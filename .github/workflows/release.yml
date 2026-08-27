@@ -241,6 +241,16 @@ jobs:
           TAG_VERSION: ${{ needs.changelog.outputs.normalized_version }}
         run: bun scripts/align-version.ts
 
+      # scripts/sync-stamped-root-lock.py imports `tomllib`, which is stdlib only
+      # from Python 3.11. The ubuntu-22.04 runner's default python3 is 3.10, so
+      # this step died there with ModuleNotFoundError while passing on the macOS
+      # and Windows runners, whose images happen to ship something newer. Pin the
+      # interpreter rather than depend on whatever an image provides.
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v7.0.0
+        with:
+          python-version: '3.11'
+
       - name: Synchronize stamped root lock entry
         run: |-
           python3 scripts/sync-stamped-root-lock.py --manifest src-tauri/Cargo.toml --lockfile src-tauri/Cargo.lock --package termul-manager
@@ -447,6 +457,16 @@ jobs:
         env:
           TAG_VERSION: ${{ needs.changelog.outputs.normalized_version }}
         run: bun scripts/align-version.ts
+
+      # scripts/sync-stamped-root-lock.py imports `tomllib`, which is stdlib only
+      # from Python 3.11. The ubuntu-22.04 runner's default python3 is 3.10, so
+      # this step died there with ModuleNotFoundError while passing on the macOS
+      # and Windows runners, whose images happen to ship something newer. Pin the
+      # interpreter rather than depend on whatever an image provides.
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v7.0.0
+        with:
+          python-version: '3.11'
 
       - name: Synchronize stamped root lock entry
         run: |-
