@@ -2,7 +2,9 @@ name: Code Review
 
 on:
   pull_request:
-    branches: [dev]
+    # `main` is this repository's integration branch; targeting `dev` (the
+    # upstream layout) meant this review never ran.
+    branches: [main]
     types: [opened, synchronize, ready_for_review, reopened]
 
 concurrency:
@@ -22,6 +24,12 @@ jobs:
     env:
       ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
       API_TIMEOUT_MS: 3000000
+      # `secrets` is not a context available to `if`, at job or step level, so the
+      # presence check has to be materialized into job-level env first. Without
+      # this the review step runs keyless and fails on every pull request, which
+      # is worse than not reviewing: a permanently red check trains contributors
+      # to ignore the check list.
+      HAS_REVIEW_KEY: ${{ secrets.ZAI_API_KEY != '' }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
@@ -36,6 +44,7 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
+        if: env.HAS_REVIEW_KEY == 'true'
         uses: anthropics/claude-code-action@b112a167ee1f4aa7ad2e3adae255c8c8c69e740b # v1
         env:
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
