@@ -5,19 +5,24 @@ import { basename } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
+/**
+ * Every key a merged manifest must carry. This is the gate that fails a release
+ * when a build target silently stops producing artifacts, so it must track the
+ * build matrix in `.github/workflows/release.yml` exactly.
+ *
+ * Desktop targets are Apple Silicon and Windows x64. The Intel-macOS
+ * (`darwin-x86_64*`) and desktop-Linux (`linux-x86_64`, `-appimage`, `-deb`,
+ * `-rpm`) keys were removed with those matrix entries — note this is NOT the
+ * same as the server key below.
+ */
 export const requiredPlatformKeys = [
   'windows-x86_64',
   'windows-x86_64-msi',
   'windows-x86_64-nsis',
-  'linux-x86_64',
-  'linux-x86_64-appimage',
-  'linux-x86_64-deb',
-  'linux-x86_64-rpm',
   'darwin-aarch64',
   'darwin-aarch64-app',
-  'darwin-x86_64',
-  'darwin-x86_64-app',
-  // Standalone `termul-server` binary (linux-x64 only today). Each channel's
+  // Standalone `termul-server` binary (linux-x64 only today) — a headless
+  // self-hosting target, not a desktop one, and still built. Each channel's
   // manifest covers both the desktop targets and the server target so a single
   // manifest drives both updaters.
   'linux-x86_64-server'

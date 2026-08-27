@@ -132,26 +132,32 @@ jobs:
     needs: changelog
     if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
+    # Job-level, deliberately. The Apple steps below gate on
+    # `env.APPLE_CERTIFICATE != ''`, and a step's `if` is evaluated before that
+    # step's own `env:` block exists — with the secret declared only per-step the
+    # condition read an undefined value and was permanently false, so signing and
+    # notarization never ran even with the secrets configured. Job-level env is
+    # resolved earlier and is visible to every step's `if`.
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     strategy:
       fail-fast: false
       matrix:
+        # Desktop targets are Apple Silicon and Windows x64 only. `linux-x64` and
+        # `macos-x64` (Intel) were dropped deliberately — re-adding either is a
+        # matrix entry plus its keys in `requiredPlatformKeys`; the per-platform
+        # collection logic in scripts/release/prepare-platform-artifacts.mjs still
+        # knows how to handle them. The standalone linux-x64 `termul-server` is a
+        # separate job below and is unaffected.
         include:
           - platform: windows-x64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc
-          - platform: linux-x64
-            runner: ubuntu-22.04
-            rust_target: x86_64-unknown-linux-gnu
-            args: --target x86_64-unknown-linux-gnu
           - platform: macos-aarch64
             runner: macos-latest
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
-          - platform: macos-x64
-            runner: macos-15-intel
-            rust_target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
     steps:
       - name: Harden runner
         if: matrix.runner == 'ubuntu-22.04'
@@ -542,7 +548,7 @@ jobs:
           RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
           IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
         run: |
-          expected=(windows-x64 linux-x64 macos-aarch64 macos-x64)
+          expected=(windows-x64 macos-aarch64)
           manifests=()
           mkdir -p release-assets
           printf '%s' "$RELEASE_BODY" > release-notes.md

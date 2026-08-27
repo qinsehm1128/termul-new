@@ -123,13 +123,21 @@ _An independent project — not a GitHub fork. Derived from [gnoviawan/termul](h
 
 ## 📦 Install
 
-### curl (macOS/Linux)
+Released builds target **macOS on Apple Silicon** and **Windows x64**. Intel Macs and
+Linux desktops are not published — build from source (see [Getting Started](#-getting-started)).
+A headless `termul-server` for linux-x64 is published separately for self-hosting.
+
+### macOS (Apple Silicon)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/qinsehm1128/termul-new/main/scripts/install.sh | bash
 ```
 
-Windows users should install the `.exe` or `.msi` from [GitHub Releases](https://github.com/qinsehm1128/termul-new/releases). Manual DMG downloads in a browser may still hit Gatekeeper, so macOS users should prefer the curl installer.
+### Windows
+
+Install the `.exe` or `.msi` from [GitHub Releases](https://github.com/qinsehm1128/termul-new/releases).
+
+Manual DMG downloads in a browser may still hit Gatekeeper, so macOS users should prefer the curl installer.
 
 > **Homebrew is not published yet.** The release pipeline can push a cask, but this
 > project does not run a tap. The workflow stays skipped until the `HOMEBREW_TAP`

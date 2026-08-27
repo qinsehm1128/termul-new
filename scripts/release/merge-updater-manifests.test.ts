@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 // @ts-expect-error The production helper is intentionally plain ESM for direct workflow use.
 import { mergeUpdaterManifests, requiredPlatformKeys } from './merge-updater-manifests.mjs'
@@ -33,6 +34,36 @@ function completeAssetNames() {
   return requiredPlatformKeys.flatMap((key: string) => [assetName(key), `${assetName(key)}.sig`])
 }
 
+/**
+ * A representative key the merged manifest must carry, derived from the required
+ * set instead of named literally. Several tests below only need "some required
+ * key" to delete or corrupt; naming one meant trimming the build matrix left them
+ * asserting about a key the manifest no longer has. Excludes the server key,
+ * which has its own dedicated test.
+ */
+const sampleKey: string = requiredPlatformKeys.find((key: string) => key !== 'linux-x86_64-server')
+
+const workflowDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../.github/workflows')
+const releaseWorkflowPath = join(workflowDir, 'release.yml')
+const nightlyWorkflowPath = join(workflowDir, 'nightly.yml')
+
+async function matrixPlatformsOf(workflowPath: string): Promise<string[]> {
+  const workflow = await readFile(workflowPath, 'utf8')
+  return [...workflow.matchAll(/^ {10}- platform: (\S+)$/gm)].map((match) => match[1])
+}
+
+/**
+ * Updater keys each desktop target contributes, written out here rather than
+ * imported from `prepare-platform-artifacts.mjs` on purpose — an independent
+ * statement of the mapping is what makes the assertion below worth anything.
+ */
+const updaterKeysByPlatform: Record<string, string[]> = {
+  'windows-x64': ['windows-x86_64', 'windows-x86_64-msi', 'windows-x86_64-nsis'],
+  'linux-x64': ['linux-x86_64', 'linux-x86_64-appimage', 'linux-x86_64-deb', 'linux-x86_64-rpm'],
+  'macos-aarch64': ['darwin-aarch64', 'darwin-aarch64-app'],
+  'macos-x64': ['darwin-x86_64', 'darwin-x86_64-app']
+}
+
 describe('mergeUpdaterManifests', () => {
   test('authoritatively merges all historical Tauri platform keys', async () => {
     const dir = await fixtureDir()
@@ -57,10 +88,50 @@ describe('mergeUpdaterManifests', () => {
     expect(JSON.parse(await readFile(outputPath, 'utf8'))).toEqual(merged)
   })
 
+  /**
+   * `requiredPlatformKeys` is the gate that fails a release when a target stops
+   * producing artifacts, so it has to track the build matrix. Nothing else here
+   * does: every other fixture derives from `requiredPlatformKeys`, so dropping a
+   * key just shrinks the whole suite consistently — it stays green while the
+   * published manifest silently loses a platform. This pins the two together.
+   */
+  test('requiredPlatformKeys covers exactly the release matrix plus the server target', async () => {
+    const matrixPlatforms = await matrixPlatformsOf(releaseWorkflowPath)
+    expect(matrixPlatforms.length).toBeGreaterThan(0)
+
+    const expected = matrixPlatforms.flatMap((platform) => {
+      const keys = updaterKeysByPlatform[platform]
+      if (!keys) {
+        throw new Error(`release.yml builds ${platform} but this test has no updater keys for it`)
+      }
+      return keys
+    })
+    // The standalone `termul-server` is not a matrix entry — it has its own job.
+    expected.push('linux-x86_64-server')
+
+    expect([...requiredPlatformKeys].sort()).toEqual(expected.sort())
+  })
+
+  /**
+   * Nightly publishes updater manifests through the same merge + the same gate.
+   * If it built a platform the release matrix does not, the nightly channel would
+   * offer updates for a target that stable can never follow up on; if it built
+   * fewer, the nightly manifest would fail the gate at publish time instead of at
+   * review time.
+   */
+  test('the nightly build matrix matches the release build matrix', async () => {
+    const [release, nightly] = await Promise.all([
+      matrixPlatformsOf(releaseWorkflowPath),
+      matrixPlatformsOf(nightlyWorkflowPath)
+    ])
+    expect(nightly.length).toBeGreaterThan(0)
+    expect([...nightly].sort()).toEqual([...release].sort())
+  })
+
   test('rejects a missing updater platform', async () => {
     const dir = await fixtureDir()
     const platforms = completePlatforms()
-    delete platforms['darwin-x86_64-app']
+    delete platforms[sampleKey]
     const input = join(dir, 'manifest.json')
     await writeManifest(input, platforms)
 
@@ -72,21 +143,17 @@ describe('mergeUpdaterManifests', () => {
         notes: 'notes',
         pubDate: '2026-01-01T00:00:00.000Z'
       })
-    ).rejects.toThrow('Missing required updater platforms: darwin-x86_64-app')
+    ).rejects.toThrow(`Missing required updater platforms: ${sampleKey}`)
   })
 
   test.each([
     ['empty url', { url: '', signature: 'signature' }, 'url must be a nonempty string'],
-    [
-      'missing signature',
-      { url: record('linux-x86_64').url },
-      'signature must be a nonempty string'
-    ],
+    ['missing signature', { url: record(sampleKey).url }, 'signature must be a nonempty string'],
     ['non-object record', 'broken', 'must be an object']
   ])('rejects malformed updater entries: %s', async (_name, malformed, error) => {
     const dir = await fixtureDir()
     const platforms = completePlatforms()
-    platforms['linux-x86_64'] = malformed as never
+    platforms[sampleKey] = malformed as never
     const input = join(dir, 'manifest.json')
     await writeManifest(input, platforms, version, completeAssetNames())
 
@@ -125,7 +192,7 @@ describe('mergeUpdaterManifests', () => {
   test.each([
     [
       'a different release tag',
-      `https://github.com/qinsehm1128/termul-new/releases/download/v9.9.9/${assetName('linux-x86_64')}`,
+      `https://github.com/qinsehm1128/termul-new/releases/download/v9.9.9/${assetName(sampleKey)}`,
       'must target the current v1.2.3 GitHub release'
     ],
     [
@@ -136,7 +203,7 @@ describe('mergeUpdaterManifests', () => {
   ])('rejects updater URLs referencing %s', async (_name, url, error) => {
     const dir = await fixtureDir()
     const platforms = completePlatforms()
-    platforms['linux-x86_64'] = { ...record('linux-x86_64'), url }
+    platforms[sampleKey] = { ...record(sampleKey), url }
     const input = join(dir, 'manifest.json')
     await writeManifest(input, platforms, version, completeAssetNames())
 
@@ -155,7 +222,7 @@ describe('mergeUpdaterManifests', () => {
     const dir = await fixtureDir()
     const input = join(dir, 'manifest.json')
     const assets = completeAssetNames().filter(
-      (name: string) => name !== `${assetName('linux-x86_64')}.sig`
+      (name: string) => name !== `${assetName(sampleKey)}.sig`
     )
     await writeManifest(input, completePlatforms(), version, assets)
 
@@ -168,7 +235,7 @@ describe('mergeUpdaterManifests', () => {
         pubDate: '2026-01-01T00:00:00.000Z'
       })
     ).rejects.toThrow(
-      `Updater record linux-x86_64 is missing collected signature asset ${assetName('linux-x86_64')}.sig`
+      `Updater record ${sampleKey} is missing collected signature asset ${assetName(sampleKey)}.sig`
     )
   })
 
@@ -267,9 +334,9 @@ describe('mergeUpdaterManifests', () => {
       const nightlyPlatforms = completePlatforms()
       // URL uses v<version> (the versioned tag) but the nightly channel expects
       // the moving `nightly` tag.
-      nightlyPlatforms['linux-x86_64'] = {
-        url: `https://github.com/qinsehm1128/termul-new/releases/download/v${nightlyVersion}/${assetName('linux-x86_64')}`,
-        signature: `signature-linux-x86_64`
+      nightlyPlatforms[sampleKey] = {
+        url: `https://github.com/qinsehm1128/termul-new/releases/download/v${nightlyVersion}/${assetName(sampleKey)}`,
+        signature: `signature-${sampleKey}`
       }
       const input = join(dir, 'manifest.json')
       await writeManifest(input, nightlyPlatforms, nightlyVersion, nightlyAssetNames)

@@ -91,23 +91,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Must stay identical to the release matrix in release.yml — pinned by
+        # `requiredPlatformKeys covers exactly the release matrix ...` in
+        # scripts/release/merge-updater-manifests.test.ts. Nightly building a
+        # platform the release does not would ship updates for a target the
+        # stable channel cannot follow up on.
         include:
           - platform: windows-x64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc --bundles nsis
-          - platform: linux-x64
-            runner: ubuntu-22.04
-            rust_target: x86_64-unknown-linux-gnu
-            args: --target x86_64-unknown-linux-gnu
           - platform: macos-aarch64
             runner: macos-latest
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
-          - platform: macos-x64
-            runner: macos-15-intel
-            rust_target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
     steps:
       - name: Harden runner
         if: matrix.runner == 'ubuntu-22.04'
@@ -397,7 +394,7 @@ jobs:
           NIGHTLY_DATE: ${{ needs.prepare.outputs.nightly_date }}
           SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
         run: |
-          expected=(windows-x64 linux-x64 macos-aarch64 macos-x64)
+          expected=(windows-x64 macos-aarch64)
           manifests=()
           mkdir -p release-assets
           printf 'Automated nightly build of main HEAD (%s, %s).\n' "$NIGHTLY_DATE" "$SHORT_SHA" > release-notes.md

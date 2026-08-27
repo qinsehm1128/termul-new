@@ -341,7 +341,11 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   [ "$(grep -c "hdiutil attach" "$TERMUL_TEST_LOG")" -eq 1 ]
 }
 
-@test "main happy Linux prompt includes platform tuple and installs AppImage" {
+# The release matrix publishes macOS aarch64 and Windows x64 only. `install_linux`
+# still works and is covered directly above; what must not happen is `main`
+# walking an unpublished tuple into a download that 404s and surfaces as a
+# checksum failure. Same for Intel macOS.
+@test "main refuses platform tuples that have no published build" {
   stub_uname Linux x86_64
   stub_common_tools
   stub_curl_release_flow "linux appimage payload"
@@ -350,11 +354,25 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
 
   run main
 
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Install Termul Manager v1.2.3 (linux-x86_64) to $HOME/.local/bin?"* ]]
-  [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
-  grep -q "Termul.Manager_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No published build for linux-x86_64"* ]]
+  ! grep -q "curl" "$TERMUL_TEST_LOG"
+  [ ! -e "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
+}
+
+@test "main refuses Intel macOS, which the release matrix no longer builds" {
+  stub_uname Darwin x86_64
+  stub_common_tools
+  stub_curl_release_flow "mac dmg payload"
+  stub_macos_install_tools
+  export TERMUL_INSTALL_YES=1
+  load_install
+
+  run main
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No published build for darwin-x86_64"* ]]
+  ! grep -q "hdiutil" "$TERMUL_TEST_LOG"
 }
 
 @test "main non-tty abort runs no install commands" {

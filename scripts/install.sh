@@ -327,6 +327,19 @@ main() {
 
   os="$(detect_os)" || return 1
   arch="$(detect_arch)" || return 1
+
+  # Published desktop targets are Apple Silicon macOS and Windows x64. Windows
+  # never reaches this script (rejected in require_tools), so darwin/aarch64 is
+  # the only tuple with a release asset. Reject anything else here rather than
+  # letting it download: without the asset the run dies at the checksum step,
+  # which reads like a corrupt release instead of an unsupported platform.
+  # `install_linux` and the Intel-macOS branch are left intact — restoring either
+  # target is a release-matrix entry plus relaxing this guard.
+  if [[ "$os" != "darwin" || "$arch" != "aarch64" ]]; then
+    die "No published build for ${os}-${arch}. Termul ships macOS (Apple Silicon) and Windows x64; build from source for other platforms: ${BASE_URL}#-getting-started"
+    return 1
+  fi
+
   require_tools "$os" || return 1
   version="$(resolve_version)" || return 1
 
