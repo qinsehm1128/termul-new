@@ -1,0 +1,143 @@
+import { AnimatePresence, motion } from 'framer-motion'
+import { ChevronDown, ChevronUp, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+
+interface TerminalSearchBarProps {
+  isOpen: boolean
+  onClose: () => void
+  onFindNext: (term: string) => boolean
+  onFindPrevious: (term: string) => boolean
+  onClearDecorations: () => void
+}
+
+export function TerminalSearchBar({
+  isOpen,
+  onClose,
+  onFindNext,
+  onFindPrevious,
+  onClearDecorations
+}: TerminalSearchBarProps): React.JSX.Element {
+  const { t } = useTranslation('terminal')
+  const [query, setQuery] = useState('')
+  const [matchInfo, setMatchInfo] = useState<string>('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Focus input when opened
+  useEffect(() => {
+    if (isOpen && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isOpen])
+
+  // Clear decorations when closed or query cleared
+  useEffect(() => {
+    if (!isOpen || query === '') {
+      onClearDecorations()
+      setMatchInfo('')
+    }
+  }, [isOpen, query, onClearDecorations])
+
+  const handleFindNext = useCallback(() => {
+    if (!query) return
+    const found = onFindNext(query)
+    setMatchInfo(found ? t('search.matchFound') : t('search.noMatches'))
+  }, [query, onFindNext, t])
+
+  const handleFindPrevious = useCallback(() => {
+    if (!query) return
+    const found = onFindPrevious(query)
+    setMatchInfo(found ? t('search.matchFound') : t('search.noMatches'))
+  }, [query, onFindPrevious, t])
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          handleFindPrevious()
+        } else {
+          handleFindNext()
+        }
+      }
+    },
+    [onClose, handleFindNext, handleFindPrevious]
+  )
+
+  const handleInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newQuery = e.target.value
+      setQuery(newQuery)
+      // Auto-search as you type
+      if (newQuery) {
+        const found = onFindNext(newQuery)
+        setMatchInfo(found ? t('search.matchFound') : t('search.noMatches'))
+      } else {
+        setMatchInfo('')
+      }
+    },
+    [onFindNext, t]
+  )
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.15 }}
+          className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-md border border-border/80 bg-popover p-1 shadow-[0_12px_36px_hsl(var(--background)/0.65),inset_0_1px_0_0_hsl(var(--foreground)/0.05)]"
+        >
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder={t('search.placeholder')}
+            aria-label={t('search.label')}
+            className="h-8 w-48 rounded-md border border-input/80 bg-secondary/35 px-2 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 placeholder:text-muted-foreground/70 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
+          />
+
+          {matchInfo && (
+            <span className="min-w-[70px] px-1 text-xs text-muted-foreground">{matchInfo}</span>
+          )}
+
+          <button
+            onClick={handleFindPrevious}
+            disabled={!query}
+            className="rounded-md p-1 text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            title={t('search.previous')}
+            aria-label={t('search.previous')}
+          >
+            <ChevronUp size={16} />
+          </button>
+
+          <button
+            onClick={handleFindNext}
+            disabled={!query}
+            className="rounded-md p-1 text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            title={t('search.next')}
+            aria-label={t('search.next')}
+          >
+            <ChevronDown size={16} />
+          </button>
+
+          <button
+            onClick={onClose}
+            className="rounded-md p-1 text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground"
+            title={t('search.close')}
+            aria-label={t('search.close')}
+          >
+            <X size={16} />
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+}

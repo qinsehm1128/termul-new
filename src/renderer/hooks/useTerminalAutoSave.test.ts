@@ -1,0 +1,380 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  isTerminalRestoreInProgress,
+  saveTerminalLayout,
+  serializeTerminalsForProject,
+  setTerminalRestoreInProgress,
+  syncScrollbackToStore
+} from './useTerminalAutoSave'
+
+const { mockRecordTerminalContinuityEvent } = vi.hoisted(() => ({
+  mockRecordTerminalContinuityEvent: vi.fn()
+}))
+
+import type { TerminalModes } from '@shared/types/ipc.types'
+import type { Terminal } from '@/types/project'
+import type { PersistedTerminal } from '../../shared/types/persistence.types'
+import { useSessionWorkspaceSyncStore } from '../stores/session-workspace-sync-store'
+import { useTerminalStore } from '../stores/terminal-store'
+import { extractScrollback, getTerminalModes } from '../utils/terminal-registry'
+
+// Mock terminal-registry
+vi.mock('../utils/terminal-registry', () => ({
+  extractScrollback: vi.fn((terminalId: string) => {
+    // Return mock scrollback for testing
+    if (terminalId === '1' || terminalId === 'pty-1') return ['line 1', 'line 2']
+    return undefined
+  }),
+  // R3: no tracker registered in tests → undefined (content-only restore).
+  getTerminalModes: vi.fn(() => undefined)
+}))
+
+// The module under test writes through `persistenceApi`, which in a non-Tauri
+// environment is a real WebSocket client aimed at `window.location.origin`.
+// Stubbing `window.api.persistence` below does not intercept it, so these tests
+// were making a live connection attempt and passing only because it failed
+// fast. Anything that made that connect stall instead hung the suite.
+vi.mock('@/lib/persistence-api', () => ({
+  persistenceApi: {
+    read: vi.fn().mockResolvedValue({ success: false, error: 'not found', code: 'KEY_NOT_FOUND' }),
+    write: vi.fn().mockResolvedValue({ success: true, data: undefined }),
+    writeDebounced: vi.fn().mockResolvedValue({ success: true, data: undefined }),
+    delete: vi.fn().mockResolvedValue({ success: true, data: undefined })
+  }
+}))
+
+vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
+  recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent
+}))
+
+// Mock window.api
+const mockWriteDebounced = vi.fn().mockResolvedValue({ success: true })
+const mockRead = vi.fn()
+const mockWrite = vi.fn().mockResolvedValue({ success: true })
+
+vi.stubGlobal('window', {
+  api: {
+    persistence: {
+      read: mockRead,
+      write: mockWrite,
+      writeDebounced: mockWriteDebounced,
+      delete: vi.fn()
+    }
+  }
+})
+
+describe('useTerminalAutoSave', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockRecordTerminalContinuityEvent.mockReset()
+    useSessionWorkspaceSyncStore
+      .getState()
+      .setActiveConversationId('018f7a1c-1b4d-7c8a-9f01-0123456789ab')
+  })
+
+  describe('setTerminalRestoreInProgress', () => {
+    it('only clears restore state for the matching owner', () => {
+      setTerminalRestoreInProgress('proj-1', true, 'owner-a')
+      expect(isTerminalRestoreInProgress()).toBe(true)
+
+      setTerminalRestoreInProgress('proj-1', false, 'owner-b')
+      expect(isTerminalRestoreInProgress()).toBe(true)
+
+      setTerminalRestoreInProgress('proj-1', false, 'owner-a')
+      expect(isTerminalRestoreInProgress()).toBe(false)
+    })
+  })
+
+  describe('serializeTerminalsForProject', () => {
+    it('should serialize terminals for a specific project', () => {
+      const terminals: Terminal[] = [
+        { id: '1', name: 'Terminal 1', projectId: 'proj-1', shell: 'powershell', cwd: '/path/1' },
+        { id: '2', name: 'Terminal 2', projectId: 'proj-1', shell: 'bash' },
+        { id: '3', name: 'Terminal 3', projectId: 'proj-2', shell: 'zsh' }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(result.activeTerminalId).toBe('1')
+      expect(result.terminals).toHaveLength(2)
+      expect(result.terminals[0]).toEqual({
+        id: '1',
+        name: 'Terminal 1',
+        shell: 'powershell',
+        cwd: '/path/1',
+        scrollback: ['line 1', 'line 2']
+      })
+      expect(result.terminals[1]).toEqual({
+        id: '2',
+        name: 'Terminal 2',
+        shell: 'bash',
+        cwd: undefined,
+        scrollback: undefined
+      })
+      expect(result.updatedAt).toBeDefined()
+    })
+
+    it('should set activeTerminalId to null when active terminal not in project', () => {
+      const terminals: Terminal[] = [
+        { id: '1', name: 'Terminal 1', projectId: 'proj-1', shell: 'powershell' }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', 'non-existent')
+
+      expect(result.activeTerminalId).toBeNull()
+    })
+
+    it('should return empty terminals array for non-existent project', () => {
+      const terminals: Terminal[] = [
+        { id: '1', name: 'Terminal 1', projectId: 'proj-1', shell: 'powershell' }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-999', '1')
+
+      expect(result.terminals).toHaveLength(0)
+      expect(result.activeTerminalId).toBeNull()
+    })
+
+    it('should include ISO timestamp in updatedAt', () => {
+      const terminals: Terminal[] = []
+      const before = new Date().toISOString()
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '')
+
+      const after = new Date().toISOString()
+      expect(result.updatedAt >= before).toBe(true)
+      expect(result.updatedAt <= after).toBe(true)
+    })
+
+    it('should not include output field in serialized terminals but include scrollback', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell',
+          output: [{ type: 'output', content: 'some output' }]
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(result.terminals[0]).not.toHaveProperty('output')
+      expect(result.terminals[0]).not.toHaveProperty('projectId')
+      expect(result.terminals[0]).not.toHaveProperty('isActive')
+      expect(result.terminals[0].scrollback).toEqual(['line 1', 'line 2'])
+    })
+
+    it('should prefer ptyId when extracting scrollback', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell'
+        }
+      ]
+
+      serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(extractScrollback).toHaveBeenCalledWith('pty-1')
+    })
+
+    it('captures DEC modes via getTerminalModes keyed by ptyId ?? id (R3)', () => {
+      const modes: TerminalModes = {
+        alternateScreen: true,
+        bracketedPaste: true,
+        applicationCursor: false,
+        mouseTracking: null,
+        sgrMouseMode: false,
+        sgrMousePixelsMode: false
+      }
+      vi.mocked(getTerminalModes).mockReturnValue(modes)
+
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      // R3: modes travel alongside scrollback, keyed by the same registry id.
+      expect(getTerminalModes).toHaveBeenCalledWith('pty-1')
+      expect(result.terminals[0].modes).toEqual(modes)
+
+      // Restore the content-only default for subsequent tests.
+      vi.mocked(getTerminalModes).mockReturnValue(undefined)
+    })
+
+    it('omits modes when no tracker is registered (content-only, R3 degrade)', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(getTerminalModes).toHaveBeenCalledWith('pty-1')
+      expect(result.terminals[0]).not.toHaveProperty('modes')
+    })
+
+    it('should prefer extracted scrollback over transcript when available', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell',
+          transcript: 'line 3\nline 4\n'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      // mergeScrollback prefers extracted scrollback (live xterm state) over transcript
+      expect(result.terminals[0].scrollback).toEqual(['line 1', 'line 2'])
+      expect(result.terminals[0].transcript).toBe('line 3\nline 4\n')
+    })
+  })
+
+  describe('syncScrollbackToStore', () => {
+    beforeEach(() => {
+      useTerminalStore.setState({
+        terminals: [],
+        activeTerminalId: '',
+        ptyIdIndex: new Map()
+      })
+    })
+
+    it('should update pendingScrollback in store for each terminal', () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash')
+
+      const persistedTerminals: PersistedTerminal[] = [
+        {
+          id: terminal.id,
+          name: 'Terminal 1',
+          shell: 'bash',
+          scrollback: ['new scrollback line 1', 'new scrollback line 2']
+        }
+      ]
+
+      syncScrollbackToStore(persistedTerminals)
+
+      const updatedTerminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminal.id)
+      expect(updatedTerminal?.pendingScrollback).toEqual([
+        'new scrollback line 1',
+        'new scrollback line 2'
+      ])
+    })
+
+    it('should skip terminals with undefined scrollback', () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash', undefined, [
+        'existing scrollback'
+      ])
+
+      const persistedTerminals: PersistedTerminal[] = [
+        {
+          id: terminal.id,
+          name: 'Terminal 1',
+          shell: 'bash',
+          scrollback: undefined
+        }
+      ]
+
+      syncScrollbackToStore(persistedTerminals)
+
+      const updatedTerminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminal.id)
+      expect(updatedTerminal?.pendingScrollback).toEqual(['existing scrollback'])
+    })
+
+    it('should handle non-existent terminal ids gracefully', () => {
+      const persistedTerminals: PersistedTerminal[] = [
+        {
+          id: 'non-existent-id',
+          name: 'Ghost Terminal',
+          shell: 'bash',
+          scrollback: ['some lines']
+        }
+      ]
+
+      expect(() => syncScrollbackToStore(persistedTerminals)).not.toThrow()
+    })
+  })
+
+  describe('saveTerminalLayout', () => {
+    beforeEach(() => {
+      useTerminalStore.setState({
+        terminals: [],
+        activeTerminalId: '',
+        ptyIdIndex: new Map()
+      })
+    })
+
+    it('should sync scrollback to store before writing to disk', async () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash')
+      store.setTerminalPtyId(terminal.id, 'pty-1')
+
+      await saveTerminalLayout('proj-1')
+
+      const updatedTerminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminal.id)
+      expect(updatedTerminal?.pendingScrollback).toEqual(['line 1', 'line 2'])
+    })
+
+    it('records transcript persistence diagnostics during project-switch saves', async () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash')
+      store.setTerminalPtyId(terminal.id, 'pty-1')
+      useTerminalStore.setState((state) => ({
+        terminals: state.terminals.map((currentTerminal) =>
+          currentTerminal.id === terminal.id
+            ? { ...currentTerminal, transcript: 'hello\nworld\n' }
+            : currentTerminal
+        )
+      }))
+
+      await saveTerminalLayout('proj-1', {
+        correlationId: 'corr-1',
+        reason: 'project-switch',
+        targetProjectId: 'proj-2'
+      })
+
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'transcript-persistence-evaluated',
+        correlationId: 'corr-1',
+        projectId: 'proj-1',
+        terminalId: terminal.id,
+        ptyId: 'pty-1',
+        details: {
+          reason: 'project-switch',
+          targetProjectId: 'proj-2',
+          transcriptLength: 'hello\nworld\n'.length,
+          scrollbackExtractionAvailable: true,
+          extractedScrollbackLineCount: 2,
+          persistedScrollbackLineCount: 2
+        }
+      })
+    })
+  })
+})

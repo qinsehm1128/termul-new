@@ -1,0 +1,367 @@
+import { Camera, Clock, Cpu, Edit2, Grid3X3, RotateCcw, Trash2 } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
+import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
+import { DeleteSnapshotModal } from '@/components/DeleteSnapshotModal'
+import { ImportEditorWorkspacesDialog } from '@/components/ImportEditorWorkspacesDialog'
+import { NewProjectModal } from '@/components/NewProjectModal'
+import { RestoreSnapshotModal } from '@/components/RestoreSnapshotModal'
+import {
+  useCreateSnapshot,
+  useRestoreSnapshot,
+  useSnapshotActions,
+  useSnapshotLoader,
+  useSnapshots
+} from '@/hooks/use-snapshots'
+import { getColorClasses } from '@/lib/colors'
+import { cn } from '@/lib/utils'
+import {
+  useActiveProject,
+  useActiveProjectId,
+  useProjectActions,
+  useProjectsLoaded
+} from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
+import type { Snapshot } from '@/types/project'
+
+export default function WorkspaceSnapshots(): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  const navigate = useNavigate()
+  const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
+  const [isImportEditorOpen, setIsImportEditorOpen] = useState(false)
+  const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false)
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false)
+  const [snapshotToRestore, setSnapshotToRestore] = useState<Snapshot | null>(null)
+  const [isRestoring, setIsRestoring] = useState(false)
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [snapshotToDelete, setSnapshotToDelete] = useState<Snapshot | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  const isLoaded = useProjectsLoaded()
+  const activeProject = useActiveProject()
+  const activeProjectId = useActiveProjectId()
+  const { addProject } = useProjectActions()
+
+  // Load snapshots when project changes
+  useSnapshotLoader()
+
+  // Get snapshots for current project
+  const snapshots = useSnapshots()
+  const createSnapshot = useCreateSnapshot()
+  const restoreSnapshot = useRestoreSnapshot()
+  const { deleteSnapshot } = useSnapshotActions()
+  const terminals = useTerminalStore((state) => state.terminals)
+
+  // Check if current project has terminals (running processes)
+  const hasRunningProcesses = terminals.filter((t) => t.projectId === activeProjectId).length > 0
+
+  const handleCreateSnapshot = useCallback(
+    async (name: string, description?: string) => {
+      await createSnapshot(name, description)
+    },
+    [createSnapshot]
+  )
+
+  const handleOpenRestoreModal = useCallback((snapshot: Snapshot) => {
+    setSnapshotToRestore(snapshot)
+    setIsRestoreModalOpen(true)
+  }, [])
+
+  const handleCloseRestoreModal = useCallback(() => {
+    if (!isRestoring) {
+      setIsRestoreModalOpen(false)
+      setSnapshotToRestore(null)
+    }
+  }, [isRestoring])
+
+  const handleRestore = useCallback(async () => {
+    if (!snapshotToRestore) return
+
+    setIsRestoring(true)
+    try {
+      await restoreSnapshot(snapshotToRestore.id)
+      setIsRestoreModalOpen(false)
+      setSnapshotToRestore(null)
+      // Navigate to workspace dashboard after restore
+      navigate('/')
+    } catch (error) {
+      console.error('Failed to restore snapshot:', error)
+    } finally {
+      setIsRestoring(false)
+    }
+  }, [snapshotToRestore, restoreSnapshot, navigate])
+
+  const handleOpenDeleteModal = useCallback((snapshot: Snapshot) => {
+    setSnapshotToDelete(snapshot)
+    setIsDeleteModalOpen(true)
+  }, [])
+
+  const handleCloseDeleteModal = useCallback(() => {
+    if (!isDeleting) {
+      setIsDeleteModalOpen(false)
+      setSnapshotToDelete(null)
+    }
+  }, [isDeleting])
+
+  const handleDelete = useCallback(async () => {
+    if (!snapshotToDelete) return
+
+    setIsDeleting(true)
+    try {
+      await deleteSnapshot(snapshotToDelete.id)
+      setIsDeleteModalOpen(false)
+      setSnapshotToDelete(null)
+    } catch (error) {
+      console.error('Failed to delete snapshot:', error)
+    } finally {
+      setIsDeleting(false)
+    }
+  }, [snapshotToDelete, deleteSnapshot])
+
+  const colors = activeProject ? getColorClasses(activeProject.color) : getColorClasses('blue')
+
+  const formatTime = (date: Date) => {
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+    if (diffHours < 1) return t('snapshots.justNow')
+    if (diffHours < 24) return t('snapshots.hoursAgo', { count: diffHours })
+    if (diffDays === 1) return t('snapshots.yesterday')
+    return t('snapshots.daysAgo', { count: diffDays })
+  }
+
+  // Show loading state while projects are being loaded
+  if (!isLoaded) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-background">
+        <div className="text-muted-foreground text-sm">{t('loading')}</div>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <main className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar px-3 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.025)]">
+          <div className="flex min-w-0 items-center">
+            <h1 className="flex items-center gap-2 truncate text-sm font-medium text-foreground">
+              <span className={cn('h-2.5 w-2.5 rounded-full', colors.bg)} />
+              {activeProject?.name}
+              <span className="mx-0.5 text-muted-foreground/50">/</span>
+              <span className="font-normal text-secondary-foreground">{t('snapshots.title')}</span>
+            </h1>
+          </div>
+          <button
+            onClick={() => setIsCreateSnapshotModalOpen(true)}
+            className="inline-flex h-8 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
+          >
+            <Camera size={14} className="mr-2" />
+            {t('snapshots.createNew')}
+          </button>
+        </div>
+
+        {/* Snapshot List */}
+        <div className="flex-1 overflow-y-auto bg-terminal-bg p-6">
+          <div className="max-w-5xl mx-auto space-y-4">
+            {snapshots.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Camera size={48} className="text-muted-foreground/50 mb-4" />
+                <h3 className="text-lg font-medium text-foreground mb-2">
+                  {t('snapshots.emptyTitle')}
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {t('snapshots.emptyDescription')}
+                </p>
+                <button
+                  onClick={() => setIsCreateSnapshotModalOpen(true)}
+                  className="inline-flex h-8 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
+                >
+                  <Camera size={14} className="mr-2" />
+                  {t('snapshots.createFirst')}
+                </button>
+              </div>
+            ) : (
+              snapshots.map((snapshot) => (
+                <SnapshotCard
+                  key={snapshot.id}
+                  snapshot={snapshot}
+                  formatTime={formatTime}
+                  onRestore={handleOpenRestoreModal}
+                  onDelete={handleOpenDeleteModal}
+                />
+              ))
+            )}
+          </div>
+        </div>
+      </main>
+
+      <NewProjectModal
+        isOpen={isNewProjectModalOpen}
+        onClose={() => setIsNewProjectModalOpen(false)}
+        onImportFromEditor={() => {
+          setIsNewProjectModalOpen(false)
+          setIsImportEditorOpen(true)
+        }}
+        onCreateProject={addProject}
+      />
+      <ImportEditorWorkspacesDialog
+        isOpen={isImportEditorOpen}
+        onClose={() => setIsImportEditorOpen(false)}
+      />
+
+      <CreateSnapshotModal
+        isOpen={isCreateSnapshotModalOpen}
+        onClose={() => setIsCreateSnapshotModalOpen(false)}
+        onCreateSnapshot={handleCreateSnapshot}
+      />
+
+      <RestoreSnapshotModal
+        isOpen={isRestoreModalOpen}
+        snapshot={snapshotToRestore}
+        hasRunningProcesses={hasRunningProcesses}
+        onClose={handleCloseRestoreModal}
+        onRestore={handleRestore}
+        isRestoring={isRestoring}
+      />
+
+      <DeleteSnapshotModal
+        isOpen={isDeleteModalOpen}
+        snapshot={snapshotToDelete}
+        onClose={handleCloseDeleteModal}
+        onDelete={handleDelete}
+        isDeleting={isDeleting}
+      />
+    </>
+  )
+}
+
+interface SnapshotCardProps {
+  snapshot: Snapshot
+  formatTime: (date: Date) => string
+  onRestore: (snapshot: Snapshot) => void
+  onDelete: (snapshot: Snapshot) => void
+}
+
+function SnapshotCard({
+  snapshot,
+  formatTime,
+  onRestore,
+  onDelete
+}: SnapshotCardProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  return (
+    <div className="group flex items-start gap-5 rounded-md bg-secondary/25 p-4 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.035)] transition-colors duration-150 hover:bg-secondary/40">
+      {/* Thumbnail */}
+      <SnapshotThumbnail snapshot={snapshot} />
+
+      {/* Content */}
+      <div className="flex-1 min-w-0 pt-1">
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-3">
+            <h3 className="text-base font-semibold text-foreground">{snapshot.name}</h3>
+            {snapshot.tag && (
+              <span
+                className={cn(
+                  'px-2 py-0.5 rounded text-3xs uppercase font-bold tracking-wider border',
+                  snapshot.tag === 'stable'
+                    ? 'bg-green-900/30 text-green-400 border-green-800/50'
+                    : 'bg-primary/10 text-primary border-primary/30'
+                )}
+              >
+                {snapshot.tag}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              className="rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground"
+              title={t('snapshots.rename')}
+            >
+              <Edit2 size={14} />
+            </button>
+            <button
+              onClick={() => onDelete(snapshot)}
+              className="rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive"
+              title={t('snapshots.delete')}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+
+        <p className="text-sm text-muted-foreground mb-3 line-clamp-1">{snapshot.description}</p>
+
+        <div className="flex items-center gap-6 text-xs text-muted-foreground font-mono">
+          <div className="flex items-center gap-1.5">
+            <Clock size={14} />
+            {formatTime(snapshot.createdAt)}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Cpu size={14} />
+            {t('snapshots.activeProcesses', { count: snapshot.processCount })}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Grid3X3 size={14} />
+            {t('snapshots.panes', { count: snapshot.paneCount })}
+          </div>
+        </div>
+      </div>
+
+      {/* Restore Button */}
+      <div className="flex flex-col justify-center self-center border-l border-border/70 pl-4">
+        <button
+          onClick={() => onRestore(snapshot)}
+          className="inline-flex h-8 items-center gap-2 rounded-md bg-secondary/50 px-3 text-xs font-medium text-foreground transition-colors duration-150 hover:bg-secondary"
+        >
+          <RotateCcw size={14} />
+          {t('snapshots.restore')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SnapshotThumbnail({ snapshot }: { snapshot: Snapshot }) {
+  const getLines = () => {
+    if (snapshot.tag === 'stable') {
+      return [
+        { color: 'bg-green-500/50', width: 75 },
+        { color: 'bg-muted/50', width: 50 },
+        { color: 'bg-muted/50', width: 66 },
+        { color: 'bg-primary/30', width: 100 }
+      ]
+    }
+    if (snapshot.processCount === 0) {
+      return [
+        { color: 'bg-green-500/50', width: 30 },
+        { color: 'bg-muted/20', width: 100 },
+        { color: 'bg-muted/20', width: 75 },
+        { color: 'bg-green-500/50', width: 30 }
+      ]
+    }
+    return [
+      { color: 'bg-red-500/80', width: 25 },
+      { color: 'bg-red-500/40', width: 75 },
+      { color: 'bg-red-500/40', width: 50 },
+      { color: 'bg-muted/30', width: 66 }
+    ]
+  }
+
+  return (
+    <div className="relative h-24 w-40 shrink-0 overflow-hidden rounded-md bg-black p-1 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.04)]">
+      <div className="flex flex-col gap-0.5">
+        {getLines().map((line, i) => (
+          <div
+            key={i}
+            className={cn('snapshot-line', line.color)}
+            style={{ width: `${line.width}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}

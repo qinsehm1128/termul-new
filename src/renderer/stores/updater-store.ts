@@ -1,0 +1,772 @@
+import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
+import { create } from 'zustand'
+import { useShallow } from 'zustand/shallow'
+import { runtimeT } from '@/i18n/runtime'
+import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
+import {
+  getUpdateChannel,
+  setUpdateChannel as tauriSetUpdateChannel
+} from '@/lib/tauri-update-channel'
+import {
+  clearPendingUpdate,
+  DEFAULT_UPDATE_CHANNEL,
+  registerUpdateEventHandlers,
+  type TauriUpdaterEventHandlers,
+  checkForUpdates as tauriCheckForUpdates,
+  downloadUpdate as tauriDownloadUpdate,
+  getAutoUpdateEnabled as tauriGetAutoUpdateEnabled,
+  getUpdaterState as tauriGetUpdaterState,
+  installAndRestart as tauriInstallAndRestart,
+  setAutoUpdateEnabled as tauriSetAutoUpdateEnabled,
+  type UpdateChannel
+} from '@/lib/tauri-updater-api'
+import {
+  clearSkippedVersion,
+  getSkippedVersion,
+  isVersionSkipped,
+  skipVersion as tauriSkipVersion
+} from '@/lib/tauri-version-skip'
+
+const RETRY_DELAYS_MS = [5000, 30000, 300000] as const
+const BASE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
+const CHECK_STAGGER_MS = 2 * 60 * 60 * 1000
+
+let periodicCheckTimer: ReturnType<typeof setTimeout> | null = null
+let activeTauriUpdaterUnsubscribe: (() => void) | null = null
+let isInitialized = false
+let initializationPromise: Promise<void> | null = null
+let hasCompletedStartupAutoCheck = false
+let updaterLifecycleGeneration = 0
+
+function clearPeriodicCheckTimer(): void {
+  if (periodicCheckTimer) {
+    clearTimeout(periodicCheckTimer)
+    periodicCheckTimer = null
+  }
+}
+
+function getPeriodicDelayMs(): number {
+  return BASE_CHECK_INTERVAL_MS + Math.floor(Math.random() * CHECK_STAGGER_MS)
+}
+
+/**
+ * Updater store state interface
+ * Manages the state for application auto-updater functionality
+ */
+export interface UpdaterStoreState {
+  // State
+  updateAvailable: boolean
+  version: string | null
+  downloaded: boolean
+  downloadProgress: number
+  skippedVersion: string | null
+  isChecking: boolean
+  isDownloading: boolean
+  error: string | null
+  lastChecked: Date | null
+  autoUpdateEnabled: boolean
+  releaseNotes: string | null
+  hasActiveTerminals: boolean
+  isManualUpdateMode: boolean
+  updateChannel: UpdateChannel
+
+  // Actions
+  checkForUpdates: () => Promise<void>
+  downloadUpdate: () => Promise<void>
+  installAndRestart: () => Promise<void>
+  skipVersion: (version: string) => Promise<void>
+  setError: (error: string | null) => void
+  setAutoUpdateEnabled: (enabled: boolean) => Promise<void>
+  setUpdateChannel: (channel: UpdateChannel) => Promise<void>
+  initializeUpdater: (options?: { autoCheck?: boolean }) => Promise<void>
+  schedulePeriodicChecks: (generation?: number) => void
+  stopPeriodicChecks: () => void
+  runCheckWithRetry: (generation?: number) => Promise<void>
+
+  // Internal actions (for IPC event listeners)
+  _setUpdateAvailable: (info: UpdateInfo) => void
+  _setUpdateDownloaded: (info: UpdateInfo) => void
+  _setDownloadProgress: (progress: DownloadProgress) => void
+  _setUpdaterError: (error: string, code?: string) => void
+  _initializeState: (state: UpdateState) => void
+}
+
+/**
+ * Updater Zustand store
+ * Manages application update state and provides actions for update operations
+ */
+export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
+  // Initial state
+  updateAvailable: false,
+  version: null,
+  downloaded: false,
+  downloadProgress: 0,
+  skippedVersion: null,
+  isChecking: false,
+  isDownloading: false,
+  error: null,
+  lastChecked: null,
+  autoUpdateEnabled: true,
+  releaseNotes: null,
+  hasActiveTerminals: false,
+  isManualUpdateMode: false,
+  updateChannel: 'stable',
+
+  /**
+   * Check for available updates via the Tauri updater plugin
+   */
+  checkForUpdates: async (): Promise<void> => {
+    const { isChecking, updateChannel } = get()
+    if (isChecking) return
+
+    set({ isChecking: true, error: null })
+
+    try {
+      const activeTerminals = hasActiveTerminalSessions()
+      set({ hasActiveTerminals: activeTerminals })
+
+      const updateInfo = await tauriCheckForUpdates(updateChannel)
+      const checkedAt = new Date()
+
+      if (!updateInfo) {
+        await clearPendingUpdate()
+        set({
+          updateAvailable: false,
+          downloaded: false,
+          version: null,
+          downloadProgress: 0,
+          releaseNotes: null,
+          error: null,
+          lastChecked: checkedAt
+        })
+        return
+      }
+
+      const skippedVersion = await getSkippedVersion()
+      const shouldSkipVersion = await isVersionSkipped(updateInfo.version)
+
+      if (shouldSkipVersion) {
+        set({
+          skippedVersion,
+          updateAvailable: false,
+          downloaded: false,
+          version: updateInfo.version,
+          releaseNotes: updateInfo.releaseNotes ?? null,
+          downloadProgress: 0,
+          error: null,
+          lastChecked: checkedAt
+        })
+        return
+      }
+
+      if (skippedVersion && skippedVersion !== updateInfo.version) {
+        await clearSkippedVersion()
+        set({ skippedVersion: null })
+      }
+
+      set({
+        updateAvailable: true,
+        downloaded: false,
+        version: updateInfo.version,
+        releaseNotes: updateInfo.releaseNotes ?? null,
+        downloadProgress: 0,
+        error: null,
+        lastChecked: checkedAt,
+        isManualUpdateMode: false
+      })
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.checkFailed', 'Failed to check for updates')
+      set({ error: errorMessage })
+    } finally {
+      set({ isChecking: false })
+    }
+  },
+
+  /**
+   * Download the available update via the Tauri updater plugin
+   */
+  downloadUpdate: async (): Promise<void> => {
+    const { isDownloading, updateAvailable } = get()
+    if (isDownloading || !updateAvailable) return
+
+    set({ isDownloading: true, error: null, downloadProgress: 0 })
+
+    try {
+      const result = await tauriDownloadUpdate((progress) => {
+        get()._setDownloadProgress(progress)
+      })
+
+      if (result.success) {
+        set({
+          downloaded: true,
+          downloadProgress: 100,
+          error: null
+        })
+      } else {
+        set({
+          error:
+            result.error ??
+            runtimeT('shell', 'updates.errors.downloadFailed', 'Failed to download update'),
+          downloaded: false
+        })
+      }
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.downloadFailed', 'Failed to download update')
+      set({ error: errorMessage })
+    } finally {
+      set({ isDownloading: false })
+    }
+  },
+
+  /**
+   * Install the downloaded update and restart the application
+   */
+  installAndRestart: async (): Promise<void> => {
+    const { downloaded } = get()
+    if (!downloaded) return
+
+    set({ error: null })
+
+    try {
+      const result = await tauriInstallAndRestart()
+      if (!result.success) {
+        set({
+          error:
+            result.error ??
+            runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
+        })
+      }
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
+      set({ error: errorMessage })
+    }
+  },
+
+  /**
+   * Skip a specific version update
+   */
+  skipVersion: async (version: string): Promise<void> => {
+    set({ error: null })
+
+    try {
+      await tauriSkipVersion(version)
+      set({ skippedVersion: version, updateAvailable: false, downloaded: false })
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.skipVersionFailed', 'Failed to skip version')
+      set({ error: errorMessage })
+    }
+  },
+
+  /**
+   * Set error state manually
+   */
+  setError: (error: string | null): void => {
+    set({ error })
+  },
+
+  /**
+   * Enable or disable auto-updates
+   */
+  setAutoUpdateEnabled: async (enabled: boolean): Promise<void> => {
+    set({ error: null })
+
+    const applyAutoUpdateSetting = async (): Promise<void> => {
+      set({ autoUpdateEnabled: enabled })
+
+      if (!enabled) {
+        updaterLifecycleGeneration += 1
+        clearPeriodicCheckTimer()
+        return
+      }
+
+      if (isInitialized) {
+        const generation = updaterLifecycleGeneration
+        await get().runCheckWithRetry(generation)
+        if (generation !== updaterLifecycleGeneration) return
+        get().schedulePeriodicChecks(generation)
+      }
+    }
+
+    try {
+      const result = await tauriSetAutoUpdateEnabled(enabled)
+      if (!result.success) {
+        set({
+          error:
+            result.error ??
+            runtimeT(
+              'shell',
+              'updates.errors.autoUpdateSettingFailed',
+              'Failed to update auto-update setting'
+            )
+        })
+      } else {
+        await applyAutoUpdateSetting()
+      }
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT(
+              'shell',
+              'updates.errors.autoUpdateSettingFailed',
+              'Failed to update auto-update setting'
+            )
+      set({ error: errorMessage })
+    }
+  },
+
+  /**
+   * Switch the release channel and re-check against the new manifest. The
+   * preference is persisted via the updater-preferences store so it survives a
+   * restart.
+   *
+   * `clearPendingUpdate()` resets the module-level stale update state in
+   * `tauri-updater-api.ts` (`pendingTauriUpdate`, `downloadedUpdate`,
+   * `manualUpdateInfo`, `downloadedVersion`, `preparedUpdateVersion`,
+   * `isManualUpdateMode`) so a stale stable `Update` object — or its in-memory
+   * downloaded bytes — can never be installed after switching to
+   * insider/nightly.
+   *
+   * The re-check only fires when `autoUpdateEnabled` is true: switching channel
+   * while auto-update is off clears state + persists the preference; the next
+   * manual check (or a later enable) uses the new channel. The periodic loop,
+   * if running, resumes on its own cadence.
+   */
+  setUpdateChannel: async (channel: UpdateChannel): Promise<void> => {
+    set({ error: null })
+
+    try {
+      await tauriSetUpdateChannel(channel)
+      // Reset the facade's module-level pending/downloaded state BEFORE
+      // clearing store state + re-checking, so a stale stable `Update` (and its
+      // downloaded bytes) can't survive into the new channel.
+      await clearPendingUpdate()
+      set({
+        updateChannel: channel,
+        updateAvailable: false,
+        downloaded: false,
+        version: null,
+        downloadProgress: 0,
+        releaseNotes: null
+      })
+
+      // Re-check only when auto-update is enabled — switching channel while
+      // auto-update is off just persists the preference; the next manual check
+      // uses the new channel.
+      if (get().autoUpdateEnabled) {
+        const generation = updaterLifecycleGeneration
+        await get().runCheckWithRetry(generation)
+      }
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT(
+              'shell',
+              'updates.errors.switchChannelFailed',
+              'Failed to switch update channel'
+            )
+      set({ error: errorMessage })
+    }
+  },
+
+  initializeUpdater: async (options?: { autoCheck?: boolean }): Promise<void> => {
+    const currentGeneration = updaterLifecycleGeneration
+
+    if (initializationPromise) {
+      await initializationPromise
+      if (currentGeneration !== updaterLifecycleGeneration) return
+
+      if (options?.autoCheck === true && !hasCompletedStartupAutoCheck && get().autoUpdateEnabled) {
+        await get().runCheckWithRetry(currentGeneration)
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        hasCompletedStartupAutoCheck = true
+      }
+      return
+    }
+
+    if (isInitialized) {
+      if (currentGeneration !== updaterLifecycleGeneration) return
+
+      if (options?.autoCheck === true && !hasCompletedStartupAutoCheck && get().autoUpdateEnabled) {
+        await get().runCheckWithRetry(currentGeneration)
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        hasCompletedStartupAutoCheck = true
+      }
+      return
+    }
+
+    initializationPromise = (async () => {
+      isInitialized = true
+
+      try {
+        const events: TauriUpdaterEventHandlers = {
+          onUpdateAvailable: (update) => {
+            get()._setUpdateAvailable({
+              version: update.version,
+              releaseDate: new Date().toISOString(),
+              releaseNotes: update.body ?? undefined,
+              isSecurityUpdate: false
+            })
+          },
+          onDownloadProgress: (progress) => {
+            get()._setDownloadProgress(progress)
+          },
+          onUpdateDownloaded: (update) => {
+            get()._setUpdateDownloaded({
+              version: update.version,
+              releaseDate: new Date().toISOString(),
+              releaseNotes: update.body ?? undefined,
+              isSecurityUpdate: false
+            })
+          },
+          onError: (error) => {
+            get()._setUpdaterError(error)
+          }
+        }
+
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        activeTauriUpdaterUnsubscribe?.()
+        activeTauriUpdaterUnsubscribe = registerUpdateEventHandlers(events)
+
+        const stateResult = await tauriGetUpdaterState()
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        if (stateResult.success) {
+          get()._initializeState(stateResult.data)
+        } else {
+          get()._setUpdaterError(
+            stateResult.error ??
+              runtimeT('shell', 'updates.errors.loadStateFailed', 'Failed to load updater state')
+          )
+        }
+
+        const autoUpdateResult = await tauriGetAutoUpdateEnabled()
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        if (autoUpdateResult.success) {
+          set({ autoUpdateEnabled: autoUpdateResult.data })
+        }
+
+        const skippedVersion = await getSkippedVersion()
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        set({ skippedVersion })
+
+        const persistedChannel = await getUpdateChannel()
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        // Only hydrate the persisted channel when the user hasn't already
+        // selected one during the async init window — a concurrent
+        // setUpdateChannel would otherwise be reverted to the persisted value.
+        if (get().updateChannel === DEFAULT_UPDATE_CHANNEL) {
+          set({ updateChannel: persistedChannel })
+        }
+
+        if (options?.autoCheck === true && get().autoUpdateEnabled) {
+          await get().runCheckWithRetry(currentGeneration)
+          if (currentGeneration !== updaterLifecycleGeneration) return
+          hasCompletedStartupAutoCheck = true
+        }
+
+        if (get().autoUpdateEnabled) {
+          get().schedulePeriodicChecks(currentGeneration)
+        }
+      } catch (err) {
+        isInitialized = false
+        const errorMessage =
+          err instanceof Error
+            ? err.message
+            : runtimeT('shell', 'updates.errors.initializeFailed', 'Failed to initialize updater')
+        set({ error: errorMessage })
+      } finally {
+        initializationPromise = null
+      }
+    })()
+
+    await initializationPromise
+  },
+
+  schedulePeriodicChecks: (generation?: number): void => {
+    const targetGeneration = generation ?? updaterLifecycleGeneration
+    if (targetGeneration !== updaterLifecycleGeneration) return
+
+    clearPeriodicCheckTimer()
+
+    const scheduleNext = () => {
+      if (targetGeneration !== updaterLifecycleGeneration) return
+
+      periodicCheckTimer = setTimeout(async () => {
+        if (targetGeneration !== updaterLifecycleGeneration) return
+
+        try {
+          if (get().autoUpdateEnabled) {
+            await get().runCheckWithRetry(targetGeneration)
+          }
+        } finally {
+          if (targetGeneration === updaterLifecycleGeneration && get().autoUpdateEnabled) {
+            scheduleNext()
+          }
+        }
+      }, getPeriodicDelayMs())
+    }
+
+    if (get().autoUpdateEnabled) {
+      scheduleNext()
+    }
+  },
+
+  stopPeriodicChecks: (): void => {
+    updaterLifecycleGeneration += 1
+    clearPeriodicCheckTimer()
+    activeTauriUpdaterUnsubscribe?.()
+    activeTauriUpdaterUnsubscribe = null
+    initializationPromise = null
+    hasCompletedStartupAutoCheck = false
+    isInitialized = false
+  },
+
+  runCheckWithRetry: async (generation?: number): Promise<void> => {
+    const targetGeneration = generation ?? updaterLifecycleGeneration
+
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+      if (targetGeneration !== updaterLifecycleGeneration || !get().autoUpdateEnabled) return
+
+      await get().checkForUpdates()
+
+      if (targetGeneration !== updaterLifecycleGeneration || !get().autoUpdateEnabled) return
+
+      const currentError = get().error
+      if (!currentError) return
+
+      if (attempt === RETRY_DELAYS_MS.length) return
+
+      const delay = RETRY_DELAYS_MS[attempt]
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), delay)
+      })
+    }
+  },
+
+  /**
+   * Internal action: Called when update becomes available (IPC event)
+   */
+  _setUpdateAvailable: (info: UpdateInfo): void => {
+    set({
+      updateAvailable: true,
+      version: info.version,
+      downloaded: false,
+      downloadProgress: 0,
+      releaseNotes: info.releaseNotes ?? null,
+      error: null
+    })
+  },
+
+  /**
+   * Internal action: Called when update is downloaded (IPC event)
+   */
+  _setUpdateDownloaded: (info: UpdateInfo): void => {
+    set({
+      updateAvailable: true,
+      version: info.version,
+      downloaded: true,
+      downloadProgress: 100,
+      releaseNotes: info.releaseNotes ?? null,
+      isDownloading: false,
+      error: null
+    })
+  },
+
+  /**
+   * Internal action: Called when download progress updates (IPC event)
+   */
+  _setDownloadProgress: (progress: DownloadProgress): void => {
+    set({ downloadProgress: progress.percent })
+  },
+
+  /**
+   * Internal action: Called when updater error occurs (IPC event)
+   */
+  _setUpdaterError: (error: string, code?: string): void => {
+    set({
+      error: code ? `${error} (${code})` : error,
+      isChecking: false,
+      isDownloading: false,
+      hasActiveTerminals: hasActiveTerminalSessions()
+    })
+  },
+
+  /**
+   * Internal action: Initialize state from main process
+   */
+  _initializeState: (state: UpdateState): void => {
+    set((current) => ({
+      updateAvailable: state.updateAvailable,
+      version: state.version,
+      downloaded: state.downloaded,
+      downloadProgress: state.downloadProgress?.percent ?? 0,
+      isChecking: state.isChecking,
+      isDownloading: state.isDownloading,
+      error: state.error,
+      lastChecked: state.lastChecked ? new Date(state.lastChecked) : null,
+      autoUpdateEnabled: current.autoUpdateEnabled,
+      releaseNotes: null,
+      hasActiveTerminals: hasActiveTerminalSessions(),
+      isManualUpdateMode: state.isManualUpdateMode ?? false
+    }))
+  }
+}))
+
+// ============================================================================
+// SELECTORS (for performance - use useShallow pattern)
+// ============================================================================
+
+/**
+ * Selector: Check if an update is available
+ */
+export function useUpdateAvailable(): boolean {
+  return useUpdaterStore((state) => state.updateAvailable)
+}
+
+/**
+ * Selector: Get the available version
+ */
+export function useUpdateVersion(): string | null {
+  return useUpdaterStore((state) => state.version)
+}
+
+/**
+ * Selector: Check if update is downloaded and ready to install
+ */
+export function useUpdateDownloaded(): boolean {
+  return useUpdaterStore((state) => state.downloaded)
+}
+
+/**
+ * Selector: Get download progress (0-100)
+ */
+export function useDownloadProgress(): number {
+  return useUpdaterStore((state) => state.downloadProgress)
+}
+
+/**
+ * Selector: Check if currently checking for updates
+ */
+export function useIsChecking(): boolean {
+  return useUpdaterStore((state) => state.isChecking)
+}
+
+/**
+ * Selector: Check if currently downloading update
+ */
+export function useIsDownloading(): boolean {
+  return useUpdaterStore((state) => state.isDownloading)
+}
+
+/**
+ * Selector: Get updater error message
+ */
+export function useUpdaterError(): string | null {
+  return useUpdaterStore((state) => state.error)
+}
+
+/**
+ * Selector: Get last checked timestamp
+ */
+export function useLastChecked(): Date | null {
+  return useUpdaterStore((state) => state.lastChecked)
+}
+
+/**
+ * Selector: Check if auto-update is enabled
+ */
+export function useAutoUpdateEnabled(): boolean {
+  return useUpdaterStore((state) => state.autoUpdateEnabled)
+}
+
+/**
+ * Selector: Get the active release channel
+ */
+export function useUpdateChannel(): UpdateChannel {
+  return useUpdaterStore((state) => state.updateChannel)
+}
+
+/**
+ * Selector: Get skipped version
+ */
+export function useSkippedVersion(): string | null {
+  return useUpdaterStore((state) => state.skippedVersion)
+}
+
+/**
+ * Selector: Get updater state object (all state except actions)
+ */
+export function useUpdaterState() {
+  return useUpdaterStore(
+    useShallow((state) => ({
+      updateAvailable: state.updateAvailable,
+      version: state.version,
+      downloaded: state.downloaded,
+      downloadProgress: state.downloadProgress,
+      skippedVersion: state.skippedVersion,
+      isChecking: state.isChecking,
+      isDownloading: state.isDownloading,
+      error: state.error,
+      lastChecked: state.lastChecked,
+      autoUpdateEnabled: state.autoUpdateEnabled,
+      releaseNotes: state.releaseNotes,
+      hasActiveTerminals: state.hasActiveTerminals,
+      isManualUpdateMode: state.isManualUpdateMode,
+      updateChannel: state.updateChannel
+    }))
+  )
+}
+
+/**
+ * Selector: Get updater actions (all actions except state)
+ */
+export function useUpdaterActions() {
+  return useUpdaterStore(
+    useShallow((state) => ({
+      checkForUpdates: state.checkForUpdates,
+      downloadUpdate: state.downloadUpdate,
+      installAndRestart: state.installAndRestart,
+      skipVersion: state.skipVersion,
+      setError: state.setError,
+      setAutoUpdateEnabled: state.setAutoUpdateEnabled,
+      setUpdateChannel: state.setUpdateChannel,
+      initializeUpdater: state.initializeUpdater,
+      schedulePeriodicChecks: state.schedulePeriodicChecks,
+      stopPeriodicChecks: state.stopPeriodicChecks,
+      runCheckWithRetry: state.runCheckWithRetry
+    }))
+  )
+}
+
+/**
+ * Selector: Get internal actions (for IPC event setup)
+ * These should only be used in a component that sets up IPC listeners
+ */
+export function useUpdaterInternalActions() {
+  return useUpdaterStore(
+    useShallow((state) => ({
+      _setUpdateAvailable: state._setUpdateAvailable,
+      _setUpdateDownloaded: state._setUpdateDownloaded,
+      _setDownloadProgress: state._setDownloadProgress,
+      _setUpdaterError: state._setUpdaterError,
+      _initializeState: state._initializeState
+    }))
+  )
+}
+
+// Raw store export for accessing store outside of React components
+// Usage: updaterStore.getState()
+export const updaterStore = useUpdaterStore

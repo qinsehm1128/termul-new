@@ -1,0 +1,324 @@
+import { RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
+import mermaid from 'mermaid'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import {
+  COLOR_THEME_CHANGED_EVENT,
+  type ColorThemeChangedDetail,
+  deriveSurfaces,
+  getColorThemeDefinition,
+  getLastAppliedColorThemeId
+} from '@/lib/themes'
+import { mixHex } from '@/lib/themes/color-utils'
+
+type MermaidThemeVariables = Record<string, string | boolean>
+
+function buildMermaidThemeVariables(themeId: string): MermaidThemeVariables {
+  const theme = getColorThemeDefinition(themeId)
+  const palette = theme.dark.palette
+  const surfaces = deriveSurfaces(palette, theme.appearance)
+  const isDark = theme.appearance === 'dark'
+
+  return {
+    darkMode: isDark,
+    background: palette.neutral,
+    mainBkg: surfaces.card,
+    nodeBkg: surfaces.card,
+    primaryColor: surfaces.card,
+    primaryTextColor: palette.ink,
+    primaryBorderColor: surfaces.border,
+    secondaryColor: mixHex(palette.primary, palette.neutral, isDark ? 0.7 : 0.85),
+    tertiaryColor: surfaces.muted,
+    lineColor: palette.primary,
+    textColor: palette.ink,
+    titleColor: palette.ink,
+    edgeLabelBackground: surfaces.secondary,
+    clusterBkg: surfaces.sidebar,
+    clusterBorder: surfaces.border,
+    noteBkg: surfaces.muted,
+    noteTextColor: palette.ink,
+    noteBorderColor: surfaces.border,
+    actorBkg: surfaces.card,
+    actorTextColor: palette.ink,
+    actorBorder: surfaces.border,
+    signalColor: palette.ink,
+    signalTextColor: palette.ink
+  }
+}
+
+function useMermaidThemeSignal(): { isDark: boolean; revision: number; themeId: string } {
+  const [themeSignal, setThemeSignal] = useState(() => ({
+    isDark: document.documentElement.classList.contains('dark'),
+    revision: 0,
+    themeId: getLastAppliedColorThemeId()
+  }))
+
+  useEffect(() => {
+    const sync = (themeId = getLastAppliedColorThemeId()): void => {
+      setThemeSignal((current) => {
+        const isDark = document.documentElement.classList.contains('dark')
+        if (current.themeId === themeId && current.isDark === isDark) {
+          return current
+        }
+
+        return {
+          isDark,
+          revision: current.revision + 1,
+          themeId
+        }
+      })
+    }
+
+    const handleThemeChanged = (event: Event): void => {
+      const detail =
+        event instanceof CustomEvent
+          ? (event.detail as ColorThemeChangedDetail | undefined)
+          : undefined
+      sync(detail?.themeId)
+    }
+
+    const observer = new MutationObserver(() => sync())
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    })
+
+    window.addEventListener(COLOR_THEME_CHANGED_EVENT, handleThemeChanged)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener(COLOR_THEME_CHANGED_EVENT, handleThemeChanged)
+    }
+  }, [])
+
+  return themeSignal
+}
+
+interface MermaidBlockProps {
+  source: string
+}
+
+export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  const { t: settingsT } = useTranslation('settings')
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<HTMLDivElement>(null)
+
+  // Attach native wheel listener via ref callback so it works even when
+  // BlockNote re-mounts the DOM node after initial render.
+  const wheelCleanupRef = useRef<(() => void) | null>(null)
+  const containerCallbackRef = useCallback((node: HTMLDivElement | null) => {
+    // Cleanup previous listener
+    if (wheelCleanupRef.current) {
+      wheelCleanupRef.current()
+      wheelCleanupRef.current = null
+    }
+
+    // Store the node in the regular ref too (for mouse handlers)
+    containerRef.current = node
+    if (!node) return
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+
+      const rect = node.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
+
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
+      const minScale = 0.2
+      const maxScale = 5
+
+      setScale((prev) => {
+        const newScale = Math.min(Math.max(prev * zoomFactor, minScale), maxScale)
+        const scaleRatio = newScale / prev
+        setTranslateX((tx) => tx * scaleRatio + mouseX * (1 - scaleRatio))
+        setTranslateY((ty) => ty * scaleRatio + mouseY * (1 - scaleRatio))
+        return newScale
+      })
+    }
+
+    node.addEventListener('wheel', onWheel, { passive: false })
+    wheelCleanupRef.current = () => node.removeEventListener('wheel', onWheel)
+  }, [])
+  const [svg, setSvg] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const { isDark, revision: themeRevision, themeId } = useMermaidThemeSignal()
+  const themeVariables = useMemo(() => buildMermaidThemeVariables(themeId), [themeId])
+
+  // Zoom / pan state
+  const [scale, setScale] = useState(1)
+  const [translateX, setTranslateX] = useState(0)
+  const [translateY, setTranslateY] = useState(0)
+  const _isDragging = useRef(false)
+  const dragStart = useRef({ x: 0, y: 0 })
+  const translateStart = useRef({ x: 0, y: 0 })
+
+  // Race-guard for mermaid renders
+  const latestRenderIdRef = useRef<string>('')
+
+  // Render mermaid with stale-render guard
+  useEffect(() => {
+    if (!source.trim()) {
+      setSvg('')
+      setError(null)
+      return
+    }
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: isDark ? 'dark' : 'default',
+      themeVariables,
+      suppressErrorRendering: true
+    })
+
+    const id = `mb-${themeRevision}-${Math.random().toString(36).slice(2, 11)}`
+    latestRenderIdRef.current = id
+
+    mermaid
+      .render(id, source)
+      .then(({ svg: svgStr }) => {
+        if (id !== latestRenderIdRef.current) return
+        // Skip DOMPurify for Mermaid SVG: it's generated by the trusted mermaid
+        // library from validated diagram syntax, and DOMPurify strips <style>
+        // and foreignObject contents which breaks rendering.
+        const sanitizedSvg = svgStr
+        setSvg(sanitizedSvg)
+        setError(null)
+      })
+      .catch((err: unknown) => {
+        if (id !== latestRenderIdRef.current) return
+        setError(err instanceof Error ? err.message : String(err))
+        setSvg('')
+      })
+  }, [source, isDark, themeRevision, themeVariables])
+
+  // Reset zoom/pan when source changes
+  useEffect(() => {
+    setScale(1)
+    setTranslateX(0)
+    setTranslateY(0)
+  }, [])
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      _isDragging.current = true
+      dragStart.current = { x: e.clientX, y: e.clientY }
+      translateStart.current = {
+        x: translateX,
+        y: translateY
+      }
+      e.preventDefault()
+    },
+    [translateX, translateY]
+  )
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!_isDragging.current) return
+    const dx = e.clientX - dragStart.current.x
+    const dy = e.clientY - dragStart.current.y
+    setTranslateX(translateStart.current.x + dx)
+    setTranslateY(translateStart.current.y + dy)
+  }, [])
+
+  const handleMouseUp = useCallback(() => {
+    _isDragging.current = false
+  }, [])
+
+  const handleReset = useCallback(() => {
+    setScale(1)
+    setTranslateX(0)
+    setTranslateY(0)
+  }, [])
+
+  const handleZoomIn = useCallback(() => {
+    setScale((prev) => Math.min(prev * 1.2, 5))
+  }, [])
+
+  const handleZoomOut = useCallback(() => {
+    setScale((prev) => Math.max(prev / 1.2, 0.2))
+  }, [])
+
+  if (error) {
+    return (
+      <div className="p-4 border rounded border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800">
+        <p className="mb-2 text-sm font-medium text-red-600 dark:text-red-400">
+          {settingsT('editor.mermaidSyntaxError')}
+        </p>
+        <pre className="overflow-auto text-xs text-red-700 dark:text-red-300">
+          <code>{source}</code>
+        </pre>
+      </div>
+    )
+  }
+
+  if (!svg) {
+    return (
+      <div className="p-4 text-sm rounded border border-dashed border-muted-foreground/30 text-muted-foreground">
+        {settingsT('editor.emptyMermaidDiagram')}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={containerCallbackRef}
+      className="relative w-full overflow-hidden rounded border bg-muted/30 select-none"
+      style={{
+        height: '400px',
+        cursor: _isDragging.current ? 'grabbing' : 'grab',
+        touchAction: 'none',
+        overscrollBehavior: 'contain'
+      }}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+    >
+      {/* Chart layer — willChange removed to prevent rasterization blur */}
+      <div
+        ref={chartRef}
+        className="inline-block"
+        style={{
+          transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
+          transformOrigin: '0 0'
+        }}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: SVG is generated by the trusted mermaid library
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+
+      {/* Toolbar */}
+      <div className="absolute top-2 right-2 flex items-center gap-1 rounded bg-background/80 backdrop-blur border p-1 shadow-sm">
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
+          onClick={handleZoomIn}
+          title={t('mermaid.zoomIn')}
+          aria-label={t('mermaid.zoomInAria')}
+        >
+          <ZoomIn className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
+          onClick={handleZoomOut}
+          title={t('mermaid.zoomOut')}
+          aria-label={t('mermaid.zoomOutAria')}
+        >
+          <ZoomOut className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
+          onClick={handleReset}
+          title={t('mermaid.resetView')}
+          aria-label={t('mermaid.resetViewAria')}
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}

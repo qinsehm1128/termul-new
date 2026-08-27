@@ -1,0 +1,319 @@
+/**
+ * ADR-004.4: Launch orchestration for terminal-native CLI agents.
+ *
+ * Sibling of `terminal-spawn.ts`. Reuses the same store-read / limit / env /
+ * symlink mechanics, differing only in: building the agent argv from the Agent
+ * Registry, passing `program`/`args`/`kind:'agent'` to the spawn primitive
+ * (ADR-004.2), and tagging the created Terminal record with descriptive-only
+ * agent metadata (ADR-004.4).
+ *
+ * The user's prompt is delivered to the PTY as a discrete argv element and is
+ * NEVER shell-interpolated — the Rust spawn path (argv on POSIX, audited
+ * command-line quoting on Windows) guarantees this.
+ */
+
+import type { DiscoveredCliSession } from '@shared/types/cli-session.types'
+import { runtimeT } from '@/i18n/runtime'
+import { buildAgentArgv, type TerminalAgentDefinition } from '@/lib/agents/agent-registry'
+import { buildCliResumeArgv, formatCliResumeCommand } from '@/lib/agents/cli-session-resume-argv'
+import { terminalApi } from '@/lib/api'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { ensureWorktreeSymlinks } from '@/lib/worktree-context'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useProjectStore } from '@/stores/project-store'
+import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
+import { useTerminalStore } from '@/stores/terminal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
+
+export interface LaunchAgentOptions {
+  /** Project environment variables for spawn. */
+  envVars?: Array<{ key: string; value: string; enabled?: boolean }>
+  /** Per-project terminal limit. Spawns are blocked at this count. */
+  maxTerminalsPerProject?: number
+  /** When set, skip prompt-mode argv and spawn this exact args list. */
+  argvOverride?: string[]
+  /** Extra env merged after project + agent env (e.g. CODEX_HOME). */
+  extraEnv?: Record<string, string>
+  /** Delay before typing the resume command into a login shell. */
+  shellSettleMs?: number
+}
+
+export interface LaunchAgentResult {
+  success: boolean
+  error?: string
+  terminalId?: string
+}
+
+/**
+ * Launch a CLI agent's interactive TUI in a specific workspace pane.
+ *
+ * Reads stores via getState() at call time. Returns a result object so callers
+ * decide how to surface errors. On success the pane gains a terminal tab whose
+ * foreground process is the agent binary, seeded with `prompt`.
+ */
+/** Exported for restore/spawn paths that merge agent env with project env. */
+export function resolveAgentEnv(
+  defEnv: Record<string, string> | undefined,
+  surroundingEnv: Record<string, string>
+): Record<string, string> {
+  if (!defEnv) return {}
+  const out: Record<string, string> = {}
+  for (const [key, raw] of Object.entries(defEnv)) {
+    if (!key.trim()) continue
+    let value = raw
+    if (raw.startsWith('$')) {
+      value = surroundingEnv[raw.slice(1)] ?? ''
+    }
+    if (value !== '') {
+      out[key] = value
+    }
+  }
+  return out
+}
+
+export async function launchAgentInPane(
+  paneId: string,
+  projectId: string,
+  cwd: string,
+  def: TerminalAgentDefinition,
+  prompt: string | undefined,
+  options?: LaunchAgentOptions
+): Promise<LaunchAgentResult> {
+  const terminalStore = useTerminalStore.getState()
+  const workspaceStore = useWorkspaceStore.getState()
+
+  // Per-project terminal limit (mirrors spawnTerminalInPane).
+  if (options?.maxTerminalsPerProject !== undefined) {
+    const projectTerminalCount = terminalStore.terminals.filter(
+      (t) => t.projectId === projectId
+    ).length
+    if (projectTerminalCount >= options.maxTerminalsPerProject) {
+      const count = options.maxTerminalsPerProject
+      return {
+        success: false,
+        error: runtimeT(
+          'terminal',
+          'limits.perProject',
+          count === 1
+            ? 'Maximum {{formattedCount}} terminal per project'
+            : 'Maximum {{formattedCount}} terminals per project',
+          { count, formattedCount: String(count) }
+        )
+      }
+    }
+  }
+
+  // Global terminal limit.
+  if (terminalStore.isTerminalLimitReached()) {
+    const count = terminalStore.terminals.length
+    return {
+      success: false,
+      error: runtimeT(
+        'terminal',
+        'limits.global',
+        count === 1
+          ? 'Maximum {{formattedCount}} terminal allowed across all projects'
+          : 'Maximum {{formattedCount}} terminals allowed across all projects',
+        { count, formattedCount: String(count) }
+      )
+    }
+  }
+
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  // An open Conversation binds a durable workspace terminal. Project-workspace
+  // launches (CLI session resume, launcher from the project rail) omit the id
+  // so the host issues an ephemeral claim scope, same as a regular PTY.
+  const conversationId = useSessionWorkspaceSyncStore.getState().activeConversationId
+
+  try {
+    // Ensure worktree symlinks are present when launching into a worktree path.
+    if (project?.worktrees?.some((w) => w.path === cwd)) {
+      await ensureWorktreeSymlinks(projectId)
+    }
+
+    // Resolve project env vars for spawn (same as terminal spawn).
+    const { env: projectEnv, hasProjectEnv } = resolveEnvForSpawn(
+      options?.envVars ?? project?.envVars,
+      {}
+    )
+
+    // Merge any agent-declared env on top of project env. Values may reference
+    // an existing var with a leading `$` (resolved against the project env).
+    const agentEnv = resolveAgentEnv(def.env, projectEnv)
+    const mergedEnv = { ...projectEnv, ...agentEnv, ...(options?.extraEnv ?? {}) }
+    const hasEnv =
+      hasProjectEnv ||
+      Object.keys(agentEnv).length > 0 ||
+      Object.keys(options?.extraEnv ?? {}).length > 0
+
+    const { program, args } = options?.argvOverride
+      ? { program: def.command, args: options.argvOverride }
+      : buildAgentArgv(def, prompt)
+
+    const spawnResult = await terminalApi.spawn({
+      ...(conversationId ? { conversationId } : {}),
+      projectId,
+      cwd,
+      program,
+      args,
+      kind: 'agent',
+      ...(hasEnv ? { env: mergedEnv } : {})
+    })
+
+    if (!spawnResult.success) {
+      return {
+        success: false,
+        error:
+          spawnResult.error ||
+          runtimeT('terminal', 'errors.launchAgentFailed', 'Failed to launch agent')
+      }
+    }
+
+    // Create the terminal record. Name defaults to the agent name so the tab
+    // reads e.g. "Claude Code" instead of "Terminal 3".
+    //
+    // CRITICAL: Batch all terminal store mutations into a single set() call to
+    // prevent intermediate Zustand subscriptions from firing syncTerminalTabs
+    // before the terminal has a ptyId or the tab has been added to the pane.
+    // The old approach (addTerminal → setTerminalAgentMetadata → setTerminalPtyId)
+    // triggered 3+ separate re-renders, each one making the terminal look
+    // "orphaned" to syncTerminalTabs, which removed the tab and cascaded into
+    // a MOUNT/UNMOUNT storm.
+    const terminalId = Date.now().toString()
+    const agentArgsCopy = options?.argvOverride ? [...args] : [...def.baseArgs]
+
+    const latestTerminals = useTerminalStore.getState().terminals
+    terminalStore.setTerminals([
+      ...latestTerminals,
+      {
+        id: terminalId,
+        ...(conversationId ? { conversationId } : {}),
+        name: def.name,
+        projectId,
+        shell: program,
+        cwd,
+        output: [],
+        healthStatus: 'running',
+        viewState: 'visible',
+        isHidden: false,
+        ptyId: spawnResult.data.id,
+        // ADR-004.4: descriptive-only agent metadata
+        kind: 'agent',
+        agentId: def.id,
+        agentName: def.name,
+        agentProgram: program,
+        agentArgs: agentArgsCopy,
+        // CAP-3: the issued lease credential, captured in the SAME batched
+        // set() as the ptyId — it is in-memory only and never persisted.
+        ...(spawnResult.data.claim ? { claim: spawnResult.data.claim } : {})
+      }
+    ])
+
+    // Select the new terminal.
+    terminalStore.selectTerminal(terminalId)
+
+    // Add terminal tab to the workspace pane.
+    workspaceStore.addTabToPane(paneId, {
+      type: 'terminal',
+      id: `term-${terminalId}`,
+      terminalId
+    })
+
+    return { success: true, terminalId }
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err)
+    }
+  }
+}
+
+/**
+ * Convenience wrapper mirroring `activateAndOpenTerminal`: reads the active pane
+ * and per-project limit from stores, then launches the agent. Used by the
+ * launcher UI and command bar.
+ */
+export async function launchAgentInActivePane(
+  projectId: string,
+  cwd: string,
+  def: TerminalAgentDefinition,
+  prompt: string | undefined
+): Promise<LaunchAgentResult> {
+  const paneId = useWorkspaceStore.getState().activePaneId
+  if (!paneId) {
+    return { success: false, error: 'No active pane' }
+  }
+
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject
+
+  return launchAgentInPane(paneId, projectId, cwd, def, prompt, {
+    envVars: project?.envVars,
+    maxTerminalsPerProject
+  })
+}
+
+export async function launchAgentResumeInPane(
+  paneId: string,
+  projectId: string,
+  cwd: string,
+  def: TerminalAgentDefinition,
+  session: DiscoveredCliSession,
+  defaultExtraArgs: string,
+  onceExtraArgs: string,
+  options?: LaunchAgentOptions
+): Promise<LaunchAgentResult> {
+  const built = buildCliResumeArgv(def, session, defaultExtraArgs, onceExtraArgs)
+  if ('error' in built) {
+    return { success: false, error: built.error }
+  }
+
+  const extraEnv = {
+    ...options?.extraEnv,
+    ...(session.agentId === 'codex' && session.codexHome ? { CODEX_HOME: session.codexHome } : {})
+  }
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  const maxTerminalsPerProject =
+    options?.maxTerminalsPerProject ??
+    useAppSettingsStore.getState().settings.maxTerminalsPerProject
+  const spawned = await spawnTerminalInPane(paneId, projectId, cwd, {
+    envVars: options?.envVars ?? project?.envVars,
+    maxTerminalsPerProject,
+    extraEnv
+  })
+  if (!spawned.success || !spawned.terminalId) {
+    return {
+      success: false,
+      error:
+        spawned.error || runtimeT('terminal', 'errors.createFailed', 'Failed to create terminal')
+    }
+  }
+
+  const terminal = useTerminalStore
+    .getState()
+    .terminals.find((item) => item.id === spawned.terminalId)
+  if (!terminal?.ptyId) {
+    return {
+      success: false,
+      error: runtimeT('terminal', 'errors.createFailed', 'Failed to create terminal')
+    }
+  }
+
+  const settleMs = options?.shellSettleMs ?? 350
+  if (settleMs > 0) {
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, settleMs)
+    })
+  }
+
+  const command = formatCliResumeCommand(built.program, built.args)
+  const written = await terminalApi.write(terminal.ptyId, `${command}\r`)
+  if (!written.success) {
+    return {
+      success: false,
+      error: written.error || runtimeT('terminal', 'errors.writeFailed', 'Failed to write')
+    }
+  }
+  return { success: true, terminalId: spawned.terminalId }
+}

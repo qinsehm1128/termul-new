@@ -1,0 +1,321 @@
+import { describe, expect, it } from 'vitest'
+import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import type { AgentSkillSummary } from '@/lib/skills-api'
+import {
+  applyCommandToInput,
+  buildSlashSections,
+  findSlashTrigger,
+  isSlashTrigger,
+  isSlashTriggerAny,
+  type SlashConfigItem,
+  type SlashModeItem,
+  slashFilter
+} from './slash-menu-model'
+
+const commands: AvailableCommand[] = [
+  { name: 'compact', description: 'Compact the conversation' },
+  { name: 'research', description: 'Deep research' }
+]
+
+const configOptions: SessionConfigOption[] = [
+  {
+    id: 'mode',
+    name: 'Session Mode',
+    category: 'mode',
+    type: 'select',
+    currentValue: 'ask',
+    description: null,
+    options: [
+      { value: 'ask', name: 'Ask', description: null },
+      { value: 'code', name: 'Code', description: null }
+    ]
+  },
+  {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    type: 'select',
+    currentValue: 'm1',
+    description: null,
+    options: [
+      { value: 'm1', name: 'Sonnet', description: null },
+      { value: 'm2', name: 'Opus', description: null }
+    ]
+  }
+]
+
+const modes: SessionModeState = {
+  currentModeId: 'ask',
+  availableModes: [
+    { id: 'ask', name: 'Ask' },
+    { id: 'code', name: 'Code' }
+  ]
+}
+
+const skills: AgentSkillSummary[] = [
+  {
+    name: 'investigate',
+    description: 'Run an investigation',
+    scope: 'project',
+    path: '/work/.agents/skills/investigate/SKILL.md'
+  },
+  {
+    name: 'review',
+    description: 'Review code',
+    scope: 'global',
+    path: '/home/u/.agents/skills/review/SKILL.md'
+  }
+]
+
+describe('slash trigger detection', () => {
+  it('opens on a lone slash and a leading slash token', () => {
+    expect(isSlashTrigger('/')).toBe(true)
+    expect(isSlashTrigger('/com')).toBe(true)
+  })
+  it('does not open mid-text or with whitespace', () => {
+    expect(isSlashTrigger('ab/')).toBe(false)
+    expect(isSlashTrigger('/com mand')).toBe(false)
+    expect(isSlashTrigger('hello')).toBe(false)
+    expect(isSlashTrigger('')).toBe(false)
+  })
+  it('extracts the filter after the slash', () => {
+    expect(slashFilter('/com')).toBe('com')
+    expect(slashFilter('/')).toBe('')
+  })
+  it('applyCommandToInput replaces the slash token', () => {
+    expect(applyCommandToInput('/com', 'compact')).toBe('/compact ')
+    expect(applyCommandToInput('/', 'research')).toBe('/research ')
+  })
+})
+
+describe('mid-text slash trigger detection', () => {
+  it('findSlashTrigger detects a leading slash token', () => {
+    const result = findSlashTrigger('/com')
+    expect(result).toEqual({ start: 0, end: 4, filter: 'com' })
+  })
+  it('findSlashTrigger detects a lone leading slash', () => {
+    const result = findSlashTrigger('/')
+    expect(result).toEqual({ start: 0, end: 1, filter: '' })
+  })
+  it('findSlashTrigger detects a mid-text slash after whitespace', () => {
+    const result = findSlashTrigger('hello /comp')
+    expect(result).toEqual({ start: 6, end: 11, filter: 'comp' })
+  })
+  it('findSlashTrigger detects a mid-text lone slash after whitespace', () => {
+    const result = findSlashTrigger('hello /')
+    expect(result).toEqual({ start: 6, end: 7, filter: '' })
+  })
+  it('findSlashTrigger returns null for slash without preceding whitespace', () => {
+    expect(findSlashTrigger('hello/')).toBeNull()
+    expect(findSlashTrigger('ab/comp')).toBeNull()
+  })
+  it('findSlashTrigger returns null for plain text', () => {
+    expect(findSlashTrigger('hello')).toBeNull()
+    expect(findSlashTrigger('')).toBeNull()
+  })
+  it('findSlashTrigger respects caret position', () => {
+    // Caret is before the token end — should not match
+    expect(findSlashTrigger('hello /comp', 8)).toBeNull()
+    // Caret is at the token end — should match
+    expect(findSlashTrigger('hello /comp', 11)).toEqual({ start: 6, end: 11, filter: 'comp' })
+  })
+
+  it('isSlashTriggerAny detects both leading and mid-text triggers', () => {
+    expect(isSlashTriggerAny('/')).toBe(true)
+    expect(isSlashTriggerAny('/com')).toBe(true)
+    expect(isSlashTriggerAny('hello /comp')).toBe(true)
+    expect(isSlashTriggerAny('hello /')).toBe(true)
+    expect(isSlashTriggerAny('hello/')).toBe(false)
+    expect(isSlashTriggerAny('hello')).toBe(false)
+    expect(isSlashTriggerAny('')).toBe(false)
+  })
+
+  it('slashFilter extracts filter from mid-text triggers', () => {
+    expect(slashFilter('hello /comp')).toBe('comp')
+    expect(slashFilter('hello /')).toBe('')
+    expect(slashFilter('ab/')).toBe('')
+  })
+})
+
+describe('buildSlashSections', () => {
+  it('lists skills before commands', () => {
+    const sections = buildSlashSections({
+      commands,
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    expect(sections[0].id).toBe('skills')
+    expect(sections[1].id).toBe('commands')
+  })
+
+  it('threads each skill SKILL.md path onto the skill items (for the wire prompt)', () => {
+    const sections = buildSlashSections({
+      commands: [],
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    const skillItems = sections[0].items
+    expect(skillItems.every((i) => i.kind === 'skill')).toBe(true)
+    expect(skillItems.map((i) => (i.kind === 'skill' ? i.path : ''))).toEqual([
+      '/work/.agents/skills/investigate/SKILL.md',
+      '/home/u/.agents/skills/review/SKILL.md'
+    ])
+  })
+
+  it('lists commands first when no skills', () => {
+    const sections = buildSlashSections({ commands, configOptions: [], modes: null, filter: '' })
+    expect(sections[0].id).toBe('commands')
+    expect(sections[0].items).toHaveLength(2)
+  })
+
+  it('dedupes a skill whose name collides with an ACP command (command wins)', () => {
+    // A skill named `compact` collides with the `compact` command — the skill
+    // is dropped so the name appears once (Commands), not twice.
+    const overlapping: AgentSkillSummary[] = [
+      {
+        name: 'compact',
+        description: 'A skill called compact',
+        scope: 'project',
+        path: '/work/.agents/skills/compact/SKILL.md'
+      },
+      {
+        name: 'investigate',
+        description: 'Run an investigation',
+        scope: 'project',
+        path: '/work/.agents/skills/investigate/SKILL.md'
+      }
+    ]
+    const sections = buildSlashSections({
+      commands,
+      configOptions: [],
+      modes: null,
+      skills: overlapping,
+      filter: ''
+    })
+    expect(sections[0].id).toBe('skills')
+    const skillNames = sections[0].items.map((i) => (i.kind === 'skill' ? i.name : ''))
+    expect(skillNames).toEqual(['investigate'])
+    const commandSection = sections.find((s) => s.id === 'commands')!
+    expect(commandSection.items.map((i) => (i.kind === 'command' ? i.name : ''))).toContain(
+      'compact'
+    )
+  })
+
+  it('renders one section per config option with category headings', () => {
+    const sections = buildSlashSections({ commands: [], configOptions, modes, filter: '' })
+    const ids = sections.map((s) => s.id)
+    expect(ids).toContain('config:mode')
+    expect(ids).toContain('config:model')
+    const modeSection = sections.find((s) => s.id === 'config:mode')!
+    expect(modeSection.heading).toBe('Mode')
+    expect(sections.find((s) => s.id === 'config:model')!.heading).toBe('Model')
+  })
+
+  it('PRECEDENCE: omits legacy modes when configOptions exist', () => {
+    const sections = buildSlashSections({ commands: [], configOptions, modes, filter: '' })
+    expect(sections.find((s) => s.id === 'modes')).toBeUndefined()
+  })
+
+  it('falls back to legacy modes only when no configOptions', () => {
+    const sections = buildSlashSections({ commands: [], configOptions: [], modes, filter: '' })
+    const modeSection = sections.find((s) => s.id === 'modes')
+    expect(modeSection).toBeDefined()
+    expect(modeSection!.items).toHaveLength(2)
+    expect((modeSection!.items[0] as SlashModeItem).kind).toBe('mode')
+  })
+
+  it('marks the current config value and mode as selected', () => {
+    const cfg = buildSlashSections({ commands: [], configOptions, modes: null, filter: '' })
+    const modeItems = cfg.find((s) => s.id === 'config:mode')!.items as SlashConfigItem[]
+    expect(modeItems.find((i) => i.valueId === 'ask')!.selected).toBe(true)
+    expect(modeItems.find((i) => i.valueId === 'code')!.selected).toBe(false)
+  })
+
+  it('filters across commands and option values', () => {
+    const sections = buildSlashSections({ commands, configOptions, modes: null, filter: 'opus' })
+    // only the model option's "Opus" value matches
+    expect(sections.find((s) => s.id === 'commands')).toBeUndefined()
+    const model = sections.find((s) => s.id === 'config:model')
+    expect(model!.items).toHaveLength(1)
+    expect((model!.items[0] as SlashConfigItem).label).toBe('Opus')
+  })
+
+  it('returns no sections when everything is empty', () => {
+    expect(
+      buildSlashSections({ commands: [], configOptions: [], modes: null, filter: '' })
+    ).toEqual([])
+  })
+
+  it('flattens grouped model options into leaf slash rows', () => {
+    const grouped = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'claude-sonnet-4',
+      options: [
+        {
+          group: 'claude',
+          name: 'Claude',
+          options: [
+            { value: 'claude-sonnet-4', name: 'Sonnet 4' },
+            { value: 'claude-opus-4', name: 'Opus 4' }
+          ]
+        }
+      ]
+    } as unknown as SessionConfigOption
+    const sections = buildSlashSections({
+      commands: [],
+      configOptions: [grouped],
+      modes: null,
+      filter: ''
+    })
+    const model = sections.find((s) => s.id === 'config:model')
+    expect(model?.items).toEqual([
+      {
+        kind: 'config',
+        configId: 'model',
+        valueId: 'claude-sonnet-4',
+        label: 'Sonnet 4',
+        description: null,
+        selected: true
+      },
+      {
+        kind: 'config',
+        configId: 'model',
+        valueId: 'claude-opus-4',
+        label: 'Opus 4',
+        description: null,
+        selected: false
+      }
+    ])
+  })
+
+  it('injects a synthesized modelOption when configOptions have no model', () => {
+    const modelOption: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'm1',
+      options: [
+        { value: 'm1', name: 'One' },
+        { value: 'm2', name: 'Two' }
+      ]
+    }
+    const sections = buildSlashSections({
+      commands: [],
+      configOptions: [],
+      modes: null,
+      filter: '',
+      modelOption
+    })
+    const model = sections.find((s) => s.id === 'config:model')
+    expect(model?.items).toHaveLength(2)
+    expect((model?.items[1] as SlashConfigItem).valueId).toBe('m2')
+  })
+})

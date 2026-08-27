@@ -1,0 +1,117 @@
+import { Check } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { type PendingQuestion, useAcpStore } from '@/stores/acp-store'
+import { CHAT_GUTTER_X } from './chat-layout'
+
+interface AskUserQuestionProps {
+  question: PendingQuestion
+}
+
+/** True when any option declares `cardinality: "multi"` (multi-select). */
+function isMulti(question: PendingQuestion): boolean {
+  return question.options.some((o) => o.cardinality === 'multi')
+}
+
+/**
+ * Morphing inline panel for a structured agent question (issue #411). Replaces
+ * the free-text composer for the duration of the question: choice cards for
+ * single-select, checkboxes for multi-select, approval buttons for yes/no.
+ *
+ * Answers flow back through `answerQuestion(questionId, values)` exactly once
+ * (optimistic delete; a racing second answer is a no-op). Cancel resolves the
+ * question as cancelled.
+ */
+export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
+  const answer = useAcpStore((s) => s.answerQuestion)
+  const multi = useMemo(() => isMulti(question), [question])
+  const [selected, setSelected] = useState<string[]>([])
+
+  const toggle = useCallback(
+    (value: string) => {
+      setSelected((prev) => {
+        if (multi) {
+          return prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+        }
+        return [value]
+      })
+    },
+    [multi]
+  )
+
+  const submit = useCallback(
+    (values?: string[]) => {
+      const payload = values && values.length > 0 ? values : undefined
+      void answer(question.questionId, payload).catch(() => {
+        toast.error(t('question.sendFailed'))
+      })
+    },
+    [answer, question.questionId, t]
+  )
+
+  const cancel = useCallback(() => submit(undefined), [submit])
+
+  return (
+    <div
+      role="dialog"
+      aria-label={question.question}
+      className={cn(CHAT_GUTTER_X, 'border-t border-border/70 bg-background pb-2 pt-2.5')}
+      data-testid="ask-user-question"
+    >
+      <div className="mx-auto w-full max-w-3xl rounded-md border border-border/80 bg-card px-3 py-2.5 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.04)]">
+        <p className="text-sm font-medium tracking-[-0.01em]">{question.question}</p>
+        {question.options.length === 0 && (
+          <p className="mt-1 text-2xs text-muted-foreground">{t('question.noOptions')}</p>
+        )}
+        <div className="mt-2 flex flex-col gap-1.5">
+          {question.options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={multi ? selected.includes(option.value) : selected[0] === option.value}
+              onClick={() => toggle(option.value)}
+              className={cn(
+                'flex min-h-11 items-start gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                selected.includes(option.value) || selected[0] === option.value
+                  ? 'border-primary/50 bg-primary/10 shadow-[inset_0_1px_0_0_hsl(var(--primary)/0.12)]'
+                  : 'border-border/70 bg-secondary/20 hover:border-border hover:bg-secondary/55'
+              )}
+            >
+              {multi && (
+                <span
+                  aria-hidden
+                  className={cn(
+                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border',
+                    selected.includes(option.value)
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border'
+                  )}
+                >
+                  {selected.includes(option.value) && <Check className="h-3 w-3" />}
+                </span>
+              )}
+              <span className="min-w-0">
+                <span className="block font-medium">{option.label}</span>
+                {option.description && (
+                  <span className="block text-xs text-muted-foreground">{option.description}</span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="mt-2.5 flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={cancel}>
+            {t('common.cancel')}
+          </Button>
+          <Button size="sm" disabled={selected.length === 0} onClick={() => submit(selected)}>
+            {multi ? t('question.confirm') : t('question.choose')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}

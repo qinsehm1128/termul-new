@@ -1,0 +1,510 @@
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
+import { highlightSelectionMatches } from '@codemirror/search'
+import type { Extension } from '@codemirror/state'
+import { Compartment, EditorState, Prec } from '@codemirror/state'
+import {
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers
+} from '@codemirror/view'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createTermulTheme } from '@/components/editor/codemirror-theme'
+import { requestSaveEditorFile } from '@/lib/editor-save'
+import { registerEditorSelectionAdapter } from '@/lib/editor-selection-bridge'
+import {
+  COLOR_THEME_CHANGED_EVENT,
+  type ColorThemeChangedDetail,
+  getColorThemeDefinition,
+  getLastAppliedColorThemeId,
+  resolveSyntaxColors
+} from '@/lib/themes'
+
+// Cache loaded language extensions
+const languageCache = new Map<string, Extension>()
+
+async function loadLanguage(lang: string): Promise<Extension | null> {
+  if (languageCache.has(lang)) {
+    return languageCache.get(lang)!
+  }
+
+  let extension: Extension | null = null
+
+  try {
+    switch (lang) {
+      case 'javascript':
+      case 'typescript': {
+        const { javascript } = await import('@codemirror/lang-javascript')
+        extension = javascript({ typescript: lang === 'typescript', jsx: true })
+        break
+      }
+      case 'json': {
+        const { json } = await import('@codemirror/lang-json')
+        extension = json()
+        break
+      }
+      case 'css': {
+        const { css } = await import('@codemirror/lang-css')
+        extension = css()
+        break
+      }
+      case 'html': {
+        const { html } = await import('@codemirror/lang-html')
+        extension = html()
+        break
+      }
+      case 'markdown': {
+        const { markdown } = await import('@codemirror/lang-markdown')
+        extension = markdown()
+        break
+      }
+      case 'python': {
+        const { python } = await import('@codemirror/lang-python')
+        extension = python()
+        break
+      }
+      case 'rust': {
+        const { rust } = await import('@codemirror/lang-rust')
+        extension = rust()
+        break
+      }
+      case 'yaml': {
+        const { yaml } = await import('@codemirror/lang-yaml')
+        extension = yaml()
+        break
+      }
+      case 'toml':
+        // No built-in CodeMirror TOML support; fall through to plain text
+        return null
+      default:
+        return null
+    }
+  } catch {
+    return null
+  }
+
+  if (extension) {
+    languageCache.set(lang, extension)
+  }
+  return extension
+}
+
+// Languages worth preloading at app boot to mask first-open dynamic-import
+// latency. JavaScript/TypeScript/JSON cover the overwhelming majority of
+// files in typical projects; the rest stay lazy. Fire-and-forget — failures
+// silently fall back to the lazy path on first use (issue #378).
+const PRELOAD_LANGUAGES = ['javascript', 'typescript', 'json'] as const
+
+let preloaded = false
+
+/**
+ * Eagerly load the most common CodeMirror language extensions into the shared
+ * `languageCache` so the first open of a js/ts/json file doesn't pay the
+ * dynamic-import cost. Idempotent; safe to call multiple times.
+ */
+export function preloadCommonLanguages(): void {
+  if (preloaded) return
+  preloaded = true
+  for (const lang of PRELOAD_LANGUAGES) {
+    void loadLanguage(lang)
+  }
+}
+
+export interface VisibleLineRange {
+  startLine: number
+  endLine: number
+}
+
+interface UseCodeMirrorOptions {
+  filePath: string
+  content: string
+  language: string
+  readOnly?: boolean
+  onChange: (content: string) => void
+  onCursorChange: (line: number, col: number) => void
+  onScrollChange: (scrollTop: number) => void
+  onVisibleRangeChange?: (range: VisibleLineRange) => void
+}
+
+interface UseCodeMirrorResult {
+  view: EditorView | null
+  /** True once the EditorView has been created and is safe to dispatch to. */
+  isReady: boolean
+  setContent: (content: string) => void
+  flushPendingContent: () => void
+  scrollToLine: (lineNumber: number, highlightTerm?: string) => void
+  restoreViewState: (lineNumber: number, column: number, scrollTop: number) => void
+  getVisibleLineRange: () => VisibleLineRange | null
+}
+
+/**
+ * Teach the app-wide copy / cut / select-all actions to read CodeMirror's own
+ * selection instead of the DOM.
+ *
+ * Registered at module scope so it is installed as soon as this lazily-loaded
+ * chunk arrives — before any editor is mounted, and without every hook instance
+ * re-registering. `findFromDOM` returns null for anything outside a CodeMirror
+ * view, which is what makes the caller fall back to the DOM path for ordinary
+ * inputs and page text.
+ */
+registerEditorSelectionAdapter({
+  selectedText: (element) => {
+    const view = EditorView.findFromDOM(element)
+    if (!view) return null
+    const { from, to } = view.state.selection.main
+    return from === to ? '' : view.state.sliceDoc(from, to)
+  },
+  selectAll: (element) => {
+    const view = EditorView.findFromDOM(element)
+    if (!view) return false
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+    return true
+  },
+  deleteSelection: (element) => {
+    const view = EditorView.findFromDOM(element)
+    if (!view) return false
+    const { from, to } = view.state.selection.main
+    if (from === to) return false
+    view.dispatch({ changes: { from, to, insert: '' }, selection: { anchor: from } })
+    return true
+  }
+})
+
+function getVisibleLineRangeForView(view: EditorView): VisibleLineRange {
+  const { from, to } = view.viewport
+
+  return {
+    startLine: view.state.doc.lineAt(from).number,
+    endLine: view.state.doc.lineAt(to).number
+  }
+}
+
+export function useCodeMirror(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  options: UseCodeMirrorOptions
+): UseCodeMirrorResult {
+  const viewRef = useRef<EditorView | null>(null)
+  const [viewReady, setViewReady] = useState(false)
+  const onChangeRef = useRef(options.onChange)
+  const onCursorChangeRef = useRef(options.onCursorChange)
+  const onScrollChangeRef = useRef(options.onScrollChange)
+  const onVisibleRangeChangeRef = useRef(options.onVisibleRangeChange)
+  const contentRef = useRef(options.content)
+  const isExternalUpdate = useRef(false)
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const visibleRangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const themeCompartment = useRef(new Compartment())
+  const syntaxColorsRef = useRef<ColorThemeChangedDetail['syntax'] | null>(
+    resolveSyntaxColors(getColorThemeDefinition(getLastAppliedColorThemeId()))
+  )
+  const pendingRestoreTokenRef = useRef<symbol | null>(null)
+  const filePathRef = useRef(options.filePath)
+
+  // Keep refs up to date
+  filePathRef.current = options.filePath
+  onChangeRef.current = options.onChange
+  onCursorChangeRef.current = options.onCursorChange
+  onScrollChangeRef.current = options.onScrollChange
+  onVisibleRangeChangeRef.current = options.onVisibleRangeChange
+  contentRef.current = options.content
+
+  // Create editor
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const isDark = document.documentElement.classList.contains('dark')
+
+    const updateListener = EditorView.updateListener.of((update) => {
+      if (update.docChanged && !isExternalUpdate.current) {
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current)
+        }
+        debounceTimerRef.current = setTimeout(() => {
+          const content = update.state.doc.toString()
+          onChangeRef.current(content)
+        }, 300)
+      }
+
+      if (update.selectionSet) {
+        const pos = update.state.selection.main.head
+        const line = update.state.doc.lineAt(pos)
+        onCursorChangeRef.current(line.number, pos - line.from + 1)
+      }
+    })
+
+    const scrollListener = EditorView.domEventHandlers({
+      scroll: (_event, view) => {
+        if (scrollDebounceRef.current) {
+          clearTimeout(scrollDebounceRef.current)
+        }
+        scrollDebounceRef.current = setTimeout(() => {
+          onScrollChangeRef.current(view.scrollDOM.scrollTop)
+        }, 300)
+
+        if (visibleRangeDebounceRef.current) {
+          clearTimeout(visibleRangeDebounceRef.current)
+        }
+        visibleRangeDebounceRef.current = setTimeout(() => {
+          onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(view))
+        }, 100)
+        return false
+      }
+    })
+
+    const extensions: Extension[] = [
+      lineNumbers(),
+      highlightActiveLine(),
+      highlightActiveLineGutter(),
+      bracketMatching(),
+      foldGutter(),
+      indentOnInput(),
+      history(),
+      highlightSelectionMatches(),
+      Prec.highest(
+        keymap.of([
+          {
+            key: 'Mod-s',
+            run: () => {
+              void requestSaveEditorFile(filePathRef.current)
+              return true
+            },
+            preventDefault: true
+          }
+        ])
+      ),
+      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      themeCompartment.current.of(createTermulTheme(isDark, syntaxColorsRef.current)),
+      updateListener,
+      scrollListener,
+      EditorView.lineWrapping
+    ]
+
+    if (options.readOnly) {
+      extensions.push(EditorState.readOnly.of(true))
+    }
+
+    // Cancellation flag to prevent stale async completions from leaking EditorViews
+    let cancelled = false
+
+    // Load language asynchronously
+    const initEditor = async (): Promise<void> => {
+      const langExtension = await loadLanguage(options.language)
+      if (cancelled) return
+
+      if (langExtension) {
+        extensions.push(langExtension)
+      }
+
+      if (!containerRef.current) return
+
+      const state = EditorState.create({
+        doc: contentRef.current,
+        extensions
+      })
+
+      if (cancelled) return
+
+      const view = new EditorView({
+        state,
+        parent: containerRef.current
+      })
+
+      if (cancelled) {
+        view.destroy()
+        return
+      }
+
+      viewRef.current = view
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(view))
+      setViewReady(true)
+    }
+
+    initEditor()
+
+    return () => {
+      cancelled = true
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+        debounceTimerRef.current = null
+        // Flush the pending change so the last edit isn't lost
+        if (viewRef.current) {
+          onChangeRef.current(viewRef.current.state.doc.toString())
+        }
+      }
+      if (scrollDebounceRef.current) {
+        clearTimeout(scrollDebounceRef.current)
+      }
+      if (visibleRangeDebounceRef.current) {
+        clearTimeout(visibleRangeDebounceRef.current)
+      }
+      pendingRestoreTokenRef.current = null
+      if (viewRef.current) {
+        viewRef.current.destroy()
+        viewRef.current = null
+      }
+      setViewReady(false)
+    }
+  }, [containerRef, options.language, options.readOnly])
+
+  // Watch for dark/light class changes and color theme updates
+  useEffect(() => {
+    const reconfigureTheme = (syntax?: ColorThemeChangedDetail['syntax'] | null): void => {
+      if (syntax !== undefined) {
+        syntaxColorsRef.current = syntax
+      }
+
+      const view = viewRef.current
+      if (!view) return
+
+      const isDarkNow = document.documentElement.classList.contains('dark')
+      view.dispatch({
+        effects: themeCompartment.current.reconfigure(
+          createTermulTheme(isDarkNow, syntaxColorsRef.current)
+        )
+      })
+    }
+
+    const observer = new MutationObserver(() => {
+      reconfigureTheme()
+    })
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    })
+
+    const handleColorThemeChanged = (event: Event): void => {
+      const detail = (event as CustomEvent<ColorThemeChangedDetail>).detail
+      reconfigureTheme(detail.syntax)
+    }
+
+    window.addEventListener(COLOR_THEME_CHANGED_EVENT, handleColorThemeChanged)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener(COLOR_THEME_CHANGED_EVENT, handleColorThemeChanged)
+    }
+  }, [])
+
+  const flushPendingContent = useCallback((): void => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
+    }
+    const view = viewRef.current
+    if (view) {
+      onChangeRef.current(view.state.doc.toString())
+    }
+  }, [])
+
+  const setContent = useCallback((content: string) => {
+    const view = viewRef.current
+    if (!view) return
+
+    const currentContent = view.state.doc.toString()
+    if (currentContent === content) return
+
+    isExternalUpdate.current = true
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: content }
+    })
+    isExternalUpdate.current = false
+  }, [])
+
+  const scrollToLine = useCallback((lineNumber: number, highlightTerm?: string) => {
+    const view = viewRef.current
+    if (!view) return
+
+    const safeLineNumber = Math.min(Math.max(1, lineNumber), view.state.doc.lines)
+    const line = view.state.doc.line(safeLineNumber)
+
+    const lineText = line.text
+    const normalizedHighlight = highlightTerm?.trim().toLowerCase()
+    const matchIndex = normalizedHighlight
+      ? lineText.toLowerCase().indexOf(normalizedHighlight)
+      : -1
+
+    const selection =
+      matchIndex >= 0 && normalizedHighlight
+        ? {
+            anchor: line.from + matchIndex,
+            head: line.from + matchIndex + normalizedHighlight.length
+          }
+        : { anchor: line.from }
+
+    view.dispatch({
+      selection,
+      effects: EditorView.scrollIntoView(line.from, {
+        y: 'center',
+        yMargin: 48
+      })
+    })
+
+    // Ensure final position after layout/paint in hidden->visible tab transitions.
+    requestAnimationFrame(() => {
+      const currentView = viewRef.current
+      if (!currentView) return
+      const lineBlock = currentView.lineBlockAt(line.from)
+      const scrollDOM = currentView.scrollDOM
+      const viewportHeight = scrollDOM.clientHeight
+      const maxScrollTop = Math.max(0, scrollDOM.scrollHeight - viewportHeight)
+      const desiredScrollTop = Math.max(
+        0,
+        Math.min(maxScrollTop, lineBlock.top - viewportHeight / 2)
+      )
+      onScrollChangeRef.current(desiredScrollTop)
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
+      currentView.focus()
+    })
+  }, [])
+
+  const restoreViewState = useCallback((lineNumber: number, column: number, scrollTop: number) => {
+    const view = viewRef.current
+    if (!view) return
+    if (!Number.isFinite(lineNumber) || !Number.isFinite(column)) return
+
+    const safeLineNumber = Math.min(Math.max(1, Math.trunc(lineNumber)), view.state.doc.lines)
+    const line = view.state.doc.line(safeLineNumber)
+    const safeColumn = Math.max(1, Math.trunc(column))
+    const anchor = Math.min(line.to, line.from + safeColumn - 1)
+    const restoreToken = Symbol('restore-view-state')
+    pendingRestoreTokenRef.current = restoreToken
+
+    view.dispatch({
+      selection: { anchor, head: anchor }
+    })
+
+    requestAnimationFrame(() => {
+      const currentView = viewRef.current
+      if (!currentView || pendingRestoreTokenRef.current !== restoreToken) return
+      const nextScrollTop = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0
+      currentView.scrollDOM.scrollTop = nextScrollTop
+      onScrollChangeRef.current(nextScrollTop)
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
+      currentView.focus()
+      pendingRestoreTokenRef.current = null
+    })
+  }, [])
+
+  const getVisibleLineRange = useCallback((): VisibleLineRange | null => {
+    const view = viewRef.current
+    if (!view) {
+      return null
+    }
+
+    return getVisibleLineRangeForView(view)
+  }, [])
+
+  return {
+    view: viewReady ? viewRef.current : null,
+    isReady: viewReady,
+    setContent,
+    flushPendingContent,
+    scrollToLine,
+    restoreViewState,
+    getVisibleLineRange
+  }
+}

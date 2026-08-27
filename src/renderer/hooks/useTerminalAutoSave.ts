@@ -1,0 +1,335 @@
+import { useEffect, useRef } from 'react'
+import { persistenceApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
+import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
+import type { Terminal } from '@/types/project'
+import type {
+  PersistedTerminal,
+  PersistedTerminalLayout
+} from '../../shared/types/persistence.types'
+import { PersistenceKeys } from '../../shared/types/persistence.types'
+import { useProjectStore } from '../stores/project-store'
+import { useTerminalStore } from '../stores/terminal-store'
+import { extractScrollback, getTerminalModes } from '../utils/terminal-registry'
+
+function transcriptToScrollback(transcript?: string): string[] | undefined {
+  if (!transcript) {
+    return undefined
+  }
+
+  // Approximate reconstruction of rendered output from raw PTY transcript.
+  const ESC = String.fromCharCode(27)
+  const BEL = String.fromCharCode(7)
+  const oscSequenceRegex = new RegExp(`${ESC}\\][^${BEL}]*(?:${BEL}|${ESC}\\\\)`, 'g')
+  const ansiSequenceRegex = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, 'g')
+  const withoutOsc = transcript.replace(oscSequenceRegex, '')
+  const withoutAnsi = withoutOsc.replace(ansiSequenceRegex, '')
+  const normalized = withoutAnsi
+    .replace(/\r\n/g, '\n')
+    .replace(/([^\n])\r(?!\n)/g, '$1')
+    .replace(/\r/g, '\n')
+  const lines = normalized.split('\n')
+
+  while (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop()
+  }
+
+  return lines.length > 0 ? lines : undefined
+}
+
+function mergeScrollback(snapshot?: string[], transcript?: string): string[] | undefined {
+  if (snapshot && snapshot.length > 0) {
+    return snapshot
+  }
+
+  const transcriptLines = transcriptToScrollback(transcript)
+
+  if (transcriptLines && transcriptLines.length > 0) {
+    return transcriptLines
+  }
+
+  return undefined
+}
+
+interface PersistedTerminalSnapshot {
+  persistedTerminal: PersistedTerminal
+  scrollbackExtractionAvailable: boolean
+  extractedScrollbackLineCount: number
+}
+
+function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnapshot {
+  // R3: modes travel alongside scrollback, keyed by the same registry id the
+  // tracker is registered under (ptyId ?? id), so they reach the restore payload.
+  const registryId = terminal.ptyId ?? terminal.id
+  const extractedScrollback = extractScrollback(registryId)
+  const capturedModes = getTerminalModes(registryId)
+
+  return {
+    persistedTerminal: {
+      id: terminal.id,
+      name: terminal.name,
+      shell: terminal.shell,
+      cwd: terminal.cwd,
+      scrollback: mergeScrollback(extractedScrollback, terminal.transcript),
+      transcript: terminal.transcript,
+      ...(capturedModes ? { modes: capturedModes } : {}),
+      // ADR-004.4: persist agent identity + program/baseArgs (no seed prompt).
+      ...(terminal.kind === 'agent'
+        ? {
+            kind: 'agent' as const,
+            agentId: terminal.agentId,
+            agentName: terminal.agentName,
+            agentProgram: terminal.agentProgram,
+            agentArgs: terminal.agentArgs
+          }
+        : {})
+    },
+    scrollbackExtractionAvailable: extractedScrollback !== undefined,
+    extractedScrollbackLineCount: extractedScrollback?.length ?? 0
+  }
+}
+
+export interface SaveTerminalLayoutOptions {
+  correlationId?: string
+  reason?: 'project-switch' | 'manual-save' | 'auto-save'
+  targetProjectId?: string
+}
+
+const terminalRestoreProjectsInProgress = new Map<string, string>()
+
+export function setTerminalRestoreInProgress(
+  projectId: string,
+  isRestoring: boolean,
+  ownerId: string
+): void {
+  if (!projectId || !ownerId) {
+    return
+  }
+
+  if (isRestoring) {
+    terminalRestoreProjectsInProgress.set(projectId, ownerId)
+    return
+  }
+
+  if (terminalRestoreProjectsInProgress.get(projectId) === ownerId) {
+    terminalRestoreProjectsInProgress.delete(projectId)
+  }
+}
+
+export function isTerminalRestoreInProgress(): boolean {
+  return terminalRestoreProjectsInProgress.size > 0
+}
+
+/**
+ * Sync extracted scrollback to the terminal store
+ * Updates each terminal's pendingScrollback field in memory
+ * Skips terminals where scrollback extraction returns undefined
+ */
+export function syncScrollbackToStore(terminals: PersistedTerminal[]): void {
+  const store = useTerminalStore.getState()
+  for (const t of terminals) {
+    // Skip if scrollback is undefined (terminal not in registry)
+    if (t.scrollback === undefined) continue
+    store.updateTerminalScrollback(t.id, t.scrollback)
+  }
+}
+
+/**
+ * Serialize terminal store state for persistence
+ * Includes scrollback extraction from terminal registry
+ */
+export function serializeTerminalsForProject(
+  terminals: Terminal[],
+  projectId: string,
+  activeTerminalId: string
+): PersistedTerminalLayout {
+  const projectTerminals = terminals.filter((t) => t.projectId === projectId)
+
+  const terminalSnapshots = projectTerminals.map((terminal) =>
+    toPersistedTerminalSnapshot(terminal)
+  )
+
+  return {
+    activeTerminalId: projectTerminals.find((t) => t.id === activeTerminalId)?.id ?? null,
+    terminals: terminalSnapshots.map(({ persistedTerminal }) => persistedTerminal),
+    updatedAt: new Date().toISOString()
+  }
+}
+
+/**
+ * Hook to auto-save terminal layout for the active project
+ * Subscribes to terminal store changes and triggers debounced writes
+ */
+export function useTerminalAutoSave(): void {
+  const hasInitialized = useRef(false)
+  const activeProjectIdRef = useRef<string>('')
+  const activeProjectId = useProjectStore((state) => state.activeProjectId)
+
+  // Keep ref in sync with current activeProjectId
+  activeProjectIdRef.current = activeProjectId
+
+  useEffect(() => {
+    // Subscribe to terminal store changes
+    const unsubscribe = useTerminalStore.subscribe((state, prevState) => {
+      // Skip the first state change (from restore)
+      if (!hasInitialized.current) {
+        hasInitialized.current = true
+        return
+      }
+
+      // Only save if terminals or activeTerminalId changed
+      if (
+        state.terminals === prevState.terminals &&
+        state.activeTerminalId === prevState.activeTerminalId
+      ) {
+        return
+      }
+
+      // Skip activity-only changes (hasActivity/lastActivityTimestamp) and reorderings
+      // These create new array refs but don't affect persisted layout
+      if (state.activeTerminalId === prevState.activeTerminalId) {
+        if (state.terminals.length === prevState.terminals.length) {
+          // Build ID sets to detect true structural changes (add/remove/reorder)
+          const prevIds = new Set(prevState.terminals.map((t) => t.id))
+          const nextIds = new Set(state.terminals.map((t) => t.id))
+          const added = state.terminals.filter((t) => !prevIds.has(t.id))
+          const removed = prevState.terminals.filter((t) => !nextIds.has(t.id))
+          // Check if any existing terminal changed its persisted-relevant fields
+          const changedFields = state.terminals.some((t) => {
+            const prev = prevState.terminals.find((p) => p.id === t.id)
+            if (!prev) return false
+            return (
+              t.name !== prev.name ||
+              t.shell !== prev.shell ||
+              t.cwd !== prev.cwd ||
+              t.projectId !== prev.projectId ||
+              t.isAppHidden !== prev.isAppHidden ||
+              t.appHiddenSince !== prev.appHiddenSince ||
+              t.kind !== prev.kind ||
+              t.agentId !== prev.agentId ||
+              t.agentName !== prev.agentName ||
+              t.agentProgram !== prev.agentProgram ||
+              JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(prev.agentArgs ?? [])
+            )
+          })
+          if (added.length === 0 && removed.length === 0 && !changedFields) {
+            return
+          }
+        }
+      }
+
+      if (isTerminalRestoreInProgress()) {
+        return
+      }
+
+      // A multi-root group can show terminals from several projects at once.
+      // Persist every affected project independently; projectId remains the
+      // terminal ownership/security boundary even when the pane layout is shared.
+      const projectIds = new Set<string>()
+      if (activeProjectIdRef.current) projectIds.add(activeProjectIdRef.current)
+      for (const terminal of [...state.terminals, ...prevState.terminals]) {
+        if (terminal.projectId) projectIds.add(terminal.projectId)
+      }
+
+      for (const projectId of projectIds) {
+        const layout = serializeTerminalsForProject(
+          state.terminals,
+          projectId,
+          state.activeTerminalId
+        )
+        // NOTE: syncScrollbackToStore is already called in saveTerminalLayout
+        // before writing to disk, so we skip it here to avoid double writes.
+        persistenceApi
+          .writeDebounced(PersistenceKeys.terminals(projectId), layout)
+          .catch((err: unknown) => {
+            void logFrontendError({
+              level: 'error',
+              source: 'terminal-autosave.multi-root',
+              message: `projectId=${projectId} error=${err instanceof Error ? err.message : String(err)}`
+            })
+          })
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [])
+}
+
+/**
+ * Load persisted terminals for a project
+ * Returns null if no persisted data exists
+ */
+export async function loadPersistedTerminals(
+  projectId: string
+): Promise<PersistedTerminalLayout | null> {
+  const result = await persistenceApi.read<PersistedTerminalLayout>(
+    PersistenceKeys.terminals(projectId)
+  )
+
+  if (result.success) {
+    return result.data
+  }
+
+  // FILE_NOT_FOUND is expected for new projects
+  if (result.code === 'FILE_NOT_FOUND') {
+    return null
+  }
+
+  console.error('Failed to load terminal layout:', result.error)
+  return null
+}
+
+/**
+ * Manually trigger a save of the current terminal layout
+ * Useful for ensuring save before app quit
+ */
+export async function saveTerminalLayout(
+  projectId: string,
+  options?: SaveTerminalLayoutOptions
+): Promise<void> {
+  const state = useTerminalStore.getState()
+  const projectTerminals = state.terminals.filter((terminal) => terminal.projectId === projectId)
+  const terminalSnapshots = projectTerminals.map((terminal) => ({
+    terminal,
+    snapshot: toPersistedTerminalSnapshot(terminal)
+  }))
+  const layout: PersistedTerminalLayout = {
+    activeTerminalId:
+      projectTerminals.find((terminal) => terminal.id === state.activeTerminalId)?.id ?? null,
+    terminals: terminalSnapshots.map(({ snapshot }) => snapshot.persistedTerminal),
+    updatedAt: new Date().toISOString()
+  }
+
+  if (options?.reason === 'project-switch') {
+    for (const { terminal, snapshot } of terminalSnapshots) {
+      recordTerminalContinuityEvent({
+        name: 'transcript-persistence-evaluated',
+        correlationId: options.correlationId,
+        projectId,
+        terminalId: terminal.id,
+        ptyId: terminal.ptyId,
+        details: {
+          reason: options.reason,
+          targetProjectId: options.targetProjectId,
+          transcriptLength: terminal.transcript?.length ?? 0,
+          scrollbackExtractionAvailable: snapshot.scrollbackExtractionAvailable,
+          extractedScrollbackLineCount: snapshot.extractedScrollbackLineCount,
+          persistedScrollbackLineCount: snapshot.persistedTerminal.scrollback?.length ?? 0
+        }
+      })
+    }
+  }
+
+  // Sync layout.terminals scrollback to the in-memory store's pendingScrollback.
+  // This preserves scrollback across project switches by updating the store before
+  // the xterm instance is disposed, avoiding state loss when switching projects.
+  syncScrollbackToStore(layout.terminals)
+
+  const result = await persistenceApi.write(PersistenceKeys.terminals(projectId), layout)
+
+  if (!result.success) {
+    console.error('Failed to save terminal layout:', result.error)
+  }
+}

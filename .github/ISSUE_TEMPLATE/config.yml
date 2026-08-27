@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and general discussions
+    url: https://github.com/qinsehm1128/termul-new/discussions
+    about: Please use GitHub Discussions for questions, ideas, and general support.

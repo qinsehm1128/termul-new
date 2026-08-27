@@ -1,0 +1,121 @@
+import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
+import { ChevronDown, Terminal } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Skeleton } from '@/components/ui/skeleton'
+import { shellApi } from '@/lib/api'
+import { isPreferredShell } from '@/lib/shell-api'
+import { cn } from '@/lib/utils'
+
+interface ShellSelectorProps {
+  onSelectShell: (shell: ShellInfo) => void
+  defaultShell?: string
+  className?: string
+}
+
+export function ShellSelector({ onSelectShell, defaultShell, className }: ShellSelectorProps) {
+  const { t } = useTranslation('shell')
+  const [isOpen, setIsOpen] = useState(false)
+  const [shells, setShells] = useState<DetectedShells | null>(null)
+  const [loading, setLoading] = useState(true)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const fetchShells = async () => {
+      try {
+        const result = await shellApi.getAvailableShells()
+        if (result.success) {
+          setShells(result.data)
+        }
+      } catch {
+        // Fallback if IPC fails
+        setShells(null)
+      } finally {
+        setLoading(false)
+      }
+    }
+    void fetchShells()
+  }, [])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isOpen])
+
+  const handleSelectShell = useCallback(
+    (shell: ShellInfo) => {
+      onSelectShell(shell)
+      setIsOpen(false)
+    },
+    [onSelectShell]
+  )
+
+  const sortedShells = shells?.available?.slice().sort((a, b) => {
+    if (defaultShell) {
+      if (isPreferredShell(a, defaultShell)) return -1
+      if (isPreferredShell(b, defaultShell)) return 1
+    }
+    return a.displayName.localeCompare(b.displayName)
+  })
+
+  return (
+    <div ref={dropdownRef} className={cn('relative', className)}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="h-8 px-2 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors gap-1"
+        title={t('terminalTabs.selectShell')}
+      >
+        <Terminal size={14} />
+        <ChevronDown size={12} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute top-full right-0 mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
+          {loading ? (
+            <div className="py-1 px-3 space-y-1">
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-full" />
+            </div>
+          ) : sortedShells && sortedShells.length > 0 ? (
+            <div className="py-1">
+              {sortedShells.map((shell) => (
+                <button
+                  key={shell.name}
+                  onClick={() => handleSelectShell(shell)}
+                  className={cn(
+                    'w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2',
+                    isPreferredShell(shell, defaultShell) && 'text-primary'
+                  )}
+                >
+                  <Terminal size={14} />
+                  <span>{shell.displayName}</span>
+                  {isPreferredShell(shell, defaultShell) && (
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {t('terminalTabs.default')}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              {t('terminalTabs.noShells')}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

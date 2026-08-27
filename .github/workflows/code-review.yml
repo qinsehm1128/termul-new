@@ -1,0 +1,47 @@
+name: Code Review
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: code-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+      API_TIMEOUT_MS: 3000000
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@b112a167ee1f4aa7ad2e3adae255c8c8c69e740b # v1
+        env:
+          ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+          API_TIMEOUT_MS: 3000000
+        with:
+          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'

@@ -1,0 +1,83 @@
+﻿import { create } from 'zustand'
+import type { AppSettings, AppSettingsUpdate } from '@/types/settings'
+import { DEFAULT_APP_SETTINGS } from '@/types/settings'
+
+interface AppSettingsState {
+  settings: AppSettings
+  isLoaded: boolean
+  setSettings: (settings: AppSettings) => void
+  updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void
+  updateSettings: (updates: AppSettingsUpdate) => void
+  resetToDefaults: () => void
+}
+
+export const useAppSettingsStore = create<AppSettingsState>((set) => ({
+  settings: DEFAULT_APP_SETTINGS,
+  isLoaded: false,
+
+  setSettings: (settings) => set({ settings, isLoaded: true }),
+
+  updateSetting: (key, value) =>
+    set((state) => ({
+      settings: { ...state.settings, [key]: value }
+    })),
+
+  updateSettings: (updates) =>
+    set((state) => ({
+      settings: { ...state.settings, ...updates }
+    })),
+
+  resetToDefaults: () => set({ settings: DEFAULT_APP_SETTINGS })
+}))
+
+// Selectors
+export const useAppSettings = () => useAppSettingsStore((state) => state.settings)
+export const useAppSettingsLoaded = () => useAppSettingsStore((state) => state.isLoaded)
+export const useTerminalFontFamily = () =>
+  useAppSettingsStore((state) => state.settings.terminalFontFamily)
+export const useTerminalSymbolFontFamily = () =>
+  useAppSettingsStore((state) => state.settings.terminalSymbolFontFamily)
+export const useTerminalFontSize = () =>
+  useAppSettingsStore((state) => state.settings.terminalFontSize)
+export const useDefaultShell = () => useAppSettingsStore((state) => state.settings.defaultShell)
+export const useDefaultProjectColor = () =>
+  useAppSettingsStore((state) => state.settings.defaultProjectColor)
+export const useTerminalBufferSize = () =>
+  useAppSettingsStore((state) => state.settings.terminalBufferSize)
+export const useTerminalRenderer = () =>
+  useAppSettingsStore((state) => state.settings.terminalRenderer)
+export const useTerminalScreenReaderMode = () =>
+  useAppSettingsStore((state) => state.settings.terminalScreenReaderMode)
+export const useMaxTerminalsPerProject = () =>
+  useAppSettingsStore((state) => state.settings.maxTerminalsPerProject)
+export const useOrphanDetectionEnabled = () =>
+  useAppSettingsStore((state) => state.settings.orphanDetectionEnabled)
+export const useOrphanDetectionTimeout = () =>
+  useAppSettingsStore((state) => state.settings.orphanDetectionTimeout)
+export const useConfirmTerminalClose = () =>
+  useAppSettingsStore((state) => state.settings.confirmTerminalClose)
+export const useTerminalUrlOpenMode = () =>
+  useAppSettingsStore((state) => state.settings.terminalUrlOpenMode)
+export const useSidebarVisibilitySetting = () =>
+  useAppSettingsStore((state) => state.settings.sidebarVisible)
+export const useFileExplorerVisibilitySetting = () =>
+  useAppSettingsStore((state) => state.settings.fileExplorerVisible)
+export const useColorTheme = () => useAppSettingsStore((state) => state.settings.colorTheme)
+export const useAppearanceMode = () => useAppSettingsStore((state) => state.settings.appearanceMode)
+export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)
+export const useUiLanguage = () => useAppSettingsStore((state) => state.settings.uiLanguage)
+export const useAcpTurnTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpTurnTimeoutSecs)
+export const useEditorAutoSave = () => useAppSettingsStore((state) => state.settings.editorAutoSave)
+export const useEditorAutoSaveDelayMs = () =>
+  useAppSettingsStore((state) => state.settings.editorAutoSaveDelayMs)
+export const useAcpTurnIdleTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpTurnIdleTimeoutSecs)
+export const useAcpSessionNewTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpSessionNewTimeoutSecs)
+export const useAcpSessionReopenTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpSessionReopenTimeoutSecs)
+export const useAcpFirstPromptWarmup = () =>
+  useAppSettingsStore((state) => state.settings.acpFirstPromptWarmupSecs)
+export const useAcpPreferLocalNpmInstall = () =>
+  useAppSettingsStore((state) => state.settings.acpPreferLocalNpmInstall)

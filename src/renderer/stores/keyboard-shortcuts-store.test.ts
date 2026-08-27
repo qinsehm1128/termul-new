@@ -1,0 +1,431 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
+import {
+  findConflictingShortcut,
+  formatKeyForDisplay,
+  matchesShortcut,
+  normalizeKeyEvent,
+  useKeyboardShortcutsStore
+} from './keyboard-shortcuts-store'
+
+describe('keyboard-shortcuts-store', () => {
+  beforeEach(() => {
+    // Reset store to initial state before each test
+    const defaults: Record<
+      string,
+      (typeof DEFAULT_KEYBOARD_SHORTCUTS)[keyof typeof DEFAULT_KEYBOARD_SHORTCUTS]
+    > = {}
+    for (const [key, shortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
+      defaults[key] = { ...shortcut }
+    }
+    useKeyboardShortcutsStore.setState({
+      shortcuts: defaults,
+      isLoaded: false
+    })
+  })
+
+  describe('initial state', () => {
+    it('should have all default shortcuts', () => {
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(Object.keys(shortcuts).length).toBe(Object.keys(DEFAULT_KEYBOARD_SHORTCUTS).length)
+    })
+
+    it('should include sidebar toggle shortcut defaults', () => {
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.sidebarToggle.defaultKey).toBe('ctrl+shift+b')
+      expect(shortcuts.sidebarToggle.customKey).toBeUndefined()
+    })
+
+    it('should include color theme picker shortcut defaults', () => {
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.colorThemePicker.defaultKey).toBe('ctrl+alt+t')
+      expect(shortcuts.colorThemePicker.customKey).toBeUndefined()
+    })
+
+    it('should have commandPalette shortcut with default key', () => {
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.commandPalette.defaultKey).toBe('ctrl+k')
+      expect(shortcuts.commandPalette.customKey).toBeUndefined()
+    })
+
+    it('should have isLoaded as false initially', () => {
+      const { isLoaded } = useKeyboardShortcutsStore.getState()
+      expect(isLoaded).toBe(false)
+    })
+  })
+
+  describe('updateShortcut', () => {
+    it('should update customKey for a shortcut', () => {
+      const { updateShortcut } = useKeyboardShortcutsStore.getState()
+
+      updateShortcut('commandPalette', 'ctrl+j')
+
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.commandPalette.customKey).toBe('ctrl+j')
+      expect(shortcuts.commandPalette.defaultKey).toBe('ctrl+k') // unchanged
+    })
+
+    it('should clear customKey when set to same as default', () => {
+      const { updateShortcut } = useKeyboardShortcutsStore.getState()
+
+      // First set a custom key
+      updateShortcut('commandPalette', 'ctrl+j')
+      expect(useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey).toBe('ctrl+j')
+
+      // Then set it back to default
+      updateShortcut('commandPalette', 'ctrl+k')
+      expect(
+        useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey
+      ).toBeUndefined()
+    })
+
+    it('should clear customKey when set to the default with reordered modifiers', () => {
+      const { updateShortcut } = useKeyboardShortcutsStore.getState()
+
+      updateShortcut('worktreeCreate', 'ctrl+alt+shift+n')
+
+      expect(
+        useKeyboardShortcutsStore.getState().shortcuts.worktreeCreate.customKey
+      ).toBeUndefined()
+    })
+
+    it('should not affect other shortcuts when updating one', () => {
+      const { updateShortcut } = useKeyboardShortcutsStore.getState()
+
+      updateShortcut('commandPalette', 'ctrl+j')
+
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.terminalSearch.customKey).toBeUndefined()
+      expect(shortcuts.terminalSearch.defaultKey).toBe('ctrl+f')
+    })
+  })
+
+  describe('resetShortcut', () => {
+    it('should reset a single shortcut to default', () => {
+      const { updateShortcut, resetShortcut } = useKeyboardShortcutsStore.getState()
+
+      // Set custom key
+      updateShortcut('commandPalette', 'ctrl+j')
+      expect(useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey).toBe('ctrl+j')
+
+      // Reset it
+      resetShortcut('commandPalette')
+      expect(
+        useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey
+      ).toBeUndefined()
+    })
+
+    it('should not affect other shortcuts when resetting one', () => {
+      const { updateShortcut, resetShortcut } = useKeyboardShortcutsStore.getState()
+
+      // Set custom keys for two shortcuts
+      updateShortcut('commandPalette', 'ctrl+j')
+      updateShortcut('terminalSearch', 'ctrl+g')
+
+      // Reset only one
+      resetShortcut('commandPalette')
+
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.commandPalette.customKey).toBeUndefined()
+      expect(shortcuts.terminalSearch.customKey).toBe('ctrl+g')
+    })
+  })
+
+  describe('resetAllShortcuts', () => {
+    it('should reset all shortcuts to defaults', () => {
+      const { updateShortcut, resetAllShortcuts } = useKeyboardShortcutsStore.getState()
+
+      // Set custom keys for multiple shortcuts
+      updateShortcut('commandPalette', 'ctrl+j')
+      updateShortcut('terminalSearch', 'ctrl+g')
+      updateShortcut('newProject', 'ctrl+m')
+
+      // Reset all
+      resetAllShortcuts()
+
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.commandPalette.customKey).toBeUndefined()
+      expect(shortcuts.terminalSearch.customKey).toBeUndefined()
+      expect(shortcuts.newProject.customKey).toBeUndefined()
+    })
+  })
+
+  describe('setShortcuts', () => {
+    it('should replace all shortcuts and set isLoaded to true', () => {
+      const newShortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS }
+      newShortcuts.commandPalette = { ...newShortcuts.commandPalette, customKey: 'ctrl+j' }
+
+      const { setShortcuts } = useKeyboardShortcutsStore.getState()
+      setShortcuts(newShortcuts)
+
+      const { shortcuts, isLoaded } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.commandPalette.customKey).toBe('ctrl+j')
+      expect(isLoaded).toBe(true)
+    })
+  })
+})
+
+describe('findConflictingShortcut', () => {
+  it('should find a conflicting shortcut', () => {
+    const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS }
+
+    // Try to set terminalSearch to same key as commandPalette
+    const conflict = findConflictingShortcut(shortcuts, 'ctrl+k', 'terminalSearch')
+    expect(conflict).toBeDefined()
+    expect(conflict?.id).toBe('commandPalette')
+  })
+
+  it('should not find conflict for same shortcut', () => {
+    const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS }
+
+    // Setting commandPalette to its own key should not conflict
+    const conflict = findConflictingShortcut(shortcuts, 'ctrl+k', 'commandPalette')
+    expect(conflict).toBeUndefined()
+  })
+
+  it('should not find conflict for unique key', () => {
+    const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS }
+
+    const conflict = findConflictingShortcut(shortcuts, 'ctrl+m', 'commandPalette')
+    expect(conflict).toBeUndefined()
+  })
+
+  it('should find conflict with customKey', () => {
+    const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS }
+    shortcuts.terminalSearch = { ...shortcuts.terminalSearch, customKey: 'ctrl+j' }
+
+    const conflict = findConflictingShortcut(shortcuts, 'ctrl+j', 'commandPalette')
+    expect(conflict).toBeDefined()
+    expect(conflict?.id).toBe('terminalSearch')
+  })
+
+  it('should find conflicts with reordered modifiers', () => {
+    const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS }
+
+    const conflict = findConflictingShortcut(shortcuts, 'ctrl+alt+shift+n', 'commandPalette')
+    expect(conflict).toBeDefined()
+    expect(conflict?.id).toBe('worktreeCreate')
+  })
+})
+
+describe('normalizeKeyEvent', () => {
+  it('should normalize a simple ctrl+key combination', () => {
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+k')
+  })
+
+  it('should normalize ctrl+shift combination', () => {
+    const event = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, shiftKey: true })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+shift+p')
+  })
+
+  it('should handle Tab key', () => {
+    const event = new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+tab')
+  })
+
+  it('should handle meta key as cmd', () => {
+    // metaKey produces 'cmd' token on all platforms (normalized output)
+    const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true })
+    const normalized = normalizeKeyEvent(event)
+    // On non-macOS (test env), metaKey → 'cmd' (secondary modifier)
+    // On macOS, metaKey → 'cmd' (primary modifier)
+    expect(normalized).toBe('cmd+k')
+  })
+
+  it('should normalize ctrl+alt in persisted shortcut order', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, altKey: true })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+alt+t')
+  })
+
+  it('should normalize ctrl+shift+alt in persisted shortcut order', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'n',
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+shift+alt+n')
+  })
+
+  it('should emit both cmd and ctrl for a ⌘⌃ combo on macOS', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    if (currentIsMac) {
+      // macOS: both modifiers emitted in canonical order (ctrl before cmd).
+      expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+t')
+    } else {
+      // Non-macOS: ctrl takes precedence, cmd is dropped.
+      expect(normalizeKeyEvent(event)).toBe('ctrl+t')
+    }
+  })
+
+  it('should emit a full four-modifier combo on macOS', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (!currentIsMac) return
+    const event = new KeyboardEvent('keydown', {
+      key: 't',
+      ctrlKey: true,
+      metaKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+shift+alt+t')
+  })
+})
+
+describe('formatKeyForDisplay', () => {
+  it('should format ctrl+k for display', () => {
+    // Platform-dependent, but should contain the key
+    const result = formatKeyForDisplay('ctrl+k')
+    expect(result).toContain('K')
+  })
+
+  it('should format ctrl+shift+p for display', () => {
+    const result = formatKeyForDisplay('ctrl+shift+p')
+    expect(result).toContain('P')
+  })
+
+  it('should handle empty string', () => {
+    expect(formatKeyForDisplay('')).toBe('')
+  })
+
+  it('should format ctrl+pagedown for display', () => {
+    const result = formatKeyForDisplay('ctrl+pagedown')
+    expect(result).toContain('PageDown')
+  })
+})
+
+describe('matchesShortcut', () => {
+  it('should match a simple shortcut', () => {
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
+    expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
+  })
+
+  it('should not match different key', () => {
+    const event = new KeyboardEvent('keydown', { key: 'j', ctrlKey: true })
+    expect(matchesShortcut(event, 'ctrl+k')).toBe(false)
+  })
+
+  it('should not match missing modifier', () => {
+    const event = new KeyboardEvent('keydown', { key: 'k' })
+    expect(matchesShortcut(event, 'ctrl+k')).toBe(false)
+  })
+
+  it('should match with shift modifier', () => {
+    const event = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, shiftKey: true })
+    expect(matchesShortcut(event, 'ctrl+shift+p')).toBe(true)
+  })
+
+  it('should match the color theme picker shortcut', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, altKey: true })
+    expect(matchesShortcut(event, DEFAULT_KEYBOARD_SHORTCUTS.colorThemePicker.defaultKey)).toBe(
+      true
+    )
+  })
+
+  it('should match ctrl+shift+alt shortcuts using persisted default order', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'n',
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(matchesShortcut(event, DEFAULT_KEYBOARD_SHORTCUTS.worktreeCreate.defaultKey)).toBe(true)
+  })
+
+  it('should match cmd+k against ctrl+k on macOS (alias)', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (!currentIsMac) {
+      // Non-macOS: cmd+k does NOT alias to ctrl+k
+      const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true })
+      expect(normalizeKeyEvent(event)).toBe('cmd+k')
+      expect(matchesShortcut(event, 'ctrl+k')).toBe(false)
+      return
+    }
+    // macOS: cmd+k should alias to ctrl+k
+    const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true })
+    expect(normalizeKeyEvent(event)).toBe('cmd+k')
+    expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
+  })
+
+  it('should reject ctrl+k on macOS (shell passthrough guard)', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (!currentIsMac) {
+      // Non-macOS: ctrl+k matches ctrl+k normally
+      const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
+      expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
+      return
+    }
+    // macOS: ctrl+k must NOT match — reserved for shell passthrough
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
+    expect(matchesShortcut(event, 'ctrl+k')).toBe(false)
+  })
+
+  it('should match ctrl+k against ctrl+k directly (non-macOS)', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (currentIsMac) return // tested in shell passthrough guard test
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
+    expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
+  })
+
+  it('should match a ⌘⌃ combo exactly without aliasing on macOS', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (!currentIsMac) return
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    // Exact multi-modifier match succeeds.
+    expect(matchesShortcut(event, 'ctrl+cmd+t')).toBe(true)
+    // The cross-modifier alias must NOT fire for multi-modifier combos,
+    // so it never collapses into a single-modifier binding.
+    expect(matchesShortcut(event, 'cmd+t')).toBe(false)
+    expect(matchesShortcut(event, 'ctrl+t')).toBe(false)
+  })
+})
+
+// The macOS branches above are guarded by the runtime `isMac` value, so they
+// no-op on non-macOS CI. This block mocks `@/lib/platform` to force macOS and
+// re-imports the store, exercising the regression deterministically everywhere.
+describe('macOS multi-modifier normalization (platform mocked)', () => {
+  let normalizeKeyEvent: typeof import('./keyboard-shortcuts-store').normalizeKeyEvent
+  let matchesShortcut: typeof import('./keyboard-shortcuts-store').matchesShortcut
+
+  beforeAll(async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/platform', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
+      return { ...actual, isMac: true }
+    })
+    const mod = await import('./keyboard-shortcuts-store')
+    normalizeKeyEvent = mod.normalizeKeyEvent
+    matchesShortcut = mod.matchesShortcut
+  })
+
+  afterAll(() => {
+    vi.doUnmock('@/lib/platform')
+    vi.resetModules()
+  })
+
+  it('emits both cmd and ctrl for a ⌘⌃ combo', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+t')
+  })
+
+  it('emits a full four-modifier combo', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 't',
+      ctrlKey: true,
+      metaKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+shift+alt+t')
+  })
+
+  it('matches a ⌘⌃ combo exactly without aliasing', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    expect(matchesShortcut(event, 'ctrl+cmd+t')).toBe(true)
+    // The cross-modifier alias must not fire for multi-modifier combos.
+    expect(matchesShortcut(event, 'cmd+t')).toBe(false)
+    expect(matchesShortcut(event, 'ctrl+t')).toBe(false)
+  })
+})

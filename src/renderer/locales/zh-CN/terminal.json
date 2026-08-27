@@ -1,0 +1,183 @@
+{
+  "title": "终端",
+  "activity": "终端有活动",
+  "fileWatcher": {
+    "changedExternally": "文件已在外部更改",
+    "reload": "重新加载"
+  },
+  "terminalCount_one": "{{formattedCount}} 个终端",
+  "terminalCount_other": "{{formattedCount}} 个终端",
+  "defaultName": "终端 {{number}}",
+  "emptyPane": {
+    "title": "新建终端",
+    "shell": "Shell：",
+    "create": "创建终端",
+    "shells": {
+      "powerShell": "PowerShell",
+      "commandPrompt": "命令提示符",
+      "wslUbuntu": "WSL：Ubuntu",
+      "gitBash": "Git Bash"
+    }
+  },
+  "search": {
+    "label": "搜索终端",
+    "placeholder": "搜索...",
+    "matchFound": "已找到匹配项",
+    "noMatches": "没有匹配项",
+    "previous": "上一个匹配项（Shift+Enter）",
+    "next": "下一个匹配项（Enter）",
+    "close": "关闭（Escape）"
+  },
+  "parkedByPhone": {
+    "title": "手机正在使用此终端",
+    "description": "已暂停电脑端适配，方便手机操作当前会话。",
+    "resume": "在此电脑继续"
+  },
+  "contextMenu": {
+    "copy": "复制",
+    "paste": "粘贴",
+    "selectAll": "全选",
+    "restart": "重启终端"
+  },
+  "crash": {
+    "criticalError": "严重错误",
+    "paneException": "终端窗格异常",
+    "sessionInterrupted": "会话已中断",
+    "description": "终端进程意外退出。这通常是因为 Shell 崩溃或 PTY 被操作系统终止。",
+    "reconnect": "重新连接会话"
+  },
+  "links": {
+    "openFileFailed": "无法打开终端输出中的文件。",
+    "unsupportedUrl": "终端输出仅支持 http/https URL。",
+    "openUrlFailed": "无法打开终端输出中的 URL。",
+    "missingContext": "找不到项目或工作目录；请设置项目/当前工作目录后再打开路径：{{path}}",
+    "pathIsDirectory": "该路径是目录而不是文件：{{path}}",
+    "fileNotFound": "找不到文件：{{path}}",
+    "openFileFailedWithDetails": "无法打开文件：{{path}}（{{details}}）",
+    "openFileFailedForPath": "无法打开文件：{{path}}"
+  },
+  "restore": {
+    "partialNote": "恢复提示：备用屏幕或频繁重绘的输出可能只能通过转录重放进行部分还原"
+  },
+  "resume": {
+    "restoredName": "已恢复的终端",
+    "disconnectedTitle": "终端连接已断开",
+    "disconnectedDescription": "保存的终端不可用或无法通过授权。此标签页会保留；你可以重试连接，而不会启动替代进程。",
+    "retry": "重试连接",
+    "retrying": "正在重试…"
+  },
+  "cleanup": {
+    "title": "终端清理需要处理",
+    "quarantined": "终端进程已停止，但清理尚未完成。",
+    "description": "终端 {{terminalId}} 保留在“{{stage}}”阶段。请重试终止以完成清理；不会启动替代进程。",
+    "retryTermination": "重试终止",
+    "retryTerminationFor": "重试终止终端 {{terminalId}}",
+    "retryInProgress": "正在重试…",
+    "retryFailed": "清理仍未完成。你可以再次重试终止。",
+    "stages": {
+      "kill": "终止进程",
+      "wait": "等待进程退出",
+      "flusher_join": "刷新输出",
+      "reader_join": "关闭输出读取器"
+    }
+  },
+  "environment": {
+    "applied_one": "已应用 {{formattedCount}} 个项目环境变量",
+    "applied_other": "已应用 {{formattedCount}} 个项目环境变量"
+  },
+  "errors": {
+    "label": "错误",
+    "pasteWriteFailed": "写入粘贴内容失败",
+    "writeFailed": "写入失败",
+    "unknownSpawn": "未知的启动错误",
+    "spawnFailed": "启动失败",
+    "spawnProcessFailed": "无法启动终端进程",
+    "spawnException": "终端启动异常",
+    "createFailed": "无法创建终端",
+    "launchAgentFailed": "无法启动 Agent"
+  },
+  "tauri": {
+    "loading": "正在加载终端...",
+    "errorTitle": "终端错误",
+    "shellDetectionFailed": "Shell 检测失败：{{details}}",
+    "initializationFailed": "终端初始化失败：{{details}}",
+    "processExited": "进程已退出，退出代码为 {{exitCode}}"
+  },
+  "exitNotification": {
+    "done": "{{terminalName}} — 已完成",
+    "failed": "{{terminalName}} — 失败（退出代码 {{exitCode}}）"
+  },
+  "limits": {
+    "perProject_one": "每个项目最多允许 {{formattedCount}} 个终端",
+    "perProject_other": "每个项目最多允许 {{formattedCount}} 个终端",
+    "global_one": "所有项目最多允许 {{formattedCount}} 个终端",
+    "global_other": "所有项目最多允许 {{formattedCount}} 个终端"
+  },
+  "board": {
+    "title": "终端看板",
+    "description": "所有终端按分组和项目列在一起。点一行即可跳到对应项目。",
+    "listTitle": "全部终端",
+    "search": "搜索终端",
+    "searchPlaceholder": "分组、项目或终端",
+    "clearSearch": "清除搜索",
+    "emptyTitle": "还没有终端",
+    "empty": "打开项目并新建终端后，它们会按分组出现在这里。",
+    "noMatchesTitle": "没有匹配的终端",
+    "noMatches": "换一个分组、项目或终端名称再试。",
+    "ungrouped": "未分组",
+    "unassigned": "未归属项目",
+    "noProject": "无项目",
+    "archived": "已归档",
+    "status": {
+      "live": "运行中",
+      "hidden": "已隐藏",
+      "disconnected": "已断开",
+      "attention": "需要关注"
+    }
+  },
+  "lifecycle": {
+    "closeView": "关闭视图",
+    "closeViewDescription": "隐藏此视图，终端进程将继续运行。",
+    "closeViewFailed": "无法关闭终端视图；进程仍在运行。",
+    "terminateProcess": "终止进程",
+    "terminateTitle": "终止终端进程？",
+    "terminateDescription": "这会停止实时进程并仅移除终端资源；对话聊天和历史记录会保留。",
+    "terminateFailed": "无法终止终端进程。",
+    "restartFailed": "无法重启终端进程。",
+    "reopen": "重新打开",
+    "stopHidden": "停止",
+    "reconnect": "重新连接",
+    "hiddenRunning": "已隐藏但仍在运行的终端",
+    "hiddenCount": "隐藏 {{count}}",
+    "reopenNamed": "重新打开 {{name}}",
+    "conversationScopeRequired": "请先打开一个对话，再创建持久终端",
+    "scopeError": "终端需要有效的对话作用域。"
+  },
+  "switcher": {
+    "scopeLabel": "终端范围",
+    "listLabel": "范围内的项目",
+    "empty": "此范围内没有终端",
+    "scope": {
+      "project": "当前项目",
+      "group": "当前分组",
+      "all": "全部"
+    },
+    "searchPlaceholder": "搜索终端",
+    "current": "当前",
+    "listPanelLabel": "终端列表",
+    "showList": "显示终端列表",
+    "hideList": "隐藏终端列表",
+    "scopeUnavailable": "先在侧栏选择一个分组",
+    "unassigned": "未归属项目",
+    "projectTitle": "{{project}} —— {{terminals}} 个终端，打开最近用过的那个"
+  },
+  "lastSession": {
+    "label": "上次会话",
+    "title": "上次关闭时开着的终端",
+    "capturedAt": "最后保存于 {{time}}",
+    "dismiss": "知道了",
+    "terminalCount": "{{terminals}} 个终端",
+    "restore": "恢复",
+    "restored": "已恢复"
+  }
+}

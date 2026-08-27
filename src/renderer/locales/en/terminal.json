@@ -1,0 +1,183 @@
+{
+  "title": "Terminal",
+  "activity": "Terminal has activity",
+  "fileWatcher": {
+    "changedExternally": "File changed externally",
+    "reload": "Reload"
+  },
+  "terminalCount_one": "{{formattedCount}} terminal",
+  "terminalCount_other": "{{formattedCount}} terminals",
+  "defaultName": "Terminal {{number}}",
+  "emptyPane": {
+    "title": "Create New Terminal",
+    "shell": "Shell:",
+    "create": "Create Terminal",
+    "shells": {
+      "powerShell": "PowerShell",
+      "commandPrompt": "Command Prompt",
+      "wslUbuntu": "WSL: Ubuntu",
+      "gitBash": "Git Bash"
+    }
+  },
+  "search": {
+    "label": "Search terminal",
+    "placeholder": "Search...",
+    "matchFound": "Match found",
+    "noMatches": "No matches",
+    "previous": "Previous match (Shift+Enter)",
+    "next": "Next match (Enter)",
+    "close": "Close (Escape)"
+  },
+  "parkedByPhone": {
+    "title": "Phone is using this terminal",
+    "description": "The computer view is paused so the phone can drive the live session.",
+    "resume": "Use this computer"
+  },
+  "contextMenu": {
+    "copy": "Copy",
+    "paste": "Paste",
+    "selectAll": "Select All",
+    "restart": "Restart Terminal"
+  },
+  "crash": {
+    "criticalError": "CRITICAL ERROR",
+    "paneException": "Terminal Pane Exception",
+    "sessionInterrupted": "Session Interrupted",
+    "description": "The terminal process exited unexpectedly. This usually happens if the shell crashes or the PTY is killed by the OS.",
+    "reconnect": "Reconnect Session"
+  },
+  "links": {
+    "openFileFailed": "Failed to open file from terminal output.",
+    "unsupportedUrl": "Only http/https URLs are supported from terminal output.",
+    "openUrlFailed": "Failed to open URL from terminal output.",
+    "missingContext": "No project or working directory found; set a project/cwd to open paths: {{path}}",
+    "pathIsDirectory": "Path is a directory, not a file: {{path}}",
+    "fileNotFound": "File not found: {{path}}",
+    "openFileFailedWithDetails": "Failed to open file: {{path}} ({{details}})",
+    "openFileFailedForPath": "Failed to open file: {{path}}"
+  },
+  "restore": {
+    "partialNote": "Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay"
+  },
+  "resume": {
+    "restoredName": "Restored terminal",
+    "disconnectedTitle": "Terminal is disconnected",
+    "disconnectedDescription": "The saved terminal is unavailable or could not be authorized. Its tab is preserved; retry reconnecting without starting a replacement process.",
+    "retry": "Retry connection",
+    "retrying": "Retrying…"
+  },
+  "cleanup": {
+    "title": "Terminal cleanup needs attention",
+    "quarantined": "The terminal process stopped, but cleanup is incomplete.",
+    "description": "Terminal {{terminalId}} is retained at the {{stage}} stage. Retry termination to finish cleanup; no replacement process will be started.",
+    "retryTermination": "Retry termination",
+    "retryTerminationFor": "Retry termination for terminal {{terminalId}}",
+    "retryInProgress": "Retrying…",
+    "retryFailed": "Cleanup is still incomplete. You can retry termination again.",
+    "stages": {
+      "kill": "process termination",
+      "wait": "process wait",
+      "flusher_join": "output flush",
+      "reader_join": "output reader"
+    }
+  },
+  "environment": {
+    "applied_one": "Project env: {{formattedCount}} variable applied",
+    "applied_other": "Project env: {{formattedCount}} variables applied"
+  },
+  "errors": {
+    "label": "Error",
+    "pasteWriteFailed": "Paste write failed",
+    "writeFailed": "Write failed",
+    "unknownSpawn": "Unknown spawn error",
+    "spawnFailed": "Spawn failed",
+    "spawnProcessFailed": "Failed to spawn terminal process",
+    "spawnException": "Terminal spawn exception",
+    "createFailed": "Failed to create terminal",
+    "launchAgentFailed": "Failed to launch agent"
+  },
+  "tauri": {
+    "loading": "Loading terminal...",
+    "errorTitle": "Terminal Error",
+    "shellDetectionFailed": "Shell detection failed: {{details}}",
+    "initializationFailed": "Terminal initialization failed: {{details}}",
+    "processExited": "Process exited with code {{exitCode}}"
+  },
+  "exitNotification": {
+    "done": "{{terminalName}} — DONE",
+    "failed": "{{terminalName}} — Failed (exit {{exitCode}})"
+  },
+  "limits": {
+    "perProject_one": "Maximum {{formattedCount}} terminal per project",
+    "perProject_other": "Maximum {{formattedCount}} terminals per project",
+    "global_one": "Maximum {{formattedCount}} terminal allowed across all projects",
+    "global_other": "Maximum {{formattedCount}} terminals allowed across all projects"
+  },
+  "board": {
+    "title": "Terminal board",
+    "description": "Every live terminal, grouped by folder and project. Click a row to open that project.",
+    "listTitle": "All terminals",
+    "search": "Search terminals",
+    "searchPlaceholder": "Group, project, or terminal",
+    "clearSearch": "Clear search",
+    "emptyTitle": "No terminals yet",
+    "empty": "Open a project and create a terminal. They will show up here across every folder.",
+    "noMatchesTitle": "No matching terminals",
+    "noMatches": "Try a different group, project, or terminal name.",
+    "ungrouped": "Ungrouped",
+    "unassigned": "No project",
+    "noProject": "No project",
+    "archived": "Archived",
+    "status": {
+      "live": "Live",
+      "hidden": "Hidden",
+      "disconnected": "Disconnected",
+      "attention": "Needs attention"
+    }
+  },
+  "lifecycle": {
+    "closeView": "Close view",
+    "closeViewDescription": "Hide this view while the process keeps running.",
+    "closeViewFailed": "Failed to close terminal view. The process is still running.",
+    "terminateProcess": "Terminate process",
+    "terminateTitle": "Terminate terminal process?",
+    "terminateDescription": "This stops the live process and removes only its terminal resource. Conversation chat and history are preserved.",
+    "terminateFailed": "Failed to terminate terminal process.",
+    "restartFailed": "Failed to restart terminal process.",
+    "reopen": "Reopen",
+    "stopHidden": "Stop",
+    "reconnect": "Reconnect",
+    "hiddenRunning": "Hidden running terminals",
+    "hiddenCount": "Hidden {{count}}",
+    "reopenNamed": "Reopen {{name}}",
+    "conversationScopeRequired": "Open a Conversation before creating a durable terminal",
+    "scopeError": "Terminal requires a valid Conversation scope."
+  },
+  "switcher": {
+    "scopeLabel": "Terminal scope",
+    "listLabel": "Projects in scope",
+    "empty": "No terminals in this scope",
+    "scope": {
+      "project": "Project",
+      "group": "Group",
+      "all": "All"
+    },
+    "searchPlaceholder": "Search terminals",
+    "current": "current",
+    "listPanelLabel": "Terminal list",
+    "showList": "Show terminal list",
+    "hideList": "Hide terminal list",
+    "scopeUnavailable": "Select a group in the sidebar first",
+    "unassigned": "No project",
+    "projectTitle": "{{project}} — {{terminals}} terminal(s), opens the most recent"
+  },
+  "lastSession": {
+    "label": "Last session",
+    "title": "Terminals open when the app last closed",
+    "capturedAt": "Last saved {{time}}",
+    "dismiss": "Dismiss",
+    "terminalCount": "{{terminals}} terminals",
+    "restore": "Restore",
+    "restored": "Restored"
+  }
+}

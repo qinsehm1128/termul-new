@@ -1,0 +1,741 @@
+import { useCallback, useEffect, useRef } from 'react'
+import { getAcpTransport } from '@/lib/acp-transport'
+import { persistenceApi, secureStorageApi, syncProjects, worktreeApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
+import { webServerProjects } from '@/lib/web-server-api'
+import { useAcpStore } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
+import { useRemoteStatusStore } from '@/stores/remote-status-store'
+import { useTerminalStore } from '@/stores/terminal-store'
+import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
+import type {
+  PersistedProject,
+  PersistedProjectData,
+  PersistedProjectGroup,
+  PersistedWorktree
+} from '../../shared/types/persistence.types'
+import { PersistenceKeys } from '../../shared/types/persistence.types'
+import type { ProjectGroupSummary, ProjectSummary } from '../../shared/types/web-projects.types'
+
+const REDACTED_VALUE = '[REDACTED]'
+type EnvVariableSnapshot = Pick<EnvVariable, 'key' | 'value' | 'isSecret'>
+type ProjectSnapshot = Pick<Project, 'id'> & { envVars?: EnvVariableSnapshot[] }
+
+/**
+ * Generate secure storage key for a project environment variable
+ */
+function getSecureStorageKey(projectId: string, envKey: string): string {
+  return `project:${projectId}:env:${envKey}`
+}
+
+function isSecretEnvVar(envVar: Pick<EnvVariableSnapshot, 'isSecret'>): boolean {
+  return envVar.isSecret === true
+}
+
+async function deleteSecretEntry(projectId: string, envKey: string): Promise<void> {
+  const storageKey = getSecureStorageKey(projectId, envKey)
+  const deleteResult = await secureStorageApi.deleteSecret(storageKey)
+
+  if (!deleteResult.success) {
+    console.warn(`Failed to delete secret ${envKey} for project ${projectId}:`, deleteResult.error)
+  }
+}
+
+async function cleanupObsoleteSecrets(
+  projectId: string,
+  previousEnvVars: EnvVariableSnapshot[] | undefined,
+  nextEnvVars: EnvVariable[] | undefined
+): Promise<void> {
+  if (!previousEnvVars || previousEnvVars.length === 0) {
+    return
+  }
+
+  const nextSecretKeys = new Set(
+    (nextEnvVars ?? []).filter((envVar) => isSecretEnvVar(envVar)).map((envVar) => envVar.key)
+  )
+
+  for (const previousEnvVar of previousEnvVars) {
+    if (!isSecretEnvVar(previousEnvVar)) {
+      continue
+    }
+
+    if (nextSecretKeys.has(previousEnvVar.key)) {
+      continue
+    }
+
+    await deleteSecretEntry(projectId, previousEnvVar.key)
+  }
+}
+
+async function cleanupRemovedProjects(
+  previousProjects: ProjectSnapshot[],
+  nextProjects: Project[]
+): Promise<void> {
+  const nextProjectIds = new Set(nextProjects.map((project) => project.id))
+
+  for (const previousProject of previousProjects) {
+    if (nextProjectIds.has(previousProject.id)) {
+      continue
+    }
+
+    await deleteSecrets(previousProject.id, previousProject.envVars)
+  }
+}
+
+async function getPersistedProjectsSnapshot(): Promise<PersistedProject[]> {
+  const result = await persistenceApi.read<PersistedProjectData>(PersistenceKeys.projects)
+
+  if (!result.success || !result.data) {
+    return []
+  }
+
+  return result.data.projects
+}
+
+/**
+ * Store secret environment variables in secure storage
+ * Returns the env vars with secrets redacted for persistence
+ */
+async function storeSecretsAndRedact(
+  projectId: string,
+  envVars: EnvVariable[] | undefined
+): Promise<EnvVariable[] | undefined> {
+  if (!envVars || envVars.length === 0) {
+    return envVars
+  }
+
+  const result: EnvVariable[] = []
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret) {
+      if (envVar.value === REDACTED_VALUE) {
+        result.push(envVar)
+        continue
+      }
+
+      // Store in secure storage
+      const storageKey = getSecureStorageKey(projectId, envVar.key)
+      const storeResult = await secureStorageApi.setSecret(storageKey, envVar.value)
+
+      if (!storeResult.success) {
+        // Abort the save instead of writing the raw secret to disk. Throwing
+        // keeps the recoverable plaintext value in the in-memory store while
+        // ensuring neither the secret nor a misleading [REDACTED] placeholder
+        // is persisted when the keychain write fails.
+        throw new Error(
+          `Failed to store secret ${envVar.key} for project ${projectId}: ${
+            storeResult.error ?? 'unknown error'
+          }`
+        )
+      }
+
+      // Add redacted version to result
+      result.push({
+        ...envVar,
+        value: REDACTED_VALUE,
+        isSecret: true
+      })
+    } else {
+      // Non-secret, keep as-is
+      result.push(envVar)
+    }
+  }
+
+  return result
+}
+
+/**
+ * Load secret environment variables from secure storage
+ * Replaces redacted values with actual secrets
+ */
+async function loadSecrets(
+  projectId: string,
+  envVars: EnvVariable[] | undefined
+): Promise<EnvVariable[] | undefined> {
+  if (!envVars || envVars.length === 0) {
+    return envVars
+  }
+
+  const result: EnvVariable[] = []
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret && envVar.value === REDACTED_VALUE) {
+      // Load from secure storage
+      const storageKey = getSecureStorageKey(projectId, envVar.key)
+      const getResult = await secureStorageApi.getSecret(storageKey)
+
+      if (getResult.success) {
+        result.push({
+          key: envVar.key,
+          value: getResult.data,
+          isSecret: true
+        })
+      } else {
+        // Secret not found or error - keep redacted
+        console.warn(
+          `Failed to load secret ${envVar.key} for project ${projectId}:`,
+          getResult.error
+        )
+        result.push(envVar)
+      }
+    } else {
+      // Non-secret or already has value, keep as-is
+      result.push(envVar)
+    }
+  }
+
+  return result
+}
+
+/**
+ * Delete secret environment variables from secure storage
+ */
+async function deleteSecrets(projectId: string, envVars: EnvVariable[] | undefined): Promise<void> {
+  if (!envVars || envVars.length === 0) {
+    return
+  }
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret) {
+      await deleteSecretEntry(projectId, envVar.key)
+    }
+  }
+}
+
+function toPersistedWorktree(worktree: Worktree): PersistedWorktree {
+  return {
+    id: worktree.id,
+    name: worktree.name,
+    branch: worktree.branch,
+    path: worktree.path,
+    createdAt: worktree.createdAt
+  }
+}
+
+function fromPersistedWorktree(persisted: PersistedWorktree): Worktree {
+  return {
+    id: persisted.id,
+    name: persisted.name,
+    branch: persisted.branch,
+    path: persisted.path,
+    createdAt: persisted.createdAt
+  }
+}
+
+async function toPersistedProject(
+  project: Project,
+  previousEnvVars?: EnvVariableSnapshot[]
+): Promise<PersistedProject> {
+  await cleanupObsoleteSecrets(project.id, previousEnvVars, project.envVars)
+  const redactedEnvVars = await storeSecretsAndRedact(project.id, project.envVars)
+
+  return {
+    id: project.id,
+    name: project.name,
+    color: project.color,
+    path: project.path,
+    isArchived: project.isArchived,
+    gitBranch: project.gitBranch,
+    defaultShell: project.defaultShell,
+    envVars: redactedEnvVars,
+    worktrees: project.worktrees?.map(toPersistedWorktree),
+    activeWorktreeId: project.activeWorktreeId,
+    isGitRepo: project.isGitRepo
+  }
+}
+
+async function persistProjectsSnapshot(
+  projects: Project[],
+  activeProjectId: string,
+  writeProjects: (key: string, data: PersistedProjectData) => Promise<unknown>,
+  previousProjects?: ProjectSnapshot[],
+  groups?: ProjectGroup[],
+  activeGroupId?: string | null
+): Promise<void> {
+  const previousProjectsSnapshot = previousProjects ?? (await getPersistedProjectsSnapshot())
+  await cleanupRemovedProjects(previousProjectsSnapshot, projects)
+
+  const previousEnvVarsByProjectId = new Map(
+    previousProjectsSnapshot.map((project) => [project.id, project.envVars])
+  )
+  const persistedProjects = await Promise.all(
+    projects.map((project) =>
+      toPersistedProject(project, previousEnvVarsByProjectId.get(project.id))
+    )
+  )
+  const data: PersistedProjectData = {
+    projects: persistedProjects,
+    groups: groups as PersistedProjectGroup[],
+    activeProjectId,
+    activeGroupId: activeGroupId ?? null,
+    updatedAt: new Date().toISOString()
+  }
+
+  await writeProjects(PersistenceKeys.projects, data)
+}
+
+async function fromPersistedProject(persisted: PersistedProject): Promise<Project> {
+  const loadedEnvVars = await loadSecrets(persisted.id, persisted.envVars)
+
+  return {
+    id: persisted.id,
+    name: persisted.name,
+    color: persisted.color as ProjectColor,
+    path: persisted.path,
+    isArchived: persisted.isArchived,
+    gitBranch: persisted.gitBranch,
+    defaultShell: persisted.defaultShell,
+    envVars: loadedEnvVars,
+    worktrees: persisted.worktrees?.map(fromPersistedWorktree),
+    activeWorktreeId: persisted.activeWorktreeId,
+    isGitRepo: persisted.isGitRepo
+  }
+}
+
+/**
+ * Reconcile worktrees for a single project against `git worktree list --porcelain`.
+ * Adds worktrees that git knows about but we don't; removes stale entries.
+ * All actions are logged with [WorktreeReconciler] prefix for debugging.
+ */
+async function reconcileProjectWorktrees(project: Project): Promise<void> {
+  if (!project.path) return
+
+  const result = await worktreeApi.list(project.path)
+  if (!result.success) {
+    // Not a git repo or git not available
+    if (result.code === 'NOT_A_GIT_REPO' || result.code === 'GIT_NOT_FOUND') {
+      useProjectStore.getState().updateProject(project.id, { isGitRepo: false })
+      console.debug(`[WorktreeReconciler] Not a git repo or git not found: ${project.name}`)
+    }
+    return
+  }
+
+  // Mark project as a git repo
+  useProjectStore.getState().updateProject(project.id, { isGitRepo: true })
+
+  const gitWorktrees = result.data
+  if (!gitWorktrees) return
+
+  const storedWorktrees = project.worktrees ?? []
+  const storedByPath = new Map(storedWorktrees.map((w) => [w.path, w]))
+  const gitByPath = new Map(gitWorktrees.map((w) => [w.path, w]))
+
+  let changed = false
+  const updatedWorktrees = [...storedWorktrees]
+
+  // Git has worktree not in store → add it
+  for (const gitWt of gitWorktrees) {
+    if (!storedByPath.has(gitWt.path)) {
+      const isTermulManaged = gitWt.path.includes('.termul/worktrees/')
+      updatedWorktrees.push({
+        id: randomUUID(),
+        name: gitWt.name,
+        branch: gitWt.branch,
+        path: gitWt.path,
+        createdAt: new Date().toISOString()
+      })
+      console.debug(
+        `[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isTermulManaged})`
+      )
+      changed = true
+    }
+  }
+
+  // Store has worktree git doesn't show → remove stale entry
+  // But only remove if we can verify (the path no longer exists or git doesn't list it)
+  const staleIds: string[] = []
+  for (const storedWt of storedWorktrees) {
+    if (!gitByPath.has(storedWt.path)) {
+      staleIds.push(storedWt.id)
+      console.debug(
+        `[WorktreeReconciler] Removing stale worktree: ${storedWt.name} (not in git worktree list)`
+      )
+      changed = true
+    }
+  }
+
+  if (changed) {
+    const finalList = updatedWorktrees.filter((w) => !staleIds.includes(w.id))
+
+    // Reconcile activeWorktreeId: if the active worktree was pruned, reset it
+    const currentProject = useProjectStore.getState().projects.find((p) => p.id === project.id)
+    const activeId = currentProject?.activeWorktreeId
+    const newActiveId = activeId && staleIds.includes(activeId) ? null : activeId
+
+    useProjectStore.getState().updateProject(project.id, {
+      worktrees: finalList,
+      activeWorktreeId: newActiveId
+    })
+  }
+}
+
+/**
+ * Force-reconcile worktrees for a specific project after create/remove operations.
+ * Always re-lists from git to ensure consistency.
+ */
+export async function reconcileProjectWorktreesNow(projectId: string): Promise<void> {
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  if (project) {
+    await reconcileProjectWorktrees(project)
+  }
+}
+
+/**
+ * Build the redacted `ProjectSummary[]` wire shape for the web/remote mirror
+ * (Epic-4 bridge) from the renderer `Project` store. No env-var values cross
+ * the wire — redact-by-omission. Shared by the auto-save live-push path + the
+ * `RemoteAccessPopover` server-start seed.
+ *
+ * In desktop-hosted mode the desktop's `activeProjectId` IS the host default
+ * (the desktop user is the host operator), so the per-entry flag is
+ * `isDefault` (the host default), not `isActive` (which is per-client and the
+ * host cannot know). The param is named `defaultProjectId` because the value
+ * the desktop renderer tracks (its active selection) is pushed as the default
+ * for new web clients — the caller passes `state.activeProjectId` as the
+ * `defaultProjectId` (P12: the param name now matches its wire semantics).
+ */
+export function toProjectSummaries(
+  projects: Project[],
+  defaultProjectId: string
+): ProjectSummary[] {
+  // Derive the host default from each project's stored `isDefault` flag — NOT
+  // from `defaultProjectId`. At the autosave call site `defaultProjectId` is
+  // `state.activeProjectId`, but the active (per-connection) project and the
+  // host default are distinct: `handleSetDefault` flips the stored flags while
+  // `activeProjectId` still points at the switch target. Deriving from
+  // `activeProjectId` here would re-broadcast the active project as the host
+  // default and clobber an explicit `set_default_project`. Fall back to
+  // `defaultProjectId` only when no project carries a stored flag (legacy
+  // snapshots / initial load where the flag was never set).
+  const hasStoredDefault = projects.some((p) => p.isDefault === true)
+  return projects.map((p) => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    path: p.path ?? null,
+    isArchived: p.isArchived ?? false,
+    isDefault: hasStoredDefault ? p.isDefault === true : p.id === defaultProjectId
+  }))
+}
+
+/**
+ * Map a web/remote `ProjectSummary` (the in-memory registry's wire shape) to
+ * the renderer `Project`. The mirror carries NO env-var values (redact-by-
+ * omission — secrets live in secure storage; plain env is omitted for the
+ * interim), so `envVars` is empty and worktree reconciliation is skipped (the
+ * browser cannot shell out to git anyway). `color` is a valid `ProjectColor`
+ * token string the desktop sent, cast through.
+ *
+ * Maps `summary.isDefault` (host default) → `Project.isDefault`. Does NOT map
+ * an `isActive` — the host no longer sends one (it cannot know a client's
+ * per-connection active selection). `Project.isActive` stays per-client and is
+ * stamped locally by `selectProject`.
+ */
+function summaryToProject(summary: ProjectSummary): Project {
+  return {
+    id: summary.id,
+    name: summary.name,
+    color: summary.color as ProjectColor,
+    path: summary.path ?? undefined,
+    isArchived: summary.isArchived,
+    isDefault: summary.isDefault,
+    envVars: [],
+    worktrees: [],
+    activeWorktreeId: null
+  }
+}
+
+function summaryToProjectGroup(
+  summary: ProjectGroupSummary,
+  previousGroup?: ProjectGroup
+): ProjectGroup {
+  return {
+    id: summary.id,
+    name: summary.name,
+    projectIds: summary.projectIds,
+    preferredProjectId: summary.preferredProjectId ?? undefined,
+    color: summary.color ? (summary.color as ProjectColor) : undefined,
+    isCollapsed: previousGroup?.isCollapsed ?? false
+  }
+}
+
+export function toProjectGroupSummaries(groups: ProjectGroup[]): ProjectGroupSummary[] {
+  return groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+    projectIds: group.projectIds,
+    color: group.color ?? null,
+    preferredProjectId: group.preferredProjectId ?? null
+  }))
+}
+
+export function useProjectsLoader(): void {
+  const setProjects = useProjectStore((state) => state.setProjects)
+
+  useEffect(() => {
+    // Web/remote mode: mirror the desktop's project list from the in-memory
+    // `ProjectRegistry` via `GET /projects`. The browser's stubbed plugin-store
+    // returns nothing, so without this branch the sidebar renders empty. The
+    // mirror is read-only — `useProjectsAutoSave` is disabled in web mode. The
+    // desktop broadcasts `projects_changed` on store mutation; refetch on it.
+    //
+    // Epic 7 (cross-client continuity): on the INITIAL load (store not yet
+    // `isLoaded`) the client seeds `activeProjectId` from the host's
+    // `defaultProjectId`. On subsequent `projects_changed` refetches it
+    // preserves its OWN `activeProjectId` (no silent retarget when another
+    // client switches). If the current project was deleted by the host, it
+    // falls back to `defaultProjectId` (or the first project).
+    if (!isTauriContext()) {
+      let unsub: (() => void) | undefined
+      // Guard against completing a fetch after unmount (skip the stale
+      // setProjects so a remounted store is not clobbered).
+      let cancelled = false
+      const fetchMirror = async (): Promise<void> => {
+        const result = await webServerProjects.list()
+        if (cancelled || !result.success || !result.data) return
+        const projects = result.data.projects.map(summaryToProject)
+        const currentState = useProjectStore.getState()
+        const previousGroupsById = new Map(currentState.groups.map((group) => [group.id, group]))
+        const groups = (result.data.groups ?? []).map((group) =>
+          summaryToProjectGroup(group, previousGroupsById.get(group.id))
+        )
+        const defaultId = result.data.defaultProjectId
+        // P2: validate the host default references a project still in the
+        // list (the host may have deleted the default project). Fall back to
+        // the first project when the default is null or dangling.
+        const validDefault =
+          defaultId && projects.some((p) => p.id === defaultId)
+            ? defaultId
+            : (projects[0]?.id ?? '')
+        if (!currentState.isLoaded) {
+          // Initial load: seed activeProjectId from the host default.
+          setProjects(projects, validDefault, groups, null)
+        } else {
+          // Subsequent refetch: preserve the client's own activeProjectId.
+          // If it's no longer in the list (host deleted it), fall back to the
+          // default (or the first project if the default is also gone).
+          const currentActive = currentState.activeProjectId
+          const stillExists = !!currentActive && projects.some((p) => p.id === currentActive)
+          setProjects(
+            projects,
+            stillExists ? currentActive : validDefault,
+            groups,
+            currentState.activeGroupId
+          )
+        }
+      }
+      void fetchMirror()
+      try {
+        unsub = getAcpTransport().onEvent('acp:projects_changed', () => {
+          void fetchMirror()
+        })
+      } catch (err) {
+        console.debug('[projects] projects_changed listener unavailable', err)
+      }
+      return () => {
+        cancelled = true
+        unsub?.()
+      }
+    }
+
+    async function load(): Promise<void> {
+      const result = await persistenceApi.read<PersistedProjectData>(PersistenceKeys.projects)
+      if (result.success && result.data) {
+        // Load projects with secrets from secure storage
+        const projects = await Promise.all(result.data.projects.map(fromPersistedProject))
+        // Validate activeProjectId exists in projects
+        const validActiveId = projects.some((p) => p.id === result.data.activeProjectId)
+          ? result.data.activeProjectId
+          : projects.length > 0
+            ? projects[0].id
+            : ''
+        setProjects(
+          projects,
+          validActiveId,
+          result.data.groups as ProjectGroup[],
+          result.data.activeGroupId ?? null
+        )
+
+        // Reconcile all projects against git in parallel after loading
+        for (const project of projects) {
+          if (project.path) {
+            reconcileProjectWorktrees(project).catch((err) =>
+              console.debug('[WorktreeReconciler] Reconciliation error:', err)
+            )
+          }
+        }
+      } else {
+        // No saved projects - start with empty state
+        setProjects([])
+      }
+    }
+    load()
+  }, [setProjects])
+}
+
+/**
+ * Hook to auto-save projects when the store changes
+ * Subscribes to project store changes and triggers debounced writes
+ */
+export function useProjectsAutoSave(): void {
+  const hasInitialized = useRef(false)
+
+  useEffect(() => {
+    // Web/remote mode: the project list is a read-only mirror of the desktop's
+    // store; never persist from the browser (the stubbed plugin-store would
+    // silently drop writes, and edits belong on the desktop anyway).
+    if (!isTauriContext()) return
+
+    // Subscribe to project store changes
+    const unsubscribe = useProjectStore.subscribe((state, prevState) => {
+      // Skip auto-saving if the store is not yet loaded
+      if (!state.isLoaded) {
+        return
+      }
+
+      // If we just transitioned to loaded, mark it initialized and skip saving
+      if (!prevState.isLoaded) {
+        hasInitialized.current = true
+        return
+      }
+
+      // Skip the first state change (only if we haven't initialized yet, e.g. in tests where isLoaded starts as true)
+      if (!hasInitialized.current) {
+        hasInitialized.current = true
+        return
+      }
+
+      // Only save if projects, groups, activeProjectId or activeGroupId changed
+      if (
+        state.projects === prevState.projects &&
+        state.groups === prevState.groups &&
+        state.activeProjectId === prevState.activeProjectId &&
+        state.activeGroupId === prevState.activeGroupId
+      ) {
+        return
+      }
+
+      // Convert projects to persisted format (async)
+      persistProjectsSnapshot(
+        state.projects,
+        state.activeProjectId,
+        persistenceApi.writeDebounced,
+        prevState.projects,
+        state.groups,
+        state.activeGroupId
+      ).catch((err: unknown) => {
+        console.error('Failed to auto-save projects:', err)
+      })
+
+      // Epic-4 bridge live push: if the shared-live server is running, mirror
+      // the new project list into the in-memory registry + broadcast
+      // `projects_changed` so connected web clients refetch `GET /projects`.
+      // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
+      if (useRemoteStatusStore.getState().status?.running) {
+        const projectSwitched =
+          state.activeProjectId !== prevState.activeProjectId ||
+          state.projects.find((p) => p.isDefault === true)?.id !==
+            prevState.projects.find((p) => p.isDefault === true)?.id
+        syncProjects(
+          toProjectSummaries(state.projects, state.activeProjectId),
+          state.activeProjectId || null,
+          toProjectGroupSummaries(state.groups)
+        )
+          .then((result) => {
+            if (!result.success) {
+              console.warn('[projects] remote sync unsuccessful:', result.error)
+            }
+            // CAP-7: after the backend `ProjectRegistry` (and thus the resolved
+            // project root) reflects the new default, mirror the MCP registry to
+            // the new project's `.termul/mcp-servers.json`. Best-effort +
+            // non-fatal — the action logs failures and never throws, so a
+            // switch still completes even if the sync write fails. Only on a
+            // real project switch (not a projects/groups-only mutation), and
+            // only when the upstream sync succeeded (a failed syncProjects
+            // leaves the backend on the old default — syncing then would write
+            // to the wrong project's file).
+            if (projectSwitched && result.success) {
+              void useAcpStore.getState().syncMcpRegistryToProjectFile()
+            }
+          })
+          .catch((err: unknown) => {
+            console.debug('[projects] remote sync failed', err)
+          })
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [])
+}
+
+export function usePersistProjects(): () => Promise<void> {
+  return useCallback(async () => {
+    const { projects, activeProjectId, activeGroupId, groups } = useProjectStore.getState()
+    await persistProjectsSnapshot(
+      projects,
+      activeProjectId,
+      persistenceApi.writeDebounced,
+      undefined,
+      groups,
+      activeGroupId
+    )
+  }, [])
+}
+
+export function usePersistProjectsImmediate(): () => Promise<void> {
+  return useCallback(async () => {
+    const { projects, activeProjectId, activeGroupId, groups } = useProjectStore.getState()
+    await persistProjectsSnapshot(
+      projects,
+      activeProjectId,
+      persistenceApi.write,
+      undefined,
+      groups,
+      activeGroupId
+    )
+  }, [])
+}
+
+export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
+  return useCallback(async (id: string) => {
+    // Get project before deletion to clean up secrets
+    const project = useProjectStore.getState().projects.find((p) => p.id === id)
+
+    // Delete secrets from secure storage
+    if (project) {
+      await deleteSecrets(project.id, project.envVars)
+    }
+
+    // Project attribution is secondary to Conversation ownership. Deleting a
+    // project therefore hides its terminal views but never terminates or drops
+    // Conversation-scoped PTYs, claims, or passive workspace refs.
+    useTerminalStore.getState().cleanupProjectTerminals(id)
+
+    // Delete the project from the store
+    useProjectStore.getState().deleteProject(id)
+
+    // Cascade delete renderer-local project state only. The preserved legacy workspace manifest
+    // is immutable migration evidence and is never deleted by a normal project operation.
+    await Promise.all([
+      persistenceApi.delete(PersistenceKeys.terminals(id)),
+      persistenceApi.delete(PersistenceKeys.snapshots(id))
+    ])
+
+    // Persist the updated projects list
+    const { projects, activeProjectId, activeGroupId, groups } = useProjectStore.getState()
+    const persistedProjects = await Promise.all(
+      projects.map((project) => toPersistedProject(project))
+    )
+    const data: PersistedProjectData = {
+      projects: persistedProjects,
+      groups: groups as PersistedProjectGroup[],
+      activeProjectId,
+      activeGroupId,
+      updatedAt: new Date().toISOString()
+    }
+    await persistenceApi.write(PersistenceKeys.projects, data)
+  }, [])
+}

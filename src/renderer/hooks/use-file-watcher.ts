@@ -1,0 +1,121 @@
+import type { FileChangeEvent } from '@shared/types/filesystem.types'
+import { useEffect } from 'react'
+import { toast } from 'sonner'
+import { runtimeT } from '@/i18n/runtime'
+import { filesystemApi } from '@/lib/api'
+import { consumeEditorSelfSave } from '@/lib/editor-self-save'
+import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
+import { useEditorStore } from '@/stores/editor-store'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
+
+function getDirname(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  const lastSlash = normalized.lastIndexOf('/')
+  if (lastSlash < 0) return normalized
+  if (lastSlash === 0) return '/'
+  return normalized.slice(0, lastSlash)
+}
+
+export function useFileWatcher(): void {
+  useEffect(() => {
+    const pendingRefreshDirs = new Set<string>()
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+    function scheduleRefresh(dir: string): void {
+      const explorerState = useFileExplorerStore.getState()
+      if (!explorerState.expandedDirs.has(dir)) return
+
+      pendingRefreshDirs.add(dir)
+
+      if (flushTimer) clearTimeout(flushTimer)
+      flushTimer = setTimeout(() => {
+        const explorerState = useFileExplorerStore.getState()
+        for (const dirPath of pendingRefreshDirs) {
+          if (explorerState.expandedDirs.has(dirPath)) {
+            explorerState.refreshDirectory(dirPath)
+          }
+        }
+        pendingRefreshDirs.clear()
+        flushTimer = null
+      }, 300)
+    }
+
+    const handleFileChanged = (event: FileChangeEvent): void => {
+      const { path } = event
+
+      scheduleGitStatusRefreshForPath(path)
+
+      // Debounced refresh for file explorer
+      const parentDir = getDirname(path)
+      scheduleRefresh(parentDir)
+
+      // Handle open editor files (immediate — not debounced)
+      const editorState = useEditorStore.getState()
+      const fileState = editorState.openFiles.get(path)
+      if (fileState) {
+        if (consumeEditorSelfSave(path)) {
+          return
+        }
+
+        // Skip if we just saved this file (within 2 seconds)
+        if (Date.now() - fileState.lastModified < 2000) {
+          return
+        }
+
+        if (!fileState.isDirty) {
+          void editorState.reloadFile(path)
+        } else {
+          toast(runtimeT('terminal', 'fileWatcher.changedExternally', 'File changed externally'), {
+            description: path.split(/[\\/]/).pop() || path,
+            action: {
+              label: runtimeT('terminal', 'fileWatcher.reload', 'Reload'),
+              onClick: () => {
+                void useEditorStore.getState().reloadFile(path)
+              }
+            }
+          })
+        }
+      }
+    }
+
+    const handleFileCreated = (event: FileChangeEvent): void => {
+      scheduleGitStatusRefreshForPath(event.path)
+      const parentDir = getDirname(event.path)
+      scheduleRefresh(parentDir)
+    }
+
+    const handleFileDeleted = (event: FileChangeEvent): void => {
+      scheduleGitStatusRefreshForPath(event.path)
+      const parentDir = getDirname(event.path)
+      scheduleRefresh(parentDir)
+
+      // Defense in depth (GH-539): only a genuine unlink may close an open
+      // tab. The facade now dispatches unlink-only events here, but guard at
+      // this level too so a save-generated 'change' event can never race the
+      // saving→saved transition and drop the user back to the terminal.
+      if (event.type !== 'unlink') return
+
+      // Close editor tab immediately if the deleted file is open
+      const editorState = useEditorStore.getState()
+      if (editorState.openFiles.has(event.path)) {
+        const didClose = editorState.closeFileIfIdle(event.path)
+        if (didClose) {
+          useWorkspaceStore.getState().removeTab(editorTabId(event.path))
+        }
+      }
+    }
+
+    const unsubChanged = filesystemApi.onFileChanged(handleFileChanged)
+    const unsubCreated = filesystemApi.onFileCreated(handleFileCreated)
+    const unsubDeleted = filesystemApi.onFileDeleted(handleFileDeleted)
+
+    return () => {
+      if (flushTimer) clearTimeout(flushTimer)
+      pendingRefreshDirs.clear()
+      unsubChanged()
+      unsubCreated()
+      unsubDeleted()
+    }
+  }, [])
+}

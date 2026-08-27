@@ -1,0 +1,279 @@
+import { RotateCcw } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { beginShortcutCapture, endShortcutCapture } from '@/lib/shortcut-capture'
+import {
+  findConflictingShortcut,
+  formatKeyForDisplay,
+  normalizeKeyEvent
+} from '@/stores/keyboard-shortcuts-store'
+import type { KeyboardShortcut, KeyboardShortcutsConfig } from '@/types/settings'
+
+interface ShortcutRecorderProps {
+  shortcut: KeyboardShortcut
+  allShortcuts: KeyboardShortcutsConfig
+  onUpdate: (id: string, customKey: string) => void
+  onReset: (id: string) => void
+  variant?: 'default' | 'compact'
+}
+
+export function ShortcutRecorder({
+  shortcut,
+  allShortcuts,
+  onUpdate,
+  onReset,
+  variant = 'default'
+}: ShortcutRecorderProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
+  const [isRecording, setIsRecording] = useState(false)
+  const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const [conflict, setConflict] = useState<KeyboardShortcut | null>(null)
+  const inputRef = useRef<HTMLDivElement>(null)
+
+  const activeKey = shortcut.customKey ?? shortcut.defaultKey
+  const isCustomized = shortcut.customKey !== undefined
+  const displayKey = pendingKey ?? activeKey
+  const shortcutLabel = t(`shortcuts.items.${shortcut.id}.label`, {
+    defaultValue: shortcut.label
+  })
+  const shortcutDescription = t(`shortcuts.items.${shortcut.id}.description`, {
+    defaultValue: shortcut.description
+  })
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+
+      // Check for escape to cancel before normalizing so Esc is never recorded.
+      if (e.key === 'Escape') {
+        setIsRecording(false)
+        setPendingKey(null)
+        setConflict(null)
+        return
+      }
+
+      const normalized = normalizeKeyEvent(e)
+
+      // Ignore if only modifiers pressed
+      if (
+        !normalized ||
+        normalized.split('+').every((p) => ['ctrl', 'cmd', 'meta', 'alt', 'shift'].includes(p))
+      ) {
+        return
+      }
+
+      setPendingKey(normalized)
+
+      // Check for conflicts
+      const conflicting = findConflictingShortcut(allShortcuts, normalized, shortcut.id)
+      setConflict(conflicting ?? null)
+
+      if (!conflicting) {
+        onUpdate(shortcut.id, normalized)
+        setIsRecording(false)
+        setPendingKey(null)
+      }
+    },
+    [allShortcuts, onUpdate, shortcut.id]
+  )
+
+  const handleBlur = useCallback(() => {
+    window.removeEventListener('keydown', handleKeyDown, { capture: true })
+    setIsRecording(false)
+    setPendingKey(null)
+    setConflict(null)
+  }, [handleKeyDown])
+
+  const handleClick = useCallback(() => {
+    if (!isRecording) {
+      setIsRecording(true)
+      setPendingKey(null)
+      setConflict(null)
+    }
+  }, [isRecording])
+
+  const handleConfirmWithConflict = useCallback(() => {
+    if (pendingKey) {
+      onUpdate(shortcut.id, pendingKey)
+    }
+    setIsRecording(false)
+    setPendingKey(null)
+    setConflict(null)
+  }, [pendingKey, onUpdate, shortcut.id])
+
+  const handleReset = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      onReset(shortcut.id)
+    },
+    [onReset, shortcut.id]
+  )
+
+  const handleKeyboardActivate = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!isRecording && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault()
+        handleClick()
+      }
+    },
+    [handleClick, isRecording]
+  )
+
+  // Suspend the native app menu while recording so its accelerators (e.g. ⌘W,
+  // ⌘R, ⌘C) stop intercepting keys before they reach the webview, letting the
+  // user record any combination. Keyed only on `isRecording` so a change in
+  // `handleKeyDown`'s identity does not churn the menu mid-recording.
+  useEffect(() => {
+    if (!isRecording) return
+    void beginShortcutCapture()
+    return () => {
+      void endShortcutCapture()
+    }
+  }, [isRecording])
+
+  // Attach the capture-phase keydown listener while recording. Re-binds when
+  // `handleKeyDown` changes identity (e.g. after the shortcut map updates).
+  useEffect(() => {
+    if (isRecording && inputRef.current) {
+      inputRef.current.focus()
+      window.addEventListener('keydown', handleKeyDown, { capture: true })
+      return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
+    }
+  }, [isRecording, handleKeyDown])
+
+  if (variant === 'compact') {
+    return (
+      <div className="rounded-md px-2 py-1.5 hover:bg-secondary/40">
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-secondary-foreground">
+              {shortcutLabel}
+            </div>
+            <div className="truncate text-2xs text-muted-foreground">{shortcutDescription}</div>
+          </div>
+
+          {isCustomized && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              title={t('shortcuts.reset')}
+              aria-label={t('shortcuts.resetAria', { label: shortcutLabel })}
+            >
+              <RotateCcw size={13} />
+            </button>
+          )}
+
+          <div
+            ref={inputRef}
+            tabIndex={0}
+            role="button"
+            data-shortcut-recorder="true"
+            aria-label={t('shortcuts.recordAria', { label: shortcutLabel })}
+            onClick={handleClick}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyboardActivate}
+            className={`
+              min-w-[88px] shrink-0 rounded-md border px-2 py-1 text-center font-mono text-2xs transition-all cursor-pointer
+              ${
+                isRecording
+                  ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
+                  : 'border-border bg-secondary/50 hover:bg-secondary'
+              }
+              ${conflict ? 'border-red-500' : ''}
+              ${isCustomized ? 'text-primary' : 'text-foreground'}
+            `}
+          >
+            {isRecording && !pendingKey ? (
+              <span className="text-muted-foreground">{t('shortcuts.pressKeys')}</span>
+            ) : (
+              formatKeyForDisplay(displayKey)
+            )}
+          </div>
+        </div>
+
+        {conflict && (
+          <div className="mt-1 text-2xs text-red-500">
+            {t('shortcuts.conflict', {
+              label: t(`shortcuts.items.${conflict.id}.label`, { defaultValue: conflict.label })
+            })}{' '}
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleConfirmWithConflict}
+              className="underline hover:no-underline"
+            >
+              {t('shortcuts.useAnyway')}
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-medium text-secondary-foreground">{shortcutLabel}</span>
+          {isCustomized && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-foreground transition-colors"
+              title={t('shortcuts.reset')}
+              aria-label={t('shortcuts.resetAria', { label: shortcutLabel })}
+            >
+              <RotateCcw size={14} />
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground mb-2">{shortcutDescription}</p>
+
+        <div
+          ref={inputRef}
+          tabIndex={0}
+          role="button"
+          data-shortcut-recorder="true"
+          aria-label={t('shortcuts.recordAria', { label: shortcutLabel })}
+          onClick={handleClick}
+          onBlur={handleBlur}
+          onKeyDown={handleKeyboardActivate}
+          className={`
+            px-3 py-2 rounded-md border text-sm font-mono cursor-pointer transition-all
+            ${
+              isRecording
+                ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
+                : 'border-border bg-secondary/50 hover:bg-secondary'
+            }
+            ${conflict ? 'border-red-500' : ''}
+            ${isCustomized ? 'text-primary' : 'text-foreground'}
+          `}
+        >
+          {isRecording && !pendingKey ? (
+            <span className="text-muted-foreground">{t('shortcuts.pressKeys')}</span>
+          ) : (
+            formatKeyForDisplay(displayKey)
+          )}
+        </div>
+
+        {conflict && (
+          <div className="mt-2 text-xs text-red-500">
+            {t('shortcuts.conflict', {
+              label: t(`shortcuts.items.${conflict.id}.label`, { defaultValue: conflict.label })
+            })}{' '}
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleConfirmWithConflict}
+              className="underline hover:no-underline"
+            >
+              {t('shortcuts.useAnyway')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,95 @@
+{
+  "navigation": {
+    "newChat": "New chat",
+    "conversations": "Conversations",
+    "projectless": "No project"
+  },
+  "dashboard": {
+    "title": "Your Conversation workspace",
+    "description": "Start a chat without creating a project. Projects and worktrees are optional execution targets.",
+    "loading": "Loading conversations…",
+    "empty": "No conversations yet. Start a new chat in an independent workspace.",
+    "workspace": "Workspace cwd"
+  },
+  "target": {
+    "title": "Execution target and project context",
+    "label": "Execution target",
+    "workspace": "Conversation workspace",
+    "projectRoot": "Project root",
+    "worktree": "Worktree",
+    "project": "Project",
+    "noProject": "No project selected",
+    "workspaceUnchanged": "Conversation identity and workspace cwd stay unchanged",
+    "newWorkspace": "A new independent workspace will be created",
+    "newWorktree": "A new worktree will be created",
+    "invalid": "Selection required",
+    "errors": {
+      "projectRequired": "Select a project for this target.",
+      "projectRootRequired": "The selected project needs a root path.",
+      "worktreeBranchRequired": "Select a base branch or existing worktree.",
+      "projectAttachmentRequired": "Attach the project context before selecting or detaching a project target."
+    }
+  },
+  "identity": {
+    "conversationId": "Conversation ID",
+    "createdAtUtc": "Created at (UTC)",
+    "creationPartition": "Creation partition",
+    "workspaceCwd": "Workspace cwd"
+  },
+  "attachment": {
+    "attach": "Attach project context",
+    "detach": "Detach project context",
+    "attached": "Attached project: {{projectId}}",
+    "none": "No project attachment"
+  },
+  "mutation": {
+    "saving": "Saving Conversation changes…",
+    "saved": {
+      "target": "Execution target updated. Conversation identity and workspace are unchanged.",
+      "attached": "Project context attached. Conversation identity and workspace are unchanged.",
+      "detached": "Project context detached. Conversation identity and workspace are unchanged."
+    },
+    "errors": {
+      "CONVERSATION_CONFLICT": "This Conversation changed elsewhere. Reopen it and try again.",
+      "VALIDATION_ERROR": "The selected project or execution target is not valid.",
+      "CONVERSATION_RECOVERY_REQUIRED": "This Conversation requires recovery before it can change."
+    }
+  },
+  "recovery": {
+    "title": "Conversation recovery",
+    "description": "Inspect preserved sources or choose an explicit safe recovery action.",
+    "revision": "revision {{revision}}",
+    "sources": "Immutable sources and checksums",
+    "provenance": "Preserved provenance",
+    "candidateFacts": "Preserved candidate facts",
+    "preservedReadOnly": "preserved read-only",
+    "unchanged": "unchanged",
+    "outcome": "{{action}} → {{status}}; workspace revision: {{workspaceRevision}}",
+    "actions": {
+      "inspect": "Inspect preserved source",
+      "associateConversation": "Associate conversation",
+      "startEmptyWorkspace": "Start empty workspace",
+      "dismissPreservedSource": "Dismiss preserved source"
+    },
+    "statuses": {
+      "unresolved": "Unresolved",
+      "resolvedAssociated": "Associated",
+      "resolvedStartedEmpty": "Started empty",
+      "dismissedPreserved": "Dismissed; source preserved"
+    },
+    "kinds": {
+      "ambiguous_workspace_manifest": "Ambiguous workspace manifest",
+      "identifier_collision": "Identifier collision",
+      "invalid_created_at": "Invalid creation timestamp",
+      "corrupt_source": "Corrupt preserved source",
+      "conflicting_worktree_provenance": "Conflicting worktree provenance",
+      "conflicting_session_metadata": "Conflicting session metadata"
+    }
+  },
+  "errors": {
+    "CONVERSATION_INVALID_ID": "Choose a canonical Conversation before running this action.",
+    "CONVERSATION_CONFLICT": "The workspace already exists or its revision changed. Nothing was overwritten.",
+    "CONVERSATION_RECOVERY_REQUIRED": "This source still requires recovery.",
+    "CONVERSATION_RECOVERY_FAILED": "The recovery request failed. The preserved source was not changed."
+  }
+}

@@ -1,0 +1,1207 @@
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+@config "../../tailwind.config.ts";
+
+/* Streamdown ships Tailwind utility classes in its dist bundles; Tailwind v4
+   must scan them to generate the matching CSS (chat markdown renderer). */
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source "../../node_modules/@streamdown/mermaid/dist/*.js";
+
+@layer base {
+  :root {
+    /* Termul graphite — warm, low-contrast IDE chrome. */
+    --background: 72 12% 7%; /* #12130f */
+    --foreground: 48 12% 89%; /* warm paper-white */
+
+    /* Surfaces stay close together; separators and typography carry hierarchy. */
+    --card: 72 10% 10%;
+    --card-foreground: 48 12% 89%;
+
+    --popover: 72 9% 11%;
+    --popover-foreground: 48 12% 89%;
+
+    /* Muted lichen accent; reserve it for focus and direct actions. */
+    --primary: 86 18% 53%; /* restrained lichen */
+    --primary-foreground: 48 16% 96%;
+
+    --secondary: 72 8% 13%;
+    --secondary-foreground: 48 8% 74%;
+
+    --muted: 72 7% 15%;
+    --muted-foreground: 48 5% 57%;
+
+    --accent: 86 18% 53%;
+    --accent-foreground: 48 16% 96%;
+
+    /* Status colors */
+    --destructive: 0 42% 59%;
+    --destructive-foreground: 48 16% 96%;
+    /* Confirmation / completed (distinct from primary blue + connection) */
+    --success: 112 20% 52%;
+    --success-foreground: 48 16% 96%;
+    /* Live connection lamp (info cyan — not the same as success green) */
+    --connection: 202 23% 57%;
+    --warning: 36 43% 59%;
+    --warning-foreground: 72 12% 7%;
+
+    --border: 66 7% 19%;
+    --input: 66 7% 20%;
+    --ring: 86 20% 58%;
+
+    --radius: 0.375rem;
+
+    /* Custom easing curves — stronger than browser defaults so animations
+       feel intentional. Reference: easing.dev (Emil Kowalski). */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+    /* Transitions.dev tooltip open/close tokens (Radix maps delay via
+       TooltipProvider delayDuration — do not also set CSS transition-delay
+       on open, or tips double-wait). */
+    --tt-in-dur: 150ms;
+    --tt-out-dur: 50ms;
+    --tt-scale: 0.98;
+    --tt-delay: 80ms;
+    --tt-in-ease: ease-out;
+    --tt-out-ease: ease-out;
+
+    /* Terminal-specific */
+    --terminal-bg: 72 12% 7%;
+    --terminal-fg: 48 9% 85%;
+
+    /* Surface layers */
+    --surface-dark: 72 10% 10%;
+    --surface-darker: 72 12% 7%;
+
+    --status-bar: 72 9% 9%;
+    --status-bar-foreground: 48 8% 69%;
+
+    /* Shimmer text (transitions.dev) — demo hex defaults */
+    --shimmer-dur: 2000ms;
+    --shimmer-base: #6e6e6e;
+    --shimmer-highlight: #ededed;
+    --shimmer-band: 400%;
+    --shimmer-ease: linear;
+
+    /* Project colors */
+    --project-blue: 214 34% 58%;
+    --project-purple: 270 27% 61%;
+    --project-green: 120 24% 52%;
+    --project-yellow: 43 38% 59%;
+    --project-red: 2 37% 60%;
+    --project-cyan: 188 30% 55%;
+    --project-pink: 334 28% 61%;
+    --project-orange: 27 38% 57%;
+
+    --sidebar-background: 72 11% 8%;
+    --sidebar-foreground: 48 8% 74%;
+    --sidebar-primary: 86 18% 53%;
+    --sidebar-primary-foreground: 48 16% 96%;
+    --sidebar-accent: 72 8% 13%;
+    --sidebar-accent-foreground: 48 12% 89%;
+    --sidebar-border: 66 7% 18%;
+    --sidebar-ring: 86 20% 58%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  html {
+    /* Crisp font rendering on Linux/Wayland (sub-pixel AA off by default) */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizelegibility;
+    /* Hint native form controls (select dropdowns, scrollbars, date pickers,
+       autofill highlight) to render with the dark theme. Without this,
+       WebKitGTK on Linux paints <select> popups with the system light theme,
+       which clashes hard with our dark UI. */
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    /* Tabular figures for IDE chrome; Inter stylistic sets apply when Inter is active */
+    font-feature-settings: "cv11", "ss01", "ss03", "cv02", "tnum";
+    font-variant-ligatures: contextual;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.28);
+    color: hsl(var(--foreground));
+  }
+
+  :focus-visible {
+    outline-color: hsl(var(--ring) / 0.9);
+    outline-offset: 2px;
+  }
+
+  code,
+  pre,
+  kbd,
+  .font-mono {
+    /* JetBrains Mono ligatures for code-ish UI (excluded inside terminals via xterm settings) */
+    font-feature-settings: "calt", "liga", "zero";
+  }
+
+  /* Quiet physical feedback: IDE chrome should acknowledge a press without
+     the toy-like shrink used by consumer cards. */
+  @media (hover: hover) and (pointer: fine) {
+    button:not(:disabled):not([data-press-feedback="off"]),
+    [role="button"]:not([aria-disabled="true"]):not([data-press-feedback="off"]),
+    summary:not([data-press-feedback="off"]) {
+      /* Note: 'transition' here is shorthand and resets transition-property
+         on the element. Components that rely on tailwind's transition-colors
+         (e.g. hover:bg-primary) may lose their colour transition on buttons
+         that match this selector. We accept that trade-off because press
+         feedback is the dominant interaction and per-component
+         transition-colors usually still wins by specificity / cascade order
+         (this rule is in @layer base, tailwind utilities are @layer
+         utilities and apply later). If a hover snap shows up, scope the
+         override per component or drop the shorthand here in favour of
+         transition-property: transform; transition-duration: 120ms;
+         transition-timing-function: var(--ease-out); */
+      transition: transform 100ms var(--ease-out);
+    }
+
+    button:not(:disabled):not([data-press-feedback="off"]):active,
+    [role="button"]:not([aria-disabled="true"]):not([data-press-feedback="off"]):active,
+    summary:not([data-press-feedback="off"]):active {
+      transform: translateY(1px);
+    }
+  }
+
+  /* Honour user motion preference: drop the press transform but keep
+     functional state changes (colour, focus ring) intact. */
+  @media (prefers-reduced-motion: reduce) {
+    button:active,
+    [role="button"]:active,
+    summary:active {
+      transform: none;
+    }
+  }
+
+  /* Native <select> dropdown items: WebKitGTK ignores parent styling on the
+     popup menu, so set our theme tokens directly on <option>. */
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+  select option:checked,
+  select option:hover {
+    background-color: hsl(var(--accent));
+    color: hsl(var(--accent-foreground));
+  }
+
+  /* Custom scrollbar.
+     8px so it's reachable on Linux/Wayland (4px is too thin to grab).
+     Inset thumb via background-clip + transparent border = thinner visual
+     while keeping the wider hit area. ease-out on hover transition keeps
+     the colour swap snappy. */
+  ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--foreground) / 0.16);
+    background-clip: padding-box;
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    transition: background-color 160ms var(--ease-out);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--foreground) / 0.28);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* xterm v6 draws a custom slider (`.xterm-slider`) beside the last
+     column. The option `scrollbar.showScrollbar: false` hides it in the
+     addon; keep CSS display:none so a cached session cannot flash one. */
+  .xterm .xterm-scrollable-element > .xterm-scrollbar,
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
+    display: none;
+  }
+  .xterm,
+  .xterm .xterm-scrollable-element {
+    scrollbar-width: none;
+  }
+  .xterm::-webkit-scrollbar,
+  .xterm .xterm-scrollable-element::-webkit-scrollbar,
+  .xterm .xterm-viewport::-webkit-scrollbar {
+    display: none;
+  }
+  /* `.xterm-viewport` is a leftover overlay in v6 (overview ruler / DOM
+     metrics). The real scroller is `.xterm-scrollable-element`.
+     `overflow-y: scroll` + padding-right here created a second scroll
+     target and a reserved gutter, so wheel felt sticky and the last row
+     could show leftover glyphs after scroll. */
+  .xterm .xterm-viewport {
+    overflow: hidden;
+    padding-right: 0;
+  }
+  .xterm,
+  .xterm .xterm-scrollable-element {
+    overscroll-behavior: none;
+    overflow-anchor: none;
+  }
+  /* Do not promote the WebGL canvas (or its scroller) onto a compositor
+     layer. WKWebView then keeps a stale snapshot of the canvas: ZLE
+     leftovers stay on screen until the window is dragged and the layer
+     is recomposited. Pixel-smooth scroll owns transform on `.xterm-screen`. */
+
+  /* ------------------------------------------------------------
+   * Radix popovers, tooltips, dropdowns, selects, menubars,
+   * context menus, hover cards: origin-aware scale + custom
+   * ease-out for entering. The default Radix CSS uses
+   * transform-origin: center which feels disconnected from the
+   * trigger. Radix exposes the correct origin via
+   * --radix-*-content-transform-origin per primitive.
+   *
+   * tailwindcss-animate defaults to 150ms ease-in-out. We
+   * override to a snappier 180ms with our --ease-out token so
+   * the entrance feels intentional. Modals (dialog) keep
+   * transform-origin: center on purpose — they are not
+   * anchored to a trigger.
+   * ------------------------------------------------------------ */
+  [data-radix-popper-content-wrapper] > * {
+    transform-origin: var(
+      --radix-popover-content-transform-origin,
+      var(
+        --radix-tooltip-content-transform-origin,
+        var(
+          --radix-dropdown-menu-content-transform-origin,
+          var(
+            --radix-context-menu-content-transform-origin,
+            var(
+              --radix-select-content-transform-origin,
+              var(
+                --radix-menubar-content-transform-origin,
+                var(
+                  --radix-hover-card-content-transform-origin,
+                  var(--radix-navigation-menu-viewport-transform-origin)
+                )
+              )
+            )
+          )
+        )
+      )
+    );
+    animation-duration: 180ms;
+    animation-timing-function: var(--ease-out);
+  }
+
+  /* Closing animation should be a touch faster than opening so
+     dismiss feels instant (asymmetric enter/exit timing). */
+  [data-radix-popper-content-wrapper] > [data-state="closed"] {
+    animation-duration: 130ms;
+  }
+
+  /* ------------------------------------------------------------
+   * Modal / Dialog motion: timing only.
+   *
+   * Slide distance is set on the component className (8px instead
+   * of 48%), but timing & easing are tweaked here so we don't
+   * have to repeat them across dialog.tsx + alert-dialog.tsx +
+   * any future modal primitive.
+   *
+   * Asymmetric timing: 200ms in / 140ms out so dismiss feels
+   * instant. ease-out on both because closing modals don't need
+   * ease-in (user already committed to dismissing).
+   * Modals keep transform-origin: center (Emil's exception —
+   * not anchored to a trigger).
+   *
+   * IMPORTANT: Radix Popover / Tooltip / Dropdown / Select content
+   * also expose role="dialog" but live inside
+   * [data-radix-popper-content-wrapper]. We exclude those here
+   * via :where(...) so the popper rule above keeps owning their
+   * timing (180/130ms) and only true Dialog / AlertDialog get
+   * the 200/140ms treatment.
+   * ------------------------------------------------------------ */
+  :where([role="dialog"], [role="alertdialog"])[data-state]:not(
+    [data-radix-popper-content-wrapper] *
+  ):not([data-sheet]) {
+    animation-timing-function: var(--ease-out);
+  }
+
+  :where([role="dialog"], [role="alertdialog"])[data-state="open"]:not(
+    [data-radix-popper-content-wrapper] *
+  ):not([data-sheet]) {
+    animation-duration: 200ms;
+  }
+
+  :where([role="dialog"], [role="alertdialog"])[data-state="closed"]:not(
+    [data-radix-popper-content-wrapper] *
+  ):not([data-sheet]) {
+    animation-duration: 140ms;
+  }
+
+  /* ------------------------------------------------------------
+   * Sheet (side drawer) motion. Sheet is built on Radix Dialog so
+   * it matches role="dialog", but it should NOT feel like a modal
+   * — drawers slide along an axis from outside the viewport, so
+   * they want a longer travel time and a drawer-shaped curve
+   * (--ease-drawer is iOS-like: starts fast, settles slowly).
+   *
+   * data-sheet is set on SheetContent in sheet.tsx and used to
+   * exclude Sheet from the modal rule above, then opt into this
+   * rule. Asymmetric 300/200ms in/out matches what Sheet already
+   * declares via className (animate-in/animate-out duration), but
+   * is restated here with !important so the modal rule's
+   * !important duration would not silently win on rule order.
+   * ------------------------------------------------------------ */
+  [data-sheet][data-state="open"] {
+    animation-timing-function: var(--ease-drawer);
+    animation-duration: 300ms;
+  }
+
+  [data-sheet][data-state="closed"] {
+    animation-timing-function: var(--ease-drawer);
+    animation-duration: 200ms;
+  }
+
+  /* ------------------------------------------------------------
+   * Tooltip open/close (transitions.dev recipe, Radix-adapted).
+   * Appear-only delay lives on TooltipProvider (--tt-delay / 80ms).
+   * Default rule = LEAVE (50ms, no delay). Open = 150ms fade+scale.
+   * Radix open states are delayed-open | instant-open (not "open").
+   * @starting-style so first mount still plays the enter transition.
+   * ------------------------------------------------------------ */
+  .animate-tooltip-in {
+    opacity: 0;
+    transform: scale(var(--tt-scale));
+    transition:
+      opacity var(--tt-out-dur) var(--tt-out-ease),
+      transform var(--tt-out-dur) var(--tt-out-ease);
+  }
+
+  .animate-tooltip-in[data-state="delayed-open"],
+  .animate-tooltip-in[data-state="instant-open"] {
+    opacity: 1;
+    transform: scale(1);
+    transition-duration: var(--tt-in-dur);
+    transition-timing-function: var(--tt-in-ease);
+  }
+
+  @starting-style {
+    .animate-tooltip-in[data-state="delayed-open"],
+    .animate-tooltip-in[data-state="instant-open"] {
+      opacity: 0;
+      transform: scale(var(--tt-scale));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-tooltip-in {
+      transition: none !important;
+    }
+
+    .animate-tooltip-in[data-state="delayed-open"],
+    .animate-tooltip-in[data-state="instant-open"] {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+@layer utilities {
+  /* Terminal text styling */
+  .terminal-text {
+    @apply font-mono text-sm leading-relaxed;
+  }
+
+  /* Blinking cursor */
+  .terminal-cursor {
+    @apply inline-block w-2.5 h-5 bg-muted-foreground animate-pulse;
+  }
+
+  /* Glass effect for modals - Codex style */
+  .glass-panel {
+    background: hsla(0, 0%, 11%, 0.95);
+    backdrop-filter: blur(12px);
+  }
+
+  /* Project color dot glow */
+  .project-dot-glow {
+    box-shadow: 0 0 8px currentColor;
+  }
+
+  /* Snapshot thumbnail lines */
+  .snapshot-line {
+    height: 2px;
+    border-radius: 1px;
+    margin-bottom: 2px;
+  }
+}
+
+/* ------------------------------------------------------------
+ * Uppercase label scale.
+ *
+ * Two canonical typography-only roles for the uppercase tracked
+ * label element that previously drifted across ~25 call sites
+ * (sizes 10/12px, weights normal/medium/semibold/bold, tracking
+ * wide/wider). The two classes intentionally NORMALIZE weight and
+ * tracking to a single value per role — this is a deliberate
+ * unification, so some migrated labels render slightly lighter or
+ * heavier than before by design.
+ *
+ *   .label-section -> 12px panel / section headers
+ *                     (Projects, Explorer, SSH, Terminal, settings)
+ *   .label-group   -> 10px menu / group / field micro-labels
+ *                     (command palette groups, dialog field labels)
+ *
+ * These set size / weight / tracking / transform / line-height
+ * ONLY. Color and opacity stay at the call site because sidebar
+ * chrome (text-sidebar-foreground) and content surfaces
+ * (text-muted-foreground) legitimately differ. Behavioral classes
+ * (padding, hover, focus, truncate, cmdk selectors) also stay at
+ * the call site.
+ * ------------------------------------------------------------ */
+@layer components {
+  .label-section {
+    @apply text-xs font-normal uppercase tracking-wider;
+    line-height: 1.4;
+  }
+  .label-group {
+    @apply text-3xs font-semibold uppercase tracking-wider;
+    line-height: 1.4;
+  }
+}
+
+/* Chat composer (Tiptap) empty-state placeholder.
+   `@tiptap/extension-placeholder` sets `data-placeholder` + the `is-empty`
+   class on the empty `<p>` node, but ships no CSS — the app must render the
+   hint via `::before { content: attr(data-placeholder) }`. Applies to both
+   the agent launcher and the existing-chat ChatInputBar (both share
+   ChatComposerEditor). */
+@layer components {
+  [data-composer-editor="true"] p.is-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground));
+    float: left;
+    pointer-events: none;
+    height: 0;
+  }
+}
+
+/* Agent chat stream: Grok-like prose inside compact IDE chrome. */
+@layer components {
+  .chat-timeline-row-user {
+    padding-top: 0.7rem;
+  }
+  .chat-timeline-row-agent {
+    padding-top: 0.1rem;
+  }
+  .chat-timeline-row-tool,
+  .chat-timeline-row-thought,
+  .chat-timeline-row-activity {
+    padding-block: 0.05rem;
+  }
+
+  .chat-user-prompt {
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.45rem 0.7rem;
+    border: 1px solid hsl(var(--border) / 0.42);
+    border-radius: 0.375rem;
+    background: hsl(var(--muted) / 0.55);
+    color: hsl(var(--foreground));
+    font-size: 0.875rem;
+    line-height: 1.55;
+  }
+
+  .chat-agent-stream {
+    width: 100%;
+    min-width: 0;
+    max-width: 42rem;
+  }
+
+  .chat-message-meta {
+    margin-top: 0.05rem;
+  }
+
+  .chat-embedded-resource {
+    border: 1px solid hsl(var(--border) / 0.4);
+    border-radius: 0.25rem;
+    background: hsl(var(--muted) / 0.4);
+  }
+
+  .chat-prose {
+    word-break: break-word;
+    text-wrap: pretty;
+    color: hsl(var(--foreground) / 0.94);
+  }
+  .chat-prose > :first-child {
+    margin-top: 0;
+  }
+  .chat-prose > :last-child {
+    margin-bottom: 0;
+  }
+  .chat-prose h1,
+  .chat-prose h2,
+  .chat-prose h3,
+  .chat-prose h4 {
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.012em;
+    margin: 0.85em 0 0.32em;
+    color: hsl(var(--foreground));
+    text-wrap: balance;
+  }
+  .chat-prose h1 {
+    font-size: 1.2em;
+  }
+  .chat-prose h2 {
+    font-size: 1.08em;
+  }
+  .chat-prose h3 {
+    font-size: 1em;
+  }
+  .chat-prose p {
+    margin: 0 0 0.62em;
+  }
+  .chat-prose ul {
+    margin: 0 0 0.62em 1.25em;
+    padding-left: 0.35em;
+    list-style-type: disc;
+    color: hsl(var(--foreground) / 0.88);
+  }
+  .chat-prose ol {
+    margin: 0 0 0.62em 1.25em;
+    padding-left: 0.35em;
+    list-style-type: decimal;
+    color: hsl(var(--foreground) / 0.88);
+  }
+  .chat-prose li {
+    margin: 0.12em 0;
+    padding-left: 0.2em;
+  }
+  .chat-prose li::marker {
+    color: hsl(var(--muted-foreground) / 0.75);
+  }
+  .chat-prose a {
+    color: hsl(var(--primary));
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .chat-prose strong {
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+  .chat-prose blockquote {
+    border-left: 2px solid hsl(var(--primary) / 0.45);
+    padding: 0.1em 0 0.1em 0.8em;
+    margin: 0 0 0.62em;
+    color: hsl(var(--muted-foreground));
+    background: transparent;
+  }
+  .chat-prose code {
+    font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.85em;
+    font-weight: 500;
+    padding: 0.08em 0.36em;
+    border-radius: 0.25rem;
+    border: 1px solid hsl(var(--border) / 0.4);
+  }
+  .chat-prose code.chat-code-token {
+    background: hsl(var(--muted) / 0.6);
+    color: hsl(var(--foreground));
+  }
+  .chat-prose code.chat-code-path {
+    background: hsl(var(--primary) / 0.1);
+    color: hsl(var(--primary));
+    border-color: hsl(var(--primary) / 0.24);
+  }
+  .chat-prose pre {
+    background: hsl(var(--muted) / 0.42);
+    border: 1px solid hsl(var(--border) / 0.48);
+    border-radius: 0.25rem;
+    padding: 0.7em 0.8em;
+    overflow-x: auto;
+    margin: 0 0 0.62em;
+    font-size: 0.84em;
+    line-height: 1.55;
+  }
+  .chat-prose pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: inherit;
+  }
+  /* Icon copy button injected onto code blocks by ChatMessage. */
+  .chat-code-copy {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    padding: 0;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border) / 0.7);
+    border-radius: 0.25rem;
+    opacity: 0;
+    transition:
+      opacity 150ms var(--ease-out),
+      color 150ms var(--ease-out);
+    cursor: pointer;
+  }
+  .chat-code-copy svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .chat-prose pre:hover .chat-code-copy,
+  .chat-code-copy:focus-visible {
+    opacity: 1;
+  }
+  .chat-code-copy:hover {
+    color: hsl(var(--foreground));
+  }
+  .chat-code-copy.is-copied {
+    opacity: 1;
+    color: hsl(var(--success));
+  }
+  .chat-prose table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 0.62em;
+    font-size: 0.9em;
+  }
+  .chat-prose th,
+  .chat-prose td {
+    border: 0;
+    border-bottom: 1px solid hsl(var(--border) / 0.45);
+    padding: 0.32em 0.55em;
+    text-align: left;
+  }
+  .chat-prose th {
+    background: hsl(var(--muted) / 0.4);
+    font-weight: 600;
+    color: hsl(var(--foreground) / 0.88);
+  }
+  .chat-prose hr {
+    border: none;
+    border-top: 1px solid hsl(var(--border) / 0.5);
+    margin: 0.9em 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chat-code-copy {
+      transition: none;
+    }
+  }
+}
+
+/* Streamdown code blocks (agent chat): looser line-height for readable code,
+   and a comfortable min-height so short snippets don't feel cramped. */
+@layer components {
+  @keyframes tool-card-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  .tool-call-card-running::before {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    z-index: 0;
+    width: 45%;
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, hsl(var(--foreground) / 0.045), transparent);
+    animation: tool-card-shimmer 1.8s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tool-call-card-running::before {
+      width: 100%;
+      transform: none;
+      animation: none;
+    }
+  }
+
+  /* transitions.dev shimmer-text — highlight band sweeps across muted label */
+  .t-shimmer {
+    position: relative;
+    display: inline-block;
+    color: var(--shimmer-base);
+  }
+  .t-shimmer::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 40%,
+      var(--shimmer-highlight) 50%,
+      transparent 60%,
+      transparent 100%
+    );
+    background-size: var(--shimmer-band) 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+  }
+  @keyframes t-shimmer {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: 0% 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .t-shimmer::before {
+      animation: none !important;
+    }
+  }
+
+  .chat-streamdown {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+    color: hsl(var(--foreground) / 0.94);
+  }
+  .chat-streamdown > :first-child {
+    margin-top: 0;
+  }
+  .chat-streamdown > :last-child {
+    margin-bottom: 0;
+  }
+  .chat-streamdown [data-streamdown^="heading-"] {
+    margin-block: 0.9em 0.28em;
+    font-size: 1em;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.012em;
+    color: hsl(var(--foreground));
+  }
+  .chat-streamdown [data-streamdown="heading-1"] {
+    font-size: 1.06em;
+  }
+  .chat-streamdown p,
+  .chat-streamdown [data-streamdown="ordered-list"],
+  .chat-streamdown [data-streamdown="unordered-list"],
+  .chat-streamdown [data-streamdown="blockquote"],
+  .chat-streamdown pre {
+    margin-block: 0 0.6em;
+  }
+  .chat-streamdown [data-streamdown="ordered-list"],
+  .chat-streamdown [data-streamdown="unordered-list"] {
+    padding-left: 1.2rem;
+    color: hsl(var(--foreground) / 0.9);
+  }
+  .chat-streamdown [data-streamdown="list-item"] {
+    padding-block: 0.1em;
+  }
+  .chat-streamdown [data-streamdown="blockquote"] {
+    border-left: 2px solid hsl(var(--border));
+    padding-left: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    background: transparent;
+  }
+  .chat-streamdown [data-streamdown="horizontal-rule"] {
+    margin-block: 0.85rem;
+    border-color: hsl(var(--border) / 0.55);
+  }
+  .chat-streamdown :not(pre) > code {
+    border-radius: 0.2rem;
+    background: hsl(var(--muted) / 0.65);
+    border: 1px solid hsl(var(--border) / 0.35);
+    padding: 0.08em 0.32em;
+    font-size: 0.86em;
+  }
+  .chat-streamdown [data-streamdown="code-block"],
+  .chat-streamdown [data-streamdown="code-block-header"] {
+    border-color: hsl(var(--border) / 0.45);
+    background: hsl(var(--muted) / 0.32);
+  }
+  .chat-streamdown [data-streamdown="code-block"] {
+    border-radius: 0.25rem;
+    overflow: hidden;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"] {
+    line-height: 1.58;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"] pre,
+  .chat-streamdown [data-streamdown="code-block-body"] code {
+    line-height: inherit;
+    background: transparent;
+  }
+  /* Streamdown code-block action buttons: pin to 24px so the size="sm"
+     IconActionButton stays compact even when streamdown's own CSS sizes
+     the action slot. Mirrors the table-toolbar override below. */
+  .chat-streamdown [data-streamdown="code-block-actions"] button {
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+  }
+
+  /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
+  .chat-streamdown [data-streamdown="table-toolbar"] .relative {
+    display: contents;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:hover {
+    color: hsl(var(--foreground));
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+  /* Fullscreen table toolbar is portaled to document.body, so it's outside
+     .chat-streamdown — scope by the data attribute instead. Mirrors the
+     in-page table-toolbar override for compact 24px dropdown triggers. */
+  [data-streamdown="table-fullscreen"] button {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  [data-streamdown="table-fullscreen"] button:hover {
+    color: hsl(var(--foreground));
+  }
+  [data-streamdown="table-fullscreen"] button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  [data-streamdown="table-fullscreen"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+  .chat-streamdown [data-streamdown="table-wrapper"] {
+    border-radius: 0.25rem;
+    border-color: hsl(var(--border) / 0.4);
+    background: hsl(var(--muted) / 0.2);
+  }
+  .chat-streamdown [data-streamdown="table"] {
+    min-width: max-content;
+    font-size: 0.875rem;
+  }
+  .chat-streamdown [data-streamdown="table"] th {
+    background: hsl(var(--muted) / 0.38);
+    font-weight: 600;
+    color: hsl(var(--foreground) / 0.88);
+  }
+  .chat-streamdown [data-streamdown="table"] th,
+  .chat-streamdown [data-streamdown="table"] td {
+    border-color: hsl(var(--border) / 0.4);
+    padding: 0.32rem 0.55rem;
+    text-align: left;
+  }
+}
+
+/* BlockNote ships unlayered defaults, so these locally scoped overrides remain
+   unlayered as well. This prevents the markdown document theme from leaking to
+   chat or any future BlockNote surfaces. */
+.markdown-editor {
+  container-name: markdown-editor;
+  container-type: inline-size;
+  --markdown-document-width: 48rem;
+  --markdown-document-gutter: clamp(1.25rem, 5cqi, 3.5rem);
+}
+
+.markdown-editor-document {
+  min-width: 0;
+  padding-bottom: 5rem;
+}
+
+.markdown-editor .frontmatter-properties-inner,
+.markdown-editor .bn-editor {
+  width: min(100%, calc(var(--markdown-document-width) + 2 * var(--markdown-document-gutter)));
+  margin-inline: auto;
+  padding-inline: var(--markdown-document-gutter);
+}
+
+.markdown-editor .frontmatter-properties-grid {
+  max-width: 40rem;
+}
+
+.markdown-editor .bn-container,
+.markdown-editor .bn-editor {
+  min-width: 0;
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+
+.markdown-editor .bn-editor {
+  padding-top: 2.25rem;
+  padding-bottom: 1rem;
+  border-radius: 0;
+}
+
+.markdown-editor .bn-default-styles {
+  font-family: "Inter Variable", Inter, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.markdown-editor .bn-block-outer {
+  line-height: inherit;
+}
+
+.markdown-editor .bn-block-content {
+  min-width: 0;
+  padding-block: 0.16rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="paragraph"] {
+  padding-block: 0.32rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"],
+.markdown-editor .bn-block-outer[data-prev-type="heading"] > .bn-block > .bn-block-content {
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+  text-wrap: balance;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="1"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="1"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 2rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="2"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="2"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1.5rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="3"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="3"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1.2rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="4"],
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="5"],
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="6"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"]:is(
+    [data-prev-level="4"],
+    [data-prev-level="5"],
+    [data-prev-level="6"]
+  )
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1rem;
+}
+
+.markdown-editor .bn-block-outer:has(> .bn-block > [data-content-type="heading"]) {
+  margin-top: 1.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.markdown-editor
+  .bn-block-group
+  > .bn-block-outer:first-child:has(> .bn-block > [data-content-type="heading"]) {
+  margin-top: 0;
+}
+
+.markdown-editor
+  .bn-block-outer:has(
+    > .bn-block
+      > :is(
+        [data-content-type="bulletListItem"],
+        [data-content-type="numberedListItem"],
+        [data-content-type="checkListItem"]
+      )
+  ) {
+  margin-block: 0.08rem;
+}
+
+.markdown-editor
+  .bn-block-content:is(
+    [data-content-type="bulletListItem"],
+    [data-content-type="numberedListItem"],
+    [data-content-type="checkListItem"]
+  )::before {
+  color: hsl(var(--muted-foreground) / 0.85);
+}
+
+.markdown-editor .bn-block-group .bn-block-group {
+  margin-left: 1.25rem;
+}
+
+.markdown-editor [data-content-type="quote"] blockquote {
+  margin-block: 0.45rem;
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left-color: hsl(var(--primary) / 0.55);
+  color: hsl(var(--muted-foreground));
+}
+
+.markdown-editor [data-content-type="divider"] hr {
+  margin-block: 1.5rem;
+  border-top-color: hsl(var(--border) / 0.8);
+}
+
+.markdown-editor .bn-inline-content a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.markdown-editor .bn-inline-content code {
+  padding: 0.12em 0.38em;
+  border: 1px solid hsl(var(--border) / 0.55);
+  border-radius: 0.3rem;
+  background: hsl(var(--muted) / 0.55);
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88em;
+}
+
+.markdown-editor .bn-block-content[data-content-type="codeBlock"] {
+  margin-block: 0.7rem;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: calc(var(--radius) + 0.125rem);
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+}
+
+.markdown-editor .bn-block-content[data-content-type="codeBlock"] > pre {
+  padding: 1.1rem 1.25rem;
+  line-height: 1.62;
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88rem;
+}
+
+.markdown-editor [data-content-type="table"] .tableWrapper {
+  max-width: 100%;
+  margin-block: 0.8rem;
+  overflow-x: auto;
+  padding: 0;
+  border: 1px solid hsl(var(--border) / 0.75);
+  border-radius: var(--radius);
+}
+
+.markdown-editor .bn-editor .bn-block-content[data-content-type="table"] table {
+  width: max-content !important;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.markdown-editor .bn-editor [data-content-type="table"] th,
+.markdown-editor .bn-editor [data-content-type="table"] td {
+  padding: 0.55rem 0.75rem;
+  border-color: hsl(var(--border) / 0.65);
+  vertical-align: top;
+}
+
+.markdown-editor .bn-editor [data-content-type="table"] th {
+  background: hsl(var(--muted) / 0.45);
+  font-weight: 600;
+}
+
+@container markdown-editor (max-width: 560px) {
+  .markdown-editor {
+    --markdown-document-gutter: 1rem;
+  }
+
+  .markdown-editor .frontmatter-properties-inner {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  .markdown-editor .frontmatter-properties-grid > div {
+    flex-wrap: wrap;
+  }
+
+  .markdown-editor .frontmatter-properties-grid label {
+    width: calc(100% - 3.5rem);
+  }
+
+  .markdown-editor .frontmatter-properties-grid label + div {
+    flex-basis: calc(100% - 1.375rem);
+    margin-left: 1.375rem;
+  }
+
+  .markdown-editor .bn-editor {
+    padding-top: 1.5rem;
+  }
+
+  .markdown-editor .bn-block-content[data-content-type="heading"][data-level="1"],
+  .markdown-editor
+    .bn-block-outer[data-prev-type="heading"][data-prev-level="1"]
+    > .bn-block
+    > .bn-block-content {
+    font-size: 1.75rem;
+  }
+}

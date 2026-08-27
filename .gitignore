@@ -1,0 +1,110 @@
+# Local secrets (shadcn private registries, etc.)
+.env
+.env.local
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+dist-tauri/
+dist-web/
+out/
+*.tsbuildinfo
+
+# Rust/Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.local
+
+# Claude Code cache
+.claude/
+.codex/
+
+# Windows null file artifact
+nul
+/_bmad-output
+/_bmad
+/.github/agents
+
+# Auto Claude data directory
+.auto-claude/
+/.opencode
+
+# Claude Code temp directories
+tmpclaude-*/
+tmpclaude-*
+
+# Docs folder (local only, not tracked)
+# docs/
+
+# ADR documentation
+docs/adr/
+
+# Auto Claude generated files
+.auto-claude-security.json
+.auto-claude-status
+.claude_settings.json
+.worktrees/
+.security-key
+logs/security/
+
+# Transient verification files (E2E reports, checklists)
+E2E_VERIFICATION_REPORT.md
+VERIFICATION_CHECKLIST.md
+*_VERIFICATION*.md
+/_bmad-bkp
+
+# Agent workflow & prompt files
+.agent/workflows/
+.github/prompts/
+.github/copilot-instructions.md
+/.pi
+/.pi-lens
+/.pi-subagents
+/.agents
+.pi-automator-active
+
+# Personal notes & specs (local only)
+/ntfd/
+.termul/
+
+# Maestro knowledge corpus, run state and embeddings (~90 MB of local tooling
+# data: sessions, specs, knowhow, vector index). Machine-local, not project code.
+/.workflow/
+
+# Local auto-test run artifacts (plans, iteration results, reflection logs)
+/.tests/
+
+# Xcode per-user state. The directory name embeds the local macOS account
+# (`<user>.xcuserdatad`), so committing it publishes the developer's username.
+**/xcuserdata/
+*.xcuserstate
+
+# Local agent-skill installs & HyperFrames video-authoring artifacts
+# (kept out of the app repo; install locally via `skills add` / hyperframes)
+/agent/
+/video/
+/compositions/
+/plans
+.codebase-memory/

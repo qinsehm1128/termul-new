@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.web.json",
+  "compilerOptions": {
+    "composite": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/renderer/**/*",
+    "src/shared/**/*",
+    "vitest.setup.ts",
+    "scripts/**/*.test.ts",
+    "scripts/check-conversation-first-guardrails.ts",
+    "scripts/validate-pr-body.ts"
+  ]
+}

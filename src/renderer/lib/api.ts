@@ -1,0 +1,52 @@
+/**
+ * Unified API exports for the Tauri runtime
+ *
+ * This module re-exports all API singletons for easy importing.
+ * Each API follows the IpcResult<T> pattern for consistent error handling.
+ *
+ * Usage:
+ *   import { terminalApi, clipboardApi, systemApi } from '@/lib/api'
+ */
+
+export { acpApi } from './acp-api'
+export { acpCatalogApi } from './acp-catalog-api'
+export { acpInstallApi } from './acp-install-api'
+export { cliSessionApi } from './cli-session-api'
+export { clipboardApi } from './clipboard-api'
+export { conversationApi } from './conversation-api'
+export { dialogApi } from './dialog-api'
+export { editorWorkspaceApi } from './editor-workspace-api'
+export { filesystemApi } from './filesystem-api'
+export { gitApi } from './git-api'
+export { keyboardApi } from './keyboard-api'
+export * as logApi from './log-api'
+export * as macosPermissionsApi from './macos-permissions-api'
+export { persistenceApi } from './persistence-api'
+export { scheduledTaskApi } from './scheduled-task-api'
+export { sessionWorkspaceApi } from './session-workspace-api'
+export { shellApi } from './shell-api'
+export { createAskpassScript, sshApi } from './ssh-api'
+export { systemApi } from './system-api'
+export { openerApi } from './tauri-opener-api'
+export {
+  remoteServerApi,
+  syncChatHistory,
+  syncProjects,
+  tunnelConfigApi
+} from './tauri-remote-api'
+export { hasActiveTerminalSessions } from './tauri-safe-update'
+export * as tauriUpdaterApi from './tauri-updater-api'
+export * as tauriVersionSkipService from './tauri-version-skip'
+export { addRendererRef, removeRendererRef, terminalApi } from './terminal-api'
+export { visibilityApi } from './visibility-api'
+export { windowApi } from './window-api'
+export { workspaceManifestApi } from './workspace-manifest-api'
+export { worktreeApi } from './worktree-api'
+
+import { createTauriDataMigrationApi } from './tauri-data-migration-api'
+import { tauriSecureStorageApi } from './tauri-secure-storage-api'
+import { tauriSessionApi } from './tauri-session-api'
+
+export const sessionApi = tauriSessionApi
+export const dataMigrationApi = createTauriDataMigrationApi()
+export const secureStorageApi = tauriSecureStorageApi

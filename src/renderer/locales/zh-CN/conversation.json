@@ -1,0 +1,95 @@
+{
+  "navigation": {
+    "newChat": "新建聊天",
+    "conversations": "会话",
+    "projectless": "无项目"
+  },
+  "dashboard": {
+    "title": "你的会话工作区",
+    "description": "无需创建项目即可开始聊天。项目和工作树只是可选的执行目标。",
+    "loading": "正在加载会话…",
+    "empty": "还没有会话。请在独立工作区中开始新聊天。",
+    "workspace": "工作区目录"
+  },
+  "target": {
+    "title": "执行目标与项目上下文",
+    "label": "执行目标",
+    "workspace": "会话工作区",
+    "projectRoot": "项目根目录",
+    "worktree": "工作树",
+    "project": "项目",
+    "noProject": "未选择项目",
+    "workspaceUnchanged": "会话身份和工作区目录保持不变",
+    "newWorkspace": "将创建新的独立工作区",
+    "newWorktree": "将创建新的工作树",
+    "invalid": "需要选择",
+    "errors": {
+      "projectRequired": "请为此目标选择项目。",
+      "projectRootRequired": "所选项目需要根目录路径。",
+      "worktreeBranchRequired": "请选择基础分支或现有工作树。",
+      "projectAttachmentRequired": "选择或移除项目执行目标前，请先附加项目上下文。"
+    }
+  },
+  "identity": {
+    "conversationId": "会话 ID",
+    "createdAtUtc": "创建时间（UTC）",
+    "creationPartition": "创建分区",
+    "workspaceCwd": "工作区目录"
+  },
+  "attachment": {
+    "attach": "附加项目上下文",
+    "detach": "移除项目上下文",
+    "attached": "已附加项目：{{projectId}}",
+    "none": "未附加项目"
+  },
+  "mutation": {
+    "saving": "正在保存会话更改…",
+    "saved": {
+      "target": "执行目标已更新，会话身份和工作区保持不变。",
+      "attached": "项目上下文已附加，会话身份和工作区保持不变。",
+      "detached": "项目上下文已移除，会话身份和工作区保持不变。"
+    },
+    "errors": {
+      "CONVERSATION_CONFLICT": "此会话已在其他位置发生更改，请重新打开后重试。",
+      "VALIDATION_ERROR": "所选项目或执行目标无效。",
+      "CONVERSATION_RECOVERY_REQUIRED": "此会话需要恢复后才能更改。"
+    }
+  },
+  "recovery": {
+    "title": "会话恢复",
+    "description": "检查保留的来源，或明确选择安全的恢复操作。",
+    "revision": "修订 {{revision}}",
+    "sources": "不可变来源与校验和",
+    "provenance": "保留的来源记录",
+    "candidateFacts": "保留的候选事实",
+    "preservedReadOnly": "以只读方式保留",
+    "unchanged": "未改变",
+    "outcome": "{{action}} → {{status}}；工作区修订：{{workspaceRevision}}",
+    "actions": {
+      "inspect": "检查保留来源",
+      "associateConversation": "关联会话",
+      "startEmptyWorkspace": "启动空工作区",
+      "dismissPreservedSource": "忽略并保留来源"
+    },
+    "statuses": {
+      "unresolved": "未解决",
+      "resolvedAssociated": "已关联",
+      "resolvedStartedEmpty": "已启动空工作区",
+      "dismissedPreserved": "已忽略且保留来源"
+    },
+    "kinds": {
+      "ambiguous_workspace_manifest": "工作区清单存在歧义",
+      "identifier_collision": "标识符冲突",
+      "invalid_created_at": "创建时间无效",
+      "corrupt_source": "保留来源已损坏",
+      "conflicting_worktree_provenance": "工作树来源冲突",
+      "conflicting_session_metadata": "会话元数据冲突"
+    }
+  },
+  "errors": {
+    "CONVERSATION_INVALID_ID": "请先选择规范的会话再执行此操作。",
+    "CONVERSATION_CONFLICT": "工作区已存在或修订已变化，未覆盖任何内容。",
+    "CONVERSATION_RECOVERY_REQUIRED": "此来源仍需要恢复。",
+    "CONVERSATION_RECOVERY_FAILED": "恢复请求失败，保留来源未发生变化。"
+  }
+}

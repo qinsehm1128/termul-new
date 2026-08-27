@@ -1,0 +1,134 @@
+name: Publish AUR
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, without leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-aur-${{ github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Update termul-manager on AUR
+    runs-on: ubuntu-latest
+    # Gated on the AUR_PACKAGE repository variable. It used to be hardcoded to
+    # `termul-manager`, which is the upstream project's AUR package — this project
+    # is independent, so a release tag here must never push there. Set the
+    # AUR_PACKAGE variable (and the AUR_SSH_PRIVATE_KEY secret) to this project's
+    # own AUR package name to enable publishing; unset, the job is skipped.
+    if: >-
+      vars.AUR_PACKAGE != '' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
+    container:
+      image: archlinux:base-devel
+    env:
+      AUR_PACKAGE: ${{ vars.AUR_PACKAGE }}
+      AUR_REPO: ssh://aur@aur.archlinux.org/${{ vars.AUR_PACKAGE }}.git
+    steps:
+      - name: Install tools
+        run: |
+          pacman -Syu --noconfirm --needed git openssh pacman-contrib
+          useradd -m builder
+
+      - name: Configure Git
+        run: |
+          runuser -u builder -- git config --global user.name "github-actions[bot]"
+          runuser -u builder -- git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure AUR SSH
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$AUR_SSH_PRIVATE_KEY"
+          install -d -m 700 -o builder -g builder /home/builder/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
+          chown builder:builder /home/builder/.ssh/aur
+          chmod 600 /home/builder/.ssh/aur
+          printf '%s\n' \
+            'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' \
+            > /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/known_hosts
+          cat > /home/builder/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+          EOF
+          chown builder:builder /home/builder/.ssh/config
+          chmod 600 /home/builder/.ssh/config
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$REF_NAME"
+          fi
+          VERSION="${VERSION#v}"
+          # Prerelease guard: any version with a prerelease segment (RC, nightly)
+          # is skipped so AUR only publishes stable. Mirrors publish-homebrew's
+          # stable-only cask gate without sourcing the termul checkout (this job
+          # runs in the archlinux container and does not check out the repo).
+          if [[ "$VERSION" == *-* ]]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping AUR publish for prerelease $VERSION."
+          else
+            if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+              echo "Invalid stable version: $VERSION" >&2
+              exit 1
+            fi
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone AUR package
+        if: steps.version.outputs.is_prerelease != 'true'
+        run: |
+          runuser -u builder -- git clone "$AUR_REPO" "/home/builder/$AUR_PACKAGE"
+
+      - name: Update PKGBUILD
+        if: steps.version.outputs.is_prerelease != 'true'
+        working-directory: /home/builder/termul-manager
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          runuser -u builder -- sed -i \
+            -e "s/^pkgver=.*/pkgver=$VERSION/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            PKGBUILD
+          runuser -u builder -- updpkgsums
+          runuser -u builder -- bash -c 'makepkg --printsrcinfo > .SRCINFO'
+
+      - name: Commit and push
+        if: steps.version.outputs.is_prerelease != 'true'
+        working-directory: /home/builder/termul-manager
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if runuser -u builder -- git diff --quiet; then
+            echo "AUR package already up to date."
+            exit 0
+          fi
+          runuser -u builder -- git add PKGBUILD .SRCINFO
+          runuser -u builder -- git commit -m "Update to $VERSION"
+          runuser -u builder -- git fetch origin master
+          runuser -u builder -- git rebase origin/master
+          runuser -u builder -- git push origin HEAD:master

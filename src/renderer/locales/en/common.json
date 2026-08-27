@@ -1,0 +1,191 @@
+{
+  "app": {
+    "name": "Termul Manager",
+    "documentTitle": "Termul Manager — Project-Aware Terminal"
+  },
+  "actions": {
+    "cancel": "Cancel",
+    "clear": "Clear",
+    "close": "Close",
+    "confirm": "Confirm",
+    "copy": "Copy",
+    "cut": "Cut",
+    "paste": "Paste",
+    "reset": "Reset",
+    "retry": "Try Again",
+    "save": "Save",
+    "selectAll": "Select All"
+  },
+  "a11y": {
+    "breadcrumb": "Breadcrumb",
+    "carousel": "Carousel",
+    "carouselNext": "Next slide",
+    "carouselPrevious": "Previous slide",
+    "more": "More",
+    "slide": "Slide"
+  },
+  "dialog": {
+    "loading": "Loading...",
+    "selectProjectFolder": "Select Project Folder",
+    "selectFile": "Select File",
+    "saveFile": "Save File",
+    "confirm": "Confirm",
+    "info": "Info",
+    "noDirectorySelected": "No directory selected",
+    "noFileSelected": "No file selected"
+  },
+  "error": {
+    "title": "Something went wrong{{details}}",
+    "context": " in {{location}}",
+    "unexpected": "An unexpected error occurred.",
+    "locations": {
+      "appRoot": "App Root",
+      "terminalPane": "Terminal Pane",
+      "editorPane": "Editor Pane"
+    }
+  },
+  "status": {
+    "never": "Never"
+  },
+  "persistence": {
+    "failedPanel": "Failed to persist {{panel}}"
+  },
+  "loading": "Loading",
+  "pagination": {
+    "label": "Pagination",
+    "previous": "Previous",
+    "previousAria": "Go to previous page",
+    "next": "Next",
+    "nextAria": "Go to next page",
+    "morePages": "More pages"
+  },
+  "lightbox": {
+    "open": "Open image: {{name}}",
+    "close": "Close image"
+  },
+  "sidebar": {
+    "toggle": "Toggle Sidebar"
+  },
+  "directoryPicker": {
+    "title": "Select Project Folder",
+    "cancelAria": "Cancel directory picker",
+    "goUpAria": "Go up one directory",
+    "up": "Up",
+    "listing": "Listing directory...",
+    "empty": "No subdirectories in this folder",
+    "selectCurrent": "Select Current Folder",
+    "listFailed": "Unable to list this directory",
+    "noSelection": "No directory selected",
+    "pickerClosed": "Picker closed"
+  },
+  "time": {
+    "justNow": "Just now",
+    "minutesAgo": "{{count}}m ago",
+    "hoursAgo": "{{count}}h ago",
+    "daysAgo": "{{count}}d ago"
+  },
+  "window": {
+    "minimize": "Minimize",
+    "minimizeAria": "Minimize window",
+    "maximize": "Maximize",
+    "maximizeAria": "Maximize window",
+    "restore": "Restore",
+    "restoreAria": "Restore window",
+    "closeAria": "Close window"
+  },
+  "examples": {
+    "greeting": "Hello, {{name}}",
+    "itemCount_one": "{{formattedCount}} item",
+    "itemCount_other": "{{formattedCount}} items"
+  },
+  "conversationHost": {
+    "ariaLabel": "Conversation host status",
+    "recoveryCount_one": "{{count}} recovery item",
+    "recoveryCount_other": "{{count}} recovery items",
+    "states": {
+      "ready": "Conversation service ready",
+      "migrating": "Conversation service is starting",
+      "hybrid": "Conversation compatibility mode",
+      "recovery": "Conversation recovery required",
+      "error": "Conversation service unavailable"
+    }
+  },
+  "conversationNavigation": {
+    "title": "Conversations",
+    "newChat": "New Chat",
+    "search": "Search conversations",
+    "clearSearch": "Clear conversation search",
+    "filter": "Filter conversations by project",
+    "allProjects": "All projects",
+    "projectless": "No project",
+    "projectView": "Project conversations",
+    "empty": "No conversations match this view.",
+    "untitled": "Untitled conversation",
+    "loadMore": "Load {{count}} more",
+    "recoveryBadge_one": "{{count}} recovery item",
+    "recoveryBadge_other": "{{count}} recovery items",
+    "shownCount": "{{shown}} shown · {{total}} total",
+    "revision": "rev {{count}}",
+    "toggleDetails": "Show conversation details",
+    "detailsWorkspace": "Workspace",
+    "detailsState": "State",
+    "detailsProject": "Project",
+    "rowStatus": {
+      "need": "Need you",
+      "working": "Working",
+      "idle": "Idle"
+    }
+  },
+  "conversationRoute": {
+    "opening": "Opening conversation…",
+    "resolvingLegacy": "Resolving legacy conversation…",
+    "legacyError": "This legacy conversation link could not be resolved.",
+    "errors": {
+      "title": "Conversation unavailable",
+      "CONVERSATION_INVALID_ID": "The address is not a canonical ConversationId.",
+      "CONVERSATION_NOT_FOUND": "The conversation was not found.",
+      "LEGACY_ID_AMBIGUOUS": "This legacy identifier matches more than one conversation.",
+      "CONVERSATION_RECOVERY_REQUIRED": "Recovery is required before this conversation can open.",
+      "CONVERSATION_BINDING_OPEN_FAILED": "The conversation opened, but its agent binding could not be restored.",
+      "CONVERSATION_LEGACY_RESOLVE_FAILED": "The legacy identifier resolver is unavailable.",
+      "CONVERSATION_OPEN_FAILED": "The conversation could not be opened."
+    }
+  },
+  "scheduledTasks": {
+    "title": "Scheduled tasks",
+    "refresh": "Refresh scheduled tasks",
+    "empty": "No scheduled tasks yet. Ask an AI in any Conversation to create a draft.",
+    "selectTask": "Select a scheduled task to inspect it.",
+    "activate": "Review and activate",
+    "pause": "Pause",
+    "resume": "Resume",
+    "runNow": "Run now",
+    "everySeconds": "Every {{count}} seconds",
+    "prompt": "Task prompt",
+    "agent": "Agent: {{agent}}",
+    "project": "Associated project: {{project}}",
+    "noProject": "No project association",
+    "workspace": "Workspace: {{workspace}}",
+    "revision": "Revision: {{revision}}",
+    "hash": "Draft hash: {{hash}}",
+    "history": "Execution history",
+    "noRuns": "This task has not run yet.",
+    "audit": "Task audit",
+    "confirmTitle": "Activate this scheduled task?",
+    "confirmDescription": "{{name}} will run on {{schedule}}. You are confirming revision {{revision}} and its exact draft hash.",
+    "status": {
+      "draft": "Draft",
+      "active": "Active",
+      "paused": "Paused"
+    },
+    "runStatus": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "skipped": "Skipped",
+      "interrupted": "Interrupted"
+    }
+  }
+}

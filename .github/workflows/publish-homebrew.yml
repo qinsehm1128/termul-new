@@ -1,0 +1,229 @@
+name: Publish Homebrew
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version to publish, with or without leading v
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, with or without leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  release_metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      is_prerelease: ${{ steps.metadata.outputs.is_prerelease }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve authoritative release metadata
+        id: metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          source scripts/release/homebrew.sh
+          VERSION="$(normalize_release_version "$INPUT_VERSION")"
+          TAG="v$VERSION"
+          IS_PRERELEASE="$(gh release view "$TAG" \
+            --repo qinsehm1128/termul-new \
+            --json isPrerelease \
+            --jq '.isPrerelease')"
+
+          if [[ "$IS_PRERELEASE" != "true" && "$IS_PRERELEASE" != "false" ]]; then
+            echo "Unable to determine prerelease metadata for $TAG" >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  checksums:
+    name: Generate SHA256SUMS
+    needs: release_metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release_metadata.outputs.tag }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo qinsehm1128/termul-new \
+            --dir release-assets
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          cd release-assets
+          asset_count=0
+          : > ../SHA256SUMS.txt
+          while IFS= read -r -d '' asset; do
+            asset="${asset#./}"
+            sha256sum "$asset" >> ../SHA256SUMS.txt
+            asset_count=$((asset_count + 1))
+          done < <(
+            find . -maxdepth 1 -type f \
+              ! -name '*.sig' \
+              ! -name 'latest.json' \
+              ! -name 'SHA256SUMS.txt' \
+              -print0 | sort -z
+          )
+
+          if [[ "$asset_count" -eq 0 ]]; then
+            echo "No binary release assets found to checksum." >&2
+            exit 1
+          fi
+
+      - name: Upload SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release_metadata.outputs.tag }}
+        run: |
+          gh release upload "$TAG" SHA256SUMS.txt \
+            --repo qinsehm1128/termul-new \
+            --clobber
+
+  homebrew:
+    name: Update Homebrew cask
+    needs: [release_metadata, checksums]
+    # Opt-in via the HOMEBREW_TAP repository variable (e.g. `owner/homebrew-termul-new`).
+    # This project does not publish a tap yet, and the tap repo it used to hardcode
+    # belongs to the upstream project. Unset, the job is skipped so a release still
+    # completes — `checksums` above runs regardless, which is what scripts/install.sh
+    # needs. Set the variable plus the HOMEBREW_TAP_TOKEN secret to turn it back on.
+    if: >-
+      vars.HOMEBREW_TAP != '' &&
+      needs.release_metadata.outputs.is_prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Require stable tap token
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "HOMEBREW_TAP_TOKEN is required for stable Homebrew publication." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release_metadata.outputs.tag }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo qinsehm1128/termul-new \
+            --pattern SHA256SUMS.txt \
+            --dir release-assets
+
+      - name: Resolve DMG checksums
+        id: dmg
+        shell: bash
+        env:
+          VERSION: ${{ needs.release_metadata.outputs.version }}
+        run: |
+          source scripts/release/homebrew.sh
+          checksum_count=0
+          while IFS= read -r checksum; do
+            checksum_count=$((checksum_count + 1))
+            case "$checksum_count" in
+              1) ARM_SHA256="$checksum" ;;
+              2) INTEL_SHA256="$checksum" ;;
+            esac
+          done < <(resolve_dmg_checksums release-assets/SHA256SUMS.txt "$VERSION")
+          if [[ "$checksum_count" -ne 2 ]]; then
+            echo "Expected exactly two DMG checksums, found $checksum_count" >&2
+            exit 1
+          fi
+          echo "arm_sha256=$ARM_SHA256" >> "$GITHUB_OUTPUT"
+          echo "intel_sha256=$INTEL_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Clone Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh auth setup-git
+          gh repo clone "${{ vars.HOMEBREW_TAP }}" tap -- --depth 1
+
+      - name: Configure Git
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Write cask
+        env:
+          VERSION: ${{ needs.release_metadata.outputs.version }}
+          ARM_SHA256: ${{ steps.dmg.outputs.arm_sha256 }}
+          INTEL_SHA256: ${{ steps.dmg.outputs.intel_sha256 }}
+        run: |
+          source scripts/release/homebrew.sh
+          write_homebrew_cask tap/Casks/termul.rb \
+            "$VERSION" "$ARM_SHA256" "$INTEL_SHA256"
+
+      - name: Commit and push
+        working-directory: tap
+        env:
+          VERSION: ${{ needs.release_metadata.outputs.version }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git add Casks/termul.rb
+          if git diff --cached --quiet -- Casks/termul.rb; then
+            echo "Homebrew cask already up to date."
+            exit 0
+          fi
+
+          git commit -m "Update to $VERSION"
+          DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/ { print $NF}')"
+          git fetch origin "$DEFAULT_BRANCH"
+          git rebase "origin/$DEFAULT_BRANCH"
+          git push origin "HEAD:$DEFAULT_BRANCH"
