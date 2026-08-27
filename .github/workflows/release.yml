@@ -279,7 +279,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: bun run tauri
-          args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json -- --locked
+          # Prereleases skip the MSI bundle. The MSI ProductVersion cannot encode a
+          # non-numeric SemVer prerelease identifier — tauri fails the bundle with
+          # "optional pre-release identifier in app version must be numeric-only
+          # and cannot be greater than 65535 for msi target" on a tag like
+          # v0.5.0-rc.1. NSIS has no such limit, and the merge validator already
+          # drops `windows-x86_64-msi` from the required set on the insider
+          # channel, which is what a prerelease tag resolves to.
+          args: >-
+            ${{ matrix.args }}${{ (matrix.platform == 'windows-x64' &&
+            needs.changelog.outputs.is_prerelease == 'true') && ' --bundles nsis' || '' }}
+            --config src-tauri/tauri.conf.prod.json -- --locked
 
       - name: Persist Tauri artifact paths
         shell: bash
