@@ -205,10 +205,18 @@ tempfile = "3"
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
 
+# `libc` backs Unix-only code paths that compile on every Unix, not just macOS:
+# the O_CLOEXEC/O_NOFOLLOW/O_DIRECTORY open flags in
+# `conversation::migration::inventory::open_legacy_file_no_follow` and the
+# `geteuid` check in `web::auth::open_validated_token_file`, both `#[cfg(unix)]`.
+# Declared under macOS only, those sites failed to resolve the crate when the
+# linux-x64 `termul-server` target was built (E0433).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # macOS Keychain and self-contained SSH/OpenSSL linkage for packaged apps
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
-libc = "0.2"
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 
 # Preserve the existing system/default SSH native dependency behavior outside
