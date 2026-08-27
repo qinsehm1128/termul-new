@@ -37,10 +37,39 @@ function disposeSession(session: CachedTerminalSession): void {
   }
 }
 
+/**
+ * Notified just before capacity eviction disposes a session.
+ *
+ * Eviction only — not explicit close (`disposeCachedTerminal`), where the
+ * terminal is gone on purpose, nor stale-occupant replacement in
+ * `cacheTerminal`, where a newer instance already carries the state.
+ *
+ * Exists because a cached instance is a live sink for detached PTY output
+ * (`use-terminal-detached-output.ts`). Once it has been written to, its buffer
+ * is the ONLY copy of that span, so disposing it silently is data loss. The
+ * handler gets a last look to move the content somewhere the restore path can
+ * still find it.
+ */
+type CacheEvictionHandler = (ptyId: string, session: CachedTerminalSession) => void
+
+let onEviction: CacheEvictionHandler | null = null
+
+export function setCacheEvictionHandler(handler: CacheEvictionHandler | null): void {
+  onEviction = handler
+}
+
 function evictOldestSession(): void {
   const oldest = cache.entries().next().value as [string, CachedTerminalSession] | undefined
   if (!oldest) return
   cache.delete(oldest[0])
+  if (onEviction) {
+    try {
+      onEviction(oldest[0], oldest[1])
+    } catch {
+      // Salvage is best-effort; a failure here must still let the dispose run,
+      // or the eviction leaks the very context it was freeing.
+    }
+  }
   disposeSession(oldest[1])
 }
 

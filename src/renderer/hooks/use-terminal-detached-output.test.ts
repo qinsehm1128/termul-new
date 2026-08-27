@@ -8,14 +8,16 @@ const {
   mockAppendTranscript,
   mockConsumeTranscript,
   mockFindTerminalByPtyId,
-  mockPeekCachedTerminal
+  mockPeekCachedTerminal,
+  mockSetCacheEvictionHandler
 } = vi.hoisted(() => ({
   mockOnData: vi.fn(),
   mockOnExit: vi.fn(),
   mockAppendTranscript: vi.fn(),
   mockConsumeTranscript: vi.fn(() => ''),
   mockFindTerminalByPtyId: vi.fn(),
-  mockPeekCachedTerminal: vi.fn()
+  mockPeekCachedTerminal: vi.fn(),
+  mockSetCacheEvictionHandler: vi.fn()
 }))
 
 /** Convert a string to Uint8Array for binary channel test data */
@@ -35,7 +37,8 @@ vi.mock('@/lib/log-api', () => ({
 }))
 
 vi.mock('@/components/terminal/terminal-cache', () => ({
-  peekCachedTerminal: mockPeekCachedTerminal
+  peekCachedTerminal: mockPeekCachedTerminal,
+  setCacheEvictionHandler: mockSetCacheEvictionHandler
 }))
 
 // Only the store instance is faked. `rendererOwnsDetachedContinuity` comes
@@ -287,6 +290,38 @@ describe('useTerminalDetachedOutput', () => {
       emit('pty-a', toBytes('cold restore'))
 
       expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'cold restore')
+    })
+
+    it('salvages an evicted sink back into the transcript before it is disposed', () => {
+      mountHook()
+      const handler = mockSetCacheEvictionHandler.mock.calls.at(-1)?.[0] as
+        | ((ptyId: string, session: unknown) => void)
+        | undefined
+      expect(handler).toBeTypeOf('function')
+
+      const lines = ['first line', 'second line']
+      handler?.('pty-a', {
+        terminal: {
+          buffer: {
+            active: {
+              length: lines.length,
+              getLine: (index: number) => ({ translateToString: () => lines[index] })
+            }
+          }
+        }
+      })
+
+      // Once a sink has been written to, its buffer is the only copy of that
+      // span. Evicting it without this would trade the bug being fixed here for
+      // the same loss under a rarer trigger — a full LRU rather than a trim.
+      expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'first line\r\nsecond line\r\n')
+    })
+
+    it('stops salvaging once the hook is torn down', () => {
+      const { unmount } = renderHook(() => useTerminalDetachedOutput())
+      unmount()
+
+      expect(mockSetCacheEvictionHandler).toHaveBeenLastCalledWith(null)
     })
 
     it('falls back to the transcript when the cached instance rejects the write', () => {

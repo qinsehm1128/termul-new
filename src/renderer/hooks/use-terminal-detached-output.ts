@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { peekCachedTerminal } from '@/components/terminal/terminal-cache'
+import { peekCachedTerminal, setCacheEvictionHandler } from '@/components/terminal/terminal-cache'
 import { terminalApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -8,6 +8,10 @@ import {
   useTerminalStore
 } from '@/stores/terminal-store'
 import type { Terminal } from '@/types/project'
+import {
+  buildScrollbackRestorePayload,
+  extractScrollbackFromTerminal
+} from '@/utils/terminal-registry'
 
 const IS_DEV = import.meta.env.DEV
 
@@ -60,6 +64,26 @@ export function useTerminalDetachedOutput(): void {
       }
       return decoder
     }
+
+    // Evicting a sink would otherwise drop everything written into it since it
+    // was cached — the exact span the sink exists to keep. Serialise the buffer
+    // back into the transcript on the way out: the instance is gone, so the
+    // transcript becomes the only carrier again, and the cold-restore path
+    // already knows how to replay it. Post-eviction chunks append after this,
+    // in order, because `peekCachedTerminal` now misses for that PTY.
+    setCacheEvictionHandler((ptyId, session) => {
+      const store = useTerminalStore.getState()
+      // `getTerminalModes` is deliberately not consulted: unmount unregisters the
+      // terminal and stops its mode tracker, so by eviction the live tracker is
+      // always gone. `pendingModes` is the surviving snapshot.
+      const payload = buildScrollbackRestorePayload(
+        extractScrollbackFromTerminal(session.terminal),
+        store.findTerminalByPtyId(ptyId)?.pendingModes
+      )
+      if (payload) {
+        store.appendTranscript(ptyId, payload)
+      }
+    })
 
     /**
      * Route detached output to whichever sink can hold it without a later splice.
@@ -176,6 +200,7 @@ export function useTerminalDetachedOutput(): void {
     return () => {
       unsubscribe()
       unsubscribeExit()
+      setCacheEvictionHandler(null)
       pendingDetachedBuffer.clear()
       decoders.clear()
     }

@@ -264,7 +264,20 @@ export function extractScrollback(
 ): string[] | undefined {
   const terminal = terminalRegistry.get(terminalId)
   if (!terminal) return undefined
+  return extractScrollbackFromTerminal(terminal, maxLines)
+}
 
+/**
+ * Same extraction against an instance the registry no longer holds.
+ *
+ * A cached xterm is unregistered at unmount but stays alive as the sink for
+ * detached PTY output, so when the LRU evicts it the buffer is the only copy of
+ * everything written since it was cached. That instance cannot be reached by id.
+ */
+export function extractScrollbackFromTerminal(
+  terminal: Terminal,
+  maxLines: number = DEFAULT_SCROLLBACK_LIMIT
+): string[] | undefined {
   const buffer = terminal.buffer.active
   const lines: string[] = []
 
