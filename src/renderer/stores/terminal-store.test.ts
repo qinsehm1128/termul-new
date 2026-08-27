@@ -959,6 +959,72 @@ describe('terminal-store', () => {
       }
     })
 
+    // A transcript is a raw PTY byte stream. The hidden-buffer sweep used to
+    // split it on line breaks and re-join with '\n', which rewrote every CR and
+    // — because the result then differed from the input — marked the record
+    // trimmed even when nothing had been dropped. The cached-remount replay
+    // discards a trimmed transcript outright, so that false mark is what left a
+    // switched-back terminal showing the frame the user left.
+    it('leaves a CRLF transcript within the line budget byte-identical and unmarked', () => {
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date('2026-05-02T00:00:00.000Z'))
+
+        const { setTerminalPtyId, appendTranscript, setAppHidden, truncateHiddenTerminalBuffers } =
+          useTerminalStore.getState()
+        setTerminalPtyId('t1', 'pty-hidden-crlf-within-budget')
+        // Over TRUNCATED_BUFFER_SIZE *characters* (which is what the sweep's
+        // guard measures) but far under it in lines — the exact shape that used
+        // to be rewritten for nothing.
+        const transcript = Array.from(
+          { length: 200 },
+          (_, index) => `[32mline-${index + 1}[0m ${'padding'.repeat(6)}`
+        ).join('\r\n')
+        expect(transcript.length).toBeGreaterThan(TRUNCATED_BUFFER_SIZE)
+        appendTranscript('pty-hidden-crlf-within-budget', transcript)
+
+        setAppHidden(true)
+        vi.advanceTimersByTime(HIDDEN_BUFFER_TRUNCATION_DELAY + 1)
+        truncateHiddenTerminalBuffers()
+
+        const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+        expect(terminal?.transcript).toBe(transcript)
+        expect(terminal?.transcriptTrimmed).toBeFalsy()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('keeps CRLF intact when it really does drop the oldest lines', () => {
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date('2026-05-02T00:00:00.000Z'))
+
+        const { setTerminalPtyId, appendTranscript, setAppHidden, truncateHiddenTerminalBuffers } =
+          useTerminalStore.getState()
+        setTerminalPtyId('t1', 'pty-hidden-crlf-over-budget')
+        appendTranscript(
+          'pty-hidden-crlf-over-budget',
+          Array.from(
+            { length: TRUNCATED_BUFFER_SIZE + 10 },
+            (_, index) => `line-${index + 1}`
+          ).join('\r\n')
+        )
+
+        setAppHidden(true)
+        vi.advanceTimersByTime(HIDDEN_BUFFER_TRUNCATION_DELAY + 1)
+        truncateHiddenTerminalBuffers()
+
+        const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+        expect(terminal?.transcript?.split('\r\n')).toHaveLength(TRUNCATED_BUFFER_SIZE)
+        expect(terminal?.transcript?.startsWith('line-11\r\n')).toBe(true)
+        expect(terminal?.transcript?.endsWith(`line-${TRUNCATED_BUFFER_SIZE + 10}`)).toBe(true)
+        expect(terminal?.transcriptTrimmed).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('does not reset hidden timers on repeated hidden notifications', () => {
       vi.useFakeTimers()
       try {

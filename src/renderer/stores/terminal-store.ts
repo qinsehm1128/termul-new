@@ -53,8 +53,45 @@ function trimTranscriptToMaxChars(transcript: string): string {
   return firstBreak ? tail.slice(firstBreak.index + firstBreak[0].length) : tail
 }
 
+/**
+ * Keep the newest `TRUNCATED_BUFFER_SIZE` lines by slicing the original string
+ * at a line boundary, never by splitting and re-joining.
+ *
+ * A transcript is a raw PTY byte stream, not text: `\r` is the carriage return
+ * every in-place redraw depends on. Re-joining with `\n` rewrote every `\r\n`
+ * and every lone `\r`, which is destructive twice over. It corrupted the
+ * replayed bytes, and — because the result then differed from the input — it
+ * marked the record `transcriptTrimmed` even when no line had been dropped at
+ * all. Since PTY output is full of `\r`, that fired for essentially any
+ * transcript over `TRUNCATED_BUFFER_SIZE` characters. A trimmed mark is what
+ * makes the cached-remount replay discard the whole detached interval
+ * (`transcript-trimmed-unsafe-splice`), so a false mark cost real output: the
+ * user came back to the frame they left, with nothing but a SIGWINCH able to
+ * repaint it.
+ *
+ * Returns the input unchanged — same reference, so callers can compare
+ * identity — when it is already within the line budget.
+ */
 function trimTranscriptToRecentLines(transcript: string): string {
-  return transcript.split(LINE_BREAK_PATTERN).slice(-TRUNCATED_BUFFER_SIZE).join('\n')
+  let breaks = 0
+  let index = transcript.length - 1
+
+  while (index >= 0) {
+    const char = transcript[index]
+    if (char === '\n' || char === '\r') {
+      breaks += 1
+      if (breaks === TRUNCATED_BUFFER_SIZE) {
+        return transcript.slice(index + 1)
+      }
+      // `\r\n` is one break, not two.
+      if (char === '\n' && index > 0 && transcript[index - 1] === '\r') {
+        index -= 1
+      }
+    }
+    index -= 1
+  }
+
+  return transcript
 }
 
 /**
