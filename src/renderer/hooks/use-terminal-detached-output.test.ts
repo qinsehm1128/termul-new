@@ -2,14 +2,21 @@ import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTerminalDetachedOutput } from './use-terminal-detached-output'
 
-const { mockOnData, mockOnExit, mockAppendTranscript, mockFindTerminalByPtyId } = vi.hoisted(
-  () => ({
-    mockOnData: vi.fn(),
-    mockOnExit: vi.fn(),
-    mockAppendTranscript: vi.fn(),
-    mockFindTerminalByPtyId: vi.fn()
-  })
-)
+const {
+  mockOnData,
+  mockOnExit,
+  mockAppendTranscript,
+  mockConsumeTranscript,
+  mockFindTerminalByPtyId,
+  mockPeekCachedTerminal
+} = vi.hoisted(() => ({
+  mockOnData: vi.fn(),
+  mockOnExit: vi.fn(),
+  mockAppendTranscript: vi.fn(),
+  mockConsumeTranscript: vi.fn(() => ''),
+  mockFindTerminalByPtyId: vi.fn(),
+  mockPeekCachedTerminal: vi.fn()
+}))
 
 /** Convert a string to Uint8Array for binary channel test data */
 function toBytes(str: string): Uint8Array {
@@ -23,10 +30,24 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-vi.mock('@/stores/terminal-store', () => ({
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn(async () => undefined)
+}))
+
+vi.mock('@/components/terminal/terminal-cache', () => ({
+  peekCachedTerminal: mockPeekCachedTerminal
+}))
+
+// Only the store instance is faked. `rendererOwnsDetachedContinuity` comes
+// through from the real module on purpose: it is the single answer to "will the
+// host replay this interval", and a hand-rolled copy here would let these tests
+// keep passing after the production rule had changed underneath them.
+vi.mock('@/stores/terminal-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/terminal-store')>()),
   useTerminalStore: {
     getState: vi.fn(() => ({
       appendTranscript: mockAppendTranscript,
+      consumeTranscript: mockConsumeTranscript,
       findTerminalByPtyId: mockFindTerminalByPtyId
     }))
   }
@@ -192,5 +213,95 @@ describe('useTerminalDetachedOutput', () => {
     emit('pty-a', bytes.slice(2))
 
     expect(capturedTranscript()).toBe('中')
+  })
+
+  // The cached xterm is a bounded, self-evicting sink that never has to be
+  // spliced back onto a live screen. The transcript is the unbounded string
+  // that did, and whose splice was being abandoned whole — losing the detached
+  // interval and leaving the user on the frame they left.
+  describe('cached xterm as the detached sink', () => {
+    const cachedWrite = vi.fn()
+
+    function cacheATerminal(): void {
+      mockPeekCachedTerminal.mockReturnValue({ terminal: { write: cachedWrite } })
+    }
+
+    beforeEach(() => {
+      cachedWrite.mockClear()
+      mockPeekCachedTerminal.mockReturnValue(undefined)
+      mockFindTerminalByPtyId.mockReturnValue({
+        rendererAttachmentCount: 0,
+        healthStatus: 'running',
+        claim: 'claim-1'
+      })
+    })
+
+    it('writes into the cached instance instead of growing a transcript', () => {
+      cacheATerminal()
+      const { emit } = mountHook()
+
+      emit('pty-a', toBytes('detached output'))
+
+      expect(cachedWrite).toHaveBeenCalledWith('detached output')
+      expect(mockAppendTranscript).not.toHaveBeenCalled()
+    })
+
+    it('drains a transcript captured earlier ahead of the new bytes', () => {
+      cacheATerminal()
+      mockFindTerminalByPtyId.mockReturnValue({
+        rendererAttachmentCount: 0,
+        healthStatus: 'running',
+        claim: 'claim-1',
+        transcript: 'older span'
+      })
+      mockConsumeTranscript.mockReturnValue('older span')
+      const { emit } = mountHook()
+
+      emit('pty-a', toBytes('newer span'))
+
+      // Order is the whole point: the transcript predates the instance becoming
+      // the sink, so writing it second would replay the two halves reversed.
+      expect(cachedWrite.mock.calls.map(([chunk]) => chunk)).toEqual(['older span', 'newer span'])
+    })
+
+    it('keeps using the transcript when the host will replay the interval', () => {
+      cacheATerminal()
+      // No claim — reattach goes through watch/attach and the host replays these
+      // same bytes. Writing them here too would duplicate whole blocks.
+      mockFindTerminalByPtyId.mockReturnValue({
+        rendererAttachmentCount: 0,
+        healthStatus: 'running',
+        claim: undefined
+      })
+      const { emit } = mountHook()
+
+      emit('pty-a', toBytes('host will replay this'))
+
+      expect(cachedWrite).not.toHaveBeenCalled()
+      expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'host will replay this')
+    })
+
+    it('falls back to the transcript when no instance is cached', () => {
+      const { emit } = mountHook()
+
+      emit('pty-a', toBytes('cold restore'))
+
+      expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'cold restore')
+    })
+
+    it('falls back to the transcript when the cached instance rejects the write', () => {
+      mockPeekCachedTerminal.mockReturnValue({
+        terminal: {
+          write: vi.fn(() => {
+            throw new Error('terminal disposed')
+          })
+        }
+      })
+      const { emit } = mountHook()
+
+      emit('pty-a', toBytes('survives a dead sink'))
+
+      expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'survives a dead sink')
+    })
   })
 })

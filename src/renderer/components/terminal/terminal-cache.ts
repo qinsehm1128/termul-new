@@ -102,6 +102,24 @@ export function hasCachedTerminal(ptyId: string): boolean {
   return cache.has(ptyId)
 }
 
+/**
+ * Look at a cached session without claiming it.
+ *
+ * A cached xterm is detached from the DOM but fully alive: its parser, buffer
+ * and scrollback ring all still work, because `write()` is scheduled on
+ * timers/microtasks and only the paint depends on the element. That makes it a
+ * sink for detached PTY output — see `use-terminal-detached-output.ts`. Eviction
+ * is then xterm's own bounded scrollback rather than a second, unbounded copy of
+ * the byte stream that has to be spliced back in later.
+ *
+ * Distinct from `takeCachedTerminal`, which transfers ownership to a mounting
+ * component. Peeking must never remove: the sink writes into a session that is
+ * still cached, and removing it here would strand the terminal with no owner.
+ */
+export function peekCachedTerminal(ptyId: string): CachedTerminalSession | undefined {
+  return cache.get(ptyId)
+}
+
 /** Dispose one cached renderer after its terminal resource is explicitly closed. */
 export function disposeCachedTerminal(ptyId: string): boolean {
   const session = cache.get(ptyId)

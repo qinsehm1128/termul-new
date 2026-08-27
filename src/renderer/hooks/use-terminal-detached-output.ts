@@ -1,6 +1,13 @@
 import { useEffect } from 'react'
+import { peekCachedTerminal } from '@/components/terminal/terminal-cache'
 import { terminalApi } from '@/lib/api'
-import { MAX_TRANSCRIPT_CHARS, useTerminalStore } from '@/stores/terminal-store'
+import { logFrontendError } from '@/lib/log-api'
+import {
+  MAX_TRANSCRIPT_CHARS,
+  rendererOwnsDetachedContinuity,
+  useTerminalStore
+} from '@/stores/terminal-store'
+import type { Terminal } from '@/types/project'
 
 const IS_DEV = import.meta.env.DEV
 
@@ -54,6 +61,60 @@ export function useTerminalDetachedOutput(): void {
       return decoder
     }
 
+    /**
+     * Route detached output to whichever sink can hold it without a later splice.
+     *
+     * Preferred sink is the cached xterm itself. It is detached from the DOM but
+     * otherwise fully alive — `write()` is scheduled on timers and microtasks,
+     * and only the paint depends on the element — so the bytes land in exactly
+     * the structure they would have if the user had been watching, and ageing
+     * out is xterm's own scrollback ring. Nothing accumulates that has to be
+     * spliced onto a live screen later, which is where the detached interval
+     * was being lost outright: a splice that looked unsafe was thrown away
+     * whole, and the user came back to the frame they had left.
+     *
+     * The transcript stays the sink in the two cases where the cached instance
+     * cannot be the authority: there is no cached instance (cold restore, or
+     * evicted from the LRU), or the host will replay this same interval on
+     * reattach and writing both would duplicate whole blocks of output.
+     */
+    const routeDetachedOutput = (ptyId: string, terminal: Terminal, dataStr: string): void => {
+      const store = useTerminalStore.getState()
+      const cached = rendererOwnsDetachedContinuity(terminal)
+        ? peekCachedTerminal(ptyId)
+        : undefined
+
+      if (cached) {
+        try {
+          // Whatever the transcript holds predates this instance becoming the
+          // sink, so it has to go in first or the two halves land out of order.
+          if (terminal.transcript) {
+            const pending = store.consumeTranscript(ptyId)
+            if (pending) cached.terminal.write(pending)
+          }
+          cached.terminal.write(dataStr)
+          return
+        } catch (error) {
+          // A disposed instance is the realistic failure. Falling through to the
+          // transcript keeps the bytes; anything already written above is older
+          // than what the transcript now carries, so the order still holds.
+          void logFrontendError({
+            level: 'warn',
+            source: 'use-terminal-detached-output',
+            message: `cached sink write failed ptyId=${ptyId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          })
+        }
+      }
+
+      store.appendTranscript(ptyId, dataStr)
+
+      if (IS_DEV && terminal.transcript !== undefined) {
+        logTranscriptStats(ptyId, dataStr.length, terminal.transcript.length + dataStr.length)
+      }
+    }
+
     const unsubscribe = terminalApi.onData((ptyId: string, data: Uint8Array) => {
       if (!data || data.length === 0) {
         return
@@ -71,11 +132,7 @@ export function useTerminalDetachedOutput(): void {
         const store = useTerminalStore.getState()
         const terminal = store.findTerminalByPtyId(ptyId)
         if (terminal && (terminal.rendererAttachmentCount ?? 0) === 0) {
-          const allData = buffered.join('') + dataStr
-          store.appendTranscript(ptyId, allData)
-          if (IS_DEV && terminal.transcript !== undefined) {
-            logTranscriptStats(ptyId, allData.length, terminal.transcript.length + allData.length)
-          }
+          routeDetachedOutput(ptyId, terminal, buffered.join('') + dataStr)
           return
         }
         // Terminal exists but has renderer attached — drop buffered data
@@ -107,12 +164,7 @@ export function useTerminalDetachedOutput(): void {
         return
       }
 
-      store.appendTranscript(ptyId, dataStr)
-
-      if (IS_DEV && terminal.transcript !== undefined) {
-        // Compute new length directly from terminal object instead of re-querying store
-        logTranscriptStats(ptyId, dataStr.length, terminal.transcript.length + dataStr.length)
-      }
+      routeDetachedOutput(ptyId, terminal, dataStr)
     })
 
     // Release a closed PTY's decoder immediately rather than at app unmount.

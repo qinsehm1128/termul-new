@@ -5,6 +5,7 @@ import {
   clearTerminalCache,
   disposeCachedTerminal,
   hasCachedTerminal,
+  peekCachedTerminal,
   takeCachedTerminal
 } from './terminal-cache'
 
@@ -33,6 +34,19 @@ describe('terminal-cache', () => {
     expect(takeCachedTerminal('pty-1')).toBe(session)
     expect(hasCachedTerminal('pty-1')).toBe(false)
     expect(session.terminal.dispose).not.toHaveBeenCalled()
+  })
+
+  it('hands back a cached session on peek without giving up ownership', () => {
+    const session = createSession()
+    cacheTerminal('pty-peek', session)
+
+    expect(peekCachedTerminal('pty-peek')).toBe(session)
+    // The detached-output sink peeks on every PTY chunk. If peeking removed the
+    // session the way `take` does, the very first chunk would evict the terminal
+    // the remount is about to reuse — and take its scrollback with it.
+    expect(hasCachedTerminal('pty-peek')).toBe(true)
+    expect(takeCachedTerminal('pty-peek')).toBe(session)
+    expect(peekCachedTerminal('pty-peek')).toBeUndefined()
   })
 
   it('disposes a stale occupant before replacing the same PTY key', () => {

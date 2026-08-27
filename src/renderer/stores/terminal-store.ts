@@ -43,6 +43,23 @@ export interface TerminalAgentMetadata {
   agentArgs: string[]
 }
 
+/**
+ * Whether reattaching this terminal will skip the host replay, leaving the
+ * renderer holding the only copy of whatever the PTY produced while detached.
+ *
+ * The single place this question is answered. `resumeTerminalResource` returns
+ * `data: null` for exactly these terminals — no host round trip, no replayed
+ * chunks — and `use-terminal-detached-output` uses the same answer to decide
+ * whether it may feed the cached xterm directly. Two copies of this predicate
+ * that disagree means either duplicated output (both wrote) or lost output
+ * (neither did), so they read from here.
+ */
+export function rendererOwnsDetachedContinuity(
+  terminal: Pick<Terminal, 'healthStatus' | 'claim'>
+): boolean {
+  return terminal.healthStatus === 'running' && Boolean(terminal.claim)
+}
+
 function trimTranscriptToMaxChars(transcript: string): string {
   if (transcript.length <= MAX_TRANSCRIPT_CHARS) {
     return transcript
@@ -590,9 +607,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
       // Scope-less project terminals already hold the spawn-issued claim.
       // Requiring a Conversation id here closes them on mount and blanks the pane.
-      if (terminal.healthStatus === 'running' && terminal.claim) {
-        // Already reconciled: no host replay was requested, so the renderer
-        // transcript remains the only source of continuity.
+      if (rendererOwnsDetachedContinuity(terminal)) {
+        // Already reconciled: no host replay was requested, so the renderer is
+        // the only source of continuity for the detached interval.
         return { success: true, data: null }
       }
       if (!terminal.conversationId) {
