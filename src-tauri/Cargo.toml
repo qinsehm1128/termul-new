@@ -1,6 +1,6 @@
 [package]
 name = "termul-manager"
-version = "0.5.4"
+version = "0.5.5"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["qinsehm1128", "gnoviawan (original author)", "mannnrachman (Tauri port)"]
 edition = "2021"
