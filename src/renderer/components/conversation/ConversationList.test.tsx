@@ -14,6 +14,18 @@ vi.mock('@/components/chat/ChatHistoryEntryRow', () => ({
 }))
 
 const conversationId = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
+/** ACP runtime agent ids are opaque uuids, unrelated to configured-agent ids. */
+const runtimeAgentId = 'b1b17e08-b22e-49ba-98bb-2225716e9392'
+const cursorConfig = {
+  id: 'acp-registry:cursor',
+  configId: 'acp-registry:cursor',
+  name: 'Cursor',
+  command: 'npx',
+  args: [],
+  env: {},
+  allowTerminal: false,
+  permissionPolicy: 'allow_all' as const
+}
 
 function summary(overrides: Partial<ConversationRecordV2> = {}): ConversationRecordV2 {
   return {
@@ -52,7 +64,9 @@ beforeEach(() => {
     sessions: {},
     sessionIndex: [],
     pendingPermissions: {},
-    pendingQuestions: {}
+    pendingQuestions: {},
+    agentConfigs: [],
+    configToLiveAgent: {}
   })
   useConversationStore.getState().reset()
   useConversationStore.getState().replaceSummaries([summary()])
@@ -73,22 +87,58 @@ describe('ConversationList row language', () => {
   })
 
   it('uses time · agent · revision in meta and keeps project in expanded details', () => {
+    // `session.agentId` is an ACP *runtime* id, not a configured-agent id: the
+    // row must resolve it through the agent catalog to get a display name.
     useAcpStore.setState({
       sessions: {
-        s1: { conversationId, agentId: 'claude-code', activeTurn: false, status: 'active' }
+        s1: { conversationId, agentId: runtimeAgentId, activeTurn: false, status: 'active' }
       },
-      sessionIndex: [{ id: 's1', conversationId, agentId: 'claude-code' }]
+      sessionIndex: [
+        { id: 's1', conversationId, agentId: runtimeAgentId, agentConfigId: 'acp-registry:cursor' }
+      ],
+      agentConfigs: [cursorConfig]
     })
     renderList()
 
     const row = screen.getByText('Fix the layout').closest('[data-conversation-id]')
     expect(row).toBeTruthy()
-    expect(row).toHaveTextContent('Claude Code')
+    expect(row).toHaveTextContent('Cursor')
     expect(row).toHaveTextContent('rev 4')
     expect(within(row as HTMLElement).queryByText('Demo project')).not.toBeInTheDocument()
 
     fireEvent.click(within(row as HTMLElement).getByLabelText('Show conversation details'))
     expect(within(row as HTMLElement).getByText('Demo project')).toBeInTheDocument()
+  })
+
+  it('never falls back to the raw runtime agent id when the agent is unresolved', () => {
+    // No catalog entry matches the runtime id, so the meta line must simply omit
+    // the agent rather than leaking an opaque uuid into the sidebar.
+    useAcpStore.setState({
+      sessions: {
+        s1: { conversationId, agentId: runtimeAgentId, activeTurn: false, status: 'active' }
+      },
+      sessionIndex: [{ id: 's1', conversationId, agentId: runtimeAgentId }]
+    })
+    renderList()
+
+    const row = screen.getByText('Fix the layout').closest('[data-conversation-id]')
+    expect(row).toBeTruthy()
+    expect(row).not.toHaveTextContent(runtimeAgentId)
+  })
+
+  it('hides the folder preview when the workspace is the conversation-owned directory', () => {
+    // A conversation-owned workspace is named after the conversation uuid, so
+    // its basename carries no information and must not be rendered.
+    useConversationStore.getState().replaceSummaries([
+      summary({
+        workspaceCwd: `/Users/me/Documents/Termul/sessions/2026/08/15/${conversationId}`
+      })
+    ])
+    renderList()
+
+    const row = screen.getByText('Fix the layout').closest('[data-conversation-id]')
+    expect(row).toBeTruthy()
+    expect(row).not.toHaveTextContent(conversationId)
   })
 
   it('shows Need you when a pending permission belongs to the conversation', () => {

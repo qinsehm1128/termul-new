@@ -2,7 +2,7 @@ import { AlertTriangle, ChevronDown } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { AgentIcon } from '@/components/agents/AgentIcon'
+import { AgentGlyph } from '@/components/chat/AgentGlyph'
 import { ConversationLifecycleActions } from '@/components/chat/ChatHistoryEntryRow'
 import {
   ListEmptyState,
@@ -12,13 +12,12 @@ import {
   ListRowStatus
 } from '@/components/lists'
 import { pathBasename } from '@/components/lists/path-basename'
-import { getAgentById } from '@/lib/agents/custom-agents'
 import { agentIdForConversation } from '@/lib/conversation-list-meta'
 import { conversationRowStatus } from '@/lib/conversation-row-status'
 import { displayConversationTitle, sessionTitleForConversation } from '@/lib/conversation-title'
 import { formatRelativeTime } from '@/lib/git-time'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
+import { selectAgentIdentity, useAcpStore } from '@/stores/acp-store'
 import {
   recoveryCountForConversation,
   useConversationStore,
@@ -53,6 +52,12 @@ export function ConversationList({
   const sessionIndex = useAcpStore((state) => state.sessionIndex)
   const pendingPermissions = useAcpStore((state) => state.pendingPermissions)
   const pendingQuestions = useAcpStore((state) => state.pendingQuestions)
+  // `agentIdForConversation` yields the ACP *runtime* agent id, which lives in a
+  // different id space than the configured-agent catalog. These slices let each
+  // row resolve it to the configured agent's name/icon instead of leaking a raw
+  // uuid into the list.
+  const configToLiveAgent = useAcpStore((state) => state.configToLiveAgent)
+  const agentConfigs = useAcpStore((state) => state.agentConfigs)
   const projects = useProjectStore((state) => state.projects)
   const [visibleCount, setVisibleCount] = useState(pageSize)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -110,10 +115,19 @@ export function ConversationList({
         )
         const isActive = activeConversationId === conversation.conversationId
         const folder = pathBasename(conversation.workspaceCwd)
-        const preview =
-          folder && folder !== title ? <span className="font-mono">{folder}</span> : undefined
+        // A conversation-owned workspace is named after its own uuid, so its
+        // basename is noise rather than a recognizable folder. Only surface a
+        // preview when the cwd points somewhere the user would recognize.
+        const showFolder =
+          Boolean(folder) && folder !== title && folder !== conversation.conversationId
+        const preview = showFolder ? <span className="font-mono">{folder}</span> : undefined
         const agentId = agentIdForConversation(conversation.conversationId, sessions, sessionIndex)
-        const agentLabel = agentId ? (getAgentById(agentId)?.name ?? agentId) : undefined
+        const agentIdentity = selectAgentIdentity(
+          { configToLiveAgent, sessionIndex, agentConfigs },
+          agentId ?? null
+        )
+        // Never fall back to the raw agent id: an unresolved agent shows nothing.
+        const agentLabel = agentIdentity.name ?? undefined
         const rowStatus = conversationRowStatus(
           conversation.conversationId,
           sessions,
@@ -129,7 +143,7 @@ export function ConversationList({
               active={isActive}
               title={
                 <span className="flex min-w-0 items-center gap-1.5">
-                  {agentId ? <AgentIcon agentId={agentId} className="size-3.5" /> : null}
+                  {agentId ? <AgentGlyph templateId={agentIdentity.templateId} size={14} /> : null}
                   <span className="min-w-0 truncate">{title}</span>
                   <ListRowStatus
                     status={rowStatus}
