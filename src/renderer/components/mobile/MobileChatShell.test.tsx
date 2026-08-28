@@ -258,7 +258,7 @@ describe('MobileChatShell', () => {
 
     openOverflow()
     const trigger = screen.getByRole('button', {
-      name: 'Execution target and project context'
+      name: 'Reachable scope and project context'
     })
     expect(trigger).toHaveClass('h-11')
     fireEvent.click(trigger)
@@ -267,7 +267,9 @@ describe('MobileChatShell', () => {
         "Attach or detach project context and change this Conversation's execution target without changing its identity or workspace."
       )
     ).toBeInTheDocument()
-    expect(screen.getByLabelText('Execution target')).toHaveTextContent('Conversation workspace')
+    expect(screen.getByLabelText('Additional reachable directories')).toHaveTextContent(
+      'Conversation directory only'
+    )
     expect(screen.getByText('018f7a1c-1b4d-7c8a-9f01-0123456789ab')).toBeInTheDocument()
     expect(screen.getByText('2026-08-15T09:45:15.123Z')).toBeInTheDocument()
     expect(screen.getAllByText('/visible/sessions/2026/08/15/conversation').length).toBeGreaterThan(
@@ -294,7 +296,7 @@ describe('MobileChatShell', () => {
     expect(screen.getByText('Detach binding')).toBeInTheDocument()
     expect(screen.getByText('Rebind detached agent')).toBeInTheDocument()
     expect(screen.getByText('Suspend agent')).toBeInTheDocument()
-    expect(screen.getByText('Replace agent')).toBeInTheDocument()
+    expect(screen.getByText('Restart agent')).toBeInTheDocument()
     expect(screen.getByText('Delete conversation')).toBeInTheDocument()
   })
 

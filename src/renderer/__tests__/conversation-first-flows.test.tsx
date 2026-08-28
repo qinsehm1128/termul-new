@@ -237,7 +237,7 @@ function LifecycleStatus(): React.JSX.Element {
 }
 
 async function chooseTarget(option: string): Promise<void> {
-  const trigger = screen.getByRole('combobox', { name: 'Execution target' })
+  const trigger = screen.getByRole('combobox', { name: 'Additional reachable directories' })
   trigger.focus()
   fireEvent.keyDown(trigger, { key: 'ArrowDown' })
   fireEvent.click(await screen.findByRole('option', { name: option }))
@@ -278,7 +278,9 @@ describe('Conversation-first desktop/browser flow matrix', () => {
 
   it('supports zero-project New Chat target selection without changing canonical identity', () => {
     render(<TargetHarness />)
-    expect(screen.getByLabelText('Execution target')).toHaveTextContent('Conversation workspace')
+    expect(screen.getByLabelText('Additional reachable directories')).toHaveTextContent(
+      'Conversation directory only'
+    )
     expect(screen.getByTestId('workspace-identity-unchanged')).toHaveAttribute(
       'data-unchanged',
       'true'
@@ -327,9 +329,9 @@ describe('Conversation-first desktop/browser flow matrix', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Attach project context' }))
     expect(await screen.findByText(/Project context attached/)).toBeVisible()
 
-    await chooseTarget('Project root')
-    expect(await screen.findByText(/Execution target updated/)).toBeVisible()
-    await chooseTarget('Conversation workspace')
+    await chooseTarget('Plus the project root')
+    expect(await screen.findByText(/Reachable scope updated/)).toBeVisible()
+    await chooseTarget('Conversation directory only')
     await waitFor(() => expect(mockConversationApi.updateExecutionTarget).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: 'Detach project context' }))
     expect(await screen.findByText(/Project context detached/)).toBeVisible()

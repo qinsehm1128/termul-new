@@ -2845,6 +2845,9 @@ struct ConversationLifecycleWsPayload {
     expected_revision: u64,
     #[serde(default)]
     request: Option<crate::conversation::PrepareConversationRequest>,
+    /// Runtime id of the agent to bind to on replace; absent keeps the current one.
+    #[serde(default)]
+    target_runtime_agent_id: Option<String>,
 }
 
 async fn retire_ws_deleted_binding_if_updated(
@@ -2931,7 +2934,12 @@ async fn handle_conversation_lifecycle(
         ConversationWsMutation::Replace => match parsed.request {
             Some(request) => {
                 service
-                    .replace_agent_binding(conversation_id, request, parsed.expected_revision)
+                    .replace_agent_binding(
+                        conversation_id,
+                        request,
+                        parsed.expected_revision,
+                        parsed.target_runtime_agent_id.clone(),
+                    )
                     .await
             }
             None => {
@@ -3046,7 +3054,12 @@ async fn handle_conversation_lifecycle_with_service(
         ConversationWsMutation::Replace => match parsed.request {
             Some(request) => {
                 service
-                    .replace_binding(conversation_id, request, parsed.expected_revision)
+                    .replace_binding(
+                        conversation_id,
+                        request,
+                        parsed.expected_revision,
+                        parsed.target_runtime_agent_id.clone(),
+                    )
                     .await
             }
             None => {

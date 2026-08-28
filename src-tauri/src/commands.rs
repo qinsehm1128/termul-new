@@ -5824,6 +5824,8 @@ pub async fn conversation_replace_binding(
     conversation_id: String,
     expected_revision: u64,
     request: serde_json::Value,
+    // Runtime id of the agent to bind to. `None` restarts on the same agent.
+    target_runtime_agent_id: Option<String>,
     service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
 ) -> Result<IpcResult<crate::conversation::ConversationLifecycleOutcome>, String> {
     let id = match parse_conversation_id(&conversation_id) {
@@ -5843,7 +5845,7 @@ pub async fn conversation_replace_binding(
     run_conversation_lifecycle_command(
         &app,
         conversation_id,
-        service.replace_binding(id, request, expected_revision),
+        service.replace_binding(id, request, expected_revision, target_runtime_agent_id),
     )
     .await
 }

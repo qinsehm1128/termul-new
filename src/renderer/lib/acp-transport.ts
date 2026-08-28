@@ -198,7 +198,8 @@ export interface AcpTransport {
     action: 'detach' | 'rebind' | 'suspend' | 'replace' | 'delete',
     conversationId: string,
     expectedRevision: number,
-    request?: ConversationReplacementRequest
+    request?: ConversationReplacementRequest,
+    targetRuntimeAgentId?: string
   ): Promise<ConversationLifecycleOutcome>
   /** Web/remote only: switch now or report that the switch was queued. */
   switchProject?(projectId: string): Promise<SwitchProjectReply>
@@ -1141,7 +1142,8 @@ export class WsAcpTransport implements AcpTransport {
     action: 'detach' | 'rebind' | 'suspend' | 'replace' | 'delete',
     conversationId: string,
     expectedRevision: number,
-    request?: ConversationReplacementRequest
+    request?: ConversationReplacementRequest,
+    targetRuntimeAgentId?: string
   ): Promise<ConversationLifecycleOutcome> {
     const requestType =
       action === 'detach'
@@ -1156,7 +1158,8 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<ConversationLifecycleOutcome>(requestType, {
       conversationId,
       expectedRevision,
-      ...(request ? { request } : {})
+      ...(request ? { request } : {}),
+      ...(targetRuntimeAgentId ? { targetRuntimeAgentId } : {})
     })
   }
 

@@ -147,10 +147,18 @@ pub trait ConversationAgentLifecycle: Send + Sync {
         &'a self,
         binding: &'a AgentSessionBinding,
     ) -> ProviderFuture<'a, std::result::Result<(), AgentLifecycleProviderError>>;
+    /// Open the replacement session.
+    ///
+    /// `target_runtime_agent_id` selects WHICH live agent gets the new session.
+    /// `None` keeps the previous binding's agent (a plain restart); `Some` moves
+    /// the Conversation onto a different agent. The Conversation's identity,
+    /// directory and transcript are unaffected either way — only the binding
+    /// changes, which is exactly what `AgentSessionBindingState::Replaced` is for.
     fn replace<'a>(
         &'a self,
         previous_binding: &'a AgentSessionBinding,
         prepared: &'a PreparedConversation,
+        target_runtime_agent_id: Option<&'a str>,
     ) -> ProviderFuture<'a, std::result::Result<AgentBindingResult, AgentLifecycleProviderError>>;
     fn abort_replacement<'a>(
         &'a self,
@@ -193,10 +201,11 @@ impl ConversationAgentLifecycle for AcpManager {
         &'a self,
         previous_binding: &'a AgentSessionBinding,
         prepared: &'a PreparedConversation,
+        target_runtime_agent_id: Option<&'a str>,
     ) -> ProviderFuture<'a, std::result::Result<AgentBindingResult, AgentLifecycleProviderError>>
     {
         Box::pin(async move {
-            self.create_replacement_session(previous_binding, prepared)
+            self.create_replacement_session(previous_binding, prepared, target_runtime_agent_id)
                 .await
                 .map_err(|detail| AgentLifecycleProviderError {
                     kind: AgentLifecycleProviderErrorKind::Failed,
@@ -445,6 +454,7 @@ impl ConversationLifecycleService {
         conversation_id: ConversationId,
         mut request: PrepareConversationRequest,
         expected_revision: u64,
+        target_runtime_agent_id: Option<String>,
     ) -> Result<ConversationLifecycleOutcome> {
         let permit = self
             .writer
@@ -465,18 +475,18 @@ impl ConversationLifecycleService {
                     source.detail,
                 )
             })?;
-        let provider_binding =
-            self.provider
-                .replace(&previous, &prepared)
-                .await
-                .map_err(|source| {
-                    lifecycle_error(
-                        ConversationLifecycleErrorCode::AcpReplaceFailed,
-                        "replace_binding",
-                        Some(conversation_id),
-                        source.detail,
-                    )
-                })?;
+        let provider_binding = self
+            .provider
+            .replace(&previous, &prepared, target_runtime_agent_id.as_deref())
+            .await
+            .map_err(|source| {
+                lifecycle_error(
+                    ConversationLifecycleErrorCode::AcpReplaceFailed,
+                    "replace_binding",
+                    Some(conversation_id),
+                    source.detail,
+                )
+            })?;
         let replacement = AgentSessionBinding {
             schema_version: AGENT_SESSION_BINDING_SCHEMA_VERSION,
             binding_id: Uuid::new_v4(),
@@ -862,6 +872,7 @@ mod tests {
         abort_error: Mutex<Option<AgentLifecycleProviderError>>,
         replacement_execution_cwds: Mutex<Vec<String>>,
         replacement_additional_roots: Mutex<Vec<Vec<String>>>,
+        replacement_targets: Mutex<Vec<Option<String>>>,
         suspend_calls: AtomicUsize,
         replace_calls: AtomicUsize,
         abort_calls: AtomicUsize,
@@ -888,9 +899,13 @@ mod tests {
             &'a self,
             _previous_binding: &'a AgentSessionBinding,
             prepared: &'a PreparedConversation,
+            target_runtime_agent_id: Option<&'a str>,
         ) -> ProviderFuture<'a, std::result::Result<AgentBindingResult, AgentLifecycleProviderError>>
         {
             self.replace_calls.fetch_add(1, Ordering::SeqCst);
+            self.replacement_targets
+                .lock()
+                .push(target_runtime_agent_id.map(str::to_string));
             Box::pin(async move {
                 self.replacement_execution_cwds
                     .lock()
@@ -903,7 +918,9 @@ mod tests {
                 }
                 Ok(AgentBindingResult {
                     agent_session_id: "opaque/replacement".to_string(),
-                    runtime_agent_id: "agent-runtime".to_string(),
+                    runtime_agent_id: target_runtime_agent_id
+                        .unwrap_or("agent-runtime")
+                        .to_string(),
                     stable_agent_namespace: "config:test".to_string(),
                 })
             })
@@ -1235,6 +1252,55 @@ mod tests {
         );
     }
 
+    /// Switching the agent of an existing Conversation is a binding replacement:
+    /// the Conversation id, its directory and its transcript are untouched, only
+    /// the binding moves to the chosen runtime agent. Passing `None` keeps the
+    /// current agent (a plain restart), which is the pre-existing behaviour.
+    #[tokio::test]
+    async fn replace_binds_the_requested_agent_and_keeps_conversation_identity() {
+        let fixture = fixture().await;
+        let before = fixture.repository.get_conversation(fixture.id).unwrap();
+
+        let outcome = fixture
+            .service
+            .replace_agent_binding(
+                fixture.id,
+                PrepareConversationRequest {
+                    schema_version: 1,
+                    conversation_id: Some(fixture.id),
+                    project_attachment: None,
+                    execution_target: ExecutionTarget::Workspace,
+                },
+                before.last_seq,
+                Some("agent-runtime-other".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fixture.provider.replacement_targets.lock().as_slice(),
+            &[Some("agent-runtime-other".to_string())],
+            "the chosen agent must reach the provider"
+        );
+        let ConversationLifecycleOutcome::Updated {
+            conversation_id,
+            current_binding,
+            ..
+        } = outcome
+        else {
+            panic!("expected an updated outcome");
+        };
+        assert_eq!(conversation_id, fixture.id);
+        assert_eq!(
+            current_binding.unwrap().runtime_agent_id,
+            "agent-runtime-other",
+            "the Conversation is now bound to the new agent"
+        );
+        let after = fixture.repository.get_conversation(fixture.id).unwrap();
+        assert_eq!(after.conversation_id, before.conversation_id);
+        assert_eq!(after.workspace_cwd, before.workspace_cwd);
+    }
+
     #[tokio::test]
     async fn replace_preserves_identity_workspace_and_history_while_failure_appends_nothing() {
         let fixture = fixture().await;
@@ -1254,6 +1320,7 @@ mod tests {
                     execution_target: ExecutionTarget::Workspace,
                 },
                 before.last_seq,
+                None,
             )
             .await
             .unwrap_err();
@@ -1272,6 +1339,7 @@ mod tests {
                     execution_target: ExecutionTarget::Workspace,
                 },
                 before.last_seq,
+                None,
             )
             .await
             .unwrap();
@@ -1343,6 +1411,7 @@ mod tests {
                     execution_target: ExecutionTarget::Workspace,
                 },
                 before.last_seq,
+                None,
             )
             .await
             .unwrap();
@@ -1389,6 +1458,7 @@ mod tests {
                     execution_target: ExecutionTarget::Workspace,
                 },
                 before.last_seq,
+                None,
             )
             .await
             .unwrap_err();

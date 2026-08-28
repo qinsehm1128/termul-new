@@ -48,8 +48,8 @@ export function createConversationFacadeApi(
       lifecycleApi.rebindDetachedBinding(conversationId, expectedRevision),
     suspendBinding: (conversationId, expectedRevision) =>
       lifecycleApi.suspendBinding(conversationId, expectedRevision),
-    replaceBinding: (conversationId, request, expectedRevision) =>
-      lifecycleApi.replaceBinding(conversationId, request, expectedRevision),
+    replaceBinding: (conversationId, request, expectedRevision, targetRuntimeAgentId) =>
+      lifecycleApi.replaceBinding(conversationId, request, expectedRevision, targetRuntimeAgentId),
     deleteConversation: (conversationId, expectedRevision) =>
       lifecycleApi.deleteConversation(conversationId, expectedRevision)
   }

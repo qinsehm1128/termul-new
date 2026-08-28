@@ -117,7 +117,13 @@ export interface ConversationLifecycleApi {
   replaceBinding(
     conversationId: ConversationId,
     request: ConversationReplacementRequest,
-    expectedRevision: number
+    expectedRevision: number,
+    /**
+     * Runtime id of the agent to bind to. Omitted restarts the Conversation on
+     * its current agent; supplying one switches it to a different agent while
+     * keeping the Conversation's identity, directory and transcript.
+     */
+    targetRuntimeAgentId?: string
   ): Promise<ConversationLifecycleOutcome>
   deleteConversation(
     conversationId: ConversationId,

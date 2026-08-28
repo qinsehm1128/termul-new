@@ -1,5 +1,6 @@
 import type { ConversationLifecycleOutcome } from '@shared/types/conversation-lifecycle.types'
 import {
+  Bot,
   Link2,
   MoreHorizontal,
   PauseCircle,
@@ -18,8 +19,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useAgentTemplateId } from '@/stores/acp-store'
 import { useConversationStore } from '@/stores/conversation-store'
@@ -43,6 +48,9 @@ export interface ChatHistorySidebarEntry {
 type ConfirmedLifecycleAction = 'detach' | 'rebind' | 'suspend' | 'replace' | 'delete'
 
 /** Resolve the agent's bundled registry icon for a history/discovered entry. */
+/** Stable reference so the selector never re-renders on an absent slice. */
+const EMPTY_AGENT_CONFIGS: StoredAgentConfig[] = []
+
 function ChatEntryIcon({
   agentId,
   agentConfigId
@@ -93,6 +101,10 @@ export function ConversationLifecycleActions({
   const rebindDetachedBinding = useAcpStore((state) => state.rebindDetachedBinding)
   const suspendAgentBinding = useAcpStore((state) => state.suspendAgentBinding)
   const replaceAgentBinding = useAcpStore((state) => state.replaceAgentBinding)
+  const agentConfigs = useAcpStore((state) => state.agentConfigs) ?? EMPTY_AGENT_CONFIGS
+  // Which configured agent the pending 'replace' should bind to. `null` means
+  // restart on the current agent, which is what 'replace' has always done.
+  const [switchTargetConfigId, setSwitchTargetConfigId] = useState<string | null>(null)
   const deleteConversation = useAcpStore((state) => state.deleteConversation)
   const renameConversation = useConversationStore((state) => state.renameConversation)
   const [pendingAction, setPendingAction] = useState<ConfirmedLifecycleAction | null>(null)
@@ -105,6 +117,11 @@ export function ConversationLifecycleActions({
     closeChatView(conversationId)
     onViewClosed?.()
   }
+
+  // 'replace' covers two different user intents: restart on the same agent, and
+  // hand the Conversation to a different one. They need different wording.
+  const copyKey =
+    pendingAction === 'replace' && switchTargetConfigId ? 'switchAgent' : pendingAction
 
   const runConfirmedAction = async (): Promise<void> => {
     if (!conversationId || !pendingAction) return
@@ -120,7 +137,7 @@ export function ConversationLifecycleActions({
             : action === 'suspend'
               ? await suspendAgentBinding(conversationId)
               : action === 'replace'
-                ? await replaceAgentBinding(conversationId)
+                ? await replaceAgentBinding(conversationId, switchTargetConfigId ?? undefined)
                 : await deleteConversation(conversationId, true)
       if (outcome.status === 'blocked') {
         toast.error(t('lifecycle.blocked.title'), {
@@ -130,12 +147,13 @@ export function ConversationLifecycleActions({
         })
         return
       }
-      toast.success(t(`lifecycle.success.${action}`))
+      toast.success(t(`lifecycle.success.${copyKey ?? action}`))
     } catch (error) {
       const code = lifecycleErrorCode(error)
       toast.error(t(`lifecycle.errors.${code}`, { defaultValue: code }))
     } finally {
       setRunning(false)
+      setSwitchTargetConfigId(null)
     }
   }
 
@@ -178,10 +196,36 @@ export function ConversationLifecycleActions({
             <PauseCircle className="mr-2 size-4" aria-hidden="true" />
             {t('lifecycle.suspend')}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setPendingAction('replace')}>
+          <DropdownMenuItem
+            onSelect={() => {
+              setSwitchTargetConfigId(null)
+              setPendingAction('replace')
+            }}
+          >
             <RefreshCw className="mr-2 size-4" aria-hidden="true" />
             {t('lifecycle.replace')}
           </DropdownMenuItem>
+          {agentConfigs.length > 0 && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Bot className="mr-2 size-4" aria-hidden="true" />
+                {t('lifecycle.switchAgent')}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-52">
+                {agentConfigs.map((config) => (
+                  <DropdownMenuItem
+                    key={config.id}
+                    onSelect={() => {
+                      setSwitchTargetConfigId(config.id)
+                      setPendingAction('replace')
+                    }}
+                  >
+                    {config.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
           <DropdownMenuItem
             onSelect={() => {
               setRenameValue(title)
@@ -204,15 +248,15 @@ export function ConversationLifecycleActions({
 
       <ConfirmDialog
         isOpen={pendingAction !== null}
-        title={pendingAction ? t(`lifecycle.confirm.${pendingAction}.title`) : ''}
+        title={copyKey ? t(`lifecycle.confirm.${copyKey}.title`) : ''}
         message={
-          pendingAction
-            ? t(`lifecycle.confirm.${pendingAction}.message`, {
+          copyKey
+            ? t(`lifecycle.confirm.${copyKey}.message`, {
                 title
               })
             : ''
         }
-        confirmLabel={pendingAction ? t(`lifecycle.confirm.${pendingAction}.confirm`) : ''}
+        confirmLabel={copyKey ? t(`lifecycle.confirm.${copyKey}.confirm`) : ''}
         cancelLabel={t('common.cancel')}
         variant={pendingAction === 'delete' ? 'danger' : 'default'}
         onConfirm={() => void runConfirmedAction()}

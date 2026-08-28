@@ -1790,8 +1790,9 @@ impl AcpManager {
         &self,
         previous_binding: &AgentSessionBinding,
         prepared: &PreparedConversation,
+        target_runtime_agent_id: Option<&str>,
     ) -> Result<AgentBindingResult, String> {
-        let agent_id = AgentId(previous_binding.runtime_agent_id.clone());
+        let agent_id = replacement_agent_id(previous_binding, target_runtime_agent_id);
         let (caps, stable_agent_namespace) = self
             .agents
             .lock()
@@ -3119,6 +3120,26 @@ async fn join_thread_bounded(handle: JoinHandle<()>) {
 /// ACP requires every additional workspace root to be an absolute path, and the
 /// agent is free to reject or skip anything else. Drop non-absolute entries here
 /// rather than sending a request the agent may discard wholesale.
+/// Which live agent receives the replacement session.
+///
+/// `None` restarts on the binding's current agent; `Some` moves the Conversation
+/// onto a different one, which is how switching a Conversation's agent works. A
+/// blank target is treated as absent rather than as a request to bind the empty
+/// agent id. The caller is responsible for having spawned the target.
+fn replacement_agent_id(
+    previous_binding: &AgentSessionBinding,
+    target_runtime_agent_id: Option<&str>,
+) -> AgentId {
+    let target = target_runtime_agent_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    AgentId(
+        target
+            .map(str::to_string)
+            .unwrap_or_else(|| previous_binding.runtime_agent_id.clone()),
+    )
+}
+
 fn to_absolute_roots(roots: &[String]) -> Vec<PathBuf> {
     roots
         .iter()
@@ -5132,6 +5153,33 @@ mod tests {
             Some("once")
         );
         assert!(preferred_allow_option(&[reject]).is_none());
+    }
+
+    #[test]
+    fn replacement_binds_the_requested_agent_and_falls_back_to_the_current_one() {
+        let binding = AgentSessionBinding {
+            schema_version: crate::conversation::AGENT_SESSION_BINDING_SCHEMA_VERSION,
+            binding_id: uuid::Uuid::nil(),
+            agent_session_id: "session-1".to_string(),
+            runtime_agent_id: "agent-current".to_string(),
+            stable_agent_namespace: "config:current".to_string(),
+            execution_cwd: "/workspace".to_string(),
+            bound_at_utc: chrono::Utc::now(),
+            state: crate::conversation::AgentSessionBindingState::Active,
+        };
+
+        // Switching a Conversation's agent: the chosen agent wins.
+        assert_eq!(
+            replacement_agent_id(&binding, Some("agent-next")).0,
+            "agent-next"
+        );
+        // A plain restart keeps the binding's own agent.
+        assert_eq!(replacement_agent_id(&binding, None).0, "agent-current");
+        // A blank target is absence, not a request to bind the empty agent id.
+        assert_eq!(
+            replacement_agent_id(&binding, Some("   ")).0,
+            "agent-current"
+        );
     }
 
     #[test]

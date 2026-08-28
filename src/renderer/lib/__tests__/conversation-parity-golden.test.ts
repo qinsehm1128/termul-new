@@ -402,7 +402,7 @@ describe('Conversation production transport golden parity', () => {
       status: 'blocked',
       code: 'CONVERSATION_LIVE_RESOURCES'
     })
-    expect(lifecycle).toHaveBeenCalledWith('delete', ID, 7, undefined)
+    expect(lifecycle).toHaveBeenCalledWith('delete', ID, 7, undefined, undefined)
   })
 
   it('dispatches all five web lifecycle mutations through the real production factory', async () => {
@@ -449,12 +449,15 @@ describe('Conversation production transport golden parity', () => {
     await api.replaceBinding(ID, replacement, 4)
     await api.deleteConversation(ID, 5)
 
+    // The 5th slot is `targetRuntimeAgentId`: only a deliberate agent switch
+    // fills it, so every mutation here — including a plain replace — leaves it
+    // undefined and stays on the Conversation's current agent.
     expect(lifecycle.mock.calls).toEqual([
-      ['detach', ID, 1, undefined],
-      ['rebind', ID, 2, undefined],
-      ['suspend', ID, 3, undefined],
-      ['replace', ID, 4, replacement],
-      ['delete', ID, 5, undefined]
+      ['detach', ID, 1, undefined, undefined],
+      ['rebind', ID, 2, undefined, undefined],
+      ['suspend', ID, 3, undefined, undefined],
+      ['replace', ID, 4, replacement, undefined],
+      ['delete', ID, 5, undefined, undefined]
     ])
   })
 

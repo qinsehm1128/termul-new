@@ -27,7 +27,7 @@
     "cliSessionsDescription": "恢复扫描到的 CLI 代理会话",
     "commandPalette": "命令面板",
     "gitChanges": "Git 更改",
-    "executionTarget": "执行目标与项目上下文",
+    "executionTarget": "可访问范围与项目上下文",
     "executionTargetDescription": "附加或移除项目上下文，并在不更改会话身份和工作区的情况下切换执行目标。",
     "restartTerminal": "重启终端",
     "closeTerminal": "关闭终端",

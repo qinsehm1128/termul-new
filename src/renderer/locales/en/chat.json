@@ -143,7 +143,8 @@
     "detach": "Detach binding",
     "rebind": "Rebind detached agent",
     "suspend": "Suspend agent",
-    "replace": "Replace agent",
+    "replace": "Restart agent",
+    "switchAgent": "Switch to another agent",
     "delete": "Delete conversation",
     "confirm": {
       "detach": {
@@ -161,6 +162,11 @@
         "message": "Close the agent session for “{{title}}”? The conversation, transcript, workspace, and terminals are retained.",
         "confirm": "Suspend agent"
       },
+      "switchAgent": {
+        "title": "Switch agent?",
+        "message": "Hand \u201c{{title}}\u201d over to a different agent? The conversation's identity, directory and transcript are kept \u2014 only the agent behind it changes.",
+        "confirm": "Switch agent"
+      },
       "replace": {
         "title": "Replace agent?",
         "message": "Create a new agent session for “{{title}}” while retaining the same conversation and workspace?",
@@ -177,6 +183,7 @@
       "rebind": "Agent binding restored",
       "suspend": "Agent suspended",
       "replace": "Agent replaced",
+      "switchAgent": "Agent switched",
       "delete": "Conversation deleted"
     },
     "blocked": {

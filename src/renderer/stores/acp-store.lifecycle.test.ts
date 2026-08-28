@@ -259,6 +259,67 @@ describe('ACP Conversation lifecycle store', () => {
     expect(remapViewSpy).not.toHaveBeenCalled()
   })
 
+  it('switching agents spawns the chosen config and binds the Conversation to it', async () => {
+    // Switching needs a LIVE process to hand the session to, so the store must
+    // spawn the target config first and pass THAT runtime id — not the config id
+    // and not the Conversation's current agent.
+    useAcpStore.setState((state) => ({
+      agentConfigs: [
+        {
+          id: 'cfg-other',
+          configId: 'cfg-other',
+          name: 'Other agent',
+          command: 'other',
+          args: [],
+          env: {},
+          allowTerminal: false,
+          permissionPolicy: 'ask'
+        },
+        ...state.agentConfigs
+      ]
+    }))
+    invokeSpy.mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'agent-other-runtime', capabilities: {}, authMethods: [] }
+      }
+      if (command === 'conversation_replace_binding') {
+        return { success: true, data: updated('replaceBinding', 'active', 'session-new') }
+      }
+      throw new Error(`unexpected invoke in agent-switch test: ${command}`)
+    })
+
+    await useAcpStore.getState().replaceAgentBinding(conversationId, 'cfg-other')
+
+    expect(invokeSpy).toHaveBeenCalledWith(
+      'acp_spawn_agent',
+      expect.objectContaining({
+        // The agent runs in the Conversation's own directory, as always.
+        config: expect.objectContaining({ configId: 'cfg-other' })
+      })
+    )
+    expect(invokeSpy).toHaveBeenCalledWith(
+      'conversation_replace_binding',
+      expect.objectContaining({
+        conversationId,
+        targetRuntimeAgentId: 'agent-other-runtime'
+      })
+    )
+    invokeSpy.mockReset()
+  })
+
+  it('a plain restart sends no target so the Conversation keeps its current agent', async () => {
+    invokeSpy.mockResolvedValueOnce({
+      success: true,
+      data: updated('replaceBinding', 'active', 'session-new')
+    })
+
+    await useAcpStore.getState().replaceAgentBinding(conversationId)
+
+    const call = invokeSpy.mock.calls.find(([name]) => name === 'conversation_replace_binding')
+    expect(call).toBeTruthy()
+    expect(call?.[1]).not.toHaveProperty('targetRuntimeAgentId')
+  })
+
   it('dispatches blocked delete through the real factory and keeps state intact', async () => {
     invokeSpy.mockResolvedValueOnce({
       success: true,

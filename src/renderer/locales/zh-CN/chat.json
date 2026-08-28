@@ -143,7 +143,8 @@
     "detach": "分离代理绑定",
     "rebind": "重新绑定已分离代理",
     "suspend": "暂停代理",
-    "replace": "替换代理",
+    "replace": "重启代理",
+    "switchAgent": "切换到其他代理",
     "delete": "删除对话",
     "confirm": {
       "detach": {
@@ -161,6 +162,11 @@
         "message": "要关闭“{{title}}”的代理会话吗？对话、记录、工作区和终端都会保留。",
         "confirm": "暂停代理"
       },
+      "switchAgent": {
+        "title": "切换代理？",
+        "message": "要把“{{title}}”改由另一个代理接管吗？对话身份、目录和聊天记录都会保留，只是换一个代理来继续。",
+        "confirm": "切换代理"
+      },
       "replace": {
         "title": "替换代理？",
         "message": "要为“{{title}}”创建新的代理会话，同时保留同一个对话和工作区吗？",
@@ -176,7 +182,8 @@
       "detach": "代理绑定已分离",
       "rebind": "代理绑定已恢复",
       "suspend": "代理已暂停",
-      "replace": "代理已替换",
+      "replace": "代理已重启",
+      "switchAgent": "已切换代理",
       "delete": "对话已删除"
     },
     "blocked": {

@@ -266,7 +266,7 @@ function MobileReadyTargetHarness(): React.JSX.Element {
 }
 
 async function chooseMobileTarget(option: string): Promise<void> {
-  const trigger = screen.getByRole('combobox', { name: 'Execution target' })
+  const trigger = screen.getByRole('combobox', { name: 'Additional reachable directories' })
   trigger.focus()
   fireEvent.keyDown(trigger, { key: 'ArrowDown' })
   fireEvent.click(await screen.findByRole('option', { name: option }))
@@ -334,7 +334,9 @@ describe('Conversation-first responsive phone matrix', () => {
     fireEvent.click(screen.getByLabelText('Open conversation drawer'))
     expect(screen.getByLabelText('Conversation drawer')).toBeVisible()
     expect(screen.getByLabelText('New chat')).toBeEnabled()
-    expect(screen.getByLabelText('Execution target')).toHaveTextContent('Conversation workspace')
+    expect(screen.getByLabelText('Additional reachable directories')).toHaveTextContent(
+      'Conversation directory only'
+    )
   })
 
   it('persists ready attach, retarget, workspace, and detach at phone width', async () => {
@@ -374,9 +376,9 @@ describe('Conversation-first responsive phone matrix', () => {
     render(<MobileReadyTargetHarness />)
     fireEvent.click(screen.getByRole('button', { name: 'Attach project context' }))
     expect(await screen.findByText(/Project context attached/)).toBeVisible()
-    await chooseMobileTarget('Project root')
-    expect(await screen.findByText(/Execution target updated/)).toBeVisible()
-    await chooseMobileTarget('Conversation workspace')
+    await chooseMobileTarget('Plus the project root')
+    expect(await screen.findByText(/Reachable scope updated/)).toBeVisible()
+    await chooseMobileTarget('Conversation directory only')
     await waitFor(() => expect(mockConversationApi.updateExecutionTarget).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: 'Detach project context' }))
     expect(await screen.findByText(/Project context detached/)).toBeVisible()

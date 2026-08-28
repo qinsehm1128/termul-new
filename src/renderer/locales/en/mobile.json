@@ -27,7 +27,7 @@
     "cliSessionsDescription": "Resume scanned CLI agent sessions",
     "commandPalette": "Command palette",
     "gitChanges": "Git changes",
-    "executionTarget": "Execution target and project context",
+    "executionTarget": "Reachable scope and project context",
     "executionTargetDescription": "Attach or detach project context and change this Conversation's execution target without changing its identity or workspace.",
     "restartTerminal": "Restart terminal",
     "closeTerminal": "Close terminal",

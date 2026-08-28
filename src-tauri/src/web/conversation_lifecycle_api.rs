@@ -35,6 +35,9 @@ struct RevisionRequest {
 struct ReplaceRequest {
     expected_revision: u64,
     request: PrepareConversationRequest,
+    /// Runtime id of the agent to bind to; absent restarts the same agent.
+    #[serde(default)]
+    target_runtime_agent_id: Option<String>,
 }
 
 pub async fn detach(
@@ -136,7 +139,12 @@ pub async fn replace(
         conversation_id,
         None,
         service
-            .replace_binding(conversation_id, request.request, request.expected_revision)
+            .replace_binding(
+                conversation_id,
+                request.request,
+                request.expected_revision,
+                request.target_runtime_agent_id,
+            )
             .await,
     )
     .await

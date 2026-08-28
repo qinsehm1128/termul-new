@@ -875,12 +875,18 @@ impl ConversationApplicationService {
         conversation_id: ConversationId,
         request: PrepareConversationRequest,
         expected_revision: u64,
+        target_runtime_agent_id: Option<String>,
     ) -> Result<ConversationLifecycleOutcome> {
         let started = Instant::now();
         let result = async {
             self.ensure_writable(conversation_id, ConversationMutation::BindingReplace)?;
             self.lifecycle()?
-                .replace_agent_binding(conversation_id, request, expected_revision)
+                .replace_agent_binding(
+                    conversation_id,
+                    request,
+                    expected_revision,
+                    target_runtime_agent_id,
+                )
                 .await
                 .map_err(map_lifecycle_error)
         }

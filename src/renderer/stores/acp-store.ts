@@ -459,7 +459,15 @@ interface AcpState {
   detachAgentBinding: (conversationId: string) => Promise<ConversationLifecycleOutcome>
   rebindDetachedBinding: (conversationId: string) => Promise<ConversationLifecycleOutcome>
   suspendAgentBinding: (conversationId: string) => Promise<ConversationLifecycleOutcome>
-  replaceAgentBinding: (conversationId: string) => Promise<ConversationLifecycleOutcome>
+  /**
+   * Rebind a Conversation's ACP session. Omitting `targetConfigId` restarts on
+   * the same agent; supplying one switches the Conversation to that configured
+   * agent, keeping its identity, directory and transcript.
+   */
+  replaceAgentBinding: (
+    conversationId: string,
+    targetConfigId?: string
+  ) => Promise<ConversationLifecycleOutcome>
   deleteConversation: (
     conversationId: string,
     removeWorkspace?: boolean
@@ -3908,12 +3916,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     return outcome
   },
 
-  replaceAgentBinding: async (conversationId) => {
+  replaceAgentBinding: async (conversationId, targetConfigId) => {
     const record = conversationLifecycleRecord(conversationId)
+    // Switching agents needs a LIVE process to hand the session to, so spawn (or
+    // reuse) one for the target config first. The cwd is the Conversation's own
+    // workspace, which is where the agent will run either way.
+    let targetRuntimeAgentId: string | undefined
+    if (targetConfigId) {
+      const agentId = await ensureLiveAgent(get, set, targetConfigId, record.workspaceCwd)
+      if (!agentId) {
+        throw new Error(`could not start the agent for config ${targetConfigId}`)
+      }
+      targetRuntimeAgentId = agentId
+    }
     const outcome = await conversationLifecycleApi.replaceBinding(
       record.conversationId,
       replacementRequest(record),
-      record.lastSeq
+      record.lastSeq,
+      targetRuntimeAgentId
     )
     if (useConversationStore.getState().applyLifecycleOutcome(outcome)) {
       get()._onConversationLifecycle(outcome)

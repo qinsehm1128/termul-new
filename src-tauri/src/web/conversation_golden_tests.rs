@@ -66,6 +66,7 @@ impl ConversationAgentLifecycle for GoldenLifecycleProvider {
         &'a self,
         _previous_binding: &'a AgentSessionBinding,
         _prepared: &'a PreparedConversation,
+        _target_runtime_agent_id: Option<&'a str>,
     ) -> ProviderFuture<'a, std::result::Result<AgentBindingResult, AgentLifecycleProviderError>>
     {
         Box::pin(async {
