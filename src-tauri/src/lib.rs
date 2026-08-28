@@ -1437,6 +1437,12 @@ static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 static CLEANUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Budget for the `RunEvent::Exit` reap. Deliberately tighter than the graceful
+/// path's five seconds: this runs inside the platform's terminate callback,
+/// which force-kills the process if it overstays, and a partial reap beats being
+/// cut off mid-way with nothing killed at all.
+const LAST_RESORT_PTY_CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Keep the legacy importer linkable for compatibility tests and older internal callers, but
@@ -2255,6 +2261,44 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        // `ExitRequested` is emitted by tauri-runtime-wry in exactly two places:
+        // when the LAST window is Destroyed, and when `AppHandle::exit()` is
+        // called. macOS Cmd+Q takes neither path — `applicationWillTerminate`
+        // drives `AppState::exit()` -> `Event::LoopDestroyed` -> `RunEvent::Exit`
+        // — so the graceful handler below never ran on a normal quit and every
+        // PTY was left orphaned. `Exit` cannot be prevented and the loop is
+        // already gone, so this is a bounded, best-effort reap: kill the child
+        // processes, skip the durable-persistence stages that need real async
+        // time. When the graceful path did run, `CLEANUP_DONE` short-circuits it.
+        if matches!(event, RunEvent::Exit) {
+            if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let Some(pty_manager) = app_handle
+                .try_state::<Arc<pty::PtyManager>>()
+                .map(|state| state.inner().clone())
+            else {
+                return;
+            };
+            let receipt = tauri::async_runtime::block_on(async move {
+                pty_manager
+                    .kill_all_until(
+                        tokio::time::Instant::now() + LAST_RESORT_PTY_CLEANUP_DEADLINE,
+                    )
+                    .await
+            });
+            log::info!(
+                "[desktop-exit] shutdown_phase=cleanup_ptys_on_loop_exit stable_code={} result={} attempted={} succeeded={} failed={} in_flight={} elapsed_ms={}",
+                if receipt.clean_success() { "OK" } else { crate::web::PTY_CLEANUP_FAILED },
+                if receipt.clean_success() { "PASS" } else { "FAILED" },
+                receipt.attempted,
+                receipt.succeeded,
+                receipt.failed,
+                receipt.in_flight,
+                receipt.elapsed_ms
+            );
+            return;
+        }
         if let RunEvent::ExitRequested { api, .. } = event {
             if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
@@ -2429,6 +2473,43 @@ mod tests {
         assert!(helper.contains("desktop_memory()"));
         assert!(!helper.contains("issue_or_load_desktop"));
         assert!(!helper.contains("keyring"));
+    }
+
+    /// `RunEvent::ExitRequested` is emitted only when the last window is
+    /// Destroyed or `AppHandle::exit()` is called. A macOS Cmd+Q reaches neither:
+    /// `applicationWillTerminate` -> `AppState::exit()` -> `Event::LoopDestroyed`
+    /// -> `RunEvent::Exit`. Handling `ExitRequested` alone therefore orphaned
+    /// every PTY on a normal quit, so the `Exit` arm is the load-bearing one.
+    #[test]
+    fn loop_exit_reaps_ptys_since_platform_quit_skips_exit_requested() {
+        let source = include_str!("lib.rs");
+        let run_start = source
+            .find("app.run(|app_handle, event| {")
+            .expect("run event closure");
+        let run = &source[run_start..];
+        let exit_arm = run
+            .find("matches!(event, RunEvent::Exit)")
+            .expect("RunEvent::Exit arm");
+        let requested_arm = run
+            .find("if let RunEvent::ExitRequested")
+            .expect("RunEvent::ExitRequested arm");
+        assert!(
+            exit_arm < requested_arm,
+            "the Exit arm must be reached on a platform-driven quit"
+        );
+        let arm = &run[exit_arm..requested_arm];
+        assert!(
+            arm.contains("kill_all_until"),
+            "the Exit arm must actually reap the PTYs"
+        );
+        assert!(
+            arm.contains("LAST_RESORT_PTY_CLEANUP_DEADLINE"),
+            "the reap must be bounded — the platform force-kills a slow terminate callback"
+        );
+        assert!(
+            arm.contains("CLEANUP_DONE"),
+            "a completed graceful shutdown must short-circuit the reap"
+        );
     }
 
     #[test]
