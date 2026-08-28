@@ -838,13 +838,9 @@ export async function restoreProjectWorkspace(projectId: string): Promise<boolea
   return restoreWorkspaceScope(projectId, [projectId], projectId)
 }
 
-/** Reload the local pane tree owned by a multi-root project group. */
-export async function restoreProjectGroupWorkspace(
-  groupId: string,
-  projectIds: readonly string[]
-): Promise<boolean> {
-  return restoreWorkspaceScope(`group-${groupId}`, projectIds)
-}
+// `restoreProjectGroupWorkspace` lived here and read `editor-state/group-<id>`.
+// Removed with the group-scoped workspace itself: leaving a reader for a key
+// nothing writes any more is how the second tab set would come back.
 
 export function persistState(projectId: string): void {
   if (useConversationStore.getState().activeConversationId) return

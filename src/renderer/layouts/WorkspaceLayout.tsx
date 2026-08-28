@@ -53,7 +53,6 @@ import {
 } from '@/hooks/use-command-history'
 import {
   persistState,
-  restoreProjectGroupWorkspace,
   restoreProjectWorkspace,
   subscribeProjectWorkspaceRestored,
   useEditorPersistence
@@ -333,7 +332,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
       return project && project.isArchived !== true && project.path ? [project] : []
     })
   }, [activeGroup, projects])
-  const editorPersistenceScopeKey = activeGroupId ? `group-${activeGroupId}` : activeProjectId
+  // The workspace is keyed by project, never by group.
+  //
+  // A group used to own a whole second workspace under `editor-state/group-<id>`,
+  // saved and restored consistently — this was a design, not a bug. But it meant
+  // one project had two tab sets, chosen by how you arrived: open tabs on a
+  // project, then activate its group, and the group's own (initially empty)
+  // workspace loaded instead. Nothing was closed and nothing was lost — the tabs
+  // sat on disk under the other key — but it is indistinguishable from having
+  // lost them, which is how it was reported.
+  //
+  // Groups keep the part that earns them: `useEditorPersistence` below still
+  // receives every member's `rootPaths`, so the explorer stays multi-root. What
+  // they give up is a tab set of their own; switching the active project inside
+  // a group now swaps tabs, the same as switching anywhere else.
+  const editorPersistenceScopeKey = activeProjectId
   const activeConversationId = useConversationStore((state) => state.activeConversationId)
   const activeConversation = useConversationStore((state) =>
     activeConversationId ? state.summariesById[activeConversationId] : undefined
@@ -582,7 +595,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
         navigate('/')
         return
       }
-      void restoreProjectGroupWorkspace(groupId, group.projectIds).then((restored) => {
+      // Restore the project the group just activated, not a workspace belonging
+      // to the group. `selectGroup` above has already moved `activeProjectId` to
+      // the group's preferred member, so this is that member's own tab set — the
+      // same one a direct click on it would show.
+      const groupProjectId = useProjectStore.getState().activeProjectId
+      if (!groupProjectId) {
+        useConversationStore.getState().setActiveConversationId(null)
+        useWorkspaceStore.getState().resetLayout()
+        return
+      }
+      void restoreProjectWorkspace(groupProjectId).then((restored) => {
         useConversationStore.getState().setActiveConversationId(null)
         if (!restored) useWorkspaceStore.getState().resetLayout()
       })

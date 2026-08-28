@@ -290,6 +290,19 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('workspace scoping', () => {
+  it('exposes no group-scoped workspace restore', async () => {
+    const persistence = await import('./use-editor-persistence')
+
+    // A group is not a workspace of its own. While it was, the same project had
+    // two tab sets keyed by how you reached it — arrive via the group and its
+    // separate, initially empty workspace loaded, which is indistinguishable
+    // from every tab having been closed. Re-exporting a reader for
+    // `editor-state/group-<id>` is how that second workspace comes back.
+    expect(Object.keys(persistence)).not.toContain('restoreProjectGroupWorkspace')
+  })
+})
+
 describe('useEditorPersistence', () => {
   it('restores only expanded dirs within active project root', async () => {
     mockPersistenceRead.mockResolvedValue({
