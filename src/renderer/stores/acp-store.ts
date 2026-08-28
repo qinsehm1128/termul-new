@@ -2372,7 +2372,12 @@ function ensureLiveAgent(
         command: config.command,
         args: config.args,
         env: config.env,
-        allowTerminal: config.allowTerminal
+        allowTerminal: config.allowTerminal,
+        // The backend defaults `permissionPolicy` to `ask` when the field is
+        // absent, so omitting it here silently downgraded every spawned agent
+        // to manual approval no matter what the user had persisted. Normalize
+        // the same way `saveAgentConfig` does so the wire value is never null.
+        permissionPolicy: config.permissionPolicy ?? 'ask'
       })
       if (get().agentConfigs.some((c) => c.id === configId)) {
         set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
@@ -7138,7 +7143,15 @@ export interface AgentIdentity {
  * index `agentConfigId` when the live map is cold (history reopen / empty
  * state) so `AgentGlyph` still resolves the registry icon instead of Bot.
  */
-export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): AgentIdentity {
+export type AgentIdentitySource = Pick<
+  AcpState,
+  'configToLiveAgent' | 'sessionIndex' | 'agentConfigs'
+>
+
+export function selectAgentIdentity(
+  state: AgentIdentitySource,
+  agentId: AgentId | null
+): AgentIdentity {
   if (!agentId) return { name: null, templateId: null }
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === agentId

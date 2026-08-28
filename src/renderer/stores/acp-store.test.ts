@@ -4802,6 +4802,41 @@ describe('acp-store', () => {
     vi.mocked(invoke).mockReset()
   })
 
+  it('ensureLiveAgent forwards the persisted permissionPolicy to the spawn', async () => {
+    // The Rust `AgentConfig.permission_policy` is `#[serde(default)]` (= `ask`),
+    // so a spawn payload that omits the field silently downgrades a configured
+    // `allow_all` agent back to manual approval on every new process.
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        {
+          id: 'cfg-allow',
+          name: 'Allow',
+          command: 'allow',
+          args: [],
+          env: {},
+          permissionPolicy: 'allow_all'
+        },
+        ...s.agentConfigs
+      ]
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') {
+        return { agentId: 'spawned-allow', capabilities: {}, authMethods: [] }
+      }
+      throw new Error(`unexpected invoke command in permission-policy test: ${cmd}`)
+    })
+
+    await useAcpStore.getState().prewarmAgent('cfg-allow', '/w')
+
+    expect(invoke).toHaveBeenCalledWith(
+      'acp_spawn_agent',
+      expect.objectContaining({
+        config: expect.objectContaining({ permissionPolicy: 'allow_all' })
+      })
+    )
+    vi.mocked(invoke).mockReset()
+  })
+
   it('openHistorySession opens read-only when agentConfigId is missing', async () => {
     // Legacy persisted entries lack `agentConfigId`; we can't remap to a live
     // agent, so the chat opens read-only (current behavior) instead of throwing.
