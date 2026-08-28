@@ -1933,6 +1933,100 @@ describe('ConnectedTerminal', () => {
       expect(vi.mocked(clipboardApi).readText).not.toHaveBeenCalled()
     })
 
+    // On macOS the native Edit > Paste item owns Cmd+V, so the keydown handler
+    // above never runs and the only survivor is xterm's paste handler, which
+    // reads `text/plain` alone. An image copied out of Lark/Feishu puts PNG,
+    // TIFF, JPEG, GIF, AVIF and a file URL on the pasteboard and no text at all
+    // — measured — so that read comes back empty and Cmd+V did nothing.
+    describe('paste event fallback (macOS Cmd+V is consumed by the native menu)', () => {
+      function firePaste(
+        container: HTMLElement,
+        data: Record<string, string>,
+        types: string[] = Object.keys(data)
+      ): ClipboardEvent {
+        const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+        Object.defineProperty(event, 'clipboardData', {
+          value: { getData: (type: string) => data[type] ?? '', types },
+          configurable: true
+        })
+        // The listener sits on the inner mount div (`ref={containerRef}`), the
+        // one xterm's textarea lives inside — dispatching on an ancestor would
+        // never reach a capture listener registered further down.
+        const target = container.querySelector('div.bg-terminal-bg > div')
+        if (!target) throw new Error('terminal mount container not found')
+        target.dispatchEvent(event)
+        return event
+      }
+
+      it('routes an image-only clipboard through the image-aware paste path', async () => {
+        vi.mocked(clipboardApi).hasImage.mockResolvedValue({ success: true, data: true })
+        const { container } = render(<ConnectedTerminal terminalId="pty-paste-image" />)
+        await vi.waitFor(() => {
+          expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+        })
+
+        const event = firePaste(container, {}, ['image/png', 'image/tiff'])
+
+        expect(event.defaultPrevented).toBe(true)
+        await vi.waitFor(() => {
+          expect(vi.mocked(clipboardApi).hasImage).toHaveBeenCalled()
+        })
+        // \x16 is the Ctrl+V byte the CLI reads as "go look at the OS
+        // clipboard yourself" — what makes pi and claude attach the image.
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('pty-paste-image', '\x16')
+        })
+      })
+
+      it('still runs when xterm halts the event at its own listener', async () => {
+        vi.mocked(clipboardApi).hasImage.mockResolvedValue({ success: true, data: true })
+        const { container } = render(<ConnectedTerminal terminalId="pty-paste-capture" />)
+        await vi.waitFor(() => {
+          expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+        })
+
+        // Stand-in for xterm's own handler: it lives on `terminal.textarea` and
+        // `terminal.element`, both inside this container, and `handlePasteEvent`
+        // opens with `ev.stopPropagation()`. Registered on a descendant, so a
+        // bubble-phase listener on the container never gets the event at all.
+        const mount = container.querySelector('div.bg-terminal-bg > div')
+        if (!mount) throw new Error('terminal mount container not found')
+        const xtermTextarea = document.createElement('textarea')
+        mount.appendChild(xtermTextarea)
+        const xtermHandler = vi.fn((event: Event) => {
+          event.stopPropagation()
+        })
+        xtermTextarea.addEventListener('paste', xtermHandler)
+
+        const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+        Object.defineProperty(event, 'clipboardData', {
+          value: { getData: () => '', types: ['image/png'] },
+          configurable: true
+        })
+        xtermTextarea.dispatchEvent(event)
+
+        expect(event.defaultPrevented).toBe(true)
+        expect(xtermHandler).not.toHaveBeenCalled()
+        await vi.waitFor(() => {
+          expect(vi.mocked(clipboardApi).hasImage).toHaveBeenCalled()
+        })
+      })
+
+      it('leaves an ordinary text paste to xterm', async () => {
+        const { container } = render(<ConnectedTerminal terminalId="pty-paste-text" />)
+        await vi.waitFor(() => {
+          expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+        })
+
+        const event = firePaste(container, { 'text/plain': 'hello' })
+
+        // Not preventing default is the whole point: xterm's own handler owns
+        // text, including its bracketed-paste wrapping and its ESC sanitising.
+        expect(event.defaultPrevented).toBe(false)
+        expect(vi.mocked(clipboardApi).hasImage).not.toHaveBeenCalled()
+      })
+    })
+
     it('should select all on Ctrl+A', async () => {
       render(<ConnectedTerminal />)
 

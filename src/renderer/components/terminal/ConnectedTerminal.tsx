@@ -813,6 +813,10 @@ function ConnectedTerminalComponent({
     }
   })
 
+  // The mount effect runs once, so it cannot close over the paste callback.
+  const pasteFromClipboardRef = useRef(pasteFromClipboard)
+  pasteFromClipboardRef.current = pasteFromClipboard
+
   useEffect(() => {
     if (externalTerminalId) ptyIdRef.current = externalTerminalId
   }, [externalTerminalId])
@@ -1385,6 +1389,39 @@ function ConnectedTerminalComponent({
     }
 
     // Set up resize observer
+
+    // macOS never delivers Cmd+V to the webview. The native Edit menu's
+    // predefined Paste item owns that key equivalent, and AppKit resolves key
+    // equivalents before the event reaches the key window's first responder —
+    // the same preemption documented for Cmd+A in `src-tauri/src/lib.rs`, where
+    // it cost us Select All. So `case 'v'` in the key handler above is dead code
+    // on macOS; what actually runs is AppKit's `paste:`, whose DOM `paste` event
+    // xterm answers by reading `text/plain` and nothing else
+    // (`@xterm/xterm` Clipboard.ts `handlePasteEvent`).
+    //
+    // Copy an image out of an app that puts only image flavours on the
+    // pasteboard — Lark/Feishu offers PNG, TIFF, JPEG, GIF, AVIF and a file URL,
+    // and no text at all — and that read returns the empty string. Cmd+V then
+    // does nothing whatsoever, while the right-click menu works, because it
+    // calls `pasteFromClipboard` directly and that one asks the OS clipboard
+    // about images.
+    //
+    // Trigger on "the event carries no text", not on "the event carries an
+    // image": whether WebKit populates `clipboardData.items` with image types
+    // for a paste into a plain textarea is not something this code can verify,
+    // and the empty-text case is precisely the one that does nothing today.
+    // Capture phase so it lands ahead of xterm's own listeners, which sit on the
+    // textarea and on `terminal.element` inside this container.
+    const pasteContainer = containerRef.current
+    const handlePasteCapture = (event: ClipboardEvent): void => {
+      if (event.clipboardData?.getData('text/plain')) return
+      // stopPropagation as well as preventDefault: xterm's handler would
+      // otherwise still run and emit a bracketed paste wrapped around nothing.
+      event.preventDefault()
+      event.stopPropagation()
+      void pasteFromClipboardRef.current()
+    }
+    pasteContainer?.addEventListener('paste', handlePasteCapture, { capture: true })
 
     // Listen for input from xterm
     const dataDisposable = terminal.onData(handleTerminalData)
@@ -2049,6 +2086,8 @@ function ConnectedTerminalComponent({
       } else if (externalTerminalId) {
         unregisterTerminal(externalTerminalId)
       }
+
+      pasteContainer?.removeEventListener('paste', handlePasteCapture, { capture: true })
 
       // PTY lifecycle is handled by explicit terminal close, not component unmount
       pixelScroll.dispose()
