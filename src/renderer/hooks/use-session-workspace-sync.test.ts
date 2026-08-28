@@ -435,6 +435,49 @@ describe('Conversation-scoped SessionWorkspace sync', () => {
     expect(JSON.stringify(value)).not.toMatch(/claim|envVars|credentials/i)
   })
 
+  it('drops a closed unresumable placeholder from the manifest but keeps a healthy hidden terminal', () => {
+    // The manifest is rebuilt from the live terminal list, and
+    // `reconcileTerminalResources` re-materializes every listed resource. So a
+    // closed record whose resume was refused must leave the manifest, or the
+    // phantom "Restored terminal" tab comes back on every sync. A hidden but
+    // healthy terminal is a live PTY the user can reopen and has to survive.
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: 't-denied',
+          ptyId: 'pty-denied',
+          projectId: 'same-project',
+          shell: 'bash',
+          name: 'Restored terminal',
+          conversationId: one,
+          isHidden: true,
+          healthStatus: 'disconnected'
+        },
+        {
+          id: 't-hidden-alive',
+          ptyId: 'pty-hidden-alive',
+          projectId: 'same-project',
+          shell: 'bash',
+          name: 'hidden but running',
+          conversationId: one,
+          isHidden: true,
+          healthStatus: 'running'
+        }
+      ] as never
+    })
+
+    const value = buildSessionWorkspace(one)
+
+    expect(value.resources).toEqual([
+      {
+        kind: 'terminal',
+        terminalId: 'pty-hidden-alive',
+        terminalRecordId: 't-hidden-alive',
+        conversationId: one
+      }
+    ])
+  })
+
   it('reads only ConversationStore authority and never treats an ACP SessionId as identity', () => {
     useAcpStore.setState({ activeSessionId: one })
     expect(getActiveConversationId()).toBeNull()

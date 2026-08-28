@@ -95,6 +95,13 @@ export function buildSessionWorkspace(conversationId: ConversationId): SessionWo
 
   for (const terminal of useTerminalStore.getState().terminals) {
     if (terminal.conversationId !== conversationId || !terminal.ptyId) continue
+    // A record the user has closed AND whose resume was refused is a dead end:
+    // it renders nothing and cannot be revived. Keeping it in the manifest makes
+    // `reconcileTerminalResources` re-materialize the tab on the next sync, so
+    // closing it never sticks — that is where the phantom "Restored terminal"
+    // comes from. A hidden record that is still healthy stays: it is a live PTY
+    // the user can reopen.
+    if (terminal.isHidden && terminal.healthStatus === 'disconnected') continue
     const descriptor: TerminalResourceDescriptor = {
       kind: 'terminal',
       terminalId: terminal.ptyId,
