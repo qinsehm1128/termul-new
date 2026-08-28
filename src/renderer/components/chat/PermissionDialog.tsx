@@ -91,11 +91,15 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
     }
   }, [permission.options])
 
+  const action = toolTitle(permission.toolCall, t('permission.actionFallback', 'this action'))
+
   const renderOption = (option: PermissionOption): React.JSX.Element => (
     <Button
       key={option.optionId}
       variant={optionVariant(option, primaryAllowId)}
-      className={cn('min-h-11 justify-start')}
+      // `h-auto` + wrapping: an agent-supplied option name is arbitrary text and
+      // must not spill out of the button's fixed height or clip horizontally.
+      className={cn('h-auto min-h-11 justify-start whitespace-normal break-words text-left')}
       onClick={() => choose(option.optionId)}
     >
       {option.name}
@@ -104,15 +108,22 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
 
   return (
     <Dialog open onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t('permission.title', 'Permission required')}</DialogTitle>
           <DialogDescription>
-            {t('permission.description', 'The agent wants to run {{action}}.', {
-              action: toolTitle(permission.toolCall, t('permission.actionFallback', 'this action'))
-            })}
+            {t('permission.description', 'The agent wants to run:')}
           </DialogDescription>
         </DialogHeader>
+        {/* The action is an agent-supplied string — often a full absolute path.
+            Keep it out of the description sentence so it can break anywhere and
+            scroll instead of stretching the dialog past the viewport. */}
+        <p
+          className="max-h-24 overflow-y-auto break-all rounded-md bg-muted/40 px-2 py-1.5 font-mono text-2xs leading-4 text-foreground/80"
+          title={action}
+        >
+          {action}
+        </p>
         <div className="flex flex-col gap-2">
           {permission.options.length === 0 && (
             <p className="text-sm text-muted-foreground">

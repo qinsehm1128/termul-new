@@ -61,7 +61,7 @@
   },
   "permission": {
     "title": "Permission required",
-    "description": "The agent wants to run {{action}}.",
+    "description": "The agent wants to run:",
     "actionFallback": "this action",
     "noOptions": "No options were provided.",
     "declineHint": "Closing this dialog declines the request.",

@@ -61,7 +61,7 @@
   },
   "permission": {
     "title": "需要权限",
-    "description": "代理希望运行 {{action}}。",
+    "description": "代理希望运行：",
     "actionFallback": "此操作",
     "noOptions": "未提供任何选项。",
     "declineHint": "关闭此对话框将拒绝该请求。",
