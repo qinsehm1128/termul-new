@@ -69,8 +69,16 @@ impl PrepareConversationRequest {
     }
 }
 
-/// Durable pre-ACP result. `executionCwd` may point at a project/worktree, but `workspaceCwd`
-/// remains the independent visible SessionWorkspace for the lifetime of the Conversation.
+/// Durable pre-ACP result.
+///
+/// `executionCwd` is always the Conversation's own visible SessionWorkspace: an
+/// agent's working directory is the directory its Conversation created, for the
+/// lifetime of that Conversation. An attached project or worktree is exposed as
+/// an *additional root* instead (`additionalDirectories`), which per the ACP
+/// schema "expand[s] the session's filesystem scope without changing `cwd`,
+/// which remains the base for relative paths". So the agent can still read and
+/// edit the project; it just never treats the project as its own home, and
+/// relative paths it emits always resolve under the Conversation directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreparedConversation {
@@ -80,6 +88,9 @@ pub struct PreparedConversation {
     pub creation_partition: CreationPartition,
     pub workspace_cwd: String,
     pub execution_cwd: String,
+    /// Extra absolute roots the agent may reach (project root / worktree).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_directories: Vec<String>,
     pub lifecycle_state: ConversationLifecycleState,
 }
 
@@ -330,12 +341,16 @@ impl ConversationCreationService {
         // Conversation identity/workspace and resolves the replacement provider cwd exclusively
         // from the latest canonical attachment and execution target.
         let workspace = self.canonical_workspace_for(&record)?;
-        let execution_cwd = self.resolve_execution_cwd(
+        let (execution_cwd, additional_directories) = self.resolve_execution_scope(
             &record.execution_target,
             &workspace,
             record.project_attachment.as_ref(),
         )?;
-        Ok(prepared_from_record(&record, execution_cwd))
+        Ok(prepared_from_record(
+            &record,
+            execution_cwd,
+            additional_directories,
+        ))
     }
 
     /// Prepare canonical metadata and the independent visible workspace without contacting ACP.
@@ -397,13 +412,15 @@ impl ConversationCreationService {
                 let record = self
                     .complete_agent_binding_locked(conversation_id, binding)
                     .await?;
+                let (execution_cwd, additional_directories) = self.resolve_execution_scope(
+                    &record.execution_target,
+                    Path::new(&record.workspace_cwd),
+                    record.project_attachment.as_ref(),
+                )?;
                 Ok(prepared_from_record(
                     &record,
-                    self.resolve_execution_cwd(
-                        &record.execution_target,
-                        Path::new(&record.workspace_cwd),
-                        record.project_attachment.as_ref(),
-                    )?,
+                    execution_cwd,
+                    additional_directories,
                 ))
             }
             Err(failure) => {
@@ -671,7 +688,7 @@ impl ConversationCreationService {
             })?;
         let workspace_cwd =
             path_to_utf8(&workspace, "prepare_conversation", Some(conversation_id))?;
-        let execution_cwd = self.resolve_execution_cwd(
+        let (execution_cwd, additional_directories) = self.resolve_execution_scope(
             &request.execution_target,
             &workspace,
             request.project_attachment.as_ref(),
@@ -741,7 +758,11 @@ impl ConversationCreationService {
             "[conversation-creation] prepare success conversation_id={} lifecycle=initializing_agent",
             conversation_id
         );
-        Ok(prepared_from_record(&record, execution_cwd))
+        Ok(prepared_from_record(
+            &record,
+            execution_cwd,
+            additional_directories,
+        ))
     }
 
     async fn prepare_conversation_locked(
@@ -766,7 +787,7 @@ impl ConversationCreationService {
             .map_err(map_repository_error)?;
         if existing.lifecycle_state == ConversationLifecycleState::Ready {
             let workspace = self.canonical_workspace_for(&existing)?;
-            let execution_cwd = self.resolve_execution_cwd(
+            let (execution_cwd, additional_directories) = self.resolve_execution_scope(
                 &existing.execution_target,
                 &workspace,
                 existing.project_attachment.as_ref(),
@@ -775,7 +796,11 @@ impl ConversationCreationService {
                 "[conversation-creation] continue ready conversation_id={}",
                 conversation_id
             );
-            return Ok(prepared_from_record(&existing, execution_cwd));
+            return Ok(prepared_from_record(
+                &existing,
+                execution_cwd,
+                additional_directories,
+            ));
         }
         if !matches!(
             existing.lifecycle_state,
@@ -795,7 +820,7 @@ impl ConversationCreationService {
             .project_attachment
             .as_ref()
             .or(existing.project_attachment.as_ref());
-        let execution_cwd = self.resolve_execution_cwd(
+        let (execution_cwd, additional_directories) = self.resolve_execution_scope(
             &request.execution_target,
             &workspace,
             effective_attachment,
@@ -858,7 +883,11 @@ impl ConversationCreationService {
             "[conversation-creation] retry using canonical conversation_id={} lifecycle=initializing_agent",
             conversation_id
         );
-        Ok(prepared_from_record(&record, execution_cwd))
+        Ok(prepared_from_record(
+            &record,
+            execution_cwd,
+            additional_directories,
+        ))
     }
 
     async fn complete_agent_binding_locked(
@@ -885,7 +914,10 @@ impl ConversationCreationService {
             ));
         }
         let workspace = self.canonical_workspace_for(&record)?;
-        let execution_cwd = self.resolve_execution_cwd(
+        // The binding records only the cwd. Additional roots are derived from the
+        // record's execution target every time a session is opened or reopened,
+        // so a project re-attach takes effect without rewriting the binding.
+        let (execution_cwd, _additional_directories) = self.resolve_execution_scope(
             &record.execution_target,
             &workspace,
             record.project_attachment.as_ref(),
@@ -1137,20 +1169,44 @@ impl ConversationCreationService {
         Ok(workspace)
     }
 
-    fn resolve_execution_cwd(
+    /// Resolve the agent's filesystem scope: `(cwd, additional_directories)`.
+    ///
+    /// The cwd is ALWAYS the Conversation's own workspace — an agent's working
+    /// directory is the directory its Conversation created, and nothing can move
+    /// it. The execution target is still fully validated (an unreadable project
+    /// root or an empty worktree branch is a real configuration error), but it
+    /// selects the additional roots rather than the cwd. See
+    /// [`PreparedConversation`] for why.
+    fn resolve_execution_scope(
         &self,
         target: &ExecutionTarget,
         workspace: &Path,
         attachment: Option<&ProjectAttachment>,
-    ) -> Result<String> {
+    ) -> Result<(String, Vec<String>)> {
+        let additional = self.resolve_additional_directories(target, attachment)?;
+        let cwd = path_to_utf8(workspace, "resolve_execution_target", None)?;
+        Ok((cwd, additional))
+    }
+
+    /// Extra absolute roots the agent may reach beyond its Conversation
+    /// directory: the attached project root, or the worktree when one is
+    /// selected. Empty for a project-less Conversation.
+    fn resolve_additional_directories(
+        &self,
+        target: &ExecutionTarget,
+        attachment: Option<&ProjectAttachment>,
+    ) -> Result<Vec<String>> {
         match target {
-            ExecutionTarget::Workspace => path_to_utf8(workspace, "resolve_execution_target", None),
+            ExecutionTarget::Workspace => Ok(Vec::new()),
             ExecutionTarget::ProjectRoot {
                 project_id,
                 project_root,
             } => {
                 validate_project_context(project_id, attachment)?;
-                resolve_existing_directory(project_root, "project_root")
+                Ok(vec![resolve_existing_directory(
+                    project_root,
+                    "project_root",
+                )?])
             }
             ExecutionTarget::Worktree {
                 project_id,
@@ -1161,7 +1217,7 @@ impl ConversationCreationService {
                 if worktree_branch.trim().is_empty() {
                     return Err(target_validation_error("worktree branch is empty"));
                 }
-                resolve_existing_directory(worktree_path, "worktree")
+                Ok(vec![resolve_existing_directory(worktree_path, "worktree")?])
             }
         }
     }
@@ -1176,9 +1232,28 @@ impl ConversationCreationService {
     }
 }
 
+/// Additional roots for an EXISTING Conversation, derived from its record.
+///
+/// Non-failing on purpose. This runs when reopening a session, where a project
+/// directory that has since been moved or deleted must not block the reopen —
+/// the root is simply not offered to the agent. Creation-time validation still
+/// goes through `resolve_execution_scope`, which does reject a bad target.
+pub fn additional_directories_for_record(record: &ConversationRecordV2) -> Vec<String> {
+    let candidate = match &record.execution_target {
+        ExecutionTarget::Workspace => return Vec::new(),
+        ExecutionTarget::ProjectRoot { project_root, .. } => project_root,
+        ExecutionTarget::Worktree { worktree_path, .. } => worktree_path,
+    };
+    resolve_existing_directory(candidate, "additional_root")
+        .ok()
+        .into_iter()
+        .collect()
+}
+
 fn prepared_from_record(
     record: &ConversationRecordV2,
     execution_cwd: String,
+    additional_directories: Vec<String>,
 ) -> PreparedConversation {
     PreparedConversation {
         schema_version: PREPARED_CONVERSATION_SCHEMA_VERSION,
@@ -1187,6 +1262,7 @@ fn prepared_from_record(
         creation_partition: record.creation_partition.clone(),
         workspace_cwd: record.workspace_cwd.clone(),
         execution_cwd,
+        additional_directories,
         lifecycle_state: record.lifecycle_state,
     }
 }
@@ -1674,9 +1750,17 @@ mod tests {
             ),
             identity
         );
+        // The retry switched the target from project root to worktree. That moves
+        // the ADDITIONAL root; the cwd stays the Conversation workspace.
+        assert_eq!(second.execution_cwd, second.workspace_cwd);
         assert_eq!(
-            second.execution_cwd,
-            worktree.canonicalize().unwrap().to_str().unwrap()
+            second.additional_directories,
+            vec![worktree
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()]
         );
         assert!(Path::new(&second.workspace_cwd).is_dir());
         assert_eq!(fixture.ids.calls.load(Ordering::SeqCst), 1);

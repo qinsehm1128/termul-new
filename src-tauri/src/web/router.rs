@@ -488,7 +488,8 @@ async fn health_check(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or("");
-    match authority.verify_bearer_for_peer(token, peer.unwrap_or(std::net::IpAddr::from([0, 0, 0, 0])))
+    match authority
+        .verify_bearer_for_peer(token, peer.unwrap_or(std::net::IpAddr::from([0, 0, 0, 0])))
     {
         Ok(_) => (StatusCode::OK, "OK").into_response(),
         Err(error) => crate::web::auth::auth_error_response(error),

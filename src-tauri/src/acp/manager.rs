@@ -711,6 +711,7 @@ impl agent_client_protocol::JsonRpcRequest for AskUserQuestionRequest {
 enum AcpCommand {
     NewSession {
         cwd: String,
+        additional_directories: Vec<String>,
         mcp_servers: Vec<McpServer>,
         stable_agent_namespace: Option<String>,
         runtime_agent_id: String,
@@ -724,12 +725,14 @@ enum AcpCommand {
     LoadSession {
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<String>,
         mcp_servers: Vec<McpServer>,
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     ResumeSession {
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<String>,
         mcp_servers: Vec<McpServer>,
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
@@ -1409,11 +1412,17 @@ impl AcpManager {
         };
         log::info!("[acp] reattaching the conversation session onto the live agent before prompt");
         let reopened = self
-            .resume_session(&live, session_id.clone(), cwd.clone(), Vec::new())
+            .resume_session(
+                &live,
+                session_id.clone(),
+                cwd.clone(),
+                Vec::new(),
+                Vec::new(),
+            )
             .await
             .is_ok()
             || self
-                .load_session(&live, session_id.clone(), cwd, Vec::new())
+                .load_session(&live, session_id.clone(), cwd, Vec::new(), Vec::new())
                 .await
                 .is_ok();
         if !reopened {
@@ -1712,11 +1721,17 @@ impl AcpManager {
                     .then(|| agent_id.clone())
             })
             .ok_or_else(|| format!("unknown agent: {agent_id}"))?;
+        // Re-derive the extra roots from the record instead of reading them off
+        // the binding: a project re-attached since the binding was written must
+        // take effect on reopen, and the cwd stays the Conversation directory.
+        let additional_directories =
+            crate::conversation::creation::additional_directories_for_record(&record);
         let reopen = match self
             .resume_session(
                 &resume_agent,
                 session_id.clone(),
                 execution_cwd.clone(),
+                additional_directories.clone(),
                 mcp_servers.clone(),
             )
             .await
@@ -1727,6 +1742,7 @@ impl AcpManager {
                     &resume_agent,
                     session_id.clone(),
                     execution_cwd.clone(),
+                    additional_directories,
                     mcp_servers,
                 )
                 .await
@@ -1792,6 +1808,7 @@ impl AcpManager {
         let (binding_gate_tx, binding_gate_rx) = watch::channel(None);
         let outcome = send_command(&tx, |reply| AcpCommand::NewSession {
             cwd: prepared.execution_cwd.clone(),
+            additional_directories: prepared.additional_directories.clone(),
             mcp_servers: internal,
             stable_agent_namespace: stable_agent_namespace.clone(),
             runtime_agent_id: agent_id.0.clone(),
@@ -1903,6 +1920,9 @@ impl AcpManager {
         let mut prepared = None;
         let mut binding_gate_tx = None;
         let mut binding_gate_rx = None;
+        // Ephemeral sessions have no Conversation directory, so they keep the
+        // caller's cwd and get no extra roots.
+        let mut additional_directories: Vec<String> = Vec::new();
         let execution_cwd = if context.ephemeral {
             cwd.clone()
         } else if let Some(creation) = &self.conversation_creation {
@@ -1957,6 +1977,7 @@ impl AcpManager {
             binding_gate_tx = Some(tx);
             binding_gate_rx = Some(rx);
             let execution_cwd = value.execution_cwd.clone();
+            additional_directories = value.additional_directories.clone();
             prepared = Some(value);
             execution_cwd
         } else {
@@ -1996,6 +2017,7 @@ impl AcpManager {
             let tx = self.command_tx(agent_id)?;
             send_command(&tx, |reply| AcpCommand::NewSession {
                 cwd: execution_cwd,
+                additional_directories,
                 mcp_servers: combined_mcp_servers,
                 stable_agent_namespace,
                 runtime_agent_id: agent_id.0.clone(),
@@ -2162,6 +2184,7 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<String>,
         mcp_servers: Vec<McpServer>,
     ) -> Result<SessionReopenOutcome, String> {
         let agent_id = self.resolve_live_agent_id(agent_id, Some(&session_id.0))?;
@@ -2178,6 +2201,7 @@ impl AcpManager {
             self.prepare_reopen_mcp_servers(&agent_id, &session_id, mcp_servers)?;
         let session_key = session_id.0.clone();
         let outcome = send_command(&tx, |reply| AcpCommand::LoadSession {
+            additional_directories,
             session_id,
             cwd,
             mcp_servers,
@@ -2198,6 +2222,7 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<String>,
         mcp_servers: Vec<McpServer>,
     ) -> Result<SessionReopenOutcome, String> {
         let agent_id = self.resolve_live_agent_id(agent_id, Some(&session_id.0))?;
@@ -2214,6 +2239,7 @@ impl AcpManager {
             self.prepare_reopen_mcp_servers(&agent_id, &session_id, mcp_servers)?;
         let session_key = session_id.0.clone();
         let outcome = send_command(&tx, |reply| AcpCommand::ResumeSession {
+            additional_directories,
             session_id,
             cwd,
             mcp_servers,
@@ -2265,7 +2291,8 @@ impl AcpManager {
         gate_close_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
         let session_key = session_id.0.clone();
-        let result = send_command(&tx, |reply| AcpCommand::CloseSession { session_id, reply }).await;
+        let result =
+            send_command(&tx, |reply| AcpCommand::CloseSession { session_id, reply }).await;
         if result.is_ok() {
             self.composer_controls.forget(&session_key);
         }
@@ -2542,11 +2569,7 @@ impl AcpManager {
                     "[acp] composer controls snapshot has_modes={} has_models={} option_count={}",
                     snapshot.modes.is_some(),
                     snapshot.models.is_some(),
-                    snapshot
-                        .config_options
-                        .as_ref()
-                        .map(Vec::len)
-                        .unwrap_or(0)
+                    snapshot.config_options.as_ref().map(Vec::len).unwrap_or(0)
                 );
                 Ok(snapshot)
             }
@@ -3091,6 +3114,17 @@ async fn join_thread_bounded(handle: JoinHandle<()>) {
     if tokio::time::timeout(JOIN_TIMEOUT, join).await.is_err() {
         log::warn!("[acp] agent thread did not exit within {JOIN_TIMEOUT:?}; abandoning join");
     }
+}
+
+/// ACP requires every additional workspace root to be an absolute path, and the
+/// agent is free to reject or skip anything else. Drop non-absolute entries here
+/// rather than sending a request the agent may discard wholesale.
+fn to_absolute_roots(roots: &[String]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .collect()
 }
 
 fn preferred_allow_option(options: &[PermissionOption]) -> Option<&PermissionOption> {
@@ -3952,6 +3986,7 @@ async fn run_command_loop(
 
             AcpCommand::NewSession {
                 cwd,
+                additional_directories,
                 mcp_servers,
                 stable_agent_namespace,
                 runtime_agent_id,
@@ -3974,7 +4009,9 @@ async fn run_command_loop(
                 let req_warmup_done = warmup_done.clone();
                 let req_composer = composer_controls.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    let request = NewSessionRequest::new(cwd.clone())
+                        .additional_directories(to_absolute_roots(&additional_directories))
+                        .mcp_servers(mcp_servers);
                     let timeout = session_new_timeout();
                     log::debug!(
                         "[acp] {req_agent_id} session/new sent, awaiting reply (timeout {timeout:?})"
@@ -4251,6 +4288,7 @@ async fn run_command_loop(
             AcpCommand::LoadSession {
                 session_id,
                 cwd,
+                additional_directories,
                 mcp_servers,
                 reply,
             } => {
@@ -4280,8 +4318,9 @@ async fn run_command_loop(
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
-                    let request =
-                        LoadSessionRequest::new(&session_id, cwd.clone()).mcp_servers(mcp_servers);
+                    let request = LoadSessionRequest::new(&session_id, cwd.clone())
+                        .additional_directories(to_absolute_roots(&additional_directories))
+                        .mcp_servers(mcp_servers);
                     let result = run_session_reopen(
                         "session/load",
                         &session_id.0,
@@ -4297,6 +4336,7 @@ async fn run_command_loop(
             AcpCommand::ResumeSession {
                 session_id,
                 cwd,
+                additional_directories,
                 mcp_servers,
                 reply,
             } => {
@@ -4318,6 +4358,7 @@ async fn run_command_loop(
                         }
                     }
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone())
+                        .additional_directories(to_absolute_roots(&additional_directories))
                         .mcp_servers(mcp_servers);
                     let result = run_session_reopen(
                         "session/resume",
@@ -4827,10 +4868,8 @@ async fn run_command_loop(
                     );
                     match req_cx.send_request(request).block_task().await {
                         Ok(response) => {
-                            req_composer.remember_options(
-                                &session_id.0,
-                                response.config_options.clone(),
-                            );
+                            req_composer
+                                .remember_options(&session_id.0, response.config_options.clone());
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,
                                 session_id,
@@ -4881,10 +4920,8 @@ async fn run_command_loop(
                     );
                     match req_cx.send_request(request).block_task().await {
                         Ok(response) => {
-                            req_composer.remember_options(
-                                &session_id.0,
-                                response.config_options.clone(),
-                            );
+                            req_composer
+                                .remember_options(&session_id.0, response.config_options.clone());
                             // Keep the cached Model-selector configId fresh in case
                             // the agent reorganized its config options.
                             if let Some(id) = events::model_config_id_from_options(Some(
@@ -5342,6 +5379,7 @@ mod tests {
                 SessionId::new("live-session"),
                 "/work".to_string(),
                 Vec::new(),
+                Vec::new(),
             )
             .await
             .unwrap();
@@ -5518,6 +5556,7 @@ mod tests {
                 &agent_id,
                 SessionId::new("resume-session"),
                 "/workspace".to_string(),
+                Vec::new(),
                 vec![configured.clone()],
             )
             .await
@@ -5527,6 +5566,7 @@ mod tests {
                 &agent_id,
                 SessionId::new("load-session"),
                 "/workspace".to_string(),
+                Vec::new(),
                 vec![configured],
             )
             .await

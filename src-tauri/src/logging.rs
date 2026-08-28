@@ -63,10 +63,7 @@ fn default_quiet_modules() -> Vec<(String, LevelFilter)> {
     vec![
         // The plugin logs the full updater JSON, including the entire release
         // notes markdown, at DEBUG on every check.
-        (
-            "tauri_plugin_updater".to_string(),
-            LevelFilter::Info,
-        ),
+        ("tauri_plugin_updater".to_string(), LevelFilter::Info),
     ]
 }
 
@@ -376,7 +373,8 @@ mod tests {
         assert!(
             default_quiet_modules()
                 .iter()
-                .any(|(module, level)| module == "tauri_plugin_updater" && *level == LevelFilter::Info),
+                .any(|(module, level)| module == "tauri_plugin_updater"
+                    && *level == LevelFilter::Info),
             "updater changelog dumps must stay at info unless RUST_LOG overrides"
         );
     }

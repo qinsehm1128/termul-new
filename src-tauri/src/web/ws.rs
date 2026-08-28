@@ -4046,6 +4046,7 @@ async fn try_reopen_session_for_switch(
             agent_id,
             session_id.clone(),
             target.cwd.clone(),
+            Vec::new(),
             target.mcp_servers.clone(),
         )
         .await
@@ -4056,6 +4057,7 @@ async fn try_reopen_session_for_switch(
                 agent_id,
                 session_id.clone(),
                 target.cwd.clone(),
+                Vec::new(),
                 target.mcp_servers.clone(),
             )
             .await
@@ -4461,7 +4463,13 @@ async fn handle_load_session(
         }
     }
     match acp
-        .load_session(&agent_id, parsed.session_id, parsed.cwd, parsed.mcp_servers)
+        .load_session(
+            &agent_id,
+            parsed.session_id,
+            parsed.cwd,
+            Vec::new(),
+            parsed.mcp_servers,
+        )
         .await
     {
         Ok(outcome) => {
@@ -4508,7 +4516,13 @@ async fn handle_resume_session(
         }
     }
     match acp
-        .resume_session(&agent_id, parsed.session_id, parsed.cwd, parsed.mcp_servers)
+        .resume_session(
+            &agent_id,
+            parsed.session_id,
+            parsed.cwd,
+            Vec::new(),
+            parsed.mcp_servers,
+        )
         .await
     {
         Ok(outcome) => {

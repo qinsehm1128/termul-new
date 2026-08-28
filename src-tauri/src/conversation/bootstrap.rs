@@ -1108,6 +1108,11 @@ mod tests {
         }
     }
 
+    /// An explicit project target must NOT move the agent's cwd. The agent's
+    /// working directory is the directory its Conversation created, always; the
+    /// project is reachable as an additional root instead. Before this, an
+    /// attached project silently became the agent's home, so every relative path
+    /// it emitted resolved outside the Conversation.
     #[tokio::test]
     async fn explicit_execution_target_preserves_independent_workspace_cwd() {
         let temp = tempfile::tempdir().unwrap();
@@ -1143,8 +1148,15 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(prepared.execution_cwd, project_path);
-        assert_ne!(prepared.workspace_cwd, prepared.execution_cwd);
+        assert_eq!(
+            prepared.execution_cwd, prepared.workspace_cwd,
+            "the agent's cwd is the Conversation workspace, never the project"
+        );
+        assert_eq!(
+            prepared.additional_directories,
+            vec![project_path],
+            "the project stays reachable as an additional root"
+        );
         assert!(Path::new(&prepared.workspace_cwd).is_dir());
     }
 

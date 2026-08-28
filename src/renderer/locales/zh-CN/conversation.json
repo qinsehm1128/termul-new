@@ -12,14 +12,14 @@
     "workspace": "工作区目录"
   },
   "target": {
-    "title": "执行目标与项目上下文",
-    "label": "执行目标",
-    "workspace": "会话工作区",
-    "projectRoot": "项目根目录",
-    "worktree": "工作树",
+    "title": "可访问范围与项目上下文",
+    "label": "额外可访问目录",
+    "workspace": "仅会话目录",
+    "projectRoot": "加上项目根目录",
+    "worktree": "加上工作树",
     "project": "项目",
     "noProject": "未选择项目",
-    "workspaceUnchanged": "会话身份和工作区目录保持不变",
+    "workspaceUnchanged": "代理的工作目录始终是本会话目录，此设置只决定它还能访问哪里",
     "newWorkspace": "将创建新的独立工作区",
     "newWorktree": "将创建新的工作树",
     "invalid": "需要选择",
@@ -45,7 +45,7 @@
   "mutation": {
     "saving": "正在保存会话更改…",
     "saved": {
-      "target": "执行目标已更新，会话身份和工作区保持不变。",
+      "target": "可访问范围已更新，代理的工作目录仍是本会话目录。",
       "attached": "项目上下文已附加，会话身份和工作区保持不变。",
       "detached": "项目上下文已移除，会话身份和工作区保持不变。"
     },

@@ -12,14 +12,14 @@
     "workspace": "Workspace cwd"
   },
   "target": {
-    "title": "Execution target and project context",
-    "label": "Execution target",
-    "workspace": "Conversation workspace",
-    "projectRoot": "Project root",
-    "worktree": "Worktree",
+    "title": "Reachable scope and project context",
+    "label": "Additional reachable directories",
+    "workspace": "Conversation directory only",
+    "projectRoot": "Plus the project root",
+    "worktree": "Plus the worktree",
     "project": "Project",
     "noProject": "No project selected",
-    "workspaceUnchanged": "Conversation identity and workspace cwd stay unchanged",
+    "workspaceUnchanged": "The agent always works in this Conversation's own directory; this only widens what else it can reach",
     "newWorkspace": "A new independent workspace will be created",
     "newWorktree": "A new worktree will be created",
     "invalid": "Selection required",
@@ -45,7 +45,7 @@
   "mutation": {
     "saving": "Saving Conversation changes…",
     "saved": {
-      "target": "Execution target updated. Conversation identity and workspace are unchanged.",
+      "target": "Reachable scope updated. The agent still works in this Conversation's directory.",
       "attached": "Project context attached. Conversation identity and workspace are unchanged.",
       "detached": "Project context detached. Conversation identity and workspace are unchanged."
     },

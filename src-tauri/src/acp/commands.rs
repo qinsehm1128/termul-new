@@ -143,7 +143,13 @@ pub async fn acp_load_session(
         }
     }
     let outcome = manager
-        .load_session(&agent_id, session_id, cwd, mcp_servers.unwrap_or_default())
+        .load_session(
+            &agent_id,
+            session_id,
+            cwd,
+            Vec::new(),
+            mcp_servers.unwrap_or_default(),
+        )
         .await?;
     Ok(outcome)
 }
@@ -172,7 +178,13 @@ pub async fn acp_resume_session(
         }
     }
     let outcome = manager
-        .resume_session(&agent_id, session_id, cwd, mcp_servers.unwrap_or_default())
+        .resume_session(
+            &agent_id,
+            session_id,
+            cwd,
+            Vec::new(),
+            mcp_servers.unwrap_or_default(),
+        )
         .await?;
     Ok(outcome)
 }

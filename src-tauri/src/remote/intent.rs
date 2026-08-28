@@ -61,7 +61,9 @@ impl RemoteAccessIntentStore {
     #[must_use]
     pub fn new(app_data_dir: PathBuf) -> Self {
         Self {
-            path: app_data_dir.join("remote-tunnel").join("remote-access.json"),
+            path: app_data_dir
+                .join("remote-tunnel")
+                .join("remote-access.json"),
         }
     }
 

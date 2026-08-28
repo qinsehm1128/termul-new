@@ -1147,7 +1147,8 @@ mod tests {
             .unwrap();
         let (acp, pty, relay, registry) = lifecycle_fixtures();
         let authority = Arc::new(crate::web::auth::RemoteAccessAuthority::desktop_memory());
-        let state = RemoteServerState::with_desktop_authority(authority).with_pairing_store(store.clone());
+        let state =
+            RemoteServerState::with_desktop_authority(authority).with_pairing_store(store.clone());
         state
             .start(
                 acp,

@@ -220,14 +220,8 @@ mod tests {
             encode_claude_project_dir(&cwd),
             "-Users-dev-projects-termul"
         );
-        assert_eq!(
-            encode_cursor_project_dir(&cwd),
-            "Users-dev-projects-termul"
-        );
-        assert_eq!(
-            encode_pi_project_dir(&cwd),
-            "--Users-dev-projects-termul--"
-        );
+        assert_eq!(encode_cursor_project_dir(&cwd), "Users-dev-projects-termul");
+        assert_eq!(encode_pi_project_dir(&cwd), "--Users-dev-projects-termul--");
     }
 
     #[test]

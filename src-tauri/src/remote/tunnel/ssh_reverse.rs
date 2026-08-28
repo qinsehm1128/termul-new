@@ -112,10 +112,7 @@ fn required_field<'a>(value: Option<&'a str>, label: &str) -> Result<&'a str, St
         .ok_or_else(|| format!("{label} is required"))
 }
 
-fn write_identity_file(
-    store: &TunnelConfigStore,
-    key: &str,
-) -> Result<std::path::PathBuf, String> {
+fn write_identity_file(store: &TunnelConfigStore, key: &str) -> Result<std::path::PathBuf, String> {
     let path = store.parent_dir().join("ssh-reverse-identity");
     let mut material = key.to_string();
     if !material.ends_with('\n') {

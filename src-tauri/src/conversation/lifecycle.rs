@@ -861,6 +861,7 @@ mod tests {
         replace_error: Mutex<Option<AgentLifecycleProviderError>>,
         abort_error: Mutex<Option<AgentLifecycleProviderError>>,
         replacement_execution_cwds: Mutex<Vec<String>>,
+        replacement_additional_roots: Mutex<Vec<Vec<String>>>,
         suspend_calls: AtomicUsize,
         replace_calls: AtomicUsize,
         abort_calls: AtomicUsize,
@@ -894,6 +895,9 @@ mod tests {
                 self.replacement_execution_cwds
                     .lock()
                     .push(prepared.execution_cwd.clone());
+                self.replacement_additional_roots
+                    .lock()
+                    .push(prepared.additional_directories.clone());
                 if let Some(error) = self.replace_error.lock().clone() {
                     return Err(error);
                 }
@@ -1343,13 +1347,17 @@ mod tests {
             .await
             .unwrap();
 
+        // The replacement request carried a stale `Workspace` target; the canonical
+        // record says ProjectRoot. Under the fixed-cwd model the cwd can no longer
+        // show which target won, so the additional root is what proves it: the
+        // canonical project must be exposed, not the request's empty projection.
         assert_eq!(
             fixture
                 .provider
-                .replacement_execution_cwds
+                .replacement_additional_roots
                 .lock()
                 .as_slice(),
-            &[project_root.to_string_lossy().into_owned()]
+            &[vec![project_root.to_string_lossy().into_owned()]]
         );
         let after = fixture.repository.get_conversation(fixture.id).unwrap();
         assert_eq!(after.project_attachment, before.project_attachment);

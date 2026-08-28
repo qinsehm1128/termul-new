@@ -151,9 +151,9 @@ describe('ExecutionTargetPicker', () => {
   it('defaults to the independent workspace and marks identity as unchanged', () => {
     render(<Harness />)
 
-    expect(screen.getByRole('combobox', { name: 'Execution target' })).toHaveTextContent(
-      'Conversation workspace'
-    )
+    expect(
+      screen.getByRole('combobox', { name: 'Additional reachable directories' })
+    ).toHaveTextContent('Conversation directory only')
     expect(screen.getByTestId('workspace-identity-unchanged')).toHaveAttribute(
       'data-unchanged',
       'true'
@@ -168,7 +168,7 @@ describe('ExecutionTargetPicker', () => {
   it('selects an explicit project root without changing the visible workspace cwd', async () => {
     render(<Harness />)
 
-    await choose('Execution target', 'Project root')
+    await choose('Additional reachable directories', 'Plus the project root')
 
     expect(screen.getByText('/projects/termul')).toBeInTheDocument()
     expect(screen.getAllByText(identity.workspaceCwd).length).toBeGreaterThan(0)
@@ -184,7 +184,7 @@ describe('ExecutionTargetPicker', () => {
   it('selects an explicit existing worktree and keeps attachment separate', async () => {
     render(<Harness />)
 
-    await choose('Execution target', 'Worktree')
+    await choose('Additional reachable directories', 'Plus the worktree')
     expect(
       screen.getByText(/\/projects\/termul-worktree · feature\/conversations/)
     ).toBeInTheDocument()
@@ -245,11 +245,11 @@ describe('ExecutionTargetPicker', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Attach project context' }))
     expect(await screen.findByText(/Project context attached/)).toBeInTheDocument()
 
-    await choose('Execution target', 'Project root')
-    expect(await screen.findByText(/Execution target updated/)).toBeInTheDocument()
+    await choose('Additional reachable directories', 'Plus the project root')
+    expect(await screen.findByText(/Reachable scope updated/)).toBeInTheDocument()
     expect(screen.getByText('/projects/termul')).toBeInTheDocument()
 
-    await choose('Execution target', 'Conversation workspace')
+    await choose('Additional reachable directories', 'Conversation directory only')
     await waitFor(() => expect(conversationApi.updateExecutionTarget).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: 'Detach project context' }))
     expect(await screen.findByText(/Project context detached/)).toBeInTheDocument()

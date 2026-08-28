@@ -1826,7 +1826,9 @@ mod tests {
             RemoteAuthError::RateLimited
         );
         assert_eq!(
-            authority.verify_bearer_for_peer("wrong", lan_a).unwrap_err(),
+            authority
+                .verify_bearer_for_peer("wrong", lan_a)
+                .unwrap_err(),
             RemoteAuthError::InvalidCredential
         );
         assert!(authority.verify_bearer_for_peer(TOKEN, lan_a).is_ok());
@@ -2047,7 +2049,8 @@ mod tests {
 
     #[test]
     fn generation_retirement_revokes_digest_without_touching_keyring() {
-        let authority = RemoteAccessAuthority::from_token(TOKEN, RemoteAuthoritySource::DesktopKeyring);
+        let authority =
+            RemoteAccessAuthority::from_token(TOKEN, RemoteAuthoritySource::DesktopKeyring);
         authority
             .set_public_origin(Url::parse("https://retire.example.test").unwrap())
             .unwrap();
