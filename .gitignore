@@ -91,7 +91,10 @@ VERIFICATION_CHECKLIST.md
 
 # Maestro knowledge corpus, run state and embeddings (~90 MB of local tooling
 # data: sessions, specs, knowhow, vector index). Machine-local, not project code.
-/.workflow/
+# Not anchored: running a maestro command from a subdirectory creates a second
+# corpus there, and this one holds session/run history that must never reach a
+# public repo.
+.workflow/
 
 # Local auto-test run artifacts (plans, iteration results, reflection logs)
 /.tests/
