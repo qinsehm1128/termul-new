@@ -46,7 +46,7 @@ import {
   useTerminalSymbolFontFamily
 } from '@/stores/app-settings-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
-import { useActiveProject } from '@/stores/project-store'
+import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { TerminalModes, TerminalSpawnOptions } from '../../../shared/types/ipc.types'
 import {
@@ -1006,9 +1006,17 @@ function ConnectedTerminalComponent({
       event.preventDefault()
 
       try {
+        const record = useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current || '')
+        // Resolve against the terminal's OWN project, not whichever project the
+        // sidebar happens to have selected — clicking a path in a background
+        // project's terminal otherwise joins it to the wrong root and reports a
+        // spurious "file not found".
+        const ownerProjectRoot = record?.projectId
+          ? useProjectStore.getState().projects.find((p) => p.id === record.projectId)?.path
+          : undefined
         const result = await openFilePathFromTerminal(uri, {
-          cwd: useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current || '')?.cwd,
-          projectRoot: activeProjectPathRef.current
+          cwd: record?.cwd,
+          projectRoot: ownerProjectRoot ?? activeProjectPathRef.current
         })
 
         if (!result.ok) {
