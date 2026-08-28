@@ -144,37 +144,158 @@ pub fn fresh_path() -> Option<String> {
         .clone()
 }
 
+/// Sentinels bracketing the probe's payload.
+///
+/// An interactive shell runs the user's rc file, and rc files print: version
+/// managers announce themselves, Powerlevel10k emits an instant prompt, `motd`
+/// helpers cat a banner. All of that lands on stdout ahead of the PATH. Reading
+/// the whole of stdout — which is what this probe used to do — turns any such
+/// line into a PATH segment.
+pub const PATH_PROBE_BEGIN: &str = "__TERMUL_PATH_BEGIN__";
+pub const PATH_PROBE_END: &str = "__TERMUL_PATH_END__";
+
+/// How long the probe waits for the user's shell before giving up. An rc file
+/// can block on anything — a slow version manager, a network-backed prompt, a
+/// `read` nobody will answer — and this runs on the way to spawning an agent.
+#[cfg(not(target_os = "windows"))]
+const PATH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Pull the payload out of whatever the shell printed around it.
+pub fn extract_marked_path(raw: &str) -> Option<String> {
+    // Last begin, then the first end after it. An rc file that echoes the command
+    // it is about to run (`set -x`, or a trace-happy login banner) prints both
+    // markers before any real output, so the real payload is always the final
+    // pair. Anchoring on the first begin and the last end instead spans across
+    // the echo and swallows it whole — which is what this used to do.
+    let after_begin = raw.rfind(PATH_PROBE_BEGIN)? + PATH_PROBE_BEGIN.len();
+    let rest = &raw[after_begin..];
+    let end = rest.find(PATH_PROBE_END)?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// Arguments and probe command for a shell, or `None` when its dialect is not
+/// one this code can write correctly.
+///
+/// `-i` is the point of the exercise. zsh reads `.zshrc` only when interactive,
+/// bash reads `.bashrc` only when interactive, and version managers (nvm, fnm,
+/// rbenv, pyenv, asdf) install themselves there — a login-but-not-interactive
+/// shell reports a PATH with the whole toolchain missing, which is exactly how
+/// a GUI-launched Termul ended up unable to find `npx` while its own terminals
+/// could. Matches `shell_startup_args`, which is why PTY terminals never had
+/// this problem.
+pub fn shell_path_probe(shell_name: &str) -> Option<(&'static [&'static str], String)> {
+    // POSIX-family: `$PATH` is already a colon-joined string.
+    let posix = || {
+        format!("printf %s '{PATH_PROBE_BEGIN}'; printf %s \"$PATH\"; printf %s '{PATH_PROBE_END}'")
+    };
+
+    match shell_name {
+        // `-i -l -c` rather than `-ilc`: csh-family shells reject bundled flags,
+        // and keeping the two families visibly different stops a later edit from
+        // "simplifying" them back together.
+        "bash" | "zsh" | "ksh" | "mksh" => Some((&["-i", "-l", "-c"], posix())),
+        // fish's `$PATH` is a list, so it has to be joined explicitly. `string
+        // join` adds a trailing newline; `extract_marked_path` trims it.
+        "fish" => Some((
+            &["-i", "-l", "-c"],
+            format!(
+                "printf %s '{PATH_PROBE_BEGIN}'; string join : $PATH; printf %s '{PATH_PROBE_END}'"
+            ),
+        )),
+        // csh and tcsh have no `-l` that combines with `-c`.
+        "csh" | "tcsh" => Some((&["-ic"], posix())),
+        // Deliberately unlisted: nu and xonsh need their own dialect for both the
+        // join and the quoting, and neither is verifiable from here. They keep
+        // the previous behaviour — no probe, process PATH only — rather than
+        // getting a guessed command that could return a corrupted PATH.
+        _ => None,
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 fn probe_unix_login_path() -> Option<String> {
-    use std::process::Command;
-
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let shell_name = Path::new(&shell)
+    probe_shell_path(&shell, &[])
+}
+
+/// The probe itself, against an explicit shell and an explicit environment
+/// overlay.
+///
+/// Both are parameters rather than reads of the ambient process environment so
+/// a test can point a real shell at a throwaway HOME. `std::env::set_var` would
+/// not do: cargo runs tests as threads in one process, so mutating HOME for the
+/// duration of this probe breaks whatever unrelated test happens to be resolving
+/// a path at the same moment — which is exactly what it did.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn probe_shell_path(shell: &str, env_overrides: &[(&str, &str)]) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let shell_name = Path::new(shell)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("sh");
 
-    let output = match shell_name {
-        "bash" | "zsh" => Command::new(&shell)
-            .args(["-lc", "printf %s \"$PATH\""])
-            .output()
-            .ok()?,
-        "fish" => Command::new(&shell)
-            .args(["-lc", "string join : $PATH"])
-            .output()
-            .ok()?,
-        _ => return None,
-    };
+    let (args, command) = shell_path_probe(shell_name)?;
 
-    if !output.status.success() {
-        return None;
+    let mut builder = Command::new(shell);
+    builder
+        .args(args)
+        .arg(&command)
+        // An interactive shell that reaches a `read` or a pager with an inherited
+        // stdin waits forever; with /dev/null it gets EOF and moves on.
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        // Piped, not inherited: rc-file noise on stderr would otherwise be
+        // written to whatever fd the GUI process happens to have.
+        .stderr(Stdio::piped())
+        // Lets an rc file skip work it only needs for a real session. Mirrors
+        // VS Code's `VSCODE_RESOLVING_ENVIRONMENT`.
+        .env("TERMUL_RESOLVING_ENVIRONMENT", "1");
+    for (key, value) in env_overrides {
+        builder.env(key, value);
+    }
+    let mut child = builder.spawn().ok()?;
+
+    let status = wait_with_timeout(&mut child, PATH_PROBE_TIMEOUT);
+
+    let mut raw = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut raw);
     }
 
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(path)
+    match status {
+        Some(status) if status.success() => extract_marked_path(&raw),
+        Some(_) => None,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            log::warn!(
+                "[env-refresh] {shell_name} PATH probe timed out after {:?}; \
+                 falling back to the process PATH",
+                PATH_PROBE_TIMEOUT
+            );
+            None
+        }
+    }
+}
+
+/// `None` on timeout. The caller owns killing the child, so the poll loop stays
+/// free of the cleanup ordering.
+#[cfg(not(target_os = "windows"))]
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+) -> Option<std::process::ExitStatus> {
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if started.elapsed() >= timeout => return None,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(_) => return None,
+        }
     }
 }
 
@@ -349,6 +470,162 @@ pub fn shell_wants_login_arg(shell_path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_asks_bash_and_zsh_for_an_interactive_shell() {
+        // The whole bug in one assertion. zsh sources `.zshrc` only when
+        // interactive, and that is where nvm/fnm/rbenv put themselves, so a
+        // probe without `-i` reports a PATH with no `npx` in it while the app's
+        // own terminals — which do pass `-i` — can see it.
+        for shell in ["bash", "zsh"] {
+            let (args, _) = shell_path_probe(shell).expect("{shell} must be probed");
+            assert!(args.contains(&"-i"), "{shell} probe must be interactive");
+            assert!(args.contains(&"-l"), "{shell} probe must be a login shell");
+        }
+    }
+
+    #[test]
+    fn probe_matches_the_flags_the_pty_already_uses() {
+        // Terminals never had this bug because `shell_startup_args` passes both
+        // flags. Pinning the two together is what stops them drifting apart
+        // again — which is exactly how the app ended up disagreeing with itself
+        // about what the user's PATH was.
+        let pty = shell_startup_args("/bin/zsh");
+        let (probe, _) = shell_path_probe("zsh").expect("zsh must be probed");
+        for flag in pty {
+            assert!(
+                probe.contains(flag),
+                "PTY passes {flag} but the PATH probe does not"
+            );
+        }
+    }
+
+    #[test]
+    fn probe_joins_the_fish_path_list() {
+        let (args, command) = shell_path_probe("fish").expect("fish must be probed");
+        assert!(args.contains(&"-i"));
+        // `$PATH` is a list in fish, so the POSIX `printf %s "$PATH"` would emit
+        // it space-separated and every segment after the first would be lost.
+        assert!(
+            command.contains("string join : $PATH"),
+            "fish probe must join the list explicitly, got: {command}"
+        );
+    }
+
+    #[test]
+    fn probe_does_not_pass_login_to_csh_family() {
+        for shell in ["csh", "tcsh"] {
+            let (args, _) = shell_path_probe(shell).expect("{shell} must be probed");
+            assert_eq!(args, ["-ic"], "{shell} rejects -l combined with -c");
+        }
+    }
+
+    #[test]
+    fn probe_declines_shells_whose_dialect_is_unverified() {
+        // Returning None keeps the previous behaviour (process PATH only). A
+        // guessed command would be worse than no probe: it can succeed and
+        // return a corrupted PATH.
+        for shell in ["nu", "xonsh", "elvish"] {
+            assert!(shell_path_probe(shell).is_none(), "{shell} must not guess");
+        }
+    }
+
+    #[test]
+    fn marked_path_survives_a_chatty_rc_file() {
+        let raw = format!(
+            "nvm: v25.9.0\n\u{1b}]0;title\u{7}p10k instant prompt\n{PATH_PROBE_BEGIN}/opt/homebrew/bin:/usr/bin{PATH_PROBE_END}"
+        );
+        assert_eq!(
+            extract_marked_path(&raw).as_deref(),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
+    }
+
+    #[test]
+    fn marked_path_trims_the_newline_fish_appends() {
+        let raw = format!("{PATH_PROBE_BEGIN}/usr/local/bin:/usr/bin\n{PATH_PROBE_END}");
+        assert_eq!(
+            extract_marked_path(&raw).as_deref(),
+            Some("/usr/local/bin:/usr/bin")
+        );
+    }
+
+    #[test]
+    fn marked_path_takes_the_last_close_when_the_command_is_echoed() {
+        // `set -x` in an rc file replays the probe command itself, so both
+        // markers appear before any real output.
+        let raw = format!(
+            "+ printf %s {PATH_PROBE_BEGIN} ... {PATH_PROBE_END}\n{PATH_PROBE_BEGIN}/real/bin{PATH_PROBE_END}"
+        );
+        assert_eq!(extract_marked_path(&raw).as_deref(), Some("/real/bin"));
+    }
+
+    #[test]
+    fn marked_path_rejects_output_without_markers() {
+        // The pre-fix probe took all of stdout, so a banner became a PATH
+        // segment. No markers must mean no PATH, not a corrupted one.
+        assert!(extract_marked_path("command not found: nvm").is_none());
+        assert!(extract_marked_path("").is_none());
+        assert!(extract_marked_path(&format!("{PATH_PROBE_BEGIN}   {PATH_PROBE_END}")).is_none());
+    }
+
+    /// Drives a real zsh against a throwaway HOME laid out the way the bug
+    /// requires: the toolchain on `.zshrc` (where nvm/fnm/rbenv install
+    /// themselves) and something else entirely on `.zprofile`. A probe that is
+    /// login-but-not-interactive sees only the `.zprofile` half.
+    ///
+    /// Not a mock. The previous probe passed every unit test that existed while
+    /// being wrong on every real machine, because nothing ever ran a shell.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn real_zsh_probe_sees_the_interactive_rc_file() {
+        use std::io::Write;
+
+        let zsh = "/bin/zsh";
+        if !Path::new(zsh).exists() {
+            eprintln!("skipping: {zsh} not present");
+            return;
+        }
+
+        let home = std::env::temp_dir().join(format!("termul-env-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("temp HOME");
+
+        // `.zprofile` runs for any login shell; `.zshrc` only when interactive.
+        let mut zprofile = std::fs::File::create(home.join(".zprofile")).expect(".zprofile");
+        writeln!(zprofile, "export PATH=/termul-profile-only:$PATH").unwrap();
+        let mut zshrc = std::fs::File::create(home.join(".zshrc")).expect(".zshrc");
+        // The banner is the second half of the test: it proves the sentinels do
+        // their job, because the pre-fix probe read all of stdout.
+        writeln!(zshrc, "echo 'nvm loaded, welcome back'").unwrap();
+        writeln!(zshrc, "export PATH=/termul-rc-only:$PATH").unwrap();
+
+        // Passed to the child only. Mutating the process HOME here would reach
+        // every test cargo is running on another thread at the same time.
+        let home_str = home.to_string_lossy().into_owned();
+        let probed = probe_shell_path(
+            zsh,
+            // ZDOTDIR as well as HOME: zsh consults it first, so a developer
+            // machine that sets it would send the probe to the real dotfiles.
+            &[("HOME", home_str.as_str()), ("ZDOTDIR", home_str.as_str())],
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+
+        let probed = probed.expect("probe must return a PATH");
+        assert!(
+            probed.contains("/termul-rc-only"),
+            "probe missed the .zshrc PATH — this is the nvm case: {probed}"
+        );
+        assert!(
+            probed.contains("/termul-profile-only"),
+            "probe must keep the .zprofile PATH too: {probed}"
+        );
+        assert!(
+            !probed.contains("welcome back"),
+            "rc-file banner leaked into the PATH: {probed}"
+        );
+    }
 
     #[test]
     fn merge_dedupes_case_insensitively_on_windows_style() {
