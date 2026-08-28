@@ -41,8 +41,21 @@ export type PendingAttachment =
     }
   | { kind: 'file-embed'; id: string; name: string; mimeType: string; text: string; size: number }
 
-/** Max bytes for an inline image attachment. */
+/** Max bytes for an image we are willing to decode for an in-app preview. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+/**
+ * Max raw bytes for an image sent as an inline base64 `image` block.
+ *
+ * A prompt is persisted as a single conversation record bounded by
+ * `MAX_CONVERSATION_RECORD_BYTES` (256 KiB, `src-tauri/src/conversation/contracts.rs`)
+ * and base64 inflates by 4/3, so the raw image plus the surrounding JSON
+ * envelope and any accompanying text must fit inside that. 144 KiB of raw
+ * bytes encodes to 192 KiB, leaving 64 KiB of headroom for the rest of the
+ * record. Anything larger is attached as a temp-file `resource_link` instead —
+ * exceeding the bound makes the backend reject the whole prompt at dispatch
+ * (`EVENT_DELIVERY_FAILED`), which reads to the user as "the message won't send".
+ */
+export const MAX_INLINE_IMAGE_BYTES = 144 * 1024
 /** Max bytes for an embedded text file (keeps the context window sane). */
 export const MAX_EMBED_BYTES = 512 * 1024
 

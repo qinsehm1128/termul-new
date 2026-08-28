@@ -18,6 +18,7 @@ import {
   isTextLike,
   MAX_EMBED_BYTES,
   MAX_IMAGE_BYTES,
+  MAX_INLINE_IMAGE_BYTES,
   type PendingAttachment,
   uint8ToBase64
 } from './chat-attachments'
@@ -72,14 +73,19 @@ function readTextAsAttachment(file: File): Promise<PendingAttachment> {
   })
 }
 
-/** Read an image file by path into an inline base64 `image` attachment. */
+/**
+ * Read an image file by path into an inline base64 `image` attachment, or null
+ * when it exceeds what the persisted prompt record can hold. Null is not an
+ * error — the caller links the path instead, which is how a large image still
+ * reaches the agent.
+ */
 async function readImagePathAsAttachment(
   path: string,
   name: string,
   mimeType: string
-): Promise<PendingAttachment> {
+): Promise<PendingAttachment | null> {
   const bytes = await readAttachmentBytes(path)
-  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('Image too large')
+  if (bytes.byteLength > MAX_INLINE_IMAGE_BYTES) return null
   const base64 = uint8ToBase64(bytes)
   return {
     kind: 'image',
@@ -287,19 +293,21 @@ export function useComposerAttachments(opts: {
       let needImageCap = 0
       for (const f of arr) {
         if (isImageMime(f.type)) {
-          // Images always attach: inline base64 when the agent accepts images,
-          // otherwise a temp-file resource_link the agent can read by path.
-          // The size cap only guards the inline base64 path — a temp-link
-          // attachment is read by path, so large images still attach (without a
-          // preview) instead of being rejected.
-          if (imageCapable) {
-            if (f.size > MAX_IMAGE_BYTES) tooLarge++
-            else reads.push(readImageAsAttachment(f))
-          } else if (!isTauriContext()) {
+          // Images always attach: inline base64 when the agent accepts images
+          // AND the bytes fit the persisted record, otherwise a temp-file
+          // resource_link the agent reads by path. Inlining past the record
+          // bound is not "too large to attach" — it makes the backend reject
+          // the entire prompt, so route it to a link rather than a toast.
+          if (imageCapable && f.size <= MAX_INLINE_IMAGE_BYTES) {
+            reads.push(readImageAsAttachment(f))
+          } else if (isTauriContext()) {
+            reads.push(fileToTempLink(f))
+          } else if (!imageCapable) {
             // Web has no temp path — inline without imageCapable is unusable.
             needImageCap++
           } else {
-            reads.push(fileToTempLink(f))
+            // Web + oversized: no link channel exists, so this one cannot ship.
+            tooLarge++
           }
         } else if (isTextLike(f.name, f.type)) {
           if (!embedCapable) needEmbed++
@@ -380,15 +388,20 @@ export function useComposerAttachments(opts: {
       const name = basename(path)
       const mimeType = guessMimeType(name)
       if (isImageMime(mimeType)) {
+        // Inline only when the agent accepts images AND the bytes fit the
+        // persisted prompt record. Otherwise link the path, but still read the
+        // bytes for a thumbnail preview.
+        let inline: PendingAttachment | null = null
         if (imageCapable) {
           try {
-            next.push(await readImagePathAsAttachment(path, name, mimeType))
+            inline = await readImagePathAsAttachment(path, name, mimeType)
           } catch {
             readFell++
-            next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })
           }
+        }
+        if (inline) {
+          next.push(inline)
         } else {
-          // Link the path, but read the bytes for a thumbnail preview.
           const previewUrl = await readThumbnail(path, mimeType)
           next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path, previewUrl })
         }
@@ -464,17 +477,19 @@ export function useComposerAttachments(opts: {
       void (async () => {
         const att = await readClipboardImageAttachment()
         if (!att) return // empty/non-image clipboard — nothing to do
-        if (imageCapable) {
-          if ((att.base64.length * 3) / 4 > MAX_IMAGE_BYTES) {
+        // Same rule as `addFiles`: inline only what the persisted prompt record
+        // can hold, otherwise fall through to the temp-link path below.
+        if (imageCapable && (att.base64.length * 3) / 4 <= MAX_INLINE_IMAGE_BYTES) {
+          setAttachments((prev) => [...prev, att])
+          return
+        }
+        if (!isTauriContext()) {
+          if (imageCapable) {
             toast.error(
               runtimeT('chat', 'attachments.errors.imageTooLarge', 'Image too large (max 10 MB)')
             )
             return
           }
-          setAttachments((prev) => [...prev, att])
-          return
-        }
-        if (!isTauriContext()) {
           toast.error(
             runtimeT(
               'chat',
@@ -484,8 +499,8 @@ export function useComposerAttachments(opts: {
           )
           return
         }
-        // Agent can't take inline images but can read files by path: persist
-        // the pasted bitmap to a temp file and attach it as a resource_link.
+        // Either the agent can't take inline images, or the bitmap is too big to
+        // inline: persist it to a temp file and attach it as a resource_link.
         // No size cap here — the agent reads by path; the preview is skipped
         // inside writeImageBytesToTempLink when the file is too large.
         try {
