@@ -240,7 +240,6 @@ async function reconcileTerminalResources(
       if (!isCurrent()) return
       const recordId = descriptor.terminalRecordId ?? descriptor.terminalId
       const result = await useTerminalStore.getState().resumeTerminalResource(recordId)
-      if (!isCurrent()) return
       if (!result.success) {
         void logFrontendError({
           level: 'warn',
@@ -251,8 +250,17 @@ async function reconcileTerminalResources(
         // outlived its PTY, which is what every app exit leaves behind. Retire
         // record and tab together so the next manifest write stops carrying it
         // and the dead tab does not come back on the following launch.
+        //
+        // Deliberately AHEAD of the staleness guard: a gone PTY is a global
+        // fact, not an activation-scoped one. Dropping it because the user
+        // switched Conversations during the resume round-trip leaves the record
+        // in the global store, where `syncTerminalTabs` materializes it as a
+        // dead tab in whatever project is active next and `persistState` can
+        // write that zombie into the saved layout. The guard below still covers
+        // everything that IS activation-scoped.
         if (result.code === 'TERMINAL_GONE') retireTerminalRecord(recordId)
       }
+      if (!isCurrent()) return
     })
   )
   return isCurrent()

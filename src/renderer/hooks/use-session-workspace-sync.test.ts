@@ -330,6 +330,54 @@ describe('Conversation-scoped SessionWorkspace sync', () => {
     expect(terminalSpawnMock).not.toHaveBeenCalled()
   })
 
+  /**
+   * TERMINAL_GONE is a GLOBAL fact — the PTY is gone for everyone, not just for
+   * the activation that happened to ask. Before retirement moved out of
+   * `resumeTerminalResource`, the store deleted the record inside the in-flight
+   * promise regardless of who was still current. With retirement caller-owned,
+   * a staleness guard placed ahead of it swallows a proven-gone result: the
+   * record survives, `syncTerminalTabs` then materializes it as a dead tab in
+   * whatever project is active next, and `persistState` can write that zombie
+   * into the saved layout.
+   */
+  it('retires a gone terminal even when the activation is superseded mid-resume', async () => {
+    const coldWorkspace = workspace(one, 7, 'leaf-superseded')
+    if (coldWorkspace.topology?.type !== 'leaf') {
+      throw new Error('expected leaf')
+    }
+    coldWorkspace.topology.terminalIds = ['record-gone']
+    coldWorkspace.resources = [
+      {
+        kind: 'terminal',
+        terminalId: 'pty-gone',
+        terminalRecordId: 'record-gone',
+        conversationId: one
+      }
+    ]
+    getMock.mockResolvedValue({
+      success: true,
+      data: { status: 'loaded', workspace: coldWorkspace }
+    })
+
+    let current = true
+    terminalResumeMock.mockImplementation(async () => {
+      // The record exists at this point — the assertion below proves removal,
+      // not that it was never created.
+      expect(
+        useTerminalStore.getState().terminals.find((terminal) => terminal.id === 'record-gone')
+      ).toBeDefined()
+      // The user activates another Conversation while the resume is in flight.
+      current = false
+      return { success: false, error: 'Terminal is gone', code: 'TERMINAL_GONE' }
+    })
+
+    await loadSessionWorkspace(one, () => current)
+
+    expect(
+      useTerminalStore.getState().terminals.find((terminal) => terminal.id === 'record-gone')
+    ).toBeUndefined()
+  })
+
   it('keeps a disconnected placeholder when the resume boundary throws', async () => {
     const coldWorkspace = workspace(one, 5, 'leaf-network')
     if (coldWorkspace.topology?.type !== 'leaf') {
