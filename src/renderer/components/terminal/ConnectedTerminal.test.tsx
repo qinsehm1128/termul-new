@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { ComponentProps } from 'react'
+import type { ComponentProps, ReactElement } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsStore from '@/stores/app-settings-store'
+import { clearScrollPosition } from '@/utils/terminal-registry'
 import { createXtermTerminalMock } from './__tests__/xterm-terminal-mock'
 
 // Mock Tauri APIs BEFORE importing the component
@@ -3665,6 +3666,111 @@ describe('ConnectedTerminal', () => {
 
         vi.useRealTimers()
       })
+    })
+  })
+
+  /**
+   * Hiding a tab makes ConnectedTerminal dispose the WebGL addon and re-fit on
+   * the way back (see the `isVisible` effects). Both make xterm's RenderService
+   * report stale dimensions for a moment, and xterm 6's Viewport feeds those
+   * dimensions straight into `setScrollDimensions`, which clamps the scrollable
+   * to `[0, scrollHeight - height]`. When the clamp lands on a zero-ish height
+   * the position is pinned to 0, and because the clamp's own scroll event is
+   * delivered on a later animation frame — outside xterm's
+   * `_suppressOnScrollHandler` window — `_handleScroll` reads scrollTop 0 and
+   * drives `ydisp` to the top of the scrollback. Nothing is lost: the buffer is
+   * intact, the user is just teleported to the first line of history.
+   *
+   * The component cannot stop xterm from clamping, so the invariant it owns is
+   * to re-assert the viewport once the show sequence has settled. These tests
+   * model the clamp by moving `viewportY` to 0 while the tab is hidden.
+   */
+  describe('Viewport position across a hide/show cycle', () => {
+    const PTY_ID = 'terminal-123'
+    /** One animation frame under vitest's fake timers. */
+    const FRAME_MS = 20
+
+    const setBufferPosition = (viewportY: number, baseY: number): void => {
+      const active = mockTerminalInstance.buffer.active
+      active.viewportY = viewportY
+      active.baseY = baseY
+    }
+
+    beforeEach(() => {
+      // The cache is module state shared by every suite in this file.
+      clearScrollPosition(PTY_ID)
+      setBufferPosition(0, 0)
+    })
+
+    afterEach(() => {
+      clearScrollPosition(PTY_ID)
+      setBufferPosition(0, 0)
+      vi.useRealTimers()
+    })
+
+    const hideThenShow = async (
+      rerender: (ui: ReactElement) => void,
+      clobber: () => void
+    ): Promise<void> => {
+      rerender(<ConnectedTerminal isVisible={false} />)
+      await vi.waitFor(() => {
+        expect(mockPixelScrollSetEnabled).toHaveBeenCalledWith(false)
+      })
+
+      clobber()
+      mockTerminalInstance.scrollToBottom.mockClear()
+      mockTerminalInstance.scrollToLine.mockClear()
+      // Cleared here so the only surviving call is the surface repair's, which
+      // the ordering assertion below anchors against.
+      mockPixelScrollReset.mockClear()
+
+      rerender(<ConnectedTerminal isVisible={true} />)
+      // Both nested requestAnimationFrame callbacks of the visibility effect.
+      await vi.advanceTimersByTimeAsync(FRAME_MS)
+      await vi.advanceTimersByTimeAsync(FRAME_MS)
+    }
+
+    it('returns a tail-following terminal to the tail after the viewport is clamped away', async () => {
+      vi.useFakeTimers()
+      const { rerender } = render(<ConnectedTerminal isVisible={true} />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Watching live output at the bottom of 1000 lines of scrollback.
+      setBufferPosition(1000, 1000)
+
+      await hideThenShow(rerender, () => setBufferPosition(0, 1000))
+
+      // Against the buffer as it is now, not the line number it used to be:
+      // the PTY keeps producing while the tab is hidden.
+      expect(mockTerminalInstance.scrollToBottom).toHaveBeenCalled()
+
+      // And it must land AFTER the surface repair. That repair repaints the
+      // terminal, which is another chance for xterm to re-clamp the viewport,
+      // so asserting the position before it would simply be overwritten.
+      expect(mockTerminalInstance.scrollToBottom.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockPixelScrollReset.mock.invocationCallOrder[0]
+      )
+    })
+
+    it('returns a scrolled-up terminal to the history it was showing, not to line 0', async () => {
+      vi.useFakeTimers()
+      const { rerender } = render(<ConnectedTerminal isVisible={true} />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Scrolled up into history — 400 is deliberately far from both 0 and the
+      // tail, so a pass cannot be an accident of either boundary.
+      setBufferPosition(400, 1000)
+
+      await hideThenShow(rerender, () => setBufferPosition(0, 1000))
+
+      expect(mockTerminalInstance.scrollToLine).toHaveBeenCalledWith(400)
+      expect(mockTerminalInstance.scrollToBottom).not.toHaveBeenCalled()
     })
   })
 

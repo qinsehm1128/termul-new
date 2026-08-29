@@ -580,6 +580,11 @@ function ConnectedTerminalComponent({
   // Ref avoids stale closures in event listeners referencing isVisible directly.
   const isVisibleRef = useRef(isVisible)
   isVisibleRef.current = isVisible
+  // Read by the hide branch of the visibility effect. A plain closure over the
+  // prop would force it into that effect's dependency list, and a changing id
+  // would then tear down and reload the WebGL addon for no reason.
+  const externalTerminalIdRef = useRef(externalTerminalId)
+  externalTerminalIdRef.current = externalTerminalId
   const rendererPreferenceRef = useRef(rendererPreference)
   rendererPreferenceRef.current = rendererPreference
   const activeProjectPathRef = useRef<string | undefined>(activeProject?.path)
@@ -2192,6 +2197,19 @@ function ConnectedTerminalComponent({
   // state while hidden; WebGL is restored when the tab becomes visible.
   useEffect(() => {
     if (!isVisible) {
+      // Snapshot where the user was reading BEFORE the renderer churn below.
+      // Disposing the WebGL addon and re-fitting on the way back both leave
+      // xterm's RenderService reporting stale dimensions for a moment, and
+      // xterm 6's Viewport feeds those straight into `setScrollDimensions`,
+      // which clamps the scrollable into `[0, scrollHeight - height]`. A clamp
+      // against a zero-ish height pins the position to 0, and the clamp's own
+      // scroll event arrives on a later animation frame — outside xterm's
+      // `_suppressOnScrollHandler` window — so `_handleScroll` reads scrollTop 0
+      // and drives `ydisp` to the first line of scrollback. The buffer is
+      // intact; the user is just teleported to the top. We cannot stop the
+      // clamp, so we re-assert the position once the show sequence settles.
+      const scrollKey = ptyIdRef.current || externalTerminalIdRef.current
+      if (scrollKey) captureScrollPosition(scrollKey)
       needsSurfaceRestoreRef.current = true
       disposeWebglAddon()
       pixelScrollRef.current?.setEnabled(false)
@@ -2240,15 +2258,6 @@ function ConnectedTerminalComponent({
             terminal.focus()
           }
 
-          const ptyId = ptyIdRef.current
-          if (ptyId) {
-            // Restore scroll position after fit (in case of pane transition)
-            restoreScrollPosition(ptyId, terminal)
-          } else {
-            // PTY not ready yet — defer resize until spawn completes
-            needsResizeOnReadyRef.current = true
-          }
-
           if (needsSurfaceRestoreRef.current) {
             needsSurfaceRestoreRef.current = false
             restoreVisibleTerminalSurface({
@@ -2256,6 +2265,18 @@ function ConnectedTerminalComponent({
               repair: webglScrollRepairRef.current,
               terminal
             })
+          }
+
+          // Last, not before the surface repair: `restoreVisibleTerminalSurface`
+          // repaints the terminal, which is itself a chance for the viewport to
+          // be re-clamped. Asserting the position ahead of it would just be
+          // overwritten.
+          const ptyId = ptyIdRef.current
+          if (ptyId) {
+            restoreScrollPosition(ptyId, terminal)
+          } else {
+            // PTY not ready yet — defer resize until spawn completes
+            needsResizeOnReadyRef.current = true
           }
         })
       })

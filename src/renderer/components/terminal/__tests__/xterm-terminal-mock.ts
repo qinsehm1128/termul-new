@@ -98,6 +98,7 @@ function buildInstance(handles: XtermTerminalMockHandles) {
       handles.refreshPendingWrites.push(handles.pendingWrites)
     }),
     scrollToLine: vi.fn(),
+    scrollToBottom: vi.fn(),
     dispose: vi.fn(),
     cols: 80,
     rows: 24,
@@ -111,6 +112,13 @@ function buildInstance(handles: XtermTerminalMockHandles) {
         // alternate-screen branch read `undefined` and silently take the
         // normal-buffer path, so the branch looked covered and was not.
         type: 'normal' as 'normal' | 'alternate',
+        // Real xterm reports the viewport's top line and the top line of the
+        // bottom-most viewport. Both are needed to tell "following the tail"
+        // from "scrolled up into history"; while they were missing every
+        // capture read `undefined` and defaulted to "following", so the
+        // scrolled-up branch was unreachable from these suites.
+        viewportY: 0,
+        baseY: 0,
         getLine: vi.fn((index: number) => ({
           translateToString: () => (index === 0 ? 'missing.ts src/renderer/App.tsx' : '')
         }))
@@ -168,6 +176,7 @@ export function createXtermTerminalMock(): XtermTerminalMock {
     focus = instance.focus
     refresh = instance.refresh
     scrollToLine = instance.scrollToLine
+    scrollToBottom = instance.scrollToBottom
     dispose = instance.dispose
     cols = instance.cols
     rows = instance.rows
