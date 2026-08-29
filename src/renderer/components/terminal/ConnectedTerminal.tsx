@@ -453,7 +453,11 @@ async function attachResumedTerminalRenderer(
     }
     if (resumed.code === 'TERMINAL_NOT_FOUND' || resumed.code === 'UNAUTHORIZED') {
       if (record.conversationId && !record.projectId) {
-        useTerminalStore.getState().closeTerminal(record.id, record.projectId ?? '')
+        // `retireTerminalRecord`, not `closeTerminal`: dropping the record on
+        // its own leaves the tab behind rendering the missing-terminal
+        // placeholder — the same "blanks the tab" outcome the comment above
+        // warns about, just one layer along.
+        retireTerminalRecord(record.id)
         return { attached: false, stale: true, serverReplay: null }
       }
       useTerminalStore.getState().setTerminalHealthStatus(record.id, 'disconnected')
