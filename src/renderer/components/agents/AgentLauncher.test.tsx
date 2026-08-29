@@ -714,6 +714,62 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
+  /**
+   * `PaneContent` renders the launcher as a Conversation's restart surface as
+   * soon as its session cannot be resolved — it does NOT wait for the
+   * Conversation summary to load. When the summary is late, the launcher used
+   * to initialize its execution target from whatever project was active and
+   * immediately latch `targetContextInitializedRef`, so the arriving summary
+   * was ignored. The UI still flipped to continuation mode (it keys off
+   * `continuedConversation`), which made the wrong target invisible: relaunching
+   * an existing Conversation would run it in the sidebar project's directory.
+   */
+  it('adopts the continued Conversation context when its summary arrives late', async () => {
+    const LATE = '018f7a1c-1b4d-7c8a-9f01-0123456789ee'
+
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" continueConversationId={LATE} />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+
+    // Summary lands after the first render, as it does on a cold start.
+    act(() => {
+      useConversationStore.setState({
+        summariesById: {
+          [LATE]: {
+            schemaVersion: 2,
+            conversationId: LATE,
+            createdAtUtc: '2026-08-29T00:00:00.000Z',
+            creationPartition: { year: 2026, month: 8, day: 29, path: '2026/08/29' },
+            workspaceCwd: '/sessions/2026/08/29/late',
+            executionTarget: { kind: 'workspace' },
+            projectAttachment: null,
+            lifecycleState: 'ready',
+            lastSeq: 0,
+            createdBy: 'termul'
+          }
+        }
+      } as never)
+    })
+
+    setComposerValue('continue me')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    // The Conversation owns the target — not the project that happened to be
+    // selected while its summary was still loading.
+    expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: LATE,
+        executionTarget: { kind: 'workspace' },
+        cwd: '/sessions/2026/08/29/late'
+      })
+    )
+  })
+
   it('starts a chat in the active project while keeping target chrome hidden', async () => {
     renderLauncher()
 

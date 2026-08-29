@@ -219,8 +219,18 @@ export function AgentLauncher({
   const continuedConversation = useConversationStore((state) =>
     continuedConversationId ? state.summariesById[continuedConversationId] : undefined
   )
+  // `PaneContent` renders this launcher as a Conversation's restart surface as
+  // soon as its session cannot be resolved — it does not wait for the summary.
+  // Seeding the target from the active project in that window is permanent: the
+  // effect below early-returns on `targetContextInitializedRef`, so the summary
+  // arriving later is ignored, while the UI flips to continuation mode (it keys
+  // off `continuedConversation`) and hides the mistake. The launch would then
+  // carry the right ConversationId with the sidebar project's cwd.
+  const awaitingContinuationSummary = Boolean(continuedConversationId) && !continuedConversation
   const initialProjectContextRef = useRef(
-    continuedConversation ? null : defaultProjectContext(activeProject)
+    continuedConversation || awaitingContinuationSummary
+      ? null
+      : defaultProjectContext(activeProject)
   )
   const targetContextInitializedRef = useRef(
     Boolean(continuedConversation || initialProjectContextRef.current)
@@ -244,6 +254,10 @@ export function AgentLauncher({
       targetContextInitializedRef.current = true
       return
     }
+    // Named a Conversation but its summary has not landed yet — wait for it.
+    // Falling through would latch the active project's context one tick later,
+    // which is the same wrong-directory launch the ref guard above avoids.
+    if (continuedConversationId) return
     const context = defaultProjectContext(activeProject)
     if (!context) return
     setExecutionTarget(context.executionTarget)
@@ -252,7 +266,7 @@ export function AgentLauncher({
     console.info(
       `[agentLauncher.projectContext] defaulted projectId=${context.projectAttachment.projectId} target=${context.executionTarget.kind}`
     )
-  }, [continuedConversation, activeProject])
+  }, [continuedConversation, continuedConversationId, activeProject])
   const explicitProjectId = executionTarget.kind === 'workspace' ? null : executionTarget.projectId
   const conversationProjectId = explicitProjectId ?? projectAttachment?.projectId ?? null
   const selectedProjectId = conversationProjectId ?? activeProjectId
