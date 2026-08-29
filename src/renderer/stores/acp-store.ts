@@ -430,6 +430,14 @@ interface AcpState {
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
   /**
+   * Kill every warm agent that has had no open session for {@link
+   * IDLE_AGENT_TTL_MS}. Takes `now` instead of reading the clock so the TTL is
+   * testable directly. Driven by an interval in `initAcpEventListeners`.
+   */
+  reclaimIdleAgents: (now: number) => Promise<void>
+  /** Test seam: forget every recorded idle start. */
+  resetIdleAgentTracking: () => void
+  /**
    * Run the ACP `authenticate` method for an agent with an explicit method id
    * (from the advertised metadata) — used by the launcher's Sign-in action so a
    * subsequent prepare can create the session without re-authenticating. Marks
@@ -1782,6 +1790,28 @@ function refreshHostOwnedIndex(get: () => AcpState): void {
  * membership for the UI.
  */
 const inFlightWarms = new Map<string, Promise<AgentId | null>>()
+
+/**
+ * How long a warm agent may sit with no open session before it is reclaimed.
+ *
+ * The pool is warm on purpose — the first prompt should not pay a cold start —
+ * but it had no upper bound at all: nothing killed a warm process short of
+ * deleting its config or quitting the app, so a day of use left one adapter
+ * resident per (config, cwd) ever touched, tens to hundreds of MB each. Ten
+ * minutes keeps the pool warm across the pauses that actually happen in a work
+ * session while still bounding what an overnight app costs.
+ */
+export const IDLE_AGENT_TTL_MS = 10 * 60_000
+
+/** How often the idle sweep runs. See the note at its `setInterval`. */
+export const IDLE_AGENT_SWEEP_MS = 60_000
+
+/**
+ * When each agent was FIRST observed with no open session. Cleared the moment
+ * it is used again, so the TTL measures a continuous idle stretch rather than
+ * age. Outside reactive state: nothing renders from it.
+ */
+const agentIdleSince = new Map<AgentId, number>()
 
 /**
  * Agents that have completed ACP `authenticate` in this process lifetime, so a
@@ -3605,6 +3635,60 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     } catch (err) {
       set((s) => ({ agentStatus: { ...s.agentStatus, [tempKey]: 'error' } }))
       throw err
+    }
+  },
+
+  resetIdleAgentTracking: () => {
+    agentIdleSince.clear()
+  },
+
+  reclaimIdleAgents: async (now) => {
+    const state = get()
+    // An agent with any session still open is in use, whatever the clock says.
+    // `closed` is not "in use": that is precisely a chat the user finished.
+    const busy = new Set<AgentId>()
+    for (const session of Object.values(state.sessions)) {
+      if (session.status !== 'closed') busy.add(session.agentId)
+    }
+    const reap: AgentId[] = []
+    const live = new Set<AgentId>()
+    for (const [reuseKey, agentId] of Object.entries(state.configToLiveAgent)) {
+      live.add(agentId)
+      // A warm spawn still in flight for this key has not written its agent id
+      // yet; reaping the previous one now would race that write.
+      if (inFlightWarms.has(reuseKey)) {
+        agentIdleSince.delete(agentId)
+        continue
+      }
+      if (busy.has(agentId) || state.agentStatus[agentId] === 'spawning') {
+        agentIdleSince.delete(agentId)
+        continue
+      }
+      const since = agentIdleSince.get(agentId)
+      if (since === undefined) {
+        agentIdleSince.set(agentId, now)
+        continue
+      }
+      if (now - since >= IDLE_AGENT_TTL_MS) reap.push(agentId)
+    }
+    // Agents that left the reuse map (killed, config deleted) must not keep an
+    // entry here, or a re-spawned id could inherit a stale idle start.
+    for (const agentId of agentIdleSince.keys()) {
+      if (!live.has(agentId)) agentIdleSince.delete(agentId)
+    }
+    for (const agentId of reap) {
+      agentIdleSince.delete(agentId)
+      try {
+        await get().killAgent(agentId)
+      } catch (error) {
+        // One wedged process must not stop the sweep — bounding memory is the
+        // whole point, and it is the one worth retrying on the next pass.
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.reclaimIdleAgents',
+          message: `agentId=${agentId} ${error instanceof Error ? error.message : String(error)}`
+        })
+      }
     }
   },
 
@@ -7161,12 +7245,20 @@ export function initAcpEventListeners(): () => void {
       useAcpStore.getState()._onSessionClosed(e)
     )
   ]
+  // Sweep far more often than the TTL: the sweep is what OBSERVES an agent as
+  // idle, and the TTL is only counted from the first such observation, so a
+  // coarse interval would stretch the real reclaim delay by a whole period.
+  const idleSweep = setInterval(() => {
+    void useAcpStore.getState().reclaimIdleAgents(Date.now())
+  }, IDLE_AGENT_SWEEP_MS)
   return () => {
     historyTornDown = true
     if (historyRetryTimer) {
       clearTimeout(historyRetryTimer)
       historyRetryTimer = null
     }
+    clearInterval(idleSweep)
+    useAcpStore.getState().resetIdleAgentTracking()
     teardown.forEach((fn) => {
       fn()
     })
