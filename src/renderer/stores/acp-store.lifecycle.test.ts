@@ -95,6 +95,10 @@ function seed(): void {
   })
   useConversationStore.getState().replaceSummaries([conversation])
   useAcpStore.setState({
+    // Reset alongside `sessions`: a test that seeds a connected, reopen-capable
+    // agent would otherwise leave every later test suspending on view close.
+    agents: {},
+    agentStatus: {},
     sessionIndex: [
       {
         id: 'session-old',
@@ -168,6 +172,67 @@ describe('ACP Conversation lifecycle store', () => {
     expect(useAcpStore.getState().messages['session-old']?.[0].blocks[0]).toMatchObject({
       text: 'retained transcript'
     })
+  })
+
+  /**
+   * An open ACP session is not free: the adapter holds a per-session child
+   * process for it (a `claude` SDK process is ~330 MB), and nothing ever closed
+   * one for a chat the user simply stopped using. Only an explicit "suspend" in
+   * the history row or deleting the Conversation did.
+   *
+   * Closing the view is the clearest "done with this" signal there is, and
+   * reopening replays through `openHistorySession`, so the release is invisible
+   * — as long as the agent can actually reopen it, which the next test covers.
+   */
+  it('suspends the binding when the view closes and the agent can reopen the session', async () => {
+    useAcpStore.setState({
+      agentStatus: { 'agent-1': 'connected' },
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } }
+    })
+    invokeSpy.mockResolvedValueOnce({
+      success: true,
+      data: updated('suspendBinding', 'suspended', 'session-old', 5)
+    })
+
+    useAcpStore.getState().closeChatView(conversationId)
+
+    expect(closeViewSpy).toHaveBeenCalledWith(conversationId)
+    await vi.waitFor(() => {
+      expect(invokeSpy).toHaveBeenCalledWith('conversation_suspend_binding', {
+        conversationId,
+        expectedRevision: 4
+      })
+    })
+    // The transcript is Termul's, not the agent's — releasing the process must
+    // not touch it.
+    expect(useAcpStore.getState().messages['session-old']).toHaveLength(1)
+  })
+
+  it('leaves the binding alone when the agent cannot load or resume the session', async () => {
+    useAcpStore.setState({
+      agentStatus: { 'agent-1': 'connected' },
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: false } } }
+    })
+
+    useAcpStore.getState().closeChatView(conversationId)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invokeSpy).not.toHaveBeenCalled()
+  })
+
+  it('leaves the binding alone while a turn is still running', async () => {
+    useAcpStore.setState({
+      agentStatus: { 'agent-1': 'connected' },
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      sessions: {
+        'session-old': { ...useAcpStore.getState().sessions['session-old'], activeTurn: true }
+      }
+    })
+
+    useAcpStore.getState().closeChatView(conversationId)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invokeSpy).not.toHaveBeenCalled()
   })
 
   it('preserves Conversation transcript maps when provider close emits session_closed', () => {

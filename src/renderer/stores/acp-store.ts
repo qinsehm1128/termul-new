@@ -2500,6 +2500,47 @@ async function evictAgentForTransport(get: () => AcpState, agentId: AgentId): Pr
   }
 }
 
+/**
+ * Release the agent-side process an open session is holding.
+ *
+ * An ACP session is not free while it sits open: the adapter keeps a child
+ * process alive for it — hundreds of MB each for SDK-backed agents — and
+ * nothing ever closed one for a chat the user simply stopped using. Only an
+ * explicit "suspend" from the history row and deleting the Conversation did,
+ * so a day of normal use left every session it touched still resident.
+ *
+ * Suspending the binding sends ACP `session/close`, which is what lets the
+ * adapter reap it. Reopening replays through `openHistorySession`, so the
+ * release is invisible — but ONLY when the agent can load or resume the
+ * session. When it cannot, reopening would land read-only, and a silently
+ * read-only chat is worse than the memory, so the process is kept.
+ */
+async function releaseSessionProcess(get: () => AcpState, session: AcpSession): Promise<void> {
+  const conversationId = session.conversationId
+  if (!conversationId) return
+  if (session.status === 'closed') return
+  // Work the user is waiting on, or a replay still landing chunks.
+  if (session.activeTurn || session.openTurnId || session.replaying) return
+  const strategy = decideResume({
+    connected: get().agentStatus[session.agentId] === 'connected',
+    capabilities: get().agents[session.agentId]?.capabilities ?? null,
+    localHistoryAvailable: true
+  })
+  if (strategy === 'local') return
+  try {
+    await get().suspendAgentBinding(conversationId)
+  } catch (error) {
+    // Best-effort. The binding may already be suspended or detached, or the
+    // agent may not implement `session/close` after all — none of which is
+    // worth a toast, because the chat is closed either way.
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.closeChatView.suspend',
+      message: `conversationId=${conversationId} ${error instanceof Error ? error.message : String(error)}`
+    })
+  }
+}
+
 function cancelPreparedChatEntry(
   key: string,
   set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
@@ -3865,6 +3906,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const sessionId = session?.id ?? entry?.id
     const workspace = useWorkspaceStore.getState()
     workspace.closeChatView(conversationId)
+    // Ahead of the active-tab bookkeeping below, which returns early on one of
+    // its branches — a release placed after it would be skipped exactly when
+    // the closed chat was the active one, i.e. almost always.
+    if (session) void releaseSessionProcess(get, session)
     if (sessionId && state.activeSessionId === sessionId) {
       const activeTab = workspace.getActiveTab()
       if (activeTab?.type !== 'agent-chat') {
