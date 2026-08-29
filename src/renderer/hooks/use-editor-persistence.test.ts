@@ -940,6 +940,38 @@ describe('useEditorPersistence', () => {
     })
   })
 
+  /**
+   * A group scope passes `manifestProjectId: null` (WorkspaceLayout only bridges
+   * the host manifest for a single project). Keying the restore guard on that
+   * meant the guard was never raised in group mode — and the guard is what the
+   * pane area reads to stop rendering the OUTGOING project's tabs while the
+   * destination restores. The scope being restored always has a project id;
+   * that is what the guard has to be keyed on.
+   */
+  it('raises the restore guard in a group scope, where manifestProjectId is null', async () => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: { openFiles: [], activeFilePath: null, expandedDirs: [], activeTabId: null }
+    })
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+
+    renderHook(() =>
+      useEditorPersistence('project-a', {
+        projectIds: ['project-a', 'project-b'],
+        rootPaths: [],
+        manifestProjectId: null,
+        notificationProjectId: 'project-a'
+      })
+    )
+
+    await waitFor(() => {
+      expect(mockSetManifestRestoreInProgress).toHaveBeenCalledWith('project-a', true)
+    })
+    await waitFor(() => {
+      expect(mockSetManifestRestoreInProgress).toHaveBeenCalledWith('project-a', false)
+    })
+  })
+
   // P9: the restore flow sets setManifestRestoreInProgress(projectId, true)
   // before the manifest load and (projectId, false) in the finally.
   it('sets manifestRestoreInProgress true on entry and false in finally', async () => {

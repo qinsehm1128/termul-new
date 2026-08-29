@@ -17,7 +17,7 @@ import { useAcpStore } from '@/stores/acp-store'
 import { useConversationStore } from '@/stores/conversation-store'
 import { useTerminalActions, useTerminalStore } from '@/stores/terminal-store'
 import type { AgentChatTab, WorkspaceTab } from '@/stores/workspace-store'
-import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
+import { getAllLeafPanes, retireTerminalRecord, useWorkspaceStore } from '@/stores/workspace-store'
 import type { LeafNode } from '@/types/workspace.types'
 import { DropZoneOverlay } from './DropZoneOverlay'
 import { WorkspaceTabBar } from './WorkspaceTabBar'
@@ -215,6 +215,13 @@ export function PaneContent({
           source: 'pane-content.terminal-resume',
           message: `code=${result.code} terminalRecordId=${terminalId}`
         })
+        // Retrying a terminal the host reports as gone can never succeed. Retire
+        // it instead of leaving the user on a placeholder whose only action is
+        // the button they just pressed. Unlike the cold-load path there is no
+        // topology rebuild here, so the tab has to go with the record — the
+        // missing-terminal branch below would otherwise render the same
+        // "disconnected" copy minus the retry button.
+        if (result.code === 'TERMINAL_GONE') retireTerminalRecord(terminalId)
       }
     } finally {
       setRetryingTerminalIds((current) => {

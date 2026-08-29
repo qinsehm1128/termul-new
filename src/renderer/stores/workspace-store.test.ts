@@ -3,7 +3,7 @@ import { setRouterNavigate } from '@/lib/router-navigate'
 import type { LeafNode, SplitNode } from '@/types/workspace.types'
 import { useTerminalStore } from './terminal-store'
 import type { WorkspaceState } from './workspace-store'
-import { flattenSameDirection, useWorkspaceStore } from './workspace-store'
+import { flattenSameDirection, retireTerminalRecord, useWorkspaceStore } from './workspace-store'
 
 function createEditorTab(id: string): { type: 'editor'; id: string; filePath: string } {
   return {
@@ -223,6 +223,37 @@ describe('workspace-store split/move invariants', () => {
     ])
     expect(navigate).toHaveBeenCalledWith('/conversations')
     setRouterNavigate(null)
+  })
+
+  /**
+   * A terminal whose PTY the host reports as gone must lose BOTH its record and
+   * its tab. Dropping only the record leaves an orphan tab: PaneContent's
+   * missing-terminal branch renders the same "disconnected" copy minus the
+   * retry button, and an inactive orphan renders nothing while still occupying
+   * the tab bar. That orphan is why the dead tab survived the first fix.
+   */
+  it('retireTerminalRecord drops the tab together with the record', () => {
+    const store = useWorkspaceStore.getState()
+    store.addTerminalTab('terminal-gone')
+    store.addTerminalTab('terminal-live')
+    useTerminalStore.setState({
+      terminals: [
+        { id: 'terminal-gone', name: 'Gone', projectId: 'p1', shell: 'bash', output: [] },
+        { id: 'terminal-live', name: 'Live', projectId: 'p1', shell: 'bash', output: [] }
+      ],
+      activeTerminalId: 'terminal-gone',
+      ptyIdIndex: new Map(),
+      cleanupRecoveries: {}
+    })
+
+    retireTerminalRecord('terminal-gone')
+
+    const pane = useWorkspaceStore.getState().root as LeafNode
+    expect(pane.tabs).toEqual([
+      { type: 'terminal', id: 'term-terminal-live', terminalId: 'terminal-live' }
+    ])
+    const records = useTerminalStore.getState().terminals.map((terminal) => terminal.id)
+    expect(records).toEqual(['terminal-live'])
   })
 
   it('ensureTerminalTab can activate inserted terminal when requested', () => {

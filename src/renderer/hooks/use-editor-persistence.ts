@@ -564,6 +564,10 @@ export function useEditorPersistence(
   const manifestProjectId =
     options.manifestProjectId === undefined ? projectId : options.manifestProjectId
   const notificationProjectId = options.notificationProjectId ?? projectId
+  // The key the restore guard is raised under. `manifestProjectId` is null for a
+  // group scope, so it cannot serve: the guard would be down exactly where the
+  // pane area needs it. The scope being restored always has a project id.
+  const restoreGuardProjectId = projectId || manifestProjectId || notificationProjectId
 
   // Restore state when project changes
   useEffect(() => {
@@ -593,11 +597,14 @@ export function useEditorPersistence(
               return path ? [path] : []
             })
       isRestoringRef.current = true
-      // Guard the manifest writer for the entire restore window so a half-built
-      // tree (mid open-files loop, mid pane rebuild) is never persisted as the
-      // new host manifest. The terminal-restore guard already covers PTY
-      // reattachment; this mirrors it for the manifest's portable projection.
-      if (manifestProjectId) setManifestRestoreInProgress(manifestProjectId, true)
+      // Raised for the whole restore window so a half-built tree (mid open-files
+      // loop, mid pane rebuild) is neither persisted nor rendered. Keyed on the
+      // scope being restored, NOT on `manifestProjectId`: a group scope passes
+      // `manifestProjectId: null` because the host-manifest bridge is
+      // project-only, and keying on it left the guard down for the whole of
+      // group mode — which is where the pane area kept showing the outgoing
+      // project's tabs.
+      if (restoreGuardProjectId) setManifestRestoreInProgress(restoreGuardProjectId, true)
       try {
         // Persist old project state before clearing
         if (oldProjectId) {
@@ -745,7 +752,7 @@ export function useEditorPersistence(
       } finally {
         if (restoreRunIdRef.current === restoreRunId) {
           isRestoringRef.current = false
-          if (manifestProjectId) setManifestRestoreInProgress(manifestProjectId, false)
+          if (restoreGuardProjectId) setManifestRestoreInProgress(restoreGuardProjectId, false)
           if (!cancelled && prevProjectIdRef.current === projectId) {
             notifyProjectWorkspaceRestored(notificationProjectId)
           }
@@ -755,7 +762,7 @@ export function useEditorPersistence(
           // forever (blocking manifest writes for it until the user returns).
           // The same-project supersession is still owned by the newer run
           // (handled by the branch above when it completes).
-          if (manifestProjectId) setManifestRestoreInProgress(manifestProjectId, false)
+          if (restoreGuardProjectId) setManifestRestoreInProgress(restoreGuardProjectId, false)
         }
       }
     }
@@ -765,7 +772,14 @@ export function useEditorPersistence(
     return () => {
       cancelled = true
     }
-  }, [projectId, projectIdsKey, rootPathsKey, manifestProjectId, notificationProjectId])
+  }, [
+    projectId,
+    projectIdsKey,
+    rootPathsKey,
+    manifestProjectId,
+    notificationProjectId,
+    restoreGuardProjectId
+  ])
 
   // Save state on changes (debounced) - coalesced across all store subscriptions
   useEffect(() => {

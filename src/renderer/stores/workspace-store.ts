@@ -1361,3 +1361,28 @@ export function getActiveFilePathFromTree(state: WorkspaceState): string | null 
   if (activeTab?.type === 'editor') return activeTab.filePath
   return null
 }
+
+/**
+ * Retire a terminal whose PTY is provably gone: drop its tab, then its record.
+ *
+ * Lives here rather than in `terminal-store` because the renderer record and
+ * the workspace topology are independent structures, and only this layer may
+ * touch both — `workspace-store` already depends on `terminal-store` and never
+ * the reverse. Dropping the record alone leaves an orphan tab: `PaneContent`'s
+ * missing-terminal branch then renders the SAME "disconnected" placeholder
+ * minus the retry button, and an inactive orphan renders nothing at all while
+ * still occupying the tab bar. That is how the dead tab survived the first
+ * attempt at this fix.
+ *
+ * Only for terminals the host reported as `TERMINAL_GONE`. Retryable failures
+ * keep their record and their tab.
+ */
+export function retireTerminalRecord(recordId: string): void {
+  const terminalStore = useTerminalStore.getState()
+  const record = terminalStore.terminals.find((terminal) => terminal.id === recordId)
+  // Tab first: `closeTerminalView` locates the pane by tab id, which does not
+  // depend on the record still existing, but keeping this order means a thrown
+  // record removal can never strand a tab that is already unrenderable.
+  useWorkspaceStore.getState().closeTerminalView(recordId)
+  terminalStore.closeTerminal(recordId, record?.projectId ?? '')
+}

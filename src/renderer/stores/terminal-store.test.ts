@@ -271,11 +271,14 @@ describe('terminal-store', () => {
     })
 
     /**
-     * Retirement lives here, not at the call sites, because three of them reach
-     * this action: the cold-load reconciliation, the "retry connection" button
-     * and the mount-time resume. Only the store sees all three.
+     * The store surfaces TERMINAL_GONE and materializes no placeholder, but it
+     * must NOT retire the record itself: retiring means dropping the workspace
+     * tab too, and only `workspace-store` may touch both structures (it already
+     * depends on this store; the reverse would be a cycle). Removing the record
+     * alone leaves an orphan tab rendering the same "disconnected" copy minus
+     * the retry button — see `retireTerminalRecord`.
      */
-    it('retires the record when the host reports the terminal as gone', async () => {
+    it('surfaces TERMINAL_GONE without a placeholder and leaves retirement to the caller', async () => {
       const seed = (): void => {
         useTerminalStore.setState({
           terminals: [
@@ -306,9 +309,11 @@ describe('terminal-store', () => {
       const gone = await useTerminalStore.getState().resumeTerminalResource('record-gone')
 
       expect(gone).toEqual({ success: false, error: 'Terminal is gone', code: 'TERMINAL_GONE' })
-      expect(useTerminalStore.getState().terminals).toEqual([])
-      // The index must go with it, or a later lookup resolves a dead PTY.
-      expect(useTerminalStore.getState().ptyIdIndex.get('pty-gone')).toBeUndefined()
+      // Record survives this layer — the caller retires it together with the tab.
+      expect(useTerminalStore.getState().terminals).toHaveLength(1)
+      // But no disconnected placeholder was materialized for it: a gone terminal
+      // must not be re-advertised as retryable.
+      expect(useTerminalStore.getState().terminals[0].healthStatus).not.toBe('running')
 
       // UNAUTHORIZED may be transient, so its record survives as a placeholder
       // the user can retry. Same fixture, so the contrast is the code alone.

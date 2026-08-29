@@ -32,7 +32,19 @@ export interface WorkspaceManifestSyncState {
   legacyRevisionByProject: Record<string, number | null>
   /** Currently-surfaced conflict, or null when none. */
   pendingConflict: ManifestConflictBody | null
-  /** Per-project restore-in-progress flag (writer cancels while true). */
+  /**
+   * Per-project "the workspace tree is being rebuilt" flag.
+   *
+   * Introduced so the manifest writer could cancel writes mid-restore, but that
+   * writer is gone — `performManifestWrite` returns `skipped` and
+   * `useWorkspaceManifestSync` is empty since project manifests became
+   * read-only. Its live consumer is now the pane area, which stops rendering
+   * the OUTGOING project's tabs while the destination restores. Keyed on the
+   * restore SCOPE, not on `manifestProjectId`: a group scope has no manifest
+   * project, and keying on that left the flag down for all of group mode.
+   *
+   * Anything that changes when this is raised or lowered is a UI change now.
+   */
   manifestRestoreInProgressByProject: Record<string, boolean>
 
   setBasedRevision: (projectId: string, revision: number | null) => void

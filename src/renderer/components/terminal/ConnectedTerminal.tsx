@@ -48,6 +48,7 @@ import {
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { retireTerminalRecord } from '@/stores/workspace-store'
 import type { TerminalModes, TerminalSpawnOptions } from '../../../shared/types/ipc.types'
 import {
   buildRehydrateSequences,
@@ -441,6 +442,15 @@ async function attachResumedTerminalRenderer(
     // Conversation-only records (no project) that the host no longer knows
     // about can be dropped. Project terminals still receive an ephemeral
     // conversationId from spawn — closing those blanks the tab.
+    // The host proved this PTY is gone; no retry can revive it. Retire record
+    // AND tab together — dropping only the record leaves an orphan tab, which
+    // is exactly what the comment below warns about ("closing those blanks the
+    // tab"). That warning is also why the two codes underneath still keep their
+    // project terminals alive: those failures may be transient.
+    if (resumed.code === 'TERMINAL_GONE') {
+      retireTerminalRecord(record.id)
+      return { attached: false, stale: true, serverReplay: null }
+    }
     if (resumed.code === 'TERMINAL_NOT_FOUND' || resumed.code === 'UNAUTHORIZED') {
       if (record.conversationId && !record.projectId) {
         useTerminalStore.getState().closeTerminal(record.id, record.projectId ?? '')

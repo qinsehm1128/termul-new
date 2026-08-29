@@ -655,17 +655,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
       // `TERMINAL_GONE` is the one failure that can never be retried: the host
       // still holds the SessionWorkspace reference, its PTY simply does not
-      // exist any more — which is what every app exit leaves behind. Retire the
-      // record here rather than at each call site, so the cold-load
-      // reconciliation, the "retry connection" button and the mount-time resume
-      // all agree. A placeholder would render "terminal disconnected" behind a
-      // retry that cannot succeed, and would be written back to the manifest,
-      // bringing the same dead tab back on the next launch. Every other failure
-      // still keeps its placeholder: those may be transient.
-      if (!result.success && result.code === 'TERMINAL_GONE') {
-        get().closeTerminal(id, current.projectId ?? '')
-        return result
-      }
+      // exist any more — which is what every app exit leaves behind. Surface
+      // the code and materialize NO placeholder; retiring the record is the
+      // caller's job via `retireTerminalRecord`, which also drops the tab. This
+      // store cannot do it: removing the record without the tab leaves an
+      // orphan, and reaching the workspace store from here would invert the
+      // dependency (workspace-store imports this one, never the reverse).
+      // Every other failure still keeps its placeholder: those may be transient.
+      if (!result.success && result.code === 'TERMINAL_GONE') return result
       get().hydrateTerminalResource(descriptor, undefined, terminal.projectId)
       if (result.success) {
         return { success: false, error: 'Terminal resume failed', code: 'NETWORK_ERROR' }

@@ -22,7 +22,12 @@ import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
-import { editorTabId, terminalTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import {
+  editorTabId,
+  retireTerminalRecord,
+  terminalTabId,
+  useWorkspaceStore
+} from '@/stores/workspace-store'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
 
 const WRITE_DEBOUNCE_MS = 500
@@ -242,10 +247,11 @@ async function reconcileTerminalResources(
           source: 'session-workspace-sync.terminal-resume',
           message: `code=${result.code} conversationId=${conversationId} terminalId=${descriptor.terminalId}`
         })
-        // `TERMINAL_GONE` retires the record inside `resumeTerminalResource`,
-        // so nothing is left for the topology rebuild below to find and it
-        // drops the tab on its own (`rebuildTopology` skips terminals with no
-        // live record).
+        // `TERMINAL_GONE` can never be retried — the manifest reference
+        // outlived its PTY, which is what every app exit leaves behind. Retire
+        // record and tab together so the next manifest write stops carrying it
+        // and the dead tab does not come back on the following launch.
+        if (result.code === 'TERMINAL_GONE') retireTerminalRecord(recordId)
       }
     })
   )
