@@ -683,6 +683,37 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
+  /**
+   * The launcher is the NEW-chat composer; `ChatInputBar` is the running one
+   * (see the role split documented in `use-chat-composer.ts`). Every entry point
+   * that opens it — sidebar button, dashboard button, shortcut, command palette
+   * — means "start a new chat", so whichever Conversation happens to be
+   * selected in the sidebar must not capture the prompt.
+   */
+  it('does not send a new chat into the running Conversation selected in the sidebar', async () => {
+    const RUNNING_CONVERSATION = '018f7a1c-1b4d-7c8a-9f01-0123456789ff'
+    acpStateRef.current.sessions['session-running'] = {
+      ...preparedSession(ACP_CONFIG),
+      id: 'session-running',
+      status: 'active',
+      conversationId: RUNNING_CONVERSATION
+    }
+    useConversationStore.setState({ activeConversationId: RUNNING_CONVERSATION })
+
+    renderLauncher()
+
+    setComposerValue('hi?')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    // The live session bound to the selected Conversation must never receive it.
+    expect(mockSendPrompt).not.toHaveBeenCalledWith('session-running', expect.anything())
+    // Nor may the fresh launch be grafted onto that Conversation's identity.
+    expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: undefined })
+    )
+  })
+
   it('starts a chat in the active project while keeping target chrome hidden', async () => {
     renderLauncher()
 

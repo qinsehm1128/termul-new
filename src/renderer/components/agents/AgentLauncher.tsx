@@ -112,6 +112,13 @@ import type { Project, Worktree } from '@/types/project'
 interface AgentLauncherProps {
   paneId: string
   className?: string
+  /**
+   * The Conversation this launcher continues. Omit it — as every "new chat"
+   * entry point does — and the launch always creates a fresh Conversation.
+   * Only the agent-chat tab whose session cannot be resolved passes its own id,
+   * because there the launcher IS that Conversation's restart surface.
+   */
+  continueConversationId?: string
   /** Invoked once with the canonical ConversationId after a successful launch. */
   onLaunched?: (conversationId: string) => void
 }
@@ -166,6 +173,7 @@ function defaultProjectContext(project: Project | undefined): {
 export function AgentLauncher({
   paneId,
   className,
+  continueConversationId,
   onLaunched
 }: AgentLauncherProps): React.JSX.Element {
   const t = useRuntimeTranslation('agents')
@@ -201,32 +209,38 @@ export function AgentLauncher({
     s.activeGroupId ? s.groups.find((group) => group.id === s.activeGroupId) : undefined
   )
   const activeProject = useActiveProject()
-  const activeConversationId = useConversationStore((state) => state.activeConversationId)
-  const activeConversation = useConversationStore((state) =>
-    activeConversationId ? state.summariesById[activeConversationId] : undefined
+  // The Conversation this launcher continues, or null when it is the new-chat
+  // composer. Reading the store's `activeConversationId` here instead let the
+  // sidebar selection capture the prompt: opening the launcher while a running
+  // Conversation was highlighted sent the message into THAT Conversation and
+  // never created a new one. Only `PaneContent`'s no-session fallback names a
+  // target; every "new chat" entry point passes nothing.
+  const continuedConversationId = continueConversationId ?? null
+  const continuedConversation = useConversationStore((state) =>
+    continuedConversationId ? state.summariesById[continuedConversationId] : undefined
   )
   const initialProjectContextRef = useRef(
-    activeConversation ? null : defaultProjectContext(activeProject)
+    continuedConversation ? null : defaultProjectContext(activeProject)
   )
   const targetContextInitializedRef = useRef(
-    Boolean(activeConversation || initialProjectContextRef.current)
+    Boolean(continuedConversation || initialProjectContextRef.current)
   )
   const [executionTarget, setExecutionTarget] = useState<ExecutionTarget>(
     () =>
-      activeConversation?.executionTarget ??
+      continuedConversation?.executionTarget ??
       initialProjectContextRef.current?.executionTarget ?? { kind: 'workspace' }
   )
   const [projectAttachment, setProjectAttachment] = useState<ProjectAttachment | null>(
     () =>
-      activeConversation?.projectAttachment ??
+      continuedConversation?.projectAttachment ??
       initialProjectContextRef.current?.projectAttachment ??
       null
   )
   useEffect(() => {
     if (targetContextInitializedRef.current) return
-    if (activeConversation) {
-      setExecutionTarget(activeConversation.executionTarget)
-      setProjectAttachment(activeConversation.projectAttachment)
+    if (continuedConversation) {
+      setExecutionTarget(continuedConversation.executionTarget)
+      setProjectAttachment(continuedConversation.projectAttachment)
       targetContextInitializedRef.current = true
       return
     }
@@ -238,7 +252,7 @@ export function AgentLauncher({
     console.info(
       `[agentLauncher.projectContext] defaulted projectId=${context.projectAttachment.projectId} target=${context.executionTarget.kind}`
     )
-  }, [activeConversation, activeProject])
+  }, [continuedConversation, activeProject])
   const explicitProjectId = executionTarget.kind === 'workspace' ? null : executionTarget.projectId
   const conversationProjectId = explicitProjectId ?? projectAttachment?.projectId ?? null
   const selectedProjectId = conversationProjectId ?? activeProjectId
@@ -255,7 +269,7 @@ export function AgentLauncher({
       ? t('launcher.workspaceFallback', 'your Conversation workspace')
       : (selectedProject?.name ?? t('launcher.folderFallback', 'this folder'))
   const projectRoot = selectedProjectId ? getDefaultCwdForProject(selectedProjectId) : undefined
-  const workspaceSeedCwd = activeConversation?.workspaceCwd ?? projectRoot ?? '/'
+  const workspaceSeedCwd = continuedConversation?.workspaceCwd ?? projectRoot ?? '/'
   const targetCwd =
     executionTarget.kind === 'workspace'
       ? workspaceSeedCwd
@@ -1358,7 +1372,8 @@ export function AgentLauncher({
         let handedOffConversationId: string | null = null
         const completeCanonicalHandoff = (realSessionId: string): void => {
           const canonicalConversationId =
-            useAcpStore.getState().sessions[realSessionId]?.conversationId ?? activeConversationId
+            useAcpStore.getState().sessions[realSessionId]?.conversationId ??
+            continuedConversationId
           if (!canonicalConversationId) {
             throw new Error('CONVERSATION_CREATE_FAILED: canonical ConversationId missing')
           }
@@ -1379,15 +1394,15 @@ export function AgentLauncher({
         }
 
         let realId = sessionId
-        const existingSessionId = activeConversationId
-          ? resolveConversationSessionId(liveStore, activeConversationId)
+        const existingSessionId = continuedConversationId
+          ? resolveConversationSessionId(liveStore, continuedConversationId)
           : null
         const retryableConversationId =
-          activeConversationId &&
-          (activeConversation?.lifecycleState === 'allocating_workspace' ||
-            activeConversation?.lifecycleState === 'initializing_agent' ||
-            activeConversation?.lifecycleState === 'agent_failed')
-            ? activeConversationId
+          continuedConversationId &&
+          (continuedConversation?.lifecycleState === 'allocating_workspace' ||
+            continuedConversation?.lifecycleState === 'initializing_agent' ||
+            continuedConversation?.lifecycleState === 'agent_failed')
+            ? continuedConversationId
             : undefined
         if (existingSessionId) {
           const live = liveStore.sessions[existingSessionId]
@@ -1437,7 +1452,7 @@ export function AgentLauncher({
             },
             worktreePath,
             worktreeBranch,
-            conversationId: retryableConversationId ?? activeConversationId ?? undefined,
+            conversationId: retryableConversationId ?? continuedConversationId ?? undefined,
             projectAttachment: finalProjectAttachment ?? undefined,
             executionTarget: finalExecutionTarget
           })
@@ -1491,8 +1506,8 @@ export function AgentLauncher({
     canUseWorktree,
     baseBranch,
     onLaunched,
-    activeConversationId,
-    activeConversation?.lifecycleState,
+    continuedConversationId,
+    continuedConversation?.lifecycleState,
     t
   ])
 
@@ -1573,7 +1588,7 @@ export function AgentLauncher({
         className
       )}
     >
-      {!activeConversation && (
+      {!continuedConversation && (
         <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
           <TermulMark size={48} className="text-foreground" />
           <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
@@ -1835,7 +1850,7 @@ export function AgentLauncher({
               data-agent-launcher-context-strip="true"
               className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-md bg-secondary/20 px-2 pb-1 pt-5 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.03)]"
             >
-              {!activeConversation && activeGroupProjects.length > 1 && (
+              {!continuedConversation && activeGroupProjects.length > 1 && (
                 <Select value={selectedProjectId ?? ''} onValueChange={setGroupProject}>
                   <SelectTrigger
                     aria-label={t('launcher.projectRoot', 'Project root')}

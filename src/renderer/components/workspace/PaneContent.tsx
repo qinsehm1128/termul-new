@@ -69,7 +69,10 @@ function ConversationAgentChatPanel({
 
   if (!sessionId) {
     if (opening) return <PaneSkeleton />
-    return <AgentLauncher paneId={paneId} />
+    // This tab already owns a Conversation; the launcher is its restart
+    // surface, not a new-chat composer. Name the target explicitly — the
+    // launcher deliberately no longer infers one from the sidebar selection.
+    return <AgentLauncher paneId={paneId} continueConversationId={tab.conversationId} />
   }
   return <AgentChatPanel sessionId={sessionId} paneId={paneId} isVisible={isVisible} />
 }
