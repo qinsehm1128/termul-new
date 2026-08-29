@@ -324,8 +324,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // and lowers it in its `finally`. It already existed for the manifest writer;
   // the pane area reads it so the outgoing project's tabs are never on screen
   // while the destination is still being restored.
-  const isRestoringActiveProjectWorkspace = useWorkspaceManifestSyncStore((state) =>
+  const isActiveProjectRestoreFlagged = useWorkspaceManifestSyncStore((state) =>
     Boolean(activeProjectId && state.manifestRestoreInProgressByProject[activeProjectId])
+  )
+  const restoredWorkspaceScope = useWorkspaceManifestSyncStore(
+    (state) => state.restoredWorkspaceScope
   )
   const groups = useProjectStore((state) => state.groups) ?? []
   const activeGroup = useMemo(
@@ -359,6 +362,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const activeConversation = useConversationStore((state) =>
     activeConversationId ? state.summariesById[activeConversationId] : undefined
   )
+  // The scope `useEditorPersistence` is restoring for. Empty in the Conversation
+  // area, where the pane tree is a Conversation's and belongs to no project.
+  const editorPersistenceProjectId =
+    isConversationAreaPath(location.pathname) || activeConversationId
+      ? ''
+      : editorPersistenceScopeKey
+  // Two terms, because neither alone covers the switch:
+  //   - the flag is authoritative once raised, but it is raised from an effect,
+  //     so the first render after `activeProjectId` flips never sees it;
+  //   - the scope closes exactly that window — it is a render-time fact — but
+  //     it says nothing about a re-restore of the project already on screen.
+  const isRestoringActiveProjectWorkspace =
+    isActiveProjectRestoreFlagged ||
+    (Boolean(editorPersistenceProjectId) &&
+      restoredWorkspaceScope !== null &&
+      restoredWorkspaceScope !== editorPersistenceProjectId)
   const {
     selectProject,
     selectGroup,
@@ -885,9 +904,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Editor state persistence
   useEditorPersistence(
-    isConversationAreaPath(location.pathname) || activeConversationId
-      ? ''
-      : editorPersistenceScopeKey,
+    editorPersistenceProjectId,
     activeGroupId
       ? {
           projectIds: activeGroupProjects.map((project) => project.id),

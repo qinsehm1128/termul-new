@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { type MutableRefObject, useEffect } from 'react'
+import { type MutableRefObject, type ReactElement, useEffect } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -468,7 +468,10 @@ beforeEach(() => {
   mockUseActiveProjectId.mockReturnValue('')
   // Module-level store: a restore flag left set by one test would blank the
   // pane area for every test after it.
-  useWorkspaceManifestSyncStore.setState({ manifestRestoreInProgressByProject: {} })
+  useWorkspaceManifestSyncStore.setState({
+    manifestRestoreInProgressByProject: {},
+    restoredWorkspaceScope: null
+  })
   mockUseTerminals.mockReturnValue([])
   mockUseAllTerminals.mockReturnValue([])
   mockUseActiveTerminal.mockReturnValue(null)
@@ -561,6 +564,51 @@ describe('WorkspaceLayout - Empty States', () => {
     // guard cannot pass by hiding the pane area for good.
     act(() => {
       useWorkspaceManifestSyncStore.getState().setManifestRestoreInProgress('project-1', false)
+    })
+    expect(await screen.findByTestId('pane-renderer')).toBeVisible()
+  })
+
+  /**
+   * The restore flag rises in an effect, so the frame right after
+   * `activeProjectId` flips still has no flag up. A second switch landing in
+   * that window therefore un-hid the pane area for a painted frame and
+   * remounted the OUTGOING project's whole tree — every terminal in it created
+   * and then destroyed a WebGL context on the way through, which is what the
+   * tab flicker during rapid project switching was.
+   *
+   * "Which project does the tree on screen belong to" is a render-time fact,
+   * so the gate reads that instead of waiting for the flag.
+   */
+  it('keeps the skeleton when the project switches again before the restore flag rises', async () => {
+    mockUseActiveProjectId.mockReturnValue('project-1')
+    act(() => {
+      useWorkspaceManifestSyncStore.getState().setRestoredWorkspaceScope('project-1')
+    })
+
+    // A fresh element each time: React bails out of re-rendering a subtree
+    // whose element is referentially identical, which would skip the frame
+    // under test entirely.
+    const tree = (): ReactElement => (
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<WorkspaceLayout />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const view = render(tree())
+    expect(await screen.findByTestId('pane-renderer')).toBeVisible()
+
+    // The switch lands. No flag is up for project-2 yet — this is the frame.
+    mockUseActiveProjectId.mockReturnValue('project-2')
+    view.rerender(tree())
+    expect(screen.queryByTestId('pane-renderer')).not.toBeInTheDocument()
+
+    // And it comes back as soon as project-2's tree has actually landed, so the
+    // scope term cannot hide the pane area for good either.
+    act(() => {
+      useWorkspaceManifestSyncStore.getState().setRestoredWorkspaceScope('project-2')
     })
     expect(await screen.findByTestId('pane-renderer')).toBeVisible()
   })

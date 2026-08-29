@@ -172,6 +172,7 @@ const {
   mockDeleteManifest,
   mockLogFrontendError,
   mockSetManifestRestoreInProgress,
+  mockSetRestoredWorkspaceScope,
   mockSyncStoreState
 } = vi.hoisted(() => ({
   mockGetManifest: vi.fn().mockResolvedValue({ success: true, data: null }),
@@ -181,16 +182,19 @@ const {
   mockDeleteManifest: vi.fn().mockResolvedValue({ success: true, data: undefined }),
   mockLogFrontendError: vi.fn().mockResolvedValue(undefined),
   mockSetManifestRestoreInProgress: vi.fn(),
+  mockSetRestoredWorkspaceScope: vi.fn(),
   mockSyncStoreState: {
     setBasedRevision: vi.fn(),
     advanceBasedRevision: vi.fn(),
     setPendingConflict: vi.fn(),
     setManifestRestoreInProgress: vi.fn(),
+    setRestoredWorkspaceScope: vi.fn(),
     getBasedRevision: vi.fn(() => null),
     hasPendingConflict: vi.fn(() => false),
     pendingConflict: null,
     legacyRevisionByProject: {},
-    manifestRestoreInProgressByProject: {}
+    manifestRestoreInProgressByProject: {},
+    restoredWorkspaceScope: null
   }
 }))
 
@@ -208,6 +212,7 @@ vi.mock('@/lib/log-api', () => ({
 
 vi.mock('@/stores/workspace-manifest-sync-store', () => ({
   setManifestRestoreInProgress: mockSetManifestRestoreInProgress,
+  setRestoredWorkspaceScope: mockSetRestoredWorkspaceScope,
   isManifestRestoreInProgress: vi.fn(() => false),
   isManifestRestoreInProgressFor: vi.fn(() => false),
   useWorkspaceManifestSyncStore: {
@@ -243,6 +248,7 @@ beforeEach(() => {
   mockDeleteManifest.mockResolvedValue({ success: true, data: undefined })
   mockLogFrontendError.mockReset()
   mockSetManifestRestoreInProgress.mockReset()
+  mockSetRestoredWorkspaceScope.mockReset()
 
   mockEditorState.openFiles = new Map<string, ReturnType<typeof createEditorFileState>>()
   mockEditorState.activeFilePath = null
@@ -1007,5 +1013,61 @@ describe('useEditorPersistence', () => {
     expect(trueIndex).toBeGreaterThanOrEqual(0)
     expect(falseIndex).toBeGreaterThanOrEqual(0)
     expect(trueIndex).toBeLessThan(falseIndex)
+  })
+
+  // The pane area gates on "does the tree on screen belong to the active
+  // project", which only this hook can answer.
+  it('claims the workspace scope once the restore has landed', async () => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: { openFiles: [], activeFilePath: null, expandedDirs: [], activeTabId: null }
+    })
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockSetRestoredWorkspaceScope).toHaveBeenCalledWith('project-a')
+    })
+  })
+
+  // A run overtaken by a run for a DIFFERENT project must stay quiet: the tree
+  // it was building never reached the screen, and claiming it would drop the
+  // skeleton back onto the wrong project's tabs.
+  it('does not claim the workspace scope for a restore another project superseded', async () => {
+    let releaseFirstRead = (): void => {}
+    const firstRead = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve
+    })
+    const emptyState = {
+      success: true,
+      data: { openFiles: [], activeFilePath: null, expandedDirs: [], activeTabId: null }
+    }
+    mockPersistenceRead
+      .mockImplementationOnce(async () => {
+        await firstRead
+        return emptyState
+      })
+      .mockResolvedValue(emptyState)
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+
+    const { rerender } = renderHook(({ projectId }) => useEditorPersistence(projectId), {
+      initialProps: { projectId: 'project-a' }
+    })
+    await waitFor(() => {
+      expect(mockSetManifestRestoreInProgress).toHaveBeenCalledWith('project-a', true)
+    })
+
+    // project-a is still parked on its read when project-b takes over.
+    rerender({ projectId: 'project-b' })
+    await waitFor(() => {
+      expect(mockSetRestoredWorkspaceScope).toHaveBeenCalledWith('project-b')
+    })
+
+    releaseFirstRead()
+    await waitFor(() => {
+      expect(mockSetManifestRestoreInProgress).toHaveBeenCalledWith('project-a', false)
+    })
+    expect(mockSetRestoredWorkspaceScope).not.toHaveBeenCalledWith('project-a')
   })
 })

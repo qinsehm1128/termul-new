@@ -8,7 +8,10 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { setManifestRestoreInProgress } from '@/stores/workspace-manifest-sync-store'
+import {
+  setManifestRestoreInProgress,
+  setRestoredWorkspaceScope
+} from '@/stores/workspace-manifest-sync-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import {
   browserTabId,
@@ -753,6 +756,13 @@ export function useEditorPersistence(
         if (restoreRunIdRef.current === restoreRunId) {
           isRestoringRef.current = false
           if (restoreGuardProjectId) setManifestRestoreInProgress(restoreGuardProjectId, false)
+          // Deliberately not gated on `cancelled`: a dep-change cancellation
+          // aborts this run mid-way and the re-run early-returns on the
+          // unchanged projectId, so nothing else would ever claim the scope and
+          // the pane area would sit on a skeleton forever. Reaching here at all
+          // means no run for a DIFFERENT project superseded this one, which is
+          // the only case where the claim would be wrong.
+          setRestoredWorkspaceScope(projectId)
           if (!cancelled && prevProjectIdRef.current === projectId) {
             notifyProjectWorkspaceRestored(notificationProjectId)
           }

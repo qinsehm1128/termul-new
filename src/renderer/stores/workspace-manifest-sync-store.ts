@@ -46,11 +46,27 @@ export interface WorkspaceManifestSyncState {
    * Anything that changes when this is raised or lowered is a UI change now.
    */
   manifestRestoreInProgressByProject: Record<string, boolean>
+  /**
+   * The project whose pane tree currently sits in `useWorkspaceStore.root`, or
+   * null while nothing has claimed it yet.
+   *
+   * The flag above cannot answer this on its own: it is raised from an effect,
+   * so the render right after `activeProjectId` flips still sees it down. A
+   * second switch landing in that window painted the OUTGOING project's tree
+   * for a frame — remounting every terminal in it, and with them a WebGL
+   * context each. This is a render-time fact, so the pane area compares it to
+   * the active project instead of waiting for the flag.
+   *
+   * Null means "no opinion", never "stale": the pane area only claims
+   * staleness when it positively knows the tree belongs to another project.
+   */
+  restoredWorkspaceScope: string | null
 
   setBasedRevision: (projectId: string, revision: number | null) => void
   advanceBasedRevision: (projectId: string, nextRevision: number) => void
   setPendingConflict: (conflict: ManifestConflictBody | null) => void
   setManifestRestoreInProgress: (projectId: string, inProgress: boolean) => void
+  setRestoredWorkspaceScope: (projectId: string) => void
 
   getBasedRevision: (projectId: string) => number | null
   hasPendingConflict: (projectId: string) => boolean
@@ -60,6 +76,7 @@ export const useWorkspaceManifestSyncStore = create<WorkspaceManifestSyncState>(
   legacyRevisionByProject: {},
   pendingConflict: null,
   manifestRestoreInProgressByProject: {},
+  restoredWorkspaceScope: null,
 
   setBasedRevision: (projectId: string, revision: number | null): void => {
     if (!projectId) return
@@ -95,6 +112,11 @@ export const useWorkspaceManifestSyncStore = create<WorkspaceManifestSyncState>(
     }))
   },
 
+  setRestoredWorkspaceScope: (projectId: string): void => {
+    if (!projectId) return
+    set({ restoredWorkspaceScope: projectId })
+  },
+
   getBasedRevision: (projectId: string): number | null => {
     return get().legacyRevisionByProject[projectId] ?? null
   },
@@ -117,6 +139,17 @@ export const useWorkspaceManifestSyncStore = create<WorkspaceManifestSyncState>(
  */
 export function setManifestRestoreInProgress(projectId: string, inProgress: boolean): void {
   useWorkspaceManifestSyncStore.getState().setManifestRestoreInProgress(projectId, inProgress)
+}
+
+/**
+ * Records that the pane tree now belongs to `projectId`. Called from the
+ * restore's `finally` on the run that was not superseded by a run for another
+ * project — including the cancelled-by-dep-change case, where no replacement
+ * run starts and leaving the scope unclaimed would strand the pane area on a
+ * skeleton waiting for a restore that never comes.
+ */
+export function setRestoredWorkspaceScope(projectId: string): void {
+  useWorkspaceManifestSyncStore.getState().setRestoredWorkspaceScope(projectId)
 }
 
 /**
