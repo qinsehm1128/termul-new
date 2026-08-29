@@ -242,6 +242,10 @@ async function reconcileTerminalResources(
           source: 'session-workspace-sync.terminal-resume',
           message: `code=${result.code} conversationId=${conversationId} terminalId=${descriptor.terminalId}`
         })
+        // `TERMINAL_GONE` retires the record inside `resumeTerminalResource`,
+        // so nothing is left for the topology rebuild below to find and it
+        // drops the tab on its own (`rebuildTopology` skips terminals with no
+        // live record).
       }
     })
   )

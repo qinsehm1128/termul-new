@@ -551,14 +551,35 @@ mod forwarder_teardown_tests {
     }
 }
 
+/// Why a passive terminal reference could not be resumed.
+///
+/// [`ClaimError`] stays collapsed for every credential path — no response shape
+/// there may distinguish unknown terminal from wrong credential. Resume is the
+/// one place the distinction is both safe and necessary: the caller has already
+/// proved it holds the SessionWorkspace reference, so "the PTY is gone" tells it
+/// nothing it did not supply, and without it the renderer cannot tell a dead end
+/// from a retryable failure — it offers a reconnect that can never succeed.
+///
+/// Local callers only. `web::terminal_ws` maps every variant to one generic
+/// response, which is what keeps the remote surface leak-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalResumeDenial {
+    /// The reference is valid but its PTY no longer exists or has exited.
+    /// Retrying can never succeed.
+    Gone,
+    /// Everything else: no such reference, wrong Conversation, untracked ref,
+    /// claim rotation refused.
+    Unauthorized,
+}
+
 /// Validate the passive SessionWorkspace reference and rotate a one-time claim
-/// for a matching live PTY. Every missing, unknown, corrupt, or mismatched case
-/// collapses to the same data-free [`ClaimError`].
+/// for a matching live PTY. Every cause collapses to [`TerminalResumeDenial`]'s
+/// two variants; the underlying claim machinery still sees only [`ClaimError`].
 pub(crate) async fn terminal_resume_resource(
     request: &TerminalResumeRequest,
     pty_manager: &Arc<PtyManager>,
     workspace: &Arc<crate::conversation::SessionWorkspaceService>,
-) -> Result<(TerminalResumeGrant, TerminalReplay), ClaimError> {
+) -> Result<(TerminalResumeGrant, TerminalReplay), TerminalResumeDenial> {
     let has_passive_ref = match workspace.load(request.conversation_id).await {
         Ok(crate::conversation::SessionWorkspaceLoadOutcome::Loaded { workspace }) => {
             workspace.resources.iter().any(|resource| {
@@ -585,14 +606,37 @@ pub(crate) async fn terminal_resume_resource(
             request.conversation_id,
             request.terminal_id
         );
-        return Err(ClaimError);
+        return Err(TerminalResumeDenial::Unauthorized);
     }
 
-    pty_manager.resume_for_conversation(
-        request.conversation_id,
-        &request.terminal_id,
-        request.last_seq,
-    )
+    // Classify BEFORE `resume_for_conversation`, which collapses "PTY is gone",
+    // "not active", "untracked ref" and "wrong Conversation" into one opaque
+    // ClaimError. A reference whose PTY died — the app exited and killed its
+    // children, or the shell ended — is a dead end, and the renderer needs to
+    // know that to retire the record instead of offering a doomed reconnect.
+    //
+    // The PTY can still die between this check and the call below; that races
+    // to `Unauthorized`, which is the safe direction — the record survives and
+    // the next resume reports `Gone`.
+    let alive = pty_manager
+        .get(&request.terminal_id)
+        .is_some_and(|instance| instance.is_active());
+    if !alive {
+        log::info!(
+            "[terminal-resume] gone conversation_id={} terminal_id={} code=TERMINAL_GONE",
+            request.conversation_id,
+            request.terminal_id
+        );
+        return Err(TerminalResumeDenial::Gone);
+    }
+
+    pty_manager
+        .resume_for_conversation(
+            request.conversation_id,
+            &request.terminal_id,
+            request.last_seq,
+        )
+        .map_err(|_: ClaimError| TerminalResumeDenial::Unauthorized)
 }
 
 /// Resume a passive terminal reference after a cold desktop renderer start.
@@ -608,7 +652,14 @@ pub async fn terminal_resume(
     let (grant, replay) =
         match terminal_resume_resource(&request, pty_manager.inner(), workspace.inner()).await {
             Ok(value) => value,
-            Err(_) => return Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED")),
+            // Distinct on purpose: the renderer retires a record it can never
+            // revive, and keeps the retryable placeholder for everything else.
+            Err(TerminalResumeDenial::Gone) => {
+                return Ok(IpcResult::error("Terminal is gone", "TERMINAL_GONE"))
+            }
+            Err(TerminalResumeDenial::Unauthorized) => {
+                return Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED"))
+            }
         };
 
     // Rotation invalidates any predecessor forwarder. Abort the local tracked
@@ -6524,9 +6575,11 @@ mod tests {
             terminal_id: untracked.info.id.clone(),
             last_seq: 0,
         };
+        // A live PTY with no passive ref is a denial, not a dead end: the
+        // process is right there, the caller just has no reference to it.
         assert!(matches!(
             terminal_resume_resource(&denied, &pty, &workspace).await,
-            Err(ClaimError)
+            Err(TerminalResumeDenial::Unauthorized)
         ));
         assert!(pty
             .verify_claim(&untracked.info.id, &untracked.claim)
@@ -6579,6 +6632,120 @@ mod tests {
             "terminate failed: {:?}",
             terminated.error
         );
+
+        // An orderly terminate retires the passive ref along with the PTY, so
+        // this is a denial. The dead end is the disorderly case — PTY gone,
+        // reference still standing — covered by
+        // `terminal_resume_gone_is_distinct_from_denied`.
+        assert!(matches!(
+            terminal_resume_resource(&request, &pty, &workspace).await,
+            Err(TerminalResumeDenial::Unauthorized)
+        ));
+    }
+
+    /// A SessionWorkspace reference outlives the PTY it names: the app exits and
+    /// kills every child, or the shell simply ends. On the next launch the
+    /// manifest still lists the terminal, so the reference check passes and the
+    /// failure lands one step later, where `resume_for_conversation` collapses
+    /// "PTY is gone", "not active", "untracked ref" and "wrong Conversation"
+    /// into one opaque `ClaimError`.
+    ///
+    /// The renderer cannot act on that: it renders a "retry connection"
+    /// placeholder that can never succeed, and the tab comes back on every
+    /// launch. Separating the two is safe precisely here — `terminal_resume` is
+    /// the local Tauri boundary and the caller already proved it holds the
+    /// manifest reference, so "the PTY is gone" tells it nothing new. The
+    /// credential paths keep the single collapsed error; so does the web
+    /// surface, which maps every denial to one generic response.
+    #[tokio::test]
+    async fn terminal_resume_gone_is_distinct_from_denied() {
+        use crate::conversation::{
+            parse_created_at_utc, ConversationCreator, ConversationLifecycleState,
+            ConversationMutation, ConversationRecordV2, ConversationWriter, CreationPartition,
+            ExecutionTarget, SessionWorkspaceService, CONVERSATION_SCHEMA_VERSION,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let (repository, _) =
+            crate::conversation::ConversationRepository::open(base.join("conversations/v2"))
+                .unwrap();
+        let writer = ConversationWriter::for_test(Arc::clone(&repository));
+        let conversation_id =
+            crate::conversation::ConversationId::parse("018f7a1c-1b4d-7c8a-9f01-0123456789ab")
+                .unwrap();
+        let created_at = parse_created_at_utc("2026-08-15T09:45:15.123Z").unwrap();
+        writer
+            .create_conversation(
+                ConversationRecordV2 {
+                    schema_version: CONVERSATION_SCHEMA_VERSION,
+                    conversation_id,
+                    created_at_utc: created_at,
+                    creation_partition: CreationPartition::from_created_at(created_at),
+                    workspace_cwd: base.to_string_lossy().into_owned(),
+                    execution_target: ExecutionTarget::Workspace,
+                    project_attachment: None,
+                    lifecycle_state: ConversationLifecycleState::Ready,
+                    last_seq: 0,
+                    created_by: ConversationCreator::Termul,
+                    title: None,
+                    title_source: None,
+                },
+                ConversationMutation::CreateConversation,
+            )
+            .await
+            .unwrap();
+        let workspace = Arc::new(SessionWorkspaceService::new(writer));
+        let pty = crate::web::test_pty_manager();
+
+        let spawned = terminal_spawn_resource(
+            SpawnOptions {
+                conversation_id: Some(conversation_id),
+                cwd: Some(base.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+            None,
+            &pty,
+            &workspace,
+        )
+        .await;
+        assert!(spawned.success, "spawn failed: {:?}", spawned.error);
+        let spawned = spawned.data.unwrap();
+        let request = TerminalResumeRequest {
+            conversation_id,
+            terminal_id: spawned.info.id.clone(),
+            last_seq: 0,
+        };
+
+        // Still alive: resume succeeds, so the assertions below cannot pass by
+        // the reference being absent all along.
+        assert!(terminal_resume_resource(&request, &pty, &workspace)
+            .await
+            .is_ok());
+
+        // `pty.terminate` directly, NOT `terminal_terminate_resource`: the
+        // orderly path retires the passive ref too, and this test is about the
+        // disorderly case where only the PTY goes away — the app exits and
+        // kills its children, or the shell simply ends.
+        pty.terminate(&spawned.info.id).await.unwrap();
+        assert!(pty.get(&spawned.info.id).is_none());
+
+        assert!(matches!(
+            terminal_resume_resource(&request, &pty, &workspace).await,
+            Err(TerminalResumeDenial::Gone)
+        ));
+
+        // A reference that was never committed is still a denial, not a dead
+        // end — the two causes must not collapse back into each other.
+        let unknown = TerminalResumeRequest {
+            conversation_id,
+            terminal_id: "terminal-never-existed".to_string(),
+            last_seq: 0,
+        };
+        assert!(matches!(
+            terminal_resume_resource(&unknown, &pty, &workspace).await,
+            Err(TerminalResumeDenial::Unauthorized)
+        ));
     }
 
     /// The host-owned list maps `SessionIndexEntry` (camelCase wire) into the

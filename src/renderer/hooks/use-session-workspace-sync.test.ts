@@ -268,6 +268,68 @@ describe('Conversation-scoped SessionWorkspace sync', () => {
     )
   })
 
+  /**
+   * The counterpart to the denied case above. A manifest reference outlives its
+   * PTY whenever the app exits and kills its children, so on the next launch
+   * the host answers TERMINAL_GONE — the reference is valid, the process is
+   * simply not there any more. Keeping a placeholder for that is worse than
+   * useless: it renders "terminal disconnected" with a retry button that can
+   * never succeed, and because the record is written back to the manifest the
+   * same dead tab returns on every launch.
+   *
+   * UNAUTHORIZED must keep behaving as before — that one may be transient.
+   */
+  it('retires a terminal the host reports as gone instead of leaving a dead placeholder', async () => {
+    const coldWorkspace = workspace(one, 6, 'leaf-gone')
+    if (coldWorkspace.topology?.type !== 'leaf') {
+      throw new Error('expected leaf')
+    }
+    coldWorkspace.topology.terminalIds = ['record-gone', 'record-denied']
+    coldWorkspace.topology.activeTabId = 'term-record-gone'
+    coldWorkspace.resources = [
+      {
+        kind: 'terminal',
+        terminalId: 'pty-gone',
+        terminalRecordId: 'record-gone',
+        conversationId: one
+      },
+      {
+        kind: 'terminal',
+        terminalId: 'pty-denied',
+        terminalRecordId: 'record-denied',
+        conversationId: one
+      }
+    ]
+    getMock.mockResolvedValue({
+      success: true,
+      data: { status: 'loaded', workspace: coldWorkspace }
+    })
+    terminalResumeMock.mockImplementation(async (request: { terminalId: string }) => {
+      if (request.terminalId === 'pty-gone') {
+        return { success: false, error: 'Terminal is gone', code: 'TERMINAL_GONE' }
+      }
+      return { success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }
+    })
+
+    await expect(loadSessionWorkspace(one)).resolves.toBe(true)
+
+    const terminals = useTerminalStore.getState().terminals
+    expect(terminals.find((terminal) => terminal.id === 'record-gone')).toBeUndefined()
+    // The denied record is untouched: that failure may still be transient.
+    expect(terminals.find((terminal) => terminal.id === 'record-denied')).toMatchObject({
+      ptyId: 'pty-denied',
+      healthStatus: 'disconnected'
+    })
+
+    // A retired record must lose its tab too, or the pane still renders the
+    // dead placeholder it no longer has a record for.
+    const root = useWorkspaceStore.getState().root
+    if (root.type !== 'leaf') throw new Error('expected leaf')
+    expect(root.tabs.map((tab) => tab.id)).toEqual(['term-record-denied'])
+    // Never spawn a replacement: a gone terminal is retired, not restarted.
+    expect(terminalSpawnMock).not.toHaveBeenCalled()
+  })
+
   it('keeps a disconnected placeholder when the resume boundary throws', async () => {
     const coldWorkspace = workspace(one, 5, 'leaf-network')
     if (coldWorkspace.topology?.type !== 'leaf') {

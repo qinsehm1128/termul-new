@@ -665,6 +665,10 @@ async fn handle(
                 return Err(("VALIDATION_ERROR", "missing terminalId".to_string()));
             }
             let workspace = terminal_workspace_service(state)?;
+            // Every denial variant collapses to one generic response here. The
+            // remote surface has proved nothing, so telling it apart "gone"
+            // from "not authorized" would be an existence leak — that
+            // distinction is reserved for the local Tauri boundary.
             let (grant, replay) =
                 crate::commands::terminal_resume_resource(&resume, &state.pty, &workspace)
                     .await

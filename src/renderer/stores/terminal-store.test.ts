@@ -269,6 +269,64 @@ describe('terminal-store', () => {
       })
       expect(terminalApi.resume).not.toHaveBeenCalled()
     })
+
+    /**
+     * Retirement lives here, not at the call sites, because three of them reach
+     * this action: the cold-load reconciliation, the "retry connection" button
+     * and the mount-time resume. Only the store sees all three.
+     */
+    it('retires the record when the host reports the terminal as gone', async () => {
+      const seed = (): void => {
+        useTerminalStore.setState({
+          terminals: [
+            {
+              id: 'record-gone',
+              name: 'Restored terminal',
+              projectId: '1',
+              conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+              shell: 'bash',
+              ptyId: 'pty-gone',
+              healthStatus: 'disconnected',
+              output: []
+            }
+          ],
+          activeTerminalId: 'record-gone',
+          ptyIdIndex: new Map([['pty-gone', 'record-gone']]),
+          cleanupRecoveries: {}
+        })
+      }
+
+      seed()
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: false,
+        error: 'Terminal is gone',
+        code: 'TERMINAL_GONE'
+      })
+
+      const gone = await useTerminalStore.getState().resumeTerminalResource('record-gone')
+
+      expect(gone).toEqual({ success: false, error: 'Terminal is gone', code: 'TERMINAL_GONE' })
+      expect(useTerminalStore.getState().terminals).toEqual([])
+      // The index must go with it, or a later lookup resolves a dead PTY.
+      expect(useTerminalStore.getState().ptyIdIndex.get('pty-gone')).toBeUndefined()
+
+      // UNAUTHORIZED may be transient, so its record survives as a placeholder
+      // the user can retry. Same fixture, so the contrast is the code alone.
+      seed()
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: false,
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED'
+      })
+
+      await useTerminalStore.getState().resumeTerminalResource('record-gone')
+
+      expect(useTerminalStore.getState().terminals).toHaveLength(1)
+      expect(useTerminalStore.getState().terminals[0]).toMatchObject({
+        id: 'record-gone',
+        healthStatus: 'disconnected'
+      })
+    })
   })
 
   describe('restartTerminalResource', () => {
