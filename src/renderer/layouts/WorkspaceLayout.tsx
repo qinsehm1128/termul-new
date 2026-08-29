@@ -140,6 +140,7 @@ import {
   useTerminals
 } from '@/stores/terminal-store'
 import { useThemePickerOpen, useThemePickerStore } from '@/stores/theme-picker-store'
+import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
 import {
   editorTabId,
   findPaneById,
@@ -319,6 +320,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const activeProject = useActiveProject()
   const activeGroupId = useProjectStore((state) => state.activeGroupId) ?? null
   const activeProjectId = useActiveProjectId()
+  // `useEditorPersistence` raises this synchronously, before its first await,
+  // and lowers it in its `finally`. It already existed for the manifest writer;
+  // the pane area reads it so the outgoing project's tabs are never on screen
+  // while the destination is still being restored.
+  const isRestoringActiveProjectWorkspace = useWorkspaceManifestSyncStore((state) =>
+    Boolean(activeProjectId && state.manifestRestoreInProgressByProject[activeProjectId])
+  )
   const groups = useProjectStore((state) => state.groups) ?? []
   const activeGroup = useMemo(
     () => groups.find((group) => group.id === activeGroupId),
@@ -2269,16 +2277,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 {/* min-w-0 so the pane group yields width to the list instead of
                     overflowing it off-screen. */}
                 <div className="min-w-0 flex-1">
-                  <PaneRenderer
-                    node={fullscreenPane ?? paneRoot}
-                    onAddTerminal={handleAddTerminal}
-                    onAddBrowserTab={handleNewBrowserTab}
-                    onCloseTerminal={handleCloseTerminal}
-                    onRenameTerminal={renameTerminal}
-                    onCloseEditorTab={handleCloseEditorTab}
-                    closingTerminalIds={closingTerminalIds}
-                    defaultShell={activeProject?.defaultShell || appDefaultShell}
-                  />
+                  {isRestoringActiveProjectWorkspace ? (
+                    // The pane tree is still the OUTGOING project's until the
+                    // restore reaches `loadProjectWorkspace` at its very end —
+                    // it deliberately defers the swap to avoid a flash of empty
+                    // pane. That window spans a serial `openFile` loop, so the
+                    // previous project's tabs stay on screen long enough to look
+                    // real and clickable. A skeleton is honest about both: the
+                    // stale tabs are gone and the pane reads as loading rather
+                    // than as "you have no tabs".
+                    <ShellSkeleton />
+                  ) : (
+                    <PaneRenderer
+                      node={fullscreenPane ?? paneRoot}
+                      onAddTerminal={handleAddTerminal}
+                      onAddBrowserTab={handleNewBrowserTab}
+                      onCloseTerminal={handleCloseTerminal}
+                      onRenameTerminal={renameTerminal}
+                      onCloseEditorTab={handleCloseEditorTab}
+                      closingTerminalIds={closingTerminalIds}
+                      defaultShell={activeProject?.defaultShell || appDefaultShell}
+                    />
+                  )}
                 </div>
                 {isTerminalListVisible && <TerminalListPanel />}
               </motion.div>

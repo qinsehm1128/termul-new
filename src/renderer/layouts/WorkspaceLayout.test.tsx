@@ -10,6 +10,7 @@ import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
+import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
@@ -465,6 +466,9 @@ beforeEach(() => {
   mockUseProjects.mockReturnValue([])
   mockUseActiveProject.mockReturnValue(null)
   mockUseActiveProjectId.mockReturnValue('')
+  // Module-level store: a restore flag left set by one test would blank the
+  // pane area for every test after it.
+  useWorkspaceManifestSyncStore.setState({ manifestRestoreInProgressByProject: {} })
   mockUseTerminals.mockReturnValue([])
   mockUseAllTerminals.mockReturnValue([])
   mockUseActiveTerminal.mockReturnValue(null)
@@ -525,6 +529,59 @@ describe('WorkspaceLayout - Empty States', () => {
 
     expect(view.container.firstElementChild).toHaveClass('h-full', 'min-h-0', 'overflow-hidden')
     expect(view.container.firstElementChild).not.toHaveClass('h-screen')
+  })
+
+  /**
+   * `useEditorPersistence` keeps the OUTGOING project's pane tree mounted for
+   * the whole restore — it defers `loadProjectWorkspace` to the very end to
+   * avoid a flash of empty pane, and that window spans a serial `openFile`
+   * loop. The result is worse than an empty pane: the previous project's tabs
+   * stay on screen looking real and clickable. The restore guard already exists
+   * for the manifest writer; the pane area has to honour it too.
+   */
+  it('shows a skeleton instead of the stale pane tree while the active project restores', async () => {
+    mockUseActiveProjectId.mockReturnValue('project-1')
+    act(() => {
+      useWorkspaceManifestSyncStore.getState().setManifestRestoreInProgress('project-1', true)
+    })
+
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<WorkspaceLayout />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+
+    expect(screen.queryByTestId('pane-renderer')).not.toBeInTheDocument()
+
+    // And it comes straight back once the destination layout has landed, so the
+    // guard cannot pass by hiding the pane area for good.
+    act(() => {
+      useWorkspaceManifestSyncStore.getState().setManifestRestoreInProgress('project-1', false)
+    })
+    expect(await screen.findByTestId('pane-renderer')).toBeVisible()
+  })
+
+  it('keeps the pane tree while a DIFFERENT project restores', async () => {
+    mockUseActiveProjectId.mockReturnValue('project-1')
+    act(() => {
+      useWorkspaceManifestSyncStore.getState().setManifestRestoreInProgress('project-2', true)
+    })
+
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<WorkspaceLayout />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+
+    expect(await screen.findByTestId('pane-renderer')).toBeVisible()
   })
 
   it('renders the regular project workspace at root without the conversation area', async () => {
