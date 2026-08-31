@@ -315,19 +315,95 @@ async fn forward_to_parent_inner(
     }
 }
 
+/// How often the watchdog asks the parent whether this child still has a job.
+const PARENT_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Consecutive failed probes before the child concludes it is useless.
+/// Consecutive, not cumulative: a parent that is briefly unreachable under load
+/// must not accumulate its way to a spurious exit over a long-lived session.
+const PARENT_PROBE_FAILURES_BEFORE_EXIT: u32 = 3;
+
+/// Return once `probe` has reported failure `failures_before_exit` times in a
+/// row, resetting the streak on every success.
+///
+/// Split from the TCP probe so the streak semantics are testable without a
+/// socket or a real clock.
+async fn wait_for_consecutive_probe_failures<P, F>(
+    mut probe: P,
+    interval: std::time::Duration,
+    failures_before_exit: u32,
+) where
+    P: FnMut() -> F,
+    F: std::future::Future<Output = bool>,
+{
+    let mut consecutive = 0_u32;
+    loop {
+        tokio::time::sleep(interval).await;
+        if probe().await {
+            consecutive = 0;
+            continue;
+        }
+        consecutive += 1;
+        if consecutive >= failures_before_exit {
+            return;
+        }
+    }
+}
+
+/// Ask the parent whether this child's token is still registered.
+///
+/// Answers both questions that matter with one round trip: a parent that is
+/// gone cannot be connected to, and a parent that no longer knows the token has
+/// already made every future tool call from this child fail at its first step.
+async fn probe_token_is_alive(config: &ChildConfig) -> bool {
+    let request = FrameRequest {
+        token: config.token.clone(),
+        session_id: config.session_id.clone(),
+        kind: FrameKind::TokenAlive,
+        todos: Vec::new(),
+        title: None,
+        payload: None,
+    };
+    forward_to_parent(config, request, "alive").await.is_ok()
+}
+
+/// Return once this child can no longer serve anyone: its token has been
+/// unregistered, or the parent is unreachable.
+async fn wait_until_child_is_useless(config: ChildConfig) {
+    wait_for_consecutive_probe_failures(
+        || {
+            let config = config.clone();
+            async move { probe_token_is_alive(&config).await }
+        },
+        PARENT_PROBE_INTERVAL,
+        PARENT_PROBE_FAILURES_BEFORE_EXIT,
+    )
+    .await;
+}
+
 /// Drive the rmcp server over stdio. Returns when the agent closes stdin
-/// (normal disconnect) or the server fails to initialize.
+/// (normal disconnect), when this child has nothing left to serve, or when the
+/// server fails to initialize.
 async fn serve_mcp_server(config: ChildConfig) -> Result<(), String> {
+    let watchdog_config = config.clone();
     let (stdin, stdout) = rmcp::transport::io::stdio();
     let service = TermulPlanServer { config };
     let running = serve_server(service, (stdin, stdout))
         .await
         .map_err(|e| format!("mcp server initialize failed: {e}"))?;
-    // Wait until the transport closes (agent disconnect → stdin EOF).
-    running
-        .waiting()
-        .await
-        .map_err(|e| format!("mcp server ended with error: {e}"))?;
+    tokio::select! {
+        // Normal disconnect: the agent closes stdin.
+        result = running.waiting() => {
+            result.map_err(|e| format!("mcp server ended with error: {e}"))?;
+        }
+        // Fallback for the two ways stdin EOF never arrives. It only fires when
+        // the AGENT closes the pipe, so an agent that outlives its own parent
+        // holds us open forever; and an agent that keeps a child from a closed
+        // session holds a child that can no longer answer anything, because the
+        // token lookup that every call starts with now rejects it. One probe
+        // settles both, and needs no cooperation from the agent.
+        () = wait_until_child_is_useless(watchdog_config) => {}
+    }
     Ok(())
 }
 
@@ -428,5 +504,126 @@ mod tests {
         let cfg = parse_env().expect("AGENT_ID is optional");
         assert_eq!(cfg.agent_id, "");
         clear_env();
+    }
+
+    /// The watchdog's own tests all pass while it sits unwired — only a
+    /// dead-code warning marks the gap, and warnings do not fail a build. This
+    /// asserts the wiring itself.
+    #[test]
+    fn serve_mcp_server_races_the_watchdog_against_stdin_eof() {
+        let source = include_str!("child.rs");
+        let start = source
+            .find("async fn serve_mcp_server(")
+            .expect("serve_mcp_server");
+        let end = source[start..]
+            .find("\n#[cfg(test)]")
+            .map(|offset| start + offset)
+            .expect("serve_mcp_server end");
+        let body = &source[start..end];
+        assert!(
+            body.contains("wait_until_child_is_useless(watchdog_config)"),
+            "the usefulness fallback must be wired into the server loop"
+        );
+        assert!(
+            body.contains("running.waiting()"),
+            "the normal stdin-EOF disconnect must still end the server"
+        );
+        assert!(
+            body.contains("tokio::select!"),
+            "the two exit paths must race — awaiting either one in sequence reinstates the hang"
+        );
+    }
+
+    /// End-to-end against a real parent, because the thing that matters is the
+    /// contract, not the call shape: a probe that merely opened a socket would
+    /// still succeed here after the session is gone, since the listener is
+    /// shared by every session and stays bound.
+    #[tokio::test]
+    async fn probe_reads_alive_while_registered_and_dead_after_unregister() {
+        let server = crate::acp::host_mcp::parent::HostPlanServer::start(vec![], None);
+        let (port, token, provisional_sid) = server.register_session("agent-1");
+        server.bind_session(&token, "session-real-1");
+        let config = ChildConfig {
+            port,
+            token,
+            session_id: provisional_sid,
+            agent_id: "agent-1".to_string(),
+        };
+
+        assert!(
+            probe_token_is_alive(&config).await,
+            "a registered child must read as alive"
+        );
+
+        server.unregister_session("session-real-1");
+
+        assert!(
+            !probe_token_is_alive(&config).await,
+            "once the token is dropped the child can never serve a call again"
+        );
+    }
+
+    const TEST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Drive `probe` from a fixed script; the returned counter records how many
+    /// probes actually ran.
+    fn scripted_probe(
+        script: Vec<bool>,
+    ) -> (
+        impl FnMut() -> std::future::Ready<bool>,
+        std::rc::Rc<std::cell::Cell<usize>>,
+    ) {
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+        let counter = std::rc::Rc::clone(&calls);
+        let probe = move || {
+            let index = counter.get();
+            counter.set(index + 1);
+            // Past the end of the script the parent stays reachable, so a test
+            // that expects no exit cannot pass by simply running out of script.
+            std::future::ready(script.get(index).copied().unwrap_or(true))
+        };
+        (probe, calls)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_returns_after_the_configured_consecutive_failures() {
+        let (probe, calls) = scripted_probe(vec![false, false, false]);
+        wait_for_consecutive_probe_failures(probe, TEST_INTERVAL, 3).await;
+        assert_eq!(
+            calls.get(),
+            3,
+            "must return on the third failure, not later"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_does_not_return_while_the_parent_answers() {
+        let (probe, _calls) = scripted_probe(vec![true; 8]);
+        let result = tokio::time::timeout(
+            TEST_INTERVAL * 20,
+            wait_for_consecutive_probe_failures(probe, TEST_INTERVAL, 3),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "a reachable parent must never trip the watchdog"
+        );
+    }
+
+    /// The streak resets on success. Written as the failure mode it guards:
+    /// a cumulative counter would exit here on the fourth failure even though
+    /// the parent answered in between.
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_resets_the_streak_on_a_successful_probe() {
+        let (probe, _calls) = scripted_probe(vec![false, false, true, false, false]);
+        let result = tokio::time::timeout(
+            TEST_INTERVAL * 20,
+            wait_for_consecutive_probe_failures(probe, TEST_INTERVAL, 3),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "two failures, a success, then two more must not count as three in a row"
+        );
     }
 }

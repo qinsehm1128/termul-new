@@ -400,6 +400,15 @@ impl HostPlanServer {
             return FrameReply::err("auth rejected");
         }
 
+        // Liveness probe answered here, on the strength of the token lookup
+        // above and nothing else. It must NOT fall through to the binding and
+        // active-turn checks below: a registered child that simply has no turn
+        // in flight is healthy, and answering "no active turn" would tell it to
+        // exit while it is still the route for its session.
+        if matches!(req.kind, FrameKind::TokenAlive) {
+            return FrameReply::ok();
+        }
+
         // The real session_id must be bound (post `session/new`). If not, the
         // agent called the tool before the session was created — shouldn't
         // happen, but reject defensively.
@@ -453,6 +462,13 @@ impl HostPlanServer {
         };
 
         match req.kind {
+            // Unreachable in practice — the probe returns above, before the
+            // binding and active-turn checks. Answered rather than
+            // `unreachable!()` so that removing the early return degrades to a
+            // wrong-but-safe answer instead of panicking the listener; the
+            // early return itself is held in place by
+            // `token_alive_probe_succeeds_while_bound_with_no_active_turn`.
+            FrameKind::TokenAlive => FrameReply::ok(),
             FrameKind::Plan => {
                 if req.title.is_some() {
                     return FrameReply::err("plan frame must not include title");
@@ -683,7 +699,9 @@ impl HostPlanServer {
                     })
                     .and_then(|task| serde_json::to_value(task).map_err(|error| error.to_string()))
             }
-            FrameKind::Plan | FrameKind::SetTitle => unreachable!("scheduled match only"),
+            FrameKind::Plan | FrameKind::SetTitle | FrameKind::TokenAlive => {
+                unreachable!("scheduled match only")
+            }
         };
         match result {
             Ok(value) => {
@@ -988,6 +1006,72 @@ mod tests {
             let reply = connect_and_send(port, &frame).await;
             assert_eq!(reply["ok"], false);
             assert_eq!(reply["error"], "session not ready");
+        });
+    }
+
+    /// The probe answers from the token lookup alone. An unbound child is
+    /// healthy — it just has not finished `session/new` yet — and a `plan` call
+    /// in the same window is rejected with "session not ready", so answering
+    /// the probe from the same checks would tell a brand-new child to exit.
+    #[test]
+    fn token_alive_probe_succeeds_before_the_session_is_bound() {
+        let server = HostPlanServer::start(vec![Arc::new(CapturingSink::default())], None);
+        let (port, token, provisional) = server.register_session("agent-1");
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let frame = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "kind": "token_alive",
+            });
+            let reply = connect_and_send(port, &frame).await;
+            assert_eq!(reply["ok"], true, "a registered child must read as alive");
+        });
+    }
+
+    /// The load-bearing case. A bound session that simply has no turn in flight
+    /// is the steady state for an idle chat: `plan` would be rejected with "no
+    /// active turn", and if the probe fell through to that check every idle
+    /// child would exit and take the session's plan route with it.
+    #[test]
+    fn token_alive_probe_succeeds_while_bound_with_no_active_turn() {
+        let server = HostPlanServer::start(vec![Arc::new(CapturingSink::default())], None);
+        let (port, token, provisional) = server.register_session("agent-1");
+        server.bind_session(&token, "session-real-1");
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let frame = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "kind": "token_alive",
+            });
+            let reply = connect_and_send(port, &frame).await;
+            assert_eq!(
+                reply["ok"], true,
+                "an idle but registered child must not read itself as useless"
+            );
+        });
+    }
+
+    /// The exit signal. Once the token is gone every call — including the
+    /// stale-route repair, which runs after this same lookup — fails here, so
+    /// the child can never serve anyone again.
+    #[test]
+    fn token_alive_probe_fails_once_the_session_is_unregistered() {
+        let server = HostPlanServer::start(vec![Arc::new(CapturingSink::default())], None);
+        let (port, token, provisional) = server.register_session("agent-1");
+        server.bind_session(&token, "session-real-1");
+        server.unregister_session("session-real-1");
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let frame = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "kind": "token_alive",
+            });
+            let reply = connect_and_send(port, &frame).await;
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["error"], "auth rejected");
         });
     }
 

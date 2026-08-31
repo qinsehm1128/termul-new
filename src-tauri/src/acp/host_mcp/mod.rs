@@ -102,6 +102,17 @@ pub struct TermulPlanTodo {
 pub enum FrameKind {
     #[default]
     Plan,
+    /// Liveness probe: "is my token still registered?".
+    ///
+    /// Answered from the token lookup alone, deliberately BEFORE the binding
+    /// and active-turn checks — a registered child with no turn in flight is
+    /// perfectly healthy and must not read that as a reason to exit.
+    ///
+    /// A rejected probe is conclusive: `unregister_session` drops the token,
+    /// and every tool call starts with the same lookup, so a child whose token
+    /// is gone can never serve another call — not even through the stale-route
+    /// repair, which runs after the lookup it would already have failed.
+    TokenAlive,
     SetTitle,
     ScheduledTaskList,
     ScheduledTaskGet,
