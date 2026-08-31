@@ -58,10 +58,11 @@ export function useAddCommand(): (
         timestamp: Date.now()
       })
 
-      // Persist after adding
+      // Persist after adding. Debounced because every entry rewrites the whole
+      // project slice, and commands arrive as fast as the user types.
       const { entries } = useCommandHistoryStore.getState()
       const projectEntries = entries.filter((e) => e.projectId === projectId)
-      await persistenceApi.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
+      await persistenceApi.writeDebounced(COMMAND_HISTORY_KEY(projectId), projectEntries)
     },
     [addCommand]
   )

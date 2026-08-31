@@ -27,6 +27,7 @@ import { useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
 import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { systemApi, terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
+import { prepareCommandForHistory } from '@/lib/command-capture'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { isMac, isPlatformModifier } from '@/lib/platform'
@@ -344,6 +345,14 @@ export interface ConnectedTerminalProps {
   onBoundToStoreTerminal?: (ptyId: string) => void
   onExit?: (exitCode: number, signal?: number) => void
   onError?: (error: string) => void
+  /**
+   * Called with a line the user submitted, after it has passed the capture
+   * gate: input the terminal never echoed (password prompts) is dropped, and
+   * credentials written on the line are masked. Safe to persist as-is.
+   *
+   * This is typed input, not shell execution — history recall, cursor edits and
+   * TUI keystrokes all reach here as if they were commands.
+   */
   onCommand?: (command: string) => void
   className?: string
   autoFocus?: boolean
@@ -874,11 +883,18 @@ function ConnectedTerminalComponent({
 
     // Track command input for history
     if (data === '\r' || data === '\n') {
-      // Enter pressed - capture command
-      const command = currentLineRef.current
+      // Enter pressed - capture command.
+      //
+      // Read the screen before forwarding the newline to the PTY: the cursor is
+      // still on the line the user just typed, which is what the echo guard
+      // needs to see. Once the shell processes the newline that row is gone.
+      const line = currentLineRef.current
       currentLineRef.current = ''
-      if (command && onCommandRef.current) {
-        onCommandRef.current(command)
+      if (onCommandRef.current) {
+        const command = prepareCommandForHistory(terminalRef.current, line)
+        if (command) {
+          onCommandRef.current(command)
+        }
       }
     } else if (data === '\x7f' || data === '\b') {
       // Backspace

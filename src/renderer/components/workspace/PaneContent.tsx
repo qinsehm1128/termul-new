@@ -8,6 +8,7 @@ import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentLauncher } from '@/components/agents/AgentLauncher'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAddCommand } from '@/hooks/use-command-history'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { resolveConversationSessionId } from '@/lib/conversation-binding'
@@ -101,6 +102,7 @@ export function PaneContent({
   const { t } = useTranslation(['workspace', 'terminal'])
   const location = useLocation()
   const isConversationWorkspace = location.pathname.startsWith('/c/')
+  const addCommandToHistory = useAddCommand()
   // CRITICAL FIX: Get terminal IDs from this pane's tabs
   const terminalIdsInPane = useMemo(
     () => new Set(pane.tabs.filter((t) => t.type === 'terminal').map((t) => t.terminalId)),
@@ -470,6 +472,17 @@ export function PaneContent({
                           if (terminal.ptyId !== ptyId) {
                             setTerminalPtyId(terminal.id, ptyId)
                           }
+                        }}
+                        onCommand={(command) => {
+                          // History is keyed by project; a terminal without one
+                          // has nowhere to be filed.
+                          if (!terminal.projectId) return
+                          void addCommandToHistory(
+                            command,
+                            terminal.name,
+                            terminal.id,
+                            terminal.projectId
+                          )
                         }}
                         initialScrollback={terminal.pendingScrollback}
                         initialModes={terminal.pendingModes}
