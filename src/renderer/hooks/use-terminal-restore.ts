@@ -22,7 +22,6 @@ import type {
 import { useAcpStore } from '../stores/acp-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useProjectStore } from '../stores/project-store'
-import { useSessionWorkspaceSyncStore } from '../stores/session-workspace-sync-store'
 import { useTerminalStore } from '../stores/terminal-store'
 import { findPaneContainingTab, terminalTabId, useWorkspaceStore } from '../stores/workspace-store'
 import {
@@ -805,7 +804,11 @@ async function restoreFromLayout(
   isCancelled: () => boolean
 ): Promise<RestoreExecutionResult> {
   const restoreId = `restore-${randomUUID().slice(0, 5)}`
-  const conversationId = useSessionWorkspaceSyncStore.getState().activeConversationId ?? undefined
+  // No conversation scope here by construction: `terminals/{projectId}` holds
+  // scope-less project terminals only (see `isProjectScopedTerminal`), and the
+  // record carries no conversation of its own. Adopting whichever conversation
+  // happens to be active at restore time would attribute these terminals to an
+  // unrelated chat and register them as its SessionWorkspace resources.
 
   // FIX #2: Use proper lock acquire/release with owner tracking
   if (!acquireGlobalSpawnLock(restoreId)) {
@@ -851,7 +854,6 @@ async function restoreFromLayout(
     // Create all terminals at once to avoid multiple re-renders
     const newTerminals: Array<{
       id: string
-      conversationId?: string
       name: string
       projectId: string
       shell: string
@@ -940,14 +942,12 @@ async function restoreFromLayout(
             const result = await terminalApi.spawn(
               agentSpawnOptions
                 ? {
-                    ...(conversationId ? { conversationId } : {}),
                     projectId,
                     cwd: persistedTerminal.cwd,
                     ...agentSpawnOptions,
                     ...(spawnEnv ? { env: spawnEnv } : {})
                   }
                 : {
-                    ...(conversationId ? { conversationId } : {}),
                     projectId,
                     shell: normalizedShell,
                     cwd: persistedTerminal.cwd,
@@ -1014,7 +1014,6 @@ async function restoreFromLayout(
         idMap.set(persistedTerminal.id, newId)
         newTerminals.push({
           id: newId,
-          ...(conversationId ? { conversationId } : {}),
           name: persistedTerminal.name,
           projectId,
           shell: normalizedShell,
@@ -1125,7 +1124,8 @@ async function createDefaultTerminal(
   isCancelled: () => boolean
 ): Promise<RestoreExecutionResult> {
   const defaultId = `default-${randomUUID().slice(0, 5)}`
-  const conversationId = useSessionWorkspaceSyncStore.getState().activeConversationId ?? undefined
+  // A project's default terminal is scope-less for the same reason the restored
+  // ones are: nothing about it belongs to whichever chat is open right now.
 
   // FIX #2: Use proper lock acquire/release with owner tracking
   if (!acquireGlobalSpawnLock(defaultId)) {
@@ -1219,7 +1219,6 @@ async function createDefaultTerminal(
         const result = await terminalApi.spawn({
           shell,
           cwd,
-          ...(conversationId ? { conversationId } : {}),
           projectId,
           ...(hasProjectEnv ? { env } : {})
         })
@@ -1299,7 +1298,6 @@ async function createDefaultTerminal(
         terminal.id === newTerminal.id
           ? {
               ...terminal,
-              ...(conversationId ? { conversationId } : {}),
               viewState: 'visible'
             }
           : terminal

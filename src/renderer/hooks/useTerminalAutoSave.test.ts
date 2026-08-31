@@ -114,6 +114,39 @@ describe('useTerminalAutoSave', () => {
       expect(result.updatedAt).toBeDefined()
     })
 
+    it('excludes conversation-scoped terminals so SessionWorkspace stays their only owner', () => {
+      const terminals: Terminal[] = [
+        { id: '1', name: 'Project terminal', projectId: 'proj-1', shell: 'bash' },
+        {
+          id: '2',
+          name: 'Chat terminal',
+          projectId: 'proj-1',
+          conversationId: 'conv-a',
+          shell: 'bash'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(result.terminals.map((terminal) => terminal.id)).toEqual(['1'])
+    })
+
+    it('drops the active id when the active terminal is conversation-scoped', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '2',
+          name: 'Chat terminal',
+          projectId: 'proj-1',
+          conversationId: 'conv-a',
+          shell: 'bash'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '2')
+
+      expect(result.activeTerminalId).toBeNull()
+    })
+
     it('should set activeTerminalId to null when active terminal not in project', () => {
       const terminals: Terminal[] = [
         { id: '1', name: 'Terminal 1', projectId: 'proj-1', shell: 'powershell' }
@@ -340,6 +373,33 @@ describe('useTerminalAutoSave', () => {
         .getState()
         .terminals.find((t) => t.id === terminal.id)
       expect(updatedTerminal?.pendingScrollback).toEqual(['line 1', 'line 2'])
+    })
+
+    it('omits conversation-scoped terminals from the manual save path too', async () => {
+      // Built explicitly rather than via addTerminal: its id is Date.now(), so
+      // two calls in the same millisecond collide and the fixture silently
+      // becomes one terminal.
+      useTerminalStore.setState({
+        terminals: [
+          { id: 'project-term', name: 'Project terminal', projectId: 'proj-1', shell: 'bash' },
+          {
+            id: 'chat-term',
+            name: 'Chat terminal',
+            projectId: 'proj-1',
+            conversationId: 'conv-a',
+            shell: 'bash'
+          }
+        ],
+        activeTerminalId: 'project-term'
+      })
+
+      await saveTerminalLayout('proj-1')
+
+      const { persistenceApi } = await import('@/lib/persistence-api')
+      const written = vi.mocked(persistenceApi.write).mock.calls.at(-1)?.[1] as
+        | { terminals: PersistedTerminal[] }
+        | undefined
+      expect(written?.terminals.map((terminal) => terminal.id)).toEqual(['project-term'])
     })
 
     it('records transcript persistence diagnostics during project-switch saves', async () => {

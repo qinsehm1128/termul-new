@@ -89,6 +89,26 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
   }
 }
 
+/**
+ * Whether this terminal belongs in `terminals/{projectId}`.
+ *
+ * A conversation-scoped terminal is already owned by its SessionWorkspace
+ * (`sessions/YYYY/MM/DD/{conversationId}/workspace.json`), which is the single
+ * authority for "which conversation does this terminal belong to". Writing it
+ * here too would create a second authority: `PersistedTerminal` carries no
+ * `conversationId`, so the project file can only describe *that* a terminal
+ * existed, never *whose* it was — and the project restore path would then
+ * materialise the same terminal a second time under whichever conversation
+ * happened to be active.
+ *
+ * The project file therefore holds scope-less project terminals only. This
+ * mirrors the host, which likewise skips SessionWorkspace admission when a
+ * spawn carries no conversation id (`tracks_session_workspace_ref`).
+ */
+export function isProjectScopedTerminal(terminal: Terminal, projectId: string): boolean {
+  return terminal.projectId === projectId && !terminal.conversationId
+}
+
 export interface SaveTerminalLayoutOptions {
   correlationId?: string
   reason?: 'project-switch' | 'manual-save' | 'auto-save'
@@ -143,7 +163,7 @@ export function serializeTerminalsForProject(
   projectId: string,
   activeTerminalId: string
 ): PersistedTerminalLayout {
-  const projectTerminals = terminals.filter((t) => t.projectId === projectId)
+  const projectTerminals = terminals.filter((t) => isProjectScopedTerminal(t, projectId))
 
   const terminalSnapshots = projectTerminals.map((terminal) =>
     toPersistedTerminalSnapshot(terminal)
@@ -290,7 +310,9 @@ export async function saveTerminalLayout(
   options?: SaveTerminalLayoutOptions
 ): Promise<void> {
   const state = useTerminalStore.getState()
-  const projectTerminals = state.terminals.filter((terminal) => terminal.projectId === projectId)
+  const projectTerminals = state.terminals.filter((terminal) =>
+    isProjectScopedTerminal(terminal, projectId)
+  )
   const terminalSnapshots = projectTerminals.map((terminal) => ({
     terminal,
     snapshot: toPersistedTerminalSnapshot(terminal)
