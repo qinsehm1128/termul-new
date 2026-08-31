@@ -111,3 +111,6 @@ VERIFICATION_CHECKLIST.md
 /compositions/
 /plans
 .codebase-memory/
+
+# Local-only reference checkouts for comparative analysis (never committed)
+/reference/
