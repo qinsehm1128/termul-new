@@ -1443,6 +1443,16 @@ static CLEANUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
 /// cut off mid-way with nothing killed at all.
 const LAST_RESORT_PTY_CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Slice of the `RunEvent::Exit` budget reserved for winding the ACP agents
+/// down, taken before the PTY reap so the two stages share one bounded budget.
+///
+/// Deliberately small: `stop_producers` SENDS `AcpCommand::Shutdown` on an
+/// unbounded channel — which never blocks — before it joins the driver threads,
+/// so every agent has already been told to stop by the time this expires. Only
+/// the join half is sacrificed, and the agents keep winding down in parallel
+/// with the PTY reap that follows.
+const LAST_RESORT_ACP_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_millis(800);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Keep the legacy importer linkable for compatibility tests and older internal callers, but
@@ -2274,29 +2284,64 @@ pub fn run() {
             if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
-            let Some(pty_manager) = app_handle
+            // Both managers are resolved independently. The PTY manager used to
+            // gate this arm with a `let ... else { return }`, which would have
+            // silently skipped the ACP stage as well.
+            let acp_manager = app_handle
+                .try_state::<Arc<AcpManager>>()
+                .map(|state| state.inner().clone());
+            let pty_manager = app_handle
                 .try_state::<Arc<pty::PtyManager>>()
-                .map(|state| state.inner().clone())
-            else {
+                .map(|state| state.inner().clone());
+            if acp_manager.is_none() && pty_manager.is_none() {
                 return;
-            };
-            let receipt = tauri::async_runtime::block_on(async move {
-                pty_manager
-                    .kill_all_until(
-                        tokio::time::Instant::now() + LAST_RESORT_PTY_CLEANUP_DEADLINE,
+            }
+            tauri::async_runtime::block_on(async move {
+                let started = tokio::time::Instant::now();
+                // ACP first: an adapter that outlives the app keeps its own
+                // children alive (including the injected plan MCP server, whose
+                // stdin-EOF exit never fires while the orphaned adapter holds
+                // the pipe open). Telling the agents to stop early also lets
+                // them wind down while the PTY reap below runs.
+                if let Some(acp_manager) = acp_manager {
+                    match tokio::time::timeout_at(
+                        started + LAST_RESORT_ACP_REAP_DEADLINE,
+                        acp_manager.stop_producers(),
                     )
                     .await
+                    {
+                        Ok(Ok(())) => log::info!(
+                            "[desktop-exit] shutdown_phase=stop_acp_producers_on_loop_exit stable_code=OK result=PASS"
+                        ),
+                        Ok(Err(error)) => log::error!(
+                            "[desktop-exit] shutdown_phase=stop_acp_producers_on_loop_exit stable_code={} result=FAILED error={error}",
+                            crate::web::ACP_PRODUCER_STOP_FAILED
+                        ),
+                        // The shutdown was still delivered; only the join was
+                        // cut short. Logged as a distinct outcome so a slow
+                        // agent teardown is not mistaken for a failed one.
+                        Err(_) => log::warn!(
+                            "[desktop-exit] shutdown_phase=stop_acp_producers_on_loop_exit stable_code={} result=SIGNALLED_NOT_JOINED",
+                            crate::web::ACP_PRODUCER_STOP_FAILED
+                        ),
+                    }
+                }
+                if let Some(pty_manager) = pty_manager {
+                    let receipt = pty_manager
+                        .kill_all_until(started + LAST_RESORT_PTY_CLEANUP_DEADLINE)
+                        .await;
+                    log::info!(
+                        "[desktop-exit] shutdown_phase=cleanup_ptys_on_loop_exit stable_code={} result={} attempted={} succeeded={} failed={} in_flight={} elapsed_ms={}",
+                        if receipt.clean_success() { "OK" } else { crate::web::PTY_CLEANUP_FAILED },
+                        if receipt.clean_success() { "PASS" } else { "FAILED" },
+                        receipt.attempted,
+                        receipt.succeeded,
+                        receipt.failed,
+                        receipt.in_flight,
+                        receipt.elapsed_ms
+                    );
+                }
             });
-            log::info!(
-                "[desktop-exit] shutdown_phase=cleanup_ptys_on_loop_exit stable_code={} result={} attempted={} succeeded={} failed={} in_flight={} elapsed_ms={}",
-                if receipt.clean_success() { "OK" } else { crate::web::PTY_CLEANUP_FAILED },
-                if receipt.clean_success() { "PASS" } else { "FAILED" },
-                receipt.attempted,
-                receipt.succeeded,
-                receipt.failed,
-                receipt.in_flight,
-                receipt.elapsed_ms
-            );
             return;
         }
         if let RunEvent::ExitRequested { api, .. } = event {
@@ -2509,6 +2554,44 @@ mod tests {
         assert!(
             arm.contains("CLEANUP_DONE"),
             "a completed graceful shutdown must short-circuit the reap"
+        );
+    }
+
+    /// The same platform quit that orphaned every PTY also orphaned every ACP
+    /// adapter: the `Exit` arm reaped only the PTYs. An adapter that outlives
+    /// the app keeps its own children alive — including the injected plan MCP
+    /// server, which waits on a stdin EOF the orphaned adapter never sends.
+    #[test]
+    fn loop_exit_also_reaps_acp_agents_not_just_ptys() {
+        let source = include_str!("lib.rs");
+        let run_start = source
+            .find("app.run(|app_handle, event| {")
+            .expect("run event closure");
+        let run = &source[run_start..];
+        let exit_arm = run
+            .find("matches!(event, RunEvent::Exit)")
+            .expect("RunEvent::Exit arm");
+        let requested_arm = run
+            .find("if let RunEvent::ExitRequested")
+            .expect("RunEvent::ExitRequested arm");
+        let arm = &run[exit_arm..requested_arm];
+        assert!(
+            arm.contains("stop_producers"),
+            "the Exit arm must wind the ACP agents down, not only the PTYs"
+        );
+        assert!(
+            arm.contains("LAST_RESORT_ACP_REAP_DEADLINE"),
+            "the ACP stage must be bounded — it shares the terminate callback's budget"
+        );
+        let acp_stage = arm.find("stop_producers").expect("acp stage");
+        let pty_stage = arm.find("kill_all_until").expect("pty stage");
+        assert!(
+            acp_stage < pty_stage,
+            "shutdown must be signalled to the agents before the PTY reap, so they wind down in parallel with it"
+        );
+        assert!(
+            !arm.contains("else {\n                return;\n            };"),
+            "neither manager may gate the other's stage with an early return"
         );
     }
 
