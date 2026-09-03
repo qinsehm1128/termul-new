@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * Finding C regression test.
  *
  * The injected annotation overlay used to early-return when a layer already
- * existed (`if (document.getElementById('__termul_annotation_layer')) return;`),
+ * existed (`if (document.getElementById('__se_annotation_layer')) return;`),
  * which turned re-injection into a silent no-op and left stale/absent capture
  * handlers bound. The overlay now reconciles: it tears the previous layer down
  * and installs a fresh set of capture-phase listeners.
@@ -34,15 +34,15 @@ function isCapture(arg: unknown): boolean {
 }
 
 interface OverlayWindow {
-  __termul_annotation_mode?: string
-  __termul_annotation_tab_id?: string
-  __termul_remove_annotation_overlay?: () => void
+  __se_annotation_mode?: string
+  __se_annotation_tab_id?: string
+  __se_remove_annotation_overlay?: () => void
 }
 
 function injectOverlay(mode: string, tabId: string): void {
   const w = window as unknown as OverlayWindow
-  w.__termul_annotation_mode = mode
-  w.__termul_annotation_tab_id = tabId
+  w.__se_annotation_mode = mode
+  w.__se_annotation_tab_id = tabId
   // Indirect eval runs the IIFE in global scope where jsdom `window`/`document` live.
   // biome-ignore lint/complexity/noCommaOperator: indirect eval idiom requires the comma sequence
   ;(0, eval)(overlaySource)
@@ -62,17 +62,17 @@ describe('annotation overlay reconcile (Finding C)', () => {
     document.body.innerHTML = ''
     document.head.innerHTML = ''
     const w = window as unknown as OverlayWindow
-    delete w.__termul_remove_annotation_overlay
-    delete w.__termul_annotation_mode
-    delete w.__termul_annotation_tab_id
+    delete w.__se_remove_annotation_overlay
+    delete w.__se_annotation_mode
+    delete w.__se_annotation_tab_id
     addSpy = vi.spyOn(document, 'addEventListener')
     removeSpy = vi.spyOn(document, 'removeEventListener')
   })
 
   afterEach(() => {
     const w = window as unknown as OverlayWindow
-    if (typeof w.__termul_remove_annotation_overlay === 'function') {
-      w.__termul_remove_annotation_overlay()
+    if (typeof w.__se_remove_annotation_overlay === 'function') {
+      w.__se_remove_annotation_overlay()
     }
     addSpy.mockRestore()
     removeSpy.mockRestore()
@@ -83,9 +83,9 @@ describe('annotation overlay reconcile (Finding C)', () => {
   it('installs the overlay layer and capture-phase handlers on first injection', () => {
     injectOverlay('select', 'tab-1')
 
-    expect(document.getElementById('__termul_annotation_layer')).not.toBeNull()
+    expect(document.getElementById('__se_annotation_layer')).not.toBeNull()
     expect(captureListenerCalls(addSpy).sort()).toEqual([...CAPTURE_EVENTS].sort())
-    expect(typeof (window as unknown as OverlayWindow).__termul_remove_annotation_overlay).toBe(
+    expect(typeof (window as unknown as OverlayWindow).__se_remove_annotation_overlay).toBe(
       'function'
     )
   })
@@ -103,7 +103,7 @@ describe('annotation overlay reconcile (Finding C)', () => {
     expect(captureListenerCalls(addSpy).sort()).toEqual([...CAPTURE_EVENTS].sort())
 
     // Exactly one layer remains — no duplicate/orphaned overlay.
-    expect(document.querySelectorAll('#__termul_annotation_layer')).toHaveLength(1)
+    expect(document.querySelectorAll('#__se_annotation_layer')).toHaveLength(1)
   })
 
   it('preserves the requested mode/tab globals across reconcile teardown', () => {
@@ -113,21 +113,21 @@ describe('annotation overlay reconcile (Finding C)', () => {
     injectOverlay('draw', 'tab-2')
 
     const w = window as unknown as OverlayWindow
-    expect(w.__termul_annotation_mode).toBe('draw')
-    expect(w.__termul_annotation_tab_id).toBe('tab-2')
+    expect(w.__se_annotation_mode).toBe('draw')
+    expect(w.__se_annotation_tab_id).toBe('tab-2')
   })
 
   it('removes an orphaned layer that has no cleanup function', () => {
     // Simulate a leftover layer with no associated cleanup fn.
     const orphan = document.createElement('div')
-    orphan.id = '__termul_annotation_layer'
+    orphan.id = '__se_annotation_layer'
     document.body.appendChild(orphan)
     const w = window as unknown as OverlayWindow
-    delete w.__termul_remove_annotation_overlay
+    delete w.__se_remove_annotation_overlay
 
     injectOverlay('select', 'tab-1')
 
-    expect(document.querySelectorAll('#__termul_annotation_layer')).toHaveLength(1)
+    expect(document.querySelectorAll('#__se_annotation_layer')).toHaveLength(1)
     expect(captureListenerCalls(addSpy).sort()).toEqual([...CAPTURE_EVENTS].sort())
   })
 
@@ -135,11 +135,11 @@ describe('annotation overlay reconcile (Finding C)', () => {
     injectOverlay('select', 'tab-1')
     const w = window as unknown as OverlayWindow
 
-    w.__termul_remove_annotation_overlay?.()
+    w.__se_remove_annotation_overlay?.()
 
-    expect(document.getElementById('__termul_annotation_layer')).toBeNull()
-    // Cleanup deletes its own global, so the Rust-side `if (window.__termul_...)`
+    expect(document.getElementById('__se_annotation_layer')).toBeNull()
+    // Cleanup deletes its own global, so the Rust-side `if (window.__se_...)`
     // guard short-circuits — calling it again is a no-op.
-    expect(w.__termul_remove_annotation_overlay).toBeUndefined()
+    expect(w.__se_remove_annotation_overlay).toBeUndefined()
   })
 })

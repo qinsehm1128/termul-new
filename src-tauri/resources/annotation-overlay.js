@@ -2,36 +2,36 @@
   // Reconcile instead of bailing: if a previous overlay layer is still present
   // (e.g. left behind by an SPA navigation where the DOM was not wiped), tear it
   // down first so this injection always installs fresh capture-phase handlers for
-  // the current `window.__termul_annotation_mode`. Silently returning here would
+  // the current `window.__se_annotation_mode`. Silently returning here would
   // leave stale (or, after a cancelled removal, absent) handlers bound.
   //
   // The previous overlay's cleanup `delete`s the mode/tab-id globals that the Rust
   // bootstrap just set before this script ran, so snapshot and restore them around
   // the teardown to preserve the requested mode/tab for this fresh injection.
-  var __termul_existing_layer = document.getElementById('__termul_annotation_layer');
-  if (__termul_existing_layer) {
-    var __termul_pending_mode = window.__termul_annotation_mode;
-    var __termul_pending_tab_id = window.__termul_annotation_tab_id;
-    if (typeof window.__termul_remove_annotation_overlay === 'function') {
+  var __se_existing_layer = document.getElementById('__se_annotation_layer');
+  if (__se_existing_layer) {
+    var __se_pending_mode = window.__se_annotation_mode;
+    var __se_pending_tab_id = window.__se_annotation_tab_id;
+    if (typeof window.__se_remove_annotation_overlay === 'function') {
       try {
-        window.__termul_remove_annotation_overlay();
+        window.__se_remove_annotation_overlay();
       } catch (e) {}
     }
     // Sweep any layer node still present — covers a missing cleanup fn, a throw
     // mid-teardown, or a partial cleanup that left the node behind. Guarantees the
     // fresh overlay below never collides with a stale duplicate-ID node.
-    var __termul_stale = document.getElementById('__termul_annotation_layer');
-    while (__termul_stale) {
-      __termul_stale.remove();
-      __termul_stale = document.getElementById('__termul_annotation_layer');
+    var __se_stale = document.getElementById('__se_annotation_layer');
+    while (__se_stale) {
+      __se_stale.remove();
+      __se_stale = document.getElementById('__se_annotation_layer');
     }
-    window.__termul_annotation_mode = __termul_pending_mode;
-    window.__termul_annotation_tab_id = __termul_pending_tab_id;
+    window.__se_annotation_mode = __se_pending_mode;
+    window.__se_annotation_tab_id = __se_pending_tab_id;
   }
 
-  var OVERLAY_ID = '__termul_annotation_layer';
-  var RECT_ID = '__termul_annotation_rect';
-  var HIGHLIGHT_ID = '__termul_annotation_highlight';
+  var OVERLAY_ID = '__se_annotation_layer';
+  var RECT_ID = '__se_annotation_rect';
+  var HIGHLIGHT_ID = '__se_annotation_highlight';
   var MAX_TEXT_CONTENT_LENGTH = 2000;
   var MAX_SELECTOR_LENGTH = 500;
   var MAX_ATTRIBUTE_VALUE_LENGTH = 500;
@@ -46,7 +46,7 @@
     'data-testid'
   ];
 
-  var mode = window.__termul_annotation_mode === 'select' ? 'select' : 'draw';
+  var mode = window.__se_annotation_mode === 'select' ? 'select' : 'draw';
   var overlay = document.createElement('div');
   overlay.id = OVERLAY_ID;
   overlay.style.cssText = mode === 'select'
@@ -388,7 +388,7 @@
     var textResult = sanitizeAndTruncate(getSafeTextContent(element), MAX_TEXT_CONTENT_LENGTH);
 
     return {
-      tabId: window.__termul_annotation_tab_id || '',
+      tabId: window.__se_annotation_tab_id || '',
       url: stripControlChars(location.href),
       title: stripControlChars(document.title || ''),
       viewportWidth: window.innerWidth,
@@ -469,7 +469,7 @@
       var x = Math.min(startX, currentX);
       var y = Math.min(startY, currentY);
       invoke('browser_tab_report_region_captured', {
-        tabId: window.__termul_annotation_tab_id || '',
+        tabId: window.__se_annotation_tab_id || '',
         x: x,
         y: y,
         width: width,
@@ -523,8 +523,8 @@
   }
 
   // --- Marker System ---
-  var MARKER_CONTAINER_ID = '__termul_marker_container';
-  var MARKER_CLASS = '__termul_marker';
+  var MARKER_CONTAINER_ID = '__se_marker_container';
+  var MARKER_CLASS = '__se_marker';
   var markerContainer = null;
   var markerRegistry = {};
   var markerRafId = 0;
@@ -646,7 +646,7 @@
     ].join(';');
 
     if (data.id === selectedId) {
-      el.classList.add('__termul_marker_selected');
+      el.classList.add('__se_marker_selected');
     }
 
     el.addEventListener('click', function onMarkerClick(e) {
@@ -654,7 +654,7 @@
       e.stopPropagation();
       e.stopImmediatePropagation();
       invoke('browser_tab_report_annotation_marker_clicked', {
-        tabId: window.__termul_annotation_tab_id || '',
+        tabId: window.__se_annotation_tab_id || '',
         annotationId: data.id
       });
     });
@@ -663,14 +663,14 @@
   }
 
   // Inject marker styling once
-  if (!document.getElementById('__termul_marker_styles')) {
+  if (!document.getElementById('__se_marker_styles')) {
     var style = document.createElement('style');
-    style.id = '__termul_marker_styles';
+    style.id = '__se_marker_styles';
     style.textContent = [
       '.' + MARKER_CLASS + ' {',
       '  transition: transform 0.15s ease, background 0.1s ease, border-color 0.1s ease;',
       '}',
-      '.' + MARKER_CLASS + '.__termul_marker_selected {',
+      '.' + MARKER_CLASS + '.__se_marker_selected {',
       '  background: #3b82f6;',
       '  border-color: #ffffff;',
       '  transform: scale(1.2);',
@@ -681,7 +681,7 @@
       '  .' + MARKER_CLASS + ' {',
       '    transition: none;',
       '  }',
-      '  .' + MARKER_CLASS + '.__termul_marker_selected {',
+      '  .' + MARKER_CLASS + '.__se_marker_selected {',
       '    transform: scale(1);',
       '  }',
       '}'
@@ -689,8 +689,8 @@
     document.head.appendChild(style);
   }
 
-  window.__termul_render_markers = function(annotations, selectedId) {
-    window.__termul_remove_markers();
+  window.__se_render_markers = function(annotations, selectedId) {
+    window.__se_remove_markers();
     if (!annotations || annotations.length === 0) return;
 
     var container = ensureMarkerContainer();
@@ -710,21 +710,21 @@
     startMarkerTracking();
   };
 
-  window.__termul_update_marker_selection = function(selectedId) {
+  window.__se_update_marker_selection = function(selectedId) {
     if (!markerContainer) return;
     var markers = markerContainer.querySelectorAll('.' + MARKER_CLASS);
     for (var i = 0; i < markers.length; i++) {
       var m = markers[i];
       var isSelected = String(m.dataset.annotationId) === String(selectedId);
       if (isSelected) {
-        m.classList.add('__termul_marker_selected');
+        m.classList.add('__se_marker_selected');
       } else {
-        m.classList.remove('__termul_marker_selected');
+        m.classList.remove('__se_marker_selected');
       }
     }
   };
 
-  window.__termul_remove_markers = function() {
+  window.__se_remove_markers = function() {
     stopMarkerTracking();
     if (markerContainer) {
       markerContainer.remove();
@@ -734,9 +734,9 @@
   };
   // --- End Marker System ---
 
-  window.__termul_remove_annotation_overlay = function() {
-    window.__termul_remove_markers();
-    var markerStylesEl = document.getElementById('__termul_marker_styles');
+  window.__se_remove_annotation_overlay = function() {
+    window.__se_remove_markers();
+    var markerStylesEl = document.getElementById('__se_marker_styles');
     if (markerStylesEl) {
       markerStylesEl.remove();
     }
@@ -758,9 +758,9 @@
     document.removeEventListener('keydown', onKeyDown, true);
     document.removeEventListener('contextmenu', onContextMenu, true);
     document.documentElement.style.cursor = previousCursor;
-    delete window.__termul_remove_annotation_overlay;
-    delete window.__termul_annotation_tab_id;
-    delete window.__termul_annotation_mode;
+    delete window.__se_remove_annotation_overlay;
+    delete window.__se_annotation_tab_id;
+    delete window.__se_annotation_mode;
   };
 
   document.addEventListener('mousedown', onMouseDown, true);

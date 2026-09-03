@@ -1,5 +1,5 @@
 /**
- * T-H10 — the annotation overlay's `window.__termul_*` bridge, checked across
+ * T-H10 — the annotation overlay's `window.__se_*` bridge, checked across
  * the two files that actually form it.
  *
  * `src-tauri/resources/annotation-overlay.js` defines the globals; the Rust in
@@ -10,15 +10,15 @@
  * to every existing test.
  *
  * Both sides are therefore read from disk and the names are *extracted*, never
- * written down here. A test that spelled `__termul_render_markers` out as a
+ * written down here. A test that spelled `__se_render_markers` out as a
  * literal would be rewritten by the same repo-wide sed that broke the bridge,
  * and would stay green through the breakage. The only brand string this file
  * knows is the one it asks the brand seam for.
  *
  * Strict set equality between the two files does not hold and should not: the
- * Rust owns `__termul_poller` end to end (its own injected snippet writes and
+ * Rust owns `__se_poller` end to end (its own injected snippet writes and
  * reads it, the overlay never sees it) and the overlay owns
- * `__termul_remove_markers` end to end (it exports it and calls it itself).
+ * `__se_remove_markers` end to end (it exports it and calls it itself).
  * What must hold is *closure*: no global may be referenced on one side without
  * an owner on the other, in either direction. The last three assertions below
  * are that property, and each goes red when a single name is changed on a
@@ -52,7 +52,7 @@ interface GlobalUsage {
  * Classify every `window.<brand-prefixed>` occurrence in one source text.
  *
  * The optional `=` group deliberately rejects `==`/`===`/`=>` so a comparison
- * (`window.__termul_annotation_mode === 'select'`) is counted as a read rather
+ * (`window.__se_annotation_mode === 'select'`) is counted as a read rather
  * than as a definition.
  */
 function scanWindowGlobals(source: string, prefix: string): GlobalUsage {
@@ -102,7 +102,7 @@ describe('annotation overlay ↔ browser_tab_manager global-name parity', () => 
 
   it('spells every double-underscore identifier at the canonical prefix', () => {
     // Covers the names the window scan cannot see — element ids
-    // (`__termul_annotation_layer`), the marker CSS class, and the local
+    // (`__se_annotation_layer`), the marker CSS class, and the local
     // snapshot variables. A half-finished rename leaves some at the old prefix
     // and shows up here as a non-empty list.
     const offenders = sorted(

@@ -57,8 +57,8 @@ impl BrowserTabManager {
             let poller_script = format!(
                 r#"
                 (function() {{
-                    if (window.__termul_poller) return;
-                    window.__termul_poller = true;
+                    if (window.__se_poller) return;
+                    window.__se_poller = true;
 
                     var tabId = '{}';
                     var lastUrl = location.href;
@@ -348,8 +348,8 @@ impl BrowserTabManager {
         let overlay_script = include_str!("../resources/annotation-overlay.js");
         let bootstrap_script = format!(
             r#"
-            window.__termul_annotation_mode = {mode:?};
-            window.__termul_annotation_tab_id = {tab_id:?};
+            window.__se_annotation_mode = {mode:?};
+            window.__se_annotation_tab_id = {tab_id:?};
             {overlay_script}
             "#,
             mode = normalized_mode,
@@ -364,7 +364,7 @@ impl BrowserTabManager {
         webview
             .eval(
                 r#"
-                if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+                if (typeof window.__se_remove_annotation_overlay !== 'function') {
                     throw new Error('Annotation overlay bootstrap probe failed');
                 }
                 "#,
@@ -409,8 +409,8 @@ impl BrowserTabManager {
         };
 
         let cleanup_script = r#"
-            if (window.__termul_remove_annotation_overlay) {
-                window.__termul_remove_annotation_overlay();
+            if (window.__se_remove_annotation_overlay) {
+                window.__se_remove_annotation_overlay();
             }
         "#;
         let _ = webview.eval(cleanup_script);
@@ -462,7 +462,7 @@ impl BrowserTabManager {
         let webview = self.get_webview(tab_id)?;
 
         let probe = r#"
-            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+            if (typeof window.__se_remove_annotation_overlay !== 'function') {
                 throw new Error('Annotation overlay probe failed');
             }
         "#;
@@ -483,7 +483,7 @@ impl BrowserTabManager {
             |id| format!("'{}'", Self::escape_js_string_literal(id)),
         );
         let js = format!(
-            "window.__termul_render_markers(JSON.parse('{}'), {});",
+            "window.__se_render_markers(JSON.parse('{}'), {});",
             escaped_json, selected_id_js,
         );
         webview
@@ -517,7 +517,7 @@ impl BrowserTabManager {
         let webview = self.get_webview(tab_id)?;
 
         let probe = r#"
-            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+            if (typeof window.__se_remove_annotation_overlay !== 'function') {
                 throw new Error('Annotation overlay probe failed');
             }
         "#;
@@ -537,7 +537,7 @@ impl BrowserTabManager {
             |id| format!("'{}'", Self::escape_js_string_literal(id)),
         );
         let js = format!(
-            "window.__termul_update_marker_selection({});",
+            "window.__se_update_marker_selection({});",
             selected_id_js,
         );
         webview
