@@ -88,7 +88,7 @@ describe('ImportEditorWorkspacesDialog', () => {
 
     await waitFor(() => {
       expect(screen.getByText('alpha')).toBeInTheDocument()
-      expect(screen.getByText('Already in Termul')).toBeInTheDocument()
+      expect(screen.getByText('Already in Se')).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByTestId('editor-import-confirm'))

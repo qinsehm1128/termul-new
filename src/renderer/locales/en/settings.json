@@ -26,7 +26,7 @@
   },
   "language": {
     "title": "Display Language",
-    "description": "Choose the language used by the Termul interface.",
+    "description": "Choose the language used by the Se interface.",
     "system": "System Default",
     "english": "English",
     "simplifiedChinese": "Simplified Chinese",
@@ -85,7 +85,7 @@
   "behavior": {
     "description": "Configure terminal cleanup and editor auto-save behavior.",
     "openLinks": "Open Terminal Links In",
-    "openLinksHint": "Choose whether Ctrl/Cmd+Click URLs from terminal output open in your system browser or a new Termul browser tab.",
+    "openLinksHint": "Choose whether Ctrl/Cmd+Click URLs from terminal output open in your system browser or a new Se browser tab.",
     "orphanDetection": "Orphan Detection",
     "enableOrphanDetection": "Enable orphan detection",
     "orphanDetectionHint": "Automatically clean up terminals that have been inactive",
@@ -126,7 +126,7 @@
     "firstPromptWarmup": "First-Prompt Warmup Timeout",
     "firstPromptWarmupHint": "Warmup prompt budget after session/new to absorb agent cold-start stalls; choose Disabled to skip the warmup entirely. The TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS env var still overrides this (operator/diagnostic). Desktop only — the standalone server uses the env var.",
     "preferLocalNpmInstall": "Install npm agents locally",
-    "preferLocalNpmInstallHint": "On first launch, download npx agents (Claude, Codex, Gemini, Copilot, Qwen, Cline, Auggie) into Termul’s local cache and run that copy afterwards. Turn this off to always use npx. Desktop only — the standalone server uses TERMUL_ACP_PREFER_LOCAL_NPM.",
+    "preferLocalNpmInstallHint": "On first launch, download npx agents (Claude, Codex, Gemini, Copilot, Qwen, Cline, Auggie) into Se’s local cache and run that copy afterwards. Turn this off to always use npx. Desktop only — the standalone server uses TERMUL_ACP_PREFER_LOCAL_NPM.",
     "cliResumeTitle": "CLI resume extra args",
     "cliResumeDescription": "Prefixed before the resume flag when launching a scanned session. Edit here or override once in the resume dialog.",
     "cliResumePlaceholder": "none",
@@ -158,7 +158,7 @@
     "insiderWarning": "Insider release candidates may be unfinished. Updates are offered as a manual download from the insider release page.",
     "available": "Update Available",
     "versionAvailable": "Version {{version}} is available!",
-    "aurHint": "Update through AUR with: yay -S termul-manager",
+    "aurHint": "Update through AUR with: yay -S se-manager",
     "manualHint": "Automatic update is unavailable. Please download and install the latest version manually.",
     "downloadHint": "A new version is ready to download.",
     "error": "Update Error",
@@ -196,7 +196,7 @@
       "sshReverse": "Runs ssh -N -R to your VPS. Put Caddy or Nginx in front of 127.0.0.1 on the remote port. Uses ssh-agent or a saved private key — never a password."
     },
     "namedHostname": "Public hostname",
-    "namedHostnameHint": "The hostname already routed to this named tunnel, for example termul.example.com.",
+    "namedHostnameHint": "The hostname already routed to this named tunnel, for example se.example.com.",
     "namedLocalPort": "Local bind port",
     "namedLocalPortHint": "Stable loopback port (default 18787) so Cloudflare ingress can target http://127.0.0.1:18787.",
     "namedToken": "Cloudflare tunnel token",
@@ -222,14 +222,14 @@
     "sshRemotePort": "Remote forward port",
     "sshRemotePortHint": "Port bound on 127.0.0.1 on the VPS. Point your reverse proxy there.",
     "sshPublicHostname": "Public hostname",
-    "sshPublicHostnameHint": "The hostname (and optional port) drawn into the QR, for example termul.example.com.",
+    "sshPublicHostnameHint": "The hostname (and optional port) drawn into the QR, for example se.example.com.",
     "sshPrivateKey": "Private key (optional)",
     "sshPrivateKeyHint": "Leave empty to use ssh-agent. Paste a private key to store it with Remote Access settings.",
     "sshPublicHttps": "QR uses HTTPS",
     "sshPublicHttpsHint": "Leave on when the VPS terminates TLS. Turn off only for trusted HTTP test setups."
   },
   "macosPrivacy": {
-    "description": "macOS grants each protected resource separately. Commands you run in a terminal inherit Termul's grants, so a missing one surfaces as a command that fails for no visible reason.",
+    "description": "macOS grants each protected resource separately. Commands you run in a terminal inherit Se's grants, so a missing one surfaces as a command that fails for no visible reason.",
     "osVersion": "macOS",
     "bundleId": "Bundle ID",
     "signature": "Signature",
@@ -330,7 +330,7 @@
     },
     "urlMode": {
       "system": "System Default Browser",
-      "termul": "Termul Browser"
+      "termul": "Se Browser"
     }
   }
 }

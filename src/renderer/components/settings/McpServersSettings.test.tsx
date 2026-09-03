@@ -402,7 +402,7 @@ describe('McpServersSettings', () => {
     })
     render(<McpServersSettings />)
     await waitFor(() => expect(probeMcpServer).toHaveBeenCalledWith('s1'))
-    expect(screen.getByTitle('Connected (Termul can reach this server)')).toBeInTheDocument()
+    expect(screen.getByTitle('Connected (Se can reach this server)')).toBeInTheDocument()
   })
 
   it('shows the disconnected dot and the probe error behind the disclosure', () => {
@@ -414,9 +414,7 @@ describe('McpServersSettings', () => {
       mcpProbeError: { s5: 'initialize failed: connection refused' }
     })
     render(<McpServersSettings />)
-    expect(
-      screen.getByTitle('Disconnected (Termul could not reach this server)')
-    ).toBeInTheDocument()
+    expect(screen.getByTitle('Disconnected (Se could not reach this server)')).toBeInTheDocument()
     // The error detail lives behind the tools disclosure; expand via the
     // disconnected-specific trigger, then assert the redacted reason.
     fireEvent.click(screen.getByText(/probe failed — retry/i))

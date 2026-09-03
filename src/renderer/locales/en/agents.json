@@ -59,7 +59,7 @@
     "arbitraryCommandPrompt": "This will execute an arbitrary command on your machine. Are you sure you want to persist this agent?",
     "terminalPrompt": "This agent requests the ACP terminal capability, which allows it to execute arbitrary commands on your machine. Are you sure you want to allow this?",
     "terminalSecondConfirmation": "This is the second confirmation: terminal capability lets the agent run arbitrary commands on your machine.",
-    "permissionPrompt": "This agent requests full tool permission. Termul will automatically accept allow options without asking each time.",
+    "permissionPrompt": "This agent requests full tool permission. Se will automatically accept allow options without asking each time.",
     "permissionSecondConfirmation": "This is a separate confirmation: all allow options offered by the agent will be accepted automatically.",
     "saveAgent": "Save Agent",
     "confirmExecute": "Confirm — Execute Command",
@@ -115,7 +115,7 @@
     "installUv": "Install uv",
     "installNode": "Install Node.js",
     "manualInstall": "Manual install",
-    "manualInstallDescription": "Install {{name}} from the vendor, then point Termul at the binary.",
+    "manualInstallDescription": "Install {{name}} from the vendor, then point Se at the binary.",
     "expectedCommand": "Expected: {{command}}",
     "pathPlaceholder": "Path to installed ACP binary",
     "pathAria": "ACP agent executable path",
@@ -234,7 +234,7 @@
       "timeout": "Session setup timed out",
       "unknown": "Setup failed"
     },
-    "ambiguousAuth": "This agent advertises multiple sign-in methods ({{names}}). Termul does not choose one automatically; select a single-method agent or configure the provider directly."
+    "ambiguousAuth": "This agent advertises multiple sign-in methods ({{names}}). Se does not choose one automatically; select a single-method agent or configure the provider directly."
   },
   "newWorktree": {
     "title": "New Worktree",

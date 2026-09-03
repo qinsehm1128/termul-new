@@ -8,13 +8,13 @@ describe('i18n core', () => {
     expect(i18n.t('examples.greeting', { name: 'Ada' })).toBe('Hello, Ada')
     expect(i18n.t('examples.itemCount', { count: 2, formattedCount: '2' })).toBe('2 items')
     expect(document.documentElement.lang).toBe('en')
-    expect(document.title).toBe('Termul Manager — Project-Aware Terminal')
+    expect(document.title).toBe('Se Manager — Project-Aware Terminal')
 
     await initializeI18n('zh-CN')
     expect(i18n.t('examples.greeting', { name: 'Ada' })).toBe('你好，Ada')
     expect(i18n.t('examples.itemCount', { count: 2, formattedCount: '2' })).toBe('2 项')
     expect(document.documentElement.lang).toBe('zh-CN')
-    expect(document.title).toBe('Termul 管理器 — 项目感知终端')
+    expect(document.title).toBe('Se 管理器 — 项目感知终端')
   })
 
   it('falls back to English when a Chinese key is missing', async () => {

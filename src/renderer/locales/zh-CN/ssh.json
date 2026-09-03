@@ -149,7 +149,7 @@
     "title": "远程 Agent 访问",
     "description": "扫码在手机上打开实时 Agent。同一 Wi-Fi 用本机网络；其他网络用隧道。",
     "enable": "启用远程访问",
-    "enableHint": "会记住这个开关，下次打开 Termul 时按这个状态恢复。",
+    "enableHint": "会记住这个开关，下次打开 Se 时按这个状态恢复。",
     "toggleAria": "切换远程终端访问",
     "publishModeAria": "手机连接方式",
     "modeLan": "本机网络",

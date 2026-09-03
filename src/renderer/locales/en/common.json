@@ -1,7 +1,7 @@
 {
   "app": {
-    "name": "Termul Manager",
-    "documentTitle": "Termul Manager — Project-Aware Terminal"
+    "name": "Se Manager",
+    "documentTitle": "Se Manager — Project-Aware Terminal"
   },
   "actions": {
     "cancel": "Cancel",

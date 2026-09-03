@@ -149,7 +149,7 @@
     "title": "Remote Agent Access",
     "description": "Scan the QR to open live agent sessions on a phone. Use Local network on the same Wi-Fi, or Tunnel for another network.",
     "enable": "Enable remote access",
-    "enableHint": "Remembers this setting and restores it the next time Termul starts.",
+    "enableHint": "Remembers this setting and restores it the next time Se starts.",
     "toggleAria": "Toggle remote terminal access",
     "publishModeAria": "How the phone should connect",
     "modeLan": "Local network",

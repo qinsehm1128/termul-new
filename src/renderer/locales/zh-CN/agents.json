@@ -59,7 +59,7 @@
     "arbitraryCommandPrompt": "这将在你的设备上执行任意命令。确定要保存此代理吗？",
     "terminalPrompt": "此代理请求 ACP 终端能力，这会允许它在你的设备上执行任意命令。确定要允许吗？",
     "terminalSecondConfirmation": "这是第二次确认：终端能力允许代理在你的设备上运行任意命令。",
-    "permissionPrompt": "此代理请求完全工具权限。Termul 将自动接受允许选项，不再逐次询问。",
+    "permissionPrompt": "此代理请求完全工具权限。Se 将自动接受允许选项，不再逐次询问。",
     "permissionSecondConfirmation": "这是单独的权限确认：代理提供的所有允许选项都会被自动接受。",
     "saveAgent": "保存代理",
     "confirmExecute": "确认 — 执行命令",
@@ -115,7 +115,7 @@
     "installUv": "安装 uv",
     "installNode": "安装 Node.js",
     "manualInstall": "手动安装",
-    "manualInstallDescription": "请从供应商处安装 {{name}}，然后让 Termul 指向该二进制文件。",
+    "manualInstallDescription": "请从供应商处安装 {{name}}，然后让 Se 指向该二进制文件。",
     "expectedCommand": "预期：{{command}}",
     "pathPlaceholder": "已安装 ACP 二进制文件的路径",
     "pathAria": "ACP 代理可执行文件路径",
@@ -234,7 +234,7 @@
       "timeout": "会话设置超时",
       "unknown": "设置失败"
     },
-    "ambiguousAuth": "此代理提供了多种登录方式（{{names}}）。Termul 不会自动选择；请选择仅有一种登录方式的代理，或直接配置提供商。"
+    "ambiguousAuth": "此代理提供了多种登录方式（{{names}}）。Se 不会自动选择；请选择仅有一种登录方式的代理，或直接配置提供商。"
   },
   "newWorktree": {
     "title": "新建工作树",
