@@ -1565,12 +1565,27 @@ pub fn run() {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
                 .map(std::path::PathBuf::from)
-                .or_else(|| handle.path().document_dir().ok().map(|path| path.join("Termul")))
+                // Named by the brand seam, not a literal (T-A16). Resolved on
+                // the setup thread, where the override lives (FORBID-07); the
+                // `or_else`/`map` closures run inline here, not off-thread.
+                // T-M06 keeps the pre-rename sibling root listable and openable
+                // — the user's files there are never moved.
+                .or_else(|| {
+                    handle
+                        .path()
+                        .document_dir()
+                        .ok()
+                        .map(|path| path.join(crate::brand::canonical().display_name))
+                })
                 .or_else(|| {
                     log::warn!(
                         "[conversation-bootstrap] document directory unavailable; using home directory"
                     );
-                    handle.path().home_dir().ok().map(|path| path.join("Termul"))
+                    handle
+                        .path()
+                        .home_dir()
+                        .ok()
+                        .map(|path| path.join(crate::brand::canonical().display_name))
                 })
                 .ok_or_else(|| {
                     "CONVERSATION_ROOT_INVALID: no document or home directory is available"

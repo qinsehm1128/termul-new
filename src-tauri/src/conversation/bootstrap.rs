@@ -149,17 +149,25 @@ impl HostConversationRoots {
         legacy_session_root: Option<PathBuf>,
         legacy_workspace_manifest_root: Option<PathBuf>,
     ) -> Self {
+        // `<project_root>/<display name>` is the standalone twin of
+        // `~/Documents/<display name>` and is named by the same identity, so
+        // the same pre-rename sibling can be sitting next to it (T-A16). Read
+        // on the caller's thread like the desktop constructor (FORBID-07), and
+        // read-only in exactly the same sense: the user's workspaces are never
+        // moved on the strength of this field.
+        let legacy_workspace_bases = legacy_workspace_base(&workspace_base)
+            .into_iter()
+            .collect();
         Self {
             state_root,
             workspace_base,
             legacy_session_roots: legacy_session_root.into_iter().collect(),
             legacy_workspace_manifest_roots: legacy_workspace_manifest_root.into_iter().collect(),
             // The standalone host names its state root from `state_dir`, not
-            // from a bundle identifier, and it has no `~/Documents` workspace
-            // root. Its own legacy fallback is T-M07's, applied by the caller
-            // before it gets here.
+            // from a bundle identifier. Its own legacy fallback is T-M07's,
+            // applied by the caller before it gets here.
             legacy_appdata_roots: Vec::new(),
-            legacy_workspace_bases: Vec::new(),
+            legacy_workspace_bases,
         }
     }
 

@@ -622,7 +622,8 @@ mod tests {
 
     fn server_config(root: &std::path::Path) -> ServerConfig {
         let project_root = root.canonicalize().expect("canonical project root");
-        let conversation_workspace_root = project_root.join("Termul");
+        let conversation_workspace_root =
+            project_root.join(crate::brand::canonical().display_name);
         std::fs::create_dir_all(&conversation_workspace_root).expect("Conversation workspace root");
         ServerConfig {
             host: "127.0.0.1".to_string(),

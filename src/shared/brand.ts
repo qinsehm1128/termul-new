@@ -163,7 +163,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   wsSubprotocol: 'se-terminal-v2.binary',
   envPrefix: 'TERMUL_',
   workspaceDir: '.termul',
-  displayName: 'Termul',
+  displayName: 'Se',
   displayNameFull: 'Termul Manager',
   packageName: 'termul-manager',
   serverBinary: 'termul-server',

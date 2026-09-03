@@ -565,7 +565,8 @@ impl RemoteServerState {
                 .rendezvous()
                 .map(|r| r.disconnect_grace().as_secs())
                 .unwrap_or(15),
-            conversation_workspace_root: project_root.join("Termul"),
+            conversation_workspace_root: project_root
+                .join(crate::brand::canonical().display_name),
             project_root,
             // Desktop-hosted shared-live mode queries the live desktop
             // `AcpManager` via the in-memory renderer-fed registry, NOT a

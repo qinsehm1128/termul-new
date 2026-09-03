@@ -51,14 +51,15 @@
 //!    the `crate::brand::LEGACY` tree forward into it (copy-only, repeatable).
 //!    The two ledger entries below are struck; the four candidate parents each
 //!    get their own resolution test.
-//! 2. **Open (T-M06).** The desktop `~/Documents/<name>` root
-//!    (`src/lib.rs:1533`, `:1538`) must read
-//!    `crate::brand::canonical().display_name`. That expression lives inline
-//!    inside the Tauri `setup` closure in `run()` and is not callable from an
-//!    integration test, so it is asserted as a scoped source-text parity check
-//!    below: Wave 4's T-M06 should extract it into a named `pub fn` so it can
-//!    be driven directly. The standalone twin at `src/web/config.rs:668` is the
-//!    same `display_name` identity and belongs to the same task.
+//! 2. **Landed (T-M06 / T-A16).** Both `display_name` roots now read
+//!    `crate::brand::canonical().display_name`: the standalone twin in
+//!    `web::config`, driven directly through the real CLI parser, and the
+//!    desktop `~/Documents/<name>` root, which lives inline inside the Tauri
+//!    `setup` closure in `run()` with no `pub fn` to call and is therefore
+//!    asserted as a scoped source-text parity check. Both ledger entries below
+//!    are struck. The old root is *declared* legacy-readable rather than
+//!    merged — the user's files there are never moved, so the reachability
+//!    assertion runs against that declaration.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -67,6 +68,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use termul_manager_lib::brand::{self, BrandCanonical};
+use termul_manager_lib::conversation::HostConversationRoots;
 use termul_manager_lib::web::config::{default_sessions_dir, ServerConfig};
 
 /// The resolvers under test read *process*-global env vars while `cargo test`
@@ -486,10 +488,19 @@ fn candidate_temp_dir_is_the_last_resort_and_still_carries_the_legacy_root_forwa
 // Identity 2 — the visible session workspace root (named by `display_name`).
 // ---------------------------------------------------------------------------
 
+/// Cleared by T-A16. The `#[should_panic]` pinned the first assertion below —
+/// the root was a hardcoded `<project_root>/Termul` — and `web::config` now
+/// names it from the seam, so the marker is gone and this is a live guard.
+///
+/// The second half changed shape when the marker came off, and deliberately.
+/// As written it asserted the legacy workspaces were readable *at the
+/// post-rename root*, which can only be true if something moved or copied
+/// them. The accepted design is the opposite: the user's files in the old root
+/// are never touched, and the root is instead **declared** legacy-readable
+/// (M-06) so detection and the merge banner can see it. So reachability is
+/// asserted through that declaration, and the fixture's bytes are asserted
+/// unchanged — which is the property the old assertion would have destroyed.
 #[test]
-#[should_panic(
-    expected = "conversation workspace root must be named by crate::brand::canonical().display_name"
-)]
 fn standalone_conversation_workspace_root_uses_the_canonical_display_name_and_still_sees_legacy_workspaces(
 ) {
     let _lock = env_lock();
@@ -540,15 +551,45 @@ fn standalone_conversation_workspace_root_uses_the_canonical_display_name_and_st
         resolved.display(),
     );
 
+    // The real constructor the standalone host uses (`server_main.rs:148`),
+    // fed the root the parser just resolved.
+    let roots = HostConversationRoots::standalone(
+        temp.path().join("server-state"),
+        resolved.clone(),
+        None,
+        None,
+    );
+    let legacy_base = canonical_project_root.join(brand::LEGACY.display_name);
+    assert_eq!(
+        roots.legacy_workspace_bases,
+        vec![legacy_base.clone()],
+        "the pre-rename {:?} root sitting next to {} must be declared legacy-readable, or the \
+         merge banner never mentions it and the user has no way to reach a workspace they can \
+         still see in their own file manager",
+        brand::LEGACY.display_name,
+        resolved.display(),
+    );
+
     for relative in &legacy_workspace_files {
         assert!(
-            resolved.join(relative).is_file(),
-            "workspace file {relative} from the legacy {:?} root is unreachable at the \
-             post-rename workspace root {}",
-            brand::LEGACY.display_name,
-            resolved.display(),
+            legacy_base.join(relative).is_file(),
+            "workspace file {relative} is no longer readable under the declared legacy root {}",
+            legacy_base.display(),
         );
     }
+
+    // Read-only means read-only: nothing was moved out of the old root and
+    // nothing was copied into the new one.
+    assert_eq!(
+        relative_files(&legacy_base),
+        legacy_workspace_files,
+        "the legacy workspace root must be byte-for-byte untouched"
+    );
+    assert!(
+        relative_files(&resolved).is_empty(),
+        "the post-rename workspace root must still be empty; declaring the legacy root \
+         read-only must not copy anything into it"
+    );
 }
 
 /// The desktop `~/Documents/<name>` root at `src/lib.rs:1524-1543` is built
@@ -562,9 +603,6 @@ fn standalone_conversation_workspace_root_uses_the_canonical_display_name_and_st
 /// but can never author a `brand::canonical().display_name` call, so this
 /// cannot be laundered green.
 #[test]
-#[should_panic(
-    expected = "must join crate::brand::canonical().display_name"
-)]
 fn desktop_documents_workspace_root_is_built_from_the_display_name_seam() {
     let path = manifest_dir().join("src/lib.rs");
     let source = fs::read_to_string(&path)

@@ -791,7 +791,9 @@ impl ServerConfig {
                     .filter(|value| !value.trim().is_empty())
                     .map(PathBuf::from)
             })
-            .unwrap_or_else(|| project_root.join("Termul"));
+            // The standalone twin of `~/Documents/<display name>`, named by the
+            // same seam (T-A16). Resolved here on the parse thread (FORBID-07).
+            .unwrap_or_else(|| project_root.join(crate::brand::canonical().display_name));
 
         if require_remote_auth && (remote_access_token_file.is_none() || allowed_origins.is_empty())
         {
