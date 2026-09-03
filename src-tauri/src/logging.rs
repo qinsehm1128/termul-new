@@ -13,13 +13,27 @@ use tauri::{Manager, Runtime};
 use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind};
 use uuid::Uuid;
 
+use crate::brand;
+
 /// Maximum size of a single log file before it is rotated (5 MB). Old logs are
 /// renamed to a timestamped file (`KeepAll`) so the lifecycle narrative that
 /// led to a crash survives rotation while individual files stay attachable.
 const MAX_LOG_FILE_SIZE: u128 = 5 * 1024 * 1024;
 
 /// Base file name (without extension) for the Rust log in the OS log dir.
-const LOG_FILE_NAME: &str = "termul";
+///
+/// The name is not a literal here: `.github/ISSUE_TEMPLATE/bug_report.yml`
+/// publishes the resulting absolute path on all three platforms, and that
+/// template is prose nothing compiles. `scripts/tests/log-path-parity.test.ts`
+/// holds the two sides together by deriving the published path from
+/// [`brand::canonical`]'s `log_file_name` plus the bundle identifier — which
+/// only works while this function is the sole place the name is read.
+///
+/// Reads the brand seam, so it must be called on the thread that owns it
+/// (FORBID-07). Both callers do.
+fn log_file_name() -> &'static str {
+    brand::canonical().log_file_name
+}
 
 static SESSION_ID: OnceLock<String> = OnceLock::new();
 
@@ -145,7 +159,7 @@ fn parse_directives(spec: &str) -> LogDirectives {
 /// level, and target, satisfying the structured-line requirement.
 pub fn build_log_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     let mut targets = vec![Target::new(TargetKind::LogDir {
-        file_name: Some(LOG_FILE_NAME.to_string()),
+        file_name: Some(log_file_name().to_string()),
     })];
 
     if cfg!(debug_assertions) {
@@ -254,14 +268,14 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Resolve the absolute path of the active log file (`<app_log_dir>/termul.log`).
-/// The `LogDir` target writes `{file_name}.log`, so we append the `.log`
-/// extension the plugin adds.
+/// Resolve the absolute path of the active log file
+/// (`<app_log_dir>/<log_file_name>.log`). The `LogDir` target writes
+/// `{file_name}.log`, so we append the `.log` extension the plugin adds.
 pub fn log_file_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<std::path::PathBuf> {
     app.path()
         .app_log_dir()
         .ok()
-        .map(|dir| dir.join(format!("{}.log", LOG_FILE_NAME)))
+        .map(|dir| dir.join(format!("{}.log", log_file_name())))
 }
 
 /// Emit a single startup banner at `info` level: version, OS/arch, build
@@ -444,6 +458,26 @@ mod tests {
         let d = parse_directives("bogus,se_manager=nonsense");
         assert_eq!(d.global, default_floor());
         assert!(d.per_module.is_empty());
+    }
+
+    /// The published log paths in `.github/ISSUE_TEMPLATE/bug_report.yml` are
+    /// derived from `brand::canonical().log_file_name`. That derivation is only
+    /// true of the shipped binary while this module reads the seam instead of
+    /// carrying its own copy of the name.
+    #[test]
+    fn log_file_name_follows_the_brand_seam_rather_than_a_literal() {
+        assert_eq!(log_file_name(), brand::DEFAULT_CANONICAL.log_file_name);
+
+        let _guard = brand::override_canonical(brand::BrandCanonical {
+            log_file_name: "se-manager",
+            ..brand::DEFAULT_CANONICAL
+        });
+        assert_eq!(
+            log_file_name(),
+            "se-manager",
+            "a rename of brand::canonical().log_file_name must move the log file the app writes; \
+             a literal here would strand every path bug_report.yml publishes"
+        );
     }
 
     #[test]

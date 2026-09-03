@@ -13,8 +13,16 @@
  * bug reporter to a path that does not exist, and nothing would notice. So both
  * sides are read from disk and one is *computed* from the other: the template
  * is parsed for its three paths, and the three expected paths are assembled
- * from `LOG_FILE_NAME`, the `{}.log` template in `log_file_path`, and the
+ * from `log_file_name`, the `{}.log` template in `log_file_path`, and the
  * bundle identifier. No path in this file is written down as a literal.
+ *
+ * T-M04 moved the name itself into `src-tauri/src/brand.rs` — `logging.rs` now
+ * reads `brand::canonical().log_file_name` rather than holding a literal, so a
+ * Wave-5 flip is a one-line edit there. This file follows that indirection
+ * instead of short-circuiting it: the expected name is read from `brand.rs`,
+ * and `logging.rs` is checked to still be reading the seam. Skipping that
+ * second check would let the two agree with each other while the shipped binary
+ * wrote a third name entirely.
  *
  * The only thing this file does encode is the *shape* of `app_log_dir()` per
  * platform. That is Tauri's own platform convention, carries no brand string,
@@ -28,24 +36,49 @@ const repoRoot = process.cwd()
 const read = (relativePath: string): string => readFileSync(join(repoRoot, relativePath), 'utf8')
 
 const BUG_REPORT_YML = '.github/ISSUE_TEMPLATE/bug_report.yml'
+const BRAND_RS = 'src-tauri/src/brand.rs'
 const LOGGING_RS = 'src-tauri/src/logging.rs'
 const TAURI_CONF = 'src-tauri/tauri.conf.json'
 
-/** `const LOG_FILE_NAME: &str = "…";` — the base name, no extension. */
+/**
+ * `log_file_name: "…"` from `DEFAULT_CANONICAL` — the base name, no extension.
+ *
+ * Scoped to that struct literal specifically: `LEGACY` carries a
+ * `log_file_name` of its own and is a permanent record of what is already on
+ * user disks, so matching the first occurrence in the file would pin the
+ * published path to the pre-rename value forever.
+ */
 function logFileName(): string {
-  const match = read(LOGGING_RS).match(/const LOG_FILE_NAME: &str = "([^"]+)";/)
-  if (!match) throw new Error(`LOG_FILE_NAME not found in ${LOGGING_RS}`)
+  const source = read(BRAND_RS)
+  const block = source.match(/DEFAULT_CANONICAL: BrandCanonical = BrandCanonical \{([\s\S]*?)\n\};/)
+  if (!block) throw new Error(`DEFAULT_CANONICAL not found in ${BRAND_RS}`)
+  const match = block[1].match(/^\s*log_file_name: "([^"]+)",$/m)
+  if (!match) throw new Error(`log_file_name not found in DEFAULT_CANONICAL in ${BRAND_RS}`)
   return match[1]
 }
 
 /**
  * The extension `log_file_path` appends, taken from the `format!` that builds
- * it rather than assumed: `format!("{}.log", LOG_FILE_NAME)`.
+ * it rather than assumed: `format!("{}.log", log_file_name())`.
  */
 function logFileExtension(): string {
-  const match = read(LOGGING_RS).match(/format!\("\{\}(\.[a-z]+)", LOG_FILE_NAME\)/)
+  const match = read(LOGGING_RS).match(/format!\("\{\}(\.[a-z]+)", log_file_name\(\)\)/)
   if (!match) throw new Error(`log_file_path format! not found in ${LOGGING_RS}`)
   return match[1]
+}
+
+/**
+ * Whether `logging.rs` still gets the name from the brand seam.
+ *
+ * The parity above compares `brand.rs` with the issue template. That comparison
+ * only says something about the shipped app while `logging.rs` is the seam's
+ * consumer — reintroducing a literal there would leave both sides of the
+ * comparison agreeing on a name nothing writes.
+ */
+function loggingReadsTheBrandSeam(): boolean {
+  return /fn log_file_name\(\) -> &'static str \{\s*brand::canonical\(\)\.log_file_name\s*\}/.test(
+    read(LOGGING_RS)
+  )
 }
 
 /** The bundle identifier Tauri interpolates into every per-app OS directory. */
@@ -85,6 +118,10 @@ function derivedLogPaths(): Map<string, string> {
 describe('published log paths vs. the code that writes them', () => {
   const published = publishedLogPaths()
   const derived = derivedLogPaths()
+
+  it('derives the file name through the brand seam the app actually reads', () => {
+    expect(loggingReadsTheBrandSeam()).toBe(true)
+  })
 
   it('publishes a path for every platform the app derives one for', () => {
     // Vacuity guard, and a real check in itself: dropping a platform bullet
