@@ -182,16 +182,6 @@ export function useAppSettingsLoader(): void {
           shouldPersistSettings = true
         }
 
-        // A settings blob written before the rename still names the brand
-        // theme by its legacy id. Normalize once, here at the read boundary,
-        // so nothing downstream has to know two spellings and the theme picker
-        // highlights the row the user actually chose. In-memory only: the
-        // write side does not flip this wave, so this must not mark the blob
-        // dirty and re-persist it.
-        if (settings.colorTheme === LEGACY.themeId) {
-          settings = { ...settings, colorTheme: brandCanonical().themeId }
-        }
-
         if (rawAppearance === undefined && !hasLegacyLightThemeId) {
           settings = { ...settings, appearanceMode: 'dark' }
           shouldPersistSettings = true
@@ -217,10 +207,21 @@ export function useAppSettingsLoader(): void {
           shouldPersistSettings = true
         }
 
-        setSettings(settings)
         if (shouldPersistSettings) {
           void persistenceApi.writeDebounced(APP_SETTINGS_KEY, settings)
         }
+
+        // A settings blob written before the rename still names the brand
+        // theme by its legacy id. Normalize once, here at the read boundary,
+        // so nothing downstream has to know two spellings. Deliberately after
+        // the persist above and idempotent on the next load: this is a
+        // compatibility read, and letting it ride into a write another branch
+        // already scheduled would flip a persisted value a wave early.
+        if (settings.colorTheme === LEGACY.themeId) {
+          settings = { ...settings, colorTheme: brandCanonical().themeId }
+        }
+
+        setSettings(settings)
       } else {
         settings = DEFAULT_APP_SETTINGS
         setSettings(settings)
