@@ -48,6 +48,7 @@ const repoRoot = process.cwd()
 const APP_ROOT = 'ios/TermulRemote/TermulRemote'
 const INFO_PLIST = `${APP_ROOT}/Info.plist`
 const PBXPROJ = 'ios/TermulRemote/TermulRemote.xcodeproj/project.pbxproj'
+const IOS_README = 'ios/README.md'
 const FIXTURE = 'src/__fixtures__/legacy-brand/ios-defaults-dump.json'
 
 /**
@@ -131,6 +132,29 @@ function swiftCode(relativePath: string): string {
 function filesSpelling(value: string): string[] {
   const needle = `"${value}"`
   return appSwiftFiles().filter((relative) => swiftCode(relative).includes(needle))
+}
+
+/**
+ * Every string literal in the app's Swift *code* that carries the legacy brand
+ * token, as `file :: literal`.
+ *
+ * This is the catch-all the seven contract-specific tests cannot be: those only
+ * look where the fixture says to look, so a legacy value in a file the fixture
+ * never names — an `os_log` subsystem, a dispatch queue label, a notification
+ * name — was invisible to every one of them. Three such residuals were found by
+ * hand rather than by this gate, which is the argument for the gate.
+ *
+ * The token comes from the brand seam, not from this file.
+ */
+function legacyBrandLiterals(): string[] {
+  const token = LEGACY.displayName.toLowerCase()
+  const found: string[] = []
+  for (const relative of appSwiftFiles()) {
+    for (const match of swiftCode(relative).matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+      if (match[1].toLowerCase().includes(token)) found.push(`${relative} :: ${match[1]}`)
+    }
+  }
+  return found.sort()
 }
 
 /**
@@ -309,6 +333,73 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
   // Guarded here because it was owned by no task until Wave 5: the display name
   // is not one of the seven contracts above, so nothing else in this file would
   // have noticed it. Directory and target renaming remains T-B08's.
+  // The catch-all. Everything above is contract-specific and fixture-driven, so
+  // it can only look where the fixture points; a legacy value anywhere else was
+  // invisible. This says the whole app owns exactly six legacy spellings — the
+  // six compatibility reads — and nothing else, no matter which file it hides in.
+  it('spells a legacy brand string only where a compatibility read declares one', () => {
+    const allowed = persistenceSites()
+      .map((site) => `${site.declaredIn} :: ${site.legacy}`)
+      .sort()
+
+    expect(legacyBrandLiterals()).toEqual(allowed)
+  })
+
+  // Two process-visible identifiers that were plain copies of the bundle id:
+  // the `os_log` subsystem and the network queue label. Apple's convention is
+  // that the subsystem equals the bundle identifier, and Console.app's subsystem
+  // filter is what makes that load-bearing — someone reading device logs types
+  // the bundle id. A literal copy drifts the moment the id is renamed, which is
+  // precisely how the pre-rename value survived in that line.
+  it('derives the log subsystem and queue label from the bundle identifier', () => {
+    const declarers = appSwiftFiles().filter((relative) =>
+      swiftCode(relative).includes('subsystem:')
+    )
+    expect(declarers.length, 'no os_log subsystem is declared anywhere').toBeGreaterThan(0)
+
+    for (const relative of declarers) {
+      const code = swiftCode(relative)
+      expect(code, `${relative} hard-codes an os_log subsystem`).not.toMatch(/subsystem:\s*"/)
+      expect(code, `${relative} does not read the bundle identifier`).toContain(
+        'Bundle.main.bundleIdentifier'
+      )
+    }
+
+    // A queue label is a second place the same stem gets typed. Interpolating it
+    // is fine; spelling it out again is the thing that drifts.
+    for (const relative of appSwiftFiles()) {
+      expect(swiftCode(relative), `${relative} hard-codes a dispatch queue label`).not.toMatch(
+        /DispatchQueue\(label:\s*"(?:[^"\\]|\\[^(])*"/
+      )
+    }
+  })
+
+  // Residual U-02's neighbour: the README's own title. Not covered by anything
+  // above, because the README declares no contract — it is just the first thing
+  // a contributor reads.
+  it('titles the iOS README with the post-rename display name', () => {
+    __setBrandCanonicalOverride(POST_RENAME)
+    const [title] = read(IOS_README).split('\n')
+
+    expect(title).toContain(brandCanonical().displayName)
+    expect(title).not.toContain(LEGACY.displayName)
+  })
+
+  // The README also names the bundle identifier, as signing instructions. That
+  // is *currently accurate* and must stay accurate rather than be flipped ahead
+  // of the project: the identifier belongs to the pending bundle-id rename, not
+  // here. Pinning the doc to the project's real value means that rename cannot
+  // land without updating this line — the failure is forced instead of hoped for.
+  it('documents the bundle identifier the project actually sets', () => {
+    const bundleIds = [...read(PBXPROJ).matchAll(/PRODUCT_BUNDLE_IDENTIFIER = (.*);/g)].map(
+      (match) => match[1].replace(/^"|"$/g, '')
+    )
+
+    expect(bundleIds.length, `${PBXPROJ} sets no bundle identifier`).toBeGreaterThan(0)
+    expect(new Set(bundleIds).size, 'build configurations disagree on the bundle id').toBe(1)
+    expect(read(IOS_README)).toContain(bundleIds[0])
+  })
+
   it('bakes the post-rename display name into the base Info.plist fallback', () => {
     __setBrandCanonicalOverride(POST_RENAME)
     const displayNames = infoPlistBuildSettings('CFBundleDisplayName')

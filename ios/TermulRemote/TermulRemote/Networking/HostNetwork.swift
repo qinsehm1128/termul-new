@@ -12,7 +12,9 @@ nonisolated enum HostNetwork {
                 gate.open()
             }
         }
-        monitor.start(queue: DispatchQueue(label: "com.termul.remote.path"))
+        // Same bundle-derived stem as the log subsystem: this label shows up in
+        // crash reports and the debugger, so it should name the app that shipped.
+        monitor.start(queue: DispatchQueue(label: "\(HostLog.subsystem).path"))
         defer { monitor.cancel() }
         await gate.wait(timeoutSeconds: timeoutSeconds)
     }

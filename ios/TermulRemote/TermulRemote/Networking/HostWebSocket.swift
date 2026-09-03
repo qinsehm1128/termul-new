@@ -2,7 +2,22 @@ import Foundation
 import os
 
 enum HostLog {
-    nonisolated static let session = Logger(subsystem: "com.termul.remote", category: "session")
+    /// `os_log` subsystem, and the stem of every queue label this app names.
+    ///
+    /// Apple's convention is that the subsystem *is* the bundle identifier, and
+    /// Console.app's subsystem filter is what makes that convention load-bearing:
+    /// someone reading device logs types the bundle id. So it is read from the
+    /// bundle rather than written down a second time. The two spellings then
+    /// cannot disagree, and the pending bundle-identifier rename carries this
+    /// along without anyone having to remember that it also lives here — which
+    /// is exactly how the pre-rename value survived in this line to begin with.
+    ///
+    /// `bundleIdentifier` is nil only outside an app bundle, where the process
+    /// name is the more useful label anyway.
+    nonisolated static let subsystem = Bundle.main.bundleIdentifier
+        ?? ProcessInfo.processInfo.processName
+
+    nonisolated static let session = Logger(subsystem: subsystem, category: "session")
 }
 
 enum HostTunnelSession {

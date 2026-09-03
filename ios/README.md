@@ -1,4 +1,4 @@
-# Termul iOS companion
+# Se iOS companion
 
 Native SwiftUI client for the desktop shared-live session. It does **not** run a PTY or tunnel sidecar. The desktop still hosts agents and terminals; this app pairs over HTTPS and speaks the same `/ws`, `/terminal/ws`, `/projects`, and `/fs/*` contracts as the browser client.
 

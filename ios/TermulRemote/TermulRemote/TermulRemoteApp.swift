@@ -33,13 +33,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
         AppLaunchURL.set(url)
-        NotificationCenter.default.post(name: .termulOpenURL, object: url)
+        NotificationCenter.default.post(name: .seOpenURL, object: url)
         return true
     }
 }
 
 extension Notification.Name {
-    static let termulOpenURL = Notification.Name("termul.openURL")
+    static let seOpenURL = Notification.Name("se.openURL")
 }
 
 @main
@@ -55,7 +55,7 @@ struct TermulRemoteApp: App {
                 .preferredColorScheme(settings.appearance.colorScheme)
                 .tint(SeTheme.accent)
                 .onOpenURL { store.openIncomingURL($0) }
-                .onReceive(NotificationCenter.default.publisher(for: .termulOpenURL)) { notification in
+                .onReceive(NotificationCenter.default.publisher(for: .seOpenURL)) { notification in
                     if let url = notification.object as? URL {
                         store.openIncomingURL(url)
                     }
