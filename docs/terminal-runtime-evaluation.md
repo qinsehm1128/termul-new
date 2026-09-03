@@ -90,7 +90,7 @@ Completed on 2026-08-21:
   their dedicated dependencies and tests;
 - added an opt-in screen-reader setting, defaulting off, that updates both new
   and already-mounted xterm instances;
-- added an opt-in `termul-terminal-v2.binary` WebSocket subprotocol. New clients
+- added an opt-in `se-terminal-v2.binary` WebSocket subprotocol. New clients
   receive live and replay PTY bytes in compact binary frames, while old clients
   and protocol-stripping proxies continue to receive the existing JSON
   `number[]` frames;

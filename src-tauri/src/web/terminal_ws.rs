@@ -43,7 +43,7 @@ use crate::web::ws::AppState;
 
 const MAX_RECONNECT_FRAMES: usize = 64;
 const ATTACH_GENERATION_CHECK_MS: u64 = 250;
-const BINARY_SUBPROTOCOL: &str = "termul-terminal-v2.binary";
+const BINARY_SUBPROTOCOL: &str = "se-terminal-v2.binary";
 const BINARY_FRAME_MAGIC: &[u8; 4] = b"TML2";
 static CONNECTION_SERIAL: AtomicU64 = AtomicU64::new(1);
 
@@ -1592,7 +1592,7 @@ mod tests {
 
         headers.insert(
             axum::http::header::SEC_WEBSOCKET_PROTOCOL,
-            axum::http::HeaderValue::from_static("legacy, termul-terminal-v2.binary"),
+            axum::http::HeaderValue::from_static("legacy, se-terminal-v2.binary"),
         );
         assert!(supports_binary_subprotocol(&headers));
     }

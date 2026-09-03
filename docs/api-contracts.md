@@ -241,7 +241,7 @@ sequence, and a terminal metadata snapshot. `gap` reports live receiver lag;
 `event` carries transport-neutral exit/cwd/git/exit-code updates.
 
 New browser clients request the WebSocket subprotocol
-`termul-terminal-v2.binary`. When selected, live and replay output use binary
+`se-terminal-v2.binary`. When selected, live and replay output use binary
 frames while request/reply, replay metadata, gap, and event frames remain JSON.
 Old clients, old servers, and intermediaries that do not negotiate the
 subprotocol continue using the JSON representation.

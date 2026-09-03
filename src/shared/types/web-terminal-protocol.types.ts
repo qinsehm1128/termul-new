@@ -12,7 +12,7 @@ import type {
 export type { TerminalResumeGrant, TerminalResumeRequest } from './ipc.types'
 
 /** Negotiated WebSocket subprotocol enabling binary PTY output frames. */
-export const WEB_TERMINAL_BINARY_PROTOCOL = 'termul-terminal-v2.binary'
+export const WEB_TERMINAL_BINARY_PROTOCOL = 'se-terminal-v2.binary'
 
 const WEB_TERMINAL_BINARY_MAGIC = [0x54, 0x4d, 0x4c, 0x32] as const // "TML2"
 const WEB_TERMINAL_BINARY_FIXED_HEADER_BYTES = 15
