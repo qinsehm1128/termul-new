@@ -5,9 +5,9 @@
  *
  * T-H18 wanted a behavioural iOS gate. It is blocked by two environment facts
  * this Session cannot fix in code, both measured rather than assumed:
- * `xcodebuild -list` reports a single target, `TermulRemote` (there is no
- * `TermulRemoteTests`), and `xcrun simctl list runtimes` is empty on this
- * machine. So the iOS gate is downgraded from behavioural to source-text parity
+ * `xcodebuild -list` reports a single target, `SeRemote` (there is no test
+ * target at all), and `xcrun simctl list runtimes` is empty on this machine.
+ * So the iOS gate is downgraded from behavioural to source-text parity
  * against a frozen fixture — the same honest move already accepted for the
  * keychain in T-H08.
  *
@@ -45,9 +45,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 const repoRoot = process.cwd()
 
 /** The app's own Swift sources. `ios/Vendor/` is third-party and out of scope. */
-const APP_ROOT = 'ios/TermulRemote/TermulRemote'
+const APP_ROOT = 'ios/SeRemote/SeRemote'
 const INFO_PLIST = `${APP_ROOT}/Info.plist`
-const PBXPROJ = 'ios/TermulRemote/TermulRemote.xcodeproj/project.pbxproj'
+const PBXPROJ = 'ios/SeRemote/SeRemote.xcodeproj/project.pbxproj'
 const IOS_README = 'ios/README.md'
 const FIXTURE = 'src/__fixtures__/legacy-brand/ios-defaults-dump.json'
 
@@ -346,7 +346,8 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
   //
   // Guarded here because it was owned by no task until Wave 5: the display name
   // is not one of the seven contracts above, so nothing else in this file would
-  // have noticed it. Directory and target renaming remains T-B08's.
+  // have noticed it. Directory and target renaming landed separately in T-B08,
+  // which is why the path constants at the top of this file say `SeRemote`.
   // The catch-all. Everything above is contract-specific and fixture-driven, so
   // it can only look where the fixture points; a legacy value anywhere else was
   // invisible. This says the whole app owns exactly six legacy spellings — the

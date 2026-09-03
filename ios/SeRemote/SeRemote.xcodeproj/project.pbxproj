@@ -11,26 +11,26 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A11A00000000000000000001 /* TermulRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TermulRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A11A00000000000000000001 /* SeRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SeRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		A11A00000000000000000005 /* Exceptions for "TermulRemote" folder in "TermulRemote" target */ = {
+		A11A00000000000000000005 /* Exceptions for "SeRemote" folder in "SeRemote" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = A11A00000000000000000003 /* TermulRemote */;
+			target = A11A00000000000000000003 /* SeRemote */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		A11A00000000000000000002 /* TermulRemote */ = {
+		A11A00000000000000000002 /* SeRemote */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				A11A00000000000000000005 /* Exceptions for "TermulRemote" folder in "TermulRemote" target */,
+				A11A00000000000000000005 /* Exceptions for "SeRemote" folder in "SeRemote" target */,
 			);
-			path = TermulRemote;
+			path = SeRemote;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -50,7 +50,7 @@
 		A11A00000000000000000007 = {
 			isa = PBXGroup;
 			children = (
-				A11A00000000000000000002 /* TermulRemote */,
+				A11A00000000000000000002 /* SeRemote */,
 				A11A00000000000000000008 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -58,7 +58,7 @@
 		A11A00000000000000000008 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A11A00000000000000000001 /* TermulRemote.app */,
+				A11A00000000000000000001 /* SeRemote.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -66,9 +66,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A11A00000000000000000003 /* TermulRemote */ = {
+		A11A00000000000000000003 /* SeRemote */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A11A0000000000000000000A /* Build configuration list for PBXNativeTarget "TermulRemote" */;
+			buildConfigurationList = A11A0000000000000000000A /* Build configuration list for PBXNativeTarget "SeRemote" */;
 			buildPhases = (
 				A11A00000000000000000009 /* Sources */,
 				A11A00000000000000000006 /* Frameworks */,
@@ -79,14 +79,14 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				A11A00000000000000000002 /* TermulRemote */,
+				A11A00000000000000000002 /* SeRemote */,
 			);
-			name = TermulRemote;
+			name = SeRemote;
 			packageProductDependencies = (
 				A11A00000000000000000021 /* SwiftTerm */,
 			);
-			productName = TermulRemote;
-			productReference = A11A00000000000000000001 /* TermulRemote.app */;
+			productName = SeRemote;
+			productReference = A11A00000000000000000001 /* SeRemote.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -104,7 +104,7 @@
 					};
 				};
 			};
-			buildConfigurationList = A11A0000000000000000000C /* Build configuration list for PBXProject "TermulRemote" */;
+			buildConfigurationList = A11A0000000000000000000C /* Build configuration list for PBXProject "SeRemote" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -122,7 +122,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A11A00000000000000000003 /* TermulRemote */,
+				A11A00000000000000000003 /* SeRemote */,
 			);
 		};
 /* End PBXProject section */
@@ -256,7 +256,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = TermulRemote/Info.plist;
+				INFOPLIST_FILE = SeRemote/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Se;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Se uses the camera to scan the desktop remote-access QR code.";
@@ -292,7 +292,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = TermulRemote/Info.plist;
+				INFOPLIST_FILE = SeRemote/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Se;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Se uses the camera to scan the desktop remote-access QR code.";
@@ -322,7 +322,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A11A0000000000000000000A /* Build configuration list for PBXNativeTarget "TermulRemote" */ = {
+		A11A0000000000000000000A /* Build configuration list for PBXNativeTarget "SeRemote" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A11A0000000000000000000F /* Debug */,
@@ -331,7 +331,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A11A0000000000000000000C /* Build configuration list for PBXProject "TermulRemote" */ = {
+		A11A0000000000000000000C /* Build configuration list for PBXProject "SeRemote" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A11A0000000000000000000D /* Debug */,

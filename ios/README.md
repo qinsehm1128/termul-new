@@ -6,7 +6,7 @@ The pairing chrome is native (home, language, appearance). After you connect, **
 
 ## Open in Xcode
 
-1. Open `ios/TermulRemote/TermulRemote.xcodeproj`.
+1. Open `ios/SeRemote/SeRemote.xcodeproj`.
 2. Select your Development Team for signing (`com.se-manager.remote`).
 3. Run on a physical iPhone to use the camera QR scanner. Simulator can paste the copied link.
 

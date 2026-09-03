@@ -43,7 +43,7 @@ extension Notification.Name {
 }
 
 @main
-struct TermulRemoteApp: App {
+struct SeRemoteApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = ConnectionStore()
     @State private var settings = AppSettings()
