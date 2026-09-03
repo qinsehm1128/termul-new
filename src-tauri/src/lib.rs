@@ -20,6 +20,8 @@ mod macos_permissions;
 /// Read-only probe for pre-rename brand data (T-MIG-DETECT). Public because the
 /// brand-migration integration tests link this crate as an external dependency.
 pub mod migration_detect;
+/// User-initiated merge orchestrator for the pre-rename roots (T-MIG-RUN).
+pub mod migration_run;
 mod migrations;
 mod path_validation;
 mod pty;
@@ -2296,9 +2298,11 @@ pub fn run() {
             commands::conversation_suspend_binding,
             commands::conversation_replace_binding,
             commands::conversation_delete,
-            // Read-only probe for data the pre-rename brand left behind. Safe
-            // to call at any time; it never writes and never fails.
+            // Pre-rename brand data: the read-only probe, and the merge the
+            // user starts from the banner. The probe is safe to call at any
+            // time; the merge is never triggered automatically.
             migration_detect::detect_legacy_brand_data,
+            migration_run::run_brand_migration,
             // macOS WebView storage handoff across the identifier rename (M-05)
             webview_storage_handoff::webview_storage_handoff_capture,
             webview_storage_handoff::webview_storage_handoff_pending,
