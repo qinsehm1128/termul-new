@@ -19,35 +19,37 @@
 //! it can see. The fixtures are read-only and sha256-guarded by
 //! `legacy_brand_fixture_manifest.rs`; nothing here writes back to them.
 //!
-//! # The lever
+//! # The lever, and how Wave 4 answered it
 //!
-//! `HostConversationRoots` (`src/conversation/bootstrap.rs:37-69`) carries a
-//! `legacy_session_roots: Vec<PathBuf>`. `standalone()` populates it from its
-//! caller; `desktop()` hardcodes `Vec::new()`. That asymmetry is the seam the
-//! rename migration has to use — the desktop host is precisely the one whose
-//! root moves when the bundle identifier changes, and it is the one that today
-//! declares it has no legacy roots at all.
+//! When these tests were written (Wave 1) they asserted a specific *design*:
+//! that `HostConversationRoots::desktop` would declare the legacy trees in
+//! `legacy_session_roots`, and that `LegacyRootConfiguration::known_roots()`
+//! would then carry them. Wave 4 delivered the capability by a different
+//! mechanism, and the assertions below were retargeted onto it. Two findings
+//! forced that, and both are load-bearing:
 //!
-//! Downstream, `LegacyRootConfiguration::known_roots()`
-//! (`src/conversation/migration/inventory.rs:84-119`) turns those roots into
-//! the three source kinds the pipeline understands — `acp-sessions`,
-//! `acp-chat-history`, `workspace-manifests`. That enumeration is the real
-//! production answer to "what will the migration carry", and it is what the
-//! per-subdirectory test below interrogates.
+//! 1. **Shape.** `standalone_session_roots` entries are consumed as
+//!    `LegacySourceKind::LegacyHostSessions` *leaf* directories — the inventory
+//!    scans the path itself, it never appends `acp-sessions`. An `app_data_dir`
+//!    root sits one level above that, so routing it through the field would
+//!    point the session scanner at a directory of unrelated subtrees.
+//! 2. **Channel.** Both identifier trees have to be *visible* (a user who
+//!    renamed while holding both installs must be told about both), but only
+//!    the *matching* one may be carried. prod carries prod and dev carries dev;
+//!    merging them lets a dev experiment overwrite real user data.
 //!
-//! # Seams Wave 4 must add
+//! So the delivered seam is:
 //!
-//! 1. `HostConversationRoots::desktop` must populate `legacy_session_roots`
-//!    with the `crate::brand::LEGACY.bundle_id` and `.bundle_id_dev` sibling
-//!    trees of the canonical app-data root (both, not just prod).
-//! 2. A copy-only merge that leaves the source bytes untouched. Every existing
-//!    stage/finalize step is scoped to conversation data; there is no public
-//!    entry point that carries the other six subdirectories, and
-//!    `remote-tunnel/secrets.json` must land at mode 0600.
-//! 3. The desktop app-data root itself (`src/lib.rs:1524-1548`) is resolved by
-//!    Tauri from `tauri.conf.json`'s identifier, so the canonical/legacy pair
-//!    has to be reachable from Rust — today `brand::LEGACY.bundle_id` has no
-//!    production consumer at all.
+//! - `crate::legacy_appdata::carry_forward` — a whole-tree, copy-only merge
+//!   running *beside* the conversation pipeline rather than inside it. It has
+//!   no source-kind filter, which is exactly why it reaches the six
+//!   subdirectories the pipeline never looked at.
+//! - `HostConversationRoots::legacy_appdata_roots` — a read-only declaration of
+//!   both identifier trees, for the startup detector and the merge banner.
+//!   `legacy_session_roots` stays empty on desktop, and one of the tests below
+//!   pins that so the rejected design cannot quietly come back.
+//!
+//! `remote-tunnel/secrets.json` must still land at mode 0600.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -234,10 +236,13 @@ fn the_frozen_appdata_fixtures_carry_both_identifiers_and_all_six_subdirs() {
 }
 
 /// A detector given the post-rename app-data root must find BOTH legacy
-/// identifier trees. The real production constructor is
-/// `HostConversationRoots::desktop`, which hardcodes `Vec::new()`.
+/// identifier trees — including the install channel this process is not.
+///
+/// The second half is the anti-regression: those roots must NOT reach
+/// `legacy_session_roots`. Putting them there is the rejected design, and it
+/// fails in two ways at once (an appdata root is not an `acp-sessions` leaf,
+/// and the dev tree would be merged into a release install).
 #[test]
-#[should_panic(expected = "HostConversationRoots::desktop must declare the legacy bundle-identifier trees")]
 fn desktop_roots_detect_both_legacy_identifier_trees() {
     let roots = plant_appdata_roots();
     let _brand = brand::override_canonical(post_rename());
@@ -251,7 +256,7 @@ fn desktop_roots_detect_both_legacy_identifier_trees() {
     let host_roots =
         HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
 
-    let declared = &host_roots.legacy_session_roots;
+    let declared = &host_roots.legacy_appdata_roots;
     let mut undetected = Vec::new();
     for tree in roots.legacy_trees() {
         if !declared.iter().any(|root| root.starts_with(tree)) {
@@ -261,81 +266,81 @@ fn desktop_roots_detect_both_legacy_identifier_trees() {
     assert!(
         undetected.is_empty(),
         "HostConversationRoots::desktop must declare the legacy bundle-identifier trees \
-         so the rename migration can reach them; undetected: {undetected:?}; declared: {declared:?}",
+         so detection and the merge banner can report them; undetected: {undetected:?}; \
+         declared: {declared:?}",
+    );
+
+    assert!(
+        host_roots.legacy_session_roots.is_empty(),
+        "an app_data_dir root is not an acp-sessions leaf, and this vector spans BOTH install \
+         channels — routing it into LegacyRootConfiguration would merge a dev build's data into \
+         a release install; got {:?}",
+        host_roots.legacy_session_roots,
     );
 }
 
 /// After a merge the canonical root must hold equivalent content, and the
 /// legacy trees' bytes must be byte-for-byte unchanged — a rename migration
 /// copies, it never moves or deletes.
+///
+/// "Equivalent content" is scoped to the *matching* install channel. This
+/// process resolved the prod identifier, so the prod tree is carried and the
+/// dev tree is deliberately left where it is: `bundle_id` and `bundle_id_dev`
+/// name two separate installs whose contents genuinely differ, and a running
+/// process is only ever one of them.
 #[test]
-#[should_panic(expected = "the legacy inventory must cover both bundle-identifier trees")]
 fn merge_copies_legacy_trees_and_leaves_the_source_bytes_untouched() {
     let roots = plant_appdata_roots();
     let before: Vec<BTreeMap<String, String>> =
         roots.legacy_trees().iter().map(|t| digest_tree(t)).collect();
+    let dev_only: BTreeSet<String> = {
+        let prod = digest_tree(&roots.legacy_prod);
+        digest_tree(&roots.legacy_dev)
+            .into_keys()
+            .filter(|relative| !prod.contains_key(relative))
+            .collect()
+    };
+    assert!(
+        !dev_only.is_empty(),
+        "the dev fixture must hold at least one file the prod fixture does not, or the channel \
+         isolation below asserts nothing"
+    );
     let _brand = brand::override_canonical(post_rename());
 
-    // Real production chain: desktop roots -> legacy root configuration ->
-    // the pipeline's own inventory pass.
-    let host_roots =
+    // The real production chain: the desktop constructor performs the
+    // carry-forward before it returns.
+    let _host_roots =
         HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
-    let configuration = LegacyRootConfiguration {
-        host_state_root: host_roots.state_root.clone(),
-        standalone_session_roots: host_roots.legacy_session_roots.clone(),
-        standalone_workspace_manifest_roots: host_roots.legacy_workspace_manifest_roots.clone(),
-    };
 
-    let operation_dir = roots.canonical.join("migration-operation");
-    fs::create_dir_all(&operation_dir).expect("create operation dir");
-    let inventory = inventory_legacy_roots(
-        &configuration,
-        uuid::Uuid::new_v4(),
-        chrono::Utc::now(),
-        &operation_dir,
-    )
-    .expect("legacy inventory runs");
-
-    let inventoried: BTreeSet<String> = inventory
-        .roots
-        .iter()
-        .map(|root| root.canonical_path.clone())
-        .collect();
-    let mut missing = Vec::new();
-    for tree in roots.legacy_trees() {
-        let prefix = tree.to_string_lossy().into_owned();
-        if !inventoried.iter().any(|path| path.starts_with(&prefix)) {
-            missing.push(prefix);
-        }
-    }
-    assert!(
-        missing.is_empty(),
-        "the legacy inventory must cover both bundle-identifier trees before anything can be \
-         merged; missing: {missing:?}; inventoried: {inventoried:?}",
-    );
-
-    // Equivalent content at the new root.
-    for (tree, snapshot) in roots.legacy_trees().iter().zip(&before) {
-        for (relative, digest) in snapshot {
-            let merged = roots.canonical.join(relative);
-            let bytes = fs::read(&merged).unwrap_or_else(|e| {
-                panic!(
-                    "{relative} from {} was not merged into {}: {e}",
-                    tree.display(),
-                    roots.canonical.display()
-                )
-            });
-            let mut hasher = Sha256::new();
-            hasher.update(&bytes);
-            assert_eq!(
-                &format!("{:x}", hasher.finalize()),
-                digest,
-                "merged {relative} does not match the legacy source bytes"
-            );
-        }
+    // Equivalent content at the new root, for the matching channel.
+    for (relative, digest) in &before[0] {
+        let merged = roots.canonical.join(relative);
+        let bytes = fs::read(&merged).unwrap_or_else(|e| {
+            panic!(
+                "{relative} from {} was not merged into {}: {e}",
+                roots.legacy_prod.display(),
+                roots.canonical.display()
+            )
+        });
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        assert_eq!(
+            &format!("{:x}", hasher.finalize()),
+            digest,
+            "merged {relative} does not match the legacy source bytes"
+        );
     }
 
-    // And the source is untouched: same files, same bytes, still there.
+    // The other channel is NOT merged in.
+    for relative in &dev_only {
+        assert!(
+            !roots.canonical.join(relative).exists(),
+            "{relative} belongs to the dev install and must not be merged into the release \
+             root — the two are separate installs with genuinely different contents"
+        );
+    }
+
+    // And every source is untouched: same files, same bytes, still there.
     for (tree, snapshot) in roots.legacy_trees().iter().zip(&before) {
         assert_eq!(
             &digest_tree(tree),
@@ -346,24 +351,72 @@ fn merge_copies_legacy_trees_and_leaves_the_source_bytes_untouched() {
     }
 }
 
-/// The six subdirectories the existing legacy-stage pipeline does not cover.
+/// The six subdirectories the conversation pipeline does not cover must be
+/// carried anyway.
 ///
 /// "Covered" is deliberately *behavioural*, not path-shaped: the check is
-/// whether the real `inventory_legacy_roots` pass actually enumerates a file
-/// living under the subdirectory. Declaring an ancestor root is not enough —
-/// each `LegacySourceKind` has its own scanner (`inventory_host_sessions`,
-/// `inventory_chat_history`, `inventory_workspace_manifests`), and every one
-/// of them filters to conversation data. A migration that merely *pointed* at
-/// the legacy tree would still leave the scheduled tasks and the tunnel
-/// credentials behind, so a prefix match would be a false green.
+/// whether a real file living under the subdirectory actually arrives at the
+/// canonical root with its bytes intact. Declaring an ancestor root is not
+/// enough — that is precisely the failure this test exists to catch.
+///
+/// The second assertion records WHY a separate mechanism was needed: each
+/// `LegacySourceKind` has its own scanner (`inventory_host_sessions`,
+/// `inventory_chat_history`, `inventory_workspace_manifests`) and every one of
+/// them filters to conversation data, so the pipeline enumerates none of these
+/// files no matter what roots it is handed. If some future change makes the
+/// pipeline cover them, this assertion fails and says so — that is a design
+/// change to make deliberately, not to discover.
 #[test]
-#[should_panic(expected = "are not carried by the legacy-stage pipeline")]
-fn every_appdata_subdirectory_is_covered_by_the_legacy_stage_pipeline() {
+fn every_appdata_subdirectory_is_carried_even_though_the_pipeline_ignores_it() {
     let roots = plant_appdata_roots();
+    let source_digests = digest_tree(&roots.legacy_prod);
     let _brand = brand::override_canonical(post_rename());
 
     let host_roots =
         HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
+
+    let mut uncovered = Vec::new();
+    for subdir in UNCOVERED_SUBDIRS {
+        let source = roots.legacy_prod.join(subdir);
+        assert!(
+            source.is_dir(),
+            "the frozen fixture must carry {subdir}; got {}",
+            source.display()
+        );
+        let in_subdir: Vec<(&String, &String)> = source_digests
+            .iter()
+            .filter(|(relative, _)| relative.starts_with(&format!("{subdir}/")))
+            .collect();
+        assert!(
+            !in_subdir.is_empty(),
+            "the frozen fixture must hold at least one file under {subdir}, or this subdirectory \
+             asserts nothing"
+        );
+        for (relative, digest) in in_subdir {
+            let merged = roots.canonical.join(relative);
+            match fs::read(&merged) {
+                Ok(bytes) => {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&bytes);
+                    assert_eq!(
+                        &format!("{:x}", hasher.finalize()),
+                        digest,
+                        "carried {relative} does not match the legacy source bytes"
+                    );
+                }
+                Err(_) => uncovered.push(relative.clone()),
+            }
+        }
+    }
+    assert!(
+        uncovered.is_empty(),
+        "{} appdata files were left stranded under the old bundle identifier: {uncovered:?}",
+        uncovered.len(),
+    );
+
+    // The conversation pipeline still does not enumerate any of them — which is
+    // why the carry-forward above is a separate mechanism rather than a wider
+    // root list.
     let configuration = LegacyRootConfiguration {
         host_state_root: host_roots.state_root.clone(),
         standalone_session_roots: host_roots.legacy_session_roots.clone(),
@@ -374,7 +427,6 @@ fn every_appdata_subdirectory_is_covered_by_the_legacy_stage_pipeline() {
         .into_iter()
         .map(|spec| spec.path)
         .collect();
-
     let operation_dir = roots.canonical.join("migration-operation");
     fs::create_dir_all(&operation_dir).expect("create operation dir");
     let inventory = inventory_legacy_roots(
@@ -384,9 +436,7 @@ fn every_appdata_subdirectory_is_covered_by_the_legacy_stage_pipeline() {
         &operation_dir,
     )
     .expect("legacy inventory runs");
-
-    // Every absolute file path the pipeline says it will carry.
-    let carried: BTreeSet<PathBuf> = inventory
+    let carried_by_pipeline: BTreeSet<PathBuf> = inventory
         .roots
         .iter()
         .flat_map(|root| {
@@ -396,27 +446,14 @@ fn every_appdata_subdirectory_is_covered_by_the_legacy_stage_pipeline() {
             })
         })
         .collect();
-
-    let mut uncovered = Vec::new();
     for subdir in UNCOVERED_SUBDIRS {
         let source = roots.legacy_prod.join(subdir);
         assert!(
-            source.is_dir(),
-            "the frozen fixture must carry {subdir}; got {}",
-            source.display()
+            !carried_by_pipeline.iter().any(|path| path.starts_with(&source)),
+            "the conversation pipeline now enumerates {subdir}; the carry-forward's reason for \
+             existing has changed and this file's premise needs revisiting. known roots: {known:?}"
         );
-        if !carried.iter().any(|path| path.starts_with(&source)) {
-            uncovered.push(*subdir);
-        }
     }
-
-    assert!(
-        uncovered.is_empty(),
-        "{} appdata subdirectories are not carried by the legacy-stage pipeline and would be \
-         stranded under the old bundle identifier: {uncovered:?}; \
-         known roots: {known:?}; files the pipeline would carry: {carried:?}",
-        uncovered.len(),
-    );
 }
 
 /// `remote-tunnel/secrets.json` carries the frp auth token and the remote
@@ -425,7 +462,6 @@ fn every_appdata_subdirectory_is_covered_by_the_legacy_stage_pipeline() {
 /// detail.
 #[cfg(unix)]
 #[test]
-#[should_panic(expected = "must be merged into the canonical root at mode 0600")]
 fn remote_tunnel_secrets_keeps_mode_0600_after_the_merge() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -440,22 +476,8 @@ fn remote_tunnel_secrets_keeps_mode_0600_after_the_merge() {
     let source_bytes = fs::read(&source).expect("read source secrets");
 
     let _brand = brand::override_canonical(post_rename());
-    let host_roots =
+    let _host_roots =
         HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
-    let configuration = LegacyRootConfiguration {
-        host_state_root: host_roots.state_root.clone(),
-        standalone_session_roots: host_roots.legacy_session_roots.clone(),
-        standalone_workspace_manifest_roots: host_roots.legacy_workspace_manifest_roots.clone(),
-    };
-    let operation_dir = roots.canonical.join("migration-operation");
-    fs::create_dir_all(&operation_dir).expect("create operation dir");
-    let _inventory = inventory_legacy_roots(
-        &configuration,
-        uuid::Uuid::new_v4(),
-        chrono::Utc::now(),
-        &operation_dir,
-    )
-    .expect("legacy inventory runs");
 
     let merged = roots.canonical.join(SECRETS_FILE);
     let merged_mode = fs::metadata(&merged)
