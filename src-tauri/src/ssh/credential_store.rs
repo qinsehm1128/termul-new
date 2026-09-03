@@ -6,10 +6,15 @@
 use crate::brand;
 use crate::credentials::{self, CredentialError};
 
-/// Key suffix for password credentials
-const PASSWORD_SUFFIX: &str = "password";
-/// Key suffix for passphrase credentials
-const PASSPHRASE_SUFFIX: &str = "passphrase";
+/// Key suffix for password credentials.
+///
+/// `pub(crate)` because the brand-merge orchestrator has to *enumerate* the
+/// keys a pre-rename install wrote (M-10), and a second copy of the suffix in
+/// that module would silently stop matching the moment either one changed.
+pub(crate) const PASSWORD_SUFFIX: &str = "password";
+/// Key suffix for passphrase credentials. `pub(crate)` for the same reason as
+/// [`PASSWORD_SUFFIX`].
+pub(crate) const PASSPHRASE_SUFFIX: &str = "passphrase";
 
 /// The keychain service this build writes to. Read through the brand seam on
 /// the calling thread (FORBID-07) so a rename is a single edit in `brand.rs`

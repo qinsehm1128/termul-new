@@ -39,6 +39,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use crate::brand;
 
@@ -112,6 +113,59 @@ pub fn migration_failed() -> bool {
 #[doc(hidden)]
 pub fn set_migration_failed_for_test(failed: bool) {
     MIGRATION_FAILED.store(failed, Ordering::SeqCst);
+}
+
+/// What the startup pass did, kept so the merge banner can *report* it.
+///
+/// The variants carry no path: this is read by a detector and rendered to a
+/// user, and `~/.ssh` is not information a banner needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupOutcome {
+    /// The pass ran and reached one of the [`KnownHostsMigration`] states.
+    Completed(KnownHostsMigration),
+    /// The pass ran and failed. The interlock is set; unknown hosts are refused.
+    Failed { reason: String },
+}
+
+/// The outcome [`run_at_startup`] recorded, or `None` when it has not run in
+/// this process (every non-desktop composition — `se-server`, the browser
+/// client — never calls it).
+///
+/// Process-wide rather than thread-local, for the same reason
+/// [`MIGRATION_FAILED`] is: it describes one process-wide event, not a
+/// per-thread test injection. Nothing here is a substitute for running the
+/// migration — this is a *record*, and the only legitimate use of it is to
+/// report. A caller that wants the copy performed calls
+/// [`migrate_app_known_hosts`].
+static STARTUP_OUTCOME: Mutex<Option<StartupOutcome>> = Mutex::new(None);
+
+/// The recorded outcome of the startup pass, if it has run.
+#[must_use]
+pub fn startup_outcome() -> Option<StartupOutcome> {
+    // A poisoned lock means some other thread panicked mid-record. The record
+    // is still readable and reporting a stale outcome beats propagating a panic
+    // into a detector that is required never to fail.
+    match STARTUP_OUTCOME.lock() {
+        Ok(slot) => slot.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
+fn record_startup_outcome(outcome: StartupOutcome) {
+    match STARTUP_OUTCOME.lock() {
+        Ok(mut slot) => *slot = Some(outcome),
+        Err(poisoned) => *poisoned.into_inner() = Some(outcome),
+    }
+}
+
+/// Test seam for the reporting path. Production only ever records through
+/// [`run_at_startup`].
+#[doc(hidden)]
+pub fn set_startup_outcome_for_test(outcome: Option<StartupOutcome>) {
+    match STARTUP_OUTCOME.lock() {
+        Ok(mut slot) => *slot = outcome,
+        Err(poisoned) => *poisoned.into_inner() = outcome,
+    }
 }
 
 /// The user's `~/.ssh` directory.
@@ -213,7 +267,8 @@ fn migrate_app_known_hosts_inner(
 /// makes `verify_host_key` refuse unknown hosts, which is the safe response,
 /// and refusing to launch the app would not make the user any safer.
 pub fn run_at_startup() {
-    match migrate_app_known_hosts() {
+    let outcome = migrate_app_known_hosts();
+    match &outcome {
         Ok(KnownHostsMigration::NotApplicable) | Ok(KnownHostsMigration::NotNeeded) => {}
         Ok(KnownHostsMigration::AlreadyMigrated) => {
             log::info!("[SSH] App-managed known_hosts store was already migrated");
@@ -231,6 +286,15 @@ pub fn run_at_startup() {
             );
         }
     }
+    // Recorded so the merge banner can show what already happened. The banner
+    // must never be the thing that *causes* it: this root's window opens the
+    // moment the app starts, long before a user could click anything.
+    record_startup_outcome(match outcome {
+        Ok(migration) => StartupOutcome::Completed(migration),
+        Err(error) => StartupOutcome::Failed {
+            reason: error.to_string(),
+        },
+    });
 }
 
 #[cfg(test)]

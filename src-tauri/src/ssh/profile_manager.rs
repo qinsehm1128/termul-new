@@ -10,8 +10,11 @@ use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-const STORE_FILE: &str = "ssh-profiles.json";
-const STORE_KEY: &str = "profiles";
+/// `pub(crate)` so the brand-merge orchestrator reads profile ids out of the
+/// same file this manager writes them to (M-10). It enumerates the keychain
+/// keys `{id}-password` / `{id}-passphrase` from that id set.
+pub(crate) const STORE_FILE: &str = "ssh-profiles.json";
+pub(crate) const STORE_KEY: &str = "profiles";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

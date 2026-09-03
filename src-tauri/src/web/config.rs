@@ -33,23 +33,45 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
             return Some(PathBuf::from(trimmed));
         }
     }
+    Some(state_root_under(&state_root_parent()?).join("sessions"))
+}
+
+/// The directory the standalone state root hangs off on this host.
+///
+/// Split out of [`default_sessions_dir`] so the brand-merge orchestrator
+/// (`migration_run`) resolves the *same* parent the resolver does. A second
+/// copy of this precedence order would let the merge carry a root the server
+/// never reads, or miss the one it does.
+pub(crate) fn state_root_parent() -> Option<PathBuf> {
     #[cfg(unix)]
     {
         if let Some(base) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
-            return Some(state_root_under(&base).join("sessions"));
+            return Some(base);
         }
         std::env::var_os("HOME")
             .map(PathBuf::from)
-            .map(|home| state_root_under(&home.join(".local").join("state")).join("sessions"))
+            .map(|home| home.join(".local").join("state"))
     }
     #[cfg(windows)]
     {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|base| state_root_under(&base).join("sessions"))
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     }
     #[cfg(not(any(unix, windows)))]
     None
+}
+
+/// `(pre-rename root, current root)` under `parent`, or `None` when the rename
+/// has not landed and the two names are the same directory (M-07).
+///
+/// Reads the brand seam, so it must be called on the thread that owns it
+/// (FORBID-07).
+#[must_use]
+pub(crate) fn legacy_state_root_pair(parent: &Path) -> Option<(PathBuf, PathBuf)> {
+    let (canonical, legacy) = state_dir_names();
+    if canonical == legacy {
+        return None;
+    }
+    Some((parent.join(legacy), parent.join(canonical)))
 }
 
 /// The state-root directory name on this platform: the one written today, and

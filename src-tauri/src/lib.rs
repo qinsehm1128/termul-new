@@ -17,6 +17,9 @@ mod host_admission;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
+/// Read-only probe for pre-rename brand data (T-MIG-DETECT). Public because the
+/// brand-migration integration tests link this crate as an external dependency.
+pub mod migration_detect;
 mod migrations;
 mod path_validation;
 mod pty;
@@ -2293,6 +2296,9 @@ pub fn run() {
             commands::conversation_suspend_binding,
             commands::conversation_replace_binding,
             commands::conversation_delete,
+            // Read-only probe for data the pre-rename brand left behind. Safe
+            // to call at any time; it never writes and never fails.
+            migration_detect::detect_legacy_brand_data,
             // macOS WebView storage handoff across the identifier rename (M-05)
             webview_storage_handoff::webview_storage_handoff_capture,
             webview_storage_handoff::webview_storage_handoff_pending,

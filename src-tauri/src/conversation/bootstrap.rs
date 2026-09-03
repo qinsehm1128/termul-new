@@ -184,8 +184,12 @@ impl HostConversationRoots {
 ///
 /// Reads the brand seam, so it must be called on the thread that owns it
 /// (FORBID-07).
+///
+/// `pub(crate)` so `migration_detect` reports the same root this constructor
+/// declares. A second copy of the "is the final component the canonical display
+/// name?" rule would let the banner list a directory the host never registered.
 #[must_use]
-fn legacy_workspace_base(workspace_base: &Path) -> Option<PathBuf> {
+pub(crate) fn legacy_workspace_base(workspace_base: &Path) -> Option<PathBuf> {
     let canonical = crate::brand::canonical();
     let legacy_name = crate::brand::LEGACY.display_name;
     if legacy_name == canonical.display_name {
