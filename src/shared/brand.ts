@@ -212,3 +212,38 @@ export function __setBrandCanonicalOverride(next: Partial<BrandCanonical> | null
 export function __resetBrandCanonicalOverride(): void {
   override = null
 }
+
+/**
+ * The values a compatibility read must accept for `field`, most-current first.
+ *
+ * A read that knows only the canonical value drops everything already on disk;
+ * one that knows only the legacy value stops working the moment the contract
+ * flips. This is the one shape that survives both, and it collapses to a single
+ * entry while the two spellings are still equal — so no caller pays for a
+ * second lookup before the flip.
+ *
+ * Compatibility *read* only. A caller that writes must name the value it writes
+ * explicitly; FORBID-04 forbids emitting two spellings of the same contract.
+ *
+ * Call it at the point of use. A list captured into a module-level `const`
+ * freezes before {@link __setBrandCanonicalOverride} can move it.
+ */
+export function acceptedBrandValues<K extends keyof BrandCanonical>(field: K): readonly string[] {
+  const canonical = brandCanonical()[field]
+  return canonical === LEGACY[field] ? [canonical] : [canonical, LEGACY[field]]
+}
+
+/**
+ * {@link acceptedBrandValues} as a regexp alternation body, ready to drop into
+ * a `(?:…)` group.
+ *
+ * Every value is escaped: brand identifiers carry `.` (`com.termul.manager`)
+ * and `-` prefixes, and an unescaped `.` in an alternation quietly matches any
+ * character. Build the `RegExp` in the function body that uses it — a pattern
+ * hoisted to module scope freezes with the brand value baked in.
+ */
+export function acceptedBrandPattern<K extends keyof BrandCanonical>(field: K): string {
+  return acceptedBrandValues(field)
+    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')
+}

@@ -16,6 +16,7 @@
  * at least as long. Inline backticks, four-space indented literals, and nested
  * shorter fences inside a longer outer fence are left alone.
  */
+import { acceptedBrandPattern } from '@shared/brand'
 
 interface FenceOpen {
   /** Line index of the opening fence. */
@@ -146,23 +147,32 @@ export function stripEmptyFences(text: string, streaming: boolean): string {
 }
 
 /**
- * Ensure a `termul-plan` fence opener sits on its own line. CommonMark
- * requires the opening ``` of a fenced code block to be at the start of a
- * line; when text blocks are joined with '' a preceding block that does not
- * end in '\n' glues the opener onto the prose (e.g. "prose```termul-plan"),
- * so Streamdown never recognizes the fence and renders the snapshot as plain
- * text. This inserts a '\n' before any `termul-plan` opener that is not
- * already at the start of a line, covering both freshly-appended snapshots
- * and persisted messages written before the `appendPlanSnapshot` boundary fix.
+ * Ensure a plan fence opener sits on its own line. CommonMark requires the
+ * opening ``` of a fenced code block to be at the start of a line; when text
+ * blocks are joined with '' a preceding block that does not end in '\n' glues
+ * the opener onto the prose (e.g. "prose```<plan>"), so Streamdown never
+ * recognizes the fence and renders the snapshot as plain text. This inserts a
+ * '\n' before any plan-fence opener that is not already at the start of a
+ * line, covering both freshly-appended snapshots and persisted messages
+ * written before the `appendPlanSnapshot` boundary fix.
  *
- * Only the exact opener (`termul-plan` followed by a newline or end of input)
- * is normalized, so a quoted reference like ` ```termul-plan-v2` or a longer
- * info string is left alone. An opener already at line start (preceded by
- * only up to three spaces/tabs, or by a backtick run that is part of another
- * fence construct) is left untouched.
+ * Every fence language in `acceptedBrandValues` is normalized: a message
+ * persisted before the rename carries the legacy language and needs the same
+ * boundary repair as one written after it.
+ *
+ * Only the exact opener (the language followed by a newline or end of input)
+ * is normalized, so a quoted reference like ` ```<plan>-v2` or a longer info
+ * string is left alone. An opener already at line start (preceded by only up
+ * to three spaces/tabs, or by a backtick run that is part of another fence
+ * construct) is left untouched.
  */
 export function normalizePlanFenceBoundary(text: string): string {
-  return text.replace(/```termul-plan(?=\r?\n|$)/g, (opener, offset, source) => {
+  // Built here, not at module scope: the brand seam must stay movable.
+  const openerPattern = new RegExp(
+    `\`\`\`(?:${acceptedBrandPattern('planFence')})(?=\\r?\\n|$)`,
+    'g'
+  )
+  return text.replace(openerPattern, (opener, offset, source) => {
     const lineStart = source.lastIndexOf('\n', offset - 1) + 1
     const linePrefix = source.slice(lineStart, offset)
     // Valid CommonMark fence position: indented up to 3 spaces/tabs, or the

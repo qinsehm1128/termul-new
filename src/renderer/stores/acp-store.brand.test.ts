@@ -26,7 +26,7 @@ import {
 } from '@shared/brand'
 import { render } from '@testing-library/react'
 import { createContext, createElement } from 'react'
-import { afterEach, describe, expect, it, test, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { useIsCodeFenceIncompleteMock } = vi.hoisted(() => ({
   useIsCodeFenceIncompleteMock: vi.fn(() => false)
@@ -132,12 +132,10 @@ describe('ACP plan fence across the rename', () => {
     expect(getByText('Reproduce the webhook retry storm')).toBeInTheDocument()
   })
 
-  // LEDGER (Wave 4) — expected failure. The extractor's regexp hardcodes
-  // `termul-plan` and consults neither `brandCanonical()` nor `LEGACY`, so a
-  // fence emitted after the flip is invisible to the rehydrate path. Delete
-  // this test, `.fails` and all, once the extractor accepts the canonical
-  // language alongside the legacy one.
-  test.fails('extracts a plan fence carrying the post-rename language', () => {
+  // T-A02 landed: the extractor's regexp is built from `acceptedBrandValues`,
+  // so a fence emitted after the flip is visible to the rehydrate path and
+  // yields byte-identical JSON to the legacy one.
+  it('extracts a plan fence carrying the post-rename language', () => {
     __setBrandCanonicalOverride({ planFence: 'se-plan' })
     const json = extractSePlanFenceJson(transcriptWrittenToday())
 
@@ -145,11 +143,10 @@ describe('ACP plan fence across the rename', () => {
     expect(json).toBe(extractSePlanFenceJson(transcriptOnDisk()))
   })
 
-  // LEDGER (Wave 4) — expected failure. `ChatMarkdownCode` compares `language`
-  // against a hardcoded 'termul-plan', so a fence emitted after the flip falls
-  // through to the generic code block. Delete this test, `.fails` and all, once
-  // the dispatch reads the canonical language.
-  test.fails('renders a post-rename plan fence as a plan, not a code block', () => {
+  // T-A02 landed: `ChatMarkdownCode` tests `language` for membership in
+  // `acceptedBrandValues('planFence')`, so a fence emitted after the flip
+  // renders as a plan instead of falling through to the generic code block.
+  it('renders a post-rename plan fence as a plan, not a code block', () => {
     __setBrandCanonicalOverride({ planFence: 'se-plan' })
     const { getByText, queryByTestId } = renderFence(
       brandCanonical().planFence,

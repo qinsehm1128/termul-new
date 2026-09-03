@@ -1,3 +1,4 @@
+import { acceptedBrandValues } from '@shared/brand'
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
 import { Check, Copy, Download } from 'lucide-react'
 import {
@@ -171,13 +172,17 @@ export function ChatMarkdownCode({
     )
   }
 
-  // termul-plan fences render as an inline read-only PlanPanel, not a code
-  // block. This override replaces Streamdown's default `code` component (the
-  // only one that consults the `renderers` plugin config), so the lookup must
-  // happen here. `useIsCodeFenceIncomplete` is the public per-block hook that
-  // reports whether THIS fence is still being streamed — the same signal the
-  // default component passes to custom renderers.
-  if (language === 'termul-plan') {
+  // Plan fences render as an inline read-only PlanPanel, not a code block.
+  // This override replaces Streamdown's default `code` component (the only one
+  // that consults the `renderers` plugin config), so the lookup must happen
+  // here. `useIsCodeFenceIncomplete` is the public per-block hook that reports
+  // whether THIS fence is still being streamed — the same signal the default
+  // component passes to custom renderers.
+  //
+  // Membership, not equality: a plan persisted before the rename carries the
+  // legacy language and must keep rendering as a plan rather than falling
+  // through to the generic code block.
+  if (acceptedBrandValues('planFence').includes(language)) {
     return (
       <Suspense fallback={null}>
         <SePlanRenderer code={code} isIncomplete={isIncomplete} language={language} />

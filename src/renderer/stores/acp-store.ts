@@ -22,6 +22,7 @@
  * prepared-chat reaping) and is **not** a cross-tab isolation boundary.
  */
 
+import { acceptedBrandPattern } from '@shared/brand'
 import {
   type ConversationRecordV2,
   type ExecutionTarget,
@@ -1127,14 +1128,22 @@ export function parseSePlanFence(text: string | undefined): PlanEntry[] | null {
 }
 
 /**
- * Extract the raw JSON string from the LAST ```termul-plan fence in the text.
+ * Extract the raw JSON string from the LAST plan fence in the text.
  * Returns `null` when no fence is present. Used by the rehydrate path to
  * distinguish "no fence" (skip silently) from "malformed fence JSON" (warn).
+ *
+ * Accepts every fence language in {@link acceptedBrandValues}: a transcript
+ * persisted before the rename carries the legacy language, and one written
+ * after it carries the canonical one. Both must rehydrate.
  */
 export function extractSePlanFenceJson(text: string | undefined): string | null {
   if (typeof text !== 'string' || text.length === 0) return null
   // \r? handles both LF and CRLF line endings (Windows host/agent normalization).
-  const fence = /```termul-plan\r?\n([\s\S]*?)\r?\n```/g
+  // Built here rather than at module scope so the brand seam stays movable.
+  const fence = new RegExp(
+    `\`\`\`(?:${acceptedBrandPattern('planFence')})\\r?\\n([\\s\\S]*?)\\r?\\n\`\`\``,
+    'g'
+  )
   let lastJson: string | null = null
   for (let match = fence.exec(text); match !== null; match = fence.exec(text)) {
     lastJson = match[1]
@@ -1174,15 +1183,21 @@ function scanPlanFenceFromMessages(messages: ChatMessage[]): PlanEntry[] | null 
 }
 
 /**
- * Check whether a text block IS a termul-plan fence (the entire text is the
- * fence, not just contains one). Used by `appendPlanSnapshot` to decide which
- * blocks to replace — only drop blocks that ARE fences, preserving assistant
- * prose that merely quotes or references the fence format.
+ * Check whether a text block IS a plan fence (the entire text is the fence,
+ * not just contains one). Used by `appendPlanSnapshot` to decide which blocks
+ * to replace — only drop blocks that ARE fences, preserving assistant prose
+ * that merely quotes or references the fence format.
+ *
+ * Accepts both fence languages: a snapshot this renderer wrote before the
+ * rename must still be recognized as the block to replace, or a second
+ * snapshot piles up next to the first.
  */
 function isSePlanFenceBlock(text: string | undefined): boolean {
   if (typeof text !== 'string' || text.length === 0) return false
   // Full-string match (anchored): the entire block must be the fence.
-  return /^```termul-plan\r?\n([\s\S]*?)\r?\n```$/.test(text)
+  return new RegExp(
+    `^\`\`\`(?:${acceptedBrandPattern('planFence')})\\r?\\n([\\s\\S]*?)\\r?\\n\`\`\`$`
+  ).test(text)
 }
 
 /**
