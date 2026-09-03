@@ -1,18 +1,17 @@
-//! T-H04 — per-repository workspace directory (`.termul/`) across the rename.
+//! T-H04 — per-repository workspace directory across the rename.
 //!
 //! # Why this reads a repository off disk instead of inlining a literal
 //!
-//! The assertion this file replaces lives at `src/worktree/mod.rs:2264`:
+//! The assertion this file replaces lived in `src/worktree/mod.rs`
+//! (`test_is_se_manager_managed_{true,false}`) and had the shape
+//! `assert!(<path literal>.contains(<workspace dir literal>))`, with both
+//! operands written on the same source line.
 //!
-//! ```ignore
-//! assert!("/project/.termul/worktrees/feat-1".contains(".termul/worktrees/"));
-//! ```
-//!
-//! Both operands are literals on the same source line, so the assertion cannot
-//! fail — and a repo-wide `sed 's/termul/se-manager/g'` rewrites subject and
+//! Such an assertion cannot fail — and a repo-wide `sed` rewrites subject and
 //! expectation together and leaves it green while every user's existing
-//! `.termul/` tree silently stops being recognised. (That assertion is *not*
-//! deleted here; a later task owns it.)
+//! pre-rename tree silently stops being recognised. T-A18 removed it rather
+//! than updating its literal: editing the literal would have preserved a test
+//! that never had any power to detect anything.
 //!
 //! So this file takes its subject from `tests/fixtures/legacy-brand/fake-user-repo/`,
 //! a sha256-frozen snapshot of what a pre-rename install leaves in a user's

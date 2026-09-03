@@ -163,7 +163,7 @@ pub const LEGACY: BrandCanonical = BrandCanonical {
 pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     created_by: "se-manager",
     plan_fence: "termul-plan",
-    workspace_dir: ".termul",
+    workspace_dir: ".se-manager",
     display_name: "Se",
     display_name_full: "Termul Manager",
     package_name: "termul-manager",
@@ -241,15 +241,31 @@ mod tests {
         assert_eq!(canonical(), DEFAULT_CANONICAL);
     }
 
+    /// Injected values have to be ones `canonical()` never returns on its own,
+    /// or an assertion that observes them passes without the seam being
+    /// consulted. Wave 5 flipped `created_by` and `workspace_dir` to the values
+    /// these tests used to inject, so they now inject the legacy spellings:
+    /// `LEGACY` is permanent and FORBID-04 forbids `canonical()` from ever
+    /// returning it again, so no later flip can collapse the distinction.
+    fn injected() -> BrandCanonical {
+        BrandCanonical {
+            created_by: LEGACY.created_by,
+            workspace_dir: LEGACY.workspace_dir,
+            ..DEFAULT_CANONICAL
+        }
+    }
+
     #[test]
     fn override_replaces_canonical_and_reverts_on_drop() {
+        assert_ne!(
+            injected().created_by,
+            DEFAULT_CANONICAL.created_by,
+            "the injected value must differ from the shipped one or this proves nothing"
+        );
         let before = canonical();
         {
-            let _guard = override_canonical(BrandCanonical {
-                created_by: "se-manager",
-                ..DEFAULT_CANONICAL
-            });
-            assert_eq!(canonical().created_by, "se-manager");
+            let _guard = override_canonical(injected());
+            assert_eq!(canonical().created_by, injected().created_by);
             // Untouched fields still come from the shipped values.
             assert_eq!(canonical().plan_fence, DEFAULT_CANONICAL.plan_fence);
         }
@@ -258,11 +274,16 @@ mod tests {
 
     #[test]
     fn legacy_values_are_independent_of_the_override_seam() {
+        // Deliberately *not* `injected()`: overriding with the legacy values
+        // would leave the assertions below true no matter what the seam did to
+        // `LEGACY`. Sentinels nothing ships are the only injection that can
+        // distinguish "LEGACY is immovable" from "LEGACY happens to match".
         let _guard = override_canonical(BrandCanonical {
-            created_by: "se-manager",
-            workspace_dir: ".se-manager",
+            created_by: "probe-created-by",
+            workspace_dir: ".probe-workspace-dir",
             ..DEFAULT_CANONICAL
         });
+        assert_eq!(canonical().created_by, "probe-created-by");
         assert_eq!(LEGACY.created_by, "termul");
         assert_eq!(LEGACY.workspace_dir, ".termul");
     }
@@ -272,11 +293,9 @@ mod tests {
     /// would be non-deterministic and the ledger would prove nothing.
     #[test]
     fn override_does_not_leak_into_other_threads() {
-        let _guard = override_canonical(BrandCanonical {
-            created_by: "se-manager",
-            ..DEFAULT_CANONICAL
-        });
-        assert_eq!(canonical().created_by, "se-manager");
+        let _guard = override_canonical(injected());
+        assert_eq!(canonical().created_by, injected().created_by);
+        assert_ne!(canonical().created_by, DEFAULT_CANONICAL.created_by);
 
         let observed = std::thread::spawn(|| canonical().created_by).join().unwrap();
         assert_eq!(observed, DEFAULT_CANONICAL.created_by);

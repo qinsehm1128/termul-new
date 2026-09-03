@@ -55,14 +55,14 @@ vi.mock('@/stores/project-store', () => ({
               id: 'wt-1',
               name: 'feat-1',
               branch: 'feat-1',
-              path: '/test/project/.termul/worktrees/feat-1',
+              path: '/test/project/.se-manager/worktrees/feat-1',
               createdAt: '2026-01-01'
             },
             {
               id: 'wt-2',
               name: 'feat-2',
               branch: 'feat-2',
-              path: '/test/project/.termul/worktrees/feat-2',
+              path: '/test/project/.se-manager/worktrees/feat-2',
               createdAt: '2026-01-01'
             }
           ],
@@ -97,7 +97,7 @@ describe('useWorktreeReconciler', () => {
         {
           name: 'feat-1',
           branch: 'feat-1',
-          path: '/test/project/.termul/worktrees/feat-1',
+          path: '/test/project/.se-manager/worktrees/feat-1',
           headCommit: 'abc'
         }
       ]
@@ -119,13 +119,13 @@ describe('useWorktreeReconciler', () => {
         {
           name: 'feat-1',
           branch: 'feat-1',
-          path: '/test/project/.termul/worktrees/feat-1',
+          path: '/test/project/.se-manager/worktrees/feat-1',
           headCommit: 'abc'
         },
         {
           name: 'feat-3',
           branch: 'feat-3',
-          path: '/test/project/.termul/worktrees/feat-3',
+          path: '/test/project/.se-manager/worktrees/feat-3',
           headCommit: 'def'
         }
       ]
@@ -139,7 +139,7 @@ describe('useWorktreeReconciler', () => {
         expect.objectContaining({
           name: 'feat-3',
           branch: 'feat-3',
-          path: '/test/project/.termul/worktrees/feat-3'
+          path: '/test/project/.se-manager/worktrees/feat-3'
         })
       )
     })
@@ -156,13 +156,13 @@ describe('useWorktreeReconciler', () => {
         {
           name: 'feat-1',
           branch: 'feat-1',
-          path: '/test/project/.termul/worktrees/feat-1',
+          path: '/test/project/.se-manager/worktrees/feat-1',
           headCommit: 'abc'
         },
         {
           name: 'feat-2',
           branch: 'feat-2',
-          path: '/test/project/.termul/worktrees/feat-2',
+          path: '/test/project/.se-manager/worktrees/feat-2',
           headCommit: 'def'
         }
       ]
@@ -188,7 +188,7 @@ describe('useWorktreeReconciler', () => {
         {
           name: 'feat-1',
           branch: 'feat-1',
-          path: '/test/project/.termul/worktrees/feat-1',
+          path: '/test/project/.se-manager/worktrees/feat-1',
           headCommit: 'abc'
         }
       ]

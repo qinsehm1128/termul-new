@@ -2375,15 +2375,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_is_se_manager_managed_true() {
-        assert!("/project/.termul/worktrees/feat-1".contains(".termul/worktrees/"));
-    }
-
-    #[test]
-    fn test_is_se_manager_managed_false() {
-        assert!(!"/project/../other-worktree".contains(".termul/worktrees/"));
-    }
+    // `test_is_se_manager_managed_{true,false}` were removed by T-A18 rather
+    // than having their literal updated. Both were of the form
+    // `assert!("<literal>".contains("<literal>"))` with both sides written on
+    // the same line: they named no production function, so they could not fail
+    // for any reason and a rename pass would rewrite both halves in one stroke.
+    // The replacement is `tests/legacy_brand_worktree.rs`, which drives the real
+    // routes over a frozen on-disk repository.
 
     // --------------------------------------------------------------------
     // CAP-2 / CAP-5 — worktree include carry-over + base-branch helpers

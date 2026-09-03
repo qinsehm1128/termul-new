@@ -1,5 +1,6 @@
 // Import GitStatus from shared types to ensure consistency
 // between IPC contract and renderer domain models
+import { acceptedBrandValues } from '@shared/brand'
 import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
 import type { TerminalResourceHydrationStatus } from '@shared/types/session-workspace.types'
 
@@ -65,10 +66,22 @@ export function getActiveWorktree(project: Project): Worktree | undefined {
   return project.worktrees?.find((w) => w.id === project.activeWorktreeId)
 }
 
-export function isWorktreeSeManaged(worktree: Worktree): boolean {
+/**
+ * `Pick<…, 'path'>` rather than a full `Worktree`: the reconciler asks the same
+ * question of a raw `GitWorktreeEntry` straight from `git worktree list`, and
+ * one shared rule is the point — a second copy at that call site is how the two
+ * drift apart at the next flip.
+ */
+export function isWorktreeSeManaged(worktree: Pick<Worktree, 'path'>): boolean {
   // Normalize path separators for cross-platform detection
   const normalizedPath = worktree.path.replace(/\\/g, '/')
-  return normalizedPath.includes('.termul/worktrees/')
+  // Every workspace dir this app has ever written, most-current first: a
+  // worktree created before T-A18 still sits under the legacy one, and one
+  // created after sits under the canonical one. Naming either alone
+  // misclassifies half the worktrees on disk.
+  return acceptedBrandValues('workspaceDir').some((dir) =>
+    normalizedPath.includes(`${dir}/worktrees/`)
+  )
 }
 
 export type TerminalHealthStatus = TerminalResourceHydrationStatus | 'crashed' | 'hibernated'

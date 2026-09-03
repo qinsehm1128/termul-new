@@ -107,7 +107,7 @@ export const worktreeApi = {
    * Create a new worktree.
    * If isNewBranch is true, creates a new branch from the startRef (or HEAD).
    * If branch exists, checks it out in the new worktree.
-   * targetPath defaults to `<project-path>/.termul/worktrees/<name>/` when not provided.
+   * targetPath defaults to `<project-path>/.se-manager/worktrees/<name>/` when not provided.
    */
   create: (params: {
     projectPath: string
@@ -209,7 +209,7 @@ export const worktreeApi = {
     }),
 
   /**
-   * Archive a worktree by moving it to `.termul/archives/<name>-<timestamp>/`.
+   * Archive a worktree by moving it to `.se-manager/archives/<name>-<timestamp>/`.
    * The worktree is recoverable until the 30-day retention expires.
    *
    * **Web:** returns `WEB_UNSUPPORTED` (deferred — see deferred-work.md).

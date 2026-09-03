@@ -240,17 +240,17 @@ describe('pure history helpers', () => {
     // sidebar must list root-cwd sessions AND the project's worktree-cwd
     // sessions so a worktree chat stays reachable without a restart.
     const root = entry('root', { cwd: '/project' })
-    const wtChat = entry('wt-chat', { cwd: '/project/.termul/worktrees/wt' })
+    const wtChat = entry('wt-chat', { cwd: '/project/.se-manager/worktrees/wt' })
     const otherProjectWt = entry('other-wt', {
       projectId: 'project-2',
-      cwd: '/project/.termul/worktrees/wt'
+      cwd: '/project/.se-manager/worktrees/wt'
     })
     const entries = [root, wtChat, otherProjectWt]
 
     expect(
-      scopeSessionIndex(entries, 'project-1', '/project', ['/project/.termul/worktrees/wt']).map(
-        ({ id }) => id
-      )
+      scopeSessionIndex(entries, 'project-1', '/project', [
+        '/project/.se-manager/worktrees/wt'
+      ]).map(({ id }) => id)
     ).toEqual(['root', 'wt-chat'])
   })
 
@@ -259,12 +259,12 @@ describe('pure history helpers', () => {
     // chat; the root-cwd chat is not in the worktreePath set so it is hidden,
     // matching the prior scoped-to-active-cwd behavior.
     const root = entry('root', { cwd: '/project' })
-    const wtChat = entry('wt-chat', { cwd: '/project/.termul/worktrees/wt' })
+    const wtChat = entry('wt-chat', { cwd: '/project/.se-manager/worktrees/wt' })
     const entries = [root, wtChat]
 
     expect(
-      scopeSessionIndex(entries, 'project-1', '/project/.termul/worktrees/wt', [
-        '/project/.termul/worktrees/wt'
+      scopeSessionIndex(entries, 'project-1', '/project/.se-manager/worktrees/wt', [
+        '/project/.se-manager/worktrees/wt'
       ]).map(({ id }) => id)
     ).toEqual(['wt-chat'])
   })
@@ -274,25 +274,25 @@ describe('pure history helpers', () => {
     // project's scoping; and the worktree-inclusive set never duplicates an
     // entry already matched by exact-cwd (filter, not concat).
     const root = entry('root', { cwd: '/project' })
-    const wtChat = entry('wt-chat', { cwd: '/project/.termul/worktrees/wt' })
+    const wtChat = entry('wt-chat', { cwd: '/project/.se-manager/worktrees/wt' })
     const foreignWt = entry('foreign', {
       projectId: 'project-2',
-      cwd: '/other/.termul/worktrees/x'
+      cwd: '/other/.se-manager/worktrees/x'
     })
     const entries = [root, wtChat, foreignWt]
 
     // Foreign worktree path is not in the active project's worktreePaths.
     expect(
-      scopeSessionIndex(entries, 'project-1', '/project', ['/project/.termul/worktrees/wt']).map(
-        ({ id }) => id
-      )
+      scopeSessionIndex(entries, 'project-1', '/project', [
+        '/project/.se-manager/worktrees/wt'
+      ]).map(({ id }) => id)
     ).toEqual(['root', 'wt-chat'])
 
     // projectId-only fallback when the scoped set (exact + worktree) is empty.
     expect(
-      scopeSessionIndex(entries, 'project-2', '/nowhere', ['/project/.termul/worktrees/wt']).map(
-        ({ id }) => id
-      )
+      scopeSessionIndex(entries, 'project-2', '/nowhere', [
+        '/project/.se-manager/worktrees/wt'
+      ]).map(({ id }) => id)
     ).toEqual(['foreign'])
   })
 
@@ -305,14 +305,16 @@ describe('pure history helpers', () => {
     // appear in BOTH forms (471 unprefixed + 94 prefixed in real data).
     const rootUnprefixed = entry('root-unprefixed', { cwd: 'E:\\project' })
     const rootPrefixed = entry('root-prefixed', { cwd: '\\\\?\\E:\\project' })
-    const wtChat = entry('wt-chat', { cwd: '\\\\?\\E:\\project\\.termul\\worktrees\\wt' })
+    const wtChat = entry('wt-chat', { cwd: '\\\\?\\E:\\project\\.se-manager\\worktrees\\wt' })
     const entries = [rootUnprefixed, rootPrefixed, wtChat]
 
     // Root view: activeCwd is the project root (store form, backslashes);
     // worktreePaths is the store form (forward slashes, no prefix). Both root
     // forms AND the worktree chat must be listed.
     expect(
-      scopeSessionIndex(entries, 'project-1', 'E:\\project', ['E:/project/.termul/worktrees/wt'])
+      scopeSessionIndex(entries, 'project-1', 'E:\\project', [
+        'E:/project/.se-manager/worktrees/wt'
+      ])
         .map(({ id }) => id)
         .sort()
     ).toEqual(['root-prefixed', 'root-unprefixed', 'wt-chat'])
@@ -320,8 +322,8 @@ describe('pure history helpers', () => {
     // Active-worktree view: activeCwd is the store worktree path (forward
     // slashes); the prefixed-backslash session cwd must still match exactly.
     expect(
-      scopeSessionIndex(entries, 'project-1', 'E:/project/.termul/worktrees/wt', [
-        'E:/project/.termul/worktrees/wt'
+      scopeSessionIndex(entries, 'project-1', 'E:/project/.se-manager/worktrees/wt', [
+        'E:/project/.se-manager/worktrees/wt'
       ]).map(({ id }) => id)
     ).toEqual(['wt-chat'])
   })

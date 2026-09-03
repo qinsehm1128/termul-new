@@ -64,7 +64,7 @@ describe('worktreeApi', () => {
         data: {
           name: 'feat-1',
           branch: 'feat-1',
-          path: '/project/.termul/worktrees/feat-1',
+          path: '/project/.se-manager/worktrees/feat-1',
           headCommit: 'def5678'
         }
       }
@@ -96,13 +96,13 @@ describe('worktreeApi', () => {
 
       const result = await worktreeApi.remove(
         '/test/project',
-        '/project/.termul/worktrees/feat-1',
+        '/project/.se-manager/worktrees/feat-1',
         false
       )
 
       expect(mockInvoke).toHaveBeenCalledWith('worktree_remove', {
         projectPath: '/test/project',
-        worktreePath: '/project/.termul/worktrees/feat-1',
+        worktreePath: '/project/.se-manager/worktrees/feat-1',
         force: false
       })
       expect(result.success).toBe(true)
@@ -111,11 +111,11 @@ describe('worktreeApi', () => {
     it('passes force=true when requested', async () => {
       mockInvoke.mockResolvedValue({ success: true, data: null })
 
-      await worktreeApi.remove('/test/project', '/project/.termul/worktrees/feat-1', true)
+      await worktreeApi.remove('/test/project', '/project/.se-manager/worktrees/feat-1', true)
 
       expect(mockInvoke).toHaveBeenCalledWith('worktree_remove', {
         projectPath: '/test/project',
-        worktreePath: '/project/.termul/worktrees/feat-1',
+        worktreePath: '/project/.se-manager/worktrees/feat-1',
         force: true
       })
     })
@@ -149,10 +149,10 @@ describe('worktreeApi', () => {
       }
       mockInvoke.mockResolvedValue(mockResult)
 
-      const result = await worktreeApi.checkDirty('/project/.termul/worktrees/feat-1')
+      const result = await worktreeApi.checkDirty('/project/.se-manager/worktrees/feat-1')
 
       expect(mockInvoke).toHaveBeenCalledWith('worktree_check_dirty', {
-        worktreePath: '/project/.termul/worktrees/feat-1'
+        worktreePath: '/project/.se-manager/worktrees/feat-1'
       })
       if (result.success) {
         expect(result.data.hasChanges).toBe(true)
@@ -168,13 +168,15 @@ describe('worktreeApi', () => {
           id: '1',
           name: 'feat-1',
           branch: 'feat-1',
-          path: '/project/.termul/worktrees/feat-1',
+          path: '/project/.se-manager/worktrees/feat-1',
           createdAt: '2026-01-01'
         }
       ])
       const mockResult = {
         success: true,
-        data: [{ worktreePath: '/project/.termul/worktrees/feat-1', success: true, error: null }]
+        data: [
+          { worktreePath: '/project/.se-manager/worktrees/feat-1', success: true, error: null }
+        ]
       }
       mockInvoke.mockResolvedValue(mockResult)
 

@@ -519,7 +519,7 @@ mod tests {
             tool_count: 0,
             last_seq: 0,
             discovered: false,
-            worktree_path: Some("/work/project/.termul/worktrees/chat/abc123".to_string()),
+            worktree_path: Some("/work/project/.se-manager/worktrees/chat/abc123".to_string()),
             worktree_branch: Some("chat/abc123".to_string()),
         }
     }
@@ -921,7 +921,7 @@ mod tests {
                 "messageCount": 0,
                 "lastSeq": 0,
                 "status": "active",
-                "worktreePath": "/work/project/.termul/worktrees/chat/abc123",
+                "worktreePath": "/work/project/.se-manager/worktrees/chat/abc123",
                 "worktreeBranch": "chat/abc123",
             })
         );
@@ -1120,7 +1120,7 @@ mod tests {
         let payload = materialize_session_payload(&metadata(), &[]);
         assert_eq!(
             payload.metadata.worktree_path.as_deref(),
-            Some("/work/project/.termul/worktrees/chat/abc123")
+            Some("/work/project/.se-manager/worktrees/chat/abc123")
         );
         assert_eq!(
             payload.metadata.worktree_branch.as_deref(),

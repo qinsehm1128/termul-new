@@ -81,7 +81,7 @@ export interface BrandCanonical {
   readonly skillMarker: string
   /**
    * On-disk key of the managed-skill manifest's ownership flag
-   * (`.termul/managed-skills.json`).
+   * (`.se-manager/managed-skills.json`).
    *
    * Mirrors `brand.rs`'s `skill_manifest_key`. The Rust struct that owns this
    * file carries `#[serde(rename_all = "camelCase", deny_unknown_fields)]`, so
@@ -162,7 +162,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   domGlobalPrefix: '__se',
   wsSubprotocol: 'se-terminal-v2.binary',
   envPrefix: 'TERMUL_',
-  workspaceDir: '.termul',
+  workspaceDir: '.se-manager',
   displayName: 'Se',
   displayNameFull: 'Termul Manager',
   packageName: 'termul-manager',

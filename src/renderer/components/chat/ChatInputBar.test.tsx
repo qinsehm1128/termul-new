@@ -288,8 +288,8 @@ describe('ChatInputBar config controls', () => {
     renderInputBar({
       session: {
         ...session(),
-        cwd: '/work/.termul/worktrees/abcd1234',
-        worktreePath: '/work/.termul/worktrees/abcd1234',
+        cwd: '/work/.se-manager/worktrees/abcd1234',
+        worktreePath: '/work/.se-manager/worktrees/abcd1234',
         worktreeBranch: 'chat/abcd1234'
       }
     })

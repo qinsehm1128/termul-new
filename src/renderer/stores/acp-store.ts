@@ -368,7 +368,7 @@ interface AcpState {
   mcpServers: StoredMcpServer[]
   // True once `loadMcpServers` has resolved at least once. Guards
   // `syncMcpRegistryToProjectFile` against syncing the initial empty state
-  // (which would overwrite a project's `.termul/mcp-servers.json` with `[]`
+  // (which would overwrite a project's `.se-manager/mcp-servers.json` with `[]`
   // before the app-store registry is loaded — CAP-7 race guard).
   mcpServersLoaded: boolean
 
@@ -669,7 +669,7 @@ interface AcpState {
   deleteMcpServer: (id: string) => Promise<void>
   /**
    * CAP-7: mirror the app-store MCP registry to the active project's
-   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
+   * `.se-manager/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
    * host-level project switch so the new project's file is synced with the
    * desktop's app-store registry before the web route reads it.
    */
@@ -5753,7 +5753,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   // CAP-7: on a desktop host-level project switch, mirror the app-store MCP
-  // registry to the new project's `.termul/mcp-servers.json` so the web
+  // registry to the new project's `.se-manager/mcp-servers.json` so the web
   // `GET /mcp-servers` route (file-based) serves the same registry. Invoked
   // from `useProjectsAutoSave` AFTER `syncProjects` lands so the backend
   // `ProjectRegistry` (and thus the resolved project root) reflects the new

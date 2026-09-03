@@ -18,19 +18,36 @@
 //! and the assertion passes against the shipped default it was already going to
 //! see.
 //!
-//! `src/web/worktree_api.rs:194` (list) and `:269` (create) are the live
-//! instances: both hand `WorktreeManager` to `spawn_blocking`, and the worktree
-//! path is built from `brand::canonical().workspace_dir`. `mcp_servers_api`
-//! resolves on the request thread and is unaffected.
+//! `src/web/worktree_api.rs` (list and create) are the live instances: both hand
+//! `WorktreeManager` to `spawn_blocking`, and the worktree path is built from
+//! `brand::canonical().workspace_dir`. `mcp_servers_api` resolves on the request
+//! thread and is unaffected.
+//!
+//! # The scan looks one hop past the seam call, and has to
+//!
+//! T-A18 mutation-proved this gate and found it did not fire. The reason:
+//! T-M08 had, correctly, introduced `WorkspaceDirs::resolve()` so the two
+//! `worktree_api` handlers resolve on the request thread — but the scan looked
+//! only for a literal `canonical()` call inside the spawn argument. Moving that
+//! one `resolve()` call into the closure reproduced F-05 exactly, and the gate
+//! reported zero offences.
+//!
+//! So the offence set is now "reads the seam directly **or** calls a function
+//! whose own body does", with that second set discovered from the source rather
+//! than listed. See [`seam_reading_fns`] for the matching rules and why method
+//! calls are deliberately excluded.
 //!
 //! # This file registers zero ledger entries
 //!
 //! It is a **guard**, not a red. The scan finds zero offences today, so forcing
 //! it into `#[should_panic]` would be a fabrication. All of its value comes from
-//! the mutation proof recorded in the run report: a `brand::canonical()` call
-//! temporarily inserted into `worktree_api.rs`'s `spawn_blocking` closure turns
+//! the mutation proofs recorded in the run report, and both halves are proved
+//! separately: a `brand::canonical()` call temporarily inserted into
+//! `worktree_api::list`'s `spawn_blocking` closure turns
 //! `no_brand_seam_read_inside_a_closure_that_leaves_the_calling_thread` red, and
-//! removing it turns it green again with a clean `git diff`.
+//! so does moving `worktree_api::create`'s existing `WorkspaceDirs::resolve()`
+//! into its closure. Reverting either turns it green again with a clean
+//! `git diff`.
 //!
 //! It changes no production code.
 //!
@@ -155,6 +172,144 @@ fn reads_the_seam(expr: &Expr) -> bool {
     scan.found
 }
 
+// ---------------------------------------------------------------------------
+// One hop out: helpers that read the seam *for* their caller
+// ---------------------------------------------------------------------------
+
+/// Functions whose own body reads `brand::canonical()`, keyed so a call site can
+/// be recognised without type inference.
+#[derive(Default)]
+struct SeamReaders {
+    /// `Type::name`, from the enclosing `impl` block.
+    associated: BTreeSet<String>,
+    /// Bare `name`, for free functions.
+    free: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct SeamReaderScan {
+    impl_type: Vec<String>,
+    readers: SeamReaders,
+}
+
+impl SeamReaderScan {
+    fn body_reads_seam(block: &syn::Block) -> bool {
+        let mut scan = SeamReadScan::default();
+        scan.visit_block(block);
+        scan.found
+    }
+}
+
+impl<'ast> Visit<'ast> for SeamReaderScan {
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        let name = match node.self_ty.as_ref() {
+            syn::Type::Path(path) => path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string()),
+            _ => None,
+        };
+        self.impl_type.push(name.unwrap_or_default());
+        visit::visit_item_impl(self, node);
+        self.impl_type.pop();
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if Self::body_reads_seam(&node.block) {
+            self.readers.free.insert(node.sig.ident.to_string());
+        }
+        visit::visit_item_fn(self, node);
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        if Self::body_reads_seam(&node.block) {
+            if let Some(owner) = self.impl_type.last() {
+                self.readers
+                    .associated
+                    .insert(format!("{owner}::{}", node.sig.ident));
+            }
+        }
+        visit::visit_impl_item_fn(self, node);
+    }
+}
+
+/// Every function that reads the seam on its caller's behalf.
+///
+/// Discovered from the source, not listed. The scan used to look only for a
+/// literal `canonical()` call inside the spawn argument, and T-A18 proved that
+/// is not enough: `WorkspaceDirs::resolve()` reads the seam *for* whoever calls
+/// it, so moving that one call into `worktree_api::create`'s `spawn_blocking`
+/// closure reproduced F-05 exactly — shipped default silently, whole suite
+/// green — while this gate reported zero offences. A hand-maintained list of
+/// such helpers would have the same hole one helper later.
+///
+/// Only direct readers, and only *path* call sites (`Type::name(..)` or
+/// `name(..)`). Method calls are deliberately not matched: `x.resolve()` gives
+/// the AST no way to know `x`'s type, and matching by bare method name sweeps in
+/// every `clone`, `send` and `len` in the crate — a gate that fires on
+/// everything is one somebody turns off.
+fn seam_reading_fns() -> SeamReaders {
+    let mut readers = SeamReaders::default();
+    for relative in source_files() {
+        let path = manifest_dir().join(&relative);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("source file {} is unreadable: {e}", path.display()));
+        let ast: syn::File = syn::parse_file(&source)
+            .unwrap_or_else(|e| panic!("source file {} does not parse: {e}", path.display()));
+        let mut scan = SeamReaderScan::default();
+        scan.visit_file(&ast);
+        readers.associated.extend(scan.readers.associated);
+        readers.free.extend(scan.readers.free);
+    }
+    readers
+}
+
+/// The first seam-reading helper called anywhere in a subtree.
+struct SeamHelperScan<'a> {
+    readers: &'a SeamReaders,
+    hit: Option<String>,
+}
+
+impl<'ast> Visit<'ast> for SeamHelperScan<'_> {
+    fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+        if let Expr::Path(path) = node.func.as_ref() {
+            let segments: Vec<String> = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            if let Some(last) = segments.last() {
+                // A qualifier is a type or a module, and the repo's own naming
+                // rule tells them apart: `PascalCase` types, `snake_case`
+                // modules. Choosing the right table matters — falling back to
+                // the bare name for `Type::run(..)` matches every free `run` in
+                // the crate, which is how the first draft of this reported
+                // `ConversationBootstrap::run` as an offence it is not.
+                let owner = (segments.len() >= 2).then(|| &segments[segments.len() - 2]);
+                let matched = match owner {
+                    Some(owner) if owner.starts_with(char::is_uppercase) => {
+                        let key = format!("{owner}::{last}");
+                        self.readers.associated.contains(&key).then_some(key)
+                    }
+                    _ => self.readers.free.contains(last).then(|| last.clone()),
+                };
+                if let Some(name) = matched {
+                    self.hit.get_or_insert(name);
+                }
+            }
+        }
+        visit::visit_expr_call(self, node);
+    }
+}
+
+fn calls_a_seam_helper(expr: &Expr, readers: &SeamReaders) -> Option<String> {
+    let mut scan = SeamHelperScan { readers, hit: None };
+    scan.visit_expr(expr);
+    scan.hit
+}
+
 /// The scan result for one file.
 struct Scan {
     /// `<fn name>` for each spawn whose payload reads the seam.
@@ -165,13 +320,15 @@ struct Scan {
 }
 
 #[derive(Default)]
-struct SpawnVisitor {
+struct SpawnVisitor<'a> {
     enclosing: Vec<String>,
     offences: Vec<String>,
     spawns_examined: usize,
+    /// Helpers that read the seam for their caller, from [`seam_reading_fns`].
+    seam_readers: Option<&'a SeamReaders>,
 }
 
-impl SpawnVisitor {
+impl SpawnVisitor<'_> {
     fn site(&self) -> String {
         if self.enclosing.is_empty() {
             "<file scope>".to_string()
@@ -201,14 +358,24 @@ impl SpawnVisitor {
         self.spawns_examined += 1;
         for argument in arguments {
             if reads_the_seam(&argument) {
-                self.offences.push(self.site());
+                self.offences.push(format!("{} (reads {SEAM_FN}() directly)", self.site()));
+                break;
+            }
+            let helper = self
+                .seam_readers
+                .and_then(|readers| calls_a_seam_helper(&argument, readers));
+            if let Some(helper) = helper {
+                self.offences.push(format!(
+                    "{} (calls {helper}(), which reads the seam)",
+                    self.site()
+                ));
                 break;
             }
         }
     }
 }
 
-impl<'ast> Visit<'ast> for SpawnVisitor {
+impl<'ast> Visit<'ast> for SpawnVisitor<'_> {
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
         self.enclosing.push(node.sig.ident.to_string());
         visit::visit_item_fn(self, node);
@@ -252,13 +419,16 @@ impl<'ast> Visit<'ast> for SpawnVisitor {
     }
 }
 
-fn scan_file(relative: &str) -> Scan {
+fn scan_file(relative: &str, seam_readers: &SeamReaders) -> Scan {
     let path = manifest_dir().join(relative);
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("source file {} is unreadable: {e}", path.display()));
     let ast: syn::File = syn::parse_file(&source)
         .unwrap_or_else(|e| panic!("source file {} does not parse: {e}", path.display()));
-    let mut visitor = SpawnVisitor::default();
+    let mut visitor = SpawnVisitor {
+        seam_readers: Some(seam_readers),
+        ..SpawnVisitor::default()
+    };
     visitor.visit_file(&ast);
     Scan {
         offences: visitor.offences,
@@ -277,10 +447,11 @@ fn scan_file(relative: &str) -> Scan {
 /// `spawn_blocking` closure at `src/web/worktree_api.rs:194` turns this red.
 #[test]
 fn no_brand_seam_read_inside_a_closure_that_leaves_the_calling_thread() {
+    let seam_readers = seam_reading_fns();
     let mut offences = Vec::new();
     let mut spawns_examined = 0usize;
     for relative in source_files() {
-        let scan = scan_file(&relative);
+        let scan = scan_file(&relative, &seam_readers);
         spawns_examined += scan.spawns_examined;
         for site in scan.offences {
             offences.push(format!("{relative}::{site}"));
@@ -292,6 +463,15 @@ fn no_brand_seam_read_inside_a_closure_that_leaves_the_calling_thread() {
         spawns_examined >= 20,
         "the scanner found only {spawns_examined} off-thread spawns across src/, which is far \
          fewer than this repo has. It has stopped matching and its green means nothing."
+    );
+    // Same, for the indirection half: an empty set silently degrades this back
+    // to the direct-call-only scan that T-A18 showed was not enough.
+    assert!(
+        seam_readers.associated.contains("WorkspaceDirs::resolve"),
+        "the helper scan no longer sees WorkspaceDirs::resolve as a seam reader, so the indirect \
+         half of this gate is matching nothing. Found {} associated and {} free readers.",
+        seam_readers.associated.len(),
+        seam_readers.free.len()
     );
 
     assert!(
@@ -310,7 +490,7 @@ fn no_brand_seam_read_inside_a_closure_that_leaves_the_calling_thread() {
 /// gate above would go on reporting zero.
 #[test]
 fn the_exemption_is_exactly_the_seam_module_and_it_really_does_read_off_thread() {
-    let scan = scan_file(EXEMPT);
+    let scan = scan_file(EXEMPT, &seam_reading_fns());
     assert!(
         !scan.offences.is_empty(),
         "{EXEMPT} no longer reads the seam off-thread, so the exemption has no subject and \
@@ -326,9 +506,21 @@ fn the_exemption_is_exactly_the_seam_module_and_it_really_does_read_off_thread()
 // The two halves of F-05, executed
 // ---------------------------------------------------------------------------
 
-fn post_rename() -> BrandCanonical {
+/// A `workspace_dir` the seam never returns on its own.
+///
+/// This was `".se-manager"` — the post-rename value — until T-A18 flipped the
+/// contract and made it the shipped default. At that moment every `assert_ne!`
+/// below became a value compared with itself, and the two tests started failing
+/// on their own vacuity guards: exactly the outcome those guards exist to
+/// produce, rather than a silent slide into proving nothing.
+///
+/// The legacy spelling is the durable replacement. `LEGACY` is permanent by
+/// construction and FORBID-04 forbids `canonical()` from ever returning it
+/// again, so no later flip can collapse this distinction the way the last one
+/// did.
+fn injected() -> BrandCanonical {
     BrandCanonical {
-        workspace_dir: ".se-manager",
+        workspace_dir: brand::LEGACY.workspace_dir,
         ..DEFAULT_CANONICAL
     }
 }
@@ -336,7 +528,7 @@ fn post_rename() -> BrandCanonical {
 /// The correct shape: resolve on the calling thread, move the value in.
 #[tokio::test]
 async fn a_value_resolved_on_the_calling_thread_survives_into_a_blocking_closure() {
-    let _guard = brand::override_canonical(post_rename());
+    let _guard = brand::override_canonical(injected());
     // Resolved here, on the thread that holds the override.
     let workspace_dir = brand::canonical().workspace_dir;
 
@@ -346,7 +538,7 @@ async fn a_value_resolved_on_the_calling_thread_survives_into_a_blocking_closure
 
     assert_eq!(
         observed,
-        post_rename().workspace_dir,
+        injected().workspace_dir,
         "a value resolved on the calling thread must be what the closure sees"
     );
     assert_ne!(
@@ -359,10 +551,10 @@ async fn a_value_resolved_on_the_calling_thread_survives_into_a_blocking_closure
 /// the reason the gate above exists: nothing about this code looks wrong.
 #[tokio::test]
 async fn a_seam_read_inside_a_blocking_closure_silently_ignores_the_override() {
-    let _guard = brand::override_canonical(post_rename());
+    let _guard = brand::override_canonical(injected());
     assert_eq!(
         brand::canonical().workspace_dir,
-        post_rename().workspace_dir,
+        injected().workspace_dir,
         "the override is in force on this thread"
     );
 
@@ -377,7 +569,7 @@ async fn a_seam_read_inside_a_blocking_closure_silently_ignores_the_override() {
     );
     assert_ne!(
         observed,
-        post_rename().workspace_dir,
+        injected().workspace_dir,
         "if this ever changes the seam is no longer thread_local and the whole ledger's \
          isolation guarantee has to be re-derived"
     );
@@ -387,9 +579,14 @@ async fn a_seam_read_inside_a_blocking_closure_silently_ignores_the_override() {
 /// behavioural counterpart rather than only a source-scan one.
 #[test]
 fn a_seam_read_inside_a_spawned_thread_silently_ignores_the_override() {
-    let _guard = brand::override_canonical(post_rename());
+    let _guard = brand::override_canonical(injected());
     let observed = std::thread::spawn(|| brand::canonical().workspace_dir)
         .join()
         .expect("thread joins");
     assert_eq!(observed, DEFAULT_CANONICAL.workspace_dir);
+    assert_ne!(
+        observed,
+        injected().workspace_dir,
+        "the injection did not take, so this proves nothing"
+    );
 }

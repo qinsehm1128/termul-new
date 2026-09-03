@@ -21,7 +21,7 @@ afterEach(() => {
 describe('brand seam', () => {
   it('returns the shipped canonical values by default', () => {
     expect(brandCanonical().createdBy).toBe('se-manager')
-    expect(brandCanonical().workspaceDir).toBe('.termul')
+    expect(brandCanonical().workspaceDir).toBe('.se-manager')
   })
 
   it('returns injected values while an override is in force', () => {
@@ -45,7 +45,15 @@ describe('brand seam', () => {
   it('never lets an override reach the LEGACY values', () => {
     // LEGACY is what is already on users' disks. If the seam could move it,
     // every compatibility-read path would shift under the migration's feet.
-    __setBrandCanonicalOverride({ createdBy: 'se-manager', workspaceDir: '.se-manager' })
+    //
+    // Sentinels nothing ships, deliberately: injecting the canonical values
+    // (which is what this used to do) leaves the assertions true no matter what
+    // the seam does to LEGACY, and injecting the legacy values would too.
+    __setBrandCanonicalOverride({
+      createdBy: 'probe-created-by',
+      workspaceDir: '.probe-workspace-dir'
+    })
+    expect(brandCanonical().createdBy).toBe('probe-created-by')
     expect(LEGACY.createdBy).toBe('termul')
     expect(LEGACY.workspaceDir).toBe('.termul')
   })

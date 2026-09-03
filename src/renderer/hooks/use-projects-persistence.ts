@@ -9,6 +9,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
+import { isWorktreeSeManaged } from '@/types/project'
 import type {
   PersistedProject,
   PersistedProjectData,
@@ -327,7 +328,7 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
   // Git has worktree not in store → add it
   for (const gitWt of gitWorktrees) {
     if (!storedByPath.has(gitWt.path)) {
-      const isSeManaged = gitWt.path.includes('.termul/worktrees/')
+      const isSeManaged = isWorktreeSeManaged(gitWt)
       updatedWorktrees.push({
         id: randomUUID(),
         name: gitWt.name,
@@ -648,7 +649,7 @@ export function useProjectsAutoSave(): void {
             }
             // CAP-7: after the backend `ProjectRegistry` (and thus the resolved
             // project root) reflects the new default, mirror the MCP registry to
-            // the new project's `.termul/mcp-servers.json`. Best-effort +
+            // the new project's `.se-manager/mcp-servers.json`. Best-effort +
             // non-fatal — the action logs failures and never throws, so a
             // switch still completes even if the sync write fails. Only on a
             // real project switch (not a projects/groups-only mutation), and

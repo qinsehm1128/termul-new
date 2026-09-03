@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import type { BranchInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { AlertTriangle, GitBranch, Link2, Loader2, Search, Terminal, X } from 'lucide-react'
@@ -163,8 +164,11 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
     if (!worktreeName.trim()) return t('newWorktree.nameRequired')
 
-    // Check for path length (Windows MAX_PATH = 260)
-    const targetPath = `${projectPath}/.termul/worktrees/${worktreeName}/`
+    // Check for path length (Windows MAX_PATH = 260). The directory name comes
+    // from the brand seam because the backend builds the real target from the
+    // same seam — a literal here would measure, and preview, a path the app
+    // does not create.
+    const targetPath = `${projectPath}/${brandCanonical().workspaceDir}/worktrees/${worktreeName}/`
     if (targetPath.length > 240) return t('newWorktree.pathTooLong')
 
     return null
@@ -360,7 +364,9 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
   // Path preview
   const pathPreview = projectPath
-    ? `${projectPath}/.termul/worktrees/${worktreeName || t('newWorktree.pathNamePlaceholder')}/`
+    ? `${projectPath}/${brandCanonical().workspaceDir}/worktrees/${
+        worktreeName || t('newWorktree.pathNamePlaceholder')
+      }/`
     : t('newWorktree.pathSelectProject')
 
   if (!project) return null

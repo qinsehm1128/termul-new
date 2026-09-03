@@ -200,7 +200,7 @@ export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
       )
     }
     // CAP-7: mirror the app-store registry to the active project's
-    // `.termul/mcp-servers.json` so the web `GET /mcp-servers` route (file-based)
+    // `.se-manager/mcp-servers.json` so the web `GET /mcp-servers` route (file-based)
     // serves the same registry. Best-effort — a sync failure is logged but
     // never blocks the app-store save (the save above already succeeded).
     await syncMcpRegistryToProjectBestEffort(normalized)

@@ -37,6 +37,7 @@
       "identifier": "fs:scope",
       "allow": [
         { "path": "$APPDATA/termul/**" },
+        { "path": "$HOME/.se-manager/**" },
         { "path": "$HOME/.termul/**" },
         { "path": "$HOME/**" },
         { "path": "$HOME/Documents/**" },

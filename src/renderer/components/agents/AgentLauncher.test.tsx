@@ -1747,13 +1747,13 @@ describe('AgentLauncher worktree isolation', () => {
   beforeEach(() => {
     enableDesktopGitRepo()
     mockWorktreeCreate.mockReset()
-    // Default success: returns a worktree at /work/.termul/worktrees/{name}/
+    // Default success: returns a worktree at /work/.se-manager/worktrees/{name}/
     mockWorktreeCreate.mockResolvedValue({
       success: true,
       data: {
         name: 'abcd1234',
         branch: 'chat/abcd1234',
-        path: '/work/.termul/worktrees/abcd1234',
+        path: '/work/.se-manager/worktrees/abcd1234',
         headCommit: ''
       }
     })
@@ -1885,8 +1885,8 @@ describe('AgentLauncher worktree isolation', () => {
       worktreePath?: string
       worktreeBranch?: string
     }
-    expect(finalizeArgs.cwd).toBe('/work/.termul/worktrees/abcd1234')
-    expect(finalizeArgs.worktreePath).toBe('/work/.termul/worktrees/abcd1234')
+    expect(finalizeArgs.cwd).toBe('/work/.se-manager/worktrees/abcd1234')
+    expect(finalizeArgs.worktreePath).toBe('/work/.se-manager/worktrees/abcd1234')
     expect(finalizeArgs.worktreeBranch).toMatch(/^chat\/[a-f0-9]+$/)
   })
 
@@ -1908,7 +1908,7 @@ describe('AgentLauncher worktree isolation', () => {
       { id: string; path: string; branch: string; name: string }
     ]
     expect(projectId).toBe('p1')
-    expect(worktree.path).toBe('/work/.termul/worktrees/abcd1234')
+    expect(worktree.path).toBe('/work/.se-manager/worktrees/abcd1234')
     expect(worktree.branch).toMatch(/^chat\/[a-f0-9]+$/)
     expect(worktree.name).toMatch(/^[a-f0-9]{8}$/)
     // The same id is activated so the sidebar scopes to the new worktree.
@@ -1964,7 +1964,7 @@ describe('AgentLauncher worktree isolation', () => {
         data: {
           name: 'abcd1234-2',
           branch: 'chat/abcd1234-2',
-          path: '/work/.termul/worktrees/abcd1234-2',
+          path: '/work/.se-manager/worktrees/abcd1234-2',
           headCommit: ''
         }
       })
@@ -2000,7 +2000,7 @@ describe('AgentLauncher worktree isolation', () => {
     }
     expect(registered.name).toBe(retryCreate.name)
     expect(registered.branch).toBe(retryCreate.branch)
-    expect(registered.path).toBe('/work/.termul/worktrees/abcd1234-2')
+    expect(registered.path).toBe('/work/.se-manager/worktrees/abcd1234-2')
   })
 
   // CAP-2: on detached HEAD, worktree mode blocks launch until a base branch

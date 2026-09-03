@@ -131,7 +131,7 @@ export async function setHostDefaultProject(projectId: string): Promise<IpcResul
 
 /**
  * Mirror the desktop app-store MCP registry to the active project's
- * `.termul/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
+ * `.se-manager/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
  * `remote_sync_mcp_registry` command resolves the active project root via the
  * shared `ProjectRegistry` (same chain `RemoteServerState::start` uses) and
  * writes the registry via `atomic_file::replace`, so the web `GET /mcp-servers`
