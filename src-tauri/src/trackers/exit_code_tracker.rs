@@ -13,12 +13,12 @@ lazy_static! {
 
 // Simple marker pattern as fallback (injected via PROMPT_COMMAND)
 lazy_static! {
-    static ref EXIT_MARKER_RE: Regex = Regex::new(r"__TERMUL_EXIT__(\d+)__").unwrap();
+    static ref EXIT_MARKER_RE: Regex = Regex::new(r"__SE_EXIT__(\d+)__").unwrap();
 }
 
 /// Quick check strings for performance optimization
 const OSC_QUICK_CHECK: &str = "\x1b]133;D";
-const MARKER_QUICK_CHECK: &str = "__TERMUL_EXIT__";
+const MARKER_QUICK_CHECK: &str = "__SE_EXIT__";
 
 /// State for tracking a terminal's exit code
 #[derive(Debug, Clone)]
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_parse_exit_code_marker() {
-        let code = ExitCodeTracker::parse_exit_code("__TERMUL_EXIT__127__");
+        let code = ExitCodeTracker::parse_exit_code("__SE_EXIT__127__");
         assert_eq!(code, Some(127));
     }
 
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_parse_exit_code_osc_preferred_over_marker() {
         // OSC should be tried first and returned
-        let data = "\x1b]133;D;7\x07 and __TERMUL_EXIT__99__";
+        let data = "\x1b]133;D;7\x07 and __SE_EXIT__99__";
         assert_eq!(ExitCodeTracker::parse_exit_code(data), Some(7));
     }
 
@@ -214,13 +214,13 @@ mod tests {
 
     #[test]
     fn test_parse_exit_code_multiple_markers() {
-        let data = "__TERMUL_EXIT__10____TERMUL_EXIT__20__";
+        let data = "__SE_EXIT__10____SE_EXIT__20__";
         assert_eq!(ExitCodeTracker::parse_exit_code(data), Some(10));
     }
 
     #[test]
     fn test_parse_exit_code_invalid_marker() {
-        let code = ExitCodeTracker::parse_exit_code("__TERMUL_EXIT__abc__");
+        let code = ExitCodeTracker::parse_exit_code("__SE_EXIT__abc__");
         assert_eq!(code, None);
     }
 

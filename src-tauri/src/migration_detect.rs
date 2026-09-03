@@ -198,7 +198,7 @@ impl LegacyRoots {
             .path()
             .app_data_dir()
             .map_err(|error| format!("app data directory is unavailable: {error}"))?;
-        let workspace_base = std::env::var("TERMUL_CONVERSATION_WORKSPACE_ROOT")
+        let workspace_base = std::env::var("SE_CONVERSATION_WORKSPACE_ROOT")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .map(PathBuf::from)

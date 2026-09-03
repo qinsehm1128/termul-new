@@ -2280,7 +2280,7 @@ fn rg_sidecar_name() -> &'static str {
 }
 
 pub(crate) fn resolve_rg_path() -> (String, String) {
-    let from_env = std::env::var("TERMUL_RG_PATH")
+    let from_env = std::env::var("SE_RG_PATH")
         .ok()
         .filter(|v| !v.trim().is_empty());
     if let Some(path) = from_env {
@@ -4426,7 +4426,7 @@ pub async fn remote_sync_chat_history(
 ///
 /// Resolves the active project root via the same chain `RemoteServerState::start`
 /// uses: the registry's default-project path (canonicalized), falling back to
-/// `default_project_root()` (`$TERMUL_PROJECT_ROOT` / `$HOME`) when the
+/// `default_project_root()` (`$SE_PROJECT_ROOT` / `$HOME`) when the
 /// registry has no default (server stopped / never started). The write reuses
 /// `mcp_servers_api::registry_path` + `atomic_file::replace` so the sync writes
 /// the exact file the web route reads.
@@ -7541,7 +7541,7 @@ mod remote_sync_mcp_registry_tests {
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// Serializes tests that mutate `TERMUL_PROJECT_ROOT` (process-global env).
+    /// Serializes tests that mutate `SE_PROJECT_ROOT` (process-global env).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
@@ -7643,10 +7643,10 @@ mod remote_sync_mcp_registry_tests {
     async fn falls_back_to_default_project_root_when_registry_has_no_default() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_dir("fallback");
-        // Point TERMUL_PROJECT_ROOT at the temp dir so the fallback path
+        // Point SE_PROJECT_ROOT at the temp dir so the fallback path
         // resolves there instead of the real home directory.
-        let prev = std::env::var_os("TERMUL_PROJECT_ROOT");
-        std::env::set_var("TERMUL_PROJECT_ROOT", &dir);
+        let prev = std::env::var_os("SE_PROJECT_ROOT");
+        std::env::set_var("SE_PROJECT_ROOT", &dir);
 
         let reg = ProjectRegistry::new(); // no default project set
         let registry = json!([
@@ -7667,8 +7667,8 @@ mod remote_sync_mcp_registry_tests {
 
         // Restore the env var.
         match prev {
-            Some(v) => std::env::set_var("TERMUL_PROJECT_ROOT", v),
-            None => std::env::remove_var("TERMUL_PROJECT_ROOT"),
+            Some(v) => std::env::set_var("SE_PROJECT_ROOT", v),
+            None => std::env::remove_var("SE_PROJECT_ROOT"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

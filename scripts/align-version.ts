@@ -7,7 +7,7 @@ import fs from 'node:fs'
 // for nightly. Stable and Insider RC tags keep the strict guard.
 const nightlyBypass =
   process.argv.slice(2).includes('--nightly') ||
-  process.env.TERMUL_NIGHTLY === '1' ||
+  process.env.SE_NIGHTLY === '1' ||
   process.env.NIGHTLY === '1'
 
 const tagVersion = process.env.TAG_VERSION

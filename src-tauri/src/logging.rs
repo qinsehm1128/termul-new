@@ -319,7 +319,7 @@ mod tests {
 
     use super::*;
 
-    const BRIDGE_CHILD_CASE: &str = "TERMUL_LOGGING_BRIDGE_CHILD_CASE";
+    const BRIDGE_CHILD_CASE: &str = "SE_LOGGING_BRIDGE_CHILD_CASE";
 
     #[derive(Clone)]
     struct CapturedLog {

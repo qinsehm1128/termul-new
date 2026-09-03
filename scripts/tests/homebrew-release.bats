@@ -4,7 +4,7 @@ load "helpers.bash"
 
 setup() {
   make_tmp
-  source "$TERMUL_TEST_REPO_ROOT/scripts/release/homebrew.sh"
+  source "$SE_TEST_REPO_ROOT/scripts/release/homebrew.sh"
 }
 
 teardown() {
@@ -48,7 +48,7 @@ teardown() {
 }
 
 @test "resolves exact DMG checksums" {
-  local checksums="$TERMUL_TEST_TMP_DIR/SHA256SUMS.txt"
+  local checksums="$SE_TEST_TMP_DIR/SHA256SUMS.txt"
   local arm_sha="$(printf 'a%.0s' {1..64})"
   local intel_sha="$(printf 'b%.0s' {1..64})"
   cat >"$checksums" <<EOF
@@ -63,7 +63,7 @@ EOF
 }
 
 @test "checksum resolution propagates missing malformed and duplicate errors" {
-  local checksums="$TERMUL_TEST_TMP_DIR/SHA256SUMS.txt"
+  local checksums="$SE_TEST_TMP_DIR/SHA256SUMS.txt"
   local arm_sha="$(printf 'a%.0s' {1..64})"
   local intel_sha="$(printf 'b%.0s' {1..64})"
 
@@ -91,8 +91,8 @@ EOF
 }
 
 @test "generates the exact v0.4.8 xattr exception and omits it for future releases" {
-  local legacy="$TERMUL_TEST_TMP_DIR/termul-0.4.8.rb"
-  local future="$TERMUL_TEST_TMP_DIR/termul-0.4.9.rb"
+  local legacy="$SE_TEST_TMP_DIR/termul-0.4.8.rb"
+  local future="$SE_TEST_TMP_DIR/termul-0.4.9.rb"
   local arm_sha="6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69"
   local intel_sha="72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
 
@@ -105,7 +105,7 @@ EOF
 }
 
 @test "prerelease metadata path does not require a Homebrew token" {
-  local workflow="$TERMUL_TEST_REPO_ROOT/.github/workflows/publish-homebrew.yml"
+  local workflow="$SE_TEST_REPO_ROOT/.github/workflows/publish-homebrew.yml"
   local metadata_section
   local checksums_section
   metadata_section="$(sed -n '/release_metadata:/,/checksums:/p' "$workflow")"
@@ -122,8 +122,8 @@ EOF
 }
 
 @test "release workflows preserve permissions token flow portability and tap serialization" {
-  local release_workflow="$TERMUL_TEST_REPO_ROOT/.github/workflows/release.yml"
-  local homebrew_workflow="$TERMUL_TEST_REPO_ROOT/.github/workflows/publish-homebrew.yml"
+  local release_workflow="$SE_TEST_REPO_ROOT/.github/workflows/release.yml"
+  local homebrew_workflow="$SE_TEST_REPO_ROOT/.github/workflows/publish-homebrew.yml"
 
   grep -Fq 'group: publish-homebrew-tap' "$homebrew_workflow"
   grep -Fq 'GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}' "$homebrew_workflow"

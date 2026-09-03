@@ -10,23 +10,26 @@
  * gated silently stops being configurable.
  *
  * `src-tauri/tests/fixtures/legacy-brand/env-names.txt` is the frozen
- * pre-rename inventory of all 65, sha256-guarded and never edited. It is
- * deliberately raw: `TERMUL_ACP_`, `TERMUL_PLAN_` and
- * `TERMUL_EXIT__10____TERMUL_EXIT__20__` are fragments the scan sees because
- * the source builds those names by interpolation, and `TERMUL_EXIT__*` are
- * terminal exit markers rather than variables at all. They stay exactly as
- * captured; a "tidied" inventory would be an inventory of what someone thought
- * was there.
+ * pre-rename inventory of all 65, sha256-guarded and never edited — it still
+ * spells every name at the legacy prefix, and `inventoryAt` is what re-prefixes
+ * it for comparison. It is deliberately raw: the entries that read back as
+ * `SE_ACP_`, `SE_PLAN_` and `SE_EXIT__10____SE_EXIT__20__` are fragments the
+ * scan sees because the source builds those names by interpolation, and the
+ * `SE_EXIT__*` family are terminal exit markers rather than variables at all.
+ * They stay exactly as captured; a "tidied" inventory would be an inventory of
+ * what someone thought was there.
  *
  * Three checks, in the order they depend on each other:
  *
  * 1. The live scan reproduces the frozen inventory at the *shipped* canonical
- *    prefix. This is what makes check 2's red trustworthy — without it, a red
- *    could just as easily mean the scanner broke.
- * 2. With the *post*-rename prefix injected through the brand seam, the same
- *    scan must still find all 65. It does not, and cannot until Wave 5 moves
- *    them, so this is registered as a red with `it.fails()`. It goes green on
- *    the day the rename is complete *and* nothing was dropped on the way.
+ *    prefix. This is what makes check 2's verdict trustworthy — without it, a
+ *    red could just as easily mean the scanner broke.
+ * 2. With the post-rename prefix injected through the brand seam, the same scan
+ *    must still find all 65. This was registered as a red with `it.fails()`
+ *    until T-A11 moved them; the marker came off in that same commit. It stays
+ *    green only while every one of the 65 is spelled at the new prefix — a
+ *    later edit that drops one, or that quietly reverts the seam in
+ *    `brand.ts` while leaving the tree alone, puts it back to red.
  * 3. Every env name the settings UI documents must be one the code actually
  *    spells. A name that survives only in help text is R-07: the user is told
  *    to set a variable nothing reads.
@@ -102,7 +105,13 @@ const FROZEN_FIXTURE_MARKER = 'fixtures/legacy-brand'
  */
 const FOREIGN_PREFIX_COLLISIONS = ['SE_FILE_OBJECT']
 
-/** The post-rename prefix this harness injects to force a real red. */
+/**
+ * The post-rename prefix, written out here rather than read from the seam.
+ *
+ * Before T-A11 this was what the harness injected to force a real red; it now
+ * pins the value the flip was supposed to land on, which a check that reads
+ * `brandCanonical()` cannot do.
+ */
 const CANDIDATE_ENV_PREFIX = 'SE_'
 
 function escapeRegExp(value: string): string {
@@ -141,9 +150,9 @@ const scannedText = new Map(scannedFiles.map((path) => [path, read(path)]))
  * Occurrences of `<prefix><SCREAMING_SNAKE>` in one text.
  *
  * The leading `[^A-Za-z0-9]` guard is what makes the rule work for both
- * prefixes at once: it admits `__TERMUL_EXIT__` (underscore before, exactly as
- * the frozen inventory captured it) while rejecting the `SE_` buried inside
- * `USE_…` or `RESPONSE_…`. The bare prefix itself is never a name.
+ * prefixes at once: it admits `__SE_EXIT__` (underscore before, exactly as the
+ * frozen inventory captured its legacy-prefixed twin) while rejecting the `SE_`
+ * buried inside `USE_…` or `RESPONSE_…`. The bare prefix itself is never a name.
  */
 function namesIn(text: string, prefix: string): string[] {
   const pattern = new RegExp(`(?:^|[^A-Za-z0-9])(${escapeRegExp(prefix)}[A-Z0-9_]*)`, 'gm')
@@ -189,19 +198,20 @@ describe('environment variable names', () => {
   })
 
   it('reproduces the frozen inventory at the shipped canonical prefix', () => {
-    // Soundness guard for the `it.fails` below: if this is green, the scanner
-    // sees exactly the 65 names the fixture froze, so a red under an injected
-    // prefix is the rename's absence and not the scanner's.
+    // Soundness guard for the check below: if this is green, the scanner sees
+    // exactly the 65 names the fixture froze, so a red under an injected prefix
+    // is the rename's absence and not the scanner's.
     expect(sorted(namesInCode(brandCanonical().envPrefix))).toEqual(
       inventoryAt(brandCanonical().envPrefix)
     )
   })
 
-  it.fails('uses the canonical env prefix for every name in the frozen inventory', () => {
-    // RED until Wave 5. The seam hands back the post-rename prefix while the
-    // tree still spells the pre-rename one, so this compares what the code
-    // *would* have to contain against what it does. It turns green only when
-    // every one of the 65 has moved — a rename that drops one stays red.
+  it('uses the canonical env prefix for every name in the frozen inventory', () => {
+    // Was RED until T-A11; the `it.fails()` marker came off in the commit that
+    // moved the names. It pins the post-rename prefix as a literal rather than
+    // reading it back from the seam, so it still says something the check above
+    // does not: that check follows `brandCanonical()` wherever it goes, this one
+    // asserts where it is supposed to have arrived.
     __setBrandCanonicalOverride({ envPrefix: CANDIDATE_ENV_PREFIX })
     const prefix = brandCanonical().envPrefix
     expect(sorted(namesInCode(prefix))).toEqual(inventoryAt(prefix))

@@ -24,7 +24,7 @@ export interface GuardFinding {
 export type GuardSources = Readonly<Record<string, string>>
 
 const REAL_REPOSITORY_SOURCES = Symbol('conversation-first-real-repository-sources')
-const CHILD_SENTINEL = 'TERMUL_CONVERSATION_FIRST_GUARD_CHILD'
+const CHILD_SENTINEL = 'SE_CONVERSATION_FIRST_GUARD_CHILD'
 const findingsBySourceIdentity = new WeakMap<GuardSources, GuardFinding[]>()
 
 type ReachabilityScope = 'default' | 'exports'

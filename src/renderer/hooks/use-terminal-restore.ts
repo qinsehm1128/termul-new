@@ -206,7 +206,7 @@ export function startPeriodicSummary(intervalMs: number = 5000): () => void {
 
 // Make summary available globally for debugging
 if (typeof window !== 'undefined' && IS_DEV) {
-  ;(window as unknown as Record<string, unknown>).__TERMUL_DEBUG__ = {
+  ;(window as unknown as Record<string, unknown>).__SE_DEBUG__ = {
     printTerminalSummary,
     startPeriodicSummary,
     SPAWN_TRACKER,

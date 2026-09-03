@@ -186,8 +186,8 @@ impl HostPlanServer {
 
     /// Register a session at injection time (before `session/new` is sent).
     /// Returns `(port, token, provisional_session_id)` to inject into the
-    /// `McpServer::Stdio` env: `TERMUL_PLAN_PORT`, `TERMUL_PLAN_TOKEN`,
-    /// `TERMUL_PLAN_SESSION_ID`.
+    /// `McpServer::Stdio` env: `SE_PLAN_PORT`, `SE_PLAN_TOKEN`,
+    /// `SE_PLAN_SESSION_ID`.
     ///
     /// The real ACP session_id isn't known yet — call `bind_session` after the
     /// `session/new` response arrives to bind it to the token.

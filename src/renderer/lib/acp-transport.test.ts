@@ -647,7 +647,7 @@ describe('WsAcpTransport', () => {
     const sentBefore = sock.sent.length
 
     // The standalone server has no settings surface and configures these via
-    // the TERMUL_ACP_* env vars — the setters must resolve without sending
+    // the SE_ACP_* env vars — the setters must resolve without sending
     // anything over the wire (and without throwing).
     await transport.setTurnTimeout(7200)
     await transport.setTurnIdleTimeout(1800)

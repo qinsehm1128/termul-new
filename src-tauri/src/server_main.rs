@@ -295,7 +295,7 @@ fn main() -> ExitCode {
         // Story 4.1: the in-memory project registry. In VPS mode the
         // standalone binary is the source of truth — it seeds the registry
         // from the file-backed `FileProjectRegistry` at startup (when
-        // --projects-file / $TERMUL_PROJECTS_FILE is configured). A missing
+        // --projects-file / $SE_PROJECTS_FILE is configured). A missing
         // file is not fatal (loads as empty, so `/projects` returns empty);
         // a corrupt/invalid file IS fatal (abort startup so a misconfigured
         // VPS is obvious). Desktop-hosted mode never reaches here (it calls
@@ -364,7 +364,7 @@ fn main() -> ExitCode {
 
         let projects_file = cfg.projects_file.clone();
         // Opt-in self-update loop (default off): only runs when the operator set
-        // TERMUL_SERVER_UPDATE_ENABLED=true + TERMUL_SERVER_UPDATE_CHANNEL. A bad
+        // SE_SERVER_UPDATE_ENABLED=true + SE_SERVER_UPDATE_CHANNEL. A bad
         // signature keeps the current binary running (verify-before-swap), so an
         // unattended server is never bricked by a failed update attempt.
         spawn_periodic_update_loop();
@@ -743,19 +743,19 @@ fn current_binary_path() -> PathBuf {
 /// Build the self-update options from env + the embedded pubkey. `Err` when
 /// self-update is unavailable (no pubkey baked in) — the caller logs + skips.
 ///
-/// `default_channel`: when `TERMUL_SERVER_UPDATE_CHANNEL` is unset/invalid,
+/// `default_channel`: when `SE_SERVER_UPDATE_CHANNEL` is unset/invalid,
 /// `Some(c)` falls back to `c` (used by the operator-explicit `--check-update`
 /// one-shot, which defaults to Stable), while `None` surfaces an error (used by
 /// the periodic loop, which requires the env to opt in).
 fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<UpdateOptions, String> {
     let channel =
-        UpdateChannel::parse(&std::env::var("TERMUL_SERVER_UPDATE_CHANNEL").unwrap_or_default())
+        UpdateChannel::parse(&std::env::var("SE_SERVER_UPDATE_CHANNEL").unwrap_or_default())
             .or(default_channel);
     let channel = match channel {
         Some(c) => c,
         None => {
             return Err(
-                "TERMUL_SERVER_UPDATE_CHANNEL is unset or not stable/insider/nightly".to_owned(),
+                "SE_SERVER_UPDATE_CHANNEL is unset or not stable/insider/nightly".to_owned(),
             )
         }
     };
@@ -848,8 +848,8 @@ fn spawn_periodic_update_loop() {
     if !is_update_enabled() {
         info!(
             target: "se_manager::server_update",
-            "self-update disabled (set TERMUL_SERVER_UPDATE_ENABLED=true + \
-             TERMUL_SERVER_UPDATE_CHANNEL to opt in)"
+            "self-update disabled (set SE_SERVER_UPDATE_ENABLED=true + \
+             SE_SERVER_UPDATE_CHANNEL to opt in)"
         );
         return;
     }
@@ -861,7 +861,7 @@ fn spawn_periodic_update_loop() {
         Err(reason) => {
             warn!(
                 target: "se_manager::server_update",
-                "TERMUL_SERVER_UPDATE_ENABLED=true but self-update unavailable: {reason} \
+                "SE_SERVER_UPDATE_ENABLED=true but self-update unavailable: {reason} \
                  (periodic loop disabled)"
             );
             return;
@@ -870,7 +870,7 @@ fn spawn_periodic_update_loop() {
 
     // Default 6h, mirroring the desktop's periodic cadence. Overridable so an
     // operator can tune the polling frequency for their deployment.
-    let interval_secs = std::env::var("TERMUL_SERVER_UPDATE_INTERVAL_SECS")
+    let interval_secs = std::env::var("SE_SERVER_UPDATE_INTERVAL_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
@@ -942,10 +942,10 @@ fn usage() -> &'static str {
         --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
         --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
         --permission-reconnect-grace SECS  Last-subscriber reconnect grace (default: 15)\n\
-        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
-        --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
-        --sessions-dir PATH         Legacy sessions input root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
-        --conversation-workspace-root PATH  Visible Conversation workspaces (default: $TERMUL_CONVERSATION_WORKSPACE_ROOT or <project-root>/Termul)\n\
+        --project-root PATH         Project-root boundary for /fs/* routes (default: $SE_PROJECT_ROOT or $HOME)\n\
+        --projects-file PATH        VFS-roots registry file (default: $SE_PROJECTS_FILE; missing = empty list)\n\
+        --sessions-dir PATH         Legacy sessions input root (default: $SE_SESSIONS_DIR or service-account state dir)\n\
+        --conversation-workspace-root PATH  Visible Conversation workspaces (default: $SE_CONVERSATION_WORKSPACE_ROOT or <project-root>/Termul)\n\
         --workspace-manifests-dir PATH  Legacy workspace-manifests input root (default: <state dir>/workspace-manifests)\n\
         --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
         --remote-access-token-file PATH  Operator-owned bearer token file (required)\n\
@@ -957,8 +957,8 @@ fn usage() -> &'static str {
         --check-update              Run one opt-in self-update now: fetch the channel manifest,\n\
                                      verify the downloaded binary signature, atomically swap, and\n\
                                      reexec. Defaults to the stable channel when\n\
-                                     TERMUL_SERVER_UPDATE_CHANNEL is unset; the env wins when set.\n\
-                                     (env: TERMUL_SERVER_UPDATE_ENABLED + TERMUL_SERVER_UPDATE_CHANNEL\n\
-                                     gate the periodic loop; TERMUL_SERVER_UPDATE_INTERVAL_SECS default 21600)\n\
+                                     SE_SERVER_UPDATE_CHANNEL is unset; the env wins when set.\n\
+                                     (env: SE_SERVER_UPDATE_ENABLED + SE_SERVER_UPDATE_CHANNEL\n\
+                                     gate the periodic loop; SE_SERVER_UPDATE_INTERVAL_SECS default 21600)\n\
         -h, --help                  Show this help"
 }

@@ -182,7 +182,7 @@ impl HostConversationRoots {
 ///
 /// `workspace_base` is `<documents>/<display_name>`, so the legacy root is its
 /// sibling under the same parent. `None` when the final component is not the
-/// canonical display name (the user pointed `TERMUL_CONVERSATION_WORKSPACE_ROOT`
+/// canonical display name (the user pointed `SE_CONVERSATION_WORKSPACE_ROOT`
 /// somewhere of their own), when the rename has not landed yet and the two
 /// names are equal, or when nothing is there.
 ///
@@ -687,7 +687,7 @@ mod legacy_root_declaration_tests {
         fs::create_dir_all(documents.join(brand::LEGACY.display_name)).unwrap();
         let _brand = brand::override_canonical(post_rename());
 
-        // TERMUL_CONVERSATION_WORKSPACE_ROOT pointed somewhere of the user's
+        // SE_CONVERSATION_WORKSPACE_ROOT pointed somewhere of the user's
         // own choosing: there is no rename relationship to infer.
         assert_eq!(
             legacy_workspace_base(&documents.join("my-own-projects")),

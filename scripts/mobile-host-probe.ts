@@ -6,7 +6,7 @@
  *   bun scripts/mobile-host-probe.ts
  *   bun scripts/mobile-host-probe.ts --wait 180
  *
- * Auth (never printed): `TERMUL_ACCESS_URL`, `TERMUL_ACCESS_TOKEN`, or
+ * Auth (never printed): `SE_ACCESS_URL`, `SE_ACCESS_TOKEN`, or
  * `<app data>/remote-tunnel/secrets.json`. Does not read the macOS keychain.
  *
  * Default walks the iPhone path and then the interactive flows: resume/load
@@ -306,13 +306,13 @@ export async function resolveAuthFromDisk(
   env: NodeJS.ProcessEnv = process.env,
   home = homedir()
 ): Promise<ResolvedAuth | null> {
-  const fromUrl = env.TERMUL_ACCESS_URL ? tokenFromAccessUrl(env.TERMUL_ACCESS_URL) : null
+  const fromUrl = env.SE_ACCESS_URL ? tokenFromAccessUrl(env.SE_ACCESS_URL) : null
   if (fromUrl) {
     return { origin: fromUrl.origin, token: fromUrl.token, source: 'env-url' }
   }
-  const host = env.TERMUL_HOST ?? DEFAULT_LOCAL_ORIGIN
-  if (env.TERMUL_ACCESS_TOKEN) {
-    return { origin: host, token: env.TERMUL_ACCESS_TOKEN, source: 'env-token' }
+  const host = env.SE_HOST ?? DEFAULT_LOCAL_ORIGIN
+  if (env.SE_ACCESS_TOKEN) {
+    return { origin: host, token: env.SE_ACCESS_TOKEN, source: 'env-token' }
   }
   for (const path of secretsPaths(home)) {
     const raw = await readTextFile(path)
@@ -949,7 +949,7 @@ export async function runMobileHostProbe(options: {
 
   if (!auth) {
     steps.push(
-      skipStep('auth', 'no pairing token in TERMUL_ACCESS_URL / TERMUL_ACCESS_TOKEN / secrets.json')
+      skipStep('auth', 'no pairing token in SE_ACCESS_URL / SE_ACCESS_TOKEN / secrets.json')
     )
     return steps
   }

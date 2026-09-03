@@ -86,7 +86,7 @@ pub fn detect_frpc_path() -> String {
     if let Some(cached) = FRPC_PATH_CACHE.get() {
         return cached.clone();
     }
-    let (detected, _source) = resolve_sidecar_path("TERMUL_FRPC_PATH", frpc_sidecar_name());
+    let (detected, _source) = resolve_sidecar_path("SE_FRPC_PATH", frpc_sidecar_name());
     let _ = FRPC_PATH_CACHE.set(detected.clone());
     detected
 }
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn resolve_path_returns_known_source() {
         let (path, source) =
-            resolve_sidecar_path("TERMUL_FRPC_PATH_UNSET_FOR_TEST", frpc_sidecar_name());
+            resolve_sidecar_path("SE_FRPC_PATH_UNSET_FOR_TEST", frpc_sidecar_name());
         assert!(!path.is_empty());
         assert!(matches!(source.as_str(), "env" | "sidecar" | "path"));
     }

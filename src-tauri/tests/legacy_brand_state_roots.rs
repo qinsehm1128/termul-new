@@ -254,7 +254,7 @@ fn standalone_sessions_dir_resolves_under_the_canonical_state_dir_and_still_sees
     let _env = EnvScope::new()
         .set("XDG_STATE_HOME", &state_home)
         .set("HOME", &state_home)
-        .unset("TERMUL_SESSIONS_DIR");
+        .unset("SE_SESSIONS_DIR");
     let _brand = brand::override_canonical(post_rename());
 
     let resolved = default_sessions_dir().expect("a sessions dir is resolvable under XDG_STATE_HOME");
@@ -297,7 +297,7 @@ fn standalone_service_account_state_dir_resolves_under_the_canonical_state_dir_a
     let _env = EnvScope::new()
         .set("XDG_STATE_HOME", &state_home)
         .set("HOME", &state_home)
-        .unset("TERMUL_SESSIONS_DIR");
+        .unset("SE_SESSIONS_DIR");
     let _brand = brand::override_canonical(post_rename());
 
     let config = probe_config(state_home.clone());
@@ -347,7 +347,7 @@ fn candidate_xdg_state_home_resolves_and_carries_the_legacy_root_forward() {
         // A `HOME` that would resolve somewhere else, so a pass cannot come
         // from the next candidate down.
         .set("HOME", state_home.join("not-this-one"))
-        .unset("TERMUL_SESSIONS_DIR");
+        .unset("SE_SESSIONS_DIR");
     let _brand = brand::override_canonical(post_rename());
 
     let resolved = default_sessions_dir().expect("XDG_STATE_HOME is a resolvable candidate");
@@ -380,7 +380,7 @@ fn candidate_home_local_state_resolves_and_carries_the_legacy_root_forward() {
     let _env = EnvScope::new()
         .unset("XDG_STATE_HOME")
         .set("HOME", &home)
-        .unset("TERMUL_SESSIONS_DIR");
+        .unset("SE_SESSIONS_DIR");
     let _brand = brand::override_canonical(post_rename());
 
     let resolved = default_sessions_dir().expect("HOME is a resolvable candidate");
@@ -415,7 +415,7 @@ fn candidate_localappdata_resolves_and_carries_the_legacy_root_forward() {
 
     let _env = EnvScope::new()
         .set("LOCALAPPDATA", &local_appdata)
-        .unset("TERMUL_SESSIONS_DIR");
+        .unset("SE_SESSIONS_DIR");
     let _brand = brand::override_canonical(post_rename());
 
     let resolved = default_sessions_dir().expect("LOCALAPPDATA is a resolvable candidate");
@@ -455,7 +455,7 @@ fn candidate_temp_dir_is_the_last_resort_and_still_carries_the_legacy_root_forwa
         .unset("XDG_STATE_HOME")
         .unset("HOME")
         .unset("LOCALAPPDATA")
-        .unset("TERMUL_SESSIONS_DIR");
+        .unset("SE_SESSIONS_DIR");
     // `std::env::temp_dir()` reads TMPDIR on unix and TEMP/TMP on Windows.
     env = env
         .set("TMPDIR", &tmp_root)
@@ -525,10 +525,10 @@ fn standalone_conversation_workspace_root_uses_the_canonical_display_name_and_st
     let sessions_dir = temp.path().join("sessions");
     fs::create_dir_all(&sessions_dir).expect("create sessions dir");
     let _env = EnvScope::new()
-        .set("TERMUL_SESSIONS_DIR", &sessions_dir)
-        .unset("TERMUL_CONVERSATION_WORKSPACE_ROOT")
-        .unset("TERMUL_PROJECT_ROOT")
-        .unset("TERMUL_STORE_FILE");
+        .set("SE_SESSIONS_DIR", &sessions_dir)
+        .unset("SE_CONVERSATION_WORKSPACE_ROOT")
+        .unset("SE_PROJECT_ROOT")
+        .unset("SE_STORE_FILE");
     let _brand = brand::override_canonical(post_rename());
 
     // The real CLI parser. `from_maintenance_args` is the auth-free public

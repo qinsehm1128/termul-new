@@ -36,7 +36,7 @@ pub struct ChildConfig {
     pub agent_id: String,
 }
 
-/// Parse the child's env (`TERMUL_PLAN_PORT` / `_TOKEN` / `_SESSION_ID` /
+/// Parse the child's env (`SE_PLAN_PORT` / `_TOKEN` / `_SESSION_ID` /
 /// `_AGENT_ID`). Returns an error string (not an enum) so `run()` can print it
 /// verbatim to stderr + exit 1 — matching the matrix's "child exits non-zero
 /// within 5s" AC.

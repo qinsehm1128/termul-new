@@ -58,7 +58,7 @@ function updateDebugApi(): void {
     return
   }
 
-  target.__TERMUL_CONTINUITY__ = {
+  target.__SE_CONTINUITY__ = {
     getEvents: () => getTerminalContinuityEvents(),
     clearEvents: () => clearTerminalContinuityEvents()
   } satisfies TerminalContinuityDebugApi

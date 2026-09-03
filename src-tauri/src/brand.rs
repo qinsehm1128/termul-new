@@ -184,7 +184,7 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     state_dir: "se-manager",
     state_dir_windows: "Se",
     ws_subprotocol: "se-terminal-v2.binary",
-    env_prefix: "TERMUL_",
+    env_prefix: "SE_",
     dom_global_prefix: "__se",
     deep_link_scheme: "termul",
     storage_prefix: "se-store:",

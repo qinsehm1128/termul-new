@@ -161,7 +161,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   cssVarPrefix: '--se-',
   domGlobalPrefix: '__se',
   wsSubprotocol: 'se-terminal-v2.binary',
-  envPrefix: 'TERMUL_',
+  envPrefix: 'SE_',
   workspaceDir: '.se-manager',
   displayName: 'Se',
   displayNameFull: 'Termul Manager',

@@ -5,7 +5,7 @@
 //! that reuses the **same** minisign keypair the desktop updater trusts.
 //!
 //! Flow (opt-in, default off — `server_main.rs` only wires it when
-//! `TERMUL_SERVER_UPDATE_ENABLED=true` + `TERMUL_SERVER_UPDATE_CHANNEL` are set):
+//! `SE_SERVER_UPDATE_ENABLED=true` + `SE_SERVER_UPDATE_CHANNEL` are set):
 //!
 //! 1. Fetch the per-channel manifest (`latest-<channel>.json`) from GitHub
 //!    Releases.
@@ -46,7 +46,7 @@ pub enum UpdateChannel {
 }
 
 impl UpdateChannel {
-    /// Parse the `TERMUL_SERVER_UPDATE_CHANNEL` env value. `None` for anything
+    /// Parse the `SE_SERVER_UPDATE_CHANNEL` env value. `None` for anything
     /// unrecognized — the caller treats an absent/invalid channel as "no checks".
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -98,9 +98,9 @@ pub struct PlatformRecord {
 }
 
 /// True only when the operator explicitly opts in via
-/// `TERMUL_SERVER_UPDATE_ENABLED=true` (case-insensitive). Absent → off.
+/// `SE_SERVER_UPDATE_ENABLED=true` (case-insensitive). Absent → off.
 pub fn is_update_enabled() -> bool {
-    std::env::var("TERMUL_SERVER_UPDATE_ENABLED")
+    std::env::var("SE_SERVER_UPDATE_ENABLED")
         .map(|v| v.trim().eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }

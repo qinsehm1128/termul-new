@@ -13,9 +13,9 @@ use termul_manager_lib::conversation::migration::{
 };
 use uuid::Uuid;
 
-const CHILD_ENV: &str = "TERMUL_MAINT_LOCK_CHILD";
-const ROOT_ENV: &str = "TERMUL_MAINT_LOCK_ROOT";
-const REQUEST_ID_ENV: &str = "TERMUL_MAINT_LOCK_REQUEST_ID";
+const CHILD_ENV: &str = "SE_MAINT_LOCK_CHILD";
+const ROOT_ENV: &str = "SE_MAINT_LOCK_ROOT";
+const REQUEST_ID_ENV: &str = "SE_MAINT_LOCK_REQUEST_ID";
 
 fn at() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 15, 10, 0, 0).unwrap()

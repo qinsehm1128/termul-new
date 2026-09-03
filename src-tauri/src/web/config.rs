@@ -17,7 +17,7 @@ pub const REMOTE_AUTH_CONFIGURATION_REQUIRED: &str = "REMOTE_AUTH_CONFIGURATION_
 
 /// Resolve the default project-root boundary for the fs_api routes (PR-S4).
 ///
-/// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
+/// Prefers `$SE_PROJECT_ROOT` when set; otherwise falls back to the
 /// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
 /// Windows). The fallback is intentionally permissive enough to allow
 /// ordinary project-creation flows under the user's own account — tightening
@@ -27,7 +27,7 @@ pub const REMOTE_AUTH_CONFIGURATION_REQUIRED: &str = "REMOTE_AUTH_CONFIGURATION_
 /// `None` is returned only when no home directory is discoverable and the
 /// env var is unset; callers should treat that as a fatal startup error.
 pub fn default_sessions_dir() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var("TERMUL_SESSIONS_DIR") {
+    if let Ok(value) = std::env::var("SE_SESSIONS_DIR") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
             return Some(PathBuf::from(trimmed));
@@ -182,7 +182,7 @@ fn carry_forward_legacy_state(legacy: &Path, canonical: &Path) {
 }
 
 pub fn default_project_root() -> Option<PathBuf> {
-    if let Ok(env_root) = std::env::var("TERMUL_PROJECT_ROOT") {
+    if let Ok(env_root) = std::env::var("SE_PROJECT_ROOT") {
         let trimmed = env_root.trim();
         if !trimmed.is_empty() {
             return Some(PathBuf::from(trimmed));
@@ -485,7 +485,7 @@ impl ServerConfig {
         // Story 4.1: the VFS-roots registry file. Parsed but NOT validated
         // against the filesystem here (a missing file loads as an empty
         // registry at load, not a fatal error). Defaults to None; an
-        // optional $TERMUL_PROJECTS_FILE env var is honored after the loop.
+        // optional $SE_PROJECTS_FILE env var is honored after the loop.
         let mut projects_file: Option<PathBuf> = None;
         let mut sessions_dir: Option<PathBuf> = None;
         let mut conversation_workspace_root: Option<PathBuf> = None;
@@ -732,7 +732,7 @@ impl ServerConfig {
                 let raw = default_project_root().ok_or_else(|| {
                     ParseCliError::Message(
                         "could not determine project root: \
-                         set --project-root, $TERMUL_PROJECT_ROOT, or $HOME"
+                         set --project-root, $SE_PROJECT_ROOT, or $HOME"
                             .into(),
                     )
                 })?;
@@ -745,7 +745,7 @@ impl ServerConfig {
             }
         };
 
-        // Story 4.1: optional $TERMUL_PROJECTS_FILE env default when
+        // Story 4.1: optional $SE_PROJECTS_FILE env default when
         // --projects-file is absent (mirrors default_project_root's env
         // pattern). An unset/empty env var means "no registry configured"
         // — the binary serves an empty project list, which is valid (not
@@ -753,19 +753,19 @@ impl ServerConfig {
         // missing file loads as an empty registry at load time.
         let projects_file = match projects_file {
             Some(p) => Some(p),
-            None => std::env::var("TERMUL_PROJECTS_FILE").ok().and_then(|v| {
+            None => std::env::var("SE_PROJECTS_FILE").ok().and_then(|v| {
                 let t = v.trim();
                 (!t.is_empty()).then(|| PathBuf::from(t))
             }),
         };
 
-        // Issue #613: optional $TERMUL_STORE_FILE env default when
-        // --store-file is absent (mirrors the $TERMUL_PROJECTS_FILE env
+        // Issue #613: optional $SE_STORE_FILE env default when
+        // --store-file is absent (mirrors the $SE_PROJECTS_FILE env
         // pattern). An unset/empty env var means "resolve the default at
         // serve time".
         let store_file = match store_file {
             Some(p) => Some(p),
-            None => std::env::var("TERMUL_STORE_FILE").ok().and_then(|v| {
+            None => std::env::var("SE_STORE_FILE").ok().and_then(|v| {
                 let t = v.trim();
                 (!t.is_empty()).then(|| PathBuf::from(t))
             }),
@@ -773,7 +773,7 @@ impl ServerConfig {
 
         let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
             ParseCliError::Message(
-                "could not determine sessions directory: set --sessions-dir or $TERMUL_SESSIONS_DIR"
+                "could not determine sessions directory: set --sessions-dir or $SE_SESSIONS_DIR"
                     .into(),
             )
         })?;
@@ -786,7 +786,7 @@ impl ServerConfig {
 
         let conversation_workspace_root = conversation_workspace_root
             .or_else(|| {
-                std::env::var("TERMUL_CONVERSATION_WORKSPACE_ROOT")
+                std::env::var("SE_CONVERSATION_WORKSPACE_ROOT")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
                     .map(PathBuf::from)
@@ -1039,7 +1039,7 @@ mod tests {
         );
         assert!(
             !cfg.project_root.as_os_str().is_empty(),
-            "default project_root should resolve from $HOME when $TERMUL_PROJECT_ROOT is unset"
+            "default project_root should resolve from $HOME when $SE_PROJECT_ROOT is unset"
         );
     }
 

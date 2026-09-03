@@ -1561,7 +1561,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
-            let conversation_workspace_base = std::env::var("TERMUL_CONVERSATION_WORKSPACE_ROOT")
+            let conversation_workspace_base = std::env::var("SE_CONVERSATION_WORKSPACE_ROOT")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
                 .map(std::path::PathBuf::from)

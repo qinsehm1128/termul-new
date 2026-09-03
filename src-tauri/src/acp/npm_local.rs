@@ -18,7 +18,7 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 /// Default on: first `npx -y` spawn installs into a host prefix, later spawns
 /// start the local bin. App Preferences can turn this off to always use npx.
-/// `TERMUL_ACP_PREFER_LOCAL_NPM` (0/1/true/false) wins when set.
+/// `SE_ACP_PREFER_LOCAL_NPM` (0/1/true/false) wins when set.
 static PREFER_LOCAL_NPM: AtomicBool = AtomicBool::new(true);
 
 /// Push the App Preferences toggle into the spawn path.
@@ -27,7 +27,7 @@ pub fn set_prefer_local_npm_install(prefer: bool) {
 }
 
 fn prefer_local_npm_install() -> bool {
-    match std::env::var("TERMUL_ACP_PREFER_LOCAL_NPM") {
+    match std::env::var("SE_ACP_PREFER_LOCAL_NPM") {
         Ok(value) if value == "0" || value.eq_ignore_ascii_case("false") => false,
         Ok(value) if value == "1" || value.eq_ignore_ascii_case("true") => true,
         _ => PREFER_LOCAL_NPM.load(Ordering::SeqCst),
@@ -36,13 +36,13 @@ fn prefer_local_npm_install() -> bool {
 
 /// Pin the host-owned npm prefix. Desktop uses
 /// `<app_data_dir>/acp-npm-packages`; standalone uses
-/// `<state dir>/acp-npm-packages`. Tests may override via `TERMUL_ACP_NPM_ROOT`.
+/// `<state dir>/acp-npm-packages`. Tests may override via `SE_ACP_NPM_ROOT`.
 pub fn set_root(path: PathBuf) {
     let _ = ROOT.set(path);
 }
 
 fn root() -> PathBuf {
-    if let Ok(override_root) = std::env::var("TERMUL_ACP_NPM_ROOT") {
+    if let Ok(override_root) = std::env::var("SE_ACP_NPM_ROOT") {
         if !override_root.is_empty() {
             return PathBuf::from(override_root);
         }
@@ -393,7 +393,7 @@ mod tests {
     fn materialize_rewrites_npx_when_local_bin_exists() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("TERMUL_ACP_NPM_ROOT", temp.path());
+        std::env::set_var("SE_ACP_NPM_ROOT", temp.path());
         let slug = package_slug("@agentclientprotocol/claude-agent-acp").unwrap();
         let pkg = temp
             .path()
@@ -413,7 +413,7 @@ mod tests {
             "npx",
             &["-y", "@agentclientprotocol/claude-agent-acp", "--acp"],
         ));
-        std::env::remove_var("TERMUL_ACP_NPM_ROOT");
+        std::env::remove_var("SE_ACP_NPM_ROOT");
         if resolve_node().is_none() {
             assert_eq!(next.command, "npx");
             return;
@@ -428,10 +428,10 @@ mod tests {
     #[test]
     fn materialize_uses_npm_bin_shim_when_present() {
         let _guard = ENV_LOCK.lock().expect("env lock");
-        std::env::remove_var("TERMUL_ACP_PREFER_LOCAL_NPM");
+        std::env::remove_var("SE_ACP_PREFER_LOCAL_NPM");
         set_prefer_local_npm_install(true);
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("TERMUL_ACP_NPM_ROOT", temp.path());
+        std::env::set_var("SE_ACP_NPM_ROOT", temp.path());
         let slug = package_slug("@zed-industries/codex-acp").unwrap();
         let bin_dir = temp.path().join(slug).join("node_modules").join(".bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
@@ -439,7 +439,7 @@ mod tests {
         std::fs::write(&shim, "#!/bin/sh\n").unwrap();
 
         let next = materialize_npx_config(config("npx", &["-y", "@zed-industries/codex-acp"]));
-        std::env::remove_var("TERMUL_ACP_NPM_ROOT");
+        std::env::remove_var("SE_ACP_NPM_ROOT");
         assert_eq!(next.command, shim.to_string_lossy());
         assert!(next.args.is_empty());
     }
@@ -447,10 +447,10 @@ mod tests {
     #[test]
     fn materialize_keeps_npx_when_local_install_disabled() {
         let _guard = ENV_LOCK.lock().expect("env lock");
-        std::env::remove_var("TERMUL_ACP_PREFER_LOCAL_NPM");
+        std::env::remove_var("SE_ACP_PREFER_LOCAL_NPM");
         set_prefer_local_npm_install(false);
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("TERMUL_ACP_NPM_ROOT", temp.path());
+        std::env::set_var("SE_ACP_NPM_ROOT", temp.path());
         let slug = package_slug("@zed-industries/codex-acp").unwrap();
         let bin_dir = temp.path().join(slug).join("node_modules").join(".bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
@@ -458,7 +458,7 @@ mod tests {
 
         let next = materialize_npx_config(config("npx", &["-y", "@zed-industries/codex-acp"]));
         set_prefer_local_npm_install(true);
-        std::env::remove_var("TERMUL_ACP_NPM_ROOT");
+        std::env::remove_var("SE_ACP_NPM_ROOT");
         assert_eq!(next.command, "npx");
         assert_eq!(
             next.args,

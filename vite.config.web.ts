@@ -62,7 +62,7 @@ function tauriStubFallback(): Plugin {
  * Browser / headless-server web client build (Story 1.2 / 1.5).
  *
  * Mirrors `vite.config.tauri.ts` plugin/alias/define setup but targets
- * `index.html` → `dist-web/` and sets `import.meta.env.TERMUL_WEB`.
+ * `index.html` → `dist-web/` and sets `import.meta.env.SE_WEB`.
  *
  * Story 1.5: alias every `@tauri-apps/*` specifier used by the App import graph
  * to thin browser stubs so Rollup never embeds real Tauri package code.
@@ -104,7 +104,7 @@ export default defineConfig({
   define: {
     'import.meta.env.PACKAGE_VERSION': JSON.stringify(pkg.version),
     // Feature-gate signal for Story 1.5+ (desktop-only path exclusion).
-    'import.meta.env.TERMUL_WEB': JSON.stringify(true),
+    'import.meta.env.SE_WEB': JSON.stringify(true),
     // CAP-3: build-time app version for `getCurrentAppVersion()` web branch
     // (tauri-release-notes.ts). Desktop reads version via Tauri `getVersion`;
     // the web client has no Tauri runtime, so inject the package version as a

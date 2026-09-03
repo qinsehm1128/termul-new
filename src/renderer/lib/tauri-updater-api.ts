@@ -66,7 +66,7 @@ export function normalizeUpdateChannel(value: string | null | undefined): Update
 
 export type UpdateMode = 'tauri' | 'aur'
 
-const UPDATE_MODE: UpdateMode = import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur' ? 'aur' : 'tauri'
+const UPDATE_MODE: UpdateMode = import.meta.env.VITE_SE_UPDATE_MODE === 'aur' ? 'aur' : 'tauri'
 
 /**
  * Default mode uses Tauri's signed updater manifest and self-update flow.

@@ -2293,7 +2293,7 @@ mod tests {
 
     fn parse_marked_window(buffer: &str) -> Option<(u16, u16)> {
         for line in buffer.lines() {
-            let Some(rest) = line.trim().strip_prefix("TERMUL_WIN:") else {
+            let Some(rest) = line.trim().strip_prefix("SE_WIN:") else {
                 continue;
             };
             let mut parts = rest.split_whitespace();
@@ -2331,7 +2331,7 @@ mod tests {
         receiver: &mut tokio::sync::broadcast::Receiver<crate::pty::manager::TerminalOutputChunk>,
     ) -> (u16, u16) {
         while receiver.try_recv().is_ok() {}
-        pty.write(terminal_id, "echo TERMUL_WIN:$(stty size)\n")
+        pty.write(terminal_id, "echo SE_WIN:$(stty size)\n")
             .await
             .expect("write stty probe");
         let buffer =
@@ -2352,7 +2352,7 @@ mod tests {
     ) -> usize {
         std::fs::write(
             script_path,
-            "printf '%s\\n' TERMUL_PAINT_START\nawk 'BEGIN{ \"stty size\" | getline s; split(s,a); for(i=1;i<=a[1];i++){ for(j=1;j<=a[2];j++) printf \"A\"; print \"\" } }'\nprintf '%s\\n' TERMUL_PAINT_END\n",
+            "printf '%s\\n' SE_PAINT_START\nawk 'BEGIN{ \"stty size\" | getline s; split(s,a); for(i=1;i<=a[1];i++){ for(j=1;j<=a[2];j++) printf \"A\"; print \"\" } }'\nprintf '%s\\n' SE_PAINT_END\n",
         )
         .expect("write paint script");
         while receiver.try_recv().is_ok() {}
@@ -2360,15 +2360,15 @@ mod tests {
             .await
             .expect("run paint script");
         let buffer = collect_output_until(receiver, |text| {
-            has_output_line(text, "TERMUL_PAINT_START") && has_output_line(text, "TERMUL_PAINT_END")
+            has_output_line(text, "SE_PAINT_START") && has_output_line(text, "SE_PAINT_END")
         })
         .await;
         let start = buffer
             .lines()
-            .position(|line| line.trim() == "TERMUL_PAINT_START");
+            .position(|line| line.trim() == "SE_PAINT_START");
         let end = buffer
             .lines()
-            .position(|line| line.trim() == "TERMUL_PAINT_END");
+            .position(|line| line.trim() == "SE_PAINT_END");
         let (Some(start), Some(end)) = (start, end) else {
             panic!("paint markers missing in PTY output: {buffer:?}");
         };

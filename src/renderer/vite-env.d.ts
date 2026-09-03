@@ -2,9 +2,9 @@
 
 interface ImportMetaEnv {
   readonly PACKAGE_VERSION: string
-  readonly VITE_TERMUL_UPDATE_MODE?: 'tauri' | 'aur'
+  readonly VITE_SE_UPDATE_MODE?: 'tauri' | 'aur'
   /** Set `true` by `vite.config.web.ts` for the browser/headless client build. */
-  readonly TERMUL_WEB?: boolean
+  readonly SE_WEB?: boolean
   /**
    * Build-time app version (CAP-3). Injected by `vite.config.web.ts`
    * `define` from `package.json#version` so `getCurrentAppVersion()` can

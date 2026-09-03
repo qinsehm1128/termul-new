@@ -513,7 +513,7 @@ impl RemoteServerState {
         //
         // Fallback chain:
         // 1. Registry default project path → canonicalize.
-        // 2. `default_project_root()` ($TERMUL_PROJECT_ROOT / $HOME) → canonicalize.
+        // 2. `default_project_root()` ($SE_PROJECT_ROOT / $HOME) → canonicalize.
         // 3. None discoverable → fatal (the server cannot enforce a boundary).
         //
         // A transient canonicalization failure on the registry default (deleted
@@ -538,14 +538,14 @@ impl RemoteServerState {
                 // 2. Empty registry / bad default → home fallback + warn.
                 let raw_root = crate::web::config::default_project_root().ok_or_else(|| {
                     "could not determine project root for shared-live server: \
-                     set $TERMUL_PROJECT_ROOT or ensure $HOME is available"
+                     set $SE_PROJECT_ROOT or ensure $HOME is available"
                         .to_string()
                 })?;
                 log::warn!(target: "se_manager::remote::host", "operation=shared_live_host stable_code=REJECTED");
                 crate::web::config::resolve_and_validate_project_root(&raw_root).map_err(|e| {
                     format!(
                         "shared-live server refused to start: {e} \
-                         (set $TERMUL_PROJECT_ROOT to a valid directory)"
+                         (set $SE_PROJECT_ROOT to a valid directory)"
                     )
                 })?
             }
@@ -1582,7 +1582,7 @@ mod tests {
     /// Windows `std::env::temp_dir()` resolves to `%USERPROFILE%\AppData\Local\
     /// Temp` — i.e. INSIDE the home tree — so using it would let the buggy
     /// `project_root = home` code accept the project (false pass). We instead
-    /// derive the project dirs from an outside-home base: `$TERMUL_TEST_OUTSIDE_
+    /// derive the project dirs from an outside-home base: `$SE_TEST_OUTSIDE_
     /// HOME_BASE` when set (so CI can pin a known-writable path outside home),
     /// falling back to `home.parent()` (a sibling of home) when unset. If the
     /// base cannot be resolved or (without an override) is not writable, the
@@ -1599,21 +1599,21 @@ mod tests {
             eprintln!("skip: cannot resolve user home dir for cross-drive test");
             return;
         };
-        // `$TERMUL_TEST_OUTSIDE_HOME_BASE` lets CI pin a known-writable path
+        // `$SE_TEST_OUTSIDE_HOME_BASE` lets CI pin a known-writable path
         // outside home (e.g. `/var/tmp` or a separate drive on runners where
         // `home.parent()` is locked down). When unset, fall back to
         // `home.parent()`. An explicit override that is unusable is a hard
         // error — the operator asked for it, so a silent skip would mask a
         // broken setup.
-        let override_set = std::env::var_os("TERMUL_TEST_OUTSIDE_HOME_BASE").is_some();
-        let outside_base = match std::env::var("TERMUL_TEST_OUTSIDE_HOME_BASE") {
+        let override_set = std::env::var_os("SE_TEST_OUTSIDE_HOME_BASE").is_some();
+        let outside_base = match std::env::var("SE_TEST_OUTSIDE_HOME_BASE") {
             Ok(raw) if !raw.trim().is_empty() => std::path::PathBuf::from(raw.trim()),
             _ => match home.parent() {
                 Some(p) => p.to_path_buf(),
                 None => {
                     eprintln!(
                         "skip: home dir has no parent and \
-                         TERMUL_TEST_OUTSIDE_HOME_BASE is unset"
+                         SE_TEST_OUTSIDE_HOME_BASE is unset"
                     );
                     return;
                 }
@@ -1631,7 +1631,7 @@ mod tests {
         if std::fs::create_dir_all(&probe).is_err() {
             if override_set {
                 panic!(
-                    "TERMUL_TEST_OUTSIDE_HOME_BASE='{}' is not writable; CI cannot \
+                    "SE_TEST_OUTSIDE_HOME_BASE='{}' is not writable; CI cannot \
                      run the cross-drive test reliably — fix the override path",
                     outside_base.display()
                 );
@@ -1639,7 +1639,7 @@ mod tests {
             eprintln!(
                 "skip: cannot write outside-home base '{}'; cross-drive layout \
                  not reproducible on this filesystem (set \
-                 TERMUL_TEST_OUTSIDE_HOME_BASE to force)",
+                 SE_TEST_OUTSIDE_HOME_BASE to force)",
                 outside_base.display()
             );
             return;

@@ -725,12 +725,11 @@ fn one_unwritable_root_fails_alone_and_is_named_in_the_receipt() {
 /// ordinary run of this file.
 #[test]
 fn subprocess_lock_owner() {
-    let Some(root) = std::env::var_os("TERMUL_TEST_MIGRATION_LOCK_ROOT") else {
+    let Some(root) = std::env::var_os("SE_TEST_MIGRATION_LOCK_ROOT") else {
         return;
     };
-    let barrier = PathBuf::from(
-        std::env::var_os("TERMUL_TEST_MIGRATION_LOCK_BARRIER").expect("barrier path"),
-    );
+    let barrier =
+        PathBuf::from(std::env::var_os("SE_TEST_MIGRATION_LOCK_BARRIER").expect("barrier path"));
     let lock = HostMigrationLock::new(&PathBuf::from(root)).expect("prepare lock");
     let _guard = lock.acquire().expect("acquire lock");
     fs::write(barrier, b"locked").expect("signal the parent");
@@ -747,8 +746,8 @@ fn only_one_process_merges_at_a_time() {
 
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
         .args(["--exact", "subprocess_lock_owner", "--nocapture"])
-        .env("TERMUL_TEST_MIGRATION_LOCK_ROOT", &tree.app_data)
-        .env("TERMUL_TEST_MIGRATION_LOCK_BARRIER", &barrier)
+        .env("SE_TEST_MIGRATION_LOCK_ROOT", &tree.app_data)
+        .env("SE_TEST_MIGRATION_LOCK_BARRIER", &barrier)
         .spawn()
         .expect("spawn the lock owner");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

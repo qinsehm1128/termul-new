@@ -151,8 +151,8 @@ pub fn fresh_path() -> Option<String> {
 /// helpers cat a banner. All of that lands on stdout ahead of the PATH. Reading
 /// the whole of stdout — which is what this probe used to do — turns any such
 /// line into a PATH segment.
-pub const PATH_PROBE_BEGIN: &str = "__TERMUL_PATH_BEGIN__";
-pub const PATH_PROBE_END: &str = "__TERMUL_PATH_END__";
+pub const PATH_PROBE_BEGIN: &str = "__SE_PATH_BEGIN__";
+pub const PATH_PROBE_END: &str = "__SE_PATH_END__";
 
 /// How long the probe waits for the user's shell before giving up. An rc file
 /// can block on anything — a slow version manager, a network-backed prompt, a
@@ -252,7 +252,7 @@ pub(crate) fn probe_shell_path(shell: &str, env_overrides: &[(&str, &str)]) -> O
         .stderr(Stdio::piped())
         // Lets an rc file skip work it only needs for a real session. Mirrors
         // VS Code's `VSCODE_RESOLVING_ENVIRONMENT`.
-        .env("TERMUL_RESOLVING_ENVIRONMENT", "1");
+        .env("SE_RESOLVING_ENVIRONMENT", "1");
     for (key, value) in env_overrides {
         builder.env(key, value);
     }

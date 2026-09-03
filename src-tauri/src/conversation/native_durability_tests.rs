@@ -124,10 +124,10 @@ fn native_workspace_revision_and_jsonl_restart_matrix() {
 
 #[test]
 fn native_kernel_lock_owner() {
-    let Some(root) = std::env::var_os("TERMUL_NATIVE_LOCK_ROOT") else {
+    let Some(root) = std::env::var_os("SE_NATIVE_LOCK_ROOT") else {
         return;
     };
-    let barrier = PathBuf::from(std::env::var_os("TERMUL_NATIVE_LOCK_BARRIER").unwrap());
+    let barrier = PathBuf::from(std::env::var_os("SE_NATIVE_LOCK_BARRIER").unwrap());
     let lock = HostMigrationLock::new(&PathBuf::from(root)).unwrap();
     let _guard = lock.acquire().unwrap();
     fs::write(barrier, b"locked").unwrap();
@@ -147,8 +147,8 @@ fn native_kernel_lock_releases_after_forced_process_exit() {
             "conversation::native_durability_tests::native_kernel_lock_owner",
             "--nocapture",
         ])
-        .env("TERMUL_NATIVE_LOCK_ROOT", &root)
-        .env("TERMUL_NATIVE_LOCK_BARRIER", &barrier)
+        .env("SE_NATIVE_LOCK_ROOT", &root)
+        .env("SE_NATIVE_LOCK_BARRIER", &barrier)
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);

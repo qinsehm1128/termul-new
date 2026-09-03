@@ -3,11 +3,11 @@
  * Reads the desktop remote-access token from the OS keychain and never prints it.
  *
  * Usage: bun scripts/companion-chat-request-test.ts
- * Optional: TERMUL_ACCESS_URL=https://host/#access_token=...
+ * Optional: SE_ACCESS_URL=https://host/#access_token=...
  */
 import { acceptedBrandValues } from '../src/shared/brand'
 
-const HOST = process.env.TERMUL_HOST ?? 'http://127.0.0.1:18787'
+const HOST = process.env.SE_HOST ?? 'http://127.0.0.1:18787'
 
 type IpcBody<T> = {
   success: boolean
@@ -69,14 +69,14 @@ async function tokenFromKeychain(): Promise<string | null> {
 }
 
 async function resolveAuth(): Promise<{ origin: string; token: string }> {
-  const fromEnv = process.env.TERMUL_ACCESS_URL
+  const fromEnv = process.env.SE_ACCESS_URL
   if (fromEnv) {
     const parsed = tokenFromAccessUrl(fromEnv)
     if (parsed) return parsed
   }
-  const token = process.env.TERMUL_ACCESS_TOKEN || (await tokenFromKeychain())
+  const token = process.env.SE_ACCESS_TOKEN || (await tokenFromKeychain())
   if (!token) {
-    fail('no remote-access token in TERMUL_ACCESS_URL / keychain')
+    fail('no remote-access token in SE_ACCESS_URL / keychain')
   }
   return { origin: HOST, token }
 }

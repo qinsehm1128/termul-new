@@ -712,7 +712,7 @@ pub async fn acp_probe_mcp_server(
 /// `None` to clear it (fall back to the env var / unlimited default). Pushed from
 /// the App Preferences UI so the turn timeout is editable without a restart or
 /// env var. Desktop-only: the standalone `se-server` has no settings
-/// surface and configures via `TERMUL_ACP_TURN_TIMEOUT_SECS`. The env var
+/// surface and configures via `SE_ACP_TURN_TIMEOUT_SECS`. The env var
 /// remains top-precedence (operator/diagnostic override).
 #[tauri::command]
 pub fn acp_set_turn_timeout(secs: Option<u64>) -> Result<(), String> {
@@ -723,7 +723,7 @@ pub fn acp_set_turn_timeout(secs: Option<u64>) -> Result<(), String> {
 /// Set the in-process ACP turn *idle* timeout override, in seconds, or `None`
 /// to clear it (fall back to the env var / unlimited default). Pushed from the
 /// App Preferences UI. Desktop-only parity with `acp_set_turn_timeout`: the
-/// standalone `se-server` configures via `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`.
+/// standalone `se-server` configures via `SE_ACP_TURN_IDLE_TIMEOUT_SECS`.
 /// The env var remains top-precedence (operator/diagnostic override).
 #[tauri::command]
 pub fn acp_set_turn_idle_timeout(secs: Option<u64>) -> Result<(), String> {
@@ -738,7 +738,7 @@ pub fn acp_set_turn_idle_timeout(secs: Option<u64>) -> Result<(), String> {
 /// Set the in-process `session/new` timeout override, in seconds, or `None`
 /// to clear it (fall back to the env var / 60s default). Pushed from the App
 /// Preferences UI; same desktop-only + env-precedence contract as
-/// `acp_set_turn_timeout` (`TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` wins).
+/// `acp_set_turn_timeout` (`SE_ACP_SESSION_NEW_TIMEOUT_SECS` wins).
 #[tauri::command]
 pub fn acp_set_session_new_timeout(secs: Option<u64>) -> Result<(), String> {
     if matches!(secs, Some(0)) {
@@ -753,7 +753,7 @@ pub fn acp_set_session_new_timeout(secs: Option<u64>) -> Result<(), String> {
 /// seconds, or `None` to clear it (fall back to the env var / 60s default).
 /// Pushed from the App Preferences UI; same desktop-only + env-precedence
 /// contract as `acp_set_turn_timeout`
-/// (`TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` wins).
+/// (`SE_ACP_SESSION_REOPEN_TIMEOUT_SECS` wins).
 #[tauri::command]
 pub fn acp_set_session_reopen_timeout(secs: Option<u64>) -> Result<(), String> {
     if matches!(secs, Some(0)) {
@@ -768,7 +768,7 @@ pub fn acp_set_session_reopen_timeout(secs: Option<u64>) -> Result<(), String> {
 /// `None` to clear it (fall back to the env var / 45s default). `0` disables
 /// the warmup entirely. Pushed from the App Preferences UI; same desktop-only
 /// + env-precedence contract as `acp_set_turn_timeout`
-/// (`TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` wins).
+/// (`SE_ACP_FIRST_PROMPT_WARMUP_SECS` wins).
 #[tauri::command]
 pub fn acp_set_first_prompt_warmup_timeout(secs: Option<u64>) -> Result<(), String> {
     crate::acp::manager::set_first_prompt_warmup_timeout_override(secs);
@@ -778,7 +778,7 @@ pub fn acp_set_first_prompt_warmup_timeout(secs: Option<u64>) -> Result<(), Stri
 
 /// Prefer host-owned local `npm install` for `npx -y` agents (default), or
 /// always launch through npx. Pushed from App Preferences. Desktop-only;
-/// standalone `se-server` uses `TERMUL_ACP_PREFER_LOCAL_NPM`.
+/// standalone `se-server` uses `SE_ACP_PREFER_LOCAL_NPM`.
 #[tauri::command]
 pub fn acp_set_prefer_local_npm_install(prefer: bool) -> Result<(), String> {
     crate::acp::npm_local::set_prefer_local_npm_install(prefer);

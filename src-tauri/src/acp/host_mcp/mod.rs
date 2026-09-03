@@ -53,11 +53,11 @@ pub fn is_child_invocation() -> bool {
 }
 
 /// Env vars set on the injected `McpServer::Stdio` (carrying connection info
-/// to the child). Prefixed `TERMUL_PLAN_` to avoid collisions with agent env.
-pub const ENV_PORT: &str = "TERMUL_PLAN_PORT";
-pub const ENV_TOKEN: &str = "TERMUL_PLAN_TOKEN";
-pub const ENV_SESSION_ID: &str = "TERMUL_PLAN_SESSION_ID";
-pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
+/// to the child). Prefixed `SE_PLAN_` to avoid collisions with agent env.
+pub const ENV_PORT: &str = "SE_PLAN_PORT";
+pub const ENV_TOKEN: &str = "SE_PLAN_TOKEN";
+pub const ENV_SESSION_ID: &str = "SE_PLAN_SESSION_ID";
+pub const ENV_AGENT_ID: &str = "SE_PLAN_AGENT_ID";
 
 /// Input the agent sends to `plan` (the `arguments` of `tools/call`).
 /// Also re-used as the parent–child TCP frame body (one todo per plan entry).

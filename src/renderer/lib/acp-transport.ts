@@ -487,8 +487,8 @@ const SEND_PROMPT_GRACE_MS = 10_000
  * session, so it normally never fires pre-auth) with a bounded, setTimeout-safe
  * 1h budget.
  *
- * NOTE: a deployment that sets `TERMUL_ACP_TURN_TIMEOUT_SECS` /
- * `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS` publishes those bounded values, which the
+ * NOTE: a deployment that sets `SE_ACP_TURN_TIMEOUT_SECS` /
+ * `SE_ACP_TURN_IDLE_TIMEOUT_SECS` publishes those bounded values, which the
  * client honours instead of this fallback.
  */
 const FALLBACK_SEND_PROMPT_INACTIVITY_MS = 3_600_000
@@ -879,32 +879,32 @@ export class WsAcpTransport implements AcpTransport {
 
   async setTurnTimeout(_secs: number | null): Promise<void> {
     // Desktop-only: the standalone server has no settings surface and
-    // configures the turn timeout via TERMUL_ACP_TURN_TIMEOUT_SECS.
+    // configures the turn timeout via SE_ACP_TURN_TIMEOUT_SECS.
   }
 
   async setTurnIdleTimeout(_secs: number | null): Promise<void> {
     // Desktop-only: the standalone server has no settings surface and
-    // configures the turn idle timeout via TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS.
+    // configures the turn idle timeout via SE_ACP_TURN_IDLE_TIMEOUT_SECS.
   }
 
   async setSessionNewTimeout(_secs: number | null): Promise<void> {
     // Desktop-only: the standalone server has no settings surface and configures
-    // the session/new timeout via TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS.
+    // the session/new timeout via SE_ACP_SESSION_NEW_TIMEOUT_SECS.
   }
 
   async setSessionReopenTimeout(_secs: number | null): Promise<void> {
     // Desktop-only: the standalone server has no settings surface and configures
-    // the session reopen timeout via TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS.
+    // the session reopen timeout via SE_ACP_SESSION_REOPEN_TIMEOUT_SECS.
   }
 
   async setFirstPromptWarmupTimeout(_secs: number | null): Promise<void> {
     // Desktop-only: the standalone server has no settings surface and configures
-    // the first-prompt warmup timeout via TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS.
+    // the first-prompt warmup timeout via SE_ACP_FIRST_PROMPT_WARMUP_SECS.
   }
 
   async setPreferLocalNpmInstall(_prefer: boolean): Promise<void> {
     // Desktop-only: the standalone server has no settings surface and
-    // configures local npm install via TERMUL_ACP_PREFER_LOCAL_NPM.
+    // configures local npm install via SE_ACP_PREFER_LOCAL_NPM.
   }
 
   /**

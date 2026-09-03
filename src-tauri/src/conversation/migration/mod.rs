@@ -2229,11 +2229,10 @@ mod tests {
 
     #[test]
     fn subprocess_lock_owner() {
-        let Some(root) = std::env::var_os("TERMUL_TEST_MIGRATION_LOCK_ROOT") else {
+        let Some(root) = std::env::var_os("SE_TEST_MIGRATION_LOCK_ROOT") else {
             return;
         };
-        let barrier =
-            PathBuf::from(std::env::var_os("TERMUL_TEST_MIGRATION_LOCK_BARRIER").unwrap());
+        let barrier = PathBuf::from(std::env::var_os("SE_TEST_MIGRATION_LOCK_BARRIER").unwrap());
         let root = PathBuf::from(root);
         let lock = HostMigrationLock::new(&root).unwrap();
         let _guard = lock.acquire().unwrap();
@@ -2257,8 +2256,8 @@ mod tests {
                 "conversation::migration::tests::subprocess_lock_owner",
                 "--nocapture",
             ])
-            .env("TERMUL_TEST_MIGRATION_LOCK_ROOT", &root)
-            .env("TERMUL_TEST_MIGRATION_LOCK_BARRIER", &barrier)
+            .env("SE_TEST_MIGRATION_LOCK_ROOT", &root)
+            .env("SE_TEST_MIGRATION_LOCK_BARRIER", &barrier)
             .spawn()
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

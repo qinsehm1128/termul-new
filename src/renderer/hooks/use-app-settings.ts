@@ -252,7 +252,7 @@ export function useAppSettingsLoader(): void {
 
       // Push the ACP timeout overrides to the Rust core (desktop-only via the
       // transport; the WS transport no-ops on the standalone server, which
-      // configures via the TERMUL_ACP_* env vars).
+      // configures via the SE_ACP_* env vars).
       try {
         await acpApi.setTurnTimeout(settings.acpTurnTimeoutSecs)
       } catch (error) {

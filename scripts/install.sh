@@ -154,19 +154,19 @@ confirm_install() {
   local prompt="$1"
   local reply
 
-  if [[ "${TERMUL_INSTALL_YES:-}" == "1" ]]; then
-    printf 'TERMUL_INSTALL_YES=1: %s\n' "$prompt"
+  if [[ "${SE_INSTALL_YES:-}" == "1" ]]; then
+    printf 'SE_INSTALL_YES=1: %s\n' "$prompt"
     return 0
   fi
 
   if [[ ! -r /dev/tty ]]; then
-    die "Interactive confirmation requires /dev/tty. Set TERMUL_INSTALL_YES=1 to install non-interactively."
+    die "Interactive confirmation requires /dev/tty. Set SE_INSTALL_YES=1 to install non-interactively."
     return 1
   fi
 
   printf '%s [y/N] ' "$prompt" >/dev/tty
   if ! IFS= read -r reply </dev/tty; then
-    die "Interactive confirmation requires /dev/tty. Set TERMUL_INSTALL_YES=1 to install non-interactively."
+    die "Interactive confirmation requires /dev/tty. Set SE_INSTALL_YES=1 to install non-interactively."
     return 1
   fi
 
@@ -197,7 +197,7 @@ install_macos() {
   local tmpdir
   local dmg_path
   local mount_dir
-  local applications_dir="${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}"
+  local applications_dir="${SE_INSTALL_APPLICATIONS_DIR:-/Applications}"
   local app_source
   local app_target
 
@@ -266,8 +266,8 @@ install_linux() {
   local asset_name
   local tmpdir
   local appimage_path
-  local bin_dir="${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}"
-  local desktop_dir="${TERMUL_INSTALL_DESKTOP_DIR:-${HOME}/.local/share/applications}"
+  local bin_dir="${SE_INSTALL_BIN_DIR:-${HOME}/.local/bin}"
+  local desktop_dir="${SE_INSTALL_DESKTOP_DIR:-${HOME}/.local/share/applications}"
   local target_path="${bin_dir}/termul-manager"
   local desktop_path="${desktop_dir}/termul-manager.desktop"
 
@@ -345,10 +345,10 @@ main() {
 
   case "$os" in
     darwin)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
+      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${SE_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
       ;;
     linux)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
+      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${SE_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
       ;;
     *)
       die "Unsupported operating system: ${os}"
