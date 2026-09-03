@@ -1462,10 +1462,20 @@ mod tests {
             .unwrap();
 
         service.open_conversation(conversation_id).await.unwrap();
+        // The directory name is the managed skill's name, which is a brand
+        // contract. Read through the same accessor the provisioner builds its
+        // paths from rather than spelled here — an inline copy silently stops
+        // matching the moment that contract is renamed, and this test would then
+        // report "the backfill did not run" for a backfill that ran fine.
+        let skill_name = crate::skills::provisioner::scheduled_task_skill_name();
         let cross_tool = std::path::Path::new(&conversation.workspace_cwd)
-            .join(".agents/skills/termul-scheduled-tasks/SKILL.md");
+            .join(".agents/skills")
+            .join(skill_name)
+            .join("SKILL.md");
         let provider = std::path::Path::new(&conversation.workspace_cwd)
-            .join(".claude/skills/termul-scheduled-tasks/SKILL.md");
+            .join(".claude/skills")
+            .join(skill_name)
+            .join("SKILL.md");
         let first = std::fs::read_to_string(&cross_tool).unwrap();
         assert!(provider.exists());
 

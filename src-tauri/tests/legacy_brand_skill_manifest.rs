@@ -1,21 +1,20 @@
-//! T-H23 — the on-disk keys of `.termul/managed-skills.json`.
+//! T-H23 — the on-disk keys of the managed-skill manifest.
 //!
 //! # Why this contract is invisible
 //!
 //! Finding F-03. `ManagedSkillManifestV1` carries
-//! `#[serde(rename_all = "camelCase", deny_unknown_fields)]`
-//! (`src/skills/provisioner.rs:67-76`), so the Rust field identifier
-//! `managed_by_termul` **is** the persisted JSON key `managedByTermul`. There is
-//! no string literal anywhere in the repo to grep for, exclude from a rename
-//! list, or notice in review. A rename of the identifier is a one-token edit
-//! that compiles, reads naturally, and silently rewrites an external contract.
+//! `#[serde(rename_all = "camelCase", deny_unknown_fields)]`, so the Rust field
+//! identifier of the ownership flag **is** its persisted JSON key. There is no
+//! string literal anywhere in the repo to grep for, exclude from a rename list,
+//! or notice in review. A rename of the identifier is a one-token edit that
+//! compiles, reads naturally, and silently rewrites an external contract.
 //!
 //! `deny_unknown_fields` is what turns that from a cosmetic drift into data
-//! loss: a manifest already sitting in a user's `.termul/` stops deserializing
-//! the *instant* the key moves — not degraded, rejected. The D batch did move
-//! it once; the executor reverted it and left the explanatory comment that is
-//! still at `provisioner.rs:70-76`. This file is what makes the next attempt
-//! ring instead of relying on that comment being read.
+//! loss: a manifest already sitting in a user's workspace directory stops
+//! deserializing the *instant* the key moves — not degraded, rejected. The D
+//! batch did move it once, with no alias and no version bump, and the executor
+//! reverted it. This file is what makes the next attempt ring instead of
+//! relying on a comment being read.
 //!
 //! # Why this reads from disk
 //!
@@ -39,18 +38,27 @@
 //!
 //! `mod skills` is private to `termul_manager_lib` (`src/lib.rs:29`, no `pub`
 //! and no re-export), so `ManagedSkillManifestV1` is not nameable from an
-//! integration test. [`ManagedSkillManifestMirror`] stands in for it, and
-//! `mirror_key_set_matches_the_production_struct` pins the two together: if
-//! production adds, drops or renames a field, the mirror's key set diverges and
-//! that guard goes red. The mirror is never the *source* of an expectation.
+//! integration test. Two stand-ins do the work, and the difference between them
+//! is the point:
 //!
-//! # Seams Wave 5 must add
+//! - [`ManagedSkillManifestMirror`] tracks production *today*, pinned by
+//!   `mirror_key_set_matches_the_production_struct`.
+//! - [`ManagedSkillManifestV1Reader`] is frozen at the pre-rename shape and
+//!   plays the older binary, pinned to the frozen fixture by
+//!   `v1_reader_matches_the_frozen_manifest_on_disk`.
 //!
-//! 1. The ownership key moves to `brand::canonical().skill_manifest_key`'s
-//!    spelling, with an explicit `#[serde(alias = "managedByTermul")]` (or an
-//!    equivalent compat read) so manifests already on disk still parse.
-//! 2. `schema_version` bumps to 2 on write, and a read path accepts 1 and 2.
-//!    There is no read path at all today — the manifest is write-only.
+//! Neither is ever the *source* of an expectation.
+//!
+//! # Seam status
+//!
+//! Landed by T-M12 and T-A21:
+//!
+//! 1. The ownership key moved to `brand::canonical().skill_manifest_key`'s
+//!    spelling, with an explicit `#[serde(alias = …)]` naming the pre-rename key
+//!    so manifests already on disk still parse.
+//! 2. `schema_version` is stamped 2 on write and the read path accepts 1 and 2.
+//!    T-M12 added the read path; before it, the manifest was write-only and no
+//!    alias or version check on it could have taken effect at all.
 //! 3. Downgrade is explicitly **out** of contract; see
 //!    `downgrading_to_an_older_binary_is_a_known_and_accepted_loss`.
 
@@ -95,14 +103,41 @@ fn frozen_manifest_value() -> Value {
     serde_json::from_str(&frozen_manifest_text()).expect("the frozen manifest is JSON")
 }
 
-/// Stand-in for the private `ManagedSkillManifestV1`. Serde attributes are
-/// copied verbatim from `provisioner.rs:67-76`; `mirror_key_set_matches_the_production_struct`
-/// is what keeps that copy honest.
+/// The shape a **pre-rename** binary compiled: the old ownership key, and no
+/// compatibility alias for anything.
+///
+/// This is deliberately *not* a mirror of production any more. It plays the
+/// older binary in [`downgrading_to_an_older_binary_is_a_known_and_accepted_loss`],
+/// and it is the reader the frozen v1 fixture has to parse under. Pinned to the
+/// frozen artifact — not to production — by
+/// [`v1_reader_matches_the_frozen_manifest_on_disk`], so it cannot drift into a
+/// fiction the tests below reason about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ManagedSkillManifestV1Reader {
+    schema_version: u32,
+    managed_by_termul: bool,
+    skill_name: String,
+    template_version: u32,
+    sha256: String,
+    paths: Vec<String>,
+}
+
+/// Stand-in for the private `ManagedSkillManifestV1` **as it exists today**.
+/// Serde attributes are copied from `provisioner.rs`;
+/// `mirror_key_set_matches_the_production_struct` is what keeps that copy honest.
+///
+/// The production struct's compat `alias` is deliberately absent: an alias never
+/// appears in serialized output, so mirroring it would change nothing here, and
+/// spelling a legacy brand value in this file would be the FORBID-04 violation
+/// the alias itself is the single named exception to. The alias is checked
+/// against `brand::LEGACY` by parsing the production source instead — see
+/// [`accepted_disk_keys`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ManagedSkillManifestMirror {
     schema_version: u32,
-    managed_by_termul: bool,
+    managed_by_se_manager: bool,
     skill_name: String,
     template_version: u32,
     sha256: String,
@@ -188,12 +223,33 @@ fn production_struct() -> ItemStruct {
     })
 }
 
-/// `field identifier -> every JSON key that would deserialize into it`.
+/// How one production field is named on disk.
+///
+/// `primary` is the key serde *writes*; `aliases` are the extra keys it will
+/// still *read*. The two are kept apart because a mirror struct can only ever
+/// reproduce the first — aliases never appear in serialized output — and
+/// conflating them was what made the old single-set comparison impossible to
+/// satisfy once a compat alias existed.
+#[derive(Debug, Default)]
+struct FieldKeys {
+    primary: String,
+    aliases: BTreeSet<String>,
+}
+
+impl FieldKeys {
+    fn accepted(&self) -> BTreeSet<String> {
+        let mut all = self.aliases.clone();
+        all.insert(self.primary.clone());
+        all
+    }
+}
+
+/// `field identifier -> how that field is named on disk`.
 ///
 /// Covers the three ways serde can name a field: the container's `rename_all`
 /// projection of the identifier, an explicit per-field `rename`, and any number
-/// of `alias`es (the compat-read mechanism Wave 5 needs).
-fn accepted_disk_keys() -> BTreeMap<String, BTreeSet<String>> {
+/// of `alias`es (the compat-read mechanism).
+fn disk_keys() -> BTreeMap<String, FieldKeys> {
     let item = production_struct();
     let container = serde_words(&item.attrs);
     let rename_all = container
@@ -207,28 +263,34 @@ fn accepted_disk_keys() -> BTreeMap<String, BTreeSet<String>> {
             continue;
         };
         let words = serde_words(&field.attrs);
-        let mut accepted = BTreeSet::new();
-        match words.iter().find(|(name, _)| name == "rename") {
-            Some((_, Some(explicit))) => {
-                accepted.insert(explicit.clone());
-            }
-            _ => {
-                accepted.insert(match rename_all.as_deref() {
-                    Some("camelCase") => to_camel_case(&identifier),
-                    _ => identifier.clone(),
-                });
-            }
-        }
-        for (name, value) in &words {
-            if name == "alias" {
-                if let Some(alias) = value {
-                    accepted.insert(alias.clone());
-                }
-            }
-        }
-        keys.insert(identifier, accepted);
+        let primary = match words.iter().find(|(name, _)| name == "rename") {
+            Some((_, Some(explicit))) => explicit.clone(),
+            _ => match rename_all.as_deref() {
+                Some("camelCase") => to_camel_case(&identifier),
+                _ => identifier.clone(),
+            },
+        };
+        let aliases = words
+            .iter()
+            .filter(|(name, _)| name == "alias")
+            .filter_map(|(_, value)| value.clone())
+            .collect();
+        keys.insert(identifier, FieldKeys { primary, aliases });
     }
     keys
+}
+
+/// `field identifier -> every JSON key that would deserialize into it`.
+fn accepted_disk_keys() -> BTreeMap<String, BTreeSet<String>> {
+    disk_keys()
+        .into_iter()
+        .map(|(identifier, keys)| (identifier, keys.accepted()))
+        .collect()
+}
+
+/// Only the keys production *writes* — no aliases.
+fn primary_disk_keys() -> BTreeSet<String> {
+    disk_keys().into_values().map(|keys| keys.primary).collect()
 }
 
 /// The `schema_version` literal the writer stamps into every new manifest.
@@ -349,7 +411,7 @@ fn frozen_v1_manifest_deserializes_and_declares_legacy_ownership() {
         "the frozen manifest must declare this app owns the skill files it lists"
     );
 
-    let parsed: ManagedSkillManifestMirror =
+    let parsed: ManagedSkillManifestV1Reader =
         serde_json::from_str(&frozen_manifest_text()).expect("the frozen v1 manifest deserializes");
     assert!(
         parsed.managed_by_termul,
@@ -399,20 +461,68 @@ fn production_field_identifier_projects_onto_the_brand_key() {
     );
 }
 
-/// Keeps [`ManagedSkillManifestMirror`] pinned to the production struct. If a
-/// field is added, dropped or renamed over there, this diverges — so the mirror
-/// can never quietly become a fiction the other tests reason about.
+/// Keeps [`ManagedSkillManifestV1Reader`] pinned to the bytes a pre-rename build
+/// actually wrote, rather than to production.
+///
+/// It stopped tracking production the moment T-A21 moved the ownership key, and
+/// an unpinned stand-in for "the older binary" is worth nothing — the downgrade
+/// test below would be asserting against whatever this file happened to declare.
+/// The frozen fixture is the independent source: it is sha256-guarded by
+/// `legacy_brand_fixture_manifest.rs` and cannot be edited to match.
 #[test]
-fn mirror_key_set_matches_the_production_struct() {
-    let production: BTreeSet<String> = accepted_disk_keys()
-        .values()
-        .flatten()
+fn v1_reader_matches_the_frozen_manifest_on_disk() {
+    let reader_value = serde_json::to_value(ManagedSkillManifestV1Reader {
+        schema_version: 1,
+        managed_by_termul: true,
+        skill_name: String::new(),
+        template_version: 0,
+        sha256: String::new(),
+        paths: Vec::new(),
+    })
+    .expect("the v1 reader serializes");
+    let reader: BTreeSet<String> = reader_value
+        .as_object()
+        .expect("the v1 reader serializes to an object")
+        .keys()
         .cloned()
         .collect();
 
+    let on_disk: BTreeSet<String> = frozen_manifest_value()
+        .as_object()
+        .expect("the frozen manifest is an object")
+        .keys()
+        .cloned()
+        .collect();
+
+    assert_eq!(
+        reader, on_disk,
+        "ManagedSkillManifestV1Reader no longer describes the frozen v1 manifest, so it is \
+         not the older binary any more and downgrading_to_an_older_binary_is_a_known_and_accepted_loss \
+         proves nothing"
+    );
+    assert!(
+        reader.contains(brand::LEGACY.skill_manifest_key),
+        "the v1 reader's ownership key is not brand::LEGACY.skill_manifest_key ({:?}); \
+         keys it writes: {reader:?}",
+        brand::LEGACY.skill_manifest_key,
+    );
+}
+
+/// Keeps [`ManagedSkillManifestMirror`] pinned to the production struct. If a
+/// field is added, dropped or renamed over there, this diverges — so the mirror
+/// can never quietly become a fiction the other tests reason about.
+///
+/// Compared against production's *primary* keys rather than everything it
+/// accepts: aliases are read-only and never serialize, so a mirror can never
+/// reproduce them. That the alias exists, and that it is exactly the pre-rename
+/// spelling, is asserted separately below from the parsed production source.
+#[test]
+fn mirror_key_set_matches_the_production_struct() {
+    let production = primary_disk_keys();
+
     let mirror_value = serde_json::to_value(ManagedSkillManifestMirror {
-        schema_version: 1,
-        managed_by_termul: true,
+        schema_version: 2,
+        managed_by_se_manager: true,
         skill_name: String::new(),
         template_version: 0,
         sha256: String::new(),
@@ -429,6 +539,28 @@ fn mirror_key_set_matches_the_production_struct() {
     assert_eq!(
         mirror, production,
         "ManagedSkillManifestMirror has drifted from {PRODUCTION_FILE}::{PRODUCTION_STRUCT}"
+    );
+
+    // The compat read is an `alias` on the ownership field specifically, and it
+    // is exactly the pre-rename spelling — not some other key that happens to be
+    // accepted. Both operands are independent: one is parsed out of the
+    // production source, the other read from `brand::LEGACY`.
+    let ownership = disk_keys()
+        .into_iter()
+        .find(|(_, keys)| keys.primary == brand::canonical().skill_manifest_key)
+        .map(|(_, keys)| keys)
+        .unwrap_or_else(|| {
+            panic!(
+                "no field of {PRODUCTION_STRUCT} writes brand::canonical().skill_manifest_key ({:?})",
+                brand::canonical().skill_manifest_key
+            )
+        });
+    assert_eq!(
+        ownership.aliases,
+        BTreeSet::from([brand::LEGACY.skill_manifest_key.to_string()]),
+        "the ownership field's compat aliases must be exactly the pre-rename key; \
+         serde takes literals only, so this attribute is the single named FORBID-04 \
+         exception and this is what keeps it equal to brand::LEGACY.skill_manifest_key"
     );
 
     // `deny_unknown_fields` is load-bearing for every claim in this file: it is
@@ -468,7 +600,7 @@ fn downgrading_to_an_older_binary_is_a_known_and_accepted_loss() {
     );
     object.insert("schemaVersion".to_string(), Value::from(2));
 
-    let error = serde_json::from_value::<ManagedSkillManifestMirror>(value)
+    let error = serde_json::from_value::<ManagedSkillManifestV1Reader>(value)
         .expect_err("a v2 manifest must NOT deserialize under the v1 reader");
     let message = error.to_string();
     assert!(
@@ -486,14 +618,16 @@ fn downgrading_to_an_older_binary_is_a_known_and_accepted_loss() {
 // The ledger — reds that go green when the capability lands
 // ---------------------------------------------------------------------------
 
-/// LEDGER — the disk key must move to the canonical spelling **and** keep
-/// accepting the legacy one.
+/// The disk key must move to the canonical spelling **and** keep accepting the
+/// legacy one.
 ///
 /// Both halves in one assertion on purpose: moving the key without a compat
 /// read is exactly the failure the reverted D-batch change caused, and keeping
 /// the compat read without moving the key is not a rename at all.
+///
+/// Ledger entry struck by T-A21: the field is `managed_by_se_manager` with a
+/// permanent `#[serde(alias = …)]` for the pre-rename key.
 #[test]
-#[should_panic(expected = "does not accept the post-rename ownership key")]
 fn manifest_accepts_both_the_canonical_and_the_legacy_ownership_key() {
     let _guard = brand::override_canonical(post_rename());
     assert_ne!(
@@ -521,13 +655,14 @@ fn manifest_accepts_both_the_canonical_and_the_legacy_ownership_key() {
     );
 }
 
-/// LEDGER — a moved key is a schema change, so the version has to say so.
+/// A moved key is a schema change, so the version has to say so.
 ///
 /// Without the bump there is no way for any future reader to tell a v1 manifest
 /// from a v2 one except by probing which key is present, which is precisely the
 /// implicit coupling this file exists to remove.
+///
+/// Ledger entry struck by T-A21: `provision` stamps 2.
 #[test]
-#[should_panic(expected = "still stamps schema_version")]
 fn new_manifests_are_written_at_schema_version_2() {
     let written = writer_schema_version();
     assert_eq!(

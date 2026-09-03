@@ -13,10 +13,10 @@ const MANIFEST_FILE: &str = "managed-skills.json";
 
 /// `schema_version` values this build knows how to read.
 ///
-/// 1 is what is on disk today. 2 is what T-A21 will write when the ownership
-/// key moves; accepting it now means the reader does not have to change in the
-/// same commit as the writer, and a manifest from a *newer* build is skipped
-/// with a log line rather than silently treated as absent.
+/// 2 is what this build writes since T-A21 moved the ownership key; 1 is what a
+/// pre-rename build left on disk and must still be read. A manifest from a
+/// version outside this set is skipped with a log line rather than silently
+/// treated as absent.
 const READABLE_MANIFEST_SCHEMA_VERSIONS: &[u32] = &[1, 2];
 
 /// The managed skill's directory name.
@@ -119,13 +119,20 @@ impl SkillProvider {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagedSkillManifestV1 {
     pub schema_version: u32,
-    // NOT renamed with the rest of the D batch. `rename_all = "camelCase"`
-    // makes this identifier the persisted JSON key `managedByTermul`, and
-    // `deny_unknown_fields` means a manifest already on a user's disk stops
-    // deserializing the moment the key moves. That makes it an external
-    // contract, not a repo-internal name, so it flips in the rename wave
-    // together with its compatibility read and a `schema_version` bump.
-    pub managed_by_termul: bool,
+    // `rename_all = "camelCase"` makes this identifier the persisted JSON key,
+    // so renaming it *is* an on-disk schema change — which is why T-A21 moved it
+    // together with the `schema_version` bump below rather than with the
+    // repo-internal renames in the D batch.
+    //
+    // The alias is a permanent compatibility read, not a transitional one:
+    // `deny_unknown_fields` means every manifest a pre-rename build left in a
+    // user's workspace is rejected *outright* the moment it disappears, and the
+    // provisioner then stops recognising the skill files it owns. Serde
+    // attributes take literals only, so this line cannot read
+    // `brand::LEGACY.skill_manifest_key`; it is the single named FORBID-04
+    // exception, and `tests/legacy_brand_skill_manifest.rs` compares the two.
+    #[serde(alias = "managedByTermul")]
+    pub managed_by_se_manager: bool,
     pub skill_name: String,
     pub template_version: u32,
     pub sha256: String,
@@ -259,8 +266,12 @@ impl ConversationSkillProvisioner {
         }
 
         let manifest = ManagedSkillManifestV1 {
-            schema_version: 1,
-            managed_by_termul: true,
+            // 2 since T-A21 moved the ownership key. `READABLE_MANIFEST_SCHEMA_VERSIONS`
+            // still accepts 1, so a manifest a pre-rename build wrote is read;
+            // the reverse is out of contract — see
+            // `legacy_brand_skill_manifest::downgrading_to_an_older_binary_is_a_known_and_accepted_loss`.
+            schema_version: 2,
+            managed_by_se_manager: true,
             skill_name: scheduled_task_skill_name().to_string(),
             template_version: SCHEDULED_TASK_SKILL_TEMPLATE_VERSION,
             sha256: sha256.clone(),

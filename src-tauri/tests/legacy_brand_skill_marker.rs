@@ -189,6 +189,71 @@ fn opening_a_conversation_runs_the_real_skill_provisioner() {
     );
 }
 
+/// The claim the two tests below make through an injected brand, made once more
+/// under the values this build actually **ships**.
+///
+/// T-A21 flipped `DEFAULT_CANONICAL`'s skill name and marker. Every other test
+/// in this file injects its own post-rename brand, so all of them would keep
+/// passing if that flip had never landed or were reverted — they prove the seam,
+/// not the shipped values. This one is the difference, and it is the state a
+/// user's workspace is in the first time they open the renamed app: a `SKILL.md`
+/// this app wrote is sitting at what is now the *canonical* path, still carrying
+/// the pre-rename marker, and a directory under the pre-rename name is beside it.
+///
+/// The `assert_ne!` pair is the precondition, not decoration: with the flip
+/// reverted, `canonical() == LEGACY` for both fields, "recognised the legacy
+/// marker" and "recognised its own marker" become the same statement, and
+/// nothing below distinguishes them.
+#[test]
+fn the_shipped_skill_identity_claims_a_pre_rename_file_without_rewriting_it() {
+    assert_ne!(
+        DEFAULT_CANONICAL.skill_name,
+        brand::LEGACY.skill_name,
+        "the managed skill name has not been flipped, so nothing below \
+         distinguishes the pre-rename identity from the current one"
+    );
+    assert_ne!(
+        DEFAULT_CANONICAL.skill_marker,
+        brand::LEGACY.skill_marker,
+        "the managed marker has not been flipped, so 'claimed a file carrying the \
+         legacy marker' below is vacuous"
+    );
+
+    let body = legacy_skill_body();
+    let opened = open_conversation_under(DEFAULT_CANONICAL, |workspace, _guard| {
+        // A file this app wrote before the rename, now sitting at the path the
+        // shipped build considers its own.
+        write_skill(&skill_md(workspace, DEFAULT_CANONICAL.skill_name), &body);
+        // And the directory the pre-rename build actually used.
+        write_skill(&skill_md(workspace, brand::LEGACY.skill_name), &body);
+    });
+
+    // Claimed rather than refused: the provisioner recognised the pre-rename
+    // marker as its own writing and re-templated the file. Had it not, the body
+    // would still be the frozen fixture — `backfill_managed_skills` logs and
+    // swallows `UnmanagedCollision`, so the filesystem is the only observable.
+    let canonical = skill_md(&opened.workspace_cwd, DEFAULT_CANONICAL.skill_name);
+    let after = std::fs::read_to_string(&canonical)
+        .unwrap_or_else(|e| panic!("read {} failed: {e}", canonical.display()));
+    assert!(
+        after.contains(DEFAULT_CANONICAL.skill_marker),
+        "the shipped build did not claim a file carrying the pre-rename marker: {} \
+         still reads as it did before provisioning, so its own earlier writing was \
+         treated as a user-owned file and the skill silently stopped being maintained",
+        canonical.display()
+    );
+
+    // And the pre-rename directory is left exactly as it was (FORBID-05): it is
+    // a user-visible file an agent may still be reading.
+    let legacy = skill_md(&opened.workspace_cwd, brand::LEGACY.skill_name);
+    assert_eq!(
+        std::fs::read_to_string(&legacy).expect("the pre-rename skill must never be deleted"),
+        body,
+        "{} was rewritten; LEGACY values may only ever be read",
+        legacy.display()
+    );
+}
+
 /// After the rename the managed skill must be written under the canonical name.
 #[test]
 fn managed_skill_is_provisioned_under_the_canonical_name() {

@@ -72,19 +72,24 @@ pub struct BrandCanonical {
     pub skill_name: &'static str,
     /// HTML marker identifying a skill file this app wrote.
     pub skill_marker: &'static str,
-    /// On-disk key of the managed-skill manifest's ownership flag
-    /// (`.termul/managed-skills.json`).
+    /// On-disk key of the managed-skill manifest's ownership flag, in
+    /// `<workspace_dir>/managed-skills.json`.
     ///
     /// `ManagedSkillManifestV1` carries `#[serde(rename_all = "camelCase",
-    /// deny_unknown_fields)]` (`src/skills/provisioner.rs:67-76`), so the Rust
-    /// field identifier `managed_by_termul` *is* this JSON key — there is no
-    /// literal anywhere to grep for. `deny_unknown_fields` then means a manifest
-    /// already on a user's disk stops deserializing the instant the key moves.
+    /// deny_unknown_fields)]`, so the Rust field identifier *is* this JSON key —
+    /// there is no literal anywhere to grep for, and renaming the identifier is
+    /// a one-token edit that compiles and silently rewrites an external
+    /// contract. `deny_unknown_fields` is what makes that data loss rather than
+    /// drift: a manifest already on a user's disk stops deserializing outright
+    /// the instant the key moves.
     ///
-    /// Serde attributes accept literals only, so production cannot read this
-    /// constant. It exists to give the value a single source that a source-text
-    /// parity check can compare the attribute against; see
-    /// `tests/legacy_brand_skill_manifest.rs`.
+    /// T-A21 moved it and bumped the manifest's `schema_version` 1 -> 2. The
+    /// pre-rename key survives as a permanent `#[serde(alias)]` — the one place
+    /// outside this file and `src/shared/brand.ts` allowed to spell a legacy
+    /// brand value, because serde attributes take literals only and cannot read
+    /// this constant. The agreement between that attribute and this constant is
+    /// guarded by `tests/legacy_brand_skill_manifest.rs` rather than by a
+    /// whitelist entry nothing enforces.
     pub skill_manifest_key: &'static str,
     /// frp `[[proxies]]` registration name.
     pub frp_proxy_name: &'static str,
@@ -172,9 +177,9 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     ssh_known_hosts_file: "known_hosts_termul",
     keychain_pairing_service: "com.termul.remote.pairing",
     mcp_server_name: "se-manager",
-    skill_name: "termul-scheduled-tasks",
-    skill_marker: "<!-- managed-by-termul:termul-scheduled-tasks -->",
-    skill_manifest_key: "managedByTermul",
+    skill_name: "se-manager-scheduled-tasks",
+    skill_marker: "<!-- managed-by-se-manager:se-manager-scheduled-tasks -->",
+    skill_manifest_key: "managedBySeManager",
     frp_proxy_name: "se-manager",
     state_dir: "termul",
     state_dir_windows: "Termul",
