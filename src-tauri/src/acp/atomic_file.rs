@@ -99,7 +99,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-atomic-{label}-{}-{}",
+            "se-manager-atomic-{label}-{}-{}",
             std::process::id(),
             unique_suffix()
         ));

@@ -273,7 +273,7 @@ pub fn log_startup_banner<R: Runtime>(app: &tauri::AppHandle<R>) {
         .unwrap_or_else(|| "<unavailable>".to_string());
 
     log::info!(
-        "[startup] termul v{} | {} {} | channel={} | session={} | log={}",
+        "[startup] se-manager v{} | {} {} | channel={} | session={} | log={}",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH,

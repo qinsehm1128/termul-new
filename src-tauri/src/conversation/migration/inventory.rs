@@ -1,6 +1,6 @@
 //! Exact-layout, read-only inventory for legacy Conversation migration inputs.
 //!
-//! Only the three historical Termul stores are inspected. Project and worktree trees are never
+//! Only the three historical Se stores are inspected. Project and worktree trees are never
 //! traversed, every admitted regular file is hashed through a bounded streaming reader, and the
 //! resulting canonical path ordering is the source snapshot used again during verification.
 

@@ -835,7 +835,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-conversation-fs-{label}-{}-{}",
+            "se-manager-conversation-fs-{label}-{}-{}",
             std::process::id(),
             TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));

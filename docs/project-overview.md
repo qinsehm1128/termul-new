@@ -1,4 +1,4 @@
-# Termul Manager - Project Overview
+# Se Manager - Project Overview
 
 **Date:** 2026-05-09
 **Type:** Desktop Application
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Termul Manager is a project-aware desktop terminal workspace built on **Tauri 2**, with a **React 18 + TypeScript** frontend and a **Rust** backend runtime. The app organizes terminals by project, persists workspace state, supports snapshots and command history, and combines multiple interaction surfaces in a single desktop shell: terminal panes, file explorer, editor panels, and embedded browser tabs with annotation support.
+Se Manager is a project-aware desktop terminal workspace built on **Tauri 2**, with a **React 18 + TypeScript** frontend and a **Rust** backend runtime. The app organizes terminals by project, persists workspace state, supports snapshots and command history, and combines multiple interaction surfaces in a single desktop shell: terminal panes, file explorer, editor panels, and embedded browser tabs with annotation support.
 
 The repository is a **single desktop application** rather than a multi-part monorepo. Its architecture separates concerns cleanly between:
 
@@ -36,7 +36,7 @@ The repository is a **single desktop application** rather than a multi-part mono
 | Styling            | Tailwind CSS                     | 3.4.17                           | Utility-first styling                                                               |
 | UI Kit             | Radix UI + shadcn/ui             | mixed                            | Reusable UI primitives and wrappers                                                 |
 | Terminal Rendering | xterm.js                         | 6.1 beta                         | Terminal emulation in renderer                                                      |
-| PTY Bridge         | portable-pty + Termul PtyManager | 0.9 / in-tree                    | Native PTY process management, replay, claims, and lifecycle                         |
+| PTY Bridge         | portable-pty + Se PtyManager | 0.9 / in-tree                    | Native PTY process management, replay, claims, and lifecycle                         |
 | Forms/Validation   | react-hook-form + zod            | 7.61.1 / 3.25.76                 | Input handling and schema validation                                                |
 | Rich Text / Docs   | BlockNote + Mermaid + CodeMirror | mixed                            | Markdown, rich editing, diagrams, code editing                                      |
 | Testing            | Vitest + Testing Library + jsdom | 4.0.16 / 16.3.1 / 27.4.0         | Renderer unit and integration tests                                                 |

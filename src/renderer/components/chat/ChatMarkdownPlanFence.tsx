@@ -21,7 +21,7 @@ import { PlanPanel } from './PlanPanel'
  * corrupted snapshot never crashes the transcript; the store's rehydrate path
  * independently logs the malformed fence and leaves `plans[sessionId]` empty.
  */
-export function TermulPlanRenderer({ code, isIncomplete }: CustomRendererProps): React.JSX.Element {
+export function SePlanRenderer({ code, isIncomplete }: CustomRendererProps): React.JSX.Element {
   const t = useRuntimeTranslation('chat')
   const loggedRef = useRef<string | null>(null)
 

@@ -385,7 +385,7 @@ type AgentLockMap = HashMap<String, Arc<TokioMutex<()>>>;
 // ---------------------------------------------------------------------------
 
 /// Host-owned verified-atomic ACP install service. One instance per host
-/// runtime (desktop OR standalone `termul-server`, never shared across
+/// runtime (desktop OR standalone `se-server`, never shared across
 /// processes). Constructed via [`AcpInstallService::open`], which creates the
 /// root directory + idempotent re-open (mirrors `WorkspaceManifestService::open`
 /// + `AcpCatalogService::open`).
@@ -942,7 +942,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-acp-install-{label}-{}-{}",
+            "se-manager-acp-install-{label}-{}-{}",
             std::process::id(),
             now_millis()
         ));
@@ -1008,8 +1008,10 @@ mod tests {
     /// expected sha256 hex.
     fn tiny_zip(payload: &str) -> (Vec<u8>, String) {
         use std::io::Write;
-        let tmp =
-            std::env::temp_dir().join(format!("termul-acp-install-zip-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "se-manager-acp-install-zip-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let payload_path = tmp.join("acp");
         let mut f = std::fs::File::create(&payload_path).unwrap();
@@ -1411,8 +1413,10 @@ mod tests {
     /// extraction dir). Returns the archive bytes + their sha256 hex.
     fn slip_zip() -> (Vec<u8>, String) {
         use std::io::Write;
-        let tmp =
-            std::env::temp_dir().join(format!("termul-acp-install-slip-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "se-manager-acp-install-slip-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let zip_path = tmp.join("evil.zip");
         {
@@ -1443,7 +1447,7 @@ mod tests {
     fn slip_tar_gz() -> (Vec<u8>, String) {
         use std::io::Write;
         let tmp = std::env::temp_dir().join(format!(
-            "termul-acp-install-tarslip-{}",
+            "se-manager-acp-install-tarslip-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -1490,7 +1494,7 @@ mod tests {
     fn overfull_zip(n: usize) -> (Vec<u8>, String) {
         use std::io::Write;
         let tmp = std::env::temp_dir().join(format!(
-            "termul-acp-install-overfull-{}",
+            "se-manager-acp-install-overfull-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&tmp).unwrap();

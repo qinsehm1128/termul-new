@@ -1,7 +1,7 @@
 //! Strict UTC Conversation path construction and bounded recovery traversal.
 //!
 //! Canonical paths are derived only from immutable `createdAtUtc`/`CreationPartition` and the
-//! Termul-owned canonical Conversation UUID. Recovery walks exactly `YYYY/MM/DD/<uuid>`, rejects
+//! Se-owned canonical Conversation UUID. Recovery walks exactly `YYYY/MM/DD/<uuid>`, rejects
 //! malformed or symlink/junction components without following them, and yields validated records
 //! in deterministic path order.
 
@@ -823,7 +823,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-conversation-locator-{label}-{}-{}",
+            "se-manager-conversation-locator-{label}-{}-{}",
             std::process::id(),
             TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));

@@ -152,7 +152,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_then_get_round_trips_registry() {
-        let dir = std::env::temp_dir().join(format!("termul-mcp-api-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("se-manager-mcp-api-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir).await;
         let app = test_app(dir.clone());
         let response = app
@@ -188,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_array_payload() {
         let dir =
-            std::env::temp_dir().join(format!("termul-mcp-api-invalid-{}", std::process::id()));
+            std::env::temp_dir().join(format!("se-manager-mcp-api-invalid-{}", std::process::id()));
         let app = test_app(dir.clone());
         let response = app
             .oneshot(

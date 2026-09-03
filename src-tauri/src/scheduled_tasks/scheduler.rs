@@ -652,7 +652,7 @@ mod tests {
     async fn manual_run_is_persisted_and_completed() {
         let root = std::fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-scheduler-{}", Uuid::new_v4()));
+            .join(format!("se-manager-scheduler-{}", Uuid::new_v4()));
         let store = Arc::new(ScheduledTaskStore::open(root.join("state")).unwrap());
         let service = ScheduledTaskService::with_max_concurrent_runs(
             Arc::clone(&store),
@@ -682,7 +682,7 @@ mod tests {
     fn draft_cannot_run_before_explicit_activation() {
         let root = std::fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-scheduler-draft-{}", Uuid::new_v4()));
+            .join(format!("se-manager-scheduler-draft-{}", Uuid::new_v4()));
         let store = Arc::new(ScheduledTaskStore::open(root.join("state")).unwrap());
         let service = ScheduledTaskService::with_max_concurrent_runs(
             Arc::clone(&store),
@@ -705,7 +705,7 @@ mod tests {
     fn startup_recovery_marks_queued_runs_interrupted_without_reexecution() {
         let root = std::fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-scheduler-recovery-{}", Uuid::new_v4()));
+            .join(format!("se-manager-scheduler-recovery-{}", Uuid::new_v4()));
         let store = Arc::new(ScheduledTaskStore::open(root.join("state")).unwrap());
         let service = ScheduledTaskService::with_max_concurrent_runs(
             Arc::clone(&store),
@@ -740,7 +740,7 @@ mod tests {
     async fn startup_catch_up_enqueues_only_latest_missed_occurrence() {
         let root = std::fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-scheduler-catchup-{}", Uuid::new_v4()));
+            .join(format!("se-manager-scheduler-catchup-{}", Uuid::new_v4()));
         let store = Arc::new(ScheduledTaskStore::open(root.join("state")).unwrap());
         let service = ScheduledTaskService::with_max_concurrent_runs(
             Arc::clone(&store),
@@ -782,7 +782,7 @@ mod tests {
     async fn skip_overlap_records_second_occurrence_without_executing_it() {
         let root = std::fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-scheduler-overlap-{}", Uuid::new_v4()));
+            .join(format!("se-manager-scheduler-overlap-{}", Uuid::new_v4()));
         let store = Arc::new(ScheduledTaskStore::open(root.join("state")).unwrap());
         let executor = Arc::new(GateExecutor {
             started: tokio::sync::Notify::new(),

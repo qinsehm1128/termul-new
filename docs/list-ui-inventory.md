@@ -4,13 +4,13 @@
 
 **已锁定的实现顺序：** 共享列表组件 → CLI 会话面板 → 会话侧栏 → 终端列表 → 手机网页 → iOS。
 
-Termul 里其实有三套不同的列表，外加两块附属界面。难看的原因也不一样。Orca 最接近的对照物是「Agent Session History / AI Vault」，不是会话侧栏。Termul 已经有一个更瘦的同类面板（`CliSessionPanel`）。把 Orca 的保险库行样式直接套到会话行上，会把两种身份混在一起。
+Se 里其实有三套不同的列表，外加两块附属界面。难看的原因也不一样。Orca 最接近的对照物是「Agent Session History / AI Vault」，不是会话侧栏。Se 已经有一个更瘦的同类面板（`CliSessionPanel`）。把 Orca 的保险库行样式直接套到会话行上，会把两种身份混在一起。
 
 ## 有哪些列表
 
 | 界面 | 文件 | 列的是什么 | 身份 |
 |---|---|---|---|
-| 桌面会话 | `src/renderer/components/conversation/ConversationSidebar.tsx`、`ConversationList.tsx` | Termul 会话 | `conversationId` |
+| 桌面会话 | `src/renderer/components/conversation/ConversationSidebar.tsx`、`ConversationList.tsx` | Se 会话 | `conversationId` |
 | 桌面 CLI 会话 | `src/renderer/components/cli-sessions/CliSessionPanel.tsx` | Claude / Codex / Cursor 等磁盘记录 | 文件路径 + 智能体 |
 | 桌面终端标签 | `src/renderer/components/TerminalTabBar.tsx` | 已打开的 PTY 视图 | `terminal.id` / `ptyId` |
 | 隐藏运行条 | `src/renderer/layouts/WorkspaceLayout.tsx`（隐藏运行条） | 只关了视图、进程还在的 PTY | 同上 |
@@ -94,9 +94,9 @@ flowchart LR
 
 ### 不要原样照搬
 
-- 不要把「拖一行去恢复」当成主操作。Termul 的正规身份是 `conversationId`，不是 CLI 记录文件。
+- 不要把「拖一行去恢复」当成主操作。Se 的正规身份是 `conversationId`，不是 CLI 记录文件。
 - 不要做智能体看板 / 地图。那是另一个产品。
-- 不要把 CLI 的 `--resume` 当成「这一次会话」。Termul 已经会继续现有的 ACP 绑定；CLI 恢复只是第二条重开路径。
+- 不要把 CLI 的 `--resume` 当成「这一次会话」。Se 已经会继续现有的 ACP 绑定；CLI 恢复只是第二条重开路径。
 - 不要在很窄的左侧会话栏里塞 98px 高的保险库卡片。密度要分开：会话栏更紧，CLI 面板可以松一点。
 - 浮动终端、Ghostty/Warp 导入、快捷命令、链接操作气泡，以后再说，不是这轮列表的事。
 
@@ -141,12 +141,12 @@ flowchart LR
 
 1. 共享列表组件（桌面 + 手机网页）：`ListPanelHeader`、`ListRow`、`ListRowMeta`、空态/加载。用现有侧栏 CSS 变量，不要另起一套设计系统。
 2. CLI 会话面板 — 最接近 Orca，收益最高，产品已经对上了。
-3. 会话侧栏 — 同一套行语言，字段用 Termul 自己的。
+3. 会话侧栏 — 同一套行语言，字段用 Se 自己的。
 4. 终端标签 + 删掉隐藏条 — 把隐藏 PTY 收进列表/分组；分清关闭和停止。
 5. 手机网页抽屉 — 复用同一套行组件。
 6. iOS 会话 / 项目 — 原生列表行：标题、副标题、相对时间、状态；会话和项目仍然分开。
 
-`AGENTS.md` 的对等规则：行为改动要同时覆盖桌面、共享直播、`termul-server`、手机界面。纯视觉可以桌面先落地、iOS 跟一刀；最终还是要覆盖所有面。
+`AGENTS.md` 的对等规则：行为改动要同时覆盖桌面、共享直播、`se-server`、手机界面。纯视觉可以桌面先落地、iOS 跟一刀；最终还是要覆盖所有面。
 
 ## 这次盘点不做的事
 

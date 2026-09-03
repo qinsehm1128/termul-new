@@ -53,7 +53,7 @@ vi.mock('@/lib/log-api', () => ({
 
 import { ChatMarkdownCode } from '@/components/chat/chat-markdown-code'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { extractTermulPlanFenceJson } from './acp-store'
+import { extractSePlanFenceJson } from './acp-store'
 
 const FIXTURE = join(process.cwd(), 'src/__fixtures__/legacy-brand/chat-transcript-termul-plan.md')
 
@@ -72,12 +72,12 @@ function transcriptWrittenToday(): string {
 
 /**
  * The plan entries carried by the fixture. The fixture wraps them in an
- * `{ entries: [...] }` envelope, so `parseTermulPlanFence` (which requires a
+ * `{ entries: [...] }` envelope, so `parseSePlanFence` (which requires a
  * top-level array) is not the surface the fence *language* governs —
  * extraction is.
  */
 function entriesOnDisk(): unknown[] {
-  const json = extractTermulPlanFenceJson(transcriptOnDisk())
+  const json = extractSePlanFenceJson(transcriptOnDisk())
   if (json === null) throw new Error('fixture transcript carries no plan fence')
   const payload = JSON.parse(json) as { entries?: unknown[] }
   if (!Array.isArray(payload.entries)) throw new Error('fixture plan payload has no entries')
@@ -114,7 +114,7 @@ describe('ACP plan fence across the rename', () => {
     // Green today, and that is the point: it goes red the moment the fence
     // language is renamed without a compatibility read behind it.
     __setBrandCanonicalOverride({ planFence: 'se-plan' })
-    const json = extractTermulPlanFenceJson(transcriptOnDisk())
+    const json = extractSePlanFenceJson(transcriptOnDisk())
 
     expect(json).not.toBeNull()
     expect(transcriptOnDisk()).toContain(`\`\`\`${LEGACY.planFence}`)
@@ -139,10 +139,10 @@ describe('ACP plan fence across the rename', () => {
   // language alongside the legacy one.
   test.fails('extracts a plan fence carrying the post-rename language', () => {
     __setBrandCanonicalOverride({ planFence: 'se-plan' })
-    const json = extractTermulPlanFenceJson(transcriptWrittenToday())
+    const json = extractSePlanFenceJson(transcriptWrittenToday())
 
     expect(json).not.toBeNull()
-    expect(json).toBe(extractTermulPlanFenceJson(transcriptOnDisk()))
+    expect(json).toBe(extractSePlanFenceJson(transcriptOnDisk()))
   })
 
   // LEDGER (Wave 4) — expected failure. `ChatMarkdownCode` compares `language`

@@ -27,7 +27,7 @@ interface McpBadgeProps {
   servers?: McpServerSummary[]
   /** Toggle a server's `enabled` flag. Reuses `setMcpServerEnabled` (optimistic + rollback). */
   onToggle?: (id: string, enabled: boolean) => void
-  /** Per-server probe status (Termul's own rmcp client connection, NOT the agent's). */
+  /** Per-server probe status (Se's own rmcp client connection, NOT the agent's). */
   probeStatus?: Record<string, ProbeStatus>
   /**
    * Per-server probe error (the backend's redacted `ProbeResult.error`). Shown
@@ -99,7 +99,7 @@ function statusLabel(status: ProbeStatus | undefined): string {
 /**
  * MCP badge in the composer. Read-only count pill by default; when `servers`
  * is provided, swaps to a Popover with per-server enable/disable + a
- * collapsible tool list. The probe reflects Termul's own client connection
+ * collapsible tool list. The probe reflects Se's own client connection
  * (NOT the agent's — see the spec's Design Notes). Per-tool enable/disable is
  * deferred — UI shows the tool list read-only for awareness.
  */

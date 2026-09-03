@@ -203,7 +203,7 @@ describe('ACP Conversation lifecycle store', () => {
         expectedRevision: 4
       })
     })
-    // The transcript is Termul's, not the agent's — releasing the process must
+    // The transcript is Se's, not the agent's — releasing the process must
     // not touch it.
     expect(useAcpStore.getState().messages['session-old']).toHaveLength(1)
   })

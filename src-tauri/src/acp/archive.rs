@@ -360,7 +360,8 @@ mod tests {
     fn mark_spawnables_makes_companion_node_executable() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("termul-acp-exec-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("se-manager-acp-exec-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let node = dir.join("node");
         let script = dir.join("cursor-agent");
@@ -394,7 +395,7 @@ mod tests {
 
     #[test]
     fn extract_archive_rejects_unknown_extension() {
-        let dir = std::env::temp_dir().join(format!("termul-acp-rej-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("se-manager-acp-rej-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join("evil.7z");
         std::fs::write(&archive, b"").unwrap();

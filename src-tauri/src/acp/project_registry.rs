@@ -1,6 +1,6 @@
 //! File-backed project registry (VPS-mode-only) — server-owned VFS roots.
 //!
-//! The standalone `termul-server` binary loads this at startup so the web
+//! The standalone `se-server` binary loads this at startup so the web
 //! client can list and switch between the operator's projects without the
 //! browser holding any project state. The registry is the source of truth for
 //! the `GET /projects` list and the `switch_project` WS request's cwd
@@ -480,7 +480,7 @@ mod tests {
     /// no `tempfile` dev-dep). Caller must `cleanup` it.
     fn tempdir_like(label: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "termul-registry-{label}-{}-{}",
+            "se-manager-registry-{label}-{}-{}",
             std::process::id(),
             now_nanos()
         ));

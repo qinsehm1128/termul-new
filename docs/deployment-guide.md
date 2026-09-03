@@ -1,10 +1,10 @@
-# Termul Manager - Deployment Guide
+# Se Manager - Deployment Guide
 
 **Date:** 2026-07-28
 
 ## Overview
 
-Termul Manager is distributed as a packaged Tauri desktop application. Releases are built on GitHub Actions, updater artifacts are signed with the existing Tauri minisign key, macOS bundles are additionally Developer ID signed and notarized, and one publish job owns every GitHub Release upload.
+Se Manager is distributed as a packaged Tauri desktop application. Releases are built on GitHub Actions, updater artifacts are signed with the existing Tauri minisign key, macOS bundles are additionally Developer ID signed and notarized, and one publish job owns every GitHub Release upload.
 
 ## Packaging Model
 
@@ -100,12 +100,12 @@ Both `aarch64-apple-darwin` and `x86_64-apple-darwin` are built. For these targe
 The macOS collection gate requires exactly one `.app` and one DMG, resolves the app's declared `CFBundleExecutable`, and inspects that executable with `otool -L` and `otool -l`. It permits system libraries and relocatable `@rpath`, `@loader_path`, and `@executable_path` dependencies, but rejects Homebrew/local prefixes, runner-local absolute paths, unexpected relative load paths, and non-portable `LC_RPATH` entries. It then runs:
 
 ```bash
-codesign --verify --deep --strict --verbose=2 "Termul Manager.app"
-spctl --assess --type execute --verbose=4 "Termul Manager.app"
-xcrun stapler validate "Termul Manager.app"
-codesign --verify --strict --verbose=2 Termul.Manager_*.dmg
-spctl --assess --type open --context context:primary-signature --verbose=4 Termul.Manager_*.dmg
-xcrun stapler validate Termul.Manager_*.dmg
+codesign --verify --deep --strict --verbose=2 "Se Manager.app"
+spctl --assess --type execute --verbose=4 "Se Manager.app"
+xcrun stapler validate "Se Manager.app"
+codesign --verify --strict --verbose=2 Se.Manager_*.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 Se.Manager_*.dmg
+xcrun stapler validate Se.Manager_*.dmg
 ```
 
 After maintainers provision the Apple secrets, repeat these checks against both architectures on a real release. Existing v0.4.8 GitHub assets cannot be retroactively notarized.
@@ -141,7 +141,7 @@ Recommended release checks:
 3. Confirm updater, Apple, and stable Homebrew secrets are provisioned for the intended channel.
 4. Push the release tag.
 5. Confirm both macOS portability/signing/notarization gates pass.
-6. Confirm the centralized publish job reports every required updater platform and uploads installers, updater archives, `.sig` files, `termul-server`, and `latest.json` exactly once.
+6. Confirm the centralized publish job reports every required updater platform and uploads installers, updater archives, `.sig` files, `se-server`, and `latest.json` exactly once.
 7. Confirm `SHA256SUMS.txt` exists; for stable releases, confirm the Homebrew cask update succeeds.
 
 ## Local Validation

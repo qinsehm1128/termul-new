@@ -3,7 +3,7 @@
  *
  * Periodically verifies that stored worktree entries still exist on disk
  * by cross-referencing with `git worktree list`. Removes or flags orphaned
- * entries that were deleted outside Termul (e.g. via `rm -rf` or `git worktree remove`).
+ * entries that were deleted outside Se (e.g. via `rm -rf` or `git worktree remove`).
  *
  * Runs reconciliation on project focus and on a 60-second interval.
  */

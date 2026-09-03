@@ -1,4 +1,4 @@
-//! Axum router for the ACP web server (standalone `termul-server` + desktop).
+//! Axum router for the ACP web server (standalone `se-server` + desktop).
 //!
 //! Exposes `/health`, the live WS upgrade at `/ws`, and static serving of the
 //! web client: from disk `ServeDir` in dev (`dist-web/` on disk) or the
@@ -524,7 +524,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("termul-web-assets-{label}-{nanos}"));
+            let path = std::env::temp_dir().join(format!("se-manager-web-assets-{label}-{nanos}"));
             fs::create_dir_all(&path).expect("create temp dir");
             Self { path }
         }
@@ -596,7 +596,7 @@ mod tests {
             (
                 "/fs/write",
                 "POST",
-                r#"{"path":"/tmp/termul-public-denied","content":"x"}"#,
+                r#"{"path":"/tmp/se-manager-public-denied","content":"x"}"#,
                 false,
             ),
             ("/git/stage", "POST", r#"{"cwd":"/tmp","path":"x"}"#, false),
@@ -780,7 +780,7 @@ mod tests {
         let dir = TempDir::new("root");
         fs::write(
             dir.path().join("index.html"),
-            "<!doctype html><html><body>termul-web-fixture</body></html>",
+            "<!doctype html><html><body>se-manager-web-fixture</body></html>",
         )
         .expect("write index.html");
         fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
@@ -805,7 +805,7 @@ mod tests {
             .expect("read body");
         let text = String::from_utf8_lossy(&body);
         assert!(
-            text.contains("termul-web-fixture"),
+            text.contains("se-manager-web-fixture"),
             "expected fixture marker in body, got: {text}"
         );
 
@@ -835,7 +835,7 @@ mod tests {
         let spa_body = axum::body::to_bytes(spa.into_body(), usize::MAX)
             .await
             .expect("read spa body");
-        assert!(String::from_utf8_lossy(&spa_body).contains("termul-web-fixture"));
+        assert!(String::from_utf8_lossy(&spa_body).contains("se-manager-web-fixture"));
     }
 
     #[tokio::test]
@@ -868,7 +868,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let missing = std::env::temp_dir().join(format!("termul-web-assets-absent-{nanos}"));
+        let missing = std::env::temp_dir().join(format!("se-manager-web-assets-absent-{nanos}"));
         assert!(!missing.exists(), "path must not exist");
 
         let resp = test_router_with_fixture(&missing)

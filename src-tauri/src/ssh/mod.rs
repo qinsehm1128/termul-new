@@ -1,7 +1,7 @@
 //! SSH & Remote Connection Manager module
 //!
 //! Provides SSH connection management, SFTP operations, and port forwarding
-//! for the Termul terminal manager.
+//! for the Se terminal manager.
 
 pub mod config_parser;
 pub mod connection;

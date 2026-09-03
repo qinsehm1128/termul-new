@@ -5,7 +5,7 @@
 //! relay (Story 1.4).
 //!
 //! - Desktop registers a [`sink::TauriEventSink`] (`acp:*` Tauri events).
-//! - Standalone `termul-server` registers a live [`sink::WsRelaySink`] (Story
+//! - Standalone `se-server` registers a live [`sink::WsRelaySink`] (Story
 //!   1.4 — owns per-session event logs + seq counters + subscriber set) and
 //!   calls [`serve`].
 //! - Dev static serving of `dist-web/` is [`assets`] (Story 1.3); production
@@ -342,11 +342,11 @@ pub async fn serve(
 
     match serve_result {
         Ok(()) => {
-            info!("termul-server stopped");
+            info!("se-server stopped");
             Ok(())
         }
         Err(join_err) if join_err.is_cancelled() => {
-            warn!("termul-server serve task cancelled");
+            warn!("se-server serve task cancelled");
             Ok(())
         }
         Err(join_err) => Err(Box::new(join_err)),
@@ -497,7 +497,7 @@ pub async fn serve_router(
 /// instead.
 async fn shutdown_signal_future() {
     match shutdown_signal().await {
-        Ok(()) => info!("termul-server shutting down…"),
+        Ok(()) => info!("se-server shutting down…"),
         Err(e) => {
             warn!("shutdown signal setup failed ({e}); serving until process exit");
             // Do not complete the shutdown future — that would stop the

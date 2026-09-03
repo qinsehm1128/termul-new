@@ -215,23 +215,29 @@ mod tests {
     /// assertion into `f(x) == f(x)`.
     #[test]
     fn encodes_vendor_project_folders() {
-        let cwd = PathBuf::from("/Users/dev/projects/termul");
+        let cwd = PathBuf::from("/Users/dev/projects/se-manager");
         assert_eq!(
             encode_claude_project_dir(&cwd),
-            "-Users-dev-projects-termul"
+            "-Users-dev-projects-se-manager"
         );
-        assert_eq!(encode_cursor_project_dir(&cwd), "Users-dev-projects-termul");
-        assert_eq!(encode_pi_project_dir(&cwd), "--Users-dev-projects-termul--");
+        assert_eq!(
+            encode_cursor_project_dir(&cwd),
+            "Users-dev-projects-se-manager"
+        );
+        assert_eq!(
+            encode_pi_project_dir(&cwd),
+            "--Users-dev-projects-se-manager--"
+        );
     }
 
     #[test]
     fn scoped_roots_only_open_matching_folder() {
         let tmp = tempfile::tempdir().unwrap();
-        let keep = tmp.path().join("-Users-dev-projects-termul");
+        let keep = tmp.path().join("-Users-dev-projects-se-manager");
         let other = tmp.path().join("-Users-dev-other");
         fs::create_dir_all(&keep).unwrap();
         fs::create_dir_all(other).unwrap();
-        let scope = [PathBuf::from("/Users/dev/projects/termul")];
+        let scope = [PathBuf::from("/Users/dev/projects/se-manager")];
         let mut roots = Vec::new();
         if let Some(dir) = join_if_dir(tmp.path(), &encode_claude_project_dir(&scope[0])) {
             roots.push(dir);

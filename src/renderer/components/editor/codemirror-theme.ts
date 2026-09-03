@@ -58,7 +58,7 @@ function buildHighlightStyle(colors: ResolvedSyntaxColors): HighlightStyle {
   ])
 }
 
-export function createTermulTheme(
+export function createSeTheme(
   isDark: boolean,
   syntaxColors?: ResolvedSyntaxColors | null
 ): Extension[] {

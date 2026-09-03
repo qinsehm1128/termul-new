@@ -696,7 +696,7 @@ impl WorktreeManager {
         })
     }
 
-    /// Remove all Termul-managed worktrees for a project.
+    /// Remove all Se-managed worktrees for a project.
     /// Used during project cascade delete. Reports per-worktree success/failure.
     pub fn remove_all_managed(
         project_path: &str,
@@ -712,7 +712,7 @@ impl WorktreeManager {
             let path = wt["path"].as_str().unwrap_or("").to_string();
             let _name = wt["name"].as_str().unwrap_or("unknown").to_string();
 
-            // Only remove Termul-managed worktrees
+            // Only remove Se-managed worktrees
             // Use Path components for cross-platform detection (Windows uses backslashes)
             let wt_path_obj = std::path::Path::new(&path);
             let is_managed = wt_path_obj
@@ -724,7 +724,7 @@ impl WorktreeManager {
                 results.push(RemoveResult {
                     worktree_path: path.clone(),
                     success: true,
-                    error: Some("Skipped: not a Termul-managed worktree".to_string()),
+                    error: Some("Skipped: not a Se-managed worktree".to_string()),
                 });
                 continue;
             }
@@ -2260,12 +2260,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_termul_managed_true() {
+    fn test_is_se_manager_managed_true() {
         assert!("/project/.termul/worktrees/feat-1".contains(".termul/worktrees/"));
     }
 
     #[test]
-    fn test_is_termul_managed_false() {
+    fn test_is_se_manager_managed_false() {
         assert!(!"/project/../other-worktree".contains(".termul/worktrees/"));
     }
 

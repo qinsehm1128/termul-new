@@ -122,7 +122,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn setup_test_dir(name: &str) -> PathBuf {
-        let test_dir = std::env::temp_dir().join(format!("termul_test_{}", name));
+        let test_dir = std::env::temp_dir().join(format!("se_manager_test_{}", name));
         if test_dir.exists() {
             fs::remove_dir_all(&test_dir).ok();
         }

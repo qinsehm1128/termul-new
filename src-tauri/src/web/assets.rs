@@ -4,7 +4,7 @@
 //!   `tower_http::services::ServeDir` from repo-root `dist-web/` (path resolved
 //!   from `CARGO_MANIFEST_DIR`, not process CWD) so Vite output changes are
 //!   served without a cargo rebuild.
-//! - **Release** (`dist-web/` NOT on disk, e.g. a shipped `termul-server` or
+//! - **Release** (`dist-web/` NOT on disk, e.g. a shipped `se-server` or
 //!   desktop binary on a user/VPS machine): serve from the embedded
 //!   [`Assets`] (rust-embed) so the binary is self-contained (no CDN, no disk
 //!   dependency). SPA `index.html` fallback for the hash-router client.
@@ -60,7 +60,7 @@ pub fn static_service_from(dir: &Path) -> ServeDir<ServeFile> {
 }
 
 /// Embedded web bundle (rust-embed). Compiled into BOTH the standalone
-/// `termul-server` binary and the desktop app — the desktop's in-process
+/// `se-server` binary and the desktop app — the desktop's in-process
 /// shared-live server serves the SAME embedded bundle in a release install
 /// (no `dist-web/` on disk). `#[allow_missing]` keeps dev/CI-compile green
 /// when the bundle is absent; the release build fails clearly via `build.rs`

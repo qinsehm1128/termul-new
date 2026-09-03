@@ -135,7 +135,7 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let path = std::env::temp_dir().join(format!(
-                "termul-install-api-{label}-{}-{nanos}",
+                "se-manager-install-api-{label}-{}-{nanos}",
                 std::process::id()
             ));
             std::fs::create_dir_all(&path).expect("create temp dir");

@@ -18,9 +18,9 @@ use crate::commands::IpcResult;
 use crate::server_update::UpdateChannel;
 
 /// Desktop-specific User-Agent so GitHub's anonymous request gate doesn't 403.
-/// Distinct from `server_update.rs`'s `termul-server-updater` so access logs
+/// Distinct from `server_update.rs`'s `se-server-updater` so access logs
 /// can attribute requests to the desktop manager vs. the standalone server.
-const USER_AGENT: &str = "termul-manager-updater";
+const USER_AGENT: &str = "se-manager-updater";
 
 /// Total request timeout — caps a hung manifest endpoint so the periodic
 /// check cannot stall indefinitely. Mirrors `server_update.rs`'s 120s cap.

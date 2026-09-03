@@ -1,4 +1,4 @@
-# Termul Manager - Architecture
+# Se Manager - Architecture
 
 **Date:** 2026-05-09
 **Project Type:** Desktop Application
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Termul Manager is a single-repository desktop application built around a **Tauri 2 + Rust runtime** and a **React 18 + TypeScript renderer**. The architecture emphasizes a clean boundary between UI concerns and native capabilities:
+Se Manager is a single-repository desktop application built around a **Tauri 2 + Rust runtime** and a **React 18 + TypeScript renderer**. The architecture emphasizes a clean boundary between UI concerns and native capabilities:
 
 - the **renderer** owns user interaction, state, layout orchestration, editor/browser/terminal surfaces, and persistence adapters
 - the **native runtime** owns PTY processes, browser child webviews, migration execution, shell detection, window integration, and OS-level operations
@@ -23,7 +23,7 @@ The app behaves like a workspace shell rather than a single-purpose terminal vie
 | State | Zustand | App and feature stores |
 | Styling | Tailwind CSS + Radix/shadcn | Design system and primitives |
 | Terminal UI | xterm.js | In-renderer terminal rendering |
-| PTY backend | portable-pty + Termul PtyManager | Native process-backed terminals, replay, and lifecycle |
+| PTY backend | portable-pty + Se PtyManager | Native process-backed terminals, replay, and lifecycle |
 | Build | Vite | Tauri dev/build integration |
 | Testing | Vitest + Testing Library | Renderer validation |
 | CI/CD | GitHub Actions | Validation, release, updater artifact publishing |
@@ -65,7 +65,7 @@ This preserves a browser/dev/test path while keeping the Tauri-specific app as t
 
 ### Native Entry Path
 
-- `src-tauri/src/main.rs` initializes logging and delegates to `termul_manager_lib::run()`
+- `src-tauri/src/main.rs` initializes logging and delegates to `se_manager_lib::run()`
 - `src-tauri/src/lib.rs` builds the Tauri app, plugins, menu, managed state, migrations, and invoke handlers
 
 ## Renderer Architecture
@@ -344,7 +344,7 @@ CI runs:
 
 The renderer terminal seam is `terminal-api.ts`: Tauri uses typed commands and browser builds use a dedicated `/terminal/ws` socket. The terminal socket is intentionally separate from ACP `/ws`; it carries PTY requests, bounded scrollback replay/live output, and transport-neutral lifecycle/cwd/git/exit events. `ConnectedTerminal` remains the single xterm surface in both runtimes.
 
-Standalone `termul-server` owns its `PtyManager` and terminates those PTYs after graceful shutdown. Desktop shared-live mode passes the already-managed desktop `Arc<PtyManager>` into Axum, so stopping sharing detaches browser clients without killing desktop terminals. Output broadcast queues and replay scrollback remain bounded.
+Standalone `se-server` owns its `PtyManager` and terminates those PTYs after graceful shutdown. Desktop shared-live mode passes the already-managed desktop `Arc<PtyManager>` into Axum, so stopping sharing detaches browser clients without killing desktop terminals. Output broadcast queues and replay scrollback remain bounded.
 
 **Security boundary:** terminal authentication, authorization, TLS, and sandbox hardening are deferred. `/terminal/ws` must not be exposed to public or untrusted networks; existing server exposure controls are the only boundary in this version. Logs record lifecycle/request outcomes only and must never record terminal input, output, environment values, or secrets.
 

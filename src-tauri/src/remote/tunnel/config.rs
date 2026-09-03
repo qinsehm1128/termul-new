@@ -41,7 +41,7 @@ impl TunnelProviderKind {
 #[serde(rename_all = "camelCase")]
 pub struct TunnelConfig {
     pub provider: TunnelProviderKind,
-    /// Hostname only (`termul.example.com`), never a URL with credentials.
+    /// Hostname only (`se-manager.example.com`), never a URL with credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloudflare_named_hostname: Option<String>,
     /// Loopback port the named-tunnel ingress should target. Ignored by Quick.
@@ -645,11 +645,11 @@ mod tests {
     fn named_origin_normalizes_hostname() {
         let config = TunnelConfig {
             provider: TunnelProviderKind::CloudflareNamed,
-            cloudflare_named_hostname: Some("https://Termul.Example.com/".to_string()),
+            cloudflare_named_hostname: Some("https://Se.Example.com/".to_string()),
             ..TunnelConfig::default()
         };
         let origin = config.public_origin().unwrap();
-        assert!(origin.eq_ignore_ascii_case("https://Termul.Example.com"));
+        assert!(origin.eq_ignore_ascii_case("https://Se.Example.com"));
     }
 
     #[test]
@@ -672,8 +672,11 @@ mod tests {
         assert!(config.validate_for_start().is_ok());
         assert_eq!(config.public_origin().unwrap(), "https://1.2.3.4:8443");
         config.frp_public_https = false;
-        config.frp_custom_domain = Some("termul.example.com".to_string());
-        assert_eq!(config.public_origin().unwrap(), "http://termul.example.com");
+        config.frp_custom_domain = Some("se-manager.example.com".to_string());
+        assert_eq!(
+            config.public_origin().unwrap(),
+            "http://se-manager.example.com"
+        );
     }
 
     #[test]
@@ -681,7 +684,7 @@ mod tests {
         let mut config = TunnelConfig {
             provider: TunnelProviderKind::SshReverse,
             ssh_host: Some("vps.example.com".to_string()),
-            ssh_user: Some("termul".to_string()),
+            ssh_user: Some("se-manager".to_string()),
             ssh_remote_port: Some(18787),
             ssh_public_hostname: Some("remote.example.com".to_string()),
             ..TunnelConfig::default()
@@ -745,7 +748,7 @@ mod tests {
         store
             .apply_update(TunnelConfigUpdate {
                 provider: TunnelProviderKind::CloudflareNamed,
-                cloudflare_named_hostname: Some("termul.example.com".to_string()),
+                cloudflare_named_hostname: Some("se-manager.example.com".to_string()),
                 cloudflare_named_local_port: Some(18787),
                 cloudflare_named_token: Some("named-token".to_string()),
                 frp_server_addr: None,

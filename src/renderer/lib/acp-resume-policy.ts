@@ -3,13 +3,13 @@
  *
  * - 'resume' → agent connected and advertises sessionCapabilities.resume:
  *              restore the live context without replaying history already
- *              owned by Termul.
+ *              owned by Se.
  * - 'load'   → resume is unavailable and the agent advertises `loadSession`:
  *              call session/load and accept its session/update replay.
  * - 'local'  → no connected agent or no capability: show the locally persisted
  *              transcript (read-only history).
  *
- * Agent-native discovered sessions have no Termul transcript, so they prefer
+ * Agent-native discovered sessions have no Se transcript, so they prefer
  * load when available; resume remains their capability fallback.
  *
  * A gated command (load/resume) MUST NOT be attempted unless its capability is
@@ -22,7 +22,7 @@ export type ResumeStrategy = 'load' | 'resume' | 'local'
 export interface ResumeInput {
   connected: boolean
   capabilities: AgentCapabilities | null
-  /** Termul can render the transcript without asking the agent to replay it. */
+  /** Se can render the transcript without asking the agent to replay it. */
   localHistoryAvailable: boolean
 }
 

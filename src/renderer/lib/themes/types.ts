@@ -1,4 +1,4 @@
-/** OpenCode-compatible desktop theme schema (subset used by Termul). */
+/** OpenCode-compatible desktop theme schema (subset used by Se). */
 
 export interface ThemePalette {
   neutral: string

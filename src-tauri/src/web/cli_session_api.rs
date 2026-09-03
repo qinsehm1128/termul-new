@@ -1,4 +1,4 @@
-//! HTTP handlers for CLI session discovery (desktop shared-live + termul-server).
+//! HTTP handlers for CLI session discovery (desktop shared-live + se-server).
 
 use std::path::PathBuf;
 

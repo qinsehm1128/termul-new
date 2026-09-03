@@ -16,7 +16,7 @@ import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
-import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
+import { SePlanRenderer } from './ChatMarkdownPlanFence'
 
 const MERMAID_PLUGIN = mermaidPlugin
 const LANGUAGE_RE = /language-([^\s]+)/
@@ -180,7 +180,7 @@ export function ChatMarkdownCode({
   if (language === 'termul-plan') {
     return (
       <Suspense fallback={null}>
-        <TermulPlanRenderer code={code} isIncomplete={isIncomplete} language={language} />
+        <SePlanRenderer code={code} isIncomplete={isIncomplete} language={language} />
       </Suspense>
     )
   }

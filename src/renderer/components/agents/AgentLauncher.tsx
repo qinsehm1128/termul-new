@@ -48,7 +48,7 @@ import {
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { validateExecutionTarget } from '@/components/conversation/ExecutionTargetPicker'
-import { TermulMark } from '@/components/TermulMark'
+import { SeMark } from '@/components/SeMark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -1007,7 +1007,7 @@ export function AgentLauncher({
 
   // Run the agent-advertised authenticate for a chosen method, then re-prepare
   // so the session is created now that the provider login is complete. The
-  // provider owns the login UX (often opening its own browser); Termul never
+  // provider owns the login UX (often opening its own browser); Se never
   // invents a redirect URL or stores credentials. Mirrors Zed's
   // ThreadState::Unauthenticated → authenticate → reset flow.
   const runAuthenticate = useCallback(
@@ -1604,7 +1604,7 @@ export function AgentLauncher({
     >
       {!continuedConversation && (
         <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
-          <TermulMark size={48} className="text-foreground" />
+          <SeMark size={48} className="text-foreground" />
           <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
             {t('launcher.heading', 'What should we do in {{project}}?', { project: projectLabel })}
           </h1>

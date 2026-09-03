@@ -1,6 +1,6 @@
 //! Renderer-shaped session payload materializer for standalone durable history.
 //!
-//! The standalone `termul-server` persists ACP session events as JSONL records
+//! The standalone `se-server` persists ACP session events as JSONL records
 //! (`SessionPersistence`). `get_session_payload` must reply with the exact
 //! `SessionPayload { metadata, messages }` shape the renderer's
 //! `loadSessionPayload` consumes (the same shape the desktop

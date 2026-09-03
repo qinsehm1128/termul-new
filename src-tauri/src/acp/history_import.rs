@@ -319,7 +319,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-history-import-{label}-{}-{}",
+            "se-manager-history-import-{label}-{}-{}",
             std::process::id(),
             crate::acp::session_persistence::now_millis()
         ));

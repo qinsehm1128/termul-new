@@ -711,7 +711,7 @@ pub async fn acp_probe_mcp_server(
 /// Set the in-process ACP turn (hard-cap) timeout override, in seconds, or
 /// `None` to clear it (fall back to the env var / unlimited default). Pushed from
 /// the App Preferences UI so the turn timeout is editable without a restart or
-/// env var. Desktop-only: the standalone `termul-server` has no settings
+/// env var. Desktop-only: the standalone `se-server` has no settings
 /// surface and configures via `TERMUL_ACP_TURN_TIMEOUT_SECS`. The env var
 /// remains top-precedence (operator/diagnostic override).
 #[tauri::command]
@@ -723,7 +723,7 @@ pub fn acp_set_turn_timeout(secs: Option<u64>) -> Result<(), String> {
 /// Set the in-process ACP turn *idle* timeout override, in seconds, or `None`
 /// to clear it (fall back to the env var / unlimited default). Pushed from the
 /// App Preferences UI. Desktop-only parity with `acp_set_turn_timeout`: the
-/// standalone `termul-server` configures via `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`.
+/// standalone `se-server` configures via `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`.
 /// The env var remains top-precedence (operator/diagnostic override).
 #[tauri::command]
 pub fn acp_set_turn_idle_timeout(secs: Option<u64>) -> Result<(), String> {
@@ -778,7 +778,7 @@ pub fn acp_set_first_prompt_warmup_timeout(secs: Option<u64>) -> Result<(), Stri
 
 /// Prefer host-owned local `npm install` for `npx -y` agents (default), or
 /// always launch through npx. Pushed from App Preferences. Desktop-only;
-/// standalone `termul-server` uses `TERMUL_ACP_PREFER_LOCAL_NPM`.
+/// standalone `se-server` uses `TERMUL_ACP_PREFER_LOCAL_NPM`.
 #[tauri::command]
 pub fn acp_set_prefer_local_npm_install(prefer: bool) -> Result<(), String> {
     crate::acp::npm_local::set_prefer_local_npm_install(prefer);
@@ -825,7 +825,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("termul-acp-prompt-persist-{stamp}"));
+        let root = std::env::temp_dir().join(format!("se-manager-acp-prompt-persist-{stamp}"));
         std::fs::create_dir_all(&root).unwrap();
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();

@@ -513,7 +513,7 @@ impl From<VfsRoot> for ProjectSummary {
 /// Seed an in-memory [`ProjectRegistry`] from a file-backed
 /// [`FileProjectRegistry`] (the VPS-mode load path). Maps each VFS root to a
 /// [`ProjectSummary`], marks the default one, and calls [`ProjectRegistry::set`].
-/// The standalone `termul-server` binary calls this after `load`; the
+/// The standalone `se-server` binary calls this after `load`; the
 /// desktop-hosted path seeds via `remote_sync_projects` instead (it never
 /// constructs a `FileProjectRegistry`).
 pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry) {
@@ -921,7 +921,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let p = std::env::temp_dir().join(format!(
-            "termul-reg-rebind-{label}-{}-{nanos}",
+            "se-manager-reg-rebind-{label}-{}-{nanos}",
             std::process::id()
         ));
         std::fs::create_dir_all(&p).expect("create tempdir_like");

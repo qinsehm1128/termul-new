@@ -6742,7 +6742,7 @@ describe('session discovery (gh-407)', () => {
   it('discoverSessions does not promote discovered sessions into host persistence', async () => {
     // External/CLI sessions surfaced by session/list must NOT be written to the
     // Rust index nor merged into sessionIndex — the Chats tab shows only
-    // Termul-created sessions (`discovered !== true`). Promotion was removed.
+    // Se-created sessions (`discovered !== true`). Promotion was removed.
     useAcpStore.setState({
       agents: {
         'agent-1': {
@@ -6771,7 +6771,7 @@ describe('session discovery (gh-407)', () => {
     // Regression: openDiscoveredSession creates a session with `discovered: true`
     // but no sessionIndex entry. _onSessionClosed/_onAgentDisconnected still call
     // persistSession, which must preserve `discovered: true` so the external
-    // session does not leak into the Termul-only Chats tab as `discovered: false`.
+    // session does not leak into the Se-only Chats tab as `discovered: false`.
     useAcpStore.setState({
       ...FRESH,
       sessionIndex: [],

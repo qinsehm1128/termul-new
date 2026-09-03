@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
-import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
+import { SePlanRenderer } from './ChatMarkdownPlanFence'
 import { PlanPanel } from './PlanPanel'
 
 describe('PlanPanel', () => {
@@ -184,13 +184,13 @@ describe('PlanPanel', () => {
   })
 })
 
-describe('TermulPlanRenderer (termul-plan fence renderer)', () => {
+describe('SePlanRenderer (termul-plan fence renderer)', () => {
   it('renders a read-only PlanPanel from valid fence JSON', () => {
     const code = JSON.stringify([
       { content: 'Read AC file', status: 'completed', priority: 'high' },
       { content: 'Fix bug', status: 'in_progress', priority: 'high' }
     ])
-    render(<TermulPlanRenderer code={code} isIncomplete={false} language="termul-plan" />)
+    render(<SePlanRenderer code={code} isIncomplete={false} language="termul-plan" />)
     // The renderer reuses PlanPanel, so the entries appear as plan rows
     expect(screen.getByRole('region', { name: 'Execution plan' })).toBeInTheDocument()
     expect(screen.getByText('Read AC file')).toBeInTheDocument()
@@ -198,15 +198,13 @@ describe('TermulPlanRenderer (termul-plan fence renderer)', () => {
   })
 
   it('shows a fallback card when the fence JSON is malformed', () => {
-    render(
-      <TermulPlanRenderer code="{not valid json" isIncomplete={false} language="termul-plan" />
-    )
+    render(<SePlanRenderer code="{not valid json" isIncomplete={false} language="termul-plan" />)
     expect(screen.getByText('Plan snapshot unavailable')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Execution plan' })).toBeNull()
   })
 
   it('shows a streaming placeholder when the fence is incomplete', () => {
-    render(<TermulPlanRenderer code="partial" isIncomplete={true} language="termul-plan" />)
+    render(<SePlanRenderer code="partial" isIncomplete={true} language="termul-plan" />)
     expect(screen.getByText('Plan snapshot incomplete')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Execution plan' })).toBeNull()
   })

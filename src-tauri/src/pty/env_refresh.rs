@@ -1,6 +1,6 @@
 //! Refresh `Path` / `PATH` from OS sources before PTY spawn.
 //!
-//! Termul's GUI process keeps a snapshot of the environment from launch time.
+//! Se's GUI process keeps a snapshot of the environment from launch time.
 //! Global installs and registry updates are invisible until we re-read PATH here.
 
 use std::collections::HashMap;
@@ -181,7 +181,7 @@ pub fn extract_marked_path(raw: &str) -> Option<String> {
 /// bash reads `.bashrc` only when interactive, and version managers (nvm, fnm,
 /// rbenv, pyenv, asdf) install themselves there — a login-but-not-interactive
 /// shell reports a PATH with the whole toolchain missing, which is exactly how
-/// a GUI-launched Termul ended up unable to find `npx` while its own terminals
+/// a GUI-launched Se ended up unable to find `npx` while its own terminals
 /// could. Matches `shell_startup_args`, which is why PTY terminals never had
 /// this problem.
 pub fn shell_path_probe(shell_name: &str) -> Option<(&'static [&'static str], String)> {
@@ -587,18 +587,19 @@ mod tests {
             return;
         }
 
-        let home = std::env::temp_dir().join(format!("termul-env-probe-{}", std::process::id()));
+        let home =
+            std::env::temp_dir().join(format!("se-manager-env-probe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("temp HOME");
 
         // `.zprofile` runs for any login shell; `.zshrc` only when interactive.
         let mut zprofile = std::fs::File::create(home.join(".zprofile")).expect(".zprofile");
-        writeln!(zprofile, "export PATH=/termul-profile-only:$PATH").unwrap();
+        writeln!(zprofile, "export PATH=/se-manager-profile-only:$PATH").unwrap();
         let mut zshrc = std::fs::File::create(home.join(".zshrc")).expect(".zshrc");
         // The banner is the second half of the test: it proves the sentinels do
         // their job, because the pre-fix probe read all of stdout.
         writeln!(zshrc, "echo 'nvm loaded, welcome back'").unwrap();
-        writeln!(zshrc, "export PATH=/termul-rc-only:$PATH").unwrap();
+        writeln!(zshrc, "export PATH=/se-manager-rc-only:$PATH").unwrap();
 
         // Passed to the child only. Mutating the process HOME here would reach
         // every test cargo is running on another thread at the same time.
@@ -614,11 +615,11 @@ mod tests {
 
         let probed = probed.expect("probe must return a PATH");
         assert!(
-            probed.contains("/termul-rc-only"),
+            probed.contains("/se-manager-rc-only"),
             "probe missed the .zshrc PATH — this is the nvm case: {probed}"
         );
         assert!(
-            probed.contains("/termul-profile-only"),
+            probed.contains("/se-manager-profile-only"),
             "probe must keep the .zprofile PATH too: {probed}"
         );
         assert!(

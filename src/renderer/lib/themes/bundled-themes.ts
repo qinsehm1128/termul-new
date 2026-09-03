@@ -10,7 +10,7 @@ export interface ColorThemeFamily {
 
 /** Built-in dark appearance themes (OpenCode palette-compatible). */
 const BUNDLED_DARK_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
-  // syntax: VS Code Dark+ (Termul default editor)
+  // syntax: VS Code Dark+ (Se default editor)
   termul: {
     id: 'termul',
     name: 'Termul',

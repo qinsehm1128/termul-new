@@ -1,7 +1,7 @@
 //! Child side of the host-injected plan tool.
 //!
 //! Entered via the hidden `--internal-mcp-plan-server` subcommand (both the
-//! desktop `termul-manager` and standalone `termul-server` binaries branch on
+//! desktop `se-manager` and standalone `se-server` binaries branch on
 //! this flag in `main` / `server_main` BEFORE any Tauri/AppHandle setup). The
 //! agent spawns `current_exe() --internal-mcp-plan-server` as the injected
 //! `McpServer::Stdio`; the child inherits the agent-provided stdin/stdout (the
@@ -22,8 +22,8 @@ use tokio::net::TcpStream;
 use crate::acp::host_mcp::{
     FrameKind, FrameReply, FrameRequest, ScheduledTaskDraftCreateInput,
     ScheduledTaskDraftUpdateInput, ScheduledTaskGetInput, ScheduledTaskListInput,
-    ScheduledTaskPauseInput, ScheduledTaskPreviewInput, TermulPlanInput, TermulSetTitleInput,
-    ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
+    ScheduledTaskPauseInput, ScheduledTaskPreviewInput, SePlanInput, SeSetTitleInput, ENV_AGENT_ID,
+    ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
 };
 
 /// Env-derived configuration for the child. Extracted so the arg parser is
@@ -100,25 +100,25 @@ pub fn run() -> i32 {
 /// The rmcp MCP server service backing `plan`. Holds the per-session
 /// connection info (port + token + session_id) so each `tools/call` can open a
 /// fresh TCP connection to the parent.
-struct TermulPlanServer {
+struct SePlanServer {
     config: ChildConfig,
 }
 
 /// rmcp derives the `tools/list` entry from the `#[tool]` attribute; the input
 /// type must implement `schemars::JsonSchema` so rmcp can generate the
-/// `inputSchema`. We re-export the shared `TermulPlanInput` (defined in
+/// `inputSchema`. We re-export the shared `SePlanInput` (defined in
 /// `host_mcp::mod`) — it already derives `JsonSchema`.
 ///
 /// `server_handler` on `#[tool_router]` auto-generates the `ServerHandler` impl
 /// (no separate `impl ServerHandler` block needed — adding one would duplicate
 /// the impl + fail to compile).
 #[tool_router(server_handler)]
-impl TermulPlanServer {
+impl SePlanServer {
     #[tool(
         name = "plan",
-        description = "Update the execution plan / todo list shown in the Termul plan panel. You MUST call this instead of any built-in todo/task tool — do not maintain your own todo list. Every time you would create or update a task, call this tool so the user sees a unified plan UI across all agents."
+        description = "Update the execution plan / todo list shown in the Se plan panel. You MUST call this instead of any built-in todo/task tool — do not maintain your own todo list. Every time you would create or update a task, call this tool so the user sees a unified plan UI across all agents."
     )]
-    async fn plan(&self, Parameters(input): Parameters<TermulPlanInput>) -> String {
+    async fn plan(&self, Parameters(input): Parameters<SePlanInput>) -> String {
         let request = FrameRequest {
             token: self.config.token.clone(),
             session_id: self.config.session_id.clone(),
@@ -135,12 +135,9 @@ impl TermulPlanServer {
 
     #[tool(
         name = "set_session_title",
-        description = "Set a concise title for the current Termul chat session. Call this EXACTLY ONCE per session, during the first turn, as soon as the user's intent is clear. Do not call it again for the same session — subsequent calls are ignored."
+        description = "Set a concise title for the current Se chat session. Call this EXACTLY ONCE per session, during the first turn, as soon as the user's intent is clear. Do not call it again for the same session — subsequent calls are ignored."
     )]
-    async fn set_session_title(
-        &self,
-        Parameters(input): Parameters<TermulSetTitleInput>,
-    ) -> String {
+    async fn set_session_title(&self, Parameters(input): Parameters<SeSetTitleInput>) -> String {
         let request = FrameRequest {
             token: self.config.token.clone(),
             session_id: self.config.session_id.clone(),
@@ -157,7 +154,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "scheduled_task_list",
-        description = "List Termul scheduled tasks across Conversations and optional project associations. This is read-only."
+        description = "List Se scheduled tasks across Conversations and optional project associations. This is read-only."
     )]
     async fn scheduled_task_list(
         &self,
@@ -169,7 +166,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "scheduled_task_get",
-        description = "Get one Termul scheduled task and its current review revision/hash. This is read-only."
+        description = "Get one Se scheduled task and its current review revision/hash. This is read-only."
     )]
     async fn scheduled_task_get(
         &self,
@@ -193,7 +190,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "scheduled_task_draft_create",
-        description = "Create a review-only scheduled task draft. This never activates or runs the task. Do not include secrets; explain the draft and wait for explicit user confirmation in Termul."
+        description = "Create a review-only scheduled task draft. This never activates or runs the task. Do not include secrets; explain the draft and wait for explicit user confirmation in Se."
     )]
     async fn scheduled_task_draft_create(
         &self,
@@ -387,7 +384,7 @@ async fn wait_until_child_is_useless(config: ChildConfig) {
 async fn serve_mcp_server(config: ChildConfig) -> Result<(), String> {
     let watchdog_config = config.clone();
     let (stdin, stdout) = rmcp::transport::io::stdio();
-    let service = TermulPlanServer { config };
+    let service = SePlanServer { config };
     let running = serve_server(service, (stdin, stdout))
         .await
         .map_err(|e| format!("mcp server initialize failed: {e}"))?;

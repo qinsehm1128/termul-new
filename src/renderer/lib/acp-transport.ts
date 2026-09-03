@@ -123,7 +123,7 @@ export interface AcpTransport {
   setPreferLocalNpmInstall(prefer: boolean): Promise<void>
   fetchRegistrySnapshot(forceRefresh?: boolean): Promise<AcpRegistrySnapshot>
   /**
-   * On-demand MCP client probe (Termul's own rmcp client connection — NOT the
+   * On-demand MCP client probe (Se's own rmcp client connection — NOT the
    * agent's). Stateless: takes the renderer-supplied wire config, opens a fresh
    * rmcp client, calls `initialize` + `tools/list`, then closes. Desktop↔web
    * parity: on web the probe runs on the termul-server host via
@@ -1255,7 +1255,7 @@ export class WsAcpTransport implements AcpTransport {
     // `pi_terminal_login`) to the host's `AcpManager::authenticate` over the
     // authenticated WS connection. The host runs the method on the agent
     // process (the provider owns the login UX, often opening its own
-    // browser); Termul never invents a redirect URL or stores credentials.
+    // browser); Se never invents a redirect URL or stores credentials.
     // Mirrors the desktop `acp_authenticate` Tauri command.
     await this.connect()
     await this.request('authenticate_agent', { agentId, methodId })

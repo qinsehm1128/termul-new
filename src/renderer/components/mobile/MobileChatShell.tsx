@@ -29,7 +29,7 @@ import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
 import { CliSessionPanel } from '@/components/cli-sessions/CliSessionPanel'
 import { ExecutionTargetPicker } from '@/components/conversation/ExecutionTargetPicker'
 import { ListEmptyState, ListRow, ListRowMeta, pathBasename } from '@/components/lists'
-import { TermulMark } from '@/components/TermulMark'
+import { SeMark } from '@/components/SeMark'
 import { Button } from '@/components/ui/button'
 import {
   Sheet,
@@ -578,7 +578,7 @@ export function MobileChatShell({
           >
             <SheetHeader className="space-y-0 border-b border-border/60 px-4 py-3 text-left">
               <div className="flex items-center gap-2 pr-8">
-                <TermulMark size={20} />
+                <SeMark size={20} />
                 <SheetTitle className="text-base">{t('chatShell.chats')}</SheetTitle>
               </div>
               <SheetDescription className="sr-only">

@@ -53,7 +53,7 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
  * problems use "Model unavailable" (handled by the launcher, not here).
  *
  * - `multi-auth`  the agent advertised more than one auth method and none is a
- *                 single unambiguous default; Termul never silently picks one.
+ *                 single unambiguous default; Se never silently picks one.
  * - `spawn`       the agent binary could not be launched (ENOENT-style).
  * - `transport`   the connection/stream was destroyed or refused; the process
  *                 must be evicted before any retry (it cannot be reused).
@@ -109,7 +109,7 @@ export const AMBIGUOUS_AUTH_CODE = 'ACP_MULTI_AUTH'
 
 /**
  * Thrown when an agent advertises more than one authentication method and none
- * is a single unambiguous default. Termul must never silently choose a method,
+ * is a single unambiguous default. Se must never silently choose a method,
  * so this surfaces as an actionable `multi-auth` failure that lists the method
  * names. Carries a stable `code` so the classifier recognizes it even after the
  * error crosses an async/String boundary.

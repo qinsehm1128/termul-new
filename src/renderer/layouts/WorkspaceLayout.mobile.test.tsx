@@ -272,7 +272,7 @@ vi.mock('@/hooks/use-session-workspace-sync', () => ({
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
 vi.mock('@/pages/AppPreferences', () => ({ default: () => <div>preferences</div> }))
 vi.mock('@/pages/ProjectSettings', () => ({ default: () => <div>project-settings</div> }))
-vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> }))
+vi.mock('@/components/SeMark', () => ({ SeMark: () => <span>mark</span> }))
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
 }))

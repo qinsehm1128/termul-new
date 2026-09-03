@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
-import { TermulMark } from '@/components/TermulMark'
+import { SeMark } from '@/components/SeMark'
 import { Button } from '@/components/ui/button'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -59,10 +59,7 @@ function ChatRestorePreload(): React.JSX.Element {
       aria-label={t('panel.restoring')}
     >
       <div className="flex size-16 items-center justify-center">
-        <TermulMark
-          size={52}
-          className="animate-pulse text-foreground motion-reduce:animate-none"
-        />
+        <SeMark size={52} className="animate-pulse text-foreground motion-reduce:animate-none" />
       </div>
       <div className="space-y-1 text-center">
         <div className="text-sm font-medium text-foreground/90">{t('panel.restoring')}</div>

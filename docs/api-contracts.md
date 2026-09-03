@@ -1,11 +1,11 @@
-# Termul Manager - API Contracts
+# Se Manager - API Contracts
 
 **Date:** 2026-05-09
 **Surface:** Internal Tauri command and event API
 
 ## Overview
 
-Termul Manager does not expose a public HTTP API. Its primary integration surface is an **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
+Se Manager does not expose a public HTTP API. Its primary integration surface is an **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
 
 This contract is implemented through:
 
@@ -327,7 +327,7 @@ therefore creates the session (`acp_new_session`) first:
   flow; an auth-classified failure is surfaced as-is.
 
 For the default `agent` auth type the provider owns the login UX (it may open its
-own browser); Termul never invents a client-side login-URL redirect and never
+own browser); Se never invents a client-side login-URL redirect and never
 stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
 
 **3. Recoverable setup failures.** Setup failures are classified deterministically
@@ -437,7 +437,7 @@ from the plan store (logged `source: 'planRehydrate'`); the agent can still emit
 > a host-side synthetic record (tracked in `_bmad-output/deferred-work.md`).
 
 The `termul-plan` fence is rendered inline inside historical (non-streaming) messages by
-`TermulPlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only
+`SePlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only
 `PlanPanel`. The live streaming turn shows the sticky `PlanPanel` pinned in `AgentChatPanel`
 instead — the inline renderer is gated to `!streaming` so an in-flight turn never renders a
 duplicate plan UI.

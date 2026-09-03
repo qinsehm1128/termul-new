@@ -208,7 +208,7 @@ export interface ChatMessage {
 
 export interface AcpSession {
   id: SessionId
-  /** Canonical Termul-owned Conversation identity for durable workspace/history operations. */
+  /** Canonical Se-owned Conversation identity for durable workspace/history operations. */
   conversationId?: string
   agentId: AgentId
   cwd: string
@@ -261,8 +261,8 @@ export interface AcpSession {
    * `session/list` chats). Carried on the live record so `persistSession`
    * preserves it even when no `sessionIndex` entry exists yet (the
    * disconnect/close path would otherwise default a discovered session to
-   * `discovered: false` and leak it into the Termul-only Chats tab).
-   * Absent/`false` for sessions Termul created via `createSession`.
+   * `discovered: false` and leak it into the Se-only Chats tab).
+   * Absent/`false` for sessions Se created via `createSession`.
    */
   discovered?: boolean
 }
@@ -372,8 +372,8 @@ interface AcpState {
   mcpServersLoaded: boolean
 
   // MCP probe state — on-demand only (no persistent always-on connections).
-  // `mcpProbeStatus` reflects Termul's own rmcp client connection, NOT the
-  // agent's; the dot answers "can Termul reach this server and list its tools?".
+  // `mcpProbeStatus` reflects Se's own rmcp client connection, NOT the
+  // agent's; the dot answers "can Se reach this server and list its tools?".
   // `mcpTools` is the cached `tools/list` output; `mcpToolsLoaded` gates the
   // auto-probe on first expand; `mcpProbing` dedupes concurrent probes.
   mcpProbeStatus: Record<string, ProbeStatus>
@@ -676,7 +676,7 @@ interface AcpState {
 
   // Actions — MCP probe (on-demand, read-only). State slices above.
   /**
-   * Probe a registered MCP server by id (Termul's own rmcp client — NOT the
+   * Probe a registered MCP server by id (Se's own rmcp client — NOT the
    * agent's). Updates `mcpProbeStatus[id]` + `mcpTools[id]` +
    * `mcpToolsLoaded[id]=true`, and `mcpProbeError[id]` with the redacted
    * `ProbeResult.error` on a disconnected result (cleared on connected and on
@@ -1104,8 +1104,8 @@ function dropPlanForSession(
  * snapshot contract: each assistant message carries at most one renderer-
  * authored snapshot, and a rehydrate must surface the most recent one.
  */
-export function parseTermulPlanFence(text: string | undefined): PlanEntry[] | null {
-  const json = extractTermulPlanFenceJson(text)
+export function parseSePlanFence(text: string | undefined): PlanEntry[] | null {
+  const json = extractSePlanFenceJson(text)
   if (json === null) return null
   try {
     const parsed = JSON.parse(json)
@@ -1131,7 +1131,7 @@ export function parseTermulPlanFence(text: string | undefined): PlanEntry[] | nu
  * Returns `null` when no fence is present. Used by the rehydrate path to
  * distinguish "no fence" (skip silently) from "malformed fence JSON" (warn).
  */
-export function extractTermulPlanFenceJson(text: string | undefined): string | null {
+export function extractSePlanFenceJson(text: string | undefined): string | null {
   if (typeof text !== 'string' || text.length === 0) return null
   // \r? handles both LF and CRLF line endings (Windows host/agent normalization).
   const fence = /```termul-plan\r?\n([\s\S]*?)\r?\n```/g
@@ -1162,8 +1162,8 @@ function scanPlanFenceFromMessages(messages: ChatMessage[]): PlanEntry[] | null 
       // malformed, treat it as terminal: return null rather than continuing
       // to older fences (last-fence-wins means a malformed newest fence
       // supersedes any older valid plan).
-      if (extractTermulPlanFenceJson(block.text) !== null) {
-        const parsed = parseTermulPlanFence(block.text)
+      if (extractSePlanFenceJson(block.text) !== null) {
+        const parsed = parseSePlanFence(block.text)
         return parsed
       }
     }
@@ -1179,7 +1179,7 @@ function scanPlanFenceFromMessages(messages: ChatMessage[]): PlanEntry[] | null 
  * blocks to replace — only drop blocks that ARE fences, preserving assistant
  * prose that merely quotes or references the fence format.
  */
-function isTermulPlanFenceBlock(text: string | undefined): boolean {
+function isSePlanFenceBlock(text: string | undefined): boolean {
   if (typeof text !== 'string' || text.length === 0) return false
   // Full-string match (anchored): the entire block must be the fence.
   return /^```termul-plan\r?\n([\s\S]*?)\r?\n```$/.test(text)
@@ -1214,7 +1214,7 @@ function appendPlanSnapshot(
   // Only drop blocks that ARE fences (full-string match), preserving assistant
   // prose that merely contains or quotes the fence format.
   const filteredBlocks = target.blocks.filter(
-    (b) => b.type !== 'text' || !isTermulPlanFenceBlock(b.text)
+    (b) => b.type !== 'text' || !isSePlanFenceBlock(b.text)
   )
   // CommonMark requires the opening ``` of a fenced code block to be at the
   // start of a line. `blocksToText` joins text blocks with '', so a preceding
@@ -1682,7 +1682,7 @@ function persistSession(
     ),
     status: session.status,
     // Preserve the origin flag so a discovered (external) session re-projected
-    // here can't lose `discovered: true` and leak into the Termul-only sidebar.
+    // here can't lose `discovered: true` and leak into the Se-only sidebar.
     // Prefer the live-session marker (set by openDiscoveredSession) over the
     // existing index entry, so the disconnect/close path stays correct even when
     // no sessionIndex entry exists yet.
@@ -2805,7 +2805,7 @@ function rehydratePlanFromHistoryIfNeeded(
   }
   const hasMalformedFence =
     lastAgent?.blocks.some(
-      (block) => block.type === 'text' && extractTermulPlanFenceJson(block.text) !== null
+      (block) => block.type === 'text' && extractSePlanFenceJson(block.text) !== null
     ) ?? false
   if (hasMalformedFence) {
     void logFrontendError({
@@ -5475,8 +5475,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [key]: all } }))
 
       // Discovery no longer promotes external sessions into host persistence:
-      // the Chats tab renders only Termul-created sessions (`discovered !== true`),
-      // and `session/list` results are external chats Termul did not create. The
+      // the Chats tab renders only Se-created sessions (`discovered !== true`),
+      // and `session/list` results are external chats Se did not create. The
       // function is retained so store coverage keeps exercising the `session/list`
       // path; it is no longer auto-triggered from the sidebar.
     } catch (e) {

@@ -1,4 +1,4 @@
-//! Bind configuration for the standalone `termul-server` HTTP listener.
+//! Bind configuration for the standalone `se-server` HTTP listener.
 //!
 //! Mirrors `remote::host::RemoteBindMode` so `--host` parsing stays consistent
 //! across the desktop-hosted shared-live server and the headless ACP server.
@@ -80,7 +80,7 @@ pub fn default_project_root() -> Option<PathBuf> {
 ///
 /// Used at every entry point that constructs a `ServerConfig::project_root`
 /// (the `from_args` `--project-root` flag, the desktop shared-live host's
-/// `default_project_root()` fallback, the standalone `termul-server`
+/// `default_project_root()` fallback, the standalone `se-server`
 /// binary) so the boundary check in `git_api::ensure_within_project_boundary`
 /// (the shared operations chokepoint for `/git/*`, `/skills`,
 /// `/search/content` — accepts the default `project_root` or any registered,
@@ -174,7 +174,7 @@ pub struct ServerConfig {
     /// (see [`default_project_root`]).
     pub project_root: PathBuf,
     /// Server-owned VFS-roots registry file (VPS mode, Story 4.1). The
-    /// standalone `termul-server` binary loads this at startup and seeds the
+    /// standalone `se-server` binary loads this at startup and seeds the
     /// in-memory [`crate::web::project_registry::ProjectRegistry`] from it;
     /// `None` (the default) means the binary serves an empty project list.
     /// The file need not exist at parse time — a missing file loads as an
@@ -260,7 +260,7 @@ impl ServerConfig {
     }
 
     /// The platform service-account state directory. Used by the standalone
-    /// `termul-server` binary to resolve a default workspace-manifests root
+    /// `se-server` binary to resolve a default workspace-manifests root
     /// (`<state dir>/workspace-manifests`) when `--workspace-manifests-dir` is
     /// absent. Mirrors the per-platform branches of
     /// [`default_sessions_dir`]'s parent dir so the two durable stores live
@@ -773,7 +773,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let p = std::env::temp_dir().join(format!(
-            "termul-config-{label}-{}-{nanos}",
+            "se-manager-config-{label}-{}-{nanos}",
             std::process::id()
         ));
         std::fs::create_dir_all(&p).expect("create tempdir_like");
@@ -792,7 +792,7 @@ mod tests {
                 "--remote-access-token-file",
                 "operator-token",
                 "--allowed-origin",
-                "https://termul.example.test",
+                "https://se-manager.example.test",
             ])
             .map(str::to_string)
             .collect()
@@ -886,7 +886,7 @@ mod tests {
             "--remote-access-token-file",
             "operator-token",
             "--allowed-origin",
-            "https://termul.example.test",
+            "https://se-manager.example.test",
         ])
         .unwrap();
         assert_eq!(cfg.ingress_provenance(), IngressProvenance::PublicTunnel);
@@ -939,20 +939,20 @@ mod tests {
             "--port",
             "9090",
             "--remote-access-token-file",
-            "/var/lib/termul/remote-access-token",
+            "/var/lib/se-manager/remote-access-token",
             "--allowed-origin",
-            "https://termul.example.test",
+            "https://se-manager.example.test",
         ])
         .expect("explicit remote access config parses");
         assert_eq!(cfg.host, "0.0.0.0");
         assert_eq!(cfg.port, 9090);
         assert_eq!(
             cfg.remote_access_token_file,
-            Some(PathBuf::from("/var/lib/termul/remote-access-token"))
+            Some(PathBuf::from("/var/lib/se-manager/remote-access-token"))
         );
         assert_eq!(
             cfg.allowed_origins,
-            vec![Url::parse("https://termul.example.test").unwrap()]
+            vec![Url::parse("https://se-manager.example.test").unwrap()]
         );
     }
 
@@ -1103,12 +1103,12 @@ mod tests {
     fn from_args_accepts_conversation_workspace_root() {
         let cfg = ServerConfig::from_args(configured_args(&[
             "--conversation-workspace-root",
-            "/var/lib/termul/conversation-workspaces",
+            "/var/lib/se-manager/conversation-workspaces",
         ]))
         .expect("parse");
         assert_eq!(
             cfg.conversation_workspace_root,
-            PathBuf::from("/var/lib/termul/conversation-workspaces")
+            PathBuf::from("/var/lib/se-manager/conversation-workspaces")
         );
     }
 
@@ -1132,12 +1132,12 @@ mod tests {
     fn from_args_accepts_workspace_manifests_dir() {
         let cfg = ServerConfig::from_args(configured_args(&[
             "--workspace-manifests-dir",
-            "/var/lib/termul/manifests",
+            "/var/lib/se-manager/manifests",
         ]))
         .expect("parse");
         assert_eq!(
             cfg.workspace_manifests_dir,
-            Some(PathBuf::from("/var/lib/termul/manifests"))
+            Some(PathBuf::from("/var/lib/se-manager/manifests"))
         );
         // Other defaults stay intact.
         assert_eq!(cfg.host, "127.0.0.1");
@@ -1162,11 +1162,11 @@ mod tests {
 
     #[test]
     fn from_args_accepts_store_file() {
-        let cfg =
-            ServerConfig::from_args(["--store-file", "/var/lib/termul/store.json"]).expect("parse");
+        let cfg = ServerConfig::from_args(["--store-file", "/var/lib/se-manager/store.json"])
+            .expect("parse");
         assert_eq!(
             cfg.store_file,
-            Some(PathBuf::from("/var/lib/termul/store.json"))
+            Some(PathBuf::from("/var/lib/se-manager/store.json"))
         );
         // Other defaults stay intact.
         assert_eq!(cfg.host, "127.0.0.1");

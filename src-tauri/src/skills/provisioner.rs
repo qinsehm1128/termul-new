@@ -12,16 +12,16 @@ const MANAGED_MARKER: &str = "<!-- managed-by-termul:termul-scheduled-tasks -->"
 
 const SKILL_TEMPLATE: &str = r#"---
 name: termul-scheduled-tasks
-description: Draft safe Termul-level AI schedules for review from any Conversation.
+description: Draft safe Se-level AI schedules for review from any Conversation.
 metadata:
   managedByTermul: true
   templateVersion: 2
 ---
 <!-- managed-by-termul:termul-scheduled-tasks -->
 
-# Termul Scheduled Tasks
+# Se Scheduled Tasks
 
-Use Termul's `scheduled_task_*` tools when a user asks for recurring, delayed,
+Use Se's `scheduled_task_*` tools when a user asks for recurring, delayed,
 or one-time autonomous work.
 
 1. Clarify the timezone, schedule, ACP, execution directory, expected result,
@@ -30,7 +30,7 @@ or one-time autonomous work.
 2. Call `scheduled_task_preview` and show the next execution times. Never
    calculate timezone or DST behavior yourself.
 3. Create or update a draft. A draft does not run until the user confirms the
-   exact revision and hash in Termul.
+   exact revision and hash in Se.
 4. Never place secrets, credentials, environment variables, or hidden model
    reasoning in a task prompt. Explain observable decisions through normal
    messages, plans, and tool calls.
@@ -39,7 +39,7 @@ or one-time autonomous work.
 6. `scheduled_task_pause` affects future occurrences only. It does not cancel
    a Conversation that has already started.
 
-Termul stores full execution traces in the isolated child Conversation. The task
+Se stores full execution traces in the isolated child Conversation. The task
 run ledger contains only status, hashes, timestamps, usage, and Conversation
 links.
 "#;
@@ -67,6 +67,12 @@ impl SkillProvider {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagedSkillManifestV1 {
     pub schema_version: u32,
+    // NOT renamed with the rest of the D batch. `rename_all = "camelCase"`
+    // makes this identifier the persisted JSON key `managedByTermul`, and
+    // `deny_unknown_fields` means a manifest already on a user's disk stops
+    // deserializing the moment the key moves. That makes it an external
+    // contract, not a repo-internal name, so it flips in the rename wave
+    // together with its compatibility read and a `schema_version` bump.
     pub managed_by_termul: bool,
     pub skill_name: String,
     pub template_version: u32,
@@ -257,7 +263,7 @@ mod tests {
     fn workspace(label: &str) -> PathBuf {
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-skill-{label}-{}", Uuid::new_v4()));
+            .join(format!("se-manager-skill-{label}-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
     }

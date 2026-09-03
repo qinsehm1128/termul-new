@@ -9,7 +9,7 @@ use std::collections::HashMap;
 /// Opaque identifier for a spawned ACP agent (one OS subprocess + driver thread).
 ///
 /// Generated as a UUID v4 by the manager when an agent is spawned. This is the
-/// Termul-side handle for an agent and is distinct from any protocol session id.
+/// Se-side handle for an agent and is distinct from any protocol session id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AgentId(pub String);
@@ -417,7 +417,8 @@ mod tests {
     fn resolve_executable_in_path_finds_executable_in_later_segment() {
         use std::os::unix::fs::PermissionsExt;
 
-        let base = std::env::temp_dir().join(format!("termul-acp-path-{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("se-manager-acp-path-{}", uuid::Uuid::new_v4()));
         let empty_dir = base.join("empty");
         let bin_dir = base.join("bin");
         std::fs::create_dir_all(&empty_dir).unwrap();
@@ -453,7 +454,7 @@ mod tests {
     fn named_binary_path_probe_rejects_missing_and_relative_names() {
         assert!(!is_named_binary_on_path(""));
         assert!(!is_named_binary_on_path("./cursor-agent"));
-        assert!(!is_named_binary_on_path("termul-missing-catalog-bin"));
+        assert!(!is_named_binary_on_path("se-manager-missing-catalog-bin"));
     }
 
     #[test]
@@ -493,7 +494,7 @@ mod tests {
     #[test]
     fn agent_config_rewrites_windows_cmd_shim_and_orders_args() {
         // Simulate an npm-installed agent that exists only as a `.cmd` shim.
-        let dir = std::env::temp_dir().join("termul-test-acp-cmd-shim");
+        let dir = std::env::temp_dir().join("se-manager-test-acp-cmd-shim");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("node.exe"), b"MZ").unwrap();

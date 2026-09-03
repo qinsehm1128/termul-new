@@ -49,7 +49,7 @@ fn root() -> PathBuf {
     }
     ROOT.get()
         .cloned()
-        .unwrap_or_else(|| std::env::temp_dir().join("termul-acp-npm-packages"))
+        .unwrap_or_else(|| std::env::temp_dir().join("se-manager-acp-npm-packages"))
 }
 
 /// Rewrite an `npx -y <package>` config to a locally installed Node entrypoint

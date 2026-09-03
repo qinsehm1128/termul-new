@@ -873,7 +873,7 @@ struct AgentEntry {
 /// and fans every `acp:*` event out through them. It does NOT hold a Tauri
 /// `AppHandle`. The desktop app constructs it with
 /// `vec![Arc::new(TauriEventSink::new(handle))]` (see `lib.rs`); the standalone
-/// `termul-server` binary (Story 1.2) will construct it with a
+/// `se-server` binary (Story 1.2) will construct it with a
 /// `WsRelaySink`-backed sink list and NO `AppHandle` at all.
 ///
 /// The ONLY `AppHandle` reference in the ACP stack lives inside
@@ -1168,7 +1168,7 @@ impl AcpManager {
     ///
     /// Pass `vec![Arc::new(TauriEventSink::new(handle))]` for the desktop app
     /// (byte-for-byte preserves today's Tauri event flow), or a
-    /// `WsRelaySink`-backed list for the headless `termul-server` binary
+    /// `WsRelaySink`-backed list for the headless `se-server` binary
     /// (Story 1.2). An empty `vec![]` is legal (used by unit tests that only
     /// exercise the command channel) — `fan_out` over zero sinks is a no-op.
     #[must_use]
@@ -3455,7 +3455,7 @@ async fn drive_connection(
 
     let connection_result = Client
         .builder()
-        .name(format!("termul-acp-{agent_id}"))
+        .name(format!("se-manager-acp-{agent_id}"))
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::v1::SessionNotification, _cx| {
                 let session_id = notification.session_id.0.to_string();

@@ -1365,7 +1365,7 @@ pub async fn worktree_check_dirty(worktree_path: String) -> Result<IpcResult<Dir
     }
 }
 
-/// Remove all Termul-managed worktrees for a project.
+/// Remove all Se-managed worktrees for a project.
 /// Reports per-worktree success/failure.
 #[tauri::command]
 pub async fn worktree_remove_all_managed(
@@ -3776,7 +3776,7 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
         .next()
         .unwrap_or("tmp")
         .to_string();
-    let password_path = temp_dir.join(format!("termul-askpass-{}.dat", id));
+    let password_path = temp_dir.join(format!("se-manager-askpass-{}.dat", id));
 
     // Write the raw password to a separate data file to avoid shell metacharacter injection.
     if let Err(e) = std::fs::write(&password_path, password.as_bytes()) {
@@ -3804,7 +3804,7 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
     // Create platform-specific askpass script
     #[cfg(windows)]
     let script_path = {
-        let path = temp_dir.join(format!("termul-askpass-{}.bat", id));
+        let path = temp_dir.join(format!("se-manager-askpass-{}.bat", id));
         // The batch script outputs the password file contents and cleans up both files on exit.
         let content = format!(
             "@echo off\r\ntype \"{}\"\r\ndel /q \"{}\" >nul 2>&1\r\n(goto) 2>nul & del /q \"%~f0\" >nul 2>&1\r\n",
@@ -3824,7 +3824,7 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
     #[cfg(unix)]
     let script_path = {
         use std::os::unix::fs::PermissionsExt;
-        let path = temp_dir.join(format!("termul-askpass-{}.sh", id));
+        let path = temp_dir.join(format!("se-manager-askpass-{}.sh", id));
         // The shell script outputs the password file and cleans up both files.
         let content = format!(
             "#!/bin/sh\ncat \"{}\"\nrm -f \"{}\" \"$0\"\n",
@@ -7185,7 +7185,7 @@ mod tests {
     #[test]
     fn sanitize_log_field_escapes_newlines_and_strips_controls() {
         // Newlines/CR/tab are escaped so injected content stays on one line.
-        let forged = "oops\n[startup] termul forged line\r\tend";
+        let forged = "oops\n[startup] se-manager forged line\r\tend";
         let cleaned = sanitize_log_field(forged);
         assert!(!cleaned.contains('\n'));
         assert!(!cleaned.contains('\r'));
@@ -7453,7 +7453,7 @@ mod tests {
         assert!(body.contains("stable_code=OK"));
         assert!(!body.contains("Path validation failed for '{}'"));
         assert!(!body.contains("Path validated: {} -> {}"));
-        let _ = validate_project_path("/definitely-missing-termul-path-xyz");
+        let _ = validate_project_path("/definitely-missing-se-manager-path-xyz");
     }
 }
 
@@ -7526,7 +7526,7 @@ mod remote_sync_mcp_registry_tests {
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-mcp-sync-{label}-{}-{}",
+            "se-manager-mcp-sync-{label}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

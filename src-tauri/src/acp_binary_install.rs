@@ -69,7 +69,7 @@ pub async fn install_registry_binary(
         std::fs::create_dir_all(parent).map_err(|e| format!("create install parent: {e}"))?;
     }
 
-    let tmp_dir = std::env::temp_dir().join(format!("termul-acp-dl-{}", uuid::Uuid::new_v4()));
+    let tmp_dir = std::env::temp_dir().join(format!("se-manager-acp-dl-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
     let staging = tmp_dir.join("stage");
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;

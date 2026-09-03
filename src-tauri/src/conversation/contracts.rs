@@ -1,6 +1,6 @@
 //! Runtime-neutral Conversation identity, lifecycle, and resource-reference contracts.
 //!
-//! Termul allocates [`ConversationId`] before ACP session creation. The ACP session id remains an
+//! Se allocates [`ConversationId`] before ACP session creation. The ACP session id remains an
 //! opaque external binding and is never accepted as Conversation identity or a path component.
 
 use std::fmt;
@@ -31,7 +31,7 @@ pub const MAX_CONVERSATION_HISTORY_PAGE_BYTES: usize = 4 * 1024 * 1024;
 const MACOS_EINVAL: i32 = 22;
 const MACOS_ENOTSUP: i32 = 45;
 
-/// Termul-owned Conversation UUID, allocated before any ACP `session/new` request.
+/// Se-owned Conversation UUID, allocated before any ACP `session/new` request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConversationId(Uuid);
 

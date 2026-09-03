@@ -33,7 +33,7 @@ import { parseSkillSegments, replaceSkillTokensInline } from '@/lib/skill-tokens
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
-import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
+import { SePlanRenderer } from './ChatMarkdownPlanFence'
 import {
   blockData,
   blockDisplayName,
@@ -251,7 +251,7 @@ const MERMAID_PLUGIN = mermaidPlugin
 const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
 const STREAMDOWN_PLUGINS_WITH_PLAN = {
   ...STREAMDOWN_PLUGINS,
-  renderers: [{ language: 'termul-plan', component: TermulPlanRenderer }]
+  renderers: [{ language: 'termul-plan', component: SePlanRenderer }]
 }
 
 // Copy on code blocks, plus download (save an agent-generated file); no line

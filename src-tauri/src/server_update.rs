@@ -1,4 +1,4 @@
-//! Opt-in self-update subsystem for the standalone `termul-server` binary.
+//! Opt-in self-update subsystem for the standalone `se-server` binary.
 //!
 //! The desktop app updates via the signed `@tauri-apps/plugin-updater` flow; the
 //! standalone server has no Tauri runtime, so it ships its own bespoke updater
@@ -276,7 +276,7 @@ const ALLOWED_BINARY_URL_PREFIX: &str = "https://github.com/qinsehm1128/termul-n
 
 /// Cap on a downloaded server binary so a manifest endpoint that lies about
 /// Content-Length (or omits it) can't exhaust memory. 200 MiB is generous for
-/// the standalone `termul-server` binary (a stripped release build is tens of
+/// the standalone `se-server` binary (a stripped release build is tens of
 /// MiB) while bounding the exposure.
 const MAX_BINARY_BYTES: usize = 200 * 1024 * 1024;
 
@@ -287,7 +287,7 @@ fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("termul-server-updater")
+            .user_agent("se-server-updater")
             .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
@@ -428,7 +428,7 @@ pub fn atomic_swap(binary_path: &Path, new_bytes: &[u8]) -> Result<PathBuf> {
             Ok(()) => {}
             Err(restore_err) => {
                 eprintln!(
-                    "termul-server self-update: CRITICAL — promote {} -> {} failed ({e}) \
+                    "se-server self-update: CRITICAL — promote {} -> {} failed ({e}) \
                      AND restore {} -> {} also failed ({restore_err}); \
                      no binary at {} — recover the `.old` file manually",
                     new_path.display(),
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn validate_binary_url_rejects_foreign_origin() {
-        let err = validate_binary_url("https://example.com/termul-server")
+        let err = validate_binary_url("https://example.com/se-server")
             .expect_err("foreign origin rejected");
         assert!(
             err.to_string().contains("outside the allowed origin"),
@@ -821,7 +821,7 @@ mod tests {
     // --- swap decision: don't swap on verify failure ---
 
     fn write_current_binary(dir: &Path, contents: &[u8]) -> PathBuf {
-        let bin = dir.join("termul-server");
+        let bin = dir.join("se-server");
         fs::write(&bin, contents).expect("write current binary");
         make_executable(&bin, None).expect("chmod current binary");
         bin

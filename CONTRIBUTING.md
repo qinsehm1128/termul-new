@@ -1,6 +1,6 @@
-# Contributing to Termul Manager
+# Contributing to Se Manager
 
-Thank you for your interest in contributing to Termul Manager! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to Se Manager! This document provides guidelines and instructions for contributing.
 
 ## Code of Conduct
 

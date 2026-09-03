@@ -224,7 +224,7 @@ const PROBE_TTL: Duration = Duration::from_secs(60);
 // ---------------------------------------------------------------------------
 
 /// Host-owned ACP catalog service. One instance per host runtime (desktop OR
-/// standalone `termul-server`, never shared across processes). Constructed via
+/// standalone `se-server`, never shared across processes). Constructed via
 /// [`AcpCatalogService::open`], which creates the root directory + idempotent
 /// re-open (mirrors `WorkspaceManifestService::open`).
 ///
@@ -684,7 +684,7 @@ fn compute_catalog_agent_with_probe(
         status,
         platform_targets,
         // PATH-detected vendor CLIs (e.g. `cursor-agent`) are filled here so
-        // phone/web can spawn without the Termul archive installer. Archive
+        // phone/web can spawn without the Se archive installer. Archive
         // installs still overlay later via `overlay_installed`.
         installed: path_installed,
         running_agent_id: None,
@@ -758,7 +758,7 @@ fn resolve_binary(
 
     // Probe a bare PATH name, or the basename of a relative archive cmd
     // (`./dist-package/cursor-agent` → `cursor-agent`) so a locally installed
-    // vendor CLI is `ready` without a Termul archive install.
+    // vendor CLI is `ready` without a Se archive install.
     let is_relative = cmd.starts_with("./") || cmd.starts_with(".\\");
     let probe_name = if is_relative {
         command_basename(cmd)
@@ -904,7 +904,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-acp-catalog-{label}-{}-{}",
+            "se-manager-acp-catalog-{label}-{}-{}",
             std::process::id(),
             now_millis()
         ));
@@ -1038,7 +1038,7 @@ mod tests {
             serde_json::json!({
                 "binary": {
                     "linux-x86_64": {
-                        "cmd": "./termul-missing-catalog-bin",
+                        "cmd": "./se-manager-missing-catalog-bin",
                         "archive": "https://example.com/test-agent-linux-x86_64.tar.gz",
                         "sha256": "abcdef0123456789"
                     }
@@ -1072,7 +1072,7 @@ mod tests {
             serde_json::json!({
                 "binary": {
                     "linux-x86_64": {
-                        "cmd": "./termul-missing-catalog-bin",
+                        "cmd": "./se-manager-missing-catalog-bin",
                         "archive": "https://example.com/test-agent-linux-x86_64.tar.gz"
                     }
                 }
@@ -1103,7 +1103,7 @@ mod tests {
             serde_json::json!({
                 "binary": {
                     "linux-x86_64": {
-                        "cmd": "./termul-missing-catalog-bin",
+                        "cmd": "./se-manager-missing-catalog-bin",
                         "archive": "https://example.com/test-agent-linux-x86_64.tar.gz",
                         "sha256": ""
                     }
@@ -1133,7 +1133,7 @@ mod tests {
             serde_json::json!({
                 "binary": {
                     "linux-x86_64": {
-                        "cmd": "./termul-missing-catalog-bin"
+                        "cmd": "./se-manager-missing-catalog-bin"
                     }
                 }
             }),

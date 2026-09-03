@@ -18,7 +18,7 @@ pub mod git_bash_paths {
 }
 
 /// Unix shell lookup shared by detection and spawn resolution.
-/// `$SHELL` is consulted first so Termul matches Ghostty / Terminal.app.
+/// `$SHELL` is consulted first so Se matches Ghostty / Terminal.app.
 #[cfg(not(target_os = "windows"))]
 pub mod unix_shell_paths {
     use std::env;

@@ -12,7 +12,7 @@
 //!
 //! Runs on a dedicated OS thread with a current-thread tokio runtime (mirrors
 //! the per-agent driver-thread model in `AcpManager`) — works on both the
-//! desktop binary and the standalone `termul-server` (no `AppHandle`).
+//! desktop binary and the standalone `se-server` (no `AppHandle`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
@@ -126,7 +126,7 @@ impl HostPlanServer {
         // listener is driven independently of the AcpManager's per-agent
         // driver threads + the desktop's Tauri runtime.
         let _handle: std::thread::JoinHandle<()> = std::thread::Builder::new()
-            .name("termul-host-mcp".to_string())
+            .name("se-manager-host-mcp".to_string())
             .spawn(move || {
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -175,7 +175,7 @@ impl HostPlanServer {
                     }
                 });
             })
-            .expect("spawn termul-host-mcp thread");
+            .expect("spawn se-manager-host-mcp thread");
 
         // Block until the dedicated thread has bound + published the port.
         // (If the thread failed to bind, `port` is 0 — `register_session`
@@ -1247,8 +1247,10 @@ mod tests {
 
     #[test]
     fn bound_title_call_persists_and_broadcasts() {
-        let root =
-            std::env::temp_dir().join(format!("termul-host-mcp-title-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "se-manager-host-mcp-title-{}",
+            uuid::Uuid::new_v4()
+        ));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let runtime = Runtime::new().unwrap();
@@ -1301,7 +1303,7 @@ mod tests {
         // stops retrying) without writing a second persistence record or
         // emitting a second session_info_update.
         let root = std::env::temp_dir().join(format!(
-            "termul-host-mcp-title-noop-{}",
+            "se-manager-host-mcp-title-noop-{}",
             uuid::Uuid::new_v4()
         ));
         let cwd = root.join("cwd");
@@ -1371,7 +1373,7 @@ mod tests {
         // must NOT reset the title flag — the agent can't set the title again
         // on a later turn.
         let root = std::env::temp_dir().join(format!(
-            "termul-host-mcp-title-turn-{}",
+            "se-manager-host-mcp-title-turn-{}",
             uuid::Uuid::new_v4()
         ));
         let cwd = root.join("cwd");

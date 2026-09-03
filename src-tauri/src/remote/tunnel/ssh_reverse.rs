@@ -1,6 +1,6 @@
 //! SSH reverse tunnel (`ssh -N -R`) against an operator-owned VPS.
 //!
-//! SSH is only the pipe. Termul still requires the pairing bearer on the
+//! SSH is only the pipe. Se still requires the pairing bearer on the
 //! published Origin. The remote bind is `127.0.0.1:{remotePort}` so the VPS
 //! must terminate TLS (Caddy/Nginx) rather than exposing GatewayPorts.
 

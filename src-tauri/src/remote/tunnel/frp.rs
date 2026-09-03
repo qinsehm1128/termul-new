@@ -158,14 +158,14 @@ mod tests {
             provider: TunnelProviderKind::Frp,
             frp_server_addr: Some("vps.example.com".to_string()),
             frp_server_port: Some(7000),
-            frp_custom_domain: Some("termul.example.com".to_string()),
+            frp_custom_domain: Some("se-manager.example.com".to_string()),
             ..TunnelConfig::default()
         };
         let toml = render_frpc_toml(18787, &config, "s3cret\"value").unwrap();
         assert!(toml.contains("serverAddr = \"vps.example.com\""));
         assert!(toml.contains("localPort = 18787"));
         assert!(toml.contains("type = \"http\""));
-        assert!(toml.contains("customDomains = [\"termul.example.com\"]"));
+        assert!(toml.contains("customDomains = [\"se-manager.example.com\"]"));
         assert!(toml.contains("token = \"s3cret\\\"value\""));
         assert!(!toml.contains("remotePort"));
     }
@@ -305,7 +305,10 @@ mod brand_parity_tests {
         let proxies = parse_proxies(&toml);
         assert_eq!(proxies.len(), 1, "generated config has exactly one proxy");
         let keys: Vec<&str> = proxies[0].iter().map(|(k, _)| k.as_str()).collect();
-        assert!(keys.contains(&"name"), "proxies[0] carries a name: {keys:?}");
+        assert!(
+            keys.contains(&"name"),
+            "proxies[0] carries a name: {keys:?}"
+        );
         assert!(
             !keys.contains(&"token"),
             "the [auth] token must not be parsed into the proxy table: {keys:?}"

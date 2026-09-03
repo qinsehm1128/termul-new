@@ -465,7 +465,7 @@ pub const FLUSH_INTERVAL: Duration = Duration::from_millis(4);
 pub const READ_BUF: usize = 16 * 1024; // 16KB read buffer
 pub const MAX_PENDING: usize = 4 * 1024 * 1024; // 4MB overflow cap
 pub const OVERFLOW_NOTICE: &[u8] =
-    b"\x1bc\x1b[2m[termul: dropped output due to backpressure]\x1b[0m\r\n";
+    b"\x1bc\x1b[2m[se-manager: dropped output due to backpressure]\x1b[0m\r\n";
 
 /// Public info emitted to renderer on spawn (also forwarded to ws clients)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4536,7 +4536,7 @@ mod tests {
     fn parse_npm_cmd_shim_rewrites_to_node_script() {
         // Write a simulated npm .cmd shim matching the real opencode.cmd format
         // that nvm-windows generates.
-        let dir = std::env::temp_dir().join("termul-test-cmd-shim");
+        let dir = std::env::temp_dir().join("se-manager-test-cmd-shim");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -4591,7 +4591,7 @@ mod tests {
         //   "%NODE_EXE%" "%NPX_CLI_JS%" %*
         // The parser must resolve the %VAR% indirection, not only the simple
         // `"%dp0%\node.exe" "<script>"` package-bin form.
-        let dir = std::env::temp_dir().join("termul-test-npx-launcher-shim");
+        let dir = std::env::temp_dir().join("se-manager-test-npx-launcher-shim");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
@@ -4631,7 +4631,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn parse_powershell_cmd_shim_rewrites_cursor_agent_style() {
-        let dir = std::env::temp_dir().join("termul-test-ps-shim");
+        let dir = std::env::temp_dir().join("se-manager-test-ps-shim");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -4678,7 +4678,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn win_agent_resolution_skips_extensionless_before_pe() {
-        let dir = std::env::temp_dir().join("termul-test-pe-resolve");
+        let dir = std::env::temp_dir().join("se-manager-test-pe-resolve");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -4718,7 +4718,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn try_parse_windows_cmd_shim_prefers_npm_over_powershell() {
-        let dir = std::env::temp_dir().join("termul-test-shim-priority");
+        let dir = std::env::temp_dir().join("se-manager-test-shim-priority");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
@@ -4743,7 +4743,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn resolve_spawn_program_rewrites_npm_cmd_shim() {
-        let dir = std::env::temp_dir().join("termul-test-resolve-npm-shim");
+        let dir = std::env::temp_dir().join("se-manager-test-resolve-npm-shim");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
@@ -4776,7 +4776,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn resolve_spawn_program_rewrites_powershell_cmd_shim() {
-        let dir = std::env::temp_dir().join("termul-test-resolve-ps-shim");
+        let dir = std::env::temp_dir().join("se-manager-test-resolve-ps-shim");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("cursor-agent.ps1"), b"").unwrap();
@@ -4817,7 +4817,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn resolve_spawn_program_keeps_native_exe_without_prepend() {
-        let dir = std::env::temp_dir().join("termul-test-resolve-native-exe");
+        let dir = std::env::temp_dir().join("se-manager-test-resolve-native-exe");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let exe_path = dir.join("agent.exe");

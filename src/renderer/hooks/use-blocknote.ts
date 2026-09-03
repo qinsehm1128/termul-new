@@ -77,7 +77,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
   const saveShortcutExtension = useMemo(
     () =>
       createExtension(() => ({
-        key: 'termulSaveShortcut',
+        key: 'seSaveShortcut',
         keyboardShortcuts: {
           'Mod-s': () => {
             void requestSaveEditorFile(filePathRef.current)

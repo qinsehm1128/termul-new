@@ -832,7 +832,7 @@ mod tests {
     fn draft_requires_matching_hash_before_activation() {
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-task-store-{}", Uuid::new_v4()));
+            .join(format!("se-manager-task-store-{}", Uuid::new_v4()));
         let store = ScheduledTaskStore::open(root.join("state")).unwrap();
         let draft = store
             .create_draft(input(&root), TaskMutationContextV1::default())
@@ -863,7 +863,7 @@ mod tests {
     fn run_ledger_materializes_latest_record_per_run() {
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-task-runs-{}", Uuid::new_v4()));
+            .join(format!("se-manager-task-runs-{}", Uuid::new_v4()));
         let store = ScheduledTaskStore::open(root.join("state")).unwrap();
         let draft = store
             .create_draft(input(&root), TaskMutationContextV1::default())
@@ -889,7 +889,7 @@ mod tests {
     fn projectless_draft_uses_global_partition_and_executes_normally() {
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-task-global-{}", Uuid::new_v4()));
+            .join(format!("se-manager-task-global-{}", Uuid::new_v4()));
         let store = ScheduledTaskStore::open(root.join("state")).unwrap();
         let mut draft_input = input(&root);
         draft_input.project_id = None;
@@ -924,7 +924,7 @@ mod tests {
     fn legacy_project_partitions_remain_readable_and_mutable() {
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
-            .join(format!("termul-task-legacy-{}", Uuid::new_v4()));
+            .join(format!("se-manager-task-legacy-{}", Uuid::new_v4()));
         let legacy_root = root.join("projects");
         let legacy_store = ScheduledTaskStore::open(legacy_root.clone()).unwrap();
         let original = legacy_store

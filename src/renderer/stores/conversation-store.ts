@@ -818,7 +818,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     try {
       const live = acp.sessions[sessionId]
       if (!live || live.status === 'closed') {
-        // Durable history belongs to Termul and is rendered independently from
+        // Durable history belongs to Se and is rendered independently from
         // the agent process. Reconnect in the background so a slow ACP
         // session/resume (or load fallback) cannot keep the Conversation route
         // behind its full-screen opening state.

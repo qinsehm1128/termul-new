@@ -1,4 +1,4 @@
-# Termul Manager - Component Inventory
+# Se Manager - Component Inventory
 
 **Date:** 2026-05-09
 **Project Type:** Desktop Application

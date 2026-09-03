@@ -327,7 +327,7 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
   // Git has worktree not in store → add it
   for (const gitWt of gitWorktrees) {
     if (!storedByPath.has(gitWt.path)) {
-      const isTermulManaged = gitWt.path.includes('.termul/worktrees/')
+      const isSeManaged = gitWt.path.includes('.termul/worktrees/')
       updatedWorktrees.push({
         id: randomUUID(),
         name: gitWt.name,
@@ -336,7 +336,7 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
         createdAt: new Date().toISOString()
       })
       console.debug(
-        `[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isTermulManaged})`
+        `[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isSeManaged})`
       )
       changed = true
     }

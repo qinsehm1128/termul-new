@@ -150,7 +150,7 @@ export const worktreeApi = {
       : webServerWorktree.checkDirty(worktreePath),
 
   /**
-   * Remove all Termul-managed worktrees for a project.
+   * Remove all Se-managed worktrees for a project.
    * Used during project cascade delete. Reports per-worktree results.
    * Accepts a typed Worktree array; serializes to JSON internally.
    *

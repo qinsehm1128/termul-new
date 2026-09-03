@@ -6,11 +6,11 @@
 
 ## Executive summary
 
-Termul does **not** depend on or launch `tmux`. The few `tmux` strings in the
+Se does **not** depend on or launch `tmux`. The few `tmux` strings in the
 repository are examples used while testing restoration of DEC private modes for
 full-screen TUI programs such as `vim`, `less`, and `tmux`.
 
-The production terminal runtime is owned by Termul:
+The production terminal runtime is owned by Se:
 
 ```text
 OS PTY / ConPTY
@@ -22,13 +22,13 @@ OS PTY / ConPTY
 ```
 
 Replacing "tmux with RMUX" is therefore not a dependency swap. It would replace
-large parts of Termul's PTY ownership, terminal identity, output replay,
+large parts of Se's PTY ownership, terminal identity, output replay,
 authorization, cleanup, and remote transport architecture with an RMUX daemon
 and SDK adapter.
 
 The recommendation is:
 
-1. Keep the current Termul runtime for now.
+1. Keep the current Se runtime for now.
 2. Simplify and harden the current renderer lifecycle before changing engines.
 3. If persistent daemon-owned sessions are strategically desirable, build an
    optional RMUX backend spike behind the existing `TerminalApi` facade.
@@ -120,12 +120,12 @@ JSDOM timing. The existing benchmark description now reflects the pinned xterm
 The preferred strategy is subtraction and measurement, not another layer of
 renderer abstractions.
 
-## Does Termul use tmux?
+## Does Se use tmux?
 
 No production source, Cargo dependency, npm dependency, shell invocation, or
 runtime configuration calls `tmux`.
 
-Current Rust PTY support is provided by `portable-pty` and Termul's own
+Current Rust PTY support is provided by `portable-pty` and Se's own
 `PtyManager`. References to `tmux` are limited to:
 
 - comments describing full-screen alternate-buffer applications;
@@ -136,7 +136,7 @@ There is therefore no user-installed tmux prerequisite to remove.
 
 ### What currently provides tmux-like behavior
 
-Termul implements the relevant behavior itself:
+Se implements the relevant behavior itself:
 
 | Capability | Current owner |
 | --- | --- |
@@ -145,10 +145,10 @@ Termul implements the relevant behavior itself:
 | Split panes and tabs | React workspace and `workspace-store`, not a terminal multiplexer |
 | Restore full-screen TUI modes after remount | DEC private-mode capture plus `buildRehydrateSequences()` |
 | Reap abandoned terminals | Protected/resource references and configurable orphan detection |
-| Shared desktop/browser terminal | Termul's Tauri Channel and `/terminal/ws` transports |
+| Shared desktop/browser terminal | Se's Tauri Channel and `/terminal/ws` transports |
 
 Current continuity is not equivalent to a daemonized multiplexer across a full
-Termul process exit. Termul can persist and visually reconstruct bounded
+Se process exit. Se can persist and visually reconstruct bounded
 scrollback/transcript and respawn a shell, but it does not resurrect the exact
 live process after its in-process host has exited. Persistent live processes
 across application restarts are the clearest capability RMUX could add.
@@ -183,7 +183,7 @@ Using RMUX would still be "implemented in Rust", but it would add these packaged
 runtime components:
 
 ```text
-Termul
+Se
   -> rmux-sdk
   -> local socket / named pipe
   -> rmux daemon
@@ -204,13 +204,13 @@ This creates two different migration choices:
 
 | Choice | Runtime model | What it replaces |
 | --- | --- | --- |
-| `rmux-sdk` | Separate RMUX daemon over local IPC | Termul PTY manager, retained output, process/session lifetime, and part of recovery |
+| `rmux-sdk` | Separate RMUX daemon over local IPC | Se PTY manager, retained output, process/session lifetime, and part of recovery |
 | `rmux-pty` | In-process Rust library | Only `portable-pty` and some platform-specific process-control code |
 
 The second choice is much smaller, but it does **not** provide RMUX sessions,
 windows, panes, daemon persistence, snapshots, or recoverable streams.
 
-It also does not make Termul “more Rust-native”: the current `portable-pty`
+It also does not make Se “more Rust-native”: the current `portable-pty`
 dependency is already an in-process Rust crate that selects Unix PTY or Windows
 ConPTY implementations. Replacing it with `rmux-pty` is an API/backend
 evaluation, not a migration from a non-Rust technology.
@@ -219,50 +219,50 @@ evaluation, not a migration from a non-Rust technology.
 
 - xterm.js, WebGL, DOM rendering, terminal fonts, selection, search, and
   accessibility in the Tauri/browser UI.
-- Termul's React pane/tab/file/editor/browser workspace.
+- Se's React pane/tab/file/editor/browser workspace.
 - Conversation-to-project attachment and execution-target rules.
-- Termul's browser/mobile UI.
-- Termul's authorization and claim model unless it is redesigned around RMUX.
+- Se's browser/mobile UI.
+- Se's authorization and claim model unless it is redesigned around RMUX.
 
 The Ratatui RMUX widget targets terminal applications, not a Tauri WebView, so
 it is not a replacement for `ConnectedTerminal`.
 
 ### Potential benefits
 
-- Sessions and processes can survive the Termul application process without
-  Termul maintaining its own host lifetime machinery.
+- Sessions and processes can survive the Se application process without
+  Se maintaining its own host lifetime machinery.
 - RMUX already owns cross-platform PTY, stable pane identity, retained output,
   lag detection, snapshots, and authoritative recovery.
 - `recover_output()` is suitable for feeding an xterm.js frontend because it
   begins with an ANSI rebase and then preserves raw output bytes.
 - The typed SDK is safer than shelling out to tmux-compatible CLI commands.
 - A mature RMUX backend could eventually remove a significant amount of custom
-  Termul PTY and replay code.
+  Se PTY and replay code.
 
 ### Migration blockers and risks
 
 1. **Two ownership models**
-   - Termul currently owns terminal ids, conversation binding, renderer refs,
+   - Se currently owns terminal ids, conversation binding, renderer refs,
      cleanup state, leases/claims, limits, and orphan handling.
    - RMUX would own process and pane identity in another daemon.
    - A durable one-to-one identity and authorization mapping would be required.
 
 2. **Two layout models**
-   - Termul already owns split panes and tabs.
+   - Se already owns split panes and tabs.
    - RMUX also owns sessions, windows, pane layout, borders, and constrained
      resize behavior.
    - Using both layout systems would produce competing resize and lifecycle
-     semantics. Using one RMUX pane per Termul terminal avoids that conflict but
+     semantics. Using one RMUX pane per Se terminal avoids that conflict but
      gains little from RMUX multiplexing.
 
 3. **Transport duplication**
-   - Termul already has Tauri channels, WebSocket attach/replay, renderer
+   - Se already has Tauri channels, WebSocket attach/replay, renderer
      claims, and shared-live browser support.
    - RMUX Web Share has a different protocol, security model, frontend, and
-     access policy; it is not wire-compatible with Termul.
+     access policy; it is not wire-compatible with Se.
 
 4. **Packaging and updates**
-   - Termul would need to bundle, launch, monitor, upgrade, and eventually stop
+   - Se would need to bundle, launch, monitor, upgrade, and eventually stop
      a sidecar daemon on every supported platform.
    - RMUX 0.10.0 is not wire-compatible with 0.9.x daemons and requires old
      daemons to be stopped during upgrade.
@@ -281,7 +281,7 @@ it is not a replacement for `ConnectedTerminal`.
 7. **Latency**
    - Input and resize gain an additional local IPC hop.
    - The SDK resize path snapshots current dimensions and can send separate
-     width and height operations; this differs from Termul's direct PTY resize.
+     width and height operations; this differs from Se's direct PTY resize.
 
 Any full RMUX adapter must preserve at least: trusted spawn with cwd/env,
 write/resize/terminate, retained-output attach with lag reporting,
@@ -292,7 +292,7 @@ tracker integration. Session creation alone is not sufficient parity.
 ### Is replacing only `portable-pty` reasonable?
 
 Yes, as an isolated experiment, but there is no current evidence that
-`portable-pty` is the source of Termul's renderer, memory, or lifecycle
+`portable-pty` is the source of Se's renderer, memory, or lifecycle
 problems. Most identified issues are above the raw PTY layer:
 
 - duplicated React/xterm initialization;
@@ -303,7 +303,7 @@ problems. Most identified issues are above the raw PTY layer:
 
 An `rmux-pty` spike is only justified if it demonstrates a concrete advantage
 in ConPTY behavior, process-group termination, cleanup reliability, or
-maintenance cost. It should keep `PtyManager` and every existing Termul
+maintenance cost. It should keep `PtyManager` and every existing Se
 contract unchanged so the backend can be compared with the current
 `portable-pty` implementation.
 
@@ -320,17 +320,17 @@ Introduce an optional backend behind the existing `TerminalApi` contract:
 
 ```text
 TerminalApi
-  |- NativeTermulBackend (current default)
+  |- NativeSeBackend (current default)
   `- RmuxBackend (experimental)
 ```
 
 The spike should:
 
 1. Bundle a pinned RMUX daemon and connect through `rmux-sdk`.
-2. Create one RMUX pane for one Termul terminal without adopting RMUX layout.
+2. Create one RMUX pane for one Se terminal without adopting RMUX layout.
 3. Feed `recover_output()` events into the existing xterm.js renderer.
 4. Map input, resize, close, exit, cwd, title, and reconnect behavior.
-5. Keep Termul's existing renderer claims and browser protocol at the outer
+5. Keep Se's existing renderer claims and browser protocol at the outer
    boundary.
 6. Compare startup latency, input latency, heavy-output throughput, idle CPU,
    memory, recovery fidelity, and package size with the native backend.

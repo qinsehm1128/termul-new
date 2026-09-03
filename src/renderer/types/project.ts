@@ -65,7 +65,7 @@ export function getActiveWorktree(project: Project): Worktree | undefined {
   return project.worktrees?.find((w) => w.id === project.activeWorktreeId)
 }
 
-export function isWorktreeTermulManaged(worktree: Worktree): boolean {
+export function isWorktreeSeManaged(worktree: Worktree): boolean {
   // Normalize path separators for cross-platform detection
   const normalizedPath = worktree.path.replace(/\\/g, '/')
   return normalizedPath.includes('.termul/worktrees/')

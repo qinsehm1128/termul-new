@@ -13,7 +13,7 @@ import { afterAll, describe, expect, it } from 'vitest'
  * - Measure terminal.write() throughput under representative workloads
  * - Capture frame time / duration for heavy streaming scenarios
  * - Include resize/fit churn sensitivity
- * - Keep scenarios Termul-specific rather than generic
+ * - Keep scenarios Se-specific rather than generic
  */
 
 function deterministicToken(index: number): string {

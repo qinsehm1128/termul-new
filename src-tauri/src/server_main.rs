@@ -1,4 +1,4 @@
-//! Standalone headless `termul-server` binary (Story 1.2).
+//! Standalone headless `se-server` binary (Story 1.2).
 //!
 //! Constructs an [`AcpManager`] with a [`WsRelaySink`] stub (no Tauri
 //! `AppHandle`) and serves the Axum skeleton from `termul_manager_lib::web`.
@@ -188,7 +188,7 @@ fn main() -> ExitCode {
             match WorkspaceManifestService::open_read_only(workspace_manifests_dir).await {
                 Ok(service) => Some(service),
                 Err(error) => {
-                    eprintln!("termul-server: failed to open workspace-manifests store: {error}");
+                    eprintln!("se-server: failed to open workspace-manifests store: {error}");
                     return ExitCode::from(1);
                 }
             };
@@ -202,7 +202,7 @@ fn main() -> ExitCode {
         let acp_catalog = match AcpCatalogService::open(acp_catalog_dir).await {
             Ok(service) => Some(service),
             Err(error) => {
-                eprintln!("termul-server: failed to open acp-catalog store: {error}");
+                eprintln!("se-server: failed to open acp-catalog store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -225,7 +225,7 @@ fn main() -> ExitCode {
         {
             Ok(service) => Some(service),
             Err(error) => {
-                eprintln!("termul-server: failed to open acp-install store: {error}");
+                eprintln!("se-server: failed to open acp-install store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -250,7 +250,7 @@ fn main() -> ExitCode {
             ) {
                 Ok(store) => Arc::new(store),
                 Err(error) => {
-                    eprintln!("termul-server: failed to open scheduled task store: {error}");
+                    eprintln!("se-server: failed to open scheduled task store: {error}");
                     return ExitCode::from(1);
                 }
             };
@@ -316,7 +316,7 @@ fn main() -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!(
-                        "termul-server: failed to load projects file '{}': {e}",
+                        "se-server: failed to load projects file '{}': {e}",
                         projects_file.display()
                     );
                     return ExitCode::from(1);
@@ -394,7 +394,7 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 scheduled_tasks.shutdown(Duration::from_secs(10)).await;
-                eprintln!("termul-server failed: {e}");
+                eprintln!("se-server failed: {e}");
                 ExitCode::from(1)
             }
         }
@@ -935,7 +935,7 @@ fn spawn_periodic_update_loop() {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--conversation-workspace-root PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--remote-access-token-file PATH] [--allowed-origin ORIGIN] [--check-update] [--conversation-migration-control rollback|reapply|finalize] [--approval-receipt PATH]\n\n\
+    "Usage: se-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--conversation-workspace-root PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--remote-access-token-file PATH] [--allowed-origin ORIGIN] [--check-update] [--conversation-migration-control rollback|reapply|finalize] [--approval-receipt PATH]\n\n\
      Options:\n\
         --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
         --port PORT                 Bind port (default: 8080)\n\

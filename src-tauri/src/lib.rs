@@ -18,7 +18,7 @@ mod pty;
 mod remote;
 pub mod scheduled_tasks;
 mod secure_storage;
-// Opt-in `termul-server` self-update subsystem. The library module itself is
+// Opt-in `se-server` self-update subsystem. The library module itself is
 // intentionally NOT feature-gated so its full test suite — including signature
 // verification — runs under the spec's default `cargo test` gate. Only the
 // standalone binary wiring (server_main.rs) is gated by `standalone-server`.
@@ -72,7 +72,7 @@ const MENU_EVENT_SELECT_ALL: &str = "menu:select-all";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
 
 // Tray menu IDs
-const TRAY_ID: &str = "termul-tray";
+const TRAY_ID: &str = "se-manager-tray";
 const TRAY_MENU_SHOW: &str = "tray-show";
 const TRAY_MENU_QUIT: &str = "tray-quit";
 const TRAY_QUIT_REQUESTED_EVENT: &str = "tray:quit-requested";
@@ -224,14 +224,14 @@ fn native_label_for(language: NativeUiLanguage, key: &str) -> &str {
         (NativeUiLanguage::ZhCn, "menu.exportLog") => "导出日志文件...",
         (NativeUiLanguage::ZhCn, "menu.copyLogs") => "复制日志内容",
         (NativeUiLanguage::ZhCn, "menu.exportLogDefault") => "将日志导出到默认目录",
-        (NativeUiLanguage::ZhCn, "menu.about") => "关于 Termul Manager",
+        (NativeUiLanguage::ZhCn, "menu.about") => "关于 Se Manager",
         (NativeUiLanguage::ZhCn, "menu.services") => "服务",
-        (NativeUiLanguage::ZhCn, "menu.hide") => "隐藏 Termul",
+        (NativeUiLanguage::ZhCn, "menu.hide") => "隐藏 Se",
         (NativeUiLanguage::ZhCn, "menu.hideOthers") => "隐藏其他应用",
         (NativeUiLanguage::ZhCn, "menu.showAll") => "全部显示",
-        (NativeUiLanguage::ZhCn, "menu.quit") => "退出 Termul",
-        (NativeUiLanguage::ZhCn, "tray.show") => "显示 Termul",
-        (NativeUiLanguage::ZhCn, "tray.quit") => "退出 Termul",
+        (NativeUiLanguage::ZhCn, "menu.quit") => "退出 Se",
+        (NativeUiLanguage::ZhCn, "tray.show") => "显示 Se",
+        (NativeUiLanguage::ZhCn, "tray.quit") => "退出 Se",
         (NativeUiLanguage::ZhCn, "dialog.error") => "错误",
         (NativeUiLanguage::ZhCn, "dialog.success") => "成功",
         (NativeUiLanguage::ZhCn, "dialog.copied") => "已复制",
@@ -271,14 +271,14 @@ fn native_label_for(language: NativeUiLanguage, key: &str) -> &str {
         (_, "menu.exportLog") => "Export Log File...",
         (_, "menu.copyLogs") => "Copy Log Contents",
         (_, "menu.exportLogDefault") => "Export Log to Default Directory",
-        (_, "menu.about") => "About Termul Manager",
+        (_, "menu.about") => "About Se Manager",
         (_, "menu.services") => "Services",
-        (_, "menu.hide") => "Hide Termul",
+        (_, "menu.hide") => "Hide Se",
         (_, "menu.hideOthers") => "Hide Others",
         (_, "menu.showAll") => "Show All",
-        (_, "menu.quit") => "Quit Termul",
-        (_, "tray.show") => "Show Termul",
-        (_, "tray.quit") => "Quit Termul",
+        (_, "menu.quit") => "Quit Se",
+        (_, "tray.show") => "Show Se",
+        (_, "tray.quit") => "Quit Se",
         (_, "dialog.error") => "Error",
         (_, "dialog.success") => "Success",
         (_, "dialog.copied") => "Copied",
@@ -383,7 +383,7 @@ pub use scheduled_tasks::ScheduledTaskStore;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
 // `Vec<Arc<dyn EventSink>>` fan-out reaches the renderer as `acp:*` events
-// (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
+// (byte-for-byte unchanged from before Story 1.1). The headless `se-server`
 // binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
 // `AppHandle` at all.
 use web::{
@@ -550,7 +550,7 @@ fn set_native_ui_language(app: tauri::AppHandle, language: String) -> Result<(),
             );
             error.to_string()
         })?;
-        let _ = tray.set_tooltip(Some("Termul Manager"));
+        let _ = tray.set_tooltip(Some("Se Manager"));
     }
 
     log::info!("[native-ui] applied language={}", language);
@@ -1645,7 +1645,7 @@ pub fn run() {
 
             // CAP-5 / Story 5: open the host-owned workspace-manifests root
             // under `<app_data_dir>/workspace-manifests`. The desktop owns its
-            // own root — NEVER shared with a standalone `termul-server` on the
+            // own root — NEVER shared with a standalone `se-server` on the
             // same machine (two processes on one JSONL store would corrupt
             // both). `None` degrades to fresh-only mode (the
             // `workspace_manifest_*` commands return `Ok(None)` / idempotent
@@ -1678,7 +1678,7 @@ pub fn run() {
 
             // CAP-6 / Story 8: open the host-owned ACP catalog root under
             // `<app_data_dir>/acp-catalog`. The desktop owns its own root —
-            // NEVER shared with a standalone `termul-server` on the same
+            // NEVER shared with a standalone `se-server` on the same
             // machine. The catalog embeds the trusted `agents.json` at build
             // time, optionally augments with the explicitly-approved CDN
             // registry snapshot, probes real runtime availability, and
@@ -1716,7 +1716,7 @@ pub fn run() {
             // CAP-6 / Story 9: open the host-owned verified-atomic ACP install
             // root. The desktop owns its own root under
             // `<app_data_dir>/acp-registry-binaries` (NEVER shared with a
-            // standalone `termul-server` on the same machine). The install
+            // standalone `se-server` on the same machine). The install
             // service downloads + verifies (sha256) + extracts + atomically
             // activates ACP agent archives resolved from the catalog, records
             // an installed-agents manifest, and exposes `install_agent(agentId)`
@@ -1962,7 +1962,7 @@ pub fn run() {
                 let tray_menu = build_tray_menu(&handle)?;
 
                 let _tray = TrayIconBuilder::with_id(TRAY_ID)
-                    .tooltip("Termul Manager")
+                    .tooltip("Se Manager")
                     .icon(app.default_window_icon().cloned().unwrap())
                     .menu(&tray_menu)
                     .show_menu_on_left_click(false)

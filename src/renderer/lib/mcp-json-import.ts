@@ -38,7 +38,7 @@ function stringPairs(value: unknown): Array<{ name: string; value: string }> | u
 
 /**
  * Normalize `env` from a Claude Desktop-style `Record<string,string>` map into
- * Termul's internal `[{name, value}]` shape. An already-normalized array passes
+ * Se's internal `[{name, value}]` shape. An already-normalized array passes
  * through unchanged. Any other shape yields `undefined` (the server is rejected
  * by the caller; the rest still import).
  */

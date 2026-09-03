@@ -53,6 +53,17 @@ pub struct BrandCanonical {
     pub keychain_service: &'static str,
     /// Keychain service holding SSH passwords and key passphrases.
     pub keychain_ssh_service: &'static str,
+    /// App-managed `~/.ssh/` host-key store, kept separate from the user's own
+    /// `known_hosts` so libssh2's writer cannot drop `@cert-authority` /
+    /// `@revoked` markers it does not understand.
+    ///
+    /// DISCOVERED DURING EXECUTE — absent from all 14 roots in
+    /// `migration-plan.json` and from the analyze inventory. Renaming this file
+    /// without migrating it does not fail loudly: the host-key store simply
+    /// looks empty, every known host becomes "unknown", and `accept-new`
+    /// silently re-trusts whatever answers — which is precisely the state a
+    /// MITM needs. It must be migrated, not just renamed.
+    pub ssh_known_hosts_file: &'static str,
     /// Keychain service holding the iOS pairing secret.
     pub keychain_pairing_service: &'static str,
     /// MCP server name exposed to agents.
@@ -94,6 +105,7 @@ pub const LEGACY: BrandCanonical = BrandCanonical {
     log_target: "termul",
     keychain_service: "com.termul.manager",
     keychain_ssh_service: "termul-ssh",
+    ssh_known_hosts_file: "known_hosts_termul",
     keychain_pairing_service: "com.termul.remote.pairing",
     mcp_server_name: "termul",
     skill_name: "termul-scheduled-tasks",
@@ -126,6 +138,7 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     log_target: "termul",
     keychain_service: "com.termul.manager",
     keychain_ssh_service: "termul-ssh",
+    ssh_known_hosts_file: "known_hosts_termul",
     keychain_pairing_service: "com.termul.remote.pairing",
     mcp_server_name: "termul",
     skill_name: "termul-scheduled-tasks",

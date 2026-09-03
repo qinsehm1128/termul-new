@@ -1,4 +1,4 @@
-# termul Documentation Index
+# Se Manager Documentation Index
 
 **Type:** monolith
 **Primary Language:** TypeScript and Rust
@@ -7,7 +7,7 @@
 
 ## Project Overview
 
-Termul Manager is a project-aware desktop terminal workspace built with Tauri 2. It combines terminal management, project organization, snapshots, file exploration, editor panels, embedded browser tabs, and browser annotation workflows inside a single desktop shell.
+Se Manager is a project-aware desktop terminal workspace built with Tauri 2. It combines terminal management, project organization, snapshots, file exploration, editor panels, embedded browser tabs, and browser annotation workflows inside a single desktop shell.
 
 ## Quick Reference
 
@@ -30,7 +30,7 @@ Termul Manager is a project-aware desktop terminal workspace built with Tauri 2.
 - [优化借鉴目录](./borrowing/README.md) - 外部参考项目(grok-bot / ThinkRail / NyaTerm)的对抗性评估与借鉴方案总入口,含合并优先级视图
   - [grok-bot 借鉴报告与方案](./borrowing/grok-bot-borrowing-plan.md) - 用量仪表盘(ACP+终端 CLI+定价匹配)、MCP 反向桥、composing 脉冲的调研证据与分阶段方案
   - [ThinkRail 借鉴报告](./borrowing/thinkrail-borrowing-plan.md) - JetBrains/thinkrail 参考仓库的 Composer 三态发送、终端连接语义、Review 锚定、gh PR 流程等借鉴项
-  - [终端渲染层借鉴: WebGL vs DOM](./borrowing/terminal-renderer-dom-fallback.md) - ThinkRail 弃用 WebglAddon 的决策证据、崩溃机制对比、termul 回退路径现状与 A/B 实验设计
+  - [终端渲染层借鉴: WebGL vs DOM](./borrowing/terminal-renderer-dom-fallback.md) - ThinkRail 弃用 WebglAddon 的决策证据、崩溃机制对比、Se 回退路径现状与 A/B 实验设计
   - [NyaTerm 借鉴报告](./borrowing/nyaterm-borrowing-plan.md) - 同栈运维终端的 SSH 远程系统监控采样器模式、主题导入导出/自定义主题/终端主题独立等借鉴项
 - [Obsidian 式文档能力可行性](./borrowing/obsidian-doc-capability-feasibility.md) - vault/wiki 链接/backlinks + WebDAV 同步(reqwest_dav)+ 本地向量化(sqlite-vec+fastembed)的实现路径与可借鉴项目清单
 - [Development Guide](./development-guide.md) - Local setup, commands, and developer workflows

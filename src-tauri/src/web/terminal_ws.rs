@@ -2177,8 +2177,8 @@ mod tests {
     #[test]
     fn companion_title_uses_cwd_basename_then_shell() {
         assert_eq!(
-            terminal_display_title("/Users/dev/projects/termul", "zsh"),
-            "termul"
+            terminal_display_title("/Users/dev/projects/se-manager", "zsh"),
+            "se-manager"
         );
         assert_eq!(terminal_display_title("/", "zsh"), "zsh");
         assert_eq!(terminal_display_title("", "bash"), "bash");

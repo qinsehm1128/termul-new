@@ -551,7 +551,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("termul-web-wt-{label}-{nanos}"));
+            let path = std::env::temp_dir().join(format!("se-manager-web-wt-{label}-{nanos}"));
             std::fs::create_dir_all(&path).expect("create temp dir");
             Self { path }
         }
@@ -728,7 +728,7 @@ mod tests {
     /// Owns the `TempDir` so the repo survives the test body; drops (removing
     /// the temp dir) when the fixture goes out of scope at test teardown. This
     /// replaces the old `std::mem::forget(dir)` pattern that accumulated
-    /// `%TEMP%\termul-web-wt-*` dirs across CI runs.
+    /// `%TEMP%\se-manager-web-wt-*` dirs across CI runs.
     struct RepoFixture {
         _dir: TempDir,
         path: std::path::PathBuf,

@@ -1459,7 +1459,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-sessions-{label}-{}-{}",
+            "se-manager-sessions-{label}-{}-{}",
             std::process::id(),
             now_millis()
         ));

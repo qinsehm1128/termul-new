@@ -380,7 +380,7 @@ pub struct AppState {
     /// derived from the `ProjectRegistry`'s default (active) project at start,
     /// falling back to the user home dir when the registry is empty or its
     /// default project path is invalid (fails canonicalization); on the
-    /// standalone `termul-server` path it comes from
+    /// standalone `se-server` path it comes from
     /// `ServerConfig::project_root` (the `--project-root` CLI flag or the
     /// env/home default).
     ///
@@ -3634,7 +3634,7 @@ async fn handle_resolve_cli_sessions(id: String, payload: &Value) -> WsReply {
 /// from the WS connection `authenticate` token gate — this is the agent
 /// method, not the relay handshake. Mirrors the desktop `acp_authenticate`
 /// Tauri command (both call `AcpManager::authenticate`). The provider owns
-/// the login UX (often opens its own browser); Termul never invents a
+/// the login UX (often opens its own browser); Se never invents a
 /// redirect URL or stores credentials.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -5578,7 +5578,7 @@ mod tests {
     #[tokio::test]
     async fn cross_agent_prompt_is_rejected_before_claim_or_persistence() {
         let root =
-            std::env::temp_dir().join(format!("termul-ws-ownership-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("se-manager-ws-ownership-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -6005,7 +6005,8 @@ mod tests {
 
     #[tokio::test]
     async fn accepted_prompt_survives_disconnect_and_persists_completion_for_reconnect() {
-        let root = std::env::temp_dir().join(format!("termul-ws-resume-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("se-manager-ws-resume-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -6145,7 +6146,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_list_acp_catalog_ws_dispatch_returns_payload() {
-        let root = std::env::temp_dir().join(format!("termul-ws-cat-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("se-manager-ws-cat-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
             .await
@@ -6178,7 +6179,8 @@ mod tests {
 
     #[tokio::test]
     async fn handle_set_catalog_opt_in_ws_dispatch_persists() {
-        let root = std::env::temp_dir().join(format!("termul-ws-optin-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("se-manager-ws-optin-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
             .await
@@ -6326,7 +6328,8 @@ mod tests {
 
     #[tokio::test]
     async fn store_write_then_read_roundtrips() {
-        let dir = std::env::temp_dir().join(format!("termul-ws-store-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("se-manager-ws-store-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
 
@@ -6366,7 +6369,7 @@ mod tests {
     #[tokio::test]
     async fn store_read_missing_key_returns_null_value() {
         let dir =
-            std::env::temp_dir().join(format!("termul-ws-store-miss-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("se-manager-ws-store-miss-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         let reply = handle_request_with_store(
@@ -6385,7 +6388,7 @@ mod tests {
     #[tokio::test]
     async fn store_delete_removes_and_reports_existed() {
         let dir =
-            std::env::temp_dir().join(format!("termul-ws-store-del-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("se-manager-ws-store-del-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         store.write("k", json!("v"), None).unwrap();
@@ -6437,7 +6440,7 @@ mod tests {
     #[tokio::test]
     async fn store_malformed_payload_returns_validation_error() {
         let dir =
-            std::env::temp_dir().join(format!("termul-ws-store-bad-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("se-manager-ws-store-bad-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         // Missing `key` fails the payload serde.
@@ -6461,7 +6464,8 @@ mod tests {
 
     #[tokio::test]
     async fn second_client_restores_session_created_by_first_client() {
-        let root = std::env::temp_dir().join(format!("termul-ws-cross-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("se-manager-ws-cross-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -7309,7 +7313,7 @@ mod tests {
         // acp_install: Some(...). An unknown agent id resolves to
         // CATALOG_AGENT_NOT_FOUND (the catalog has no such agent).
         let tmp = std::env::temp_dir().join(format!(
-            "termul-ws-install-unknown-{}-{}",
+            "se-manager-ws-install-unknown-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -8362,7 +8366,7 @@ mod tests {
         );
         let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
         let path = std::env::temp_dir().join(format!(
-            "termul-ws-cold-tab-noperist-{}.json",
+            "se-manager-ws-cold-tab-noperist-{}.json",
             std::process::id()
         ));
         let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
@@ -8447,7 +8451,8 @@ mod tests {
     /// and standalone.
     #[tokio::test]
     async fn list_persisted_sessions_serves_host_persistence() {
-        let root = std::env::temp_dir().join(format!("termul-ws-list-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("se-manager-ws-list-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -8477,7 +8482,7 @@ mod tests {
     #[tokio::test]
     async fn register_discovered_session_promotes_metadata_without_transcript() {
         let root = std::env::temp_dir().join(format!(
-            "termul-ws-register-discovered-{}",
+            "se-manager-ws-register-discovered-{}",
             uuid::Uuid::new_v4()
         ));
         let cwd = root.join("cwd");
@@ -8555,7 +8560,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_session_payload_materializes_standalone_durable_history() {
-        let root = std::env::temp_dir().join(format!("termul-ws-payload-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("se-manager-ws-payload-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -8675,7 +8681,7 @@ mod tests {
     #[tokio::test]
     async fn get_session_payload_standalone_unknown_session_is_not_found() {
         let root =
-            std::env::temp_dir().join(format!("termul-ws-payload-nf-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("se-manager-ws-payload-nf-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -8726,7 +8732,7 @@ mod tests {
     #[tokio::test]
     async fn get_session_payload_standalone_corrupt_log_is_unsupported() {
         let root = std::env::temp_dir().join(format!(
-            "termul-ws-payload-corrupt-{}",
+            "se-manager-ws-payload-corrupt-{}",
             uuid::Uuid::new_v4()
         ));
         let cwd = root.join("cwd");
@@ -8790,8 +8796,10 @@ mod tests {
 
     #[tokio::test]
     async fn try_reopen_returns_none_when_no_stored_session() {
-        let root =
-            std::env::temp_dir().join(format!("termul-ws-reopen-none-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "se-manager-ws-reopen-none-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
             .await
@@ -8816,7 +8824,7 @@ mod tests {
     #[tokio::test]
     async fn try_reopen_falls_back_when_agent_cannot_load() {
         let root = std::env::temp_dir().join(format!(
-            "termul-ws-reopen-fallback-{}",
+            "se-manager-ws-reopen-fallback-{}",
             uuid::Uuid::new_v4()
         ));
         let cwd = root.join("cwd");
@@ -8905,7 +8913,7 @@ mod tests {
         );
         let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
         let path = std::env::temp_dir().join(format!(
-            "termul-ws-set-default-{}-{}.json",
+            "se-manager-ws-set-default-{}-{}.json",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -8971,7 +8979,7 @@ mod tests {
             Some("p-1".to_string()),
         );
         let path = std::env::temp_dir().join(format!(
-            "termul-ws-set-default-nf-{}-{}.json",
+            "se-manager-ws-set-default-nf-{}-{}.json",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -9093,7 +9101,7 @@ mod tests {
         );
         let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
         let path = std::env::temp_dir().join(format!(
-            "termul-ws-live-switch-nobroadcast-{}-{}.json",
+            "se-manager-ws-live-switch-nobroadcast-{}-{}.json",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -9248,7 +9256,7 @@ mod tests {
         );
         let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
         let path = std::env::temp_dir().join(format!(
-            "termul-ws-cold-tab-vps-noperist-{}-{}.json",
+            "se-manager-ws-cold-tab-vps-noperist-{}-{}.json",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));

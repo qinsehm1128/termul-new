@@ -1,10 +1,10 @@
 <div align="center">
 
-# 🖥️ Termul Manager
+# 🖥️ Se Manager
 
 **A modern, project-aware terminal manager built with Tauri**
 
-Termul treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+Se treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
 
 _An independent project — not a GitHub fork. Derived from [gnoviawan/termul](https://github.com/gnoviawan/termul) under the MIT License; see [License & Provenance](#-license--provenance)._
 
@@ -125,7 +125,7 @@ _An independent project — not a GitHub fork. Derived from [gnoviawan/termul](h
 
 Released builds target **macOS on Apple Silicon** and **Windows x64**. Intel Macs and
 Linux desktops are not published — build from source (see [Getting Started](#-getting-started)).
-A headless `termul-server` for linux-x64 is published separately for self-hosting.
+A headless `se-server` for linux-x64 is published separately for self-hosting.
 
 ### macOS (Apple Silicon)
 

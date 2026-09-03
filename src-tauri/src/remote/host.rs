@@ -2,7 +2,7 @@
 //!
 //! Replaces the legacy PTY bridge (`remote/server.rs`, removed). Where the old
 //! server proxied live PTY I/O over a separate WebSocket, this wraps the same
-//! [`crate::web`] Axum server the standalone `termul-server` binary uses, so the
+//! [`crate::web`] Axum server the standalone `se-server` binary uses, so the
 //! desktop's live `AcpManager` (the same agent sessions the renderer sees) is
 //! shared with a browser/phone client over the LAN — the "shared-live" mode.
 //!
@@ -509,7 +509,7 @@ impl RemoteServerState {
         // carries display paths (not canonical forms), so we run the result
         // through `resolve_and_validate_project_root` so the value stored in
         // `ServerConfig::project_root` is a canonical absolute path to an
-        // existing directory — exactly like the standalone `termul-server`.
+        // existing directory — exactly like the standalone `se-server`.
         //
         // Fallback chain:
         // 1. Registry default project path → canonicalize.
@@ -1623,7 +1623,7 @@ mod tests {
         // without an override, skip silently — local dev may lack a writable
         // outside-home path.
         let probe = outside_base.join(format!(
-            "termul-xdrive-probe-{}-{}",
+            "se-manager-xdrive-probe-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -1655,12 +1655,12 @@ mod tests {
         }
 
         let dir_a = outside_base.join(format!(
-            "termul-cross-drive-a-{}-{}",
+            "se-manager-cross-drive-a-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
         let dir_b = outside_base.join(format!(
-            "termul-cross-drive-b-{}-{}",
+            "se-manager-cross-drive-b-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));

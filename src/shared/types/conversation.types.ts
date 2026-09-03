@@ -1,7 +1,7 @@
 /**
  * Runtime-neutral Conversation identity, lifecycle, and resource-reference contracts.
  *
- * ConversationId is allocated by Termul before ACP session creation. ACP session ids remain
+ * ConversationId is allocated by Se before ACP session creation. ACP session ids remain
  * opaque replaceable bindings and must never be used as Conversation identity or path keys.
  */
 
@@ -12,7 +12,7 @@ export const TERMINAL_RESOURCE_REF_SCHEMA_VERSION = 1 as const
 
 declare const conversationIdBrand: unique symbol
 
-/** Canonical lowercase-hyphenated Termul-owned UUID. */
+/** Canonical lowercase-hyphenated Se-owned UUID. */
 export type ConversationId = string & { readonly [conversationIdBrand]?: true }
 
 const canonicalConversationId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/

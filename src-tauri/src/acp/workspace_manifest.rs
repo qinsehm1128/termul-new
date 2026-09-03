@@ -20,7 +20,7 @@
 //! # Concurrency
 //!
 //! `WorkspaceManifestService::open` returns an `Arc<Self>` shared by the host
-//! runtime (Tauri desktop OR standalone `termul-server`, never both —
+//! runtime (Tauri desktop OR standalone `se-server`, never both —
 //! `Never`-clause). Concurrent writers within the process serialize through a
 //! per-project `tokio::Mutex` keyed by `project_id`, so two racing writes to
 //! the same project deterministically produce one `Updated` and one `Conflict`
@@ -327,7 +327,7 @@ type Result<T> = std::result::Result<T, WorkspaceManifestError>;
 type ProjectLockMap = HashMap<String, Arc<TokioMutex<()>>>;
 
 /// Host-owned versioned workspace manifest service. One instance per host
-/// runtime (desktop OR standalone `termul-server`, never shared across
+/// runtime (desktop OR standalone `se-server`, never shared across
 /// processes — `Never`-clause). Constructed via
 /// [`WorkspaceManifestService::open`], which creates the root directory +
 /// idempotent re-open (mirrors `SessionPersistence::open`).
@@ -856,7 +856,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "termul-workspace-manifest-{label}-{}-{}",
+            "se-manager-workspace-manifest-{label}-{}-{}",
             std::process::id(),
             now_millis()
         ));

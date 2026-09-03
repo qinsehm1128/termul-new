@@ -279,7 +279,7 @@ impl EventSink for TauriEventSink {
 ///   `seq` (Dev Notes #6).
 ///
 /// Constructible WITHOUT a Tauri `AppHandle` (Story 1.1 invariant — the
-/// standalone `termul-server` binary has no Tauri app). `Send + Sync` so clones
+/// standalone `se-server` binary has no Tauri app). `Send + Sync` so clones
 /// of `Arc<WsRelaySink>` can cross from the Tauri command thread into each
 /// agent's dedicated driver thread.
 pub struct WsRelaySink {
@@ -583,7 +583,7 @@ impl WsRelaySink {
 
     /// Create a live relay sink with a custom per-session event-log capacity and
     /// the default per-client lossy ring capacity (AC4 + AC5). Used by
-    /// `termul-server` to thread `ServerConfig::event_log_capacity`.
+    /// `se-server` to thread `ServerConfig::event_log_capacity`.
     #[must_use]
     pub fn with_log_capacity(event_log_capacity: usize) -> Self {
         Self::with_capacity(event_log_capacity, DEFAULT_LOSSY_CAPACITY)
@@ -2771,7 +2771,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("termul-sink-{label}-{stamp}"));
+        let path = std::env::temp_dir().join(format!("se-manager-sink-{label}-{stamp}"));
         std::fs::create_dir_all(&path).unwrap();
         path
     }
@@ -3043,7 +3043,7 @@ mod tests {
     #[tokio::test]
     async fn session_lifecycle_broadcasts_history_changed_when_persistent() {
         let root = std::env::temp_dir().join(format!(
-            "termul-sink-history-broadcast-{}",
+            "se-manager-sink-history-broadcast-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -3399,7 +3399,7 @@ mod tests {
     #[tokio::test]
     async fn title_metadata_events_broadcast_history_changed_when_persistent() {
         let root = std::env::temp_dir().join(format!(
-            "termul-sink-title-broadcast-{}",
+            "se-manager-sink-title-broadcast-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();

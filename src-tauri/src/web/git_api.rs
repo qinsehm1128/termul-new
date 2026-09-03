@@ -1020,7 +1020,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("termul-web-gitapi-{label}-{nanos}"));
+            let path = std::env::temp_dir().join(format!("se-manager-web-gitapi-{label}-{nanos}"));
             std::fs::create_dir_all(&path).expect("create temp dir");
             Self { path }
         }

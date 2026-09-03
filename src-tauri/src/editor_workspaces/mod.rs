@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn skips_missing_directories() {
-        let missing = std::env::temp_dir().join("termul-missing-editor-workspace-dir");
+        let missing = std::env::temp_dir().join("se-manager-missing-editor-workspace-dir");
         let _ = fs::remove_dir_all(&missing);
         let list = discover::collect_folder(
             EditorWorkspaceKind::Vscode,

@@ -12,7 +12,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { TermulMark } from '@/components/TermulMark'
+import { SeMark } from '@/components/SeMark'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
@@ -124,7 +124,7 @@ export function ActivityRail({
           className="flex h-9 w-11 shrink-0 items-center justify-center text-foreground/90"
           data-tauri-drag-region={isMac ? true : undefined}
         >
-          <TermulMark size={19} className="pointer-events-none" />
+          <SeMark size={19} className="pointer-events-none" />
         </div>
 
         <div className="my-1 h-px w-4 bg-border/70" aria-hidden="true" />

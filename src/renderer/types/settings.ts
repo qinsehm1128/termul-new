@@ -102,7 +102,7 @@ export interface AppSettings {
    * Preferences; pushed to the Rust core. */
   acpFirstPromptWarmupSecs: number | null
   /** When true (default), first `npx -y` agent launch installs the package
-   * into Termul's local prefix and later launches skip npx. When false,
+   * into Se's local prefix and later launches skip npx. When false,
    * always run through npx. Pushed to the Rust core. */
   acpPreferLocalNpmInstall: boolean
 }

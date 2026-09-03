@@ -1509,7 +1509,7 @@ fn create_commit_message_file(bytes: &[u8]) -> Result<std::path::PathBuf, String
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let path =
-            std::env::temp_dir().join(format!("termul-commitmsg-{pid}-{nanos}-{attempt}.txt"));
+            std::env::temp_dir().join(format!("se-manager-commitmsg-{pid}-{nanos}-{attempt}.txt"));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true) // O_EXCL: fail if the path already exists
@@ -1871,7 +1871,7 @@ mod tests {
         // A bare name that does not exist on PATH should come back unchanged so
         // the spawn still produces a meaningful "not found" error rather than
         // silently rewriting to something else.
-        let unlikely = "termul-nonexistent-agent-xyz";
+        let unlikely = "se-manager-nonexistent-agent-xyz";
         assert_eq!(resolve_executable(unlikely), unlikely);
     }
 
@@ -2531,7 +2531,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("termul-git-it-{tag}-{pid}-{n}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("se-manager-git-it-{tag}-{pid}-{n}-{nanos}"));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }

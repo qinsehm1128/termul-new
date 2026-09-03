@@ -1,6 +1,6 @@
 //! Host-injected `plan` MCP tool — first-class plan UI for every ACP agent.
 //!
-//! Termul auto-injects a host-side MCP server into every `session/new`
+//! Se auto-injects a host-side MCP server into every `session/new`
 //! `mcp_servers` list (see `AcpManager::new_session_with_context`). The agent
 //! discovers it like any MCP tool and calls it instead of a built-in todo
 //! tool. When called, the host updates a per-session plan cache and emits a
@@ -62,15 +62,15 @@ pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
 /// Input the agent sends to `plan` (the `arguments` of `tools/call`).
 /// Also re-used as the parent–child TCP frame body (one todo per plan entry).
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
-pub struct TermulPlanInput {
+pub struct SePlanInput {
     /// The complete list of plan entries — each update is a FULL REPLACE
     /// (matches the ACP `plan_update` semantics the renderer already enforces).
-    pub todos: Vec<TermulPlanTodo>,
+    pub todos: Vec<SePlanTodo>,
 }
 
 /// Input the agent sends to `set_session_title`.
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
-pub struct TermulSetTitleInput {
+pub struct SeSetTitleInput {
     /// Concise title for the current chat session.
     pub title: String,
 }
@@ -78,7 +78,7 @@ pub struct TermulSetTitleInput {
 /// One todo item. `status`/`priority` are optional strings (the agent may omit
 /// them); the host maps unknown/absent values to ACP defaults.
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
-pub struct TermulPlanTodo {
+pub struct SePlanTodo {
     /// Human-readable description of the task.
     pub content: String,
     /// Optional status: `"pending"` | `"in_progress"` | `"completed"`.
@@ -129,7 +129,7 @@ pub struct FrameRequest {
     #[serde(default)]
     pub kind: FrameKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub todos: Vec<TermulPlanTodo>,
+    pub todos: Vec<SePlanTodo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,7 +229,7 @@ pub struct ScheduledTaskPauseInput {
 /// Unknown `status`/`priority` strings fall back to `Pending`/`Low` (the ACP
 /// enums are `#[non_exhaustive]`; only the three named variants are produced).
 #[must_use]
-pub fn map_todos_to_plan_entries(todos: &[TermulPlanTodo]) -> Vec<PlanEntry> {
+pub fn map_todos_to_plan_entries(todos: &[SePlanTodo]) -> Vec<PlanEntry> {
     todos
         .iter()
         .map(|todo| {
@@ -296,7 +296,7 @@ impl PlanStore {
 /// = clear contract: passing `entries: vec![]` emits a `Plan` with an empty
 /// list, which the renderer's `_onPlanUpdate` maps to `dropPlanForSession`.
 ///
-/// `agent_id` is the Termul-side `AgentId` (used for the wire event payload);
+/// `agent_id` is the Se-side `AgentId` (used for the wire event payload);
 /// the renderer keys plan state by `session_id`.
 pub async fn emit_plan_update(
     sinks: &[Arc<dyn EventSink>],
@@ -350,17 +350,17 @@ mod tests {
     #[test]
     fn map_todos_preserves_order_and_maps_status_priority() {
         let todos = vec![
-            TermulPlanTodo {
+            SePlanTodo {
                 content: "a".into(),
                 status: Some("in_progress".into()),
                 priority: Some("high".into()),
             },
-            TermulPlanTodo {
+            SePlanTodo {
                 content: "b".into(),
                 status: Some("completed".into()),
                 priority: Some("medium".into()),
             },
-            TermulPlanTodo {
+            SePlanTodo {
                 content: "c".into(),
                 status: None,
                 priority: None,
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn map_todos_unknown_status_priority_falls_back() {
-        let todos = vec![TermulPlanTodo {
+        let todos = vec![SePlanTodo {
             content: "x".into(),
             status: Some("bogus".into()),
             priority: Some("nope".into()),
@@ -396,17 +396,17 @@ mod tests {
         let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
         let (agent_id, session_id) = make_ids();
         let todos = vec![
-            TermulPlanTodo {
+            SePlanTodo {
                 content: "one".into(),
                 status: None,
                 priority: None,
             },
-            TermulPlanTodo {
+            SePlanTodo {
                 content: "two".into(),
                 status: None,
                 priority: None,
             },
-            TermulPlanTodo {
+            SePlanTodo {
                 content: "three".into(),
                 status: None,
                 priority: None,
