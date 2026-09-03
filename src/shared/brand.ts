@@ -170,7 +170,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   bundleId: 'com.termul-manager.app',
   bundleIdDev: 'com.termul-manager.app.dev',
   deepLinkScheme: 'termul',
-  logFileName: 'termul',
+  logFileName: 'se-manager',
   logTarget: 'termul',
   keychainService: 'com.termul.manager',
   keychainSshService: 'termul-ssh',
@@ -180,7 +180,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   skillMarker: '<!-- managed-by-termul:termul-scheduled-tasks -->',
   skillManifestKey: 'managedByTermul',
   frpProxyName: 'termul',
-  stateDir: 'termul',
+  stateDir: 'se-manager',
   iosDefaultsPrefix: 'termul.',
   iosCacheDir: 'TermulRemote'
 } as const

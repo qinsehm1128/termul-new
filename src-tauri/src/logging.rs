@@ -268,6 +268,20 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// The active log file's on-disk name, `<log_file_name>.log`.
+///
+/// Shared with the "save a copy of the log" flows in `lib.rs`: those offer a
+/// default file name in a save dialog, and a literal there would drift from the
+/// file being copied the moment the brand flipped — the copy would still be the
+/// right bytes under a name that no longer matches anything the app writes.
+///
+/// Reads the brand seam, so it must be called on the caller's own thread
+/// (FORBID-07).
+#[must_use]
+pub fn log_file_base_name() -> String {
+    format!("{}.log", log_file_name())
+}
+
 /// Resolve the absolute path of the active log file
 /// (`<app_log_dir>/<log_file_name>.log`). The `LogDir` target writes
 /// `{file_name}.log`, so we append the `.log` extension the plugin adds.
@@ -275,7 +289,7 @@ pub fn log_file_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<std::path:
     app.path()
         .app_log_dir()
         .ok()
-        .map(|dir| dir.join(format!("{}.log", log_file_name())))
+        .map(|dir| dir.join(log_file_base_name()))
 }
 
 /// Emit a single startup banner at `info` level: version, OS/arch, build
@@ -468,15 +482,38 @@ mod tests {
     fn log_file_name_follows_the_brand_seam_rather_than_a_literal() {
         assert_eq!(log_file_name(), brand::DEFAULT_CANONICAL.log_file_name);
 
+        // The injected name has to be one `canonical()` never returns on its
+        // own, or the assertion below passes without the seam being consulted.
+        // Now that T-A17 has flipped the contract, that is the legacy spelling.
         let _guard = brand::override_canonical(brand::BrandCanonical {
-            log_file_name: "se-manager",
+            log_file_name: brand::LEGACY.log_file_name,
+            ..brand::DEFAULT_CANONICAL
+        });
+        assert_ne!(
+            brand::LEGACY.log_file_name,
+            brand::DEFAULT_CANONICAL.log_file_name,
+            "the injected name must differ from the shipped one or this proves nothing"
+        );
+        assert_eq!(
+            log_file_name(),
+            brand::LEGACY.log_file_name,
+            "a rename of brand::canonical().log_file_name must move the log file the app writes; \
+             a literal here would strand every path bug_report.yml publishes"
+        );
+    }
+
+    /// `lib.rs`'s two "save a copy of the log" dialogs offer this as the
+    /// default file name; a literal in either would name a file the app has
+    /// stopped writing.
+    #[test]
+    fn the_saved_copy_is_offered_under_the_name_the_app_actually_writes() {
+        let _guard = brand::override_canonical(brand::BrandCanonical {
+            log_file_name: brand::LEGACY.log_file_name,
             ..brand::DEFAULT_CANONICAL
         });
         assert_eq!(
-            log_file_name(),
-            "se-manager",
-            "a rename of brand::canonical().log_file_name must move the log file the app writes; \
-             a literal here would strand every path bug_report.yml publishes"
+            log_file_base_name(),
+            format!("{}.log", brand::LEGACY.log_file_name)
         );
     }
 

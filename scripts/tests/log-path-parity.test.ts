@@ -38,6 +38,7 @@ const read = (relativePath: string): string => readFileSync(join(repoRoot, relat
 const BUG_REPORT_YML = '.github/ISSUE_TEMPLATE/bug_report.yml'
 const BRAND_RS = 'src-tauri/src/brand.rs'
 const LOGGING_RS = 'src-tauri/src/logging.rs'
+const LIB_RS = 'src-tauri/src/lib.rs'
 const TAURI_CONF = 'src-tauri/tauri.conf.json'
 
 /**
@@ -121,6 +122,22 @@ describe('published log paths vs. the code that writes them', () => {
 
   it('derives the file name through the brand seam the app actually reads', () => {
     expect(loggingReadsTheBrandSeam()).toBe(true)
+  })
+
+  // The third published spelling of the same name, and the one with no
+  // compiler tying it to the other two: `lib.rs`'s two "save a copy of the log"
+  // flows offer a default file name in a native save dialog. T-A17 pointed both
+  // at `logging::log_file_base_name()`, but nothing structural holds them
+  // there — a re-introduced literal compiles, and the dialog then proposes a
+  // name for a file the app has stopped writing. Asserted positively: a rename
+  // pass can delete a literal but cannot author a call to the helper.
+  it('offers the saved copy under the derived name rather than a literal', () => {
+    const source = read(LIB_RS)
+    const helperCalls = [...source.matchAll(/logging::log_file_base_name\(\)/g)]
+    expect(helperCalls.length).toBeGreaterThanOrEqual(2)
+
+    const literals = [...source.matchAll(/"([^"\n]*\.log)"/g)].map((match) => match[1])
+    expect(literals).toEqual([])
   })
 
   it('publishes a path for every platform the app derives one for', () => {

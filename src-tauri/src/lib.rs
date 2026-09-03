@@ -1205,7 +1205,7 @@ fn export_log_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), S
     app.dialog()
         .file()
         .add_filter(native_label("log.files"), &["log"])
-        .set_file_name("termul.log")
+        .set_file_name(logging::log_file_base_name())
         .save_file(move |file_path| {
             if let Some(tauri_plugin_dialog::FilePath::Path(dest_path)) = file_path {
                 match std::fs::copy(&log_path, &dest_path) {
@@ -1315,7 +1315,7 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
         }
     };
 
-    let dest_path = default_dir.join("termul.log");
+    let dest_path = default_dir.join(logging::log_file_base_name());
     let app_handle = app.clone();
 
     tauri::async_runtime::spawn(async move {
