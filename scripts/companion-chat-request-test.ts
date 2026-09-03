@@ -5,6 +5,8 @@
  * Usage: bun scripts/companion-chat-request-test.ts
  * Optional: TERMUL_ACCESS_URL=https://host/#access_token=...
  */
+import { acceptedBrandValues } from '../src/shared/brand'
+
 const HOST = process.env.TERMUL_HOST ?? 'http://127.0.0.1:18787'
 
 type IpcBody<T> = {
@@ -45,15 +47,23 @@ function tokenFromAccessUrl(url: string): { origin: string; token: string } | nu
 
 async function tokenFromKeychain(): Promise<string | null> {
   const accounts = ['remote-access-generation-v2', 'remote-access-v1']
-  for (const account of accounts) {
-    const proc = Bun.spawn({
-      cmd: ['security', 'find-generic-password', '-s', 'com.termul.manager', '-a', account, '-w'],
-      stdout: 'pipe',
-      stderr: 'pipe'
-    })
-    const text = (await new Response(proc.stdout).text()).trim()
-    const code = await proc.exited
-    if (code === 0 && text.length > 0) return text
+  // Both spellings, current first: this runs against whichever desktop build the
+  // developer happens to have launched, and one that has not yet performed a
+  // compatibility read still has the token only under the pre-rename service.
+  // Sourced from the brand module rather than spelled here, so the name cannot
+  // drift away from what the app writes.
+  const services = acceptedBrandValues('keychainService')
+  for (const service of services) {
+    for (const account of accounts) {
+      const proc = Bun.spawn({
+        cmd: ['security', 'find-generic-password', '-s', service, '-a', account, '-w'],
+        stdout: 'pipe',
+        stderr: 'pipe'
+      })
+      const text = (await new Response(proc.stdout).text()).trim()
+      const code = await proc.exited
+      if (code === 0 && text.length > 0) return text
+    }
   }
   return null
 }

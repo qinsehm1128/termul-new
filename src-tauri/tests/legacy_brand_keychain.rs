@@ -480,6 +480,92 @@ fn production_reads_a_credential_seeded_under_the_legacy_service() {
     );
 }
 
+/// The same claim as the test above, with **no injection at all**.
+///
+/// T-A20 flipped `DEFAULT_CANONICAL`, so the service names in force here are the
+/// ones this build actually ships to users. That distinction is the whole point:
+/// the test above proves the *seam* carries credentials forward under whatever
+/// names it is handed, and would keep passing even if the flip had never landed
+/// or were reverted. This one proves the shipped values do it, which is the
+/// state a user's machine is in the first time they launch the renamed app.
+///
+/// The `assert_ne!` pair is the precondition, not decoration: if the flip is
+/// reverted, `canonical() == LEGACY`, both getters short-circuit before the
+/// fallback ever runs, and everything below would pass without exercising a
+/// single line of the compatibility read.
+#[test]
+fn the_shipped_service_names_still_read_entries_left_under_the_legacy_ones() {
+    let _global = installed_keychain();
+
+    assert_ne!(
+        DEFAULT_CANONICAL.keychain_service,
+        brand::LEGACY.keychain_service,
+        "the desktop keychain service has not been flipped, so nothing below \
+         exercises the compatibility read"
+    );
+    assert_ne!(
+        DEFAULT_CANONICAL.keychain_ssh_service,
+        brand::LEGACY.keychain_ssh_service,
+        "the SSH keychain service has not been flipped, so nothing below \
+         exercises the compatibility read"
+    );
+
+    let store = keychain_with_only_legacy_entries();
+    let password_key = format!("{INJECTED_PROFILE_ID}-password");
+    let passphrase_key = format!("{INJECTED_PROFILE_ID}-passphrase");
+    assert_eq!(
+        store.peek(DEFAULT_CANONICAL.keychain_service, INJECTED_PROJECT_KEY),
+        None,
+        "precondition: the keychain holds nothing but pre-rename entries"
+    );
+
+    let _backend = credentials::override_backend(Arc::clone(&store) as Arc<dyn CredentialBackend>);
+
+    assert_eq!(
+        keyring_get(INJECTED_PROJECT_KEY).expect("the project secret read succeeds"),
+        Some(INJECTED_PROJECT_SECRET.to_string()),
+        "a project environment secret written by the pre-rename build must still \
+         be readable under the service name this build ships"
+    );
+    assert_eq!(
+        ssh_credential_store::get_password(INJECTED_PROFILE_ID)
+            .expect("the SSH password read succeeds"),
+        Some(INJECTED_SSH_PASSWORD.to_string()),
+        "an SSH password written by the pre-rename build must still be readable"
+    );
+    assert_eq!(
+        ssh_credential_store::get_passphrase(INJECTED_PROFILE_ID)
+            .expect("the SSH passphrase read succeeds"),
+        Some(INJECTED_SSH_PASSPHRASE.to_string()),
+        "a private-key passphrase written by the pre-rename build must still be readable"
+    );
+
+    // Carried forward under the shipped names …
+    assert_eq!(
+        store.peek(DEFAULT_CANONICAL.keychain_service, INJECTED_PROJECT_KEY),
+        Some(INJECTED_PROJECT_SECRET.to_string())
+    );
+    assert_eq!(
+        store.peek(DEFAULT_CANONICAL.keychain_ssh_service, &password_key),
+        Some(INJECTED_SSH_PASSWORD.to_string())
+    );
+    assert_eq!(
+        store.peek(DEFAULT_CANONICAL.keychain_ssh_service, &passphrase_key),
+        Some(INJECTED_SSH_PASSPHRASE.to_string())
+    );
+
+    // … and copied, not moved (FORBID-05).
+    assert!(
+        store.contains(brand::LEGACY.keychain_service, INJECTED_PROJECT_KEY),
+        "the legacy project entry must survive the compatibility read"
+    );
+    assert!(
+        store.contains(brand::LEGACY.keychain_ssh_service, &password_key)
+            && store.contains(brand::LEGACY.keychain_ssh_service, &passphrase_key),
+        "the legacy SSH entries must survive the compatibility read"
+    );
+}
+
 /// A user-initiated delete must purge the legacy service too, or the very next
 /// read resurrects the credential the user just revoked.
 ///
