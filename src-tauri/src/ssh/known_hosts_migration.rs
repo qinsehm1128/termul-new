@@ -441,14 +441,54 @@ mod tests {
         );
     }
 
+    /// The degenerate case: a build whose canonical store name *is* the legacy
+    /// one has nothing to carry, and must not copy a file onto itself.
+    ///
+    /// Was every shipping build until T-A23 flipped the name, which is why it
+    /// needed no injection then.
     #[test]
     fn an_unchanged_brand_has_nothing_to_carry() {
         let temp = tempfile::tempdir().expect("tempdir");
         plant(temp.path());
-        // No override: canonical == legacy, which is every build until Wave 5.
+        let _brand = brand::override_canonical(brand::BrandCanonical {
+            ssh_known_hosts_file: brand::LEGACY.ssh_known_hosts_file,
+            ..brand::DEFAULT_CANONICAL
+        });
         assert_eq!(
             migrate_app_known_hosts_in(temp.path()).expect("migration runs"),
             KnownHostsMigration::NotApplicable
+        );
+    }
+
+    /// The shipped values do carry it. Every other test in this module injects
+    /// `renamed()`, so all of them would pass unchanged if T-A23's flip had
+    /// never landed; this one is what pins the flip itself.
+    #[test]
+    fn the_shipped_brand_carries_the_store_across() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let legacy = plant(temp.path());
+        assert_ne!(
+            brand::DEFAULT_CANONICAL.ssh_known_hosts_file,
+            brand::LEGACY.ssh_known_hosts_file,
+            "the host-key store name has not been flipped, so there is nothing to carry"
+        );
+
+        let expected = frozen_store();
+        assert_eq!(
+            migrate_app_known_hosts_in(temp.path()).expect("migration runs"),
+            KnownHostsMigration::Copied {
+                bytes: expected.len() as u64
+            }
+        );
+        assert_eq!(
+            fs::read(temp.path().join(brand::DEFAULT_CANONICAL.ssh_known_hosts_file))
+                .expect("read the store under the shipped name"),
+            expected
+        );
+        assert_eq!(
+            fs::read(&legacy).expect("read legacy"),
+            expected,
+            "a migration copies; it never rewrites the source"
         );
     }
 

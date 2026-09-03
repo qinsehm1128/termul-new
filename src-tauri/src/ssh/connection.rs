@@ -1038,8 +1038,15 @@ mod tests {
         .expect("a carried store accepts a new host");
     }
 
-    /// Every build until the rename lands: the two names are the same, so the
-    /// "left behind" branch must never fire on the store the app is using.
+    /// The degenerate case: a build whose canonical store name *is* the legacy
+    /// one. The "left behind" branch must never fire on the store the app is
+    /// itself using — that would refuse first-use trust forever, for everyone.
+    ///
+    /// Was every shipping build until T-A23 flipped the name, which is why it
+    /// needed no injection then. It is now reachable only through the seam, but
+    /// the branch it covers (`legacy != canonical`) is still in
+    /// `guard_accept_new` and still the difference between a safety interlock
+    /// and a permanent outage.
     #[test]
     fn an_unrenamed_store_is_never_treated_as_left_behind() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1048,9 +1055,174 @@ mod tests {
             b"build-01.example.com ssh-ed25519 AAAAtrusted-long-ago\n",
         )
         .expect("plant the store");
+        let _brand = crate::brand::override_canonical(crate::brand::BrandCanonical {
+            ssh_known_hosts_file: crate::brand::LEGACY.ssh_known_hosts_file,
+            ..crate::brand::DEFAULT_CANONICAL
+        });
 
         SSHConnectionManager::guard_accept_new(Some(temp.path()), false)
-            .expect("no rename has happened; accept-new must behave exactly as before");
+            .expect("the app's own store must never read as one left behind");
+    }
+
+    /// The claim T-A23 exists to protect, executed end to end under the values
+    /// this build **ships**: a host the user trusted before the rename is still
+    /// recognised after it, and the two OpenSSH markers this store is kept
+    /// separate for survive into the file `verify_host_key` reads.
+    ///
+    /// "The migration copied the bytes" is not the same statement. libssh2 is
+    /// the component that has to *parse* `@cert-authority` and `@revoked`; if
+    /// `read_file` rejected them, `verify_host_key`'s app-file branch fails
+    /// closed and every SSH connection stops working — a byte-identical copy
+    /// would not have caught that. So this drives the real `ssh2::KnownHosts`
+    /// against the real migrated file.
+    ///
+    /// The store is planted under the legacy name only. Nothing here injects a
+    /// brand, so if the flip were reverted the migration would report
+    /// `NotApplicable` and the `assert_ne!` guard below would say so.
+    #[test]
+    fn a_host_trusted_before_the_rename_is_still_recognised_after_it() {
+        use base64::Engine as _;
+
+        assert_ne!(
+            crate::brand::DEFAULT_CANONICAL.ssh_known_hosts_file,
+            crate::brand::LEGACY.ssh_known_hosts_file,
+            "the host-key store name has not been flipped, so there is no migration \
+             to prove anything about"
+        );
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/legacy-brand/ssh-known-hosts")
+            .join(crate::brand::LEGACY.ssh_known_hosts_file);
+        let frozen = std::fs::read_to_string(&fixture)
+            .unwrap_or_else(|e| panic!("read {} failed: {e}", fixture.display()));
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(crate::brand::LEGACY.ssh_known_hosts_file),
+            &frozen,
+        )
+        .expect("plant the pre-rename store");
+
+        // The real startup migration (M-15), not a test-only copy.
+        known_hosts_migration::migrate_app_known_hosts_in(temp.path())
+            .expect("the startup migration runs");
+
+        // The same path expression `app_known_hosts_path` builds, against an
+        // explicit `~/.ssh` so this test never touches the developer's own.
+        let store = temp
+            .path()
+            .join(crate::brand::canonical().ssh_known_hosts_file);
+
+        // An ordinary entry and a `[host]:port` entry, read out of the frozen
+        // store rather than spelled here.
+        let entries: Vec<(&str, u16, &str)> = frozen
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim_start();
+                !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with('@')
+            })
+            .map(|line| {
+                let mut parts = line.split_whitespace();
+                let pattern = parts.next().expect("a host pattern");
+                let _key_type = parts.next().expect("a key type");
+                let key = parts.next().expect("a base64 key");
+                match pattern.strip_prefix('[').and_then(|rest| rest.split_once("]:")) {
+                    Some((host, port)) => (host, port.parse().expect("a port"), key),
+                    None => (pattern, 22, key),
+                }
+            })
+            .collect();
+        assert!(
+            entries.len() >= 2,
+            "the frozen store must carry a plain entry and a [host]:port entry; got {entries:?}"
+        );
+
+        let session = Session::new().expect("an unconnected session is enough for known_hosts");
+        let mut known_hosts = session.known_hosts().expect("known_hosts handle");
+        known_hosts
+            .read_file(&store, KnownHostFileKind::OpenSSH)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "libssh2 could not read the carried store {}: {e}. verify_host_key fails \
+                     closed on this branch, so every SSH connection would stop working.",
+                    store.display()
+                )
+            });
+
+        for (host, port, key) in &entries {
+            let blob = base64::engine::general_purpose::STANDARD
+                .decode(key)
+                .expect("the frozen store's keys are base64");
+            assert!(
+                matches!(known_hosts.check_port(host, *port, &blob), CheckResult::Match),
+                "{host}:{port} was trusted before the rename but is not recognised in {}; \
+                 accept-new would re-trust whatever answers on that address",
+                store.display()
+            );
+        }
+
+        // The two markers are the reason this store is not the user's own
+        // known_hosts, and they are what a parse-and-rewrite migration loses.
+        let carried = std::fs::read_to_string(&store).expect("read the carried store");
+        let markers: Vec<&str> = carried
+            .lines()
+            .filter(|line| line.trim_start().starts_with('@'))
+            .collect();
+        assert!(
+            markers.iter().any(|line| line.starts_with("@cert-authority")),
+            "the @cert-authority line did not survive: {markers:?}"
+        );
+        assert!(
+            markers.iter().any(|line| line.starts_with("@revoked")),
+            "the @revoked line did not survive — a key the user explicitly revoked \
+             would be silently re-trusted: {markers:?}"
+        );
+    }
+
+    /// The other side of that boundary, under the values this build **ships**.
+    ///
+    /// Every other test here injects its own post-rename brand and so would pass
+    /// unchanged if T-A23's flip had never landed. This one has no override: it
+    /// is the state a user's machine is in on first launch after the rename, and
+    /// the refusal it asserts is what stops `accept-new` from re-trusting every
+    /// host whose key is sitting in a store nothing has carried across yet.
+    #[test]
+    fn the_shipped_store_name_refuses_accept_new_while_the_old_store_is_uncarried() {
+        assert_ne!(
+            crate::brand::DEFAULT_CANONICAL.ssh_known_hosts_file,
+            crate::brand::LEGACY.ssh_known_hosts_file,
+            "the host-key store name has not been flipped, so the interlock below \
+             cannot fire and this proves nothing"
+        );
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(crate::brand::LEGACY.ssh_known_hosts_file),
+            b"build-01.example.com ssh-ed25519 AAAAtrusted-long-ago\n",
+        )
+        .expect("plant the store a pre-rename build left behind");
+
+        let error = SSHConnectionManager::accept_new(
+            Some(temp.path()),
+            false,
+            "example.com",
+            22,
+            HOST_KEY,
+            ssh2::HostKeyType::Ed25519,
+        )
+        .expect_err("an uncarried store must refuse an unknown host");
+        assert!(
+            error.contains(crate::brand::LEGACY.ssh_known_hosts_file)
+                && error.contains(crate::brand::DEFAULT_CANONICAL.ssh_known_hosts_file),
+            "the refusal must name both stores so the cause is legible: {error}"
+        );
+        assert!(
+            !temp
+                .path()
+                .join(crate::brand::DEFAULT_CANONICAL.ssh_known_hosts_file)
+                .exists(),
+            "nothing may be appended while the old store is unread"
+        );
     }
 
     #[test]

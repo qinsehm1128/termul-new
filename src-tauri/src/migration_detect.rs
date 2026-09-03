@@ -15,12 +15,15 @@
 //!
 //! # Every probe is gated on the rename having landed
 //!
-//! `~/.ssh/known_hosts_termul` existing is not evidence of legacy data on a
-//! build that still writes that exact name — it is the live store. So each
-//! probe first asks whether [`brand::LEGACY`] and [`brand::canonical`] even
-//! differ for the identifier it is about, and reports "not present" when they
-//! do not. On today's shipped values that makes the whole detection empty,
-//! which is the correct answer: nothing has been renamed yet.
+//! A file at `~/.ssh/<`[`brand::LEGACY::ssh_known_hosts_file`]`>` existing is not
+//! evidence of legacy data on a build that still writes that exact name — it is
+//! the live store. So each probe first asks whether [`brand::LEGACY`] and
+//! [`brand::canonical`] even differ for the identifier it is about, and reports
+//! "not present" when they do not. For an identifier Wave 5 has not flipped yet,
+//! that makes its probe empty, which is the correct answer: nothing has been
+//! renamed for it.
+//!
+//! [`brand::LEGACY::ssh_known_hosts_file`]: crate::brand::BrandCanonical::ssh_known_hosts_file
 //!
 //! # M-15 is the one root detection does not trigger
 //!
@@ -1150,8 +1153,14 @@ mod tests {
     }
 
     /// Every probe has to answer "absent" while the two brands are still the
-    /// same values, or every user of today's build is told they have legacy data
-    /// to merge — which would be their live data.
+    /// same values, or a user whose live data sits under exactly those names is
+    /// told they have legacy data to merge — which would be their live data.
+    ///
+    /// This needed no injection until Wave 5 began flipping `DEFAULT_CANONICAL`,
+    /// because `canonical == LEGACY` then held for every identifier by itself.
+    /// Injecting `LEGACY` wholesale reproduces that build exactly, which is the
+    /// condition the gates are about; asserting it against today's half-flipped
+    /// shipped values would be asserting something else.
     #[test]
     fn nothing_is_legacy_before_the_rename_lands() {
         let fixture = Fixture::new();
@@ -1165,7 +1174,7 @@ mod tests {
             b"host ssh-ed25519 AAAA\n",
         )
         .expect("store");
-        // No brand override: canonical == LEGACY, which is every build so far.
+        let _brand = brand::override_canonical(brand::LEGACY);
         let detection = detect_legacy_data(&fixture.roots);
         assert!(
             !detection.has_legacy_data,
