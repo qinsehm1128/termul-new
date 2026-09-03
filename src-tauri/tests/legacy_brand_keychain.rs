@@ -24,7 +24,7 @@
 //! reasons:
 //!
 //! 1. **No reachable production seam.** `mod secure_storage` and `mod ssh` were
-//!    private to `termul_manager_lib` and neither was re-exported;
+//!    private to `se_manager_lib` and neither was re-exported;
 //!    `keyring_get`/`keyring_set` were additionally `pub(crate)`. Nothing under
 //!    `tests/` could call the credential paths at all.
 //!
@@ -61,9 +61,9 @@ use keyring::credential::{Credential, CredentialApi, CredentialBuilder, Credenti
 use keyring::{Entry, Error};
 use serde_json::Value;
 
-use termul_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
-use termul_manager_lib::credentials::{self, CredentialBackend, CredentialError};
-use termul_manager_lib::{keyring_delete, keyring_get, ssh_credential_store};
+use se_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
+use se_manager_lib::credentials::{self, CredentialBackend, CredentialError};
+use se_manager_lib::{keyring_delete, keyring_get, ssh_credential_store};
 
 /// Keychain service names the app writes *after* the rename.
 fn post_rename() -> BrandCanonical {

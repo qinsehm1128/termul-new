@@ -33,7 +33,7 @@
 //!
 //! # Why the path assertions are structural rather than a call
 //!
-//! `mod ssh` is private to `termul_manager_lib` (`src/lib.rs:31`, no `pub` and
+//! `mod ssh` is private to `se_manager_lib` (`src/lib.rs:31`, no `pub` and
 //! no re-export), and `SshConnection::app_known_hosts_path` /
 //! `verify_host_key` are private associated functions inside it. Integration
 //! tests under `tests/` link this crate as an external dependency and see only
@@ -68,9 +68,9 @@ use std::sync::{Mutex, MutexGuard};
 use sha2::{Digest, Sha256};
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprField, Ident, Lit, Member};
-use termul_manager_lib::brand::{self, BrandCanonical};
-use termul_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
-use termul_manager_lib::known_hosts_migration::{
+use se_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
+use se_manager_lib::known_hosts_migration::{
     self, migrate_app_known_hosts, KnownHostsMigration, KnownHostsMigrationError,
 };
 

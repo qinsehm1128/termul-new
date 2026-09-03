@@ -63,7 +63,7 @@ use std::path::{Path, PathBuf};
 
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, Ident};
-use termul_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
+use se_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
 
 /// The one file exempt from the scan, and why.
 ///

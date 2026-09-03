@@ -1,35 +1,35 @@
 [package]
-name = "termul-manager"
+name = "se-manager"
 version = "0.5.9"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["qinsehm1128", "gnoviawan (original author)", "mannnrachman (Tauri port)"]
 edition = "2021"
 # ACP 1.3.0 is edition 2024 and requires Rust ≥ 1.88; bump MSRV to match.
 rust-version = "1.88"
-# Two binaries live in this crate: the desktop app (`termul-manager`, the
-# implicit src/main.rs) and the standalone headless server (`termul-server`).
+# Two binaries live in this crate: the desktop app (`se-manager`, the
+# implicit src/main.rs) and the standalone headless server (`se-server`).
 # Pin `cargo run` / `tauri dev` to the desktop app so Cargo doesn't error on
 # ambiguity. The standalone binary is built explicitly via
-# `cargo build --bin termul-server --features standalone-server`.
-default-run = "termul-manager"
+# `cargo build --bin se-server --features standalone-server`.
+default-run = "se-manager"
 
 [lib]
-name = "termul_manager_lib"
+name = "se_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 # Standalone headless server (Story 1.2). Gated so default `cargo build` / `tauri
 # build` do NOT build or bundle it (Tauri bundler copies every [[bin]] it
 # discovers — see tauri#15325). Source lives OUTSIDE `src/bin/` so stage-2
 # disk scan cannot re-add it. Build with:
-#   cargo build --bin termul-server --features standalone-server
+#   cargo build --bin se-server --features standalone-server
 [[bin]]
-name = "termul-server"
+name = "se-server"
 path = "src/server_main.rs"
 required-features = ["standalone-server"]
 
 [features]
 default = []
-# Enables the termul-server binary entry (server_main.rs, required-features on
+# Enables the se-server binary entry (server_main.rs, required-features on
 # the [[bin]] target). rust-embed is always-on (the desktop's in-process
 # shared-live server serves the SAME embedded bundle in a release install
 # without dist-web/ on disk).
@@ -102,7 +102,7 @@ agent-client-protocol = "1.3"
 #     `client-side-sse` (rmcp's SSE stream parser, consumed by the
 #     streamable-http client which still speaks `text/event-stream` after rmcp
 #     1.7 dropped the standalone legacy SSE transport — CHANGELOG #562).
-#  2. `src/acp/host_mcp/` — the host-injected `termul` MCP SERVER (exposes the `plan` tool), served
+#  2. `src/acp/host_mcp/` — the host-injected `se-manager` MCP SERVER (exposes the `plan` tool), served
 #     over stdio by a self-spawned child of the host binary. Uses `server`,
 #     `transport-io` (`rmcp::transport::io::stdio()`), and `macros`
 #     (`#[tool_router]` / `#[tool]` / `#[tool_handler]`; the `#[tool]` macro
@@ -170,13 +170,13 @@ futures-util = { version = "0.3", default-features = false }
 async-trait = "0.1"
 
 # Embed the Vite web bundle (dist-web/) into the binary so the standalone
-# termul-server AND the desktop's in-process shared-live server serve the web
+# se-server AND the desktop's in-process shared-live server serve the web
 # client without dist-web/ on disk. #[allow_missing] keeps dev/CI-compile
 # green when the bundle is absent; the release build fails clearly via
 # build.rs when it is missing.
 rust-embed = { version = "8.12", features = ["mime-guess"] }
 
-# Standalone `termul-server` self-update (opt-in, default off): verifies
+# Standalone `se-server` self-update (opt-in, default off): verifies
 # downloaded binary signatures against the same minisign keypair the desktop
 # updater uses. Non-optional so the `server_update` module + its tests (incl.
 # signature verification) compile and run under default `cargo test`, per the
@@ -214,7 +214,7 @@ keyring = { version = "3.6", features = ["windows-native"] }
 # `conversation::migration::inventory::open_legacy_file_no_follow` and the
 # `geteuid` check in `web::auth::open_validated_token_file`, both `#[cfg(unix)]`.
 # Declared under macOS only, those sites failed to resolve the crate when the
-# linux-x64 `termul-server` target was built (E0433).
+# linux-x64 `se-server` target was built (E0433).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use chrono::{TimeZone, Utc};
-use termul_manager_lib::conversation::migration::{
+use se_manager_lib::conversation::migration::{
     ConversationMigrationControlService, MigrationErrorCode, MigrationMaintenanceAction,
     MigrationMaintenanceRequestV1,
 };
@@ -123,7 +123,7 @@ fn migration_control_request_serializes_across_processes() {
     let decoded: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
             root.join("conversation-migrations")
-                .join(termul_manager_lib::conversation::migration::MIGRATION_MAINTENANCE_FILE),
+                .join(se_manager_lib::conversation::migration::MIGRATION_MAINTENANCE_FILE),
         )
         .unwrap(),
     )

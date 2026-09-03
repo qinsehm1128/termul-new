@@ -793,9 +793,9 @@ mod tests {
     #[test]
     fn validate_binary_url_accepts_github_origin() {
         validate_binary_url(
-            "https://github.com/qinsehm1128/termul-new/releases/download/nightly/termul-server",
+            "https://github.com/qinsehm1128/termul-new/releases/download/nightly/se-server",
         )
-        .expect("termul github origin accepted");
+        .expect("github origin accepted");
     }
 
     #[test]

@@ -46,8 +46,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use syn::visit::{self, Visit};
 use syn::{Attribute, ItemEnum, ItemMod, Lit};
-use termul_manager_lib::brand::{self, BrandCanonical};
-use termul_manager_lib::conversation::ConversationCreator;
+use se_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::conversation::ConversationCreator;
 
 /// Where the enum lives.
 const CONTRACTS_FILE: &str = "src/conversation/contracts.rs";

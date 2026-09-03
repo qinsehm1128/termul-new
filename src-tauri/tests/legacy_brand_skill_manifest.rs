@@ -36,7 +36,7 @@
 //!
 //! # Why the struct is mirrored rather than imported
 //!
-//! `mod skills` is private to `termul_manager_lib` (`src/lib.rs:29`, no `pub`
+//! `mod skills` is private to `se_manager_lib` (`src/lib.rs:29`, no `pub`
 //! and no re-export), so `ManagedSkillManifestV1` is not nameable from an
 //! integration test. Two stand-ins do the work, and the difference between them
 //! is the point:
@@ -69,7 +69,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, ExprStruct, ItemStruct, Lit};
-use termul_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::brand::{self, BrandCanonical};
 
 /// The production site under test.
 const PRODUCTION_FILE: &str = "src/skills/provisioner.rs";

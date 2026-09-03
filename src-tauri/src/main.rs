@@ -8,13 +8,13 @@ fn main() {
     // the child never initializes the app / plugins / sinks — it just runs
     // an rmcp MCP server over stdio + forwards calls to the parent's TCP
     // listener. See `acp::host_mcp::child` + spec `spec-acp-host-todo-plan-tool.md`.
-    if termul_manager_lib::host_mcp::is_child_invocation() {
-        std::process::exit(termul_manager_lib::host_mcp::child::run());
+    if se_manager_lib::host_mcp::is_child_invocation() {
+        std::process::exit(se_manager_lib::host_mcp::child::run());
     }
 
     // Seed a default RUST_LOG so module-level overrides keep working, e.g.:
     //   RUST_LOG=trace npm run dev
-    //   RUST_LOG=termul_manager_lib=debug npm run dev
+    //   RUST_LOG=se_manager_lib=debug npm run dev
     // The global logger itself (file sink in release, console in debug) is
     // installed by tauri-plugin-log inside `run()`; its level floor is set
     // there (info in release, debug in debug builds).
@@ -29,5 +29,5 @@ fn main() {
         );
     }
 
-    termul_manager_lib::run()
+    se_manager_lib::run()
 }

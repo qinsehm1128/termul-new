@@ -23,7 +23,7 @@
 //!
 //! # Reachability note (reported as a Wave-4 seam gap)
 //!
-//! `mod worktree` and `registry_path` are private to `termul_manager_lib`, so
+//! `mod worktree` and `registry_path` are private to `se_manager_lib`, so
 //! `WorktreeManager::*` and `mcp_servers_api::registry_path` cannot be called
 //! from `tests/`. The nearest public seam is the web route layer
 //! (`web::worktree_api`, `web::mcp_servers_api`), which calls exactly the same
@@ -50,16 +50,16 @@ use axum::Json;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-use termul_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
-use termul_manager_lib::web::auth::IngressProvenance;
-use termul_manager_lib::web::mcp_servers_api;
-use termul_manager_lib::web::project_registry::ProjectRegistry;
-use termul_manager_lib::web::sink::WsRelaySink;
-use termul_manager_lib::web::worktree_api::{
+use se_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
+use se_manager_lib::web::auth::IngressProvenance;
+use se_manager_lib::web::mcp_servers_api;
+use se_manager_lib::web::project_registry::ProjectRegistry;
+use se_manager_lib::web::sink::WsRelaySink;
+use se_manager_lib::web::worktree_api::{
     self, WorktreeCreateRequest, WorktreeProjectPathRequest,
 };
-use termul_manager_lib::web::ws::{AppState, HistoryMode};
-use termul_manager_lib::{
+use se_manager_lib::web::ws::{AppState, HistoryMode};
+use se_manager_lib::{
     AcpManager, CwdTracker, ExitCodeTracker, GitTracker, PtyManager, TerminalEventHub,
 };
 
@@ -186,7 +186,7 @@ fn app_state(project_root: PathBuf) -> AppState {
     }
 }
 
-async fn read_registry(state: &AppState) -> termul_manager_lib::web::fs_api::IpcBody<Value> {
+async fn read_registry(state: &AppState) -> se_manager_lib::web::fs_api::IpcBody<Value> {
     mcp_servers_api::get(State(state.clone())).await.0
 }
 

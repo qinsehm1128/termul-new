@@ -67,9 +67,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use termul_manager_lib::brand::{self, BrandCanonical};
-use termul_manager_lib::conversation::HostConversationRoots;
-use termul_manager_lib::web::config::{default_sessions_dir, ServerConfig};
+use se_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::conversation::HostConversationRoots;
+use se_manager_lib::web::config::{default_sessions_dir, ServerConfig};
 
 /// The resolvers under test read *process*-global env vars while `cargo test`
 /// runs test fns on parallel threads. The brand override is thread-local and

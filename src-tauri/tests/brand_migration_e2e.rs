@@ -36,13 +36,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use termul_manager_lib::brand::{self, BrandCanonical};
-use termul_manager_lib::conversation::HostMigrationLock;
-use termul_manager_lib::credentials::{self, CredentialBackend, CredentialError};
-use termul_manager_lib::known_hosts_migration::{self, KnownHostsMigration, StartupOutcome};
-use termul_manager_lib::migration_detect::{LegacyRoots, LegacySignalKind};
-use termul_manager_lib::migration_run::{self, BrandMigrationReceipt, BrandMigrationRootStatus};
-use termul_manager_lib::webview_storage_handoff::{self, HostPlatform};
+use se_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::conversation::HostMigrationLock;
+use se_manager_lib::credentials::{self, CredentialBackend, CredentialError};
+use se_manager_lib::known_hosts_migration::{self, KnownHostsMigration, StartupOutcome};
+use se_manager_lib::migration_detect::{LegacyRoots, LegacySignalKind};
+use se_manager_lib::migration_run::{self, BrandMigrationReceipt, BrandMigrationRootStatus};
+use se_manager_lib::webview_storage_handoff::{self, HostPlatform};
 
 /// Serializes every test that touches the process-wide startup-outcome record.
 static EXCLUSIVE: Mutex<()> = Mutex::new(());
@@ -212,7 +212,7 @@ impl Tree {
         // after M-01/M-02 has carried them across in the same pass.
         let project_secret_key = "project:p1:env:TOKEN".to_string();
         fs::write(
-            legacy_app_data.join(termul_manager_lib::migration_detect::PERSISTENCE_STORE_FILE),
+            legacy_app_data.join(se_manager_lib::migration_detect::PERSISTENCE_STORE_FILE),
             serde_json::to_vec(&serde_json::json!({
                 "projects": {
                     "projects": [{

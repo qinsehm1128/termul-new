@@ -56,9 +56,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use termul_manager_lib::brand::{self, BrandCanonical};
-use termul_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
-use termul_manager_lib::conversation::HostConversationRoots;
+use se_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
+use se_manager_lib::conversation::HostConversationRoots;
 
 /// The six subdirectories that live under the appdata root and are absent from
 /// `LegacyRootConfiguration::known_roots()`. Named here only so the failure

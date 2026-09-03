@@ -25,7 +25,7 @@
 //!
 //! # Reachability note (reported as a Wave-4 seam gap)
 //!
-//! `mod skills` is private to `termul_manager_lib`, so
+//! `mod skills` is private to `se_manager_lib`, so
 //! `ConversationSkillProvisioner::provision` cannot be called from `tests/`.
 //! The nearest public seam is the one production itself uses to reach it:
 //! `ConversationApplicationService::open_conversation` →
@@ -47,12 +47,12 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use termul_manager_lib::brand::{self, BrandCanonical, BrandOverrideGuard, DEFAULT_CANONICAL};
-use termul_manager_lib::conversation::{
+use se_manager_lib::brand::{self, BrandCanonical, BrandOverrideGuard, DEFAULT_CANONICAL};
+use se_manager_lib::conversation::{
     AgentBindingResult, BootstrapOutcome, ConversationBootstrap, ConversationCreationService,
     HostConversationRoots, MigrationHostMode, PrepareConversationRequest,
 };
-use termul_manager_lib::{ConversationId, ExecutionTarget};
+use se_manager_lib::{ConversationId, ExecutionTarget};
 
 /// Skill identity the app writes *after* the rename.
 fn post_rename() -> BrandCanonical {

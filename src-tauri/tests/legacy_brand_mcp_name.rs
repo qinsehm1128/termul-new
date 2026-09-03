@@ -26,7 +26,7 @@
 //! wrapper (`grep -n 'fn build_internal_plan_stdio' src/acp/manager.rs` →
 //! one hit, no `pub`). Integration tests under `tests/` link this crate as an
 //! external dependency and therefore see only `pub` items of
-//! `termul_manager_lib`, so the function cannot be called from here.
+//! `se_manager_lib`, so the function cannot be called from here.
 //!
 //! So the contract is asserted structurally instead: the two brand-bearing
 //! values inside that function body must be *reads through the brand seam*,
@@ -62,15 +62,21 @@ use std::path::{Path, PathBuf};
 
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprField, Ident, ItemFn, Lit, Member};
-use termul_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::brand::{self, BrandCanonical};
 
 /// The production site under test.
 const PRODUCTION_FILE: &str = "src/acp/manager.rs";
 const PRODUCTION_FN: &str = "build_internal_plan_stdio";
 
-/// The post-rename canonical values. Injected on this thread so the assertions
-/// below run against a brand that is *different* from the one production still
-/// emits — which is what makes the red real rather than self-certifying.
+/// The post-rename canonical values.
+///
+/// These were injected so the assertions below ran against a brand *different*
+/// from the one production emitted, which is what made the original red real
+/// rather than self-certifying. T-A19 flipped `mcp_server_name` and T-B02
+/// flipped `package_name` to exactly these values, so the injection is now a
+/// no-op and the load-bearing assertions are the AST facts below: they observe
+/// that production *reads* `crate::brand::canonical()` rather than that it
+/// returns any particular literal, which no later flip can turn into a tautology.
 fn post_rename() -> BrandCanonical {
     BrandCanonical {
         mcp_server_name: "se-manager",

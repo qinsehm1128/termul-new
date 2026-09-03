@@ -1,7 +1,7 @@
 //! Standalone headless `se-server` binary (Story 1.2).
 //!
 //! Constructs an [`AcpManager`] with a [`WsRelaySink`] stub (no Tauri
-//! `AppHandle`) and serves the Axum skeleton from `termul_manager_lib::web`.
+//! `AppHandle`) and serves the Axum skeleton from `se_manager_lib::web`.
 //! Live WS relay + static-embed serving are wired via the shared `web` module.
 //!
 //! Path is intentionally **outside** `src/bin/` so Tauri's bundler stage-2
@@ -19,17 +19,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-use termul_manager_lib::server_update::{
+use se_manager_lib::server_update::{
     check_and_apply_update, current_version, embedded_public_key, is_update_enabled,
     restart_binary, restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome,
     SERVER_PLATFORM_KEY,
 };
-use termul_manager_lib::web::config::{ParseCliError, REMOTE_AUTH_CONFIGURATION_REQUIRED};
-use termul_manager_lib::web::{
+use se_manager_lib::web::config::{ParseCliError, REMOTE_AUTH_CONFIGURATION_REQUIRED};
+use se_manager_lib::web::{
     seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous,
     RemoteAccessAuthority, ServerConfig, WsRelaySink,
 };
-use termul_manager_lib::{
+use se_manager_lib::{
     AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
     FileProjectRegistry, GitTracker, PtyManager, TerminalEventHub, WorkspaceManifestService,
 };
@@ -72,8 +72,8 @@ fn main() -> ExitCode {
     // tokio/app setup (AC2) so the standalone binary never inits the server
     // stack for the child path. See `acp::host_mcp::child` + spec
     // `spec-acp-host-todo-plan-tool.md`.
-    if termul_manager_lib::host_mcp::is_child_invocation() {
-        return ExitCode::from(termul_manager_lib::host_mcp::child::run() as u8);
+    if se_manager_lib::host_mcp::is_child_invocation() {
+        return ExitCode::from(se_manager_lib::host_mcp::child::run() as u8);
     }
 
     let (server_args, maintenance) = match parse_conversation_maintenance_args(&raw_args) {
@@ -144,14 +144,14 @@ fn main() -> ExitCode {
         // The standalone host crosses the same synchronous Conversation admission gate as
         // Desktop before opening any app-managed store, manager, PTY, or network route.
         let conversation_bootstrap =
-            match termul_manager_lib::conversation::ConversationBootstrap::run(
-                termul_manager_lib::conversation::HostConversationRoots::standalone(
+            match se_manager_lib::conversation::ConversationBootstrap::run(
+                se_manager_lib::conversation::HostConversationRoots::standalone(
                     cfg.service_account_state_dir(),
                     cfg.conversation_workspace_root(),
                     cfg.sessions_dir.clone(),
                     cfg.workspace_manifests_dir.clone(),
                 ),
-                termul_manager_lib::conversation::MigrationHostMode::Standalone,
+                se_manager_lib::conversation::MigrationHostMode::Standalone,
             ) {
                 Ok(outcome) => outcome,
                 Err(error) => {
@@ -214,7 +214,7 @@ fn main() -> ExitCode {
         let acp_install_dir = cfg
             .service_account_state_dir()
             .join("acp-registry-binaries");
-        termul_manager_lib::set_acp_npm_local_root(
+        se_manager_lib::set_acp_npm_local_root(
             cfg.service_account_state_dir().join("acp-npm-packages"),
         );
         let acp_install = match AcpInstallService::open(
@@ -244,7 +244,7 @@ fn main() -> ExitCode {
             .join("scheduled-tasks")
             .join("v1");
         let scheduled_task_store =
-            match termul_manager_lib::ScheduledTaskStore::open_with_legacy_root(
+            match se_manager_lib::ScheduledTaskStore::open_with_legacy_root(
                 scheduled_task_root.join("catalog"),
                 Some(scheduled_task_root.join("projects")),
             ) {
@@ -254,10 +254,10 @@ fn main() -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-        let scheduled_tasks = termul_manager_lib::scheduled_tasks::ScheduledTaskService::new(
+        let scheduled_tasks = se_manager_lib::scheduled_tasks::ScheduledTaskService::new(
             scheduled_task_store,
             Arc::new(
-                termul_manager_lib::scheduled_tasks::AcpScheduledTaskExecutor::new(
+                se_manager_lib::scheduled_tasks::AcpScheduledTaskExecutor::new(
                     Arc::clone(&acp),
                     Arc::clone(&ws_relay),
                 ),
@@ -341,7 +341,7 @@ fn main() -> ExitCode {
         ));
         acp.set_pty_manager(&pty);
         let lifecycle =
-            match termul_manager_lib::conversation::ConversationLifecycleService::from_manager(
+            match se_manager_lib::conversation::ConversationLifecycleService::from_manager(
                 Arc::clone(&acp),
                 Arc::clone(&pty),
             ) {
@@ -406,7 +406,7 @@ fn main() -> ExitCode {
 /// share the same setup.
 #[derive(Debug)]
 struct StandaloneConversationMaintenance {
-    action: termul_manager_lib::conversation::MigrationMaintenanceAction,
+    action: se_manager_lib::conversation::MigrationMaintenanceAction,
     approval_receipt_path: Option<PathBuf>,
 }
 
@@ -430,13 +430,13 @@ fn parse_conversation_maintenance_args(
                     .ok_or("missing value for --conversation-migration-control")?;
                 action = Some(match value.as_str() {
                     "rollback" => {
-                        termul_manager_lib::conversation::MigrationMaintenanceAction::Rollback
+                        se_manager_lib::conversation::MigrationMaintenanceAction::Rollback
                     }
                     "reapply" => {
-                        termul_manager_lib::conversation::MigrationMaintenanceAction::Reapply
+                        se_manager_lib::conversation::MigrationMaintenanceAction::Reapply
                     }
                     "finalize" => {
-                        termul_manager_lib::conversation::MigrationMaintenanceAction::Finalize
+                        se_manager_lib::conversation::MigrationMaintenanceAction::Finalize
                     }
                     _ => {
                         return Err(format!(
@@ -472,15 +472,15 @@ fn parse_conversation_maintenance_args(
         return Ok((server_args, None));
     };
     match (action, approval_receipt_path.as_ref()) {
-        (termul_manager_lib::conversation::MigrationMaintenanceAction::Finalize, None) => {
+        (se_manager_lib::conversation::MigrationMaintenanceAction::Finalize, None) => {
             return Err(
                 "--conversation-migration-control finalize requires --approval-receipt <path>"
                     .into(),
             );
         }
         (
-            termul_manager_lib::conversation::MigrationMaintenanceAction::Rollback
-            | termul_manager_lib::conversation::MigrationMaintenanceAction::Reapply,
+            se_manager_lib::conversation::MigrationMaintenanceAction::Rollback
+            | se_manager_lib::conversation::MigrationMaintenanceAction::Reapply,
             Some(_),
         ) => {
             return Err(
@@ -529,18 +529,18 @@ fn schedule_standalone_conversation_maintenance(
     let request_id = approval_receipt
         .as_ref()
         .map(
-            |receipt: &termul_manager_lib::conversation::ApprovalReceiptV1| {
+            |receipt: &se_manager_lib::conversation::ApprovalReceiptV1| {
                 receipt.request_id.clone()
             },
         )
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let request = termul_manager_lib::conversation::MigrationMaintenanceRequestV1 {
+    let request = se_manager_lib::conversation::MigrationMaintenanceRequestV1 {
         action: maintenance.action,
         request_id,
         requested_at_utc: Utc::now(),
         approval_receipt,
     };
-    let control = match termul_manager_lib::conversation::ConversationMigrationControlService::new(
+    let control = match se_manager_lib::conversation::ConversationMigrationControlService::new(
         &state_root,
     ) {
         Ok(control) => control,
@@ -578,7 +578,7 @@ fn schedule_standalone_conversation_maintenance(
 #[allow(clippy::items_after_test_module)]
 mod conversation_maintenance_tests {
     use super::*;
-    use termul_manager_lib::conversation::MigrationMaintenanceAction;
+    use se_manager_lib::conversation::MigrationMaintenanceAction;
 
     #[test]
     fn standalone_control_mode_accepts_all_actions_and_preserves_server_args() {
@@ -696,13 +696,13 @@ mod conversation_maintenance_tests {
         let app = axum::Router::new()
             .route("/projects", axum::routing::get(|| async { "admitted" }))
             .layer(axum::middleware::from_fn(
-                termul_manager_lib::web::auth::capability_middleware,
+                se_manager_lib::web::auth::capability_middleware,
             ))
             .layer(axum::Extension(
-                termul_manager_lib::web::auth::RemoteRouteClass::Project,
+                se_manager_lib::web::auth::RemoteRouteClass::Project,
             ))
             .layer(axum::Extension(
-                termul_manager_lib::web::auth::IngressProvenance::LocalOperator,
+                se_manager_lib::web::auth::IngressProvenance::LocalOperator,
             ))
             .layer(axum::Extension(authority));
         let response = app
@@ -736,8 +736,13 @@ fn init_tracing() {
 }
 
 /// Resolve the server's own binary path for the self-update swap/reexec.
+///
+/// The PATH-lookup fallback is the `[[bin]]` name from `Cargo.toml`, so it comes
+/// from the brand seam rather than a literal here — a literal survives a rename
+/// of the binary and silently re-execs a name that no longer exists.
 fn current_binary_path() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"))
+    std::env::current_exe()
+        .unwrap_or_else(|_| PathBuf::from(se_manager_lib::brand::canonical().server_binary))
 }
 
 /// Build the self-update options from env + the embedded pubkey. `Err` when
