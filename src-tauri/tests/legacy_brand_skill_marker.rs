@@ -2,9 +2,9 @@
 //!
 //! # Why this reads the skill off disk instead of inlining a literal
 //!
-//! `src/skills/provisioner.rs` carries the managed marker twice — once as
-//! `MANAGED_MARKER` (line 11) and once again, character for character, inside
-//! `SKILL_TEMPLATE` (line 20). An assertion written as
+//! `src/skills/provisioner.rs` used to carry the managed marker twice — once as
+//! a `MANAGED_MARKER` constant and once again, character for character, inside
+//! a `SKILL_TEMPLATE` constant. An assertion written as
 //! `assert_eq!(MANAGED_MARKER, "<!-- managed-by-termul:... -->")` is a copy of
 //! the constant it checks: a repo-wide `sed 's/termul/se-manager/g'` rewrites
 //! both operands together and the suite stays green, while every
@@ -12,6 +12,11 @@
 //! being recognised as ours. The provisioner then refuses to touch it
 //! (`UnmanagedCollision`), and a user who has been running scheduled tasks for
 //! months silently stops getting the skill.
+//!
+//! T-M12 replaced both constants with `skill_template()` and
+//! `managed_markers()`, which read `brand::canonical()` and — for the marker —
+//! also accept `brand::LEGACY.skill_marker` so a pre-rename file is still
+//! claimed. All four ledger entries below are struck.
 //!
 //! So the subject here is `tests/fixtures/legacy-brand/user-skills/termul-scheduled-tasks.md`,
 //! a sha256-frozen copy of what a pre-rename build wrote, and the expectation
@@ -89,6 +94,13 @@ struct OpenedWorkspace {
 /// Build a Conversation through the real bootstrap, let `seed` populate its
 /// workspace, then open it under the post-rename brand so the production
 /// provisioner runs.
+fn open_conversation_under_post_rename_brand(
+    seed: impl FnOnce(&Path, &BrandOverrideGuard),
+) -> OpenedWorkspace {
+    open_conversation_under(post_rename(), seed)
+}
+
+/// The same, under an explicit set of canonical values.
 ///
 /// The runtime is built explicitly (rather than via `#[tokio::test]`) because
 /// `ConversationBootstrap::run` is synchronous and internally blocks on a
@@ -96,7 +108,12 @@ struct OpenedWorkspace {
 /// happen. It is therefore driven before `block_on` is entered. The runtime is
 /// single-threaded so `open_conversation` resolves on this thread, where the
 /// brand override lives.
-fn open_conversation_under_post_rename_brand(
+///
+/// The guard is installed even when `canonical` is the shipped set, so the
+/// control test below exercises the identical code path as the others and
+/// differs only in which values are in force.
+fn open_conversation_under(
+    canonical: BrandCanonical,
     seed: impl FnOnce(&Path, &BrandOverrideGuard),
 ) -> OpenedWorkspace {
     let temp = TempDir::new().unwrap();
@@ -136,7 +153,7 @@ fn open_conversation_under_post_rename_brand(
         ))
         .expect("bind an agent session");
 
-    let guard = brand::override_canonical(post_rename());
+    let guard = brand::override_canonical(canonical);
     seed(&workspace_cwd, &guard);
     runtime
         .block_on(outcome.application.open_conversation(conversation_id))
@@ -151,13 +168,14 @@ fn open_conversation_under_post_rename_brand(
 
 /// Control test — proves the harness reaches the real provisioner.
 ///
-/// Without this, every `should_panic` below could be panicking because
-/// `backfill_managed_skills` bailed out early (no binding, missing workspace)
-/// and no skill was ever provisioned, rather than because of the brand
-/// contract they name.
+/// Deliberately runs under the *shipped* values rather than the injected ones,
+/// so it stays an independent check: if the provisioner were bailing out early
+/// (no binding, missing workspace) and writing nothing at all, every assertion
+/// below would still be satisfiable by an accident of the seam, and this one
+/// would not.
 #[test]
 fn opening_a_conversation_runs_the_real_skill_provisioner() {
-    let opened = open_conversation_under_post_rename_brand(|_workspace, _guard| {});
+    let opened = open_conversation_under(DEFAULT_CANONICAL, |_workspace, _guard| {});
     let provisioned = skill_md(&opened.workspace_cwd, DEFAULT_CANONICAL.skill_name);
     assert!(
         provisioned.is_file(),
@@ -173,7 +191,6 @@ fn opening_a_conversation_runs_the_real_skill_provisioner() {
 
 /// After the rename the managed skill must be written under the canonical name.
 #[test]
-#[should_panic(expected = "skill was not provisioned under the canonical name")]
 fn managed_skill_is_provisioned_under_the_canonical_name() {
     let opened = open_conversation_under_post_rename_brand(|workspace, guard| {
         let _ = guard;
@@ -189,8 +206,8 @@ fn managed_skill_is_provisioned_under_the_canonical_name() {
         canonical.is_file(),
         "skill was not provisioned under the canonical name: canonical() \
          reports the skill name is {canonical_name:?}, so the provisioner must \
-         write {}, but nothing is there. src/skills/provisioner.rs:9 defines \
-         SCHEDULED_TASK_SKILL_NAME as a literal.",
+         write {}, but nothing is there. `skill_path` must join \
+         `provisioner::scheduled_task_skill_name()`, not a literal.",
         canonical.display()
     );
 }
@@ -200,7 +217,6 @@ fn managed_skill_is_provisioned_under_the_canonical_name() {
 /// It is a user-visible file an agent may still be reading; the rename copies
 /// forward, it does not rewrite in place (brand.rs FORBID-04).
 #[test]
-#[should_panic(expected = "legacy skill file was rewritten after the rename")]
 fn legacy_skill_file_survives_provisioning_byte_for_byte() {
     let body = legacy_skill_body();
     let opened = open_conversation_under_post_rename_brand(|workspace, guard| {
@@ -223,16 +239,14 @@ fn legacy_skill_file_survives_provisioning_byte_for_byte() {
 ///
 /// This is the migration shape: the skill directory has been moved to the
 /// canonical name but its body still carries the marker the previous build
-/// wrote. `write_managed_skill` (`src/skills/provisioner.rs:206`) refuses to
-/// overwrite any file that does not contain `MANAGED_MARKER`, so a provisioner
-/// that only knows the canonical marker treats its own file as user-owned and
-/// bails out with `UnmanagedCollision` — silently, because
-/// `backfill_managed_skills` logs and swallows the error.
+/// wrote. `write_managed_skill` refuses to overwrite any file that is not
+/// evidently ours, so a provisioner that only knows the canonical marker treats
+/// its own file as user-owned and bails out with `UnmanagedCollision` —
+/// silently, because `backfill_managed_skills` logs and swallows the error.
 ///
 /// Re-templating that file is therefore the observable proof the claim was
 /// recognised.
 #[test]
-#[should_panic(expected = "provisioner did not claim a file carrying the legacy marker")]
 fn provisioner_claims_a_skill_carrying_the_legacy_marker() {
     let canonical_name = post_rename().skill_name;
     let opened = open_conversation_under_post_rename_brand(|workspace, guard| {
@@ -270,7 +284,6 @@ fn guard_skill_name(_guard: &BrandOverrideGuard) -> &'static str {
 /// only at canonical paths; the legacy file stays on disk but is no longer
 /// claimed.
 #[test]
-#[should_panic(expected = "managed-skills manifest still points at the legacy skill")]
 fn managed_skill_manifest_stops_claiming_the_legacy_skill() {
     let opened = open_conversation_under_post_rename_brand(|workspace, guard| {
         let _ = guard;

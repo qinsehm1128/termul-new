@@ -538,15 +538,16 @@ fn new_manifests_are_written_at_schema_version_2() {
     );
 }
 
-/// LEDGER — and something has to read it back.
+/// The manifest is read back, so a compatibility read on it can take effect.
 ///
-/// The manifest is write-only today: `provision` serializes it and nothing
-/// under `src/skills/` ever deserializes it. A compat read that no code path
-/// exercises is not a compat read, so the alias in
-/// `manifest_accepts_both_the_canonical_and_the_legacy_ownership_key` only
-/// becomes real once a reader exists that accepts both versions.
+/// It used to be write-only: `provision` serialized it and nothing under
+/// `src/skills/` ever deserialized it, which meant an alias or a
+/// `schema_version` check on it could not possibly change any behaviour. T-M12
+/// added `provisioner::read_manifest` — it reads the current workspace
+/// directory then the pre-rename one, accepts `schema_version` 1 and 2, and
+/// feeds the recorded paths into `write_managed_skill`'s ownership decision.
+/// Without a reader, the remaining ledger entry above would be decoration.
 #[test]
-#[should_panic(expected = "never deserializes the managed-skill manifest")]
 fn a_read_path_exists_and_accepts_both_schema_versions() {
     let reads = deserializing_calls_in_skills_module();
     assert!(

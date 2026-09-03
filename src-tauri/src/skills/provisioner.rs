@@ -6,18 +6,64 @@ use sha2::{Digest, Sha256};
 
 use crate::conversation::{DirectoryPermissions, DurableFileSystem};
 
-pub const SCHEDULED_TASK_SKILL_NAME: &str = "termul-scheduled-tasks";
 pub const SCHEDULED_TASK_SKILL_TEMPLATE_VERSION: u32 = 2;
-const MANAGED_MARKER: &str = "<!-- managed-by-termul:termul-scheduled-tasks -->";
 
-const SKILL_TEMPLATE: &str = r#"---
-name: termul-scheduled-tasks
+/// File name of the provisioner's own record of what it owns.
+const MANIFEST_FILE: &str = "managed-skills.json";
+
+/// `schema_version` values this build knows how to read.
+///
+/// 1 is what is on disk today. 2 is what T-A21 will write when the ownership
+/// key moves; accepting it now means the reader does not have to change in the
+/// same commit as the writer, and a manifest from a *newer* build is skipped
+/// with a log line rather than silently treated as absent.
+const READABLE_MANIFEST_SCHEMA_VERSIONS: &[u32] = &[1, 2];
+
+/// The managed skill's directory name.
+///
+/// A function rather than a `const` because the value comes from the brand
+/// seam, which is thread-local by necessity. Every caller reaches it on the
+/// thread that asked for the provisioning: `provision` is a plain synchronous
+/// call from `conversation::application::backfill_managed_skills` and from
+/// `acp::manager`, and neither hands it to `spawn_blocking` (FORBID-07).
+#[must_use]
+pub fn scheduled_task_skill_name() -> &'static str {
+    crate::brand::canonical().skill_name
+}
+
+/// Markers that mean "this app wrote this file".
+///
+/// Both names count. A `SKILL.md` a shipped build already wrote carries the
+/// pre-rename marker, and a provisioner that only recognised the current one
+/// would treat its own file as user-owned, bail out with `UnmanagedCollision`,
+/// and — because `backfill_managed_skills` logs and swallows that error —
+/// silently stop maintaining the skill for anyone who had been using it. The
+/// legacy marker is only ever *matched*, never written (FORBID-04).
+fn managed_markers() -> [&'static str; 2] {
+    [
+        crate::brand::canonical().skill_marker,
+        crate::brand::LEGACY.skill_marker,
+    ]
+}
+
+/// The skill body this build writes.
+///
+/// Built at call time rather than held as a `const` for the same reason as
+/// [`scheduled_task_skill_name`]: three of its lines — the front-matter `name`,
+/// the ownership key, and the HTML marker — are brand contracts and must come
+/// from the seam, not from a literal a repo-wide rename would rewrite in step
+/// with every assertion about it.
+fn skill_template() -> String {
+    let canonical = crate::brand::canonical();
+    format!(
+        r#"---
+name: {skill_name}
 description: Draft safe Se-level AI schedules for review from any Conversation.
 metadata:
-  managedByTermul: true
-  templateVersion: 2
+  {ownership_key}: true
+  templateVersion: {template_version}
 ---
-<!-- managed-by-termul:termul-scheduled-tasks -->
+{marker}
 
 # Se Scheduled Tasks
 
@@ -42,7 +88,13 @@ or one-time autonomous work.
 Se stores full execution traces in the isolated child Conversation. The task
 run ledger contains only status, hashes, timestamps, usage, and Conversation
 links.
-"#;
+"#,
+        skill_name = canonical.skill_name,
+        ownership_key = canonical.skill_manifest_key,
+        template_version = SCHEDULED_TASK_SKILL_TEMPLATE_VERSION,
+        marker = canonical.skill_marker,
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillProvider {
@@ -172,20 +224,47 @@ impl ConversationSkillProvisioner {
             paths.push(native);
         }
 
-        let sha256 = sha256(SKILL_TEMPLATE.as_bytes());
+        // What a previous run recorded as ours, read before this run overwrites
+        // it. After the rename that record is the pre-rename manifest, sitting
+        // in the pre-rename workspace directory.
+        let previously_claimed = read_manifest(workspace_cwd)
+            .map(|manifest| manifest.paths)
+            .unwrap_or_default();
+
+        let template = skill_template();
+        let sha256 = sha256(template.as_bytes());
         for path in &paths {
-            self.write_managed_skill(path)?;
+            self.write_managed_skill(path, &template, &previously_claimed)?;
         }
+
+        // Deactivation, which is the one thing M-12 needs beyond a copy: a
+        // skill file this app wrote under the previous name is still on disk
+        // and still loadable, so the manifest must stop naming it as the live
+        // one. The file itself is never deleted or rewritten (FORBID-05) — it
+        // simply drops out of the claim below.
+        let claimed_now: Vec<String> = paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        let deactivated: Vec<&String> = previously_claimed
+            .iter()
+            .filter(|previous| !claimed_now.contains(previous))
+            .collect();
+        if !deactivated.is_empty() {
+            log::info!(
+                "[scheduled-task-skill] boundary=deactivated_previous_claim count={} paths={:?}",
+                deactivated.len(),
+                deactivated
+            );
+        }
+
         let manifest = ManagedSkillManifestV1 {
             schema_version: 1,
             managed_by_termul: true,
-            skill_name: SCHEDULED_TASK_SKILL_NAME.to_string(),
+            skill_name: scheduled_task_skill_name().to_string(),
             template_version: SCHEDULED_TASK_SKILL_TEMPLATE_VERSION,
             sha256: sha256.clone(),
-            paths: paths
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect(),
+            paths: claimed_now,
         };
         // M-08: the manifest lives in this app's per-repository workspace
         // directory, so it moves with that directory's name. Nothing is
@@ -195,7 +274,7 @@ impl ConversationSkillProvisioner {
         self.durable_fs
             .create_dir_durable(&manifest_dir, DirectoryPermissions::PrivateOwnerOnly)?;
         self.durable_fs.replace_bytes(
-            &manifest_dir.join("managed-skills.json"),
+            &manifest_dir.join(MANIFEST_FILE),
             &serde_json::to_vec_pretty(&manifest)?,
         )?;
         log::info!(
@@ -211,12 +290,30 @@ impl ConversationSkillProvisioner {
         })
     }
 
-    fn write_managed_skill(&self, path: &Path) -> Result<(), SkillProvisionError> {
+    /// Write the skill, refusing to touch a file this app did not write.
+    ///
+    /// A file counts as ours on two independent pieces of evidence: it carries
+    /// one of [`managed_markers`], or a manifest we wrote earlier named it.
+    /// The second is what makes the manifest read path do something: a user who
+    /// edited the marker out of a file we own would otherwise turn it into a
+    /// permanent `UnmanagedCollision`.
+    fn write_managed_skill(
+        &self,
+        path: &Path,
+        template: &str,
+        previously_claimed: &[String],
+    ) -> Result<(), SkillProvisionError> {
         if let Ok(existing) = fs::read_to_string(path) {
-            if !existing.contains(MANAGED_MARKER) {
+            let ours = managed_markers()
+                .iter()
+                .any(|marker| existing.contains(marker))
+                || previously_claimed
+                    .iter()
+                    .any(|claimed| Path::new(claimed) == path);
+            if !ours {
                 return Err(SkillProvisionError::UnmanagedCollision(path.to_path_buf()));
             }
-            if existing == SKILL_TEMPLATE {
+            if existing == template {
                 return Ok(());
             }
         }
@@ -225,10 +322,52 @@ impl ConversationSkillProvisioner {
         })?;
         self.durable_fs
             .create_dir_durable(parent, DirectoryPermissions::PrivateOwnerOnly)?;
-        self.durable_fs
-            .replace_bytes(path, SKILL_TEMPLATE.as_bytes())?;
+        self.durable_fs.replace_bytes(path, template.as_bytes())?;
         Ok(())
     }
+}
+
+/// Read the manifest a previous run wrote, from the current workspace directory
+/// or from the one a pre-rename build used.
+///
+/// Until this existed the manifest was write-only: `provision` serialized it and
+/// nothing under `src/skills/` ever read it back, which meant any compatibility
+/// alias or `schema_version` check on it could not possibly take effect. The
+/// read is what gives those a code path.
+///
+/// Never fatal. A manifest that is missing, unreadable, malformed or written by
+/// a build this one does not understand degrades to "no previous claim" — the
+/// markers in the files themselves are the other, independent evidence — but it
+/// is logged rather than swallowed, because a rejected manifest means the app
+/// is about to stop recognising files it owns.
+fn read_manifest(workspace_cwd: &Path) -> Option<ManagedSkillManifestV1> {
+    let mut roots = vec![crate::brand::canonical().workspace_dir];
+    if crate::brand::LEGACY.workspace_dir != roots[0] {
+        roots.push(crate::brand::LEGACY.workspace_dir);
+    }
+    for root in roots {
+        let path = workspace_cwd.join(root).join(MANIFEST_FILE);
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        match serde_json::from_slice::<ManagedSkillManifestV1>(&bytes) {
+            Ok(manifest)
+                if READABLE_MANIFEST_SCHEMA_VERSIONS.contains(&manifest.schema_version) =>
+            {
+                return Some(manifest);
+            }
+            Ok(manifest) => log::warn!(
+                "[scheduled-task-skill] boundary=manifest_schema_unsupported path={} schema_version={}",
+                path.display(),
+                manifest.schema_version
+            ),
+            Err(error) => log::warn!(
+                "[scheduled-task-skill] boundary=manifest_unreadable path={} error={error}",
+                path.display()
+            ),
+        }
+    }
+    None
 }
 
 #[must_use]
@@ -248,7 +387,7 @@ pub fn provider_for_agent(agent_config_id: &str) -> SkillProvider {
 fn skill_path(workspace_cwd: &Path, provider: SkillProvider) -> PathBuf {
     workspace_cwd
         .join(provider.relative_root())
-        .join(SCHEDULED_TASK_SKILL_NAME)
+        .join(scheduled_task_skill_name())
         .join("SKILL.md")
 }
 
@@ -289,7 +428,9 @@ mod tests {
             .unwrap();
         assert!(receipt.primary_path.is_file());
         assert!(root
-            .join(".claude/skills/termul-scheduled-tasks/SKILL.md")
+            .join(".claude/skills")
+            .join(scheduled_task_skill_name())
+            .join("SKILL.md")
             .is_file());
         assert!(root
             .join(crate::brand::canonical().workspace_dir)
@@ -302,10 +443,127 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Seed a manifest on disk as raw JSON.
+    ///
+    /// Deliberately not built from `ManagedSkillManifestV1` — the point is to
+    /// read bytes a *different* build wrote, and a struct literal here would
+    /// only ever produce shapes this build already agrees with.
+    fn seed_manifest(workspace_root: &Path, dir: &str, schema_version: u32, claimed: &str) {
+        let manifest = serde_json::json!({
+            "schemaVersion": schema_version,
+            crate::brand::LEGACY.skill_manifest_key: true,
+            "skillName": crate::brand::LEGACY.skill_name,
+            "templateVersion": 2,
+            "sha256": "0".repeat(64),
+            "paths": [claimed],
+        });
+        let manifest_dir = workspace_root.join(dir);
+        fs::create_dir_all(&manifest_dir).unwrap();
+        fs::write(
+            manifest_dir.join(MANIFEST_FILE),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// M-12 — the manifest read accepts both workspace directories and both
+    /// schema versions, and rejects anything else out loud.
+    ///
+    /// The compatibility read only matters for a manifest a *pre-rename* build
+    /// wrote, which sits in the pre-rename workspace directory. Reading only
+    /// the current directory would find nothing and silently drop the record of
+    /// which files this app owns.
+    #[test]
+    fn manifest_read_accepts_both_workspace_dirs_and_both_schema_versions() {
+        let root = workspace("manifest-read");
+        let _guard = crate::brand::override_canonical(crate::brand::BrandCanonical {
+            workspace_dir: ".se-manager",
+            ..crate::brand::DEFAULT_CANONICAL
+        });
+        let legacy_dir = crate::brand::LEGACY.workspace_dir;
+        assert_ne!(
+            crate::brand::canonical().workspace_dir,
+            legacy_dir,
+            "the injection did not take, so this proves nothing"
+        );
+
+        // Only the pre-rename directory has one: it must still be found.
+        seed_manifest(&root, legacy_dir, 1, "/claimed/v1/SKILL.md");
+        let found = read_manifest(&root).expect("a v1 manifest in the pre-rename directory");
+        assert_eq!(found.paths, vec!["/claimed/v1/SKILL.md".to_string()]);
+
+        // The current directory wins once it has one, and v2 is readable too.
+        seed_manifest(
+            &root,
+            crate::brand::canonical().workspace_dir,
+            2,
+            "/claimed/v2/SKILL.md",
+        );
+        let found = read_manifest(&root).expect("a v2 manifest in the current directory");
+        assert_eq!(found.schema_version, 2);
+        assert_eq!(found.paths, vec!["/claimed/v2/SKILL.md".to_string()]);
+
+        // A version this build does not know is not silently treated as v1.
+        seed_manifest(
+            &root,
+            crate::brand::canonical().workspace_dir,
+            99,
+            "/claimed/v99/SKILL.md",
+        );
+        let found = read_manifest(&root).expect("falls back to the pre-rename manifest");
+        assert_eq!(
+            found.paths,
+            vec!["/claimed/v1/SKILL.md".to_string()],
+            "an unreadable schema_version must be skipped, not accepted"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A file this app recorded as its own is still its own after the marker
+    /// has been edited out of it.
+    ///
+    /// This is what makes the read path load-bearing rather than decorative:
+    /// without it the manifest could be read and thrown away and every test
+    /// above would still pass.
+    #[test]
+    fn a_file_named_by_the_previous_manifest_is_claimed_even_without_a_marker() {
+        let root = workspace("manifest-claim");
+        let skill = root
+            .join(".agents/skills")
+            .join(scheduled_task_skill_name())
+            .join("SKILL.md");
+        fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        fs::write(&skill, "ours, but the marker was edited out").unwrap();
+
+        // Without a claim it is an unmanaged collision …
+        assert!(matches!(
+            ConversationSkillProvisioner::new().provision(&root, "codex"),
+            Err(SkillProvisionError::UnmanagedCollision(found)) if found == skill
+        ));
+
+        // … and with one it is re-templated.
+        seed_manifest(
+            &root,
+            crate::brand::canonical().workspace_dir,
+            1,
+            &skill.to_string_lossy(),
+        );
+        ConversationSkillProvisioner::new()
+            .provision(&root, "codex")
+            .expect("a file the previous manifest claimed is ours");
+        assert_eq!(fs::read_to_string(&skill).unwrap(), skill_template());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn refuses_to_replace_an_unmanaged_skill() {
         let root = workspace("collision");
-        let path = root.join(".agents/skills/termul-scheduled-tasks/SKILL.md");
+        let path = root
+            .join(".agents/skills")
+            .join(scheduled_task_skill_name())
+            .join("SKILL.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "user owned").unwrap();
         assert!(matches!(
