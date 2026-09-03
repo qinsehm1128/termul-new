@@ -88,6 +88,7 @@ import {
   EDITOR_AUTO_SAVE_DELAY_OPTIONS,
   FONT_FAMILY_OPTIONS,
   MAX_TERMINALS_OPTIONS,
+  normalizeTerminalUrlOpenMode,
   ORPHAN_TIMEOUT_OPTIONS,
   SYMBOL_FONT_OPTIONS,
   TERMINAL_RENDERER_OPTIONS,
@@ -941,7 +942,11 @@ export default function AppPreferences(): React.JSX.Element {
                     {tSettings('behavior.openLinks')}
                   </label>
                   <select
-                    value={terminalUrlOpenMode}
+                    // Normalized, not raw: a mode persisted before the rename
+                    // matches no <option>, and the select would then display
+                    // "System Default Browser" while links still open in the
+                    // built-in one.
+                    value={normalizeTerminalUrlOpenMode(terminalUrlOpenMode)}
                     onChange={(e) => handleTerminalUrlOpenModeChange(e.target.value)}
                     className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
                   >

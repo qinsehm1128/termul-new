@@ -154,7 +154,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   planFence: 'se-plan',
   themeId: 'se',
   themeFamilyLight: 'se-light',
-  urlOpenMode: 'termul',
+  urlOpenMode: 'se',
   storagePrefix: 'termul-store:',
   storageKeyPrefix: 'termul:',
   eventPrefix: 'termul:',

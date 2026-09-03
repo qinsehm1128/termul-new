@@ -330,7 +330,7 @@
     },
     "urlMode": {
       "system": "系统默认浏览器",
-      "termul": "Se 浏览器"
+      "se": "Se 浏览器"
     }
   }
 }

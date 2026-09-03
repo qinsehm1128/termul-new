@@ -100,10 +100,10 @@ describe('app-settings-store', () => {
     it('should update terminalUrlOpenMode', () => {
       const { updateSetting } = useAppSettingsStore.getState()
 
-      updateSetting('terminalUrlOpenMode', 'termul')
+      updateSetting('terminalUrlOpenMode', 'se')
 
       const { settings } = useAppSettingsStore.getState()
-      expect(settings.terminalUrlOpenMode).toBe('termul')
+      expect(settings.terminalUrlOpenMode).toBe('se')
     })
   })
 
@@ -133,7 +133,7 @@ describe('app-settings-store', () => {
         orphanDetectionEnabled: true,
         orphanDetectionTimeout: 600000,
         confirmTerminalClose: true,
-        terminalUrlOpenMode: 'termul' as const,
+        terminalUrlOpenMode: 'se' as const,
         sidebarVisible: false,
         fileExplorerVisible: true,
         sshPanelVisible: true,
@@ -168,7 +168,7 @@ describe('app-settings-store', () => {
           orphanDetectionEnabled: false,
           orphanDetectionTimeout: 300000,
           confirmTerminalClose: false,
-          terminalUrlOpenMode: 'termul',
+          terminalUrlOpenMode: 'se',
           sidebarVisible: false,
           fileExplorerVisible: false,
           sshPanelVisible: false,
@@ -249,11 +249,11 @@ describe('app-settings-store', () => {
     it('useTerminalUrlOpenMode should select the terminal URL mode', () => {
       useAppSettingsStore.setState((state) => ({
         ...state,
-        settings: { ...state.settings, terminalUrlOpenMode: 'termul' }
+        settings: { ...state.settings, terminalUrlOpenMode: 'se' }
       }))
 
       const { result } = renderHook(() => useTerminalUrlOpenMode())
-      expect(result.current).toBe('termul')
+      expect(result.current).toBe('se')
     })
 
     it('useColorTheme should select the app color theme', () => {

@@ -1,4 +1,4 @@
-﻿import { brandCanonical } from '@shared/brand'
+﻿import { acceptedBrandValues, brandCanonical } from '@shared/brand'
 
 // Context bar visibility settings
 export interface ContextBarSettings {
@@ -37,7 +37,7 @@ export const DEFAULT_TOC_SETTINGS: TocSettings = {
 
 export const TOC_SETTINGS_KEY = 'settings/toc'
 
-export type TerminalUrlOpenMode = 'system' | 'termul'
+export type TerminalUrlOpenMode = 'system' | 'se'
 export type UiLanguage = 'en' | 'zh-CN'
 export type UiLanguagePreference = 'system' | UiLanguage
 
@@ -187,8 +187,28 @@ export const TERMINAL_URL_OPEN_MODE_OPTIONS: Array<{
   label: string
 }> = [
   { value: 'system', label: 'System Default Browser' },
-  { value: 'termul', label: 'Termul Browser' }
+  { value: 'se', label: 'Se Browser' }
 ]
+
+/**
+ * The canonical spelling of a persisted `terminalUrlOpenMode`.
+ *
+ * A settings blob written before the rename still names the built-in browser
+ * by its legacy enum member, and that member is deliberately absent from
+ * {@link TERMINAL_URL_OPEN_MODE_OPTIONS} — nothing may write it any more. A
+ * `<select>` bound straight to the persisted value would therefore match no
+ * `<option>` and silently display the first entry ("System Default Browser"),
+ * while `openTerminalUrl`'s compatibility read still opens links in the
+ * built-in one. The settings UI would state the opposite of what the app does.
+ *
+ * The membership test is the same `acceptedBrandValues('urlOpenMode')` that
+ * `openTerminalUrl` branches on, so display and behaviour cannot disagree.
+ * Normalizing for display never writes: the persisted spelling stays on disk
+ * until the user picks something, and what they pick is always canonical.
+ */
+export function normalizeTerminalUrlOpenMode(value: string): TerminalUrlOpenMode {
+  return acceptedBrandValues('urlOpenMode').includes(value) ? 'se' : 'system'
+}
 
 export const REMOTE_BIND_MODE_OPTIONS: Array<{
   value: RemoteBindMode

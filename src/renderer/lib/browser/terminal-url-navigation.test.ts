@@ -49,10 +49,10 @@ describe('terminal-url-navigation', () => {
     expect(root.tabs).toHaveLength(0)
   })
 
-  it('opens URLs in a new Termul browser tab when mode is termul', async () => {
+  it('opens URLs in a new built-in browser tab when mode is se', async () => {
     useAppSettingsStore.setState((state) => ({
       ...state,
-      settings: { ...state.settings, terminalUrlOpenMode: 'termul' }
+      settings: { ...state.settings, terminalUrlOpenMode: 'se' }
     }))
 
     await openTerminalUrl('https://example.com')
@@ -101,7 +101,7 @@ describe('terminal-url-navigation', () => {
     expect(useBrowserSessionStore.getState().tabs.size).toBe(0)
   })
 
-  it('always creates a dedicated Termul browser tab helper tab id', async () => {
+  it('always creates a dedicated built-in browser tab helper tab id', async () => {
     const randomUuidSpy = vi
       .spyOn(globalThis.crypto, 'randomUUID')
       .mockReturnValue('00000000-0000-4000-8000-000000000001')

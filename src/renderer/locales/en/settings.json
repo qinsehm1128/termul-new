@@ -330,7 +330,7 @@
     },
     "urlMode": {
       "system": "System Default Browser",
-      "termul": "Se Browser"
+      "se": "Se Browser"
     }
   }
 }
