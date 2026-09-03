@@ -151,7 +151,7 @@ export const LEGACY: BrandCanonical = {
  */
 const DEFAULT_CANONICAL: BrandCanonical = {
   createdBy: 'termul',
-  planFence: 'termul-plan',
+  planFence: 'se-plan',
   themeId: 'termul',
   themeFamilyLight: 'termul-light',
   urlOpenMode: 'termul',

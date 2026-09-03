@@ -22,7 +22,7 @@
  * prepared-chat reaping) and is **not** a cross-tab isolation boundary.
  */
 
-import { acceptedBrandPattern } from '@shared/brand'
+import { acceptedBrandPattern, brandCanonical } from '@shared/brand'
 import {
   type ConversationRecordV2,
   type ExecutionTarget,
@@ -1099,7 +1099,7 @@ function dropPlanForSession(
 }
 
 /**
- * Parse the LAST ```termul-plan fence out of a markdown text blob. Returns
+ * Parse the LAST ```se-plan fence out of a markdown text blob. Returns
  * the parsed `PlanEntry[]` when the JSON is a valid array, or `null` when
  * there is no fence or the JSON is malformed. Last-fence-wins matches the
  * snapshot contract: each assistant message carries at most one renderer-
@@ -1152,7 +1152,7 @@ export function extractSePlanFenceJson(text: string | undefined): string | null 
 }
 
 /**
- * Scan assistant messages in reverse for a `termul-plan` fence (last fence
+ * Scan assistant messages in reverse for a `se-plan` fence (last fence
  * wins). Returns the parsed plan, or `null` when no fence is present or the
  * JSON is malformed. Scans ALL assistant messages — if the last message has
  * no fence (e.g. the turn was interrupted before `_onPromptComplete` ran),
@@ -1201,7 +1201,7 @@ function isSePlanFenceBlock(text: string | undefined): boolean {
 }
 
 /**
- * Append a `termul-plan` fence `text` block carrying the live plan to the
+ * Append a `se-plan` fence `text` block carrying the live plan to the
  * last assistant message's `blocks`. The snapshot is a full deterministic
  * replace of any prior snapshot block on the same message (one fence per
  * assistant message, last write wins). Returns the messages map unchanged
@@ -1224,7 +1224,7 @@ function appendPlanSnapshot(
   }
   if (lastAgentIdx < 0) return messages
   const target = list[lastAgentIdx]
-  // Replace any prior termul-plan fence block on the same message so the
+  // Replace any prior plan fence block on the same message so the
   // snapshot is a full deterministic replace (one fence per assistant message).
   // Only drop blocks that ARE fences (full-string match), preserving assistant
   // prose that merely contains or quotes the fence format.
@@ -1234,7 +1234,7 @@ function appendPlanSnapshot(
   // CommonMark requires the opening ``` of a fenced code block to be at the
   // start of a line. `blocksToText` joins text blocks with '', so a preceding
   // prose block that does not end in '\n' would glue the fence opener onto the
-  // prose (e.g. "working on it```termul-plan") and Streamdown would not recognize
+  // prose (e.g. "working on it```se-plan") and Streamdown would not recognize
   // the fence — the snapshot would render as plain text instead of a PlanPanel.
   // `blocksToText` skips non-text blocks, so the block that ends up immediately
   // before the fence in the joined text is the LAST non-empty text block —
@@ -1254,9 +1254,11 @@ function appendPlanSnapshot(
     if (text.length === 0 || text.endsWith('\n')) return b
     return { ...b, text: `${text}\n` }
   })
+  // Write side names the single canonical language explicitly; the parser above
+  // is the one that accepts both spellings (FORBID-04: never emit two).
   const fenceBlock: ContentBlock = {
     type: 'text',
-    text: `\`\`\`termul-plan\n${JSON.stringify(plan)}\n\`\`\``
+    text: `\`\`\`${brandCanonical().planFence}\n${JSON.stringify(plan)}\n\`\`\``
   }
   const updatedMessage: ChatMessage = {
     ...target,
@@ -2803,7 +2805,7 @@ function rehydratePlanFromHistoryIfNeeded(
   payload: SessionPayload
 ): void {
   // An explicit canonical PlanUpdate replacement, including `entries: []`, is authoritative and
-  // must never be overwritten by an older renderer-authored termul-plan fence.
+  // must never be overwritten by an older renderer-authored plan fence.
   if (payload.plan !== undefined || get().plans[sessionId]) return
   const rehydrated = scanPlanFenceFromMessages(payload.messages)
   if (rehydrated && rehydrated.length > 0) {
@@ -2826,7 +2828,7 @@ function rehydratePlanFromHistoryIfNeeded(
     void logFrontendError({
       level: 'warn',
       source: 'planRehydrate',
-      message: `Malformed termul-plan fence in history session ${safeHistorySessionIdForLog(sessionId)}; leaving plans empty`
+      message: `Malformed plan fence in history session ${safeHistorySessionIdForLog(sessionId)}; leaving plans empty`
     })
   }
 }

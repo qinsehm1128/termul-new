@@ -408,14 +408,14 @@ ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/
 
 See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
 
-#### Persisted plan snapshot (`termul-plan` fence)
+#### Persisted plan snapshot (`se-plan` fence)
 
 When a turn ends (`_onPromptComplete` in `src/renderer/stores/acp-store.ts`), the renderer
 snapshots the live `plans[sessionId]` onto the just-finished assistant message's `blocks` as
-a fenced code block with language `termul-plan`:
+a fenced code block with language `se-plan`:
 
 ````md
-```termul-plan
+```se-plan
 [{"content":"Read AC file","status":"completed","priority":"high"},{"content":"Fix bug","status":"in_progress","priority":"high"}]
 ```
 ````
@@ -424,6 +424,11 @@ The fence JSON is `JSON.stringify(PlanEntry[])` — shape 1:1 with `PlanEntry`
 (`src/renderer/lib/acp-api.ts`). One fence per assistant message (last write wins; a prior
 fence on the same message is replaced). The snapshot rides on the existing `ChatMessage.blocks`
 persistence path (no new schema field).
+
+The write side emits `se-plan` only. The read side (`extractSePlanFenceJson`,
+`normalizePlanFenceBoundary`, and the `ChatMarkdownCode` language dispatch) accepts every
+value in `acceptedBrandValues('planFence')` (`src/shared/brand.ts`), so a snapshot persisted
+under the pre-rename fence language still rehydrates and still renders as a `PlanPanel`.
 
 On `openHistorySession`, the renderer scans assistant messages in reverse for the
 fence, parses the JSON, and repopulates `plans[sessionId]` before any new `acp:plan_update`
@@ -436,7 +441,7 @@ from the plan store (logged `source: 'planRehydrate'`); the agent can still emit
 > rehydrate (switching away and back) works via the cache update. Fixing cross-restart requires
 > a host-side synthetic record (tracked in `_bmad-output/deferred-work.md`).
 
-The `termul-plan` fence is rendered inline inside historical (non-streaming) messages by
+The `se-plan` fence is rendered inline inside historical (non-streaming) messages by
 `SePlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only
 `PlanPanel`. The live streaming turn shows the sticky `PlanPanel` pinned in `AgentChatPanel`
 instead — the inline renderer is gated to `!streaming` so an in-flight turn never renders a

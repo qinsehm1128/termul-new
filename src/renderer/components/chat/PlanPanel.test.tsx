@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
@@ -184,13 +185,15 @@ describe('PlanPanel', () => {
   })
 })
 
-describe('SePlanRenderer (termul-plan fence renderer)', () => {
+describe('SePlanRenderer (plan fence renderer)', () => {
   it('renders a read-only PlanPanel from valid fence JSON', () => {
     const code = JSON.stringify([
       { content: 'Read AC file', status: 'completed', priority: 'high' },
       { content: 'Fix bug', status: 'in_progress', priority: 'high' }
     ])
-    render(<SePlanRenderer code={code} isIncomplete={false} language="termul-plan" />)
+    render(
+      <SePlanRenderer code={code} isIncomplete={false} language={brandCanonical().planFence} />
+    )
     // The renderer reuses PlanPanel, so the entries appear as plan rows
     expect(screen.getByRole('region', { name: 'Execution plan' })).toBeInTheDocument()
     expect(screen.getByText('Read AC file')).toBeInTheDocument()
@@ -198,13 +201,21 @@ describe('SePlanRenderer (termul-plan fence renderer)', () => {
   })
 
   it('shows a fallback card when the fence JSON is malformed', () => {
-    render(<SePlanRenderer code="{not valid json" isIncomplete={false} language="termul-plan" />)
+    render(
+      <SePlanRenderer
+        code="{not valid json"
+        isIncomplete={false}
+        language={brandCanonical().planFence}
+      />
+    )
     expect(screen.getByText('Plan snapshot unavailable')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Execution plan' })).toBeNull()
   })
 
   it('shows a streaming placeholder when the fence is incomplete', () => {
-    render(<SePlanRenderer code="partial" isIncomplete={true} language="termul-plan" />)
+    render(
+      <SePlanRenderer code="partial" isIncomplete={true} language={brandCanonical().planFence} />
+    )
     expect(screen.getByText('Plan snapshot incomplete')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Execution plan' })).toBeNull()
   })

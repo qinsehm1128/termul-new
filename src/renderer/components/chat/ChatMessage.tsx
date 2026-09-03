@@ -1,3 +1,4 @@
+import { acceptedBrandValues } from '@shared/brand'
 import { code as codePlugin } from '@streamdown/code'
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
 import { motion, useReducedMotion } from 'framer-motion'
@@ -242,16 +243,30 @@ const CODE_PLUGIN = codePlugin
 /** Live Mermaid diagram rendering for ```mermaid fences. */
 const MERMAID_PLUGIN = mermaidPlugin
 /**
- * Base plugin set used while the agent message is still streaming. The
- * `termul-plan` renderer is deliberately absent here so an in-flight turn
- * never renders a duplicate inline plan (the live sticky `PlanPanel` covers
- * the streaming turn). Historical (non-streaming) messages swap in
+ * Base plugin set used while the agent message is still streaming. The plan
+ * renderer is deliberately absent here so an in-flight turn never renders a
+ * duplicate inline plan (the live sticky `PlanPanel` covers the streaming
+ * turn). Historical (non-streaming) messages swap in
  * `STREAMDOWN_PLUGINS_WITH_PLAN` via the `plugins` prop on `AgentProse`.
  */
 const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
-const STREAMDOWN_PLUGINS_WITH_PLAN = {
-  ...STREAMDOWN_PLUGINS,
-  renderers: [{ language: 'termul-plan', component: SePlanRenderer }]
+/**
+ * One registration per accepted fence language: a plan persisted before the
+ * rename carries the legacy language and must still reach `SePlanRenderer`.
+ *
+ * Built on call rather than captured into a module-level `const` — a captured
+ * list freezes before `__setBrandCanonicalOverride` can move the brand seam.
+ */
+function streamdownPluginsWithPlan(): typeof STREAMDOWN_PLUGINS & {
+  renderers: { language: string; component: typeof SePlanRenderer }[]
+} {
+  return {
+    ...STREAMDOWN_PLUGINS,
+    renderers: acceptedBrandValues('planFence').map((language) => ({
+      language,
+      component: SePlanRenderer
+    }))
+  }
 }
 
 // Copy on code blocks, plus download (save an agent-generated file); no line
@@ -402,6 +417,7 @@ function AgentProse({
       }
     }
   }, [filePathContext, t])
+  const pluginsWithPlan = useMemo(streamdownPluginsWithPlan, [])
 
   return (
     <div className="chat-streamdown min-w-0 text-sm leading-[1.6] text-foreground">
@@ -411,11 +427,10 @@ function AgentProse({
         caret="block"
         animated={reduced ? false : STREAMDOWN_ANIMATED}
         parseIncompleteMarkdown
-        // The `termul-plan` renderer is attached only to historical
-        // (non-streaming) messages so an in-flight turn never renders a
-        // duplicate inline plan — the live sticky `PlanPanel` owns the
-        // streaming turn.
-        plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
+        // The plan renderer is attached only to historical (non-streaming)
+        // messages so an in-flight turn never renders a duplicate inline
+        // plan — the live sticky `PlanPanel` owns the streaming turn.
+        plugins={streaming ? STREAMDOWN_PLUGINS : pluginsWithPlan}
         remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : undefined}
         controls={STREAMDOWN_CONTROLS}
         components={

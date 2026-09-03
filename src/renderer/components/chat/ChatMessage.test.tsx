@@ -1,3 +1,4 @@
+import { acceptedBrandValues, LEGACY } from '@shared/brand'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
@@ -300,7 +301,7 @@ describe('ChatMessage', () => {
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
   })
 
-  it('wires the termul-plan renderer only for non-streaming (historical) messages', () => {
+  it('wires the plan renderer only for non-streaming (historical) messages', () => {
     // Streaming message: the sticky PlanPanel covers the live turn; the
     // inline renderer is deliberately absent so no duplicate plan UI shows.
     const { unmount: unmountStreaming } = render(
@@ -309,13 +310,16 @@ describe('ChatMessage', () => {
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-renderer-languages', '')
     unmountStreaming()
 
-    // Historical message: the termul-plan renderer is attached so a
-    // persisted snapshot fence renders an inline read-only PlanPanel.
+    // Historical message: the plan renderer is attached so a persisted
+    // snapshot fence renders an inline read-only PlanPanel. One registration
+    // per accepted language — a plan written before the rename carries the
+    // legacy one and must still reach the renderer.
     render(<ChatMessage message={agentMessage(false)} isLast />)
     expect(screen.getByTestId('streamdown')).toHaveAttribute(
       'data-renderer-languages',
-      'termul-plan'
+      acceptedBrandValues('planFence').join(',')
     )
+    expect(acceptedBrandValues('planFence')).toContain(LEGACY.planFence)
   })
 
   it('stops the Streamdown caret when a newer timeline item follows', () => {

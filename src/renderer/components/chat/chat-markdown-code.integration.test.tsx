@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { code as codePlugin } from '@streamdown/code'
 import { render, screen, waitFor } from '@testing-library/react'
 import { Streamdown } from 'streamdown'
@@ -38,12 +39,12 @@ describe('ChatMarkdownCode with Streamdown', () => {
     })
   })
 
-  it('renders a termul-plan fence as a PlanPanel instead of a code block', async () => {
+  it('renders a plan fence as a PlanPanel instead of a code block', async () => {
     const plan = [
       { content: 'Investigate the renderer bypass', status: 'completed' },
       { content: 'Fix the delegation in ChatMarkdownCode', status: 'in_progress' }
     ]
-    const fence = `\`\`\`termul-plan\n${JSON.stringify(plan)}\n\`\`\``
+    const fence = `\`\`\`${brandCanonical().planFence}\n${JSON.stringify(plan)}\n\`\`\``
     const { container } = render(
       <TooltipProvider>
         <Streamdown

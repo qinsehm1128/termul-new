@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { render } from '@testing-library/react'
 import { createContext } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -109,12 +110,16 @@ describe('ChatMarkdownCode', () => {
     }
   })
 
-  it('renders a termul-plan fence as a PlanPanel, not a code block', () => {
+  it('renders a plan fence as a PlanPanel, not a code block', () => {
     const plan = [{ content: 'Read the spec', status: 'pending' }]
     const json = JSON.stringify(plan)
     const { getByText, queryByTestId } = render(
       withTooltip(
-        <ChatMarkdownCode className="language-termul-plan" data-block node={{ value: json }}>
+        <ChatMarkdownCode
+          className={`language-${brandCanonical().planFence}`}
+          data-block
+          node={{ value: json }}
+        >
           {json}
         </ChatMarkdownCode>
       )
@@ -124,10 +129,14 @@ describe('ChatMarkdownCode', () => {
     expect(queryByTestId('code-block')).toBeNull()
   })
 
-  it('shows a fallback card for a malformed termul-plan fence', () => {
+  it('shows a fallback card for a malformed plan fence', () => {
     const { getByText, queryByTestId } = render(
       withTooltip(
-        <ChatMarkdownCode className="language-termul-plan" data-block node={{ value: '{bad' }}>
+        <ChatMarkdownCode
+          className={`language-${brandCanonical().planFence}`}
+          data-block
+          node={{ value: '{bad' }}
+        >
           {'{bad'}
         </ChatMarkdownCode>
       )
@@ -140,7 +149,11 @@ describe('ChatMarkdownCode', () => {
   it('shows a fallback card for an empty plan fence', () => {
     const { getByText, queryByTestId } = render(
       withTooltip(
-        <ChatMarkdownCode className="language-termul-plan" data-block node={{ value: '[]' }}>
+        <ChatMarkdownCode
+          className={`language-${brandCanonical().planFence}`}
+          data-block
+          node={{ value: '[]' }}
+        >
           {'[]'}
         </ChatMarkdownCode>
       )
@@ -154,7 +167,11 @@ describe('ChatMarkdownCode', () => {
     useIsCodeFenceIncompleteMock.mockReturnValue(true)
     const { getByText, queryByTestId } = render(
       withTooltip(
-        <ChatMarkdownCode className="language-termul-plan" data-block node={{ value: 'partial' }}>
+        <ChatMarkdownCode
+          className={`language-${brandCanonical().planFence}`}
+          data-block
+          node={{ value: 'partial' }}
+        >
           {'partial'}
         </ChatMarkdownCode>
       )

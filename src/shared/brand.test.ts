@@ -31,7 +31,7 @@ describe('brand seam', () => {
 
   it('leaves un-overridden fields at their shipped values', () => {
     __setBrandCanonicalOverride({ createdBy: 'se-manager' })
-    expect(brandCanonical().planFence).toBe('termul-plan')
+    expect(brandCanonical().planFence).toBe('se-plan')
   })
 
   it('restores the shipped values when the override is cleared', () => {

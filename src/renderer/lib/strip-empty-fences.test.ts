@@ -1,3 +1,4 @@
+import { acceptedBrandValues } from '@shared/brand'
 import { describe, expect, it } from 'vitest'
 import { normalizePlanFenceBoundary, stripEmptyFences } from './strip-empty-fences'
 
@@ -93,16 +94,20 @@ describe('stripEmptyFences', () => {
   })
 })
 
-describe('normalizePlanFenceBoundary', () => {
-  const fence = '```termul-plan\n[{"content":"x"}]\n```'
+// Run the whole boundary suite once per accepted fence language: the
+// normalizer is a compatibility read, so a plan persisted before the rename
+// must be normalized exactly like one written after it.
+describe.each(acceptedBrandValues('planFence'))('normalizePlanFenceBoundary (%s)', (lang) => {
+  const fence = `\`\`\`${lang}\n[{"content":"x"}]\n\`\`\``
+  const openerAtLineStart = new RegExp(`(^|\\n)\`\`\`${lang}`)
 
-  it('inserts a newline before a termul-plan opener glued to prose', () => {
+  it('inserts a newline before an opener glued to prose', () => {
     // Mirrors the joined-blocks text produced before the appendPlanSnapshot fix
     const joined = `working on it${fence}`
     const out = normalizePlanFenceBoundary(joined)
     expect(out).toBe(`working on it\n${fence}`)
     // The opener is now at the start of a line (CommonMark fence requirement)
-    expect(/(^|\n)```termul-plan/.test(out)).toBe(true)
+    expect(openerAtLineStart.test(out)).toBe(true)
   })
 
   it('leaves an opener already at line start untouched', () => {
@@ -125,21 +130,21 @@ describe('normalizePlanFenceBoundary', () => {
     // the opener sits on its own line.
     const joined = `prose\r${fence}`
     const out = normalizePlanFenceBoundary(joined)
-    expect(/(^|\n)```termul-plan/.test(out)).toBe(true)
+    expect(openerAtLineStart.test(out)).toBe(true)
   })
 
-  it('leaves a longer info string like termul-plan-v2 untouched', () => {
+  it('leaves a longer info string with a suffix untouched', () => {
     // Only the exact opener (followed by a newline) is normalized; a quoted
     // reference with a suffix must not be split.
-    const md = 'see ```termul-plan-v2 notes```'
+    const md = `see \`\`\`${lang}-v2 notes\`\`\``
     expect(normalizePlanFenceBoundary(md)).toBe(md)
   })
 
   it('does not split a backtick run that precedes the opener', () => {
-    // A 4-backtick run before `termul-plan` is a longer fenced construct; the
+    // A 4-backtick run before the opener is a longer fenced construct; the
     // regex matches the trailing 3 backticks, but the line prefix is a single
     // backtick (the 4th) — that must be left intact, not split.
-    const md = '````termul-plan\n[{"content":"x"}]\n````'
+    const md = `\`\`\`\`${lang}\n[{"content":"x"}]\n\`\`\`\``
     expect(normalizePlanFenceBoundary(md)).toBe(md)
   })
 

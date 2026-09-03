@@ -8,13 +8,13 @@ import { logFrontendError } from '@/lib/log-api'
 import { PlanPanel } from './PlanPanel'
 
 /**
- * Streamdown custom renderer for `termul-plan` fenced code blocks. Parses the
+ * Streamdown custom renderer for `se-plan` fenced code blocks. Parses the
  * fence JSON and renders a read-only `PlanPanel` so historical assistant
  * messages retain their plan-of-record inline in the transcript.
  *
  * The live sticky plan covers the streaming turn; this renderer is gated to
  * non-streaming (historical) messages via the `STREAMDOWN_PLUGINS` selection
- * in `ChatMessage` — the `termul-plan` renderer is only attached when
+ * in `ChatMessage` — the plan renderer is only attached when
  * `!streaming` so an in-flight turn never shows a duplicate inline plan.
  *
  * Malformed JSON degrades to a "Plan snapshot unavailable" fallback card so a
@@ -52,7 +52,7 @@ export function SePlanRenderer({ code, isIncomplete }: CustomRendererProps): Rea
       void logFrontendError({
         level: 'warn',
         source: 'planSnapshotRenderer',
-        message: 'Malformed termul-plan fence rendered as fallback'
+        message: 'Malformed plan fence rendered as fallback'
       })
     }
   }, [parsed, code, isIncomplete])
