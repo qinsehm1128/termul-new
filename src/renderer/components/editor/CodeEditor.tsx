@@ -9,7 +9,11 @@ import {
   registerEditorContentFlusher,
   unregisterEditorContentFlusher
 } from '@/lib/editor-content-flush'
-import { EDITOR_REVEAL_LINE_EVENT } from '@/lib/editor-events'
+import {
+  EDITOR_REVEAL_LINE_EVENT,
+  PENDING_REVEAL_LINE_GLOBAL,
+  type PendingRevealLineWindow
+} from '@/lib/editor-events'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import { TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
 import { TocPanel } from './TocPanel'
@@ -189,19 +193,14 @@ export function CodeEditor({
   }, [initialCursorPosition, initialScrollTop, isVisible, restoreViewState, view])
 
   useEffect(() => {
-    const pending = (
-      window as unknown as {
-        __termulPendingRevealLine?: { filePath: string; lineNumber: number; searchTerm?: string }
-      }
-    ).__termulPendingRevealLine
+    const pending = (window as unknown as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL]
 
     if (pending && pending.filePath === filePath && isVisible && view) {
       scrollToLine(pending.lineNumber, pending.searchTerm)
       lastAppliedLineRef.current = pending.lineNumber
       pendingRevealLineRef.current = null
       pendingRevealTermRef.current = undefined
-      ;(window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine =
-        undefined
+      ;(window as unknown as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL] = undefined
     }
 
     const handler = (event: Event): void => {

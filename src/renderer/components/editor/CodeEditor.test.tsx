@@ -2,7 +2,11 @@ import type { EditorView } from '@codemirror/view'
 import { render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useCodeMirror } from '@/hooks/use-codemirror'
-import { EDITOR_REVEAL_LINE_EVENT } from '@/lib/editor-events'
+import {
+  EDITOR_REVEAL_LINE_EVENT,
+  PENDING_REVEAL_LINE_GLOBAL,
+  type PendingRevealLineWindow
+} from '@/lib/editor-events'
 import { CodeEditor } from './CodeEditor'
 
 const mockFocus = vi.fn()
@@ -58,7 +62,7 @@ const fakeView = { focus: mockFocus } as unknown as EditorView
 describe('CodeEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    delete (global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine
+    delete (global as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL]
     mobileRef.current = false
     tocSettingsRef.current.settings.isVisible = false
 
@@ -119,9 +123,7 @@ describe('CodeEditor', () => {
 
     expect(mockScrollToLine).toHaveBeenCalledWith(7, 'needle')
     expect(mockScrollToLine).toHaveBeenCalledTimes(1)
-    expect(
-      (global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine
-    ).toBeUndefined()
+    expect((global as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL]).toBeUndefined()
   })
 
   it('shows the loading overlay while the editor view is not ready', () => {

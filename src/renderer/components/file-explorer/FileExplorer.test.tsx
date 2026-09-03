@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { PENDING_REVEAL_LINE_GLOBAL, type PendingRevealLineWindow } from '@/lib/editor-events'
 import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { FileExplorer } from './FileExplorer'
 
@@ -182,7 +183,7 @@ beforeEach(() => {
   mockExplorerState.searchScannedFiles = 0
   mockExplorerState.searchFailedFiles = 0
   mockExplorerState.searchLastCompletedQuery = ''
-  delete (window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine
+  delete (window as unknown as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL]
 })
 
 describe('FileExplorer', () => {
@@ -368,17 +369,7 @@ describe('FileExplorer', () => {
       expect(mockOpenFile).toHaveBeenCalledWith('/project/src/FileExplorer.tsx')
       expect(mockAddEditorTab).toHaveBeenCalledWith('/project/src/FileExplorer.tsx')
       expect(mockUpdateCursorPosition).toHaveBeenCalledWith('/project/src/FileExplorer.tsx', 27, 1)
-      expect(
-        (
-          window as unknown as {
-            __termulPendingRevealLine?: {
-              filePath: string
-              lineNumber: number
-              searchTerm?: string
-            }
-          }
-        ).__termulPendingRevealLine
-      ).toEqual({
+      expect((window as unknown as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL]).toEqual({
         filePath: '/project/src/FileExplorer.tsx',
         lineNumber: 27,
         searchTerm: 'term'

@@ -20,7 +20,11 @@ import { toast } from 'sonner'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { readPersistedPanelSize } from '@/hooks/use-persisted-panel-size'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
-import { EDITOR_REVEAL_LINE_EVENT } from '@/lib/editor-events'
+import {
+  EDITOR_REVEAL_LINE_EVENT,
+  PENDING_REVEAL_LINE_GLOBAL,
+  type PendingRevealLineWindow
+} from '@/lib/editor-events'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -931,9 +935,7 @@ export function FileExplorer({
         }
         useEditorStore.getState().updateCursorPosition(filePath, lineNumber, 1)
         const revealDetail = { filePath, lineNumber, searchTerm }
-        ;(
-          window as unknown as { __termulPendingRevealLine?: typeof revealDetail }
-        ).__termulPendingRevealLine = revealDetail
+        ;(window as unknown as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL] = revealDetail
         window.dispatchEvent(
           new CustomEvent(EDITOR_REVEAL_LINE_EVENT, {
             detail: revealDetail

@@ -99,9 +99,43 @@ function dispatcherFiles(constantName: string): string[] {
   return rendererSources.filter((path) => pattern.test(sourceText.get(path) ?? ''))
 }
 
+/**
+ * Files that assign through `[<constantName>] =`.
+ *
+ * The negative lookahead rejects `==`/`===`/`=>` so a comparison counts as a
+ * read rather than a write, mirroring the overlay guard's window scan.
+ */
+function globalWriterFiles(constantName: string): string[] {
+  const pattern = new RegExp(`\\[\\s*${escapeRegExp(constantName)}\\s*\\]\\s*=(?![=>])`)
+  return rendererSources.filter((path) => pattern.test(sourceText.get(path) ?? ''))
+}
+
+/** Files that subscript `[<constantName>]` anywhere other than an assignment target. */
+function globalReaderFiles(constantName: string): string[] {
+  const pattern = new RegExp(`\\[\\s*${escapeRegExp(constantName)}\\s*\\](?!\\s*=(?!=))`)
+  return rendererSources.filter((path) => pattern.test(sourceText.get(path) ?? ''))
+}
+
 afterEach(() => {
   __resetBrandCanonicalOverride()
 })
+
+/**
+ * Files that use `constantName` without importing it from its declaring module.
+ *
+ * Without this check a file could re-declare a same-named local constant and
+ * satisfy every other assertion while agreeing with nobody. `import { X } from
+ * …` binds it; so does the barrel's `export { X } from './types'`. A local
+ * `const X = …` does not.
+ */
+function participantsMissingImport(constantName: string, declaringFile: string): string[] {
+  const importsSymbol = new RegExp(
+    `(?:import|export)\\s+(?:type\\s+)?\\{[^}]*\\b${escapeRegExp(constantName)}\\b[^}]*\\}\\s*from`
+  )
+  return filesContaining(constantName, declaringFile).filter(
+    (path) => !importsSymbol.test(sourceText.get(path) ?? '')
+  )
+}
 
 /**
  * Shared body for the two custom-DOM-event contracts.
@@ -138,17 +172,57 @@ function describeEventContract(label: string, declaringFile: string, constantNam
     })
 
     it('reaches every participant through an import of the declaring constant', () => {
-      // Without this, a file could re-declare a same-named local constant and
-      // satisfy the checks above while listening on a different string.
-      // `import { X } from …` binds it; so does the barrel's
-      // `export { X } from './types'`. A local `const X = …` does not.
-      const importsSymbol = new RegExp(
-        `(?:import|export)\\s+(?:type\\s+)?\\{[^}]*\\b${escapeRegExp(constantName)}\\b[^}]*\\}\\s*from`
-      )
-      const withoutImport = filesContaining(constantName, declaringFile).filter(
-        (path) => !importsSymbol.test(sourceText.get(path) ?? '')
-      )
-      expect(withoutImport).toEqual([])
+      expect(participantsMissingImport(constantName, declaringFile)).toEqual([])
+    })
+  })
+}
+
+/**
+ * Shared body for window-global handoff contracts.
+ *
+ * Same property as the event contracts, one degree harder to catch. An event
+ * name at least has two visibly different call shapes — a dispatch and a
+ * listen — so a wire with one end unplugged is legible in the source. A window
+ * property is just an assignment and a read of the same key, and if the two
+ * ends disagree nothing throws, nothing warns, and the feature quietly does
+ * nothing. Requiring a single spelling reached through one import is what makes
+ * that disagreement unrepresentable rather than merely detectable.
+ */
+function describeWindowGlobalContract(
+  label: string,
+  declaringFile: string,
+  constantName: string
+): void {
+  describe(label, () => {
+    const globalName = declaredStringConstant(declaringFile, constantName)
+
+    it('carries the canonical DOM global prefix', () => {
+      expect(globalName.startsWith(brandCanonical().domGlobalPrefix)).toBe(true)
+    })
+
+    it('is spelled out in exactly one production file', () => {
+      // Any second file holding the literal is a copy that can drift.
+      expect(filesContaining(`'${globalName}'`, declaringFile)).toEqual([])
+    })
+
+    it('has both ends of the handoff, in more than one file', () => {
+      // A writer with no reader (or the reverse) is the state a half-applied
+      // rename leaves behind, and the one this global cannot signal at runtime.
+      //
+      // Counted by actual subscript sites, never by mere mention of the symbol:
+      // reverting one end to an inline literal leaves its `import` behind, and
+      // a check that counted importing files would keep passing against exactly
+      // the breakage it exists to catch. That is not hypothetical — the first
+      // version of this assertion did count mentions and survived the mutation.
+      const writers = globalWriterFiles(constantName)
+      const readers = globalReaderFiles(constantName)
+      expect(writers.length).toBeGreaterThan(0)
+      expect(readers.length).toBeGreaterThan(0)
+      expect(new Set([...writers, ...readers]).size).toBeGreaterThan(1)
+    })
+
+    it('reaches every participant through an import of the declaring constant', () => {
+      expect(participantsMissingImport(constantName, declaringFile)).toEqual([])
     })
   })
 }
@@ -174,6 +248,18 @@ describeEventContract(
   'EDITOR_REVEAL_LINE_EVENT',
   'src/renderer/lib/editor-events.ts',
   'EDITOR_REVEAL_LINE_EVENT'
+)
+
+// The reveal-line handoff's second transport, for the case the event cannot
+// cover: the target editor is not mounted yet, so the explorer parks the
+// request on a window global and the editor drains it on first render. T-A10
+// found it as an inline legacy-prefixed literal at both ends plus both test
+// files — the same drift as above, and invisible to the T-H10 overlay guard,
+// which only reads `annotation-overlay.js` and `browser_tab_manager.rs`.
+describeWindowGlobalContract(
+  'PENDING_REVEAL_LINE_GLOBAL',
+  'src/renderer/lib/editor-events.ts',
+  'PENDING_REVEAL_LINE_GLOBAL'
 )
 
 describe('brand-prefixed CSS custom properties', () => {
