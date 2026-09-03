@@ -210,15 +210,15 @@ pub async fn list(
                     std::path::Path::new(entry.as_ref()).starts_with(&project_root_for_filter)
                 })
                 .collect();
-            log::info!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=OK");
+            log::info!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=OK");
             IpcBody::ok(filtered)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
             worktree_err::<Vec<GitWorktreeEntry>>(e)
         }
         Err(e) => {
-            log::error!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=FAILED");
             IpcBody::<Vec<GitWorktreeEntry>>::err(
                 format!("worktree list task failed: {e}"),
                 "WORKTREE_LIST_ERROR",
@@ -280,15 +280,15 @@ pub async fn create(
     .map_err(|e| format!("worktree create task failed: {e}"));
     let body = match result {
         Ok(Ok(entry)) => {
-            log::info!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=OK");
+            log::info!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=OK");
             IpcBody::ok(entry)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
             worktree_err::<GitWorktreeEntry>(e)
         }
         Err(e) => {
-            log::error!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=FAILED");
             IpcBody::<GitWorktreeEntry>::err(
                 format!("worktree create task failed: {e}"),
                 "WORKTREE_CREATE_ERROR",
@@ -331,15 +331,15 @@ pub async fn remove(
     .map_err(|e| format!("worktree remove task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=OK");
+            log::info!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
             worktree_err::<()>(e)
         }
         Err(e) => {
-            log::error!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=FAILED");
             IpcBody::<()>::err(
                 format!("worktree remove task failed: {e}"),
                 "WORKTREE_REMOVE_ERROR",
@@ -369,15 +369,15 @@ pub async fn branches(
         .map_err(|e| format!("worktree branches task failed: {e}"));
     let body = match result {
         Ok(Ok(entries)) => {
-            log::info!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=OK");
+            log::info!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=OK");
             IpcBody::ok(entries)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
             worktree_err::<Vec<BranchEntry>>(e)
         }
         Err(e) => {
-            log::error!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=FAILED");
             IpcBody::<Vec<BranchEntry>>::err(
                 format!("worktree branches task failed: {e}"),
                 "WORKTREE_BRANCHES_ERROR",
@@ -407,15 +407,15 @@ pub async fn check_dirty(
         .map_err(|e| format!("worktree check-dirty task failed: {e}"));
     let body = match result {
         Ok(Ok(status)) => {
-            log::info!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=OK");
+            log::info!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=OK");
             IpcBody::ok(status)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
             worktree_err::<DirtyStatus>(e)
         }
         Err(e) => {
-            log::error!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=FAILED");
             IpcBody::<DirtyStatus>::err(
                 format!("worktree check-dirty task failed: {e}"),
                 "WORKTREE_CHECK_DIRTY_ERROR",
@@ -447,15 +447,15 @@ pub async fn resolve_base_branch(
     .map_err(|e| format!("worktree resolve-base-branch task failed: {e}"));
     let body = match result {
         Ok(Ok(info)) => {
-            log::info!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=OK");
+            log::info!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=OK");
             IpcBody::ok(info)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
             worktree_err::<BaseBranchInfo>(e)
         }
         Err(e) => {
-            log::error!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=FAILED");
             IpcBody::<BaseBranchInfo>::err(
                 format!("worktree resolve-base-branch task failed: {e}"),
                 "WORKTREE_RESOLVE_BASE_BRANCH_ERROR",
@@ -505,15 +505,15 @@ pub async fn copy_include_files(
     .map_err(|e| format!("worktree copy-include-files task failed: {e}"));
     let body = match result {
         Ok(Ok(outcome)) => {
-            log::info!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=OK");
+            log::info!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=OK");
             IpcBody::ok(outcome)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=REJECTED");
             worktree_err::<IncludeCopyResult>(e)
         }
         Err(e) => {
-            log::error!(target: "termul::web::worktree_api", "operation=worktree_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::worktree_api", "operation=worktree_api stable_code=FAILED");
             IpcBody::<IncludeCopyResult>::err(
                 format!("worktree copy-include-files task failed: {e}"),
                 "WORKTREE_COPY_INCLUDE_FILES_ERROR",

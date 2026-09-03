@@ -168,7 +168,7 @@ pub async fn get(
         }
         Err(error) => {
             warn!(
-                target: "termul::web::session_workspace_api",
+                target: "se_manager::web::session_workspace_api",
                 conversation_id = %conversation_id,
                 code = %error.code,
                 "workspace get failed"
@@ -251,7 +251,7 @@ pub async fn write(
         }
         Err(error) => {
             warn!(
-                target: "termul::web::session_workspace_api",
+                target: "se_manager::web::session_workspace_api",
                 conversation_id = %conversation_id,
                 code = %error.code,
                 "workspace write failed"

@@ -84,7 +84,7 @@ pub async fn get(
     match service.load(&project_id).await {
         Ok(manifest) => {
             debug!(
-                target: "termul::web::workspace_api",
+                target: "se_manager::web::workspace_api",
                 revision = manifest.as_ref().map_or(0, |m| m.revision),
                 "operation=workspace_get stable_code=OK"
             );
@@ -92,7 +92,7 @@ pub async fn get(
         }
         Err(error) => {
             warn!(
-                target: "termul::web::workspace_api",
+                target: "se_manager::web::workspace_api",
                 "operation=workspace_get stable_code=WORKSPACE_MANIFEST_GET_FAILED"
             );
             (
@@ -141,7 +141,7 @@ pub async fn write(
         Ok(req) => req,
         Err(error) => {
             warn!(
-                target: "termul::web::workspace_api",
+                target: "se_manager::web::workspace_api",
                 "operation=workspace_write stable_code=VALIDATION_ERROR"
             );
             return (
@@ -173,7 +173,7 @@ pub async fn write(
         }
         Err(error) => {
             warn!(
-                target: "termul::web::workspace_api",
+                target: "se_manager::web::workspace_api",
                 "operation=workspace_write stable_code=WORKSPACE_MANIFEST_WRITE_FAILED"
             );
             (
@@ -207,7 +207,7 @@ pub async fn delete(
         Ok(()) => (StatusCode::OK, Json(IpcBody::<()>::ok(()))),
         Err(error) => {
             warn!(
-                target: "termul::web::workspace_api",
+                target: "se_manager::web::workspace_api",
                 "operation=workspace_delete stable_code=WORKSPACE_MANIFEST_DELETE_FAILED"
             );
             (

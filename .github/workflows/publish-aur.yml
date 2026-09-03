@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Update termul-manager on AUR
+    name: Update ${{ vars.AUR_PACKAGE }} on AUR
     runs-on: ubuntu-latest
     # Gated on the AUR_PACKAGE repository variable. It used to be hardcoded to
     # `termul-manager`, which is the upstream project's AUR package — this project
@@ -106,7 +106,7 @@ jobs:
 
       - name: Update PKGBUILD
         if: steps.version.outputs.is_prerelease != 'true'
-        working-directory: /home/builder/termul-manager
+        working-directory: /home/builder/${{ env.AUR_PACKAGE }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -119,7 +119,7 @@ jobs:
 
       - name: Commit and push
         if: steps.version.outputs.is_prerelease != 'true'
-        working-directory: /home/builder/termul-manager
+        working-directory: /home/builder/${{ env.AUR_PACKAGE }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |

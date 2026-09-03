@@ -676,7 +676,7 @@ pub async fn ws_upgrade(
     let origin = headers.get(axum::http::header::ORIGIN);
     if let Err(error) = authority.verify_origin(origin) {
         warn!(
-            target: "termul::web::ws",
+            target: "se_manager::web::ws",
             request_type = "GET /ws",
             auth_class = "origin",
             stable_code = error.code(),
@@ -686,7 +686,7 @@ pub async fn ws_upgrade(
         return auth_error_response(error);
     }
     info!(
-        target: "termul::web::ws",
+        target: "se_manager::web::ws",
         request_type = "GET /ws",
         auth_class = "origin",
         stable_code = "OK",
@@ -1152,7 +1152,7 @@ impl Drop for ConnectionCleanup {
             });
         } else {
             warn!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 "connection cleanup dropped outside a Tokio runtime"
             );
         }
@@ -1319,7 +1319,7 @@ async fn cleanup_connection_subscriptions(
         relay.unsubscribe(&session_id, client_id);
     }
     info!(
-        target: "termul::web::ws",
+        target: "se_manager::web::ws",
         session_count = disconnected_sessions.len(),
         "connection subscriptions cleaned up"
     );
@@ -1474,7 +1474,7 @@ async fn handle_request_with_conversation(
                         .err()
                         .unwrap_or(RemoteAuthError::InvalidCredential);
                     warn!(
-                        target: "termul::web::ws",
+                        target: "se_manager::web::ws",
                         request_type = "authenticate",
                         auth_class = "bearer",
                         stable_code = reported.code(),
@@ -1500,7 +1500,7 @@ async fn handle_request_with_conversation(
                     *principal = Some(verified_principal);
                     *authed = true;
                     info!(
-                        target: "termul::web::ws",
+                        target: "se_manager::web::ws",
                         request_type = "authenticate",
                         auth_class = "bearer",
                         stable_code = "OK",
@@ -1510,7 +1510,7 @@ async fn handle_request_with_conversation(
                 }
                 Err(error) => {
                     warn!(
-                        target: "termul::web::ws",
+                        target: "se_manager::web::ws",
                         request_type = "authenticate",
                         auth_class = "bearer",
                         stable_code = error.code(),
@@ -2062,7 +2062,7 @@ async fn handle_get_session_payload(
             match persistence.session_payload_async(&parsed.session_id).await {
                 Ok(payload) => {
                     tracing::debug!(
-                        target: "termul::web::ws",
+                        target: "se_manager::web::ws",
                         session_id = %parsed.session_id,
                         messages = payload.messages.len(),
                         "get_session_payload: materialized host payload"
@@ -2078,7 +2078,7 @@ async fn handle_get_session_payload(
                     // detail that do not belong on the wire. The full context
                     // stays in the host log.
                     tracing::warn!(
-                        target: "termul::web::ws",
+                        target: "se_manager::web::ws",
                         session_id = %parsed.session_id,
                         error = %error,
                         "get_session_payload: host payload materialization failed"
@@ -2161,7 +2161,7 @@ async fn handle_get_session_payload_page(
     {
         Ok(page) => {
             tracing::info!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 cursor_start = request.after_seq,
                 cursor_end = page.next_cursor,
                 record_count = page.records.len(),
@@ -2172,7 +2172,7 @@ async fn handle_get_session_payload_page(
         }
         Err(error) => {
             tracing::warn!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 code = error.code,
                 cursor_start = request.after_seq,
                 limit = request.limit,
@@ -2346,7 +2346,7 @@ async fn handle_recover_session_snapshot(
                     return WsReply::err(id, WsErrorCode::NotFound, "session snapshot not found");
                 }
                 tracing::warn!(
-                    target: "termul::web::ws",
+                    target: "se_manager::web::ws",
                     session_id = %parsed.session_id,
                     error = %error,
                     "recover_session_snapshot: transient snapshot materialization failure"
@@ -2463,7 +2463,7 @@ async fn handle_get_session_cursor(
             .unwrap_or(0)
     };
     tracing::debug!(
-        target: "termul::web::ws",
+        target: "se_manager::web::ws",
         session_id = %parsed.session_id,
         watermark,
         "get_session_cursor"
@@ -3584,7 +3584,7 @@ async fn handle_list_cli_sessions(
     match tokio::task::spawn_blocking(move || list_cli_sessions(args, Some(&allowed))).await {
         Ok(result) => {
             info!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 "operation=list_cli_sessions sessions={} issues={}",
                 result.sessions.len(),
                 result.issues.len()
@@ -3613,7 +3613,7 @@ async fn handle_resolve_cli_sessions(id: String, payload: &Value) -> WsReply {
     match tokio::task::spawn_blocking(move || resolve_cli_sessions(args)).await {
         Ok(result) => {
             info!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 "operation=resolve_cli_sessions sessions={} issues={}",
                 result.sessions.len(),
                 result.issues.len()
@@ -3655,7 +3655,7 @@ async fn handle_authenticate_agent(id: String, payload: &Value, acp: &Arc<AcpMan
         }
     };
     debug!(
-        target: "termul::web::ws",
+        target: "se_manager::web::ws",
         agent = %parsed.agent_id,
         method = %parsed.method_id,
         "authenticate_agent: invoking agent auth method"
@@ -3667,7 +3667,7 @@ async fn handle_authenticate_agent(id: String, payload: &Value, acp: &Arc<AcpMan
         Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(e) => {
             warn!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 agent = %parsed.agent_id,
                 method = %method_id,
                 error = %e,
@@ -3816,7 +3816,7 @@ async fn handle_set_default_project(
         Ok(p) => p,
         Err(e) => {
             warn!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 error = %e,
                 "set_default_project: malformed payload (want projectId)"
             );
@@ -3832,7 +3832,7 @@ async fn handle_set_default_project(
     // validation path is identical to `switch_project`.
     if registry.switch_context(&parsed.project_id).is_none() {
         warn!(
-            target: "termul::web::ws",
+            target: "se_manager::web::ws",
             project_id = %parsed.project_id,
             "set_default_project: project not found or not switchable"
         );
@@ -3871,7 +3871,7 @@ async fn handle_set_default_project(
         };
         if let Err(error) = persistence_result {
             error!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 project_id = %parsed.project_id,
                 error = %error,
                 "set_default_project: persistence failed (rolled back)"
@@ -3894,14 +3894,14 @@ async fn handle_set_default_project(
             file_registry.restore_default_project(old_default);
             if let Err(error) = file_registry.save_atomic(path) {
                 warn!(
-                    target: "termul::web::ws",
+                    target: "se_manager::web::ws",
                     error = %error,
                     "set_default_project: failed to persist in-memory-set rollback"
                 );
             }
         }
         warn!(
-            target: "termul::web::ws",
+            target: "se_manager::web::ws",
             project_id = %parsed.project_id,
             "set_default_project: target became unavailable before commit (file rolled back)"
         );
@@ -3913,7 +3913,7 @@ async fn handle_set_default_project(
     }
     broadcast_projects_changed(relay, Some(&parsed.project_id));
     info!(
-        target: "termul::web::ws",
+        target: "se_manager::web::ws",
         project_id = %parsed.project_id,
         "set_default_project: host default updated + broadcast"
     );
@@ -4150,7 +4150,7 @@ async fn execute_project_switch(
     *current_session.lock() = Some(new_session.clone());
     *current_project.lock() = Some(target.project_id.clone());
     debug!(
-        target: "termul::web::ws",
+        target: "se_manager::web::ws",
         project_id = %target.project_id,
         session_id = %new_session.0,
         "switch_project: per-connection switch committed (no broadcast)"
@@ -4182,7 +4182,7 @@ fn execute_cold_tab_select(
 ) -> Result<SwitchProjectOutcome, String> {
     *current_project.lock() = Some(target.project_id.clone());
     debug!(
-        target: "termul::web::ws",
+        target: "se_manager::web::ws",
         project_id = %target.project_id,
         "switch_project: cold-tab per-connection select (no broadcast, no persistence)"
     );
@@ -4818,7 +4818,7 @@ async fn handle_register_discovered_session(
     {
         Ok(metadata) => {
             tracing::info!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 session_id = %metadata.session_id,
                 "register_discovered_session: metadata promoted"
             );
@@ -4826,7 +4826,7 @@ async fn handle_register_discovered_session(
         }
         Err(error) => {
             tracing::warn!(
-                target: "termul::web::ws",
+                target: "se_manager::web::ws",
                 error = %error,
                 "register_discovered_session: persistence failed"
             );

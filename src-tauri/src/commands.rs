@@ -3976,7 +3976,7 @@ pub async fn remote_server_start(
         publish_mode,
     }) {
         log::error!(
-            target: "termul::remote::host",
+            target: "se_manager::remote::host",
             "operation=intent_save lifecycle_phase=start stable_code=INTENT_SAVE_FAILED"
         );
         return Ok(IpcResult::error(error, "REMOTE_INTENT_SAVE_FAILED"));
@@ -4058,7 +4058,7 @@ pub async fn remote_server_start(
                     {
                         if publish_mode == remote::PublishMode::Lan {
                             log::warn!(
-                                target: "termul::remote::host",
+                                target: "se_manager::remote::host",
                                 "operation=tunnel_attach lifecycle_phase=start stable_code=REMOTE_TUNNEL_FAILED"
                             );
                             return Ok(IpcResult::success(remote_state.status()));
@@ -4072,7 +4072,7 @@ pub async fn remote_server_start(
                 Err(e) => {
                     if publish_mode == remote::PublishMode::Lan {
                         log::warn!(
-                            target: "termul::remote::host",
+                            target: "se_manager::remote::host",
                             "operation=tunnel_start lifecycle_phase=start stable_code=REMOTE_TUNNEL_FAILED"
                         );
                         return Ok(IpcResult::success(remote_state.status()));
@@ -4106,7 +4106,7 @@ pub async fn remote_server_stop(
         publish_mode,
     }) {
         log::error!(
-            target: "termul::remote::host",
+            target: "se_manager::remote::host",
             "operation=intent_save lifecycle_phase=stop stable_code=INTENT_SAVE_FAILED"
         );
         return Ok(IpcResult::error(error, "REMOTE_INTENT_SAVE_FAILED"));
@@ -4199,7 +4199,7 @@ pub async fn remote_server_rotate_credential(
         match remote_state.rotate_active_credential() {
             Ok(status) => {
                 log::info!(
-                    target: "termul::remote::host",
+                    target: "se_manager::remote::host",
                     "operation=credential_rotate lifecycle_phase=operator stable_code=OK"
                 );
                 Ok(IpcResult::success(status))
@@ -4213,7 +4213,7 @@ pub async fn remote_server_rotate_credential(
                     return Ok(IpcResult::error(error, "REMOTE_ROTATE_FAILED"));
                 }
                 log::info!(
-                    target: "termul::remote::host",
+                    target: "se_manager::remote::host",
                     "operation=credential_rotate lifecycle_phase=operator_idle stable_code=OK"
                 );
                 Ok(IpcResult::success(remote_state.status()))
@@ -4268,7 +4268,7 @@ pub fn parse_code_workspace_file(
     match crate::editor_workspaces::parse_code_workspace_file(std::path::Path::new(&payload.path)) {
         Ok(list) => {
             log::info!(
-                target: "termul::editor_workspaces",
+                target: "se_manager::editor_workspaces",
                 "operation=parse_workspace count={} stable_code=OK",
                 list.candidates.len()
             );
@@ -4293,7 +4293,7 @@ pub async fn remote_sync_projects(
     );
     crate::web::broadcast_projects_changed(ws_relay.inner(), payload.default_project_id.as_deref());
     log::info!(
-        target: "termul::remote_sync_projects",
+        target: "se_manager::remote_sync_projects",
         "operation=remote_sync_projects stable_code=OK projects={} groups={}",
         project_count,
         group_count

@@ -77,7 +77,7 @@ pub async fn list(
                 )
             };
             if let Some(err) = outside_err {
-                log::warn!(target: "termul::web::skills_api", "operation=skills_api stable_code=REJECTED");
+                log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
                 return (StatusCode::OK, Json(err));
             }
         }
@@ -92,13 +92,13 @@ pub async fn list(
     let body = match result {
         Ok(Ok(skills)) => IpcBody::ok(skills),
         Ok(Err(_e)) => {
-            log::warn!(target: "termul::web::skills_api", "operation=skills_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
             // Degrade: return an empty list so the slash menu stays usable,
             // matching the desktop's `Promise.resolve([])` fallback contract.
             IpcBody::ok(Vec::<AgentSkillSummary>::new())
         }
         Err(_e) => {
-            log::error!(target: "termul::web::skills_api", "operation=skills_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=FAILED");
             IpcBody::ok(Vec::<AgentSkillSummary>::new())
         }
     };
@@ -131,7 +131,7 @@ pub async fn read(
                 )
             };
             if let Some(err) = outside_err {
-                log::warn!(target: "termul::web::skills_api", "operation=skills_api stable_code=REJECTED");
+                log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
                 return (StatusCode::OK, Json(err));
             }
         }
@@ -146,11 +146,11 @@ pub async fn read(
     let body = match result {
         Ok(Ok(content)) => IpcBody::ok(content),
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::skills_api", "operation=skills_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
             IpcBody::<AgentSkillContent>::err(e, "SKILL_NOT_FOUND")
         }
         Err(e) => {
-            log::error!(target: "termul::web::skills_api", "operation=skills_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=FAILED");
             IpcBody::<AgentSkillContent>::err(
                 format!("skills read task failed: {e}"),
                 "SKILL_READ_ERROR",

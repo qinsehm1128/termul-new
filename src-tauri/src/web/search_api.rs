@@ -74,7 +74,7 @@ pub async fn content(
 
     let query_char_count = trimmed_query.chars().count();
     if query_char_count > MAX_SEARCH_QUERY_LEN {
-        log::warn!(target: "termul::web::search_api", "operation=search_api stable_code=REJECTED");
+        log::warn!(target: "se_manager::web::search_api", "operation=search_api stable_code=REJECTED");
         return (
             StatusCode::OK,
             Json(IpcBody::<FileSearchResponse>::err(
@@ -90,7 +90,7 @@ pub async fn content(
     let validated_root = match validated_search_root(&req.scope_root, &req.root_path) {
         Ok(path) => path,
         Err(e) => {
-            log::warn!(target: "termul::web::search_api", "operation=search_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::search_api", "operation=search_api stable_code=REJECTED");
             return (
                 StatusCode::OK,
                 Json(IpcBody::<FileSearchResponse>::err(
@@ -109,7 +109,7 @@ pub async fn content(
     let canonical_root = match std::path::Path::new(&validated_root).canonicalize() {
         Ok(p) => p,
         Err(e) => {
-            log::warn!(target: "termul::web::search_api", "operation=search_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::search_api", "operation=search_api stable_code=REJECTED");
             return (
                 StatusCode::OK,
                 Json(IpcBody::<FileSearchResponse>::err(
@@ -134,7 +134,7 @@ pub async fn content(
         )
     };
     if let Some(err) = outside_err {
-        log::warn!(target: "termul::web::search_api", "operation=search_api stable_code=REJECTED");
+        log::warn!(target: "se_manager::web::search_api", "operation=search_api stable_code=REJECTED");
         return (StatusCode::OK, Json(err));
     }
 

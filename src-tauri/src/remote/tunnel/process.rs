@@ -30,7 +30,7 @@ pub fn spawn_sidecar(
     configure_background_command(&mut command);
     command.spawn().map_err(|e| {
         log::error!(
-            target: "termul::remote::tunnel",
+            target: "se_manager::remote::tunnel",
             "operation=tunnel_sidecar_spawn stable_code=SPAWN_FAILED path_kind={}",
             if path.contains(std::path::MAIN_SEPARATOR) {
                 "resolved"
@@ -84,7 +84,7 @@ pub async fn wait_for_ready(
         _ = tokio::time::sleep(timeout) => {
             if allow_timeout_if_alive {
                 log::warn!(
-                    target: "termul::remote::tunnel",
+                    target: "se_manager::remote::tunnel",
                     "operation=tunnel_sidecar_ready stable_code=READY_TIMEOUT_ALIVE"
                 );
                 Ok(())

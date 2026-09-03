@@ -136,7 +136,7 @@ fn record_shutdown_failure(
     phase: &'static str,
 ) {
     error!(
-        target: "termul::web::shutdown",
+        target: "se_manager::web::shutdown",
         stable_code = code,
         shutdown_phase = phase,
         "standalone resource cleanup failed"
@@ -165,7 +165,7 @@ async fn shutdown_standalone_resources_until(
     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
     let connection_receipt = registry.join_all(remaining).await;
     info!(
-        target: "termul::web::shutdown",
+        target: "se_manager::web::shutdown",
         stable_code = "OK",
         shutdown_phase = "join_upgraded_connections",
         active = connection_receipt.active,
@@ -196,7 +196,7 @@ async fn shutdown_standalone_resources_until(
     }
     match ws_relay.flush_catalog_until(deadline).await {
         Ok(receipt) => info!(
-            target: "termul::web::shutdown",
+            target: "se_manager::web::shutdown",
             stable_code = "OK",
             shutdown_phase = "flush_conversation_catalog",
             requested_generation = receipt.requested_generation,
@@ -223,7 +223,7 @@ async fn shutdown_standalone_resources_until(
     // concurrently, and failed/in-flight jobs remain owned for later explicit retry.
     let pty_shutdown = pty.kill_all_until(deadline).await;
     info!(
-        target: "termul::web::shutdown",
+        target: "se_manager::web::shutdown",
         stable_code = if pty_shutdown.clean_success() { "OK" } else { PTY_CLEANUP_FAILED },
         shutdown_phase = "cleanup_ptys",
         attempted = pty_shutdown.attempted,

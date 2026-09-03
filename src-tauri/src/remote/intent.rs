@@ -89,7 +89,7 @@ impl RemoteAccessIntentStore {
         atomic_file::replace(&self.path, &bytes)
             .map_err(|error| format!("failed to write remote access intent: {error}"))?;
         log::info!(
-            target: "termul::remote::intent",
+            target: "se_manager::remote::intent",
             "operation=intent_save wanted={} publish_mode={} stable_code=OK",
             intent.wanted,
             intent.publish_mode.as_str()

@@ -509,7 +509,7 @@ impl RemoteAccessAuthority {
     pub fn from_token_file(path: &Path) -> Result<Self, RemoteAuthError> {
         let mut file = open_validated_token_file(path).inspect_err(|error| {
             log::error!(
-                target: "termul::web::auth",
+                target: "se_manager::web::auth",
                 "operation=token_file_open authority_source={} stable_code={}",
                 RemoteAuthoritySource::OperatorTokenFile.as_str(),
                 error.code()
@@ -517,7 +517,7 @@ impl RemoteAccessAuthority {
         })?;
         let token = read_token_from_validated_handle(&mut file).inspect_err(|error| {
             log::error!(
-                target: "termul::web::auth",
+                target: "se_manager::web::auth",
                 "operation=token_file_read authority_source={} stable_code={}",
                 RemoteAuthoritySource::OperatorTokenFile.as_str(),
                 error.code()
@@ -525,7 +525,7 @@ impl RemoteAccessAuthority {
         })?;
         let authority = Self::from_token(&token, RemoteAuthoritySource::OperatorTokenFile);
         log::info!(
-            target: "termul::web::auth",
+            target: "se_manager::web::auth",
             "operation=authority_ready authority_source={} stable_code=OK",
             RemoteAuthoritySource::OperatorTokenFile.as_str()
         );
@@ -584,7 +584,7 @@ impl RemoteAccessAuthority {
     pub fn rotate_desktop_credential(&self) -> Result<DesktopCredentialLease, RemoteAuthError> {
         let bearer = generate_token().inspect_err(|error| {
             log::error!(
-                target: "termul::web::auth",
+                target: "se_manager::web::auth",
                 "operation=rotate_credential stable_code={}",
                 error.code()
             );
@@ -611,7 +611,7 @@ impl RemoteAccessAuthority {
             active: true,
         });
         log::info!(
-            target: "termul::web::auth",
+            target: "se_manager::web::auth",
             "operation=credential_rotate authority_source={} generation={} lifecycle_phase=rotate stable_code=OK",
             source.as_str(),
             generation
@@ -663,7 +663,7 @@ impl RemoteAccessAuthority {
                     });
                 }
                 log::info!(
-                    target: "termul::web::auth",
+                    target: "se_manager::web::auth",
                     "operation=credential_adopt authority_source={} generation={} issued=false stable_code=OK",
                     RemoteAuthoritySource::DesktopKeyring.as_str(),
                     generation
@@ -700,7 +700,7 @@ impl RemoteAccessAuthority {
                 active: false,
             });
             log::warn!(
-                target: "termul::web::auth",
+                target: "se_manager::web::auth",
                 "operation=credential_invalidate generation={} lifecycle_phase=invalidate stable_code=GENERATION_INVALIDATED",
                 generation
             );
@@ -735,7 +735,7 @@ impl RemoteAccessAuthority {
         }
 
         log::info!(
-            target: "termul::web::auth",
+            target: "se_manager::web::auth",
             "operation=generation_retire generation={} lifecycle_phase=retire stable_code=OK keyring_deleted=true",
             generation
         );
@@ -779,7 +779,7 @@ impl RemoteAccessAuthority {
         self.allowed_origins.write().insert(normalized);
         let generation = self.credential.read().generation;
         log::info!(
-            target: "termul::web::auth",
+            target: "se_manager::web::auth",
             "operation=origin_register generation={} lifecycle_phase=register_origin stable_code=OK",
             generation
         );
@@ -845,7 +845,7 @@ impl RemoteAccessAuthority {
             || principal.authority_source == RemoteAuthoritySource::Unconfigured
         {
             log::warn!(
-                target: "termul::web::auth",
+                target: "se_manager::web::auth",
                 "operation=capability_authorize generation={} capability={} stable_code={}",
                 principal.generation,
                 capability.as_str(),
@@ -906,7 +906,7 @@ impl RemoteAccessAuthority {
                     now,
                 );
                 log::warn!(
-                    target: "termul::web::auth",
+                    target: "se_manager::web::auth",
                     "operation=bearer_verify generation={} auth_class=bearer stable_code={}",
                     generation,
                     reported.code()
@@ -1549,7 +1549,7 @@ fn log_boundary_outcome(
 ) {
     if status.is_client_error() || status.is_server_error() {
         log::warn!(
-            target: "termul::web::auth",
+            target: "se_manager::web::auth",
             "operation=remote_boundary method={} route_class={} capability={} provenance={} stable_code={} http_status={} duration_ms={}",
             method.as_str(),
             route_class.as_str(),
@@ -1561,7 +1561,7 @@ fn log_boundary_outcome(
         );
     } else {
         log::info!(
-            target: "termul::web::auth",
+            target: "se_manager::web::auth",
             "operation=remote_boundary method={} route_class={} capability={} provenance={} stable_code={} http_status={} duration_ms={}",
             method.as_str(),
             route_class.as_str(),
@@ -2232,7 +2232,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        let output = test_tracing::messages("termul::web::auth").join("\n");
+        let output = test_tracing::messages("se_manager::web::auth").join("\n");
         for required in [
             "operation=remote_boundary",
             "route_class=conversation",
@@ -2285,7 +2285,7 @@ mod tests {
             assert_eq!(task.await.unwrap(), StatusCode::OK);
         }
 
-        let boundary = test_tracing::messages("termul::web::auth")
+        let boundary = test_tracing::messages("se_manager::web::auth")
             .into_iter()
             .filter(|message| message.contains("operation=remote_boundary"))
             .collect::<Vec<_>>();
@@ -2440,9 +2440,9 @@ mod tests {
     async fn capture_logger_scoped_id_does_not_contaminate_unrelated_or_post_guard_logs() {
         let scoped = test_tracing::lock_scoped("task-002-capture").await;
         let scoped_id = scoped.id();
-        log::info!(target: "termul::web::auth", "scoped-capture-record");
-        test_tracing::emit_unscoped_for_tests("termul::web::auth", "unrelated-concurrent-record");
-        let scoped_messages = test_tracing::messages_for(scoped_id, "termul::web::auth");
+        log::info!(target: "se_manager::web::auth", "scoped-capture-record");
+        test_tracing::emit_unscoped_for_tests("se_manager::web::auth", "unrelated-concurrent-record");
+        let scoped_messages = test_tracing::messages_for(scoped_id, "se_manager::web::auth");
         assert!(
             scoped_messages
                 .iter()
@@ -2457,8 +2457,8 @@ mod tests {
         );
         drop(scoped);
 
-        log::info!(target: "termul::web::auth", "post-guard-observable-record");
-        let forwarded = test_tracing::forwarded_messages("termul::web::auth");
+        log::info!(target: "se_manager::web::auth", "post-guard-observable-record");
+        let forwarded = test_tracing::forwarded_messages("se_manager::web::auth");
         assert!(
             forwarded
                 .iter()
@@ -2466,7 +2466,7 @@ mod tests {
             "post-guard logs must remain observable: {forwarded:?}"
         );
         assert!(
-            test_tracing::messages_for(scoped_id, "termul::web::auth").is_empty(),
+            test_tracing::messages_for(scoped_id, "se_manager::web::auth").is_empty(),
             "dropped scoped capture must not keep absorbing records"
         );
     }

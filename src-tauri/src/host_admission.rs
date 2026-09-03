@@ -39,7 +39,7 @@ impl HostAdmission {
     pub fn close(&self) {
         self.open.store(false, Ordering::SeqCst);
         log::warn!(
-            target: "termul::host_admission",
+            target: "se_manager::host_admission",
             "operation=host_admission stable_code={HOST_SHUTTING_DOWN}"
         );
     }

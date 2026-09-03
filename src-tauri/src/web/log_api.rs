@@ -59,7 +59,7 @@ pub async fn frontend_error(
         + u8::from(req.component_stack.is_some());
     let message_bytes = req.message.len();
     log::warn!(
-        target: "termul::web::log_api",
+        target: "se_manager::web::log_api",
         "operation=frontend_error level={} supplied_fields={} message_bytes={} stable_code=FRONTEND_ERROR_REPORTED",
         level,
         supplied_fields,

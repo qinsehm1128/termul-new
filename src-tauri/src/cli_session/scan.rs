@@ -27,7 +27,7 @@ pub fn list_cli_sessions(
     let (scope_paths, mut issues) = filter_scope_paths(&raw_scope, allowed_scope_roots);
 
     log::info!(
-        target: "termul::cli_session",
+        target: "se_manager::cli_session",
         "operation=list_cli_sessions agents={} scope_paths={} limit={}",
         agents.len(),
         scope_paths.len(),
@@ -49,7 +49,7 @@ pub fn list_cli_sessions(
     });
 
     log::info!(
-        target: "termul::cli_session",
+        target: "se_manager::cli_session",
         "operation=list_cli_sessions_done sessions={} issues={}",
         sessions.len(),
         issues.len()
@@ -71,7 +71,7 @@ fn scan_agent(
     let roots = walk_roots_for_agent(agent, scope_paths);
     if roots.is_empty() {
         log::info!(
-            target: "termul::cli_session",
+            target: "se_manager::cli_session",
             "operation=scan_root_missing agent={}",
             agent.as_str()
         );
@@ -81,7 +81,7 @@ fn scan_agent(
     let mut files = Vec::new();
     for root in &roots {
         log::info!(
-            target: "termul::cli_session",
+            target: "se_manager::cli_session",
             "operation=scan_root agent={} root={}",
             agent.as_str(),
             root.path.display()

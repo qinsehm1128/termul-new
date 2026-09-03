@@ -61,7 +61,7 @@ pub async fn start_ssh_reverse_tunnel(
     args.push(format!("{user}@{host}"));
 
     log::info!(
-        target: "termul::remote::tunnel",
+        target: "se_manager::remote::tunnel",
         "operation=tunnel_start provider=sshReverse local_port={local_port} stable_code=OK"
     );
 
@@ -77,7 +77,7 @@ pub async fn start_ssh_reverse_tunnel(
 
     let mut child = command.spawn().map_err(|error| {
         log::error!(
-            target: "termul::remote::tunnel",
+            target: "se_manager::remote::tunnel",
             "operation=tunnel_sidecar_spawn provider=sshReverse stable_code=SPAWN_FAILED"
         );
         format!("ssh reverse tunnel failed to spawn: {error}")
@@ -95,7 +95,7 @@ pub async fn start_ssh_reverse_tunnel(
     }
 
     log::info!(
-        target: "termul::remote::tunnel",
+        target: "se_manager::remote::tunnel",
         "operation=tunnel_ready provider=sshReverse stable_code=OK"
     );
     Ok(StartedTunnel {

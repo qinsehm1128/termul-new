@@ -22,11 +22,11 @@ pub fn discover_editor_workspaces() -> EditorWorkspaceList {
     }
     for (editor, count) in counts {
         log::info!(
-            target: "termul::editor_workspaces",
+            target: "se_manager::editor_workspaces",
             "operation=discover editor={editor} count={count} stable_code=OK"
         );
         tracing::info!(
-            target = "termul::editor_workspaces",
+            target = "se_manager::editor_workspaces",
             operation = "discover",
             editor,
             count,

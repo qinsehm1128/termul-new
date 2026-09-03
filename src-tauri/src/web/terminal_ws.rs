@@ -99,7 +99,7 @@ pub async fn terminal_ws_upgrade(
         Ok(principal) => principal,
         Err(error) => {
             warn!(
-                target: "termul::web::terminal_ws",
+                target: "se_manager::web::terminal_ws",
                 stable_code = error.code(),
                 "terminal WebSocket upgrade rejected by authentication policy"
             );
@@ -107,7 +107,7 @@ pub async fn terminal_ws_upgrade(
         }
     };
     info!(
-        target: "termul::web::terminal_ws",
+        target: "se_manager::web::terminal_ws",
         handshake_bearer = admitted.is_some(),
         stable_code = "OK",
         "terminal WebSocket upgrade Origin accepted"
@@ -119,7 +119,7 @@ pub async fn terminal_ws_upgrade(
         ws
     };
     info!(
-        target: "termul::web::terminal_ws",
+        target: "se_manager::web::terminal_ws",
         binary_output,
         "terminal WebSocket output protocol selected"
     );
@@ -279,7 +279,7 @@ async fn run(
     loop {
         if principal_generation_mismatch(&authority, principal.as_ref()) {
             info!(
-                target: "termul::web::terminal_ws",
+                target: "se_manager::web::terminal_ws",
                 generation = principal.as_ref().map(RemotePrincipal::generation).unwrap_or(0),
                 lifecycle_phase = "generation_mismatch",
                 stable_code = "OK",
@@ -291,7 +291,7 @@ async fn run(
             changed = generation_rx.changed() => {
                 if changed.is_err() || principal_generation_mismatch(&authority, principal.as_ref()) {
                     info!(
-                        target: "termul::web::terminal_ws",
+                        target: "se_manager::web::terminal_ws",
                         generation = principal.as_ref().map(RemotePrincipal::generation).unwrap_or(0),
                         lifecycle_phase = "generation_mismatch",
                         stable_code = "OK",
@@ -559,7 +559,7 @@ fn admit_terminal_frame(
                 .map_err(|_| unauthorized_error("principal"))?;
             *principal = Some(admitted);
             info!(
-                target: "termul::web::terminal_ws",
+                target: "se_manager::web::terminal_ws",
                 request_type = "authenticate",
                 auth_class = "bearer",
                 stable_code = "OK",
@@ -569,7 +569,7 @@ fn admit_terminal_frame(
         }
         Err(error) => {
             warn!(
-                target: "termul::web::terminal_ws",
+                target: "se_manager::web::terminal_ws",
                 request_type = "authenticate",
                 auth_class = "bearer",
                 stable_code = error.code(),

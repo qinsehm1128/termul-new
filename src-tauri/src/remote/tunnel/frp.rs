@@ -37,7 +37,7 @@ pub async fn start_frp_tunnel(
     let config_path = store_config_path(store, &toml)?;
     let path = detect_frpc_path();
     log::info!(
-        target: "termul::remote::tunnel",
+        target: "se_manager::remote::tunnel",
         "operation=tunnel_start provider=frp local_port={local_port} stable_code=OK"
     );
 
@@ -57,7 +57,7 @@ pub async fn start_frp_tunnel(
     }
 
     log::info!(
-        target: "termul::remote::tunnel",
+        target: "se_manager::remote::tunnel",
         "operation=tunnel_ready provider=frp stable_code=OK"
     );
     Ok(StartedTunnel {

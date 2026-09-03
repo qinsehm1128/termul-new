@@ -11,7 +11,7 @@ pub async fn list_cli_sessions_cmd(
 ) -> Result<CliSessionListResult, String> {
     let args = args.unwrap_or_default();
     log::info!(
-        target: "termul::cli_session",
+        target: "se_manager::cli_session",
         "operation=list_cli_sessions_cmd scope_paths={}",
         args.scope_paths.as_ref().map(Vec::len).unwrap_or(0)
     );
@@ -27,7 +27,7 @@ pub async fn resolve_cli_sessions_cmd(
     args: CliSessionResolveArgs,
 ) -> Result<CliSessionResolveResult, String> {
     log::info!(
-        target: "termul::cli_session",
+        target: "se_manager::cli_session",
         "operation=resolve_cli_sessions_cmd files={}",
         args.files.len()
     );

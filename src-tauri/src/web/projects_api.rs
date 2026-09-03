@@ -114,7 +114,7 @@ pub async fn set_default_project(
     let project_id = req.project_id;
     // Validate via switch_context (same path as `switch_project`).
     if state.registry.switch_context(&project_id).is_none() {
-        log::warn!(target: "termul::web::projects_api", "operation=projects_api stable_code=REJECTED");
+        log::warn!(target: "se_manager::web::projects_api", "operation=projects_api stable_code=REJECTED");
         return Json(IpcBody::<()>::err(
             format!("project '{project_id}' not found or not switchable"),
             "NOT_FOUND",
@@ -148,7 +148,7 @@ pub async fn set_default_project(
             }
         };
         if let Err(error) = persistence_result {
-            log::error!(target: "termul::web::projects_api", "operation=projects_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::projects_api", "operation=projects_api stable_code=FAILED");
             return Json(IpcBody::<()>::err(
                 format!("failed to persist default project: {error}"),
                 "PERSIST_FAILED",
@@ -167,17 +167,17 @@ pub async fn set_default_project(
             let mut file_registry = file_registry.lock();
             file_registry.restore_default_project(old_default);
             if let Err(_error) = file_registry.save_atomic(path) {
-                log::warn!(target: "termul::web::projects_api", "operation=projects_api stable_code=REJECTED");
+                log::warn!(target: "se_manager::web::projects_api", "operation=projects_api stable_code=REJECTED");
             }
         }
-        log::warn!(target: "termul::web::projects_api", "operation=projects_api stable_code=REJECTED");
+        log::warn!(target: "se_manager::web::projects_api", "operation=projects_api stable_code=REJECTED");
         return Json(IpcBody::<()>::err(
             "target project became unavailable before commit".to_string(),
             "NOT_FOUND",
         ));
     }
     broadcast_projects_changed(&state.relay, Some(&project_id));
-    log::info!(target: "termul::web::projects_api", "operation=projects_api stable_code=OK");
+    log::info!(target: "se_manager::web::projects_api", "operation=projects_api stable_code=OK");
     Json(IpcBody::ok(()))
 }
 

@@ -394,7 +394,7 @@ impl TunnelConfigStore {
         )?;
         self.save(&config)?;
         log::info!(
-            target: "termul::remote::tunnel",
+            target: "se_manager::remote::tunnel",
             "operation=tunnel_config_save provider={} stable_code=OK",
             config.provider.as_str()
         );

@@ -203,7 +203,7 @@ impl std::io::Write for TracingToLogWriter {
         if let Ok(line) = std::str::from_utf8(buf) {
             let trimmed = line.trim_end();
             if !trimmed.is_empty() {
-                log::info!(target: "termul::tracing", "{trimmed}");
+                log::info!(target: "se_manager::tracing", "{trimmed}");
             }
         }
         EMITTING.with(|flag| flag.set(false));
@@ -398,25 +398,25 @@ mod tests {
 
     #[test]
     fn module_scoped_directive_keeps_global_at_floor() {
-        // `termul_manager=debug` must NOT raise other crates: global stays at
+        // `se_manager=debug` must NOT raise other crates: global stays at
         // the floor, the module gets its own override.
-        let d = parse_directives("termul_manager=debug");
+        let d = parse_directives("se_manager=debug");
         assert_eq!(d.global, default_floor());
         assert_eq!(
             d.per_module,
-            vec![("termul_manager".to_string(), LevelFilter::Debug)]
+            vec![("se_manager".to_string(), LevelFilter::Debug)]
         );
     }
 
     #[test]
     fn multiple_modules_are_scoped_independently() {
-        let d = parse_directives("hyper=warn,termul_manager=trace");
+        let d = parse_directives("hyper=warn,se_manager=trace");
         assert_eq!(d.global, default_floor());
         assert_eq!(
             d.per_module,
             vec![
                 ("hyper".to_string(), LevelFilter::Warn),
-                ("termul_manager".to_string(), LevelFilter::Trace),
+                ("se_manager".to_string(), LevelFilter::Trace),
             ]
         );
     }
@@ -431,17 +431,17 @@ mod tests {
 
     #[test]
     fn global_level_and_module_override_combine() {
-        let d = parse_directives("info,termul_manager=trace");
+        let d = parse_directives("info,se_manager=trace");
         assert_eq!(d.global, LevelFilter::Info);
         assert_eq!(
             d.per_module,
-            vec![("termul_manager".to_string(), LevelFilter::Trace)]
+            vec![("se_manager".to_string(), LevelFilter::Trace)]
         );
     }
 
     #[test]
     fn unrecognized_level_tokens_are_ignored() {
-        let d = parse_directives("bogus,termul_manager=nonsense");
+        let d = parse_directives("bogus,se_manager=nonsense");
         assert_eq!(d.global, default_floor());
         assert!(d.per_module.is_empty());
     }
@@ -467,11 +467,11 @@ mod tests {
 
         install_bridge_capture_logger();
         install_desktop_tracing_bridge();
-        tracing::info!(target: "termul::web::ws", stable_code = "OK", "WebSocket upgrade Origin accepted");
-        let captured = captured_messages("termul::tracing");
+        tracing::info!(target: "se_manager::web::ws", stable_code = "OK", "WebSocket upgrade Origin accepted");
+        let captured = captured_messages("se_manager::tracing");
         assert!(
             captured.iter().any(|message| {
-                message.contains("termul::web::ws")
+                message.contains("se_manager::web::ws")
                     && message.contains("stable_code=\"OK\"")
                     && message.contains("WebSocket upgrade Origin accepted")
             }),
@@ -490,8 +490,8 @@ mod tests {
 
         install_desktop_tracing_bridge();
         install_bridge_capture_logger();
-        tracing::info!(target: "termul::web::ws", "bridge-before-capture");
-        let captured = captured_messages("termul::tracing");
+        tracing::info!(target: "se_manager::web::ws", "bridge-before-capture");
+        let captured = captured_messages("se_manager::tracing");
         assert!(
             captured
                 .iter()
@@ -517,17 +517,17 @@ mod tests {
         runtime.block_on(async {
             let scoped = crate::web::auth::test_tracing::lock_scoped("task-005-bridge-order").await;
             let scope_id = scoped.id();
-            tracing::info!(target: "termul::web::ws", stable_code = "OK", "scoped bridge audit");
-            log::info!(target: "termul::web::auth", "scoped auth capture");
+            tracing::info!(target: "se_manager::web::ws", stable_code = "OK", "scoped bridge audit");
+            log::info!(target: "se_manager::web::auth", "scoped auth capture");
 
-            let bridge = crate::web::auth::test_tracing::messages_for(scope_id, "termul::tracing");
+            let bridge = crate::web::auth::test_tracing::messages_for(scope_id, "se_manager::tracing");
             assert!(
                 bridge
                     .iter()
                     .any(|message| message.contains("scoped bridge audit")),
                 "scoped capture must receive tracing bridge output: {bridge:?}"
             );
-            let auth = crate::web::auth::test_tracing::messages_for(scope_id, "termul::web::auth");
+            let auth = crate::web::auth::test_tracing::messages_for(scope_id, "se_manager::web::auth");
             assert!(
                 auth.iter()
                     .any(|message| message.contains("scoped auth capture")),

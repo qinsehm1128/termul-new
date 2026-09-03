@@ -57,7 +57,7 @@ fn allowed_scope_roots(state: &AppState) -> Vec<PathBuf> {
 async fn run_list(state: &AppState, args: CliSessionListArgs) -> impl IntoResponse {
     let allowed = allowed_scope_roots(state);
     info!(
-        target: "termul::web::cli_session_api",
+        target: "se_manager::web::cli_session_api",
         "operation=list_cli_sessions scope_paths={}",
         args.scope_paths.as_ref().map(Vec::len).unwrap_or(0)
     );
@@ -65,7 +65,7 @@ async fn run_list(state: &AppState, args: CliSessionListArgs) -> impl IntoRespon
         Ok(result) => IpcBody::ok(result),
         Err(err) => {
             error!(
-                target: "termul::web::cli_session_api",
+                target: "se_manager::web::cli_session_api",
                 "operation=list_cli_sessions_failed error=join"
             );
             IpcBody::<CliSessionListResult>::err(err.to_string(), "SCAN_FAILED")
@@ -98,7 +98,7 @@ pub async fn list_post(
 
 pub async fn resolve_post(Json(args): Json<CliSessionResolveArgs>) -> impl IntoResponse {
     info!(
-        target: "termul::web::cli_session_api",
+        target: "se_manager::web::cli_session_api",
         "operation=resolve_cli_sessions files={}",
         args.files.len()
     );
@@ -106,7 +106,7 @@ pub async fn resolve_post(Json(args): Json<CliSessionResolveArgs>) -> impl IntoR
         Ok(result) => IpcBody::ok(result),
         Err(err) => {
             error!(
-                target: "termul::web::cli_session_api",
+                target: "se_manager::web::cli_session_api",
                 "operation=resolve_cli_sessions_failed error=join"
             );
             IpcBody::<CliSessionResolveResult>::err(err.to_string(), "RESOLVE_FAILED")

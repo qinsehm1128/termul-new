@@ -59,7 +59,7 @@ pub async fn install(
     let req: InstallRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
         Err(error) => {
-            log::warn!(target: "termul::web::install_api", "operation=install_validate stable_code=VALIDATION_ERROR");
+            log::warn!(target: "se_manager::web::install_api", "operation=install_validate stable_code=VALIDATION_ERROR");
             return (
                 StatusCode::OK,
                 Json(IpcBody::<InstallOutcome>::err(
@@ -80,12 +80,12 @@ pub async fn install(
     };
     match service.install_by_id(&req.agent_id).await {
         Ok(outcome) => {
-            log::info!(target: "termul::web::install_api", "operation=install stable_code=OK");
+            log::info!(target: "se_manager::web::install_api", "operation=install stable_code=OK");
             (StatusCode::OK, Json(IpcBody::ok(outcome)))
         }
         Err(error) => {
             let code = error.code();
-            log::warn!(target: "termul::web::install_api", "operation=install stable_code={}", code);
+            log::warn!(target: "se_manager::web::install_api", "operation=install stable_code={}", code);
             (
                 StatusCode::OK,
                 Json(IpcBody::<InstallOutcome>::err(error.message, code)),

@@ -254,7 +254,7 @@ impl RemoteServer {
         let receipt = self.authority.retire_generation(generation);
         if receipt.is_clean() {
             log::info!(
-                target: "termul::remote::host",
+                target: "se_manager::remote::host",
                 "operation=generation_retire generation={} lifecycle_phase={} stable_code=OK keyring_deleted={}",
                 generation,
                 lifecycle_phase,
@@ -265,7 +265,7 @@ impl RemoteServer {
                 self.credential_lease = Some(lease);
             }
             log::error!(
-                target: "termul::remote::host",
+                target: "se_manager::remote::host",
                 "operation=generation_retire generation={} lifecycle_phase={} stable_code=REMOTE_CREDENTIAL_CLEANUP_FAILED keyring_deleted={}",
                 generation,
                 lifecycle_phase,
@@ -527,7 +527,7 @@ impl RemoteServerState {
                 )) {
                     Ok(canonical) => Some(canonical),
                     Err(_) => {
-                        log::warn!(target: "termul::remote::host", "operation=project_root_resolve stable_code=PROJECT_ROOT_INVALID");
+                        log::warn!(target: "se_manager::remote::host", "operation=project_root_resolve stable_code=PROJECT_ROOT_INVALID");
                         None
                     }
                 }
@@ -541,7 +541,7 @@ impl RemoteServerState {
                      set $TERMUL_PROJECT_ROOT or ensure $HOME is available"
                         .to_string()
                 })?;
-                log::warn!(target: "termul::remote::host", "operation=shared_live_host stable_code=REJECTED");
+                log::warn!(target: "se_manager::remote::host", "operation=shared_live_host stable_code=REJECTED");
                 crate::web::config::resolve_and_validate_project_root(&raw_root).map_err(|e| {
                     format!(
                         "shared-live server refused to start: {e} \
@@ -591,7 +591,7 @@ impl RemoteServerState {
         let shutdown_tx = Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
         let shutdown = async move {
             let _ = shutdown_rx.await;
-            log::info!(target: "termul::remote::host", "operation=shared_live_host stable_code=OK");
+            log::info!(target: "se_manager::remote::host", "operation=shared_live_host stable_code=OK");
         };
 
         let (addr, serve_handle) = serve_router(
@@ -617,7 +617,7 @@ impl RemoteServerState {
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
 
         let status = RemoteStatus::running(addr, bind_mode, None, None);
-        log::info!(target: "termul::remote::host", "operation=shared_live_host stable_code=OK");
+        log::info!(target: "se_manager::remote::host", "operation=shared_live_host stable_code=OK");
 
         let mut slot = self.inner.lock().unwrap();
         if slot.is_some() {
@@ -693,7 +693,7 @@ impl RemoteServerState {
         };
         if !receipt.is_clean() {
             log::error!(
-                target: "termul::remote::host",
+                target: "se_manager::remote::host",
                 "operation=shared_live_host lifecycle_phase=stop stable_code=REMOTE_CREDENTIAL_CLEANUP_FAILED generation={} keyring_deleted={} retry_owner={}",
                 receipt.generation,
                 receipt.keyring_deleted,
@@ -731,14 +731,14 @@ impl RemoteServerState {
                     // panic surfaces as `JoinError` — log, don't propagate.
                     if let Err(join_err) = handle.await {
                         if !join_err.is_cancelled() {
-                            log::warn!(target: "termul::remote::host", "operation=shared_live_host stable_code=REJECTED");
+                            log::warn!(target: "se_manager::remote::host", "operation=shared_live_host stable_code=REJECTED");
                         }
                     }
                 }
                 if retire {
                     if let Err(error) = self.clear_pairing_token() {
                         log::error!(
-                            target: "termul::remote::host",
+                            target: "se_manager::remote::host",
                             "operation=pairing_clear lifecycle_phase=stop stable_code=REMOTE_CREDENTIAL_CLEANUP_FAILED"
                         );
                         return Err(error);
@@ -781,7 +781,7 @@ impl RemoteServerState {
             && server.tunnel_url.is_some()
         {
             log::warn!(
-                target: "termul::remote::host",
+                target: "se_manager::remote::host",
                 "operation=tunnel_watchdog lifecycle_phase=tunnel_death stable_code=TUNNEL_EXITED"
             );
             server.tunnel_url = None;
@@ -905,7 +905,7 @@ impl RemoteServerState {
                 server.tunnel_provider = Some(provider.to_string());
                 server.tunnel_dead = Some(dead_flag);
                 server.tunnel_watchdog = Some(watchdog);
-                log::info!(target: "termul::remote::host", "operation=shared_live_host stable_code=OK");
+                log::info!(target: "se_manager::remote::host", "operation=shared_live_host stable_code=OK");
                 Ok(())
             }
             _ => {
@@ -943,7 +943,7 @@ fn register_lan_origin(authority: &RemoteAccessAuthority, port: u16) {
         if let Ok(origin) = url::Url::parse(&crate::remote::lan::lan_http_origin(ip, port)) {
             if let Err(error) = authority.set_public_origin(origin) {
                 log::warn!(
-                    target: "termul::remote::host",
+                    target: "se_manager::remote::host",
                     "operation=lan_origin_register stable_code=REJECTED error_kind={}",
                     error.code()
                 );

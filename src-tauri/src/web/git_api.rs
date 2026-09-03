@@ -274,15 +274,15 @@ pub async fn get_status(
         .map_err(|e| format!("git status task failed: {e}"));
     let body = match result {
         Ok(Ok(rows)) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::ok(rows)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<Vec<GitStatusDetail>>::err(e, "GIT_STATUS_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<Vec<GitStatusDetail>>::err(
                 format!("git status task failed: {e}"),
                 "GIT_STATUS_ERROR",
@@ -314,15 +314,15 @@ pub async fn get_diff(
             .map_err(|e| format!("git diff task failed: {e}"));
     let body = match result {
         Ok(Ok(diff)) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::ok(diff)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<String>::err(e, "GIT_DIFF_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<String>::err(format!("git diff task failed: {e}"), "GIT_DIFF_ERROR")
         }
     };
@@ -401,15 +401,15 @@ pub async fn get_log(
         .map_err(|e| format!("git log task failed: {e}"));
     let body = match result {
         Ok(Ok(commits)) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::ok(commits)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<Vec<GitCommit>>::err(e, "GIT_LOG_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<Vec<GitCommit>>::err(format!("git log task failed: {e}"), "GIT_LOG_ERROR")
         }
     };
@@ -440,15 +440,15 @@ pub async fn commit(
     .map_err(|e| format!("git commit task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, "GIT_COMMIT_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(format!("git commit task failed: {e}"), "GIT_COMMIT_ERROR")
         }
     };
@@ -476,15 +476,15 @@ pub async fn push(
         .map_err(|e| format!("git push task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, "GIT_PUSH_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(format!("git push task failed: {e}"), "GIT_PUSH_ERROR")
         }
     };
@@ -510,15 +510,15 @@ pub async fn get_commit_context(
         .map_err(|e| format!("git commit-context task failed: {e}"));
     let body = match result {
         Ok(Ok(ctx)) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::ok(ctx)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<GitCommitContext>::err(e, "GIT_COMMIT_CONTEXT_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<GitCommitContext>::err(
                 format!("git commit-context task failed: {e}"),
                 "GIT_COMMIT_CONTEXT_ERROR",
@@ -551,15 +551,15 @@ pub async fn checkout_branch(
     .map_err(|e| format!("git checkout task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, "GIT_CHECKOUT_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(
                 format!("git checkout task failed: {e}"),
                 "GIT_CHECKOUT_ERROR",
@@ -593,15 +593,15 @@ pub async fn create_branch(
     .map_err(|e| format!("git create-branch task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, "GIT_CREATE_BRANCH_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(
                 format!("git create-branch task failed: {e}"),
                 "GIT_CREATE_BRANCH_ERROR",
@@ -651,15 +651,15 @@ pub async fn stash_save(
     .map_err(|e| format!("git stash-save task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, "GIT_STASH_SAVE_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(
                 format!("git stash-save task failed: {e}"),
                 "GIT_STASH_SAVE_ERROR",
@@ -712,15 +712,15 @@ pub async fn stash_list(
     .map_err(|e| format!("git stash-list task failed: {e}"));
     let body = match result {
         Ok(Ok(rows)) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::ok(rows)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<Vec<GitStashInfoDto>>::err(e, "GIT_STASH_LIST_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<Vec<GitStashInfoDto>>::err(
                 format!("git stash-list task failed: {e}"),
                 "GIT_STASH_LIST_ERROR",
@@ -789,15 +789,15 @@ pub async fn branch_list(
     .map_err(|e| format!("git branch-list task failed: {e}"));
     let body = match result {
         Ok(Ok(branches)) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::ok(branches)
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<Vec<String>>::err(e, "GIT_BRANCH_LIST_ERROR")
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<Vec<String>>::err(
                 format!("git branch-list task failed: {e}"),
                 "GIT_BRANCH_LIST_ERROR",
@@ -867,15 +867,15 @@ async fn run_git_path_write(
         .map_err(|e| format!("git {label} task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, code)
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(format!("git {label} task failed: {e}"), code)
         }
     };
@@ -914,15 +914,15 @@ async fn run_stash_index_write(
     .map_err(|e| format!("git stash {op} task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, code)
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(format!("git stash {op} task failed: {e}"), code)
         }
     };
@@ -953,15 +953,15 @@ async fn run_branch_name_write(
         .map_err(|e| format!("git {label} task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
-            log::info!(target: "termul::web::git_api", "operation=git_api stable_code=OK");
+            log::info!(target: "se_manager::web::git_api", "operation=git_api stable_code=OK");
             IpcBody::<()>::ok(())
         }
         Ok(Err(e)) => {
-            log::warn!(target: "termul::web::git_api", "operation=git_api stable_code=REJECTED");
+            log::warn!(target: "se_manager::web::git_api", "operation=git_api stable_code=REJECTED");
             IpcBody::<()>::err(e, code)
         }
         Err(e) => {
-            log::error!(target: "termul::web::git_api", "operation=git_api stable_code=FAILED");
+            log::error!(target: "se_manager::web::git_api", "operation=git_api stable_code=FAILED");
             IpcBody::<()>::err(format!("git {label} task failed: {e}"), code)
         }
     };

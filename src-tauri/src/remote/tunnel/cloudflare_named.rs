@@ -33,7 +33,7 @@ pub async fn start_named_tunnel(
     let token = store.named_token()?;
     let path = detect_cloudflared_path();
     log::info!(
-        target: "termul::remote::tunnel",
+        target: "se_manager::remote::tunnel",
         "operation=tunnel_start provider=cloudflareNamed local_port={local_port} stable_code=OK"
     );
 
@@ -52,7 +52,7 @@ pub async fn start_named_tunnel(
     }
 
     log::info!(
-        target: "termul::remote::tunnel",
+        target: "se_manager::remote::tunnel",
         "operation=tunnel_ready provider=cloudflareNamed stable_code=OK"
     );
     Ok(StartedTunnel {

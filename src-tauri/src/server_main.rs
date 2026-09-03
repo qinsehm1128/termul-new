@@ -124,7 +124,7 @@ fn main() -> ExitCode {
         }
         Err(stable_code) => {
             error!(
-                target: "termul::web::auth",
+                target: "se_manager::web::auth",
                 stable_code,
                 "standalone remote-access authority provisioning failed"
             );
@@ -781,7 +781,7 @@ fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<Update
 /// without this explicit trigger or the env gate.
 fn run_one_shot_update_check() -> ExitCode {
     info!(
-        target: "termul::server_update",
+        target: "se_manager::server_update",
         "one-shot server self-update requested (--check-update)"
     );
     // Operator-explicit one-shot: default to Stable when the channel env is
@@ -789,7 +789,7 @@ fn run_one_shot_update_check() -> ExitCode {
     let opts = match build_update_options(Some(UpdateChannel::Stable)) {
         Ok(o) => o,
         Err(reason) => {
-            error!(target: "termul::server_update", "self-update unavailable: {reason}");
+            error!(target: "se_manager::server_update", "self-update unavailable: {reason}");
             return ExitCode::from(1);
         }
     };
@@ -798,7 +798,7 @@ fn run_one_shot_update_check() -> ExitCode {
         Ok(rt) => rt,
         Err(e) => {
             error!(
-                target: "termul::server_update",
+                target: "se_manager::server_update",
                 "failed to start tokio runtime for update check: {e}"
             );
             return ExitCode::from(1);
@@ -808,7 +808,7 @@ fn run_one_shot_update_check() -> ExitCode {
     match runtime.block_on(check_and_apply_update(&opts)) {
         Ok(UpdateOutcome::NoUpdate) => {
             info!(
-                target: "termul::server_update",
+                target: "se_manager::server_update",
                 "no newer server binary on channel {:?} (current {})",
                 opts.channel,
                 opts.current_version
@@ -824,7 +824,7 @@ fn run_one_shot_update_check() -> ExitCode {
             // the server to run the new version; the `.old` binary is retained
             // for manual rollback.
             info!(
-                target: "termul::server_update",
+                target: "se_manager::server_update",
                 "verified + swapped to {new_version}; previous binary retained at {}. \
                  Restart the server to run the new version (no auto-reexec from --check-update)",
                 old_path.display()
@@ -833,7 +833,7 @@ fn run_one_shot_update_check() -> ExitCode {
         }
         Err(e) => {
             error!(
-                target: "termul::server_update",
+                target: "se_manager::server_update",
                 "update check failed (keeping current binary): {e}"
             );
             ExitCode::from(1)
@@ -847,7 +847,7 @@ fn run_one_shot_update_check() -> ExitCode {
 fn spawn_periodic_update_loop() {
     if !is_update_enabled() {
         info!(
-            target: "termul::server_update",
+            target: "se_manager::server_update",
             "self-update disabled (set TERMUL_SERVER_UPDATE_ENABLED=true + \
              TERMUL_SERVER_UPDATE_CHANNEL to opt in)"
         );
@@ -860,7 +860,7 @@ fn spawn_periodic_update_loop() {
         Ok(o) => o,
         Err(reason) => {
             warn!(
-                target: "termul::server_update",
+                target: "se_manager::server_update",
                 "TERMUL_SERVER_UPDATE_ENABLED=true but self-update unavailable: {reason} \
                  (periodic loop disabled)"
             );
@@ -878,7 +878,7 @@ fn spawn_periodic_update_loop() {
 
     let channel = opts.channel;
     info!(
-        target: "termul::server_update",
+        target: "se_manager::server_update",
         "periodic self-update enabled on channel {:?} (every {}s)", channel, interval_secs
     );
 
@@ -889,7 +889,7 @@ fn spawn_periodic_update_loop() {
             match check_and_apply_update(&opts).await {
                 Ok(UpdateOutcome::NoUpdate) => {
                     tracing::debug!(
-                        target: "termul::server_update",
+                        target: "se_manager::server_update",
                         "no newer server binary on channel {:?}", opts.channel
                     );
                 }
@@ -898,21 +898,21 @@ fn spawn_periodic_update_loop() {
                     old_path,
                 }) => {
                     info!(
-                        target: "termul::server_update",
+                        target: "se_manager::server_update",
                         "verified + swapped to {new_version}; restarting into the new binary"
                     );
                     // Re-exec the canonical install path (NOT current_exe(),
                     // which would resolve to the `.old` inode after the swap).
                     if let Err(e) = restart_binary(&opts.binary_path) {
                         error!(
-                            target: "termul::server_update",
+                            target: "se_manager::server_update",
                             "reexec failed: {e}; rolling back to the previous binary"
                         );
                         // Roll the swap back so the deployment keeps running the
                         // known-good binary instead of a new binary that can't re-exec.
                         if let Err(restore_err) = restore_previous(&opts.binary_path, &old_path) {
                             error!(
-                                target: "termul::server_update",
+                                target: "se_manager::server_update",
                                 "rollback also failed: {restore_err}; the new binary is at {} \
                                  and the previous at {} — recover manually",
                                 opts.binary_path.display(),
@@ -925,7 +925,7 @@ fn spawn_periodic_update_loop() {
                 }
                 Err(e) => {
                     warn!(
-                        target: "termul::server_update",
+                        target: "se_manager::server_update",
                         "periodic update check failed (keeping current binary): {e}"
                     );
                 }

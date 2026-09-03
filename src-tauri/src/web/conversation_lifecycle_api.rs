@@ -271,7 +271,7 @@ async fn respond(
                 if let Some(session_id) = current_session_id {
                     if let Err(code) = state.relay.retire_session(&session_id).await {
                         warn!(
-                            target: "termul::web::conversation_lifecycle_api",
+                            target: "se_manager::web::conversation_lifecycle_api",
                             conversation_id = %conversation_id,
                             code,
                             "Conversation delete committed but auxiliary retirement failed"
@@ -290,7 +290,7 @@ async fn respond(
                     .expect("Conversation lifecycle outcome serializes"),
             }) {
                 warn!(
-                    target: "termul::web::conversation_lifecycle_api",
+                    target: "se_manager::web::conversation_lifecycle_api",
                     conversation_id = %conversation_id,
                     code = error.code,
                     "conversation lifecycle committed but live delivery degraded"
@@ -304,7 +304,7 @@ async fn respond(
         }
         Err(error) => {
             warn!(
-                target: "termul::web::conversation_lifecycle_api",
+                target: "se_manager::web::conversation_lifecycle_api",
                 conversation_id = %conversation_id,
                 code = %error.code,
                 operation = error.operation,

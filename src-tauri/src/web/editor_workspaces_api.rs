@@ -22,7 +22,7 @@ pub async fn parse(Json(body): Json<ParseCodeWorkspaceRequest>) -> impl IntoResp
     match crate::editor_workspaces::parse_code_workspace_file(std::path::Path::new(&body.path)) {
         Ok(list) => {
             tracing::info!(
-                target = "termul::editor_workspaces",
+                target = "se_manager::editor_workspaces",
                 operation = "parse_workspace",
                 count = list.candidates.len(),
                 stable_code = "OK",
