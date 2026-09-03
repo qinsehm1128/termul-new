@@ -1,5 +1,5 @@
 import { brandCanonical, LEGACY } from '@shared/brand'
-import { BUNDLED_LIGHT_COLOR_THEMES } from './bundled-light-themes'
+import { BRAND_LIGHT_THEME, BUNDLED_LIGHT_COLOR_THEMES } from './bundled-light-themes'
 import type { ColorThemeDefinition } from './types'
 
 export interface ColorThemeFamily {
@@ -9,37 +9,47 @@ export interface ColorThemeFamily {
   lightThemeId: string
 }
 
+/**
+ * The bundled brand theme (dark), and the default.
+ *
+ * Its ids come from the brand seam, not from authored literals — the table
+ * below is keyed *by* the theme id, so an authored spelling would be a second
+ * home for a contract `brand.ts` already owns. {@link resolvedColorThemes}
+ * anchors the compatibility alias on this binding rather than on a key lookup.
+ */
+const BRAND_DARK_THEME: ColorThemeDefinition = {
+  // syntax: VS Code Dark+ (Se default editor)
+  id: brandCanonical().themeId,
+  name: 'Se',
+  appearance: 'dark',
+  familyId: brandCanonical().themeId,
+  dark: {
+    palette: {
+      neutral: '#131410',
+      ink: '#e6e5e0',
+      primary: '#8a9d72',
+      accent: '#8a9d72',
+      success: '#739d6c',
+      warning: '#c39f69',
+      error: '#c26b6b',
+      info: '#7898ab'
+    },
+    overrides: {
+      'syntax-comment': '#6a9955',
+      'syntax-keyword': '#c586c0',
+      'syntax-string': '#ce9178',
+      'syntax-type': '#4ec9b0',
+      'syntax-constant': '#b5cea8',
+      'syntax-variable': '#9cdcfe',
+      'syntax-property': '#9cdcfe',
+      'syntax-function': '#dcdcaa'
+    }
+  }
+}
+
 /** Built-in dark appearance themes (OpenCode palette-compatible). */
 const BUNDLED_DARK_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
-  // syntax: VS Code Dark+ (Se default editor)
-  termul: {
-    id: 'termul',
-    name: 'Termul',
-    appearance: 'dark',
-    familyId: 'termul',
-    dark: {
-      palette: {
-        neutral: '#131410',
-        ink: '#e6e5e0',
-        primary: '#8a9d72',
-        accent: '#8a9d72',
-        success: '#739d6c',
-        warning: '#c39f69',
-        error: '#c26b6b',
-        info: '#7898ab'
-      },
-      overrides: {
-        'syntax-comment': '#6a9955',
-        'syntax-keyword': '#c586c0',
-        'syntax-string': '#ce9178',
-        'syntax-type': '#4ec9b0',
-        'syntax-constant': '#b5cea8',
-        'syntax-variable': '#9cdcfe',
-        'syntax-property': '#9cdcfe',
-        'syntax-function': '#dcdcaa'
-      }
-    }
-  },
+  [BRAND_DARK_THEME.id]: BRAND_DARK_THEME,
   // syntax: opencode cursor + vscode fallback
   cursor: {
     id: 'cursor',
@@ -330,7 +340,7 @@ export const THEME_PICKER_ROWS: ThemePickerRow[] = COLOR_THEME_FAMILIES.flatMap(
   }
 ])
 
-export const DEFAULT_COLOR_THEME_ID = 'termul'
+export const DEFAULT_COLOR_THEME_ID = BRAND_DARK_THEME.id
 
 export const COLOR_THEME_LIST = Object.values(BUNDLED_COLOR_THEMES)
 
@@ -348,15 +358,14 @@ let cachedResolvedThemes: Record<string, ColorThemeDefinition> | null = null
  * Built here rather than captured at module scope: `brandCanonical()` is an
  * overridable seam, and a table frozen at import time would still answer with
  * the pre-rename identity after the seam moved. Memoized on the two ids so a
- * lookup stays a hash probe, and short-circuited to the authored table while
- * canonical and legacy are still the same value — which is every read until
- * Wave 5 flips them.
+ * lookup stays a hash probe.
+ *
+ * The two definitions are taken from the `BRAND_*_THEME` bindings, not from a
+ * key lookup into the authored table: the authored keys are themselves derived
+ * from the seam, so a lookup would miss the moment the seam moved.
  */
 function resolvedColorThemes(): Record<string, ColorThemeDefinition> {
   const { themeId, themeFamilyLight } = brandCanonical()
-  if (themeId === LEGACY.themeId && themeFamilyLight === LEGACY.themeFamilyLight) {
-    return BUNDLED_COLOR_THEMES
-  }
 
   // Joined on a control char that cannot occur in a theme id, so no pair of
   // ids can collide into the same memo key.
@@ -366,12 +375,12 @@ function resolvedColorThemes(): Record<string, ColorThemeDefinition> {
   }
 
   const dark: ColorThemeDefinition = {
-    ...BUNDLED_COLOR_THEMES[LEGACY.themeId],
+    ...BRAND_DARK_THEME,
     id: themeId,
     familyId: themeId
   }
   const light: ColorThemeDefinition = {
-    ...BUNDLED_COLOR_THEMES[LEGACY.themeFamilyLight],
+    ...BRAND_LIGHT_THEME,
     id: themeFamilyLight,
     familyId: themeId
   }

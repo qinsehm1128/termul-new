@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -38,7 +39,7 @@ describe('useAppliedColorThemeSync', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.useAppSettingsLoaded.mockReturnValue(true)
-    mocks.useColorTheme.mockReturnValue('termul')
+    mocks.useColorTheme.mockReturnValue(brandCanonical().themeId)
     mocks.useAppearanceMode.mockReturnValue('dark')
     mocks.useThemePickerOpen.mockReturnValue(false)
   })

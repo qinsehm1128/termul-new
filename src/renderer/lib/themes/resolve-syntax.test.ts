@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { describe, expect, it } from 'vitest'
 import { BUNDLED_COLOR_THEMES, COLOR_THEME_LIST, getColorThemeDefinition } from './bundled-themes'
 import { shouldOverrideToken } from './color-utils'
@@ -14,7 +15,7 @@ const EXPECTED_SYNTAX: Record<
     type: string
   }>
 > = {
-  termul: {
+  [brandCanonical().themeId]: {
     keyword: '#c586c0',
     string: '#ce9178',
     function: '#dcdcaa',
@@ -75,7 +76,7 @@ const EXPECTED_SYNTAX: Record<
     variable: '#d29922',
     property: '#39c5cf'
   },
-  'termul-light': {
+  [brandCanonical().themeFamilyLight]: {
     keyword: '#0000ff',
     string: '#a31515',
     function: '#795e26',
@@ -133,6 +134,6 @@ describe('resolveSyntaxColors', () => {
 describe('getColorThemeDefinition', () => {
   it('falls back for unknown ids without prototype pollution', () => {
     const theme = getColorThemeDefinition('toString')
-    expect(theme.id).toBe('termul')
+    expect(theme.id).toBe(brandCanonical().themeId)
   })
 })

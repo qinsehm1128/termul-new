@@ -27,7 +27,11 @@ import {
 } from '@shared/brand'
 import { afterEach, describe, expect, it } from 'vitest'
 import { isKnownColorThemeId } from './apply-color-theme'
-import { DEFAULT_COLOR_THEME_ID, getColorThemeDefinition } from './bundled-themes'
+import {
+  DEFAULT_COLOR_THEME_ID,
+  getColorThemeDefinition,
+  THEME_PICKER_ROWS
+} from './bundled-themes'
 
 const FIXTURE_ROOT = join(process.cwd(), 'src/__fixtures__/legacy-brand')
 
@@ -92,5 +96,31 @@ describe('persisted color theme id across the rename', () => {
     expect(resolved.familyId).toBe(brandCanonical().themeId)
     expect(resolved.id).not.toBe(DEFAULT_COLOR_THEME_ID)
     expect(resolved.appearance).toBe('light')
+  })
+})
+
+/**
+ * The bundled tables are keyed BY the theme id, so the flip is a re-key rather
+ * than a value edit — and a re-key that is skipped leaves no literal to grep
+ * for. These two run against the shipped values (no seam override) because the
+ * bug they catch is a disagreement between two shipped tables.
+ */
+describe('theme picker rows agree with the resolver', () => {
+  it('carries a self-resolving id on every row', () => {
+    // `ThemePicker` highlights the row whose `themeId` equals the effective
+    // theme id derived from the persisted setting, and that setting is
+    // normalized through the resolver. A row keyed by a spelling the resolver
+    // renames is a row that can never match — the active theme would show no
+    // highlight at all.
+    for (const row of THEME_PICKER_ROWS) {
+      expect(getColorThemeDefinition(row.themeId).id).toBe(row.themeId)
+    }
+  })
+
+  it('resolves both persisted ids onto ids the picker actually offers', () => {
+    const rowIds = THEME_PICKER_ROWS.map((row) => row.themeId)
+
+    expect(rowIds).toContain(getColorThemeDefinition(persistedColorTheme(DARK_FIXTURE)).id)
+    expect(rowIds).toContain(getColorThemeDefinition(persistedColorTheme(LIGHT_FIXTURE)).id)
   })
 })

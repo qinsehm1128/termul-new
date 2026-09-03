@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { type MutableRefObject, type ReactElement, useEffect } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
@@ -165,7 +166,7 @@ vi.mock('@/stores/app-settings-store', () => ({
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue'),
-  useColorTheme: vi.fn(() => 'termul'),
+  useColorTheme: vi.fn(() => brandCanonical().themeId),
   useAppearanceMode: vi.fn(() => 'dark')
 }))
 

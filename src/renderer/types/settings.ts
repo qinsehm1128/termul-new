@@ -1,4 +1,6 @@
-﻿// Context bar visibility settings
+﻿import { brandCanonical } from '@shared/brand'
+
+// Context bar visibility settings
 export interface ContextBarSettings {
   showGitBranch: boolean
   showGitStatus: boolean
@@ -313,7 +315,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   cliSessionPanelVisible: false,
   terminalListPanelVisible: false,
   remoteBindMode: 'localhost',
-  colorTheme: 'termul',
+  colorTheme: brandCanonical().themeId,
   appearanceMode: 'dark',
   uiZoomLevel: UI_ZOOM_DEFAULT,
   uiLanguage: 'system',

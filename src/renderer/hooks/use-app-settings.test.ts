@@ -1,3 +1,4 @@
+import { brandCanonical, LEGACY } from '@shared/brand'
 import type { IpcResult } from '@shared/types/ipc.types'
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -166,19 +167,29 @@ describe('use-app-settings', () => {
       success: true,
       data: {
         ...DEFAULT_APP_SETTINGS,
-        colorTheme: 'termul-light',
+        colorTheme: LEGACY.themeFamilyLight,
         appearanceMode: undefined
       }
     })
 
     renderHook(() => useAppSettingsLoader())
 
+    // The `-light` branch rewrites the persisted id to its family and schedules
+    // a write. That write must carry the CANONICAL family id: re-emitting the
+    // legacy one would put a value back on disk that nothing may write any more.
     await waitFor(() => {
       expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
         APP_SETTINGS_KEY,
-        expect.objectContaining({ colorTheme: 'termul', appearanceMode: 'light' })
+        expect.objectContaining({
+          colorTheme: brandCanonical().themeId,
+          appearanceMode: 'light'
+        })
       )
     })
+    expect(mockPersistenceWriteDebounced).not.toHaveBeenCalledWith(
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ colorTheme: LEGACY.themeId })
+    )
   })
 
   it('persists missing appearance mode defaults', async () => {

@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyColorTheme, paletteToXtermTheme, resolveThemeForTest } from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
@@ -13,8 +14,8 @@ describe('apply-color-theme', () => {
 
   it('includes dark and light bundled themes', () => {
     const ids = Object.keys(BUNDLED_COLOR_THEMES)
-    expect(ids).toContain('termul')
-    expect(ids).toContain('termul-light')
+    expect(ids).toContain(brandCanonical().themeId)
+    expect(ids).toContain(brandCanonical().themeFamilyLight)
     expect(ids).toContain('catppuccin')
     expect(ids).toContain('catppuccin-light')
     expect(ids.length).toBe(20)
@@ -28,8 +29,8 @@ describe('apply-color-theme', () => {
     expect(syntax.function).toBe('#89b4fa')
   })
 
-  it('separates termul function color from keyword', () => {
-    const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES.termul)
+  it('separates the brand theme function color from keyword', () => {
+    const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES[brandCanonical().themeId])
     expect(syntax.keyword).toBe('#c586c0')
     expect(syntax.function).toBe('#dcdcaa')
   })
@@ -42,8 +43,11 @@ describe('apply-color-theme', () => {
     expect(xterm.red).toBe('#ff5555')
   })
 
-  it('does not reuse the Termul olive accent as ANSI blue or magenta', () => {
-    const xterm = paletteToXtermTheme(BUNDLED_COLOR_THEMES.termul.dark.palette, 'dark')
+  it('does not reuse the Se olive accent as ANSI blue or magenta', () => {
+    const xterm = paletteToXtermTheme(
+      BUNDLED_COLOR_THEMES[brandCanonical().themeId].dark.palette,
+      'dark'
+    )
     expect(xterm.blue).not.toBe('#8a9d72')
     expect(xterm.magenta).not.toBe('#8a9d72')
     expect(xterm.blue).toBe('#2472c8')
@@ -66,9 +70,9 @@ describe('apply-color-theme', () => {
   })
 
   it.each([
-    'termul',
-    'termul-light'
-  ] as const)('applies a distinct --popover elevation from --card for %s', (themeId) => {
+    brandCanonical().themeId,
+    brandCanonical().themeFamilyLight
+  ])('applies a distinct --popover elevation from --card for %s', (themeId) => {
     applyColorTheme(themeId)
     const theme = BUNDLED_COLOR_THEMES[themeId]
     const surfaces = deriveSurfaces(theme.dark.palette, theme.appearance)

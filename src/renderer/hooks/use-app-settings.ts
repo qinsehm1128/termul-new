@@ -207,18 +207,23 @@ export function useAppSettingsLoader(): void {
           shouldPersistSettings = true
         }
 
-        if (shouldPersistSettings) {
-          void persistenceApi.writeDebounced(APP_SETTINGS_KEY, settings)
-        }
-
         // A settings blob written before the rename still names the brand
         // theme by its legacy id. Normalize once, here at the read boundary,
-        // so nothing downstream has to know two spellings. Deliberately after
-        // the persist above and idempotent on the next load: this is a
-        // compatibility read, and letting it ride into a write another branch
-        // already scheduled would flip a persisted value a wave early.
+        // so nothing downstream has to know two spellings.
+        //
+        // Ordered BEFORE the persist below, and deliberately without setting
+        // `shouldPersistSettings` itself: the rename alone never schedules a
+        // write (a compatibility read stays a read), but once another branch
+        // has scheduled one, the blob it writes must carry the canonical id.
+        // The legacy-light branch above is exactly that case — it rewrites
+        // `<brand>-light` to its family id, and writing the legacy family id
+        // back would re-emit a value nothing is allowed to write any more.
         if (settings.colorTheme === LEGACY.themeId) {
           settings = { ...settings, colorTheme: brandCanonical().themeId }
+        }
+
+        if (shouldPersistSettings) {
+          void persistenceApi.writeDebounced(APP_SETTINGS_KEY, settings)
         }
 
         setSettings(settings)

@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -204,7 +205,7 @@ vi.mock('@/stores/app-settings-store', () => ({
   useDefaultShell: () => 'bash',
   useMaxTerminalsPerProject: () => 10,
   useConfirmTerminalClose: () => true,
-  useColorTheme: () => 'termul',
+  useColorTheme: () => brandCanonical().themeId,
   useAppearanceMode: () => 'dark'
 }))
 

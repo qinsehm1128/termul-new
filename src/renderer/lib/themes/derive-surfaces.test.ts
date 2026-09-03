@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { describe, expect, it } from 'vitest'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 import { normalizeHex, parseHexColor } from './color-utils'
@@ -12,19 +13,19 @@ function lightness(hex: string): number {
 
 describe('deriveSurfaces', () => {
   it('lightens surfaces for dark appearance', () => {
-    const palette = BUNDLED_COLOR_THEMES.termul.dark.palette
+    const palette = BUNDLED_COLOR_THEMES[brandCanonical().themeId].dark.palette
     const surfaces = deriveSurfaces(palette, 'dark')
     expect(lightness(surfaces.card)).toBeGreaterThan(lightness(palette.neutral))
   })
 
   it('darkens surfaces for light appearance', () => {
-    const palette = BUNDLED_COLOR_THEMES['termul-light'].dark.palette
+    const palette = BUNDLED_COLOR_THEMES[brandCanonical().themeFamilyLight].dark.palette
     const surfaces = deriveSurfaces(palette, 'light')
     expect(lightness(surfaces.border)).toBeLessThan(lightness(palette.neutral))
   })
 
   it('keeps popover a distinct elevation step above card in dark chrome', () => {
-    const palette = BUNDLED_COLOR_THEMES.termul.dark.palette
+    const palette = BUNDLED_COLOR_THEMES[brandCanonical().themeId].dark.palette
     const surfaces = deriveSurfaces(palette, 'dark')
     expect(surfaces.popover).not.toBe(surfaces.card)
     expect(lightness(surfaces.popover)).toBeGreaterThan(lightness(surfaces.card))
@@ -32,7 +33,7 @@ describe('deriveSurfaces', () => {
   })
 
   it('keeps popover a distinct elevation step above card in light chrome', () => {
-    const palette = BUNDLED_COLOR_THEMES['termul-light'].dark.palette
+    const palette = BUNDLED_COLOR_THEMES[brandCanonical().themeFamilyLight].dark.palette
     const surfaces = deriveSurfaces(palette, 'light')
     expect(surfaces.popover).not.toBe(surfaces.card)
     expect(lightness(surfaces.popover)).toBeLessThan(lightness(surfaces.card))

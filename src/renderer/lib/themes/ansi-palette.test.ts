@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { describe, expect, it } from 'vitest'
 import { ansi16FromPalette, STANDARD_ANSI_DARK } from './ansi-palette'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
@@ -12,7 +13,10 @@ describe('ansi16FromPalette', () => {
   })
 
   it('falls back to a vivid table when the workbench accent is olive', () => {
-    const ansi = ansi16FromPalette(BUNDLED_COLOR_THEMES.termul.dark.palette, 'dark')
+    const ansi = ansi16FromPalette(
+      BUNDLED_COLOR_THEMES[brandCanonical().themeId].dark.palette,
+      'dark'
+    )
     expect(ansi.blue).toBe(STANDARD_ANSI_DARK.blue)
     expect(ansi.magenta).toBe(STANDARD_ANSI_DARK.magenta)
     expect(ansi.green).toBe(STANDARD_ANSI_DARK.green)

@@ -1,36 +1,49 @@
+import { brandCanonical } from '@shared/brand'
 import type { ColorThemeDefinition } from './types'
+
+/**
+ * The bundled brand theme's light twin.
+ *
+ * Its ids come from the brand seam rather than authored literals: the table
+ * below is keyed *by* the theme id, so an authored spelling would be a second
+ * home for a contract `brand.ts` already owns. Exported so `bundled-themes.ts`
+ * can anchor the compatibility alias on this binding instead of on a key
+ * lookup — a key lookup would miss whenever the seam names an id the authored
+ * table does not carry.
+ */
+export const BRAND_LIGHT_THEME: ColorThemeDefinition = {
+  // syntax: VS Code Light+ fallback
+  id: brandCanonical().themeFamilyLight,
+  name: 'Se Light',
+  appearance: 'light',
+  familyId: brandCanonical().themeId,
+  dark: {
+    palette: {
+      neutral: '#ffffff',
+      ink: '#1e1e1e',
+      primary: '#0451a5',
+      accent: '#811f3f',
+      success: '#098658',
+      warning: '#cd9731',
+      error: '#cd3131',
+      info: '#0598bc'
+    },
+    overrides: {
+      'syntax-comment': '#008000',
+      'syntax-keyword': '#0000ff',
+      'syntax-string': '#a31515',
+      'syntax-type': '#267f99',
+      'syntax-constant': '#098658',
+      'syntax-variable': '#001080',
+      'syntax-property': '#001080',
+      'syntax-function': '#795e26'
+    }
+  }
+}
 
 /** Light appearance twins (`{family}-light`). Syntax: opencode light + vscode fallback. */
 export const BUNDLED_LIGHT_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
-  // syntax: VS Code Light+ fallback
-  'termul-light': {
-    id: 'termul-light',
-    name: 'Termul Light',
-    appearance: 'light',
-    familyId: 'termul',
-    dark: {
-      palette: {
-        neutral: '#ffffff',
-        ink: '#1e1e1e',
-        primary: '#0451a5',
-        accent: '#811f3f',
-        success: '#098658',
-        warning: '#cd9731',
-        error: '#cd3131',
-        info: '#0598bc'
-      },
-      overrides: {
-        'syntax-comment': '#008000',
-        'syntax-keyword': '#0000ff',
-        'syntax-string': '#a31515',
-        'syntax-type': '#267f99',
-        'syntax-constant': '#098658',
-        'syntax-variable': '#001080',
-        'syntax-property': '#001080',
-        'syntax-function': '#795e26'
-      }
-    }
-  },
+  [BRAND_LIGHT_THEME.id]: BRAND_LIGHT_THEME,
   // syntax: opencode cursor light
   'cursor-light': {
     id: 'cursor-light',

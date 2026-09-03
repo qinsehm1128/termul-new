@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -109,7 +110,7 @@ vi.mock('@/stores/app-settings-store', () => ({
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue'),
-  useColorTheme: vi.fn(() => 'termul'),
+  useColorTheme: vi.fn(() => brandCanonical().themeId),
   useAppearanceMode: vi.fn(() => 'dark')
 }))
 
