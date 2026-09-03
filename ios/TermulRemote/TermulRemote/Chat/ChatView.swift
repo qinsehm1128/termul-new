@@ -109,7 +109,7 @@ struct ChatView: View {
                     .lineLimit(1 ... 6)
                     .focused($composerFocused)
                     .padding(12)
-                    .background(TermulTheme.surface)
+                    .background(SeTheme.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 if session.chat.isSending {
                     Button {
@@ -224,7 +224,7 @@ struct ChatView: View {
         .font(.subheadline.weight(.medium))
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(TermulTheme.surface)
+        .background(SeTheme.surface)
         .clipShape(Capsule())
     }
 }
@@ -359,7 +359,7 @@ private struct MessageBubble: View {
     }
 
     private var background: Color {
-        message.role == .user ? TermulTheme.accent.opacity(0.16) : TermulTheme.surface
+        message.role == .user ? SeTheme.accent.opacity(0.16) : SeTheme.surface
     }
 
     private var receipt: Receipt? {
@@ -420,7 +420,7 @@ private struct PermissionCardView: View {
                 ForEach(card.options) { option in
                     Button(option.name) { onChoose(option.id) }
                         .buttonStyle(.borderedProminent)
-                        .tint(TermulTheme.accent)
+                        .tint(SeTheme.accent)
                 }
                 Button("Deny") { onChoose(nil) }
                     .buttonStyle(.bordered)
@@ -428,7 +428,7 @@ private struct PermissionCardView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(TermulTheme.surface)
+        .background(SeTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
@@ -448,7 +448,7 @@ private struct QuestionCardView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(TermulTheme.surface)
+        .background(SeTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

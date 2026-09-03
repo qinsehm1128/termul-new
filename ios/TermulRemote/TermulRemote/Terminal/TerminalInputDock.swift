@@ -34,10 +34,10 @@ struct TerminalInputDock: View {
                 liveBar
             }
         }
-        .background(TermulTheme.surface)
+        .background(SeTheme.surface)
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(TermulTheme.stroke)
+                .fill(SeTheme.stroke)
                 .frame(height: 1)
         }
         .onChange(of: isKeyboardVisible) { _, visible in
@@ -151,7 +151,7 @@ struct TerminalInputDock: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 46, alignment: .center)
-            .background(TermulTheme.canvas)
+            .background(SeTheme.canvas)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -175,7 +175,7 @@ struct TerminalInputDock: View {
                 .onSubmit { submitCommand() }
                 .padding(.horizontal, 12)
                 .frame(minHeight: 36)
-                .background(TermulTheme.canvas)
+                .background(SeTheme.canvas)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             Button {
                 submitCommand()
@@ -219,11 +219,11 @@ struct TerminalInputDock: View {
         .foregroundStyle(isActive ? Color.white : Color.primary)
         .padding(.horizontal, 10)
         .frame(minWidth: 44, minHeight: 36)
-        .background(isActive ? TermulTheme.accent : TermulTheme.canvas)
+        .background(isActive ? SeTheme.accent : SeTheme.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(TermulTheme.stroke, lineWidth: 1)
+                .stroke(SeTheme.stroke, lineWidth: 1)
         )
         .accessibilityLabel(Text(accessibility))
         .accessibilityAddTraits(.isButton)

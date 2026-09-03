@@ -28,7 +28,7 @@ struct WorkspaceView: View {
                 }
             }
         }
-        .background(TermulTheme.canvas.ignoresSafeArea())
+        .background(SeTheme.canvas.ignoresSafeArea())
         .task(id: link.id) {
             await session.start()
         }
@@ -52,21 +52,21 @@ struct WorkspaceView: View {
         VStack(spacing: 16) {
             ProgressView()
             Text("Connecting to host…")
-                .font(TermulTheme.display)
+                .font(SeTheme.display)
             Text(link.title)
                 .font(.body)
                 .foregroundStyle(.secondary)
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TermulTheme.canvas.ignoresSafeArea())
+        .background(SeTheme.canvas.ignoresSafeArea())
         .accessibilityIdentifier("connecting")
     }
 
     private func failedState(_ message: String) -> some View {
         VStack(spacing: 16) {
             Text("Could not open this desk")
-                .font(TermulTheme.display)
+                .font(SeTheme.display)
                 .multilineTextAlignment(.center)
             Text(message)
                 .font(.body)
@@ -82,7 +82,7 @@ struct WorkspaceView: View {
                         .frame(minHeight: 48)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(TermulTheme.accent)
+                .tint(SeTheme.accent)
                 Button {
                     store.disconnect()
                 } label: {
@@ -96,7 +96,7 @@ struct WorkspaceView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TermulTheme.canvas.ignoresSafeArea())
+        .background(SeTheme.canvas.ignoresSafeArea())
         .accessibilityIdentifier("connect-error")
     }
 

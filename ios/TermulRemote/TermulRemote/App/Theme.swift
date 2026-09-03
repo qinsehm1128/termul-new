@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// Warm graphite companion chrome: one lichen accent, cyan lamp for live work.
-enum TermulTheme {
+enum SeTheme {
     static let canvas = Color(
         light: Color(red: 0.967, green: 0.961, blue: 0.938),
         dark: Color(red: 0.054, green: 0.059, blue: 0.036)

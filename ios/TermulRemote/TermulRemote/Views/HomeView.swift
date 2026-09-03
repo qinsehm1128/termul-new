@@ -24,7 +24,7 @@ struct HomeView: View {
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
         }
-        .background(TermulTheme.canvas.ignoresSafeArea())
+        .background(SeTheme.canvas.ignoresSafeArea())
         .safeAreaInset(edge: .top, spacing: 0) {
             toolbar
         }
@@ -72,9 +72,9 @@ struct HomeView: View {
             .accessibilityLabel(Text("Settings"))
         }
         .padding(.horizontal, 12)
-        .background(TermulTheme.canvas.opacity(0.92))
+        .background(SeTheme.canvas.opacity(0.92))
         .overlay(alignment: .bottom) {
-            Rectangle().fill(TermulTheme.stroke).frame(height: 1)
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
         }
     }
 
@@ -82,11 +82,11 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Termul Remote")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(TermulTheme.muted)
+                .foregroundStyle(SeTheme.muted)
                 .textCase(.uppercase)
                 .tracking(1.2)
             Text("Open the desk session")
-                .font(TermulTheme.wordmark)
+                .font(SeTheme.wordmark)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
             Text("Scan the desktop QR, or paste the access link. A LAN address stays on Wi-Fi; a Quick Tunnel still goes through Cloudflare.")
@@ -120,11 +120,11 @@ struct HomeView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(TermulTheme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: TermulTheme.radius, style: .continuous))
+            .background(SeTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: SeTheme.radius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: TermulTheme.radius, style: .continuous)
-                    .stroke(TermulTheme.stroke, lineWidth: 1)
+                RoundedRectangle(cornerRadius: SeTheme.radius, style: .continuous)
+                    .stroke(SeTheme.stroke, lineWidth: 1)
             )
 
             if let error = store.errorMessage, !error.isEmpty {
@@ -143,7 +143,7 @@ struct HomeView: View {
                     .frame(minHeight: 48)
             }
             .buttonStyle(.borderedProminent)
-            .tint(TermulTheme.accent)
+            .tint(SeTheme.accent)
             .disabled(draftURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
@@ -162,7 +162,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Recent desks")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(TermulTheme.muted)
+                    .foregroundStyle(SeTheme.muted)
                     .padding(.bottom, 8)
                 ForEach(store.savedLinks) { link in
                     RecentDeskRow(
@@ -220,7 +220,7 @@ private struct RecentDeskRow: View {
                 HStack(spacing: 12) {
                     Image(systemName: "desktopcomputer")
                         .font(.body)
-                        .foregroundStyle(TermulTheme.muted)
+                        .foregroundStyle(SeTheme.muted)
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(link.title)
@@ -233,7 +233,7 @@ private struct RecentDeskRow: View {
                     }
                     Spacer(minLength: 8)
                     Circle()
-                        .fill(TermulTheme.lamp)
+                        .fill(SeTheme.lamp)
                         .frame(width: 8, height: 8)
                         .accessibilityHidden(true)
                 }
@@ -256,7 +256,7 @@ private struct RecentDeskRow: View {
             .accessibilityLabel(Text("Desk actions"))
         }
         .overlay(alignment: .bottom) {
-            Rectangle().fill(TermulTheme.stroke).frame(height: 1)
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
         }
         .contextMenu {
             Button(String(localized: "Open chat"), action: onOpen)

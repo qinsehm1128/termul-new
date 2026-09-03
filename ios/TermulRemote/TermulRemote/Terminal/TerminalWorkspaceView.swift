@@ -66,7 +66,7 @@ struct TerminalWorkspaceView: View {
                             .frame(minHeight: 44)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(TermulTheme.accent)
+                    .tint(SeTheme.accent)
                     .padding(.bottom, 24)
                 }
             }

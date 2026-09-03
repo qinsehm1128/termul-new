@@ -14,7 +14,7 @@ struct HostListRow: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: glyph)
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(TermulTheme.muted)
+                .foregroundStyle(SeTheme.muted)
                 .frame(width: 22, height: 22)
                 .padding(.top, 2)
 
@@ -34,7 +34,7 @@ struct HostListRow: View {
                 if let meta, !meta.isEmpty {
                     Text(meta)
                         .font(.caption)
-                        .foregroundStyle(TermulTheme.muted)
+                        .foregroundStyle(SeTheme.muted)
                         .lineLimit(1)
                 }
 
@@ -71,7 +71,7 @@ struct HostStatusChip: View {
         HStack(spacing: 6) {
             if status == .working {
                 Circle()
-                    .fill(TermulTheme.lamp)
+                    .fill(SeTheme.lamp)
                     .frame(width: 6, height: 6)
             }
             Text(status.title)
@@ -86,17 +86,17 @@ struct HostStatusChip: View {
 
     private var foreground: Color {
         switch status {
-        case .need: TermulTheme.accent
-        case .working: TermulTheme.lamp
-        case .idle: TermulTheme.muted
+        case .need: SeTheme.accent
+        case .working: SeTheme.lamp
+        case .idle: SeTheme.muted
         }
     }
 
     private var background: Color {
         switch status {
-        case .need: TermulTheme.accent.opacity(0.14)
-        case .working: TermulTheme.lamp.opacity(0.12)
-        case .idle: TermulTheme.stroke.opacity(0.45)
+        case .need: SeTheme.accent.opacity(0.14)
+        case .working: SeTheme.lamp.opacity(0.12)
+        case .idle: SeTheme.stroke.opacity(0.45)
         }
     }
 }

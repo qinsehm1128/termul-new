@@ -40,7 +40,7 @@ struct HostHomeView: View {
                 projectList
             }
         }
-        .background(TermulTheme.canvas)
+        .background(SeTheme.canvas)
     }
 
     private var header: some View {
@@ -56,7 +56,7 @@ struct HostHomeView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(deskTitle)
-                    .font(TermulTheme.display)
+                    .font(SeTheme.display)
                     .lineLimit(1)
                 Text(section == .sessions
                      ? String(localized: "Independent chats, not project terminals")
@@ -69,7 +69,7 @@ struct HostHomeView: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(TermulTheme.stroke).frame(height: 1)
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
         }
     }
 
@@ -102,8 +102,8 @@ struct HostHomeView: View {
                         glyph: "bubble.left.and.bubble.right"
                     )
                 }
-                .listRowBackground(TermulTheme.canvas)
-                .listRowSeparatorTint(TermulTheme.stroke)
+                .listRowBackground(SeTheme.canvas)
+                .listRowSeparatorTint(SeTheme.stroke)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -134,8 +134,8 @@ struct HostHomeView: View {
                         showsChevron: true
                     )
                 }
-                .listRowBackground(TermulTheme.canvas)
-                .listRowSeparatorTint(TermulTheme.stroke)
+                .listRowBackground(SeTheme.canvas)
+                .listRowSeparatorTint(SeTheme.stroke)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)

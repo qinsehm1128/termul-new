@@ -24,7 +24,7 @@ struct ConversationPicker: View {
                         )
                         if session.conversations.active?.id == conversation.id {
                             Image(systemName: "checkmark")
-                                .foregroundStyle(TermulTheme.accent)
+                                .foregroundStyle(SeTheme.accent)
                         }
                     }
                 }

@@ -53,7 +53,7 @@ struct TermulRemoteApp: App {
             RootView(store: store, settings: settings)
                 .environment(\.locale, settings.locale)
                 .preferredColorScheme(settings.appearance.colorScheme)
-                .tint(TermulTheme.accent)
+                .tint(SeTheme.accent)
                 .onOpenURL { store.openIncomingURL($0) }
                 .onReceive(NotificationCenter.default.publisher(for: .termulOpenURL)) { notification in
                     if let url = notification.object as? URL {

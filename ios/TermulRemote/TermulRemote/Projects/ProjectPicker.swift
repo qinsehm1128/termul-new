@@ -27,7 +27,7 @@ struct ProjectPicker: View {
                         Spacer()
                         if session.projects.active?.id == project.id {
                             Image(systemName: "checkmark")
-                                .foregroundStyle(TermulTheme.accent)
+                                .foregroundStyle(SeTheme.accent)
                         }
                     }
                 }

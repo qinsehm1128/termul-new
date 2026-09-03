@@ -35,13 +35,13 @@ struct TerminalTabStrip: View {
                         .frame(minHeight: 44)
                         .background(
                             session.terminals.activeId == item.id && (session.workspace == .project || !session.showChat)
-                                ? TermulTheme.accent.opacity(0.16)
-                                : TermulTheme.surface
+                                ? SeTheme.accent.opacity(0.16)
+                                : SeTheme.surface
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(TermulTheme.stroke, lineWidth: 1)
+                                .stroke(SeTheme.stroke, lineWidth: 1)
                         )
                     }
                     .buttonStyle(.plain)

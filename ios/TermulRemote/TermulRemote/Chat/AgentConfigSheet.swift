@@ -27,7 +27,7 @@ struct AgentConfigSheet: View {
                                 Spacer()
                                 if isCurrent(agent) {
                                     Image(systemName: "checkmark")
-                                        .foregroundStyle(TermulTheme.accent)
+                                        .foregroundStyle(SeTheme.accent)
                                 }
                             }
                         }
@@ -52,7 +52,7 @@ struct AgentConfigSheet: View {
                                     Spacer()
                                     if mode.id == session.chat.modes?.currentModeId {
                                         Image(systemName: "checkmark")
-                                            .foregroundStyle(TermulTheme.accent)
+                                            .foregroundStyle(SeTheme.accent)
                                     }
                                 }
                             }
@@ -77,7 +77,7 @@ struct AgentConfigSheet: View {
                                     Spacer()
                                     if model.modelId == session.chat.models?.currentModelId {
                                         Image(systemName: "checkmark")
-                                            .foregroundStyle(TermulTheme.accent)
+                                            .foregroundStyle(SeTheme.accent)
                                     }
                                 }
                             }
@@ -103,7 +103,7 @@ struct AgentConfigSheet: View {
                                         Spacer()
                                         if value.value == option.currentValue {
                                             Image(systemName: "checkmark")
-                                                .foregroundStyle(TermulTheme.accent)
+                                                .foregroundStyle(SeTheme.accent)
                                         }
                                     }
                                 }

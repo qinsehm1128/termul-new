@@ -43,7 +43,7 @@ struct FileBrowserView: View {
                 fileList
             }
         }
-        .background(TermulTheme.canvas)
+        .background(SeTheme.canvas)
     }
 
     private var crumbs: some View {
@@ -53,7 +53,7 @@ struct FileBrowserView: View {
                     if index > 0 {
                         Text("/")
                             .font(.caption)
-                            .foregroundStyle(TermulTheme.muted)
+                            .foregroundStyle(SeTheme.muted)
                     }
                     Button {
                         if session.files.preview != nil {
@@ -72,7 +72,7 @@ struct FileBrowserView: View {
                 if session.files.previewName != nil {
                     Text("/")
                         .font(.caption)
-                        .foregroundStyle(TermulTheme.muted)
+                        .foregroundStyle(SeTheme.muted)
                     Text(session.files.previewName ?? "")
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 6)
@@ -81,7 +81,7 @@ struct FileBrowserView: View {
             .padding(.horizontal, 12)
         }
         .overlay(alignment: .bottom) {
-            Rectangle().fill(TermulTheme.stroke).frame(height: 1)
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
         }
         .accessibilityIdentifier("files-crumbs")
     }
@@ -106,8 +106,8 @@ struct FileBrowserView: View {
                     .foregroundStyle(.primary)
                     .frame(minHeight: 36, alignment: .leading)
             }
-            .listRowBackground(TermulTheme.canvas)
-            .listRowSeparatorTint(TermulTheme.stroke)
+            .listRowBackground(SeTheme.canvas)
+            .listRowSeparatorTint(SeTheme.stroke)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)

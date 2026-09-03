@@ -17,7 +17,7 @@ struct SessionScreen: View {
                 tabBar
             }
         }
-        .background(TermulTheme.canvas.ignoresSafeArea())
+        .background(SeTheme.canvas.ignoresSafeArea())
         .modifier(TerminalKeyboardAvoidance(enabled: session.workspaceTab == .terminal))
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             guard session.workspaceTab == .terminal else { return }
@@ -80,7 +80,7 @@ struct SessionScreen: View {
         .padding(.bottom, 6)
         .background(.ultraThinMaterial)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(TermulTheme.stroke).frame(height: 1)
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
         }
     }
 
@@ -151,7 +151,7 @@ struct SessionScreen: View {
                         Text(tab.title)
                             .font(.caption2.weight(.medium))
                     }
-                    .foregroundStyle(session.workspaceTab == tab ? TermulTheme.accent : TermulTheme.muted)
+                    .foregroundStyle(session.workspaceTab == tab ? SeTheme.accent : SeTheme.muted)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 48)
                 }
@@ -162,7 +162,7 @@ struct SessionScreen: View {
         .padding(.top, 4)
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) {
-            Rectangle().fill(TermulTheme.stroke).frame(height: 1)
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
         }
     }
 
