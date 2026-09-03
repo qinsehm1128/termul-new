@@ -14,6 +14,7 @@ pub mod conversation;
 pub mod credentials;
 mod editor_workspaces;
 mod host_admission;
+pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
 mod migrations;

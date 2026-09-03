@@ -100,6 +100,20 @@ pub struct BrandCanonical {
     pub dom_global_prefix: &'static str,
     /// Deep-link URL scheme (without `://`).
     pub deep_link_scheme: &'static str,
+    /// `tauri-plugin-store` namespace prefix — `<prefix><namespace>::<key>` in
+    /// the WebView's `localStorage`. Mirrors `storagePrefix` in
+    /// `src/shared/brand.ts`.
+    pub storage_prefix: &'static str,
+    /// Prefix of every bare app-owned `localStorage` key the renderer writes
+    /// outside the store plugin. Mirrors `storageKeyPrefix` in
+    /// `src/shared/brand.ts`.
+    ///
+    /// Both prefixes exist on the Rust side for one reason: on macOS the
+    /// WebView data store is partitioned by bundle identifier and cannot be
+    /// moved, so the app has to read its own keys out under the old identifier
+    /// and replay them under the new one — see
+    /// `src/webview_storage_handoff.rs`.
+    pub storage_key_prefix: &'static str,
 }
 
 /// Values already written to user disks. Permanent, read-only, never re-emitted.
@@ -132,6 +146,8 @@ pub const LEGACY: BrandCanonical = BrandCanonical {
     env_prefix: "TERMUL_",
     dom_global_prefix: "__termul",
     deep_link_scheme: "termul",
+    storage_prefix: "termul-store:",
+    storage_key_prefix: "termul:",
 };
 
 /// Values the app writes today.
@@ -166,6 +182,8 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     env_prefix: "TERMUL_",
     dom_global_prefix: "__termul",
     deep_link_scheme: "termul",
+    storage_prefix: "termul-store:",
+    storage_key_prefix: "termul:",
 };
 
 thread_local! {
