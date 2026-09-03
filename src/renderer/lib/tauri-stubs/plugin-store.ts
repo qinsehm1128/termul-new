@@ -17,7 +17,30 @@
  * The class shape and method signatures are preserved so every existing
  * consumer unblocks without per-consumer edits.
  */
-const STORAGE_PREFIX = 'termul-store:'
+import { acceptedBrandValues, LEGACY } from '@shared/brand'
+
+/**
+ * The prefix a write lands under — still the legacy one.
+ *
+ * A web install's projects, editor layout and panel sizes already sit under
+ * this namespace, and FORBID-04 rules out emitting both spellings, so the flip
+ * is a single deliberate edit (T-A08) rather than a dual-write window. Every
+ * read below accepts both prefixes, which is what makes that edit safe.
+ *
+ * A function, not a `const`: the brand seam is overridable, and a prefix
+ * captured at module scope would freeze before a test could move it.
+ */
+function writePrefix(): string {
+  return LEGACY.storagePrefix
+}
+
+/**
+ * Every namespace prefix a read must try, most-current first. Collapses to a
+ * single entry until the canonical prefix diverges from the legacy one.
+ */
+function readPrefixes(): readonly string[] {
+  return acceptedBrandValues('storagePrefix')
+}
 
 /** Escape `:` in a namespace so a namespace containing `::` (e.g. `a::b`)
  * can't make `clear('a')` prefix-match into `a::b`'s keys. Keys are NOT
@@ -29,7 +52,19 @@ function escapeNamespace(namespace: string): string {
 }
 
 function storageKey(namespace: string, key: string): string {
-  return `${STORAGE_PREFIX}${escapeNamespace(namespace)}::${key}`
+  return `${writePrefix()}${escapeNamespace(namespace)}::${key}`
+}
+
+/** Every key a read must probe for `(namespace, key)`, most-current first. */
+function readableStorageKeys(namespace: string, key: string): string[] {
+  const suffix = `${escapeNamespace(namespace)}::${key}`
+  return readPrefixes().map((prefix) => `${prefix}${suffix}`)
+}
+
+/** Every namespace scan prefix a read must walk, most-current first. */
+function readableNamespacePrefixes(namespace: string): string[] {
+  const suffix = `${escapeNamespace(namespace)}::`
+  return readPrefixes().map((prefix) => `${prefix}${suffix}`)
 }
 
 function hasLocalStorage(): boolean {
@@ -66,9 +101,14 @@ export class Store {
   async get<T>(key: string): Promise<T | undefined> {
     if (!hasLocalStorage()) return undefined
     try {
-      const raw = localStorage.getItem(storageKey(this.namespace, key))
-      if (raw == null) return undefined
-      return JSON.parse(raw) as T
+      // First hit wins: the canonical namespace is authoritative once it
+      // exists, and the legacy one is what a pre-rename install left behind.
+      for (const stored of readableStorageKeys(this.namespace, key)) {
+        const raw = localStorage.getItem(stored)
+        if (raw == null) continue
+        return JSON.parse(raw) as T
+      }
+      return undefined
     } catch {
       // Corrupt JSON / SecurityError (private mode) — degrade silently.
       return undefined
@@ -93,7 +133,11 @@ export class Store {
   async delete(key: string): Promise<void> {
     if (!hasLocalStorage()) return
     try {
-      localStorage.removeItem(storageKey(this.namespace, key))
+      // Every spelling `get` can see, or a delete would leave a legacy value
+      // behind for the next read to resurrect.
+      for (const stored of readableStorageKeys(this.namespace, key)) {
+        localStorage.removeItem(stored)
+      }
     } catch {
       // degrade silently
     }
@@ -102,13 +146,13 @@ export class Store {
   async clear(): Promise<void> {
     if (!hasLocalStorage()) return
     try {
-      const prefix = `${STORAGE_PREFIX}${escapeNamespace(this.namespace)}::`
+      const prefixes = readableNamespacePrefixes(this.namespace)
       // Collect first, then remove — mutating `localStorage` while iterating by
       // index would shift indices and skip entries.
       const toRemove: string[] = []
       for (let i = 0; i < localStorage.length; i++) {
         const stored = localStorage.key(i) ?? ''
-        if (stored.startsWith(prefix)) toRemove.push(stored)
+        if (prefixes.some((prefix) => stored.startsWith(prefix))) toRemove.push(stored)
       }
       for (const k of toRemove) localStorage.removeItem(k)
     } catch {
@@ -131,13 +175,16 @@ export class Store {
   async keys(): Promise<string[]> {
     if (!hasLocalStorage()) return []
     try {
-      const prefix = `${STORAGE_PREFIX}${escapeNamespace(this.namespace)}::`
-      const keys: string[] = []
+      const prefixes = readableNamespacePrefixes(this.namespace)
+      // A `Set`: the same key can exist under both prefixes, and a caller
+      // iterating `keys()` would then read and report it twice.
+      const keys = new Set<string>()
       for (let i = 0; i < localStorage.length; i++) {
         const stored = localStorage.key(i) ?? ''
-        if (stored.startsWith(prefix)) keys.push(stored.slice(prefix.length))
+        const prefix = prefixes.find((candidate) => stored.startsWith(candidate))
+        if (prefix !== undefined) keys.add(stored.slice(prefix.length))
       }
-      return keys
+      return Array.from(keys)
     } catch {
       return []
     }
@@ -170,7 +217,9 @@ export class Store {
   async has(key: string): Promise<boolean> {
     if (!hasLocalStorage()) return false
     try {
-      return localStorage.getItem(storageKey(this.namespace, key)) != null
+      return readableStorageKeys(this.namespace, key).some(
+        (stored) => localStorage.getItem(stored) != null
+      )
     } catch {
       return false
     }

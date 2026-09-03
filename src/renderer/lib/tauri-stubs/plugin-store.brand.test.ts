@@ -139,13 +139,11 @@ describe('persisted localStorage namespaces across the rename', () => {
     expect(localStorage.getItem(`${LEGACY.storagePrefix}${suffix}`)).toBeNull()
   })
 
-  // LEDGER (Wave 4) — expected failure. The bare renderer keys are hardcoded
-  // at their call sites (`WorkspaceLayout`, `FileExplorer`), so after the flip
-  // the persisted sidebar / explorer / rail sizes are unreachable and every
-  // panel snaps back to its default. Delete this test, `.fails` and all, once
-  // a legacy bare key resolves under its canonical name — whether that is a
-  // fallback inside the read path or a boot migration this test then invokes.
-  test.fails('keeps every persisted bare key reachable under its canonical name', async () => {
+  // T-M05 landed: `readPersistedPanelSize` probes the canonical key first and
+  // falls back to the same key under the legacy prefix, so the persisted
+  // sidebar / explorer / rail sizes survive the flip instead of every panel
+  // snapping back to its default.
+  it('keeps every persisted bare key reachable under its canonical name', async () => {
     __setBrandCanonicalOverride(CANONICAL_OVERRIDE)
     const dump = loadDump()
 

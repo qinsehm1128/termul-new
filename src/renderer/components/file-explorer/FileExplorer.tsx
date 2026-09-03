@@ -1,3 +1,4 @@
+import { LEGACY } from '@shared/brand'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import {
   ChevronDown,
@@ -17,6 +18,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
+import { readPersistedPanelSize } from '@/hooks/use-persisted-panel-size'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
@@ -31,6 +33,14 @@ import { useProjectStore } from '@/stores/project-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { FileTreeContextMenuContent } from './FileTreeContextMenu'
 import { FileTreeNodeWrapper } from './FileTreeNode'
+
+/**
+ * Still the legacy prefix: the width is read and written under one key, so
+ * naming the canonical one here would flip the write too (that is T-A08's).
+ * Safe at module scope in a way `brandCanonical()` would not be — `LEGACY` is
+ * permanent and the brand seam cannot move it.
+ */
+const EXPLORER_WIDTH_STORAGE_KEY = `${LEGACY.storageKeyPrefix}file-explorer-width`
 
 interface InlineInputState {
   parentPath: string
@@ -106,17 +116,12 @@ export function FileExplorer({
   const [deleteConfirm, setDeleteConfirm] = useState<DirectoryEntry[] | null>(null)
   const [searchResultTab, setSearchResultTab] = useState<'content' | 'files'>('content')
   const [expandedSearchResultPaths, setExpandedSearchResultPaths] = useState<Set<string>>(new Set())
-  const [explorerWidth, setExplorerWidth] = useState(() => {
-    try {
-      const savedWidth = window.localStorage?.getItem('termul:file-explorer-width')
-      if (!savedWidth) return 256
-      const parsed = Number.parseInt(savedWidth, 10)
-      if (Number.isNaN(parsed)) return 256
-      return Math.max(220, Math.min(560, parsed))
-    } catch {
-      return 256
-    }
-  })
+  // Through `readPersistedPanelSize` rather than a hand-rolled read: it is the
+  // one place that knows a width persisted before the rename still lives under
+  // the legacy prefix. The clamp and fallback are the same numbers as before.
+  const [explorerWidth, setExplorerWidth] = useState(() =>
+    readPersistedPanelSize(EXPLORER_WIDTH_STORAGE_KEY, 256, 220, 560)
+  )
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const searchDebounceRef = useRef<number | null>(null)
@@ -189,7 +194,7 @@ export function FileExplorer({
 
   useEffect(() => {
     try {
-      window.localStorage?.setItem('termul:file-explorer-width', String(explorerWidth))
+      window.localStorage?.setItem(EXPLORER_WIDTH_STORAGE_KEY, String(explorerWidth))
     } catch {
       // Ignore localStorage access failures in restricted environments.
     }

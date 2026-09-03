@@ -1,3 +1,4 @@
+import { LEGACY } from '@shared/brand'
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
 import { motion } from 'framer-motion'
@@ -407,7 +408,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isTerminalListVisible = useTerminalListPanelVisible()
   const isSidebarVisible = useSidebarVisible()
   const [cliRailHeight, setCliRailHeight] = usePersistedPanelSize(
-    'termul:cli-session-rail-height',
+    // Still the legacy prefix: `usePersistedPanelSize` reads and writes the
+    // same key, so naming the canonical one here would flip the write too.
+    // T-A08 does that; `readPersistedPanelSize` already reads both.
+    `${LEGACY.storageKeyPrefix}cli-session-rail-height`,
     { initial: 260, min: 140, max: 720 }
   )
   const isMobileWebShell = useMobileWebShell()
@@ -2721,7 +2725,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               >
                 <ResizableRail
                   side="left"
-                  storageKey="termul:sidebar-width"
+                  storageKey={`${LEGACY.storageKeyPrefix}sidebar-width`}
                   initial={240}
                   min={180}
                   max={420}
@@ -2805,7 +2809,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   >
                     <ResizableRail
                       side="right"
-                      storageKey="termul:file-explorer-width"
+                      storageKey={`${LEGACY.storageKeyPrefix}file-explorer-width`}
                       initial={256}
                       min={220}
                       max={560}
