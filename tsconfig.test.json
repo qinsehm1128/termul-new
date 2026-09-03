@@ -4,6 +4,15 @@
     "composite": true,
     "types": ["node"]
   },
+  // Restates the inherited exclude minus `src/shared/**/*.test.ts`: shared
+  // tests are excluded from the web program (they use node APIs the web bundle
+  // has no types for) and are typechecked here instead, where `node` types are
+  // available.
+  "exclude": [
+    "src/renderer/**/*.test.ts",
+    "src/renderer/**/*.test.tsx",
+    "src/renderer/**/__tests__/**/*"
+  ],
   "include": [
     "src/renderer/**/*",
     "src/shared/**/*",
