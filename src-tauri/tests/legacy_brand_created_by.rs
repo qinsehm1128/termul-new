@@ -434,10 +434,11 @@ fn every_production_write_point_is_accounted_for() {
 }
 
 // ---------------------------------------------------------------------------
-// The ledger — reds that go green when the capability lands
+// The ledger — cleared in Wave 4 (T-A01); these are live guards now
 // ---------------------------------------------------------------------------
 
-/// LEDGER — the core of this file.
+/// The core of this file. Was a `#[should_panic]` ledger entry until T-A01
+/// landed the decoupling; now a live guard against it being undone.
 ///
 /// The wire value must be decided by an explicit `#[serde(rename = "…")]` on
 /// each variant, and `rename_all` must be gone from the container. Both halves
@@ -446,7 +447,6 @@ fn every_production_write_point_is_accounted_for() {
 /// perfectly good reasons, in a refactor that has nothing to do with branding —
 /// rewrites the disk contract again, exactly as this rename would have.
 #[test]
-#[should_panic(expected = "the createdBy wire value is still decided by the variant identifier")]
 fn the_wire_value_is_decoupled_from_the_variant_identifier() {
     let item = creator_enum();
 
@@ -477,12 +477,11 @@ fn the_wire_value_is_decoupled_from_the_variant_identifier() {
     );
 }
 
-/// LEDGER — a record written *after* the flip must be readable.
+/// A record written *after* the flip must be readable. Cleared by T-A01.
 ///
 /// Reached by deserialization so it never names an identifier: once a variant
 /// exists whose wire value is `brand::canonical().created_by`, this passes.
 #[test]
-#[should_panic(expected = "no variant accepts the post-rename createdBy wire value")]
 fn a_variant_carries_the_post_rename_wire_value() {
     let _guard = brand::override_canonical(post_rename());
     assert_ne!(

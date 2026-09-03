@@ -130,7 +130,7 @@ impl LegacyConversationReader {
                         project_attachment: None,
                         lifecycle_state: ConversationLifecycleState::Ready,
                         last_seq: 0,
-                        created_by: ConversationCreator::Termul,
+                        created_by: ConversationCreator::Legacy,
                         title: None,
                         title_source: None,
                     },
@@ -374,7 +374,7 @@ mod tests {
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::Ready,
             last_seq: 0,
-            created_by: ConversationCreator::Termul,
+            created_by: ConversationCreator::Legacy,
             title: None,
             title_source: None,
         }

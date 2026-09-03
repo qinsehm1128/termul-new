@@ -299,10 +299,23 @@ pub enum ConversationLifecycleState {
     Deleted,
 }
 
+/// Who stamped a `ConversationRecordV2`.
+///
+/// Every wire value is pinned by an explicit `#[serde(rename = "…")]` and the
+/// container deliberately carries no `rename_all`: the strings below are an
+/// external contract with every conversation index already on a user's disk,
+/// and they must stay readable no matter how the identifiers are later
+/// refactored. Under `rename_all` the wire value tracks the identifier, so an
+/// ordinary rename would rewrite that contract in silence — there would be no
+/// literal anywhere for a review to catch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationCreator {
-    Termul,
+    /// Records written before the rename. Read-only: never re-emitted.
+    #[serde(rename = "termul")]
+    Legacy,
+    /// Records written after the rename.
+    #[serde(rename = "se-manager")]
+    SeManager,
 }
 
 /// Stable application error codes shared by Rust and TypeScript transports.
@@ -632,7 +645,7 @@ mod tests {
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::AllocatingWorkspace,
             last_seq: 0,
-            created_by: ConversationCreator::Termul,
+            created_by: ConversationCreator::Legacy,
             title: None,
             title_source: None,
         };
@@ -655,7 +668,9 @@ mod tests {
                 "projectAttachment": null,
                 "lifecycleState": "allocating_workspace",
                 "lastSeq": 0,
-                "createdBy": "termul"
+                "createdBy": "termul",
+                "title": null,
+                "titleSource": null
             })
         );
 

@@ -12,7 +12,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, test } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   __resetBrandCanonicalOverride,
   __setBrandCanonicalOverride,
@@ -48,12 +48,12 @@ describe('conversation createdBy across the rename', () => {
     expect(parsed.lastSeq).toBe(onDisk.lastSeq)
   })
 
-  // LEDGER (Wave 4) — expected failure. `parseConversationRecordV2` compares
-  // `createdBy` against a hardcoded 'termul' and consults neither
-  // `brandCanonical()` nor `LEGACY`, so a record written *after* the flip is
-  // rejected as invalid. Delete this test, `.fails` and all, once the parser
-  // accepts the canonical value alongside the legacy one.
-  test.fails('accepts a record carrying the post-rename createdBy', () => {
+  // Was a Wave-4 ledger entry (`test.fails`): `parseConversationRecordV2` used
+  // to compare `createdBy` against a hardcoded 'termul' and consult neither
+  // `brandCanonical()` nor `LEGACY`, so a record written *after* the flip was
+  // rejected as invalid. T-A01 made the parser read both, so the `.fails` is
+  // gone and this stands as a live guard against the widening being undone.
+  it('accepts a record carrying the post-rename createdBy', () => {
     __setBrandCanonicalOverride({ createdBy: 'se-manager' })
     const onDisk = recordOnDisk()
     const writtenToday = { ...onDisk, createdBy: brandCanonical().createdBy }

@@ -5,6 +5,8 @@
  * opaque replaceable bindings and must never be used as Conversation identity or path keys.
  */
 
+import { brandCanonical, LEGACY } from '../brand'
+
 export const CONVERSATION_SCHEMA_VERSION = 2 as const
 export const PROJECT_ATTACHMENT_SCHEMA_VERSION = 1 as const
 export const AGENT_SESSION_BINDING_SCHEMA_VERSION = 1 as const
@@ -144,7 +146,12 @@ export interface ConversationRecordV2 {
   projectAttachment: ProjectAttachment | null
   lifecycleState: ConversationLifecycleState
   lastSeq: number
-  createdBy: 'termul'
+  /**
+   * Mirrors Rust `ConversationCreator`. `'termul'` is what pre-rename installs
+   * left on disk and stays readable forever; `'se-manager'` is what records
+   * written after the flip carry.
+   */
+  createdBy: 'termul' | 'se-manager'
   title?: string | null
   titleSource?: ConversationTitleSource | null
 }
@@ -388,7 +395,13 @@ export function parseConversationRecordV2(value: unknown): ConversationRecordV2 
     throw new TypeError('conversation lifecycleState is invalid')
   }
   nonNegativeInteger(candidate.lastSeq, 'conversation.lastSeq')
-  if (candidate.createdBy !== 'termul') throw new TypeError('conversation createdBy is invalid')
+  // Both values are resolved here rather than at module scope on purpose:
+  // brand.ts warns that a field captured into a top-level const freezes before
+  // a test — or a runtime override — can move it.
+  const acceptedCreators = new Set([brandCanonical().createdBy, LEGACY.createdBy])
+  if (typeof candidate.createdBy !== 'string' || !acceptedCreators.has(candidate.createdBy)) {
+    throw new TypeError('conversation createdBy is invalid')
+  }
   return value as ConversationRecordV2
 }
 

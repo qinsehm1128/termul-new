@@ -4933,7 +4933,7 @@ mod tests {
             project_attachment: None,
             lifecycle_state: crate::conversation::ConversationLifecycleState::Ready,
             last_seq: 0,
-            created_by: crate::conversation::ConversationCreator::Termul,
+            created_by: crate::conversation::ConversationCreator::Legacy,
             title: None,
             title_source: None,
         }
