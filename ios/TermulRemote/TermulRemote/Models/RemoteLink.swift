@@ -95,7 +95,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     /// `RemoteLinkError.invalidURL` names no cause a user or a log could act on.
     ///
     /// The pre-rename `termul` scheme is deliberately absent, not forgotten.
-    /// Dropping it is a locked decision: a `termul://` link saved outside the app
+    /// Dropping it is a locked decision: a pre-rename link saved outside the app
     /// — a Safari bookmark, a message thread — stops opening. Nothing the desktop
     /// hands out is affected, because pairing has never produced a deep link; the
     /// QR and the copy button both carry an `https` access URL, which reaches

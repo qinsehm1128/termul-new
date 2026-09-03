@@ -287,7 +287,7 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
   })
 
   // T-A14's locked decision, and the one contract in this file that gets no
-  // compatibility read. A `termul://` link a user saved outside the app — a
+  // compatibility read. A pre-rename link a user saved outside the app — a
   // Safari bookmark, a message thread — stops opening. That is affordable only
   // because the desktop never generated one (R-OQ3): the pairing QR and the copy
   // button both hand out an `https` access URL, which never reaches the scheme
