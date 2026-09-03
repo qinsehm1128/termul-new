@@ -1,0 +1,40 @@
+{
+  "note": "What a pre-rename TermulRemote install owns on an iOS device: four UserDefaults keys, one keychain service, one Application Support directory and one URL scheme. Hand-authored from the declaring Swift sources, NOT captured from a device or simulator — `xcrun simctl list runtimes` is empty on this machine and the Xcode project has no test target, so no runtime evidence exists for any of it. `declaredIn` paths are relative to ios/TermulRemote/TermulRemote/.",
+  "userDefaults": [
+    {
+      "key": "termul.app.language",
+      "value": "zh-Hans",
+      "declaredIn": "App/AppSettings.swift"
+    },
+    {
+      "key": "termul.app.appearance",
+      "value": "dark",
+      "declaredIn": "App/AppSettings.swift"
+    },
+    {
+      "key": "termul.remote.savedLinks",
+      "value": "<Data> JSONEncoder([SavedLinkRecord]) — 2 saved desks",
+      "declaredIn": "Models/ConnectionStore.swift"
+    },
+    {
+      "key": "termul.companion.terminalTextScale",
+      "value": 1.25,
+      "declaredIn": "Terminal/TerminalTextScale.swift"
+    }
+  ],
+  "keychain": {
+    "service": "com.termul.remote.pairing",
+    "declaredIn": "Networking/KeychainStore.swift",
+    "accounts": ["9F1C2A64-3B7D-4E58-9A01-2C5D8E7F4B60", "b2832b54-2ca4-4db4-93fd-f93bf6793114"]
+  },
+  "applicationSupportDirectory": {
+    "name": "TermulRemote",
+    "declaredIn": "Chat/ChatTranscriptCache.swift",
+    "files": ["chat-cache/3f2a9c14-6b7d-4e58-9a01-2c5d8e7f4b60.json"]
+  },
+  "urlScheme": {
+    "value": "termul",
+    "declaredIn": "Models/RemoteLink.swift",
+    "registeredIn": "Info.plist"
+  }
+}
