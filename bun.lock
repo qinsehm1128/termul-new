@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "termul-manager",
+      "name": "se-manager",
       "dependencies": {
         "@blocknote/code-block": "^0.46.2",
         "@blocknote/core": "^0.46.2",

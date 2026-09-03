@@ -1,6 +1,6 @@
 {
-  "name": "termul-manager",
-  "productName": "Termul Manager",
+  "name": "se-manager",
+  "productName": "Se Manager",
   "version": "0.5.9",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "author": "qinsehm1128",
