@@ -76,6 +76,15 @@ export interface AppSettings {
   colorTheme: string
   /** Light, dark, or follow OS (maps to `{colorTheme}` / `{colorTheme}-light`). */
   appearanceMode: 'light' | 'dark'
+  /**
+   * Terminal color theme, independent of the UI theme.
+   *
+   * `null` means "follow the UI theme" and is the default — nullable rather
+   * than a concrete id on purpose: a concrete default would pin every terminal
+   * to one theme the moment the user changed the UI theme, which is the exact
+   * behaviour this setting exists to make opt-in.
+   */
+  terminalColorTheme: string | null
   /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
   uiZoomLevel: number
   /** User-selected interface language, or follow the operating system. */
@@ -337,6 +346,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   remoteBindMode: 'localhost',
   colorTheme: brandCanonical().themeId,
   appearanceMode: 'dark',
+  terminalColorTheme: null,
   uiZoomLevel: UI_ZOOM_DEFAULT,
   uiLanguage: 'system',
   acpTurnTimeoutSecs: null,

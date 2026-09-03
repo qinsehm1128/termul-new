@@ -1,7 +1,9 @@
 export {
   applyColorTheme,
   getActiveTerminalTheme,
-  getLastAppliedColorThemeId
+  getActiveTerminalThemeId,
+  getLastAppliedColorThemeId,
+  isKnownColorThemeId
 } from './apply-color-theme'
 export { applyThemeToTerminal } from './apply-theme-to-terminal'
 export {

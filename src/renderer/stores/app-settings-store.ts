@@ -64,6 +64,9 @@ export const useFileExplorerVisibilitySetting = () =>
   useAppSettingsStore((state) => state.settings.fileExplorerVisible)
 export const useColorTheme = () => useAppSettingsStore((state) => state.settings.colorTheme)
 export const useAppearanceMode = () => useAppSettingsStore((state) => state.settings.appearanceMode)
+/** `null` = the terminal follows the UI theme. */
+export const useTerminalColorThemeSetting = () =>
+  useAppSettingsStore((state) => state.settings.terminalColorTheme)
 export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)
 export const useUiLanguage = () => useAppSettingsStore((state) => state.settings.uiLanguage)
 export const useAcpTurnTimeout = () =>

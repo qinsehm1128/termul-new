@@ -253,7 +253,11 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-vi.mock('@/stores/app-settings-store', () => ({
+// Partial: the store itself stays real, because `getActiveTerminalTheme` reads
+// `terminalColorTheme` off it through `getState()`. Replacing the whole module
+// would make every new selector break this file.
+vi.mock('@/stores/app-settings-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/app-settings-store')>()),
   useTerminalFontFamily: vi.fn(() => 'Menlo, Monaco, "Courier New", monospace'),
   useTerminalSymbolFontFamily: vi.fn(() => ''),
   useTerminalFontSize: vi.fn(() => 14),

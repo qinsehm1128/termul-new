@@ -1,4 +1,5 @@
 import type { ITheme } from '@xterm/xterm'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { forEachTerminal } from '@/utils/terminal-registry'
 import { ansi16FromPalette } from './ansi-palette'
 import { applyThemeToTerminal } from './apply-theme-to-terminal'
@@ -114,7 +115,17 @@ export function paletteToXtermTheme(palette: ThemePalette, appearance: ThemeAppe
   }
 }
 
-function applyTerminalThemes(xtermTheme: ITheme): void {
+/**
+ * Push the *resolved* terminal theme onto every live terminal.
+ *
+ * Takes no theme argument on purpose. Every path that hands a terminal its
+ * theme — this one, `terminal-config.ts`'s `getTerminalOptions`, and
+ * `ConnectedTerminal`'s cached-restore branch — reads `getActiveTerminalTheme`,
+ * so an already-open terminal and a newly-opened one cannot disagree. A second
+ * theme source here is exactly how the split state appears.
+ */
+function applyTerminalThemes(): void {
+  const xtermTheme = getActiveTerminalTheme()
   forEachTerminal((terminal) => {
     applyThemeToTerminal(terminal, xtermTheme)
   })
@@ -129,16 +140,32 @@ export function applyColorTheme(themeId: string): void {
   const theme = getColorThemeDefinition(themeId)
   const variant = theme.dark
   const syntax = resolveSyntaxColors(theme)
-  const xtermTheme = paletteToXtermTheme(variant.palette, theme.appearance)
 
   applyCssVariables(variant.palette, theme.appearance)
-  applyTerminalThemes(xtermTheme)
+  // Before the terminal pass: `getActiveTerminalTheme` derives from it when the
+  // terminal follows the UI theme.
   lastAppliedThemeId = theme.id
+  applyTerminalThemes()
   dispatchThemeChanged({ themeId: theme.id, syntax })
 }
 
+/**
+ * The id the terminals should render, which is not always the UI theme's.
+ *
+ * `terminalColorTheme` is nullable and `null` means "follow the UI theme". An
+ * id that no longer resolves — a custom theme the user deleted — also falls
+ * back to the UI theme rather than to `getColorThemeDefinition`'s silent
+ * default, which would otherwise strand the terminals on a theme nothing else
+ * in the window is using.
+ */
+export function getActiveTerminalThemeId(): string {
+  const override = useAppSettingsStore.getState().settings.terminalColorTheme
+  if (override === null || !isKnownColorThemeId(override)) return lastAppliedThemeId
+  return override
+}
+
 export function getActiveTerminalTheme(): ITheme {
-  const theme = getColorThemeDefinition(lastAppliedThemeId)
+  const theme = getColorThemeDefinition(getActiveTerminalThemeId())
   return paletteToXtermTheme(theme.dark.palette, theme.appearance)
 }
 
