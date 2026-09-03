@@ -358,7 +358,9 @@ function resolvedColorThemes(): Record<string, ColorThemeDefinition> {
     return BUNDLED_COLOR_THEMES
   }
 
-  const brandKey = `${themeId} ${themeFamilyLight}`
+  // Joined on a control char that cannot occur in a theme id, so no pair of
+  // ids can collide into the same memo key.
+  const brandKey = `${themeId}\u0000${themeFamilyLight}`
   if (cachedResolvedThemes !== null && cachedBrandThemeKey === brandKey) {
     return cachedResolvedThemes
   }
