@@ -27,11 +27,7 @@ import {
 } from '@shared/brand'
 import { afterEach, describe, expect, it } from 'vitest'
 import { isKnownColorThemeId } from './apply-color-theme'
-import {
-  DEFAULT_COLOR_THEME_ID,
-  getColorThemeDefinition,
-  THEME_PICKER_ROWS
-} from './bundled-themes'
+import { DEFAULT_COLOR_THEME_ID, getColorThemeDefinition, themePickerRows } from './bundled-themes'
 
 const FIXTURE_ROOT = join(process.cwd(), 'src/__fixtures__/legacy-brand')
 
@@ -112,13 +108,13 @@ describe('theme picker rows agree with the resolver', () => {
     // normalized through the resolver. A row keyed by a spelling the resolver
     // renames is a row that can never match — the active theme would show no
     // highlight at all.
-    for (const row of THEME_PICKER_ROWS) {
+    for (const row of themePickerRows()) {
       expect(getColorThemeDefinition(row.themeId).id).toBe(row.themeId)
     }
   })
 
   it('resolves both persisted ids onto ids the picker actually offers', () => {
-    const rowIds = THEME_PICKER_ROWS.map((row) => row.themeId)
+    const rowIds = themePickerRows().map((row) => row.themeId)
 
     expect(rowIds).toContain(getColorThemeDefinition(persistedColorTheme(DARK_FIXTURE)).id)
     expect(rowIds).toContain(getColorThemeDefinition(persistedColorTheme(LIGHT_FIXTURE)).id)

@@ -229,7 +229,22 @@
     "empty": "没有匹配的主题。",
     "applied": "当前已应用",
     "cancel": "Esc 取消",
-    "apply": "Enter 应用"
+    "apply": "Enter 应用",
+    "customGroup": "自定义",
+    "import": "从 JSON 导入主题",
+    "export": "将高亮主题导出为 JSON",
+    "errors": {
+      "invalidJson": "文件不是合法的 JSON",
+      "invalidShape": "主题必须是一个 JSON 对象",
+      "invalidId": "主题的 \"id\" 必须是非空字符串",
+      "invalidName": "主题的 \"name\" 必须是非空字符串",
+      "invalidAppearance": "主题的 \"appearance\" 必须是 \"light\" 或 \"dark\"",
+      "missingPalette": "主题缺少 \"dark.palette\"",
+      "missingPaletteKey": "调色板缺少 \"{{key}}\"",
+      "invalidColor": "\"{{key}}\" 不是合法的十六进制颜色：{{value}}",
+      "bundledIdConflict": "主题 id \"{{id}}\" 已被内置主题占用，请改名后重新导入。",
+      "saveFailed": "保存自定义主题失败"
+    }
   },
   "notFound": {
     "title": "页面未找到",

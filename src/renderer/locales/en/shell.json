@@ -250,7 +250,22 @@
     "empty": "No themes match.",
     "applied": "Currently applied",
     "cancel": "Esc cancel",
-    "apply": "Enter apply"
+    "apply": "Enter apply",
+    "customGroup": "Custom",
+    "import": "Import theme from JSON",
+    "export": "Export highlighted theme as JSON",
+    "errors": {
+      "invalidJson": "File is not valid JSON",
+      "invalidShape": "Theme must be a JSON object",
+      "invalidId": "Theme \"id\" must be a non-empty string",
+      "invalidName": "Theme \"name\" must be a non-empty string",
+      "invalidAppearance": "Theme \"appearance\" must be \"light\" or \"dark\"",
+      "missingPalette": "Theme is missing its \"dark.palette\"",
+      "missingPaletteKey": "Palette is missing \"{{key}}\"",
+      "invalidColor": "\"{{key}}\" is not a hex color: {{value}}",
+      "bundledIdConflict": "Theme id \"{{id}}\" belongs to a built-in theme. Rename it and import again.",
+      "saveFailed": "Failed to save custom themes"
+    }
   },
   "notFound": {
     "title": "Page not found",

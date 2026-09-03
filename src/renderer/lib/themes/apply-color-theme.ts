@@ -5,7 +5,7 @@ import { applyThemeToTerminal } from './apply-theme-to-terminal'
 import {
   DEFAULT_COLOR_THEME_ID,
   getColorThemeDefinition,
-  hasBundledColorTheme
+  hasColorThemeDefinition
 } from './bundled-themes'
 import { darkenHex, hexToHslComponents, lightenHex, mixHex } from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
@@ -143,7 +143,7 @@ export function getActiveTerminalTheme(): ITheme {
 }
 
 export function isKnownColorThemeId(themeId: string): boolean {
-  return hasBundledColorTheme(themeId)
+  return hasColorThemeDefinition(themeId)
 }
 
 /** @internal for tests */

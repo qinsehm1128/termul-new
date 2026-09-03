@@ -1,5 +1,6 @@
 import { brandCanonical, LEGACY } from '@shared/brand'
 import { BRAND_LIGHT_THEME, BUNDLED_LIGHT_COLOR_THEMES } from './bundled-light-themes'
+import { getCustomColorTheme, getCustomColorThemes } from './custom-theme-registry'
 import type { ColorThemeDefinition } from './types'
 
 export interface ColorThemeFamily {
@@ -309,36 +310,75 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   ...BUNDLED_LIGHT_COLOR_THEMES
 }
 
-export const COLOR_THEME_FAMILIES: ColorThemeFamily[] = Object.values(
-  BUNDLED_DARK_COLOR_THEMES
-).map((theme) => ({
-  familyId: theme.familyId,
-  name: theme.name.replace(/ Light$/, ''),
-  darkThemeId: theme.id,
-  lightThemeId: `${theme.familyId}-light`
-}))
+/**
+ * The bundled dark/light pairs the picker groups by.
+ *
+ * A function rather than a module `const`: a table evaluated at import time is
+ * frozen before {@link getCustomColorThemes} can hold anything and before the
+ * brand seam can move, which is the same failure `resolvedColorThemes` exists
+ * to prevent one contract over.
+ */
+export function colorThemeFamilies(): ColorThemeFamily[] {
+  return Object.values(BUNDLED_DARK_COLOR_THEMES).map((theme) => ({
+    familyId: theme.familyId,
+    name: theme.name.replace(/ Light$/, ''),
+    darkThemeId: theme.id,
+    lightThemeId: `${theme.familyId}-light`
+  }))
+}
 
 export interface ThemePickerRow {
   themeId: string
   familyId: string
   label: string
   variant: 'dark' | 'light'
+  /**
+   * Which table the row came from. Custom rows are their own section: they
+   * have no light twin, so they cannot be folded into a bundled family.
+   */
+  source: 'bundled' | 'custom'
 }
 
-export const THEME_PICKER_ROWS: ThemePickerRow[] = COLOR_THEME_FAMILIES.flatMap((family) => [
-  {
-    themeId: family.darkThemeId,
-    familyId: family.familyId,
-    label: family.name,
-    variant: 'dark' as const
-  },
-  {
-    themeId: family.lightThemeId,
-    familyId: family.familyId,
-    label: `${family.name} Light`,
-    variant: 'light' as const
-  }
-])
+/**
+ * Every row the picker offers — bundled pairs first, then the user's imported
+ * themes in import order.
+ *
+ * Takes the custom list as an argument so React can key a memo on the value it
+ * already read from {@link subscribeCustomColorThemes}; the default keeps
+ * non-React callers to a bare call.
+ */
+export function themePickerRows(
+  customThemes: readonly ColorThemeDefinition[] = getCustomColorThemes()
+): ThemePickerRow[] {
+  const bundled = colorThemeFamilies().flatMap((family): ThemePickerRow[] => [
+    {
+      themeId: family.darkThemeId,
+      familyId: family.familyId,
+      label: family.name,
+      variant: 'dark',
+      source: 'bundled'
+    },
+    {
+      themeId: family.lightThemeId,
+      familyId: family.familyId,
+      label: `${family.name} Light`,
+      variant: 'light',
+      source: 'bundled'
+    }
+  ])
+
+  const custom = customThemes.map(
+    (theme): ThemePickerRow => ({
+      themeId: theme.id,
+      familyId: theme.familyId,
+      label: theme.name,
+      variant: theme.appearance,
+      source: 'custom'
+    })
+  )
+
+  return [...bundled, ...custom]
+}
 
 export const DEFAULT_COLOR_THEME_ID = BRAND_DARK_THEME.id
 
@@ -405,10 +445,24 @@ export function hasBundledColorTheme(themeId: string): boolean {
   return Object.prototype.hasOwnProperty.call(resolvedColorThemes(), themeId)
 }
 
+/** Whether `themeId` resolves to a real theme — bundled or user-imported. */
+export function hasColorThemeDefinition(themeId: string): boolean {
+  return hasBundledColorTheme(themeId) || getCustomColorTheme(themeId) !== undefined
+}
+
+/**
+ * The single resolution funnel: every theme consumer in the renderer reaches a
+ * definition through here.
+ *
+ * Bundled is probed first and the user registry second, so an imported theme
+ * can never shadow a shipped one no matter how it got into the registry. The
+ * fallback to the default theme stays silent, as before — `hasColorThemeDefinition`
+ * is the predicate that distinguishes a hit from that fallback.
+ */
 export function getColorThemeDefinition(themeId: string): ColorThemeDefinition {
   const themes = resolvedColorThemes()
-  if (!Object.prototype.hasOwnProperty.call(themes, themeId)) {
-    return themes[DEFAULT_COLOR_THEME_ID]
+  if (Object.prototype.hasOwnProperty.call(themes, themeId)) {
+    return themes[themeId]
   }
-  return themes[themeId]
+  return getCustomColorTheme(themeId) ?? themes[DEFAULT_COLOR_THEME_ID]
 }

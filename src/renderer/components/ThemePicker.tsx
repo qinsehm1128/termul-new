@@ -1,14 +1,19 @@
-import { Check, Palette, Search, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Check, Download, Palette, Search, Upload, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUpdateAppSettings } from '@/hooks/use-app-settings'
 import { useEffectiveColorThemeId } from '@/hooks/use-color-theme'
 import {
-  COLOR_THEME_FAMILIES,
+  colorThemeFamilies,
+  exportCustomColorTheme,
   getColorThemeDefinition,
+  getCustomColorThemes,
   getPickerApplySettings,
-  THEME_PICKER_ROWS,
-  type ThemePickerRow
+  importCustomColorTheme,
+  loadCustomColorThemes,
+  subscribeCustomColorThemes,
+  type ThemePickerRow,
+  themePickerRows
 } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
@@ -43,39 +48,66 @@ export function ThemePicker(): React.JSX.Element | null {
 
   const [query, setQuery] = useState('')
   const [focusIndex, setFocusIndex] = useState(0)
+  const [importError, setImportError] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const previousQueryRef = useRef(query)
+
+  const customThemes = useSyncExternalStore(
+    subscribeCustomColorThemes,
+    getCustomColorThemes,
+    getCustomColorThemes
+  )
+
+  // The picker is the only surface that reads the imported list, so it is also
+  // where the persisted list is pulled in. It is mounted for the whole session
+  // (`WorkspaceLayout`), not only while the dialog is open.
+  useEffect(() => {
+    void loadCustomColorThemes()
+  }, [])
 
   const getRowLabel = useCallback(
     (row: ThemePickerRow): string =>
-      row.variant === 'light'
+      row.source === 'bundled' && row.variant === 'light'
         ? t('themes.lightVariant', { name: row.label.replace(/ Light$/, '') })
         : row.label,
     [t]
   )
 
+  const allRows = useMemo(() => themePickerRows(customThemes), [customThemes])
+
   const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    if (!normalized) return THEME_PICKER_ROWS
-    return THEME_PICKER_ROWS.filter(
+    if (!normalized) return allRows
+    return allRows.filter(
       (row) =>
         getRowLabel(row).toLowerCase().includes(normalized) ||
         row.familyId.toLowerCase().includes(normalized) ||
         row.themeId.toLowerCase().includes(normalized)
     )
-  }, [getRowLabel, query])
+  }, [allRows, getRowLabel, query])
 
   const filteredFamilies = useMemo(() => {
-    const familyIds = new Set(filteredRows.map((row) => row.familyId))
-    return COLOR_THEME_FAMILIES.filter((family) => familyIds.has(family.familyId))
+    const familyIds = new Set(
+      filteredRows.filter((row) => row.source === 'bundled').map((row) => row.familyId)
+    )
+    return colorThemeFamilies().filter((family) => familyIds.has(family.familyId))
   }, [filteredRows])
 
+  const filteredCustomRows = useMemo(
+    () => filteredRows.filter((row) => row.source === 'custom'),
+    [filteredRows]
+  )
+
   const flatFilteredRows = useMemo(() => {
-    return filteredFamilies.flatMap((family) =>
-      filteredRows.filter((row) => row.familyId === family.familyId)
-    )
-  }, [filteredFamilies, filteredRows])
+    return [
+      ...filteredFamilies.flatMap((family) =>
+        filteredRows.filter((row) => row.source === 'bundled' && row.familyId === family.familyId)
+      ),
+      ...filteredCustomRows
+    ]
+  }, [filteredCustomRows, filteredFamilies, filteredRows])
 
   const confirmRow = useCallback(
     async (row: ThemePickerRow) => {
@@ -93,7 +125,43 @@ export function ThemePicker(): React.JSX.Element | null {
   const handleCancel = useCallback(() => {
     cancel()
     setQuery('')
+    setImportError(null)
   }, [cancel])
+
+  const handleImportFile = useCallback(
+    async (file: File) => {
+      const result = await importCustomColorTheme(await file.text())
+      if (!result.ok) {
+        setImportError(result.error.message)
+        return
+      }
+      setImportError(null)
+      // Preview it straight away — otherwise the only feedback for a successful
+      // import is a new row somewhere below the fold.
+      preview(result.theme.id)
+    },
+    [preview]
+  )
+
+  /**
+   * Write the highlighted theme out as import-ready JSON.
+   *
+   * Any theme, not only an imported one: exporting a bundled theme is how a
+   * user gets a valid starting point to edit. Re-importing it unchanged is
+   * refused by the bundled-id check, which is the intended prompt to rename.
+   */
+  const handleExport = useCallback(() => {
+    if (!highlightedThemeId) return
+    const theme = getColorThemeDefinition(highlightedThemeId)
+    const url = URL.createObjectURL(
+      new Blob([exportCustomColorTheme(theme)], { type: 'application/json' })
+    )
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${theme.id}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }, [highlightedThemeId])
 
   const scrollFocusedIntoView = useCallback((index: number) => {
     const list = listRef.current
@@ -196,6 +264,50 @@ export function ThemePicker(): React.JSX.Element | null {
 
   let rowCounter = 0
 
+  // The counter walks `flatFilteredRows` in render order, so the keyboard
+  // focus index and the rendered rows stay one numbering rather than two.
+  const renderRow = (row: ThemePickerRow): React.JSX.Element => {
+    const index = rowCounter
+    rowCounter += 1
+    const isApplied = row.themeId === effectiveThemeId
+    const isHighlighted =
+      row.themeId === highlightedThemeId || (highlightedThemeId === null && index === focusIndex)
+    const isFocused = index === focusIndex
+
+    return (
+      <button
+        key={row.themeId}
+        type="button"
+        role="option"
+        data-theme-row
+        aria-selected={isHighlighted}
+        className={cn(
+          'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs transition-colors',
+          isHighlighted || isFocused
+            ? 'bg-secondary text-foreground shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.04)] ring-1 ring-inset ring-primary/30'
+            : 'text-foreground/90 hover:bg-secondary/70'
+        )}
+        onMouseEnter={() => {
+          setFocusIndex(index)
+          preview(row.themeId)
+        }}
+        onFocus={() => {
+          setFocusIndex(index)
+          preview(row.themeId)
+        }}
+        onClick={() => {
+          void confirmRow(row)
+        }}
+      >
+        <ThemeSwatches themeId={row.themeId} />
+        <span className="flex-1 truncate font-medium">{getRowLabel(row)}</span>
+        {isApplied ? (
+          <Check size={14} className="shrink-0 text-primary" aria-label={t('themes.applied')} />
+        ) : null}
+      </button>
+    )
+  }
+
   return (
     <div className="fixed inset-0 z-[120] pointer-events-none">
       <div
@@ -225,12 +337,44 @@ export function ThemePicker(): React.JSX.Element | null {
           </div>
           <button
             type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            aria-label={t('themes.import')}
+            title={t('themes.import')}
+          >
+            <Upload size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={handleExport}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            aria-label={t('themes.export')}
+            title={t('themes.export')}
+          >
+            <Download size={14} />
+          </button>
+          <button
+            type="button"
             onClick={handleCancel}
             className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-label={t('themes.close')}
           >
             <X size={14} />
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            aria-label={t('themes.import')}
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              // Reset first: picking the same file twice in a row fires no
+              // change event otherwise, so a retry after a fixed file is silent.
+              event.target.value = ''
+              if (file) void handleImportFile(file)
+            }}
+          />
         </header>
 
         <div className="border-b border-border/70 px-3 py-2">
@@ -253,6 +397,11 @@ export function ThemePicker(): React.JSX.Element | null {
               aria-label={t('themes.searchAria')}
             />
           </div>
+          {importError ? (
+            <p role="alert" className="mt-1.5 text-2xs text-destructive">
+              {importError}
+            </p>
+          ) : null}
         </div>
 
         <div
@@ -261,7 +410,7 @@ export function ThemePicker(): React.JSX.Element | null {
           role="listbox"
           aria-label={t('themes.listAria')}
         >
-          {filteredFamilies.length === 0 ? (
+          {flatFilteredRows.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 px-3 py-10 text-center">
               <div className="flex size-8 items-center justify-center rounded-md bg-secondary/50">
                 <Search size={14} className="text-muted-foreground" />
@@ -269,60 +418,24 @@ export function ThemePicker(): React.JSX.Element | null {
               <p className="text-xs font-medium text-foreground">{t('themes.empty')}</p>
             </div>
           ) : (
-            filteredFamilies.map((family) => {
-              const rows = filteredRows.filter((row) => row.familyId === family.familyId)
-              return (
+            <>
+              {filteredFamilies.map((family) => (
                 <div key={family.familyId} className="mb-2 last:mb-0">
                   <p className="label-group px-2 pb-1 text-muted-foreground">{family.name}</p>
-                  {rows.map((row) => {
-                    const index = rowCounter
-                    rowCounter += 1
-                    const isApplied = row.themeId === effectiveThemeId
-                    const isHighlighted =
-                      row.themeId === highlightedThemeId ||
-                      (highlightedThemeId === null && index === focusIndex)
-                    const isFocused = index === focusIndex
-
-                    return (
-                      <button
-                        key={row.themeId}
-                        type="button"
-                        role="option"
-                        data-theme-row
-                        aria-selected={isHighlighted}
-                        className={cn(
-                          'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs transition-colors',
-                          isHighlighted || isFocused
-                            ? 'bg-secondary text-foreground shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.04)] ring-1 ring-inset ring-primary/30'
-                            : 'text-foreground/90 hover:bg-secondary/70'
-                        )}
-                        onMouseEnter={() => {
-                          setFocusIndex(index)
-                          preview(row.themeId)
-                        }}
-                        onFocus={() => {
-                          setFocusIndex(index)
-                          preview(row.themeId)
-                        }}
-                        onClick={() => {
-                          void confirmRow(row)
-                        }}
-                      >
-                        <ThemeSwatches themeId={row.themeId} />
-                        <span className="flex-1 truncate font-medium">{getRowLabel(row)}</span>
-                        {isApplied ? (
-                          <Check
-                            size={14}
-                            className="shrink-0 text-primary"
-                            aria-label={t('themes.applied')}
-                          />
-                        ) : null}
-                      </button>
-                    )
-                  })}
+                  {filteredRows
+                    .filter((row) => row.source === 'bundled' && row.familyId === family.familyId)
+                    .map(renderRow)}
                 </div>
-              )
-            })
+              ))}
+              {filteredCustomRows.length > 0 ? (
+                <div className="mb-2 last:mb-0">
+                  <p className="label-group px-2 pb-1 text-muted-foreground">
+                    {t('themes.customGroup')}
+                  </p>
+                  {filteredCustomRows.map(renderRow)}
+                </div>
+              ) : null}
+            </>
           )}
         </div>
 
