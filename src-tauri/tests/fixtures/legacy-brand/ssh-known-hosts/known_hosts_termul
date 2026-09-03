@@ -1,0 +1,7 @@
+# App-managed host keys. Written by the accept-new path in
+# src/ssh/connection.rs (append-only); never rewritten by libssh2's write_file,
+# which silently drops the @cert-authority / @revoked markers below.
+build-01.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIQ+G+8DeZFsclcCYqzpc87EkVmMIDg1ZSn9Ua5rW9iX
+@cert-authority *.internal.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGlZCXAB0QUBrH1UwL2422FCD2WPKSLMJuRtU2EZoxEm internal fleet CA
+[staging.example.com]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ2W2dWxrd1+fmEZojseW19oVFMSv+yyHRzcavIrhii4
+@revoked git.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEu0fxht8jPkiwnSQe5N77ghrdDDWsgxFGn+FSLGgT3V compromised 2026-04-11
