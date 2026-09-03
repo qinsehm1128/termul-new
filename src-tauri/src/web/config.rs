@@ -36,23 +36,127 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
     #[cfg(unix)]
     {
         if let Some(base) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
-            return Some(base.join("termul").join("sessions"));
+            return Some(state_root_under(&base).join("sessions"));
         }
-        std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-            home.join(".local")
-                .join("state")
-                .join("termul")
-                .join("sessions")
-        })
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| state_root_under(&home.join(".local").join("state")).join("sessions"))
     }
     #[cfg(windows)]
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .map(|base| base.join("Termul").join("sessions"))
+            .map(|base| state_root_under(&base).join("sessions"))
     }
     #[cfg(not(any(unix, windows)))]
     None
+}
+
+/// The state-root directory name on this platform: the one written today, and
+/// the one a pre-rename install left behind.
+///
+/// Windows capitalises the component (`%LOCALAPPDATA%\Termul`) while the unix
+/// roots do not, so the pair is chosen per platform rather than lower-cased at
+/// the call site.
+fn state_dir_names() -> (&'static str, &'static str) {
+    #[cfg(windows)]
+    {
+        (
+            crate::brand::canonical().state_dir_windows,
+            crate::brand::LEGACY.state_dir_windows,
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        (
+            crate::brand::canonical().state_dir,
+            crate::brand::LEGACY.state_dir,
+        )
+    }
+}
+
+/// Resolve `<parent>/<state dir>`, carrying forward whatever a pre-rename
+/// install left in `<parent>/<legacy state dir>`.
+///
+/// This is the fourth state surface: `sessions/`, `store.json`,
+/// `workspace-manifests/` and `acp-catalog/` all hang off the returned root.
+/// The name is a plain literal in the standalone binary's own path chain — it
+/// is not derived from the bundle identifier, so the desktop merge never
+/// reaches it and it needs its own carry-forward.
+///
+/// Resolution order is "new name, with the old name's contents adopted into
+/// it": a single root is returned so everything written after the rename lands
+/// under the current name, and nothing keeps reading a second live tree
+/// (FORBID-04 — the legacy root is read once, never written).
+///
+/// The brand seam is read here, on the caller's thread. Both public resolvers
+/// are ordinary synchronous calls made from startup code; neither is handed to
+/// `spawn_blocking` (FORBID-07).
+fn state_root_under(parent: &Path) -> PathBuf {
+    let (canonical, legacy) = state_dir_names();
+    let root = parent.join(canonical);
+    if canonical != legacy {
+        carry_forward_legacy_state(&parent.join(legacy), &root);
+    }
+    root
+}
+
+/// Copy every entry the pre-rename state root holds that the current one does
+/// not already have.
+///
+/// Copy-only by construction (FORBID-05): it creates directories and copies
+/// files, and there is no `remove`, `rename` or truncating write anywhere on
+/// the `legacy` side. A path already present under `canonical` wins and is left
+/// alone, which is also what makes the second call a no-op — the merge entry
+/// point can be clicked twice.
+///
+/// Best-effort and never fatal: a state root that cannot be read is not a
+/// reason to refuse to start, and the pre-rename tree is still sitting there
+/// intact for a later attempt. Every failure is logged with its path rather
+/// than swallowed, because the visible symptom — "my sessions are gone" — is
+/// otherwise unexplainable.
+fn carry_forward_legacy_state(legacy: &Path, canonical: &Path) {
+    if !legacy.is_dir() {
+        return;
+    }
+    let entries = match std::fs::read_dir(legacy) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                legacy = %legacy.display(),
+                "cannot read the pre-rename state root; leaving it in place"
+            );
+            return;
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(canonical) {
+        tracing::warn!(
+            error = %error,
+            root = %canonical.display(),
+            "cannot create the state root; the pre-rename tree stays where it is"
+        );
+        return;
+    }
+    for entry in entries.flatten() {
+        let source = entry.path();
+        let target = canonical.join(entry.file_name());
+        if source.is_dir() {
+            carry_forward_legacy_state(&source, &target);
+            continue;
+        }
+        if target.exists() {
+            continue;
+        }
+        if let Err(error) = std::fs::copy(&source, &target) {
+            tracing::warn!(
+                error = %error,
+                from = %source.display(),
+                to = %target.display(),
+                "failed to carry a file forward from the pre-rename state root"
+            );
+        }
+    }
 }
 
 pub fn default_project_root() -> Option<PathBuf> {
@@ -293,13 +397,13 @@ impl ServerConfig {
                 .map(PathBuf::from)
                 .filter(|p| !p.as_os_str().is_empty())
             {
-                return base.join("termul");
+                return state_root_under(&base);
             }
             if let Some(home) = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .filter(|p| !p.as_os_str().is_empty())
             {
-                return home.join(".local").join("state").join("termul");
+                return state_root_under(&home.join(".local").join("state"));
             }
         }
         #[cfg(windows)]
@@ -308,10 +412,10 @@ impl ServerConfig {
                 .map(PathBuf::from)
                 .filter(|p| !p.as_os_str().is_empty())
             {
-                return base.join("Termul");
+                return state_root_under(&base);
             }
         }
-        std::env::temp_dir().join("termul")
+        state_root_under(&std::env::temp_dir())
     }
 
     /// Parse `--host` / `--port` CLI args (defaults: `127.0.0.1:8080`).
@@ -1220,6 +1324,64 @@ mod tests {
             resolved.is_absolute(),
             "service_account_state_dir must resolve to an absolute path, got: {}",
             resolved.display()
+        );
+    }
+
+    /// M-07 — the carry-forward is copy-only and repeatable.
+    ///
+    /// Driven through `state_root_under` with an explicit parent rather than
+    /// through the two public resolvers, so it says nothing about the
+    /// environment: the four candidate parents are covered by
+    /// `tests/legacy_brand_state_roots.rs`, which owns a process-wide env lock.
+    /// The brand seam is injected here so the two names differ; with the
+    /// shipped values they are the same word and there would be nothing to
+    /// carry.
+    #[test]
+    fn state_root_carries_the_pre_rename_tree_forward_without_touching_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let parent = temp.path();
+
+        let _guard = crate::brand::override_canonical(crate::brand::BrandCanonical {
+            state_dir: "se-manager",
+            state_dir_windows: "Se",
+            ..crate::brand::DEFAULT_CANONICAL
+        });
+        let (canonical_name, legacy_name) = state_dir_names();
+        assert_ne!(
+            canonical_name, legacy_name,
+            "the injection did not take, so this proves nothing"
+        );
+
+        let legacy = parent.join(legacy_name);
+        std::fs::create_dir_all(legacy.join("sessions")).expect("seed the pre-rename root");
+        std::fs::write(legacy.join("store.json"), b"{\"seeded\":true}").expect("seed store.json");
+        std::fs::write(legacy.join("sessions").join("a.json"), b"session-a")
+            .expect("seed a session");
+
+        let root = state_root_under(parent);
+        assert_eq!(root, parent.join(canonical_name));
+        assert_eq!(
+            std::fs::read(root.join("store.json")).expect("store.json carried forward"),
+            b"{\"seeded\":true}"
+        );
+        assert_eq!(
+            std::fs::read(root.join("sessions").join("a.json")).expect("session carried forward"),
+            b"session-a"
+        );
+
+        // Copy-only: the pre-rename tree is still whole (FORBID-05).
+        assert!(legacy.join("store.json").is_file());
+        assert!(legacy.join("sessions").join("a.json").is_file());
+
+        // Repeatable: a second resolve must not overwrite what the app has
+        // written since, and must not fail.
+        std::fs::write(root.join("store.json"), b"{\"seeded\":false}").expect("post-merge write");
+        let again = state_root_under(parent);
+        assert_eq!(again, root);
+        assert_eq!(
+            std::fs::read(root.join("store.json")).expect("store.json still readable"),
+            b"{\"seeded\":false}",
+            "a second resolve must not re-copy over a file the app has since written"
         );
     }
 }

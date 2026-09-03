@@ -42,19 +42,23 @@
 //! is gated (`Cargo.toml:28`). This file therefore compiles and runs both with
 //! and without `--features standalone-server`; both were verified.
 //!
-//! # Seams Wave 4 must add
+//! # Seam status
 //!
-//! 1. `web::config::default_sessions_dir` and
-//!    `ServerConfig::service_account_state_dir` must build their path component
-//!    from `crate::brand::canonical().state_dir` /
-//!    `.state_dir_windows`, and must fall back to the
-//!    `crate::brand::LEGACY.state_dir` tree when it is the one holding data.
-//! 2. The desktop `~/Documents/<name>` root (`src/lib.rs:1533`, `:1538`) must
-//!    read `crate::brand::canonical().display_name`. That expression lives
-//!    inline inside the Tauri `setup` closure in `run()` and is not callable
-//!    from an integration test, so it is asserted as a scoped source-text
-//!    parity check below and flagged as a gap: Wave 4 should extract it into a
-//!    named `pub fn` so it can be driven directly.
+//! 1. **Landed (T-M07).** `web::config::default_sessions_dir` and
+//!    `ServerConfig::service_account_state_dir` both resolve through
+//!    `web::config::state_root_under`, which names the root from
+//!    `crate::brand::canonical().state_dir` / `.state_dir_windows` and carries
+//!    the `crate::brand::LEGACY` tree forward into it (copy-only, repeatable).
+//!    The two ledger entries below are struck; the four candidate parents each
+//!    get their own resolution test.
+//! 2. **Open (T-M06).** The desktop `~/Documents/<name>` root
+//!    (`src/lib.rs:1533`, `:1538`) must read
+//!    `crate::brand::canonical().display_name`. That expression lives inline
+//!    inside the Tauri `setup` closure in `run()` and is not callable from an
+//!    integration test, so it is asserted as a scoped source-text parity check
+//!    below: Wave 4's T-M06 should extract it into a named `pub fn` so it can
+//!    be driven directly. The standalone twin at `src/web/config.rs:668` is the
+//!    same `display_name` identity and belongs to the same task.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -127,6 +131,19 @@ fn post_rename() -> BrandCanonical {
 
 fn manifest_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// The state-root component on *this* platform. Windows capitalises it; the
+/// unix roots do not.
+fn platform_state_dir(values: BrandCanonical) -> &'static str {
+    #[cfg(windows)]
+    {
+        values.state_dir_windows
+    }
+    #[cfg(not(windows))]
+    {
+        values.state_dir
+    }
 }
 
 fn fixture(relative: &str) -> PathBuf {
@@ -221,7 +238,6 @@ fn plant_standalone_state(canonical_state_dir: &str) -> (tempfile::TempDir, Path
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "default_sessions_dir must resolve under crate::brand::canonical().state_dir")]
 fn standalone_sessions_dir_resolves_under_the_canonical_state_dir_and_still_sees_legacy_sessions() {
     let _lock = env_lock();
     let (_temp, state_home) = plant_standalone_state(post_rename().state_dir);
@@ -263,9 +279,6 @@ fn standalone_sessions_dir_resolves_under_the_canonical_state_dir_and_still_sees
 }
 
 #[test]
-#[should_panic(
-    expected = "service_account_state_dir must resolve under crate::brand::canonical().state_dir"
-)]
 fn standalone_service_account_state_dir_resolves_under_the_canonical_state_dir_and_still_sees_legacy_state(
 ) {
     let _lock = env_lock();
@@ -305,6 +318,168 @@ fn standalone_service_account_state_dir_resolves_under_the_canonical_state_dir_a
             resolved.display(),
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The four candidate parents, one resolution test each.
+//
+// Both resolvers pick a *parent* from the environment and then name the root
+// inside it. The two tests above pin the naming and the carry-forward through
+// one parent; these pin which parent each candidate branch chooses, so a branch
+// that silently stopped being reachable (or started resolving relative to the
+// CWD) is visible on its own rather than only through whichever candidate the
+// developer's machine happens to hit.
+//
+// The legacy tree is planted in every one of them: a candidate that resolves to
+// the right *name* but skips the carry-forward would still orphan the sessions.
+// ---------------------------------------------------------------------------
+
+/// Candidate 1 — `$XDG_STATE_HOME/<state_dir>`.
+#[cfg(unix)]
+#[test]
+fn candidate_xdg_state_home_resolves_and_carries_the_legacy_root_forward() {
+    let _lock = env_lock();
+    let (_temp, state_home) = plant_standalone_state(post_rename().state_dir);
+    let _env = EnvScope::new()
+        .set("XDG_STATE_HOME", &state_home)
+        // A `HOME` that would resolve somewhere else, so a pass cannot come
+        // from the next candidate down.
+        .set("HOME", state_home.join("not-this-one"))
+        .unset("TERMUL_SESSIONS_DIR");
+    let _brand = brand::override_canonical(post_rename());
+
+    let resolved = default_sessions_dir().expect("XDG_STATE_HOME is a resolvable candidate");
+    assert_eq!(
+        resolved,
+        state_home.join(brand::canonical().state_dir).join("sessions"),
+        "XDG_STATE_HOME must name the state root directly beneath itself"
+    );
+    assert!(
+        !relative_files(&resolved).is_empty(),
+        "the legacy sessions must have been carried into {}",
+        resolved.display()
+    );
+}
+
+/// Candidate 2 — `$HOME/.local/state/<state_dir>`, used when `XDG_STATE_HOME`
+/// is unset.
+#[cfg(unix)]
+#[test]
+fn candidate_home_local_state_resolves_and_carries_the_legacy_root_forward() {
+    let _lock = env_lock();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let state_home = home.join(".local").join("state");
+    copy_tree(
+        &fixture("standalone-state"),
+        &state_home.join(brand::LEGACY.state_dir),
+    );
+
+    let _env = EnvScope::new()
+        .unset("XDG_STATE_HOME")
+        .set("HOME", &home)
+        .unset("TERMUL_SESSIONS_DIR");
+    let _brand = brand::override_canonical(post_rename());
+
+    let resolved = default_sessions_dir().expect("HOME is a resolvable candidate");
+    assert_eq!(
+        resolved,
+        state_home.join(brand::canonical().state_dir).join("sessions"),
+        "with XDG_STATE_HOME unset the root must sit under ~/.local/state"
+    );
+    assert!(
+        !relative_files(&resolved).is_empty(),
+        "the legacy sessions must have been carried into {}",
+        resolved.display()
+    );
+}
+
+/// Candidate 3 — `%LOCALAPPDATA%\<state_dir_windows>`.
+///
+/// A separate identity from the unix one: Windows capitalises the component, so
+/// resolving it through `state_dir` rather than `state_dir_windows` would be
+/// invisible on a case-insensitive filesystem right up until somebody mounts a
+/// case-sensitive volume.
+#[cfg(windows)]
+#[test]
+fn candidate_localappdata_resolves_and_carries_the_legacy_root_forward() {
+    let _lock = env_lock();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let local_appdata = temp.path().join("LocalAppData");
+    copy_tree(
+        &fixture("standalone-state"),
+        &local_appdata.join(brand::LEGACY.state_dir_windows),
+    );
+
+    let _env = EnvScope::new()
+        .set("LOCALAPPDATA", &local_appdata)
+        .unset("TERMUL_SESSIONS_DIR");
+    let _brand = brand::override_canonical(post_rename());
+
+    let resolved = default_sessions_dir().expect("LOCALAPPDATA is a resolvable candidate");
+    assert_eq!(
+        resolved,
+        local_appdata
+            .join(brand::canonical().state_dir_windows)
+            .join("sessions"),
+        "the Windows root is named by state_dir_windows, not state_dir"
+    );
+    assert!(
+        !relative_files(&resolved).is_empty(),
+        "the legacy sessions must have been carried into {}",
+        resolved.display()
+    );
+}
+
+/// Candidate 4 — the OS temp dir, reached only by `service_account_state_dir`
+/// and only when no platform state dir is discoverable at all.
+///
+/// `default_sessions_dir` deliberately returns `None` here instead: a durable
+/// session store that lands in a directory the OS reclaims on reboot is worse
+/// than a loud startup failure, and that asymmetry between the two resolvers is
+/// part of the contract.
+#[test]
+fn candidate_temp_dir_is_the_last_resort_and_still_carries_the_legacy_root_forward() {
+    let _lock = env_lock();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let tmp_root = temp.path().join("tmp");
+    fs::create_dir_all(&tmp_root).expect("create the probe temp dir");
+    copy_tree(
+        &fixture("standalone-state"),
+        &tmp_root.join(platform_state_dir(brand::LEGACY)),
+    );
+
+    let mut env = EnvScope::new()
+        .unset("XDG_STATE_HOME")
+        .unset("HOME")
+        .unset("LOCALAPPDATA")
+        .unset("TERMUL_SESSIONS_DIR");
+    // `std::env::temp_dir()` reads TMPDIR on unix and TEMP/TMP on Windows.
+    env = env
+        .set("TMPDIR", &tmp_root)
+        .set("TEMP", &tmp_root)
+        .set("TMP", &tmp_root);
+    let _env = env;
+    let _brand = brand::override_canonical(post_rename());
+
+    assert!(
+        default_sessions_dir().is_none(),
+        "with no platform state dir, the durable session store must refuse to \
+         resolve rather than land in the OS temp dir"
+    );
+
+    let config = probe_config(tmp_root.clone());
+    let resolved = config.service_account_state_dir();
+    assert_eq!(
+        resolved,
+        tmp_root.join(platform_state_dir(brand::canonical())),
+        "the temp-dir fallback must still be named from the brand seam"
+    );
+    assert!(
+        !relative_files(&resolved).is_empty(),
+        "the legacy state must have been carried into {}",
+        resolved.display()
+    );
 }
 
 // ---------------------------------------------------------------------------
