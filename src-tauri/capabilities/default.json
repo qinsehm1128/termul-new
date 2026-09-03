@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for Termul Manager Tauri POC - Fase 3 Persistence & UI",
+  "description": "Default capabilities for Se Manager Tauri POC - Fase 3 Persistence & UI",
   "windows": ["main"],
   "permissions": [
     "core:default",

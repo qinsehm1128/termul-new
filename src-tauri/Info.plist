@@ -5,7 +5,7 @@
 
   Why the list is broad rather than minimal:
 
-  Termul runs arbitrary user commands. A subprocess that touches a TCC-protected
+  Se runs arbitrary user commands. A subprocess that touches a TCC-protected
   resource is attributed to its responsible process — this app — and when the
   matching usage-description key is absent, macOS terminates that process
   instead of prompting. For an ordinary app a minimal list is right; for a
@@ -22,60 +22,60 @@
        covers commands run inside a terminal reaching 192.168.x.x, *.local and
        similar. See Apple TN3179. -->
   <key>NSLocalNetworkUsageDescription</key>
-  <string>Termul needs local network access so commands you run in a terminal can reach devices and services on your network, such as development servers on other machines.</string>
+  <string>Se needs local network access so commands you run in a terminal can reach devices and services on your network, such as development servers on other machines.</string>
 
   <!-- Protected user folders. The file tree browses whatever project path you
        point it at, and shell commands do the same. -->
   <key>NSDesktopFolderUsageDescription</key>
-  <string>Termul needs access to your Desktop folder to browse project files and run commands there.</string>
+  <string>Se needs access to your Desktop folder to browse project files and run commands there.</string>
   <key>NSDocumentsFolderUsageDescription</key>
-  <string>Termul needs access to your Documents folder to browse project files and run commands there.</string>
+  <string>Se needs access to your Documents folder to browse project files and run commands there.</string>
   <key>NSDownloadsFolderUsageDescription</key>
-  <string>Termul needs access to your Downloads folder to browse project files and run commands there.</string>
+  <string>Se needs access to your Downloads folder to browse project files and run commands there.</string>
   <key>NSRemovableVolumesUsageDescription</key>
-  <string>Termul needs access to removable volumes so projects stored on external drives can be opened.</string>
+  <string>Se needs access to removable volumes so projects stored on external drives can be opened.</string>
   <key>NSNetworkVolumesUsageDescription</key>
-  <string>Termul needs access to network volumes so projects stored on network shares can be opened.</string>
+  <string>Se needs access to network volumes so projects stored on network shares can be opened.</string>
   <key>NSFileProviderDomainUsageDescription</key>
-  <string>Termul needs access to cloud-synced folders so projects stored there can be opened.</string>
+  <string>Se needs access to cloud-synced folders so projects stored there can be opened.</string>
 
   <!-- Scripting and automation. A command or script run in a terminal can drive
        other apps through AppleScript or osascript. -->
   <key>NSAppleEventsUsageDescription</key>
-  <string>Termul needs permission to control other apps so scripts and commands you run can automate them.</string>
+  <string>Se needs permission to control other apps so scripts and commands you run can automate them.</string>
   <key>NSSystemAdministrationUsageDescription</key>
-  <string>Termul needs administration access so commands you run can perform privileged system tasks.</string>
+  <string>Se needs administration access so commands you run can perform privileged system tasks.</string>
 
   <!-- Capture. A user command can invoke screencapture or a recording tool. -->
   <key>NSScreenCaptureUsageDescription</key>
-  <string>Termul needs screen recording permission so commands you run can capture the screen.</string>
+  <string>Se needs screen recording permission so commands you run can capture the screen.</string>
 
   <!-- Media. Declared because a subprocess invoking these without the key is
-       killed outright; Termul itself never opens a camera or microphone. -->
+       killed outright; Se itself never opens a camera or microphone. -->
   <key>NSCameraUsageDescription</key>
-  <string>Termul needs camera access only when a command you run requests it. Termul itself does not use the camera.</string>
+  <string>Se needs camera access only when a command you run requests it. Se itself does not use the camera.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Termul needs microphone access only when a command you run requests it. Termul itself does not record audio.</string>
+  <string>Se needs microphone access only when a command you run requests it. Se itself does not record audio.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Termul needs speech recognition only when a command you run requests it.</string>
+  <string>Se needs speech recognition only when a command you run requests it.</string>
 
   <!-- Personal data stores, same reasoning as above: present so a user command
        is prompted rather than killed. -->
   <key>NSCalendarsUsageDescription</key>
-  <string>Termul needs calendar access only when a command you run requests it.</string>
+  <string>Se needs calendar access only when a command you run requests it.</string>
   <key>NSRemindersUsageDescription</key>
-  <string>Termul needs reminders access only when a command you run requests it.</string>
+  <string>Se needs reminders access only when a command you run requests it.</string>
   <key>NSContactsUsageDescription</key>
-  <string>Termul needs contacts access only when a command you run requests it.</string>
+  <string>Se needs contacts access only when a command you run requests it.</string>
   <key>NSPhotoLibraryUsageDescription</key>
-  <string>Termul needs photo library access only when a command you run requests it.</string>
+  <string>Se needs photo library access only when a command you run requests it.</string>
 
   <!-- Hardware and sensors. -->
   <key>NSBluetoothAlwaysUsageDescription</key>
-  <string>Termul needs Bluetooth access only when a command you run requests it.</string>
+  <string>Se needs Bluetooth access only when a command you run requests it.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Termul needs location access only when a command you run requests it.</string>
+  <string>Se needs location access only when a command you run requests it.</string>
   <key>NSMotionUsageDescription</key>
-  <string>Termul needs motion data only when a command you run requests it.</string>
+  <string>Se needs motion data only when a command you run requests it.</string>
 </dict>
 </plist>
