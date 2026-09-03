@@ -92,11 +92,27 @@ fn store_parent(store: &TunnelConfigStore) -> std::path::PathBuf {
     store.parent_dir()
 }
 
+/// M-14 — the `[[proxies]]` registration name is renamed but **not** migrated,
+/// and it cannot be: the registration lives on the user's own `frps`, which
+/// this app neither owns nor can reach to rename an entry on.
+///
+/// Consequence for the user: after the rename their `frps` keeps the old
+/// registration around until they remove it themselves. Surfaced verbatim in
+/// the merge receipt rather than left to be discovered as a stale proxy.
+pub const FRP_PROXY_RENAME_NOTICE: &str = "frp tunnel: the proxy registration \
+     name changes with the rename. The old registration on your own frps \
+     server is not touched and will not be removed automatically — delete it \
+     there if you no longer want it.";
+
 pub fn render_frpc_toml(
     local_port: u16,
     config: &TunnelConfig,
     token: &str,
 ) -> Result<String, String> {
+    // Resolved here, on the caller's thread. `start_frp_tunnel` awaits this
+    // call directly rather than handing it to `spawn_blocking`, so the brand
+    // seam is read where an injected override is visible (FORBID-07).
+    let proxy_name = crate::brand::canonical().frp_proxy_name;
     let server_addr = config
         .frp_server_addr
         .as_deref()
@@ -106,8 +122,9 @@ pub fn render_frpc_toml(
     let server_port = config.frp_server_port.unwrap_or(7000);
     let escaped_token = escape_toml_string(token);
     let mut out = format!(
-        "serverAddr = \"{}\"\nserverPort = {server_port}\n\n[auth]\nmethod = \"token\"\ntoken = \"{escaped_token}\"\n\n[[proxies]]\nname = \"termul\"\nlocalIP = \"127.0.0.1\"\nlocalPort = {local_port}\n",
-        escape_toml_string(server_addr)
+        "serverAddr = \"{}\"\nserverPort = {server_port}\n\n[auth]\nmethod = \"token\"\ntoken = \"{escaped_token}\"\n\n[[proxies]]\nname = \"{}\"\nlocalIP = \"127.0.0.1\"\nlocalPort = {local_port}\n",
+        escape_toml_string(server_addr),
+        escape_toml_string(proxy_name)
     );
     if let Some(domain) = config
         .frp_custom_domain
@@ -213,10 +230,12 @@ mod tests {
 ///
 /// A separate module from `tests` above so the existing coverage is untouched.
 ///
-/// # Seam Wave 4 must add
+/// # Seam status
 ///
-/// `render_frpc_toml` must interpolate `crate::brand::canonical().frp_proxy_name`
-/// rather than the hardcoded `name = "termul"` at `frp.rs:109`.
+/// Landed by T-M14: `render_frpc_toml` interpolates
+/// `crate::brand::canonical().frp_proxy_name`, resolved on the caller's thread.
+/// The ledger entry that used to sit on
+/// `frpc_proxy_name_comes_from_the_brand_seam` is therefore struck.
 #[cfg(test)]
 mod brand_parity_tests {
     use super::*;
@@ -316,7 +335,6 @@ mod brand_parity_tests {
     }
 
     #[test]
-    #[should_panic(expected = "must be crate::brand::canonical().frp_proxy_name")]
     fn frpc_proxy_name_comes_from_the_brand_seam() {
         let _guard = brand::override_canonical(post_rename());
         assert_ne!(
