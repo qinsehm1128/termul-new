@@ -11,7 +11,13 @@ private struct SavedLinkRecord: Codable {
 @MainActor
 @Observable
 final class ConnectionStore {
-    private static let storageKey = "termul.remote.savedLinks"
+    private static let storageKey = "se.remote.savedLinks"
+
+    /// Pre-rename key. Read-only: this list is hand-curated by the user, so a
+    /// silent loss on the first launch after the rename is the worst outcome
+    /// this migration can produce. `load()` copies it forward; nothing ever
+    /// writes or removes it.
+    private static let legacyStorageKey = "termul.remote.savedLinks"
 
     var savedLinks: [RemoteLink] = []
     var activeLink: RemoteLink?
@@ -118,8 +124,13 @@ final class ConnectionStore {
     }
 
     private static func load() -> [RemoteLink] {
-        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return [] }
+        let current = UserDefaults.standard.data(forKey: storageKey)
+        guard let data = current ?? UserDefaults.standard.data(forKey: legacyStorageKey) else { return [] }
         if let records = try? JSONDecoder().decode([SavedLinkRecord].self, from: data) {
+            if current == nil {
+                // Byte-for-byte copy forward. The pre-rename key keeps its copy.
+                UserDefaults.standard.set(data, forKey: storageKey)
+            }
             return records.compactMap { record in
                 guard let origin = URL(string: record.origin) else { return nil }
                 guard let bearer = KeychainStore.loadBearer(account: record.id.uuidString), !bearer.isEmpty else {

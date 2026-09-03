@@ -3,11 +3,17 @@ import Foundation
 enum TerminalTextScale {
     static let presets: [CGFloat] = [0.5, 0.75, 1, 1.25, 1.5, 2]
     static let defaultValue: CGFloat = 1.25
-    private static let storageKey = "termul.companion.terminalTextScale"
+    private static let storageKey = "se.companion.terminalTextScale"
+
+    /// Pre-rename key. Read-only fallback for the first launch after the rename;
+    /// the next `set` writes `storageKey` and this one is left where it is.
+    private static let legacyStorageKey = "termul.companion.terminalTextScale"
 
     static var current: CGFloat {
         get {
-            if let stored = UserDefaults.standard.object(forKey: storageKey) as? Double {
+            let stored = UserDefaults.standard.object(forKey: storageKey)
+                ?? UserDefaults.standard.object(forKey: legacyStorageKey)
+            if let stored = stored as? Double {
                 return snap(CGFloat(stored))
             }
             return defaultValue

@@ -85,12 +85,23 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         try container.encode(createdAt, forKey: .createdAt)
     }
 
+    /// Deep-link scheme this build owns.
+    ///
+    /// `Info.plist` still registers only the pre-rename scheme, so the system
+    /// does not hand this app a `se://` URL yet — registering it is T-A14's.
+    /// Accepting it here already means a link pasted or scanned by hand parses.
+    private static let deepLinkScheme = "se"
+
+    /// Pre-rename scheme. Read-only compatibility: links a user bookmarked or
+    /// shared before the rename keep opening.
+    private static let legacyDeepLinkScheme = "termul"
+
     static func parse(_ raw: String) throws -> RemoteLink {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
             throw RemoteLinkError.invalidURL
         }
-        if scheme == "termul" {
+        if scheme == deepLinkScheme || scheme == legacyDeepLinkScheme {
             return try parseDeepLink(url)
         }
         return try parseAccessURL(url)

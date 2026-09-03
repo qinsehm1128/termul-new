@@ -202,13 +202,17 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
     )
   })
 
-  // LEDGER (Wave 5) — expected failure. Every site must carry the post-rename
-  // value *and* keep the legacy one as a compatibility read. Both halves in one
-  // entry on purpose: flipping without the fallback loses the user's saved
-  // desks, their pairing secrets and their cached transcripts, and keeping the
-  // fallback without flipping is not a rename. Delete this test, `.fails` and
-  // all, once T-M11 / T-A13 / T-A14 / T-B08 have landed.
-  test.fails('carries the post-rename value alongside a legacy read at every site', () => {
+  // Landed by T-M11: every site carries the post-rename value *and* keeps the
+  // legacy one as a compatibility read. Both halves in one assertion on
+  // purpose: flipping without the fallback loses the user's saved desks, their
+  // pairing secrets and their cached transcripts, and keeping the fallback
+  // without flipping is not a rename.
+  //
+  // CONFLICTS WITH the URL-scheme ledger entry below, and deliberately so —
+  // this one requires `"se"` in `RemoteLink.swift`, that one requires its
+  // absence. Only the scheme site is affected; the other six are independent.
+  // T-A14 owns the reconciliation and must resolve both entries together.
+  it('carries the post-rename value alongside a legacy read at every site', () => {
     __setBrandCanonicalOverride(POST_RENAME)
     const missing = sites()
       .filter((site) => {

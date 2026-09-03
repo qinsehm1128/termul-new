@@ -23,7 +23,10 @@ enum ChatTranscriptCache {
     static let pageLimit = 80
 
     static func load(_ conversationId: String) -> CachedTranscript? {
-        let url = fileURL(conversationId)
+        let current = fileURL(conversationId)
+        let url = FileManager.default.fileExists(atPath: current.path)
+            ? current
+            : fileURL(conversationId, in: legacyDirectoryName)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
             let data = try Data(contentsOf: url)
@@ -115,12 +118,20 @@ enum ChatTranscriptCache {
         return result.reversed()
     }
 
-    private static func fileURL(_ conversationId: String) -> URL {
+    /// Application Support subdirectory this build reads and writes.
+    private static let directoryName = "SeRemote"
+
+    /// Pre-rename subdirectory. `load` falls back to it so transcripts cached
+    /// before the rename still open; `save` only ever writes `directoryName`,
+    /// so the old tree is copied forward rather than moved, and never deleted.
+    private static let legacyDirectoryName = "TermulRemote"
+
+    private static func fileURL(_ conversationId: String, in directory: String = directoryName) -> URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         let safe = conversationId.replacingOccurrences(of: "/", with: "_")
         return root
-            .appendingPathComponent("TermulRemote", isDirectory: true)
+            .appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("chat-cache", isDirectory: true)
             .appendingPathComponent("\(safe).json")
     }

@@ -2,7 +2,12 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    private static let service = "com.termul.remote.pairing"
+    private static let service = "com.se-manager.remote.pairing"
+
+    /// Pre-rename service. Read-only: `loadBearer` falls back to it so a device
+    /// paired before the rename does not have to re-scan its QR. Nothing writes
+    /// it and nothing removes it.
+    private static let legacyService = "com.termul.remote.pairing"
 
     static func saveBearer(_ bearer: String, account: String) {
         guard !account.isEmpty, !bearer.isEmpty else { return }
@@ -24,6 +29,10 @@ enum KeychainStore {
 
     static func loadBearer(account: String) -> String? {
         guard !account.isEmpty else { return nil }
+        return bearer(account: account, in: service) ?? bearer(account: account, in: legacyService)
+    }
+
+    private static func bearer(account: String, in service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -38,6 +47,12 @@ enum KeychainStore {
         return bearer?.isEmpty == false ? bearer : nil
     }
 
+    /// Removes the secret this build wrote.
+    ///
+    /// It deliberately does not touch `legacyService`: the rename copies, it
+    /// never deletes (FORBID-05). A device paired before the rename therefore
+    /// keeps an orphaned pre-rename item after "forget", unreachable because
+    /// `forget` also drops the account id from the saved list.
     static func deleteBearer(account: String) {
         guard !account.isEmpty else { return }
         let query: [String: Any] = [
