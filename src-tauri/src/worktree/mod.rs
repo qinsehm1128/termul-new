@@ -27,10 +27,64 @@ fn quiet_command(program: &str) -> Command {
     }
 }
 
+/// The per-repository workspace directory names, resolved by the caller.
+///
+/// `WorktreeManager` never reads the brand seam itself. Its work is handed to
+/// `tokio::task::spawn_blocking` by `web::worktree_api` (`:194` list, `:269`
+/// create) and the seam is thread-local by necessity, so a read in here would
+/// return the shipped default no matter what the request thread resolved — the
+/// code would compile, look right, and do nothing (FORBID-07). Resolve with
+/// [`WorkspaceDirs::resolve`] on the calling thread and pass the result in.
+///
+/// Carrying both names is M-08's whole shape: these directories live in every
+/// repository the user has ever opened, the app holds no inventory of them, and
+/// moving one would dirty a git working tree and invalidate the worktree paths
+/// already written into conversation history. So both are *read*, only
+/// [`Self::current`] is ever written, and nothing is relocated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceDirs {
+    /// The directory new work is written to.
+    pub current: &'static str,
+    /// The directory a pre-rename build wrote. Read-only (FORBID-04).
+    pub legacy: &'static str,
+}
+
+impl WorkspaceDirs {
+    /// Read the brand seam. **Call this on the thread that owns the request**,
+    /// never inside a blocking closure — see the type docs.
+    #[must_use]
+    pub fn resolve() -> Self {
+        Self {
+            current: crate::brand::canonical().workspace_dir,
+            legacy: crate::brand::LEGACY.workspace_dir,
+        }
+    }
+
+    /// Both names, current first. Collapsed to one entry while the rename has
+    /// not landed yet and the two are the same word, so nothing double-counts.
+    fn candidates(self) -> Vec<&'static str> {
+        if self.current == self.legacy {
+            vec![self.current]
+        } else {
+            vec![self.current, self.legacy]
+        }
+    }
+
+    /// Whether a single path component is one of this app's workspace
+    /// directories, under either name.
+    fn matches(self, component: &std::ffi::OsStr) -> bool {
+        component == self.current || component == self.legacy
+    }
+}
+
 /// Directories that should never be symlinked into worktrees.
+///
+/// Brand-neutral on purpose: this app's own workspace directory is not listed
+/// here because its name is not a constant. [`is_excluded_dir`] appends both of
+/// [`WorkspaceDirs`]' names, so a repository carrying the pre-rename directory
+/// keeps it excluded too.
 const SYMLINK_EXCLUSION_LIST: &[&str] = &[
     ".git",
-    ".termul",
     ".worktrees",
     ".claude",
     ".codex",
@@ -46,11 +100,16 @@ const SYMLINK_EXCLUSION_LIST: &[&str] = &[
     "_bmad-bkp",
 ];
 
-/// Check if a directory name is in the hardcoded exclusion list.
-fn is_excluded_dir(dir_name: &str) -> bool {
-    SYMLINK_EXCLUSION_LIST.iter().any(|excluded| {
-        dir_name == *excluded || dir_name.starts_with(&format!("{}{}", *excluded, "/"))
-    })
+/// Check if a directory name is excluded from symlinking: either in the
+/// hardcoded list or one of this app's own workspace directories.
+fn is_excluded_dir(dir_name: &str, dirs: WorkspaceDirs) -> bool {
+    SYMLINK_EXCLUSION_LIST
+        .iter()
+        .copied()
+        .chain(dirs.candidates())
+        .any(|excluded| {
+            dir_name == excluded || dir_name.starts_with(&format!("{}{}", excluded, "/"))
+        })
 }
 
 // ============================================================================
@@ -472,8 +531,8 @@ impl WorktreeManager {
     ///
     /// - If `is_new_branch` is true, uses `git worktree add -b <branch> <path> [start_ref]`
     /// - Otherwise uses `git worktree add <path> <branch>`
-    /// - `target_path` defaults to `<project_path>/.termul/worktrees/<name>/` when `None`
-    /// - Auto-adds `.termul/` to `.gitignore` if not already present
+    /// - `target_path` defaults to `<project_path>/<dirs.current>/worktrees/<name>/` when `None`
+    /// - Auto-adds `<dirs.current>/` to `.gitignore` if not already present
     pub fn create(
         project_path: &str,
         name: &str,
@@ -481,12 +540,14 @@ impl WorktreeManager {
         is_new_branch: bool,
         start_ref: Option<&str>,
         target_path: Option<&str>,
+        dirs: WorkspaceDirs,
     ) -> Result<GitWorktreeEntry, WorktreeError> {
         let target = match target_path {
             Some(p) => p.to_string(),
             None => format!(
-                "{}/.termul/worktrees/{}/",
+                "{}/{}/worktrees/{}/",
                 project_path.trim_end_matches('/'),
+                dirs.current,
                 name
             ),
         };
@@ -521,18 +582,27 @@ impl WorktreeManager {
 
         run_git(&args, Some(project_path))?;
 
-        // Auto-add .termul/ to .gitignore if not already present
+        // Auto-add `<dirs.current>/` to `.gitignore` if not already present.
+        //
+        // Only the current name is ever appended (FORBID-04: legacy values are
+        // read, never re-emitted), and an existing pre-rename line is left
+        // exactly where it is — the repository may still hold that directory,
+        // and un-ignoring it would dump a tree of worktrees into the user's
+        // `git status`. The presence check is per line, so a file that already
+        // ignores the old name still gains the new one, and a second create
+        // appends nothing.
+        let ignore_line = format!("{}/", dirs.current);
         let gitignore_path = Path::new(project_path).join(".gitignore");
         if gitignore_path.exists() {
             let content = std::fs::read_to_string(&gitignore_path)
                 .map_err(|e| WorktreeError::IoError(e.to_string()))?;
-            if !content.lines().any(|l| l.trim() == ".termul/") {
-                let updated = format!("{}\n.termul/\n", content.trim_end());
+            if !content.lines().any(|l| l.trim() == ignore_line) {
+                let updated = format!("{}\n{}\n", content.trim_end(), ignore_line);
                 std::fs::write(&gitignore_path, updated)
                     .map_err(|e| WorktreeError::IoError(e.to_string()))?;
             }
         } else {
-            std::fs::write(&gitignore_path, ".termul/\n")
+            std::fs::write(&gitignore_path, format!("{ignore_line}\n"))
                 .map_err(|e| WorktreeError::IoError(e.to_string()))?;
         }
 
@@ -701,6 +771,7 @@ impl WorktreeManager {
     pub fn remove_all_managed(
         project_path: &str,
         worktrees_json: &str,
+        dirs: WorkspaceDirs,
     ) -> Result<Vec<RemoveResult>, WorktreeError> {
         // Parse worktrees from JSON
         let worktrees: Vec<serde_json::Value> = serde_json::from_str(worktrees_json)
@@ -712,14 +783,21 @@ impl WorktreeManager {
             let path = wt["path"].as_str().unwrap_or("").to_string();
             let _name = wt["name"].as_str().unwrap_or("unknown").to_string();
 
-            // Only remove Se-managed worktrees
-            // Use Path components for cross-platform detection (Windows uses backslashes)
+            // Only remove Se-managed worktrees.
+            // Use Path components for cross-platform detection (Windows uses backslashes).
+            //
+            // Both workspace directory names count as managed. This is a
+            // user-initiated project cascade delete, not a migration step: a
+            // worktree this app created under the pre-rename name is still its
+            // own, and refusing to recognise it would leave orphaned checkouts
+            // behind with a "not a Se-managed worktree" note the user cannot
+            // act on.
             let wt_path_obj = std::path::Path::new(&path);
             let is_managed = wt_path_obj
                 .components()
                 .collect::<Vec<_>>()
                 .windows(2)
-                .any(|w| w[0].as_os_str() == ".termul" && w[1].as_os_str() == "worktrees");
+                .any(|w| dirs.matches(w[0].as_os_str()) && w[1].as_os_str() == "worktrees");
             if !is_managed {
                 results.push(RemoveResult {
                     worktree_path: path.clone(),
@@ -756,7 +834,10 @@ impl WorktreeManager {
     /// Parse `.gitignore` and return directory entries that could be symlinked.
     /// Only returns simple directory patterns (no globs, no negations).
     /// Each entry includes whether it exists as a directory in the project root.
-    pub fn parse_gitignore_dirs(project_path: &str) -> Result<Vec<GitignoreDir>, WorktreeError> {
+    pub fn parse_gitignore_dirs(
+        project_path: &str,
+        workspace_dirs: WorkspaceDirs,
+    ) -> Result<Vec<GitignoreDir>, WorktreeError> {
         let gitignore_path = Path::new(project_path).join(".gitignore");
         if !gitignore_path.exists() {
             return Ok(Vec::new());
@@ -801,7 +882,7 @@ impl WorktreeManager {
             }
 
             // Skip if in exclusion list
-            if is_excluded_dir(dir_name) {
+            if is_excluded_dir(dir_name, workspace_dirs) {
                 continue;
             }
 
@@ -922,9 +1003,18 @@ impl WorktreeManager {
         Self::create_symlinks(project_path, worktree_path, symlink_dirs)
     }
 
-    /// Archive a worktree by moving it to `.termul/archives/<name>-<timestamp>/`.
+    /// Archive a worktree by moving it to
+    /// `<dirs.current>/archives/<name>-<timestamp>/`.
     /// Creates an archive manifest entry for later recovery.
-    pub fn archive(project_path: &str, worktree_path: &str) -> Result<(), WorktreeError> {
+    ///
+    /// New archives always land under the current workspace directory; a
+    /// pre-rename archive stays where it is and is found again by
+    /// [`Self::restore`].
+    pub fn archive(
+        project_path: &str,
+        worktree_path: &str,
+        dirs: WorkspaceDirs,
+    ) -> Result<(), WorktreeError> {
         let project_root = Path::new(project_path);
         let wt_path = Path::new(worktree_path);
 
@@ -945,7 +1035,7 @@ impl WorktreeManager {
             .ok_or(WorktreeError::ArchiveFailed)?;
 
         // Create archive directory
-        let archive_dir = project_root.join(".termul").join("archives");
+        let archive_dir = project_root.join(dirs.current).join("archives");
         let timestamp = chrono_timestamp();
         let archive_path = archive_dir.join(format!("{}-{}", wt_name, timestamp));
 
@@ -997,9 +1087,25 @@ impl WorktreeManager {
     }
 
     /// Restore an archived worktree back to its original location.
-    pub fn restore(project_path: &str, archive_path: &str) -> Result<(), WorktreeError> {
+    ///
+    /// The manifest is looked for under the current workspace directory first
+    /// and then under the pre-rename one, so a worktree archived by an earlier
+    /// build is still restorable. The pre-rename manifest is rewritten in place
+    /// when that is where the entry lives — this is not the legacy *brand*
+    /// contract being re-emitted, it is the archive's own bookkeeping, and the
+    /// alternative is an archive that can be listed but never restored.
+    pub fn restore(
+        project_path: &str,
+        archive_path: &str,
+        dirs: WorkspaceDirs,
+    ) -> Result<(), WorktreeError> {
         let project_root = Path::new(project_path);
-        let archive_dir = project_root.join(".termul").join("archives");
+        let archive_dir = dirs
+            .candidates()
+            .into_iter()
+            .map(|dir| project_root.join(dir).join("archives"))
+            .find(|dir| dir.join("archive-manifest.json").is_file())
+            .ok_or(WorktreeError::ArchiveNotFound)?;
         let manifest_path = archive_dir.join("archive-manifest.json");
 
         if !manifest_path.exists() {
@@ -1487,6 +1593,7 @@ impl WorktreeManager {
     pub fn copy_worktree_include_files(
         project_path: &str,
         worktree_path: &str,
+        dirs: WorkspaceDirs,
     ) -> Result<IncludeCopyResult, WorktreeError> {
         let include_path = Path::new(project_path).join(".worktree-include");
         if !include_path.exists() {
@@ -1555,8 +1662,14 @@ impl WorktreeManager {
         }
         let mut matched = vec![false; compiled.len()];
 
-        // Directories pruned at descent time (never recursed into).
-        const PRUNE_DIRS: &[&str] = &[".git", ".termul", "node_modules", "target", "dist"];
+        // Directories pruned at descent time (never recursed into). Both
+        // workspace directory names are pruned: a repository that still holds
+        // the pre-rename one would otherwise have its whole worktree tree
+        // walked on every carry-over.
+        let prune_dirs: Vec<&str> = [".git", "node_modules", "target", "dist"]
+            .into_iter()
+            .chain(dirs.candidates())
+            .collect();
 
         // Single recursive walk: each file is tested against every compiled
         // pattern (the first match copies it once; later matches only mark the
@@ -1610,7 +1723,7 @@ impl WorktreeManager {
                     // Skip the worktree itself (compare canonicalized paths so a
                     // differently-spelled entry to the same worktree still
                     // prunes), repo metadata, and build/dep trees.
-                    if name.is_some_and(|n| PRUNE_DIRS.contains(&n))
+                    if name.is_some_and(|n| prune_dirs.contains(&n))
                         || entry_path
                             .canonicalize()
                             .map(|p| p == worktree_real)
@@ -2024,14 +2137,17 @@ mod tests {
 
     #[test]
     fn test_list_multiple_entries() {
-        let output = "worktree /path/to/project\n\
-                      HEAD aaa111\n\
-                      branch refs/heads/main\n\
-                      \n\
-                      worktree /path/to/project/.termul/worktrees/feat-1\n\
-                      HEAD bbb222\n\
-                      branch refs/heads/feat-1\n\
-                      \n";
+        let output = format!(
+            "worktree /path/to/project\n\
+             HEAD aaa111\n\
+             branch refs/heads/main\n\
+             \n\
+             worktree /path/to/project/{}/worktrees/feat-1\n\
+             HEAD bbb222\n\
+             branch refs/heads/feat-1\n\
+             \n",
+            crate::brand::canonical().workspace_dir
+        );
 
         let mut entries = Vec::new();
         let mut current_path: Option<String> = None;
@@ -2304,6 +2420,7 @@ mod tests {
         let result = WorktreeManager::copy_worktree_include_files(
             project.path().to_str().unwrap(),
             worktree.path().to_str().unwrap(),
+            WorkspaceDirs::resolve(),
         )
         .expect("no-include path is a no-op, not an error");
         assert_eq!(result.ran, 0);
@@ -2321,6 +2438,7 @@ mod tests {
         let result = WorktreeManager::copy_worktree_include_files(
             project.path().to_str().unwrap(),
             worktree.path().to_str().unwrap(),
+            WorkspaceDirs::resolve(),
         )
         .expect("copy plain .env");
         assert_eq!(result.ran, 1);
@@ -2354,6 +2472,7 @@ mod tests {
         let result = WorktreeManager::copy_worktree_include_files(
             project.path().to_str().unwrap(),
             worktree.path().to_str().unwrap(),
+            WorkspaceDirs::resolve(),
         )
         .expect("symlink skip");
         assert_eq!(result.copied, 0);
@@ -2371,6 +2490,7 @@ mod tests {
         let result = WorktreeManager::copy_worktree_include_files(
             project.path().to_str().unwrap(),
             worktree.path().to_str().unwrap(),
+            WorkspaceDirs::resolve(),
         )
         .expect("already-present skip");
         assert_eq!(result.copied, 0);
@@ -2390,12 +2510,13 @@ mod tests {
         std::fs::write(project.path().join(".worktree-include"), "file.env\n").unwrap();
         let missing_worktree = project
             .path()
-            .join(".termul")
+            .join(crate::brand::canonical().workspace_dir)
             .join("worktrees")
             .join("missing");
         let result = WorktreeManager::copy_worktree_include_files(
             project.path().to_str().unwrap(),
             missing_worktree.to_str().unwrap(),
+            WorkspaceDirs::resolve(),
         );
         assert!(
             result.is_err(),

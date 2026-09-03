@@ -12,20 +12,51 @@ use crate::web::ws::AppState;
 pub(crate) const MAX_REGISTRY_BYTES: usize = 1024 * 1024;
 pub(crate) const FILE_NAME: &str = "mcp-servers.json";
 
-/// Resolve `{project_root}/.termul/mcp-servers.json`.
+/// Resolve `{project_root}/{workspace dir}/mcp-servers.json` — the path this
+/// app *writes*.
 ///
 /// Shared by the web `PUT /mcp-servers` handler and the desktop
 /// `remote_sync_mcp_registry` Tauri command so the desktop→project-file sync
 /// writes the exact file the web route reads (CAP-7 — registry sync gap).
+///
+/// The brand seam is read here, on the request thread. Both handlers below call
+/// this before any `spawn_blocking` and move the resolved path into the
+/// closure, never the seam (FORBID-07).
 pub(crate) fn registry_path(project_root: &Path) -> PathBuf {
-    project_root.join(".termul").join(FILE_NAME)
+    project_root
+        .join(crate::brand::canonical().workspace_dir)
+        .join(FILE_NAME)
+}
+
+/// Resolve the registry to *read*: the current workspace directory, falling
+/// back to the one a pre-rename build wrote.
+///
+/// M-08 is the root the app does not own — these directories are scattered
+/// through every repository the user has ever opened, the app holds no
+/// inventory of them, and moving one would dirty a git working tree and
+/// invalidate the worktree paths already recorded in conversation history. So
+/// the legacy file is read in place and never rewritten (FORBID-04): after the
+/// rename a registry edit lands in the new directory and the old file is left
+/// exactly as it was.
+fn registry_read_path(project_root: &Path) -> PathBuf {
+    let canonical = registry_path(project_root);
+    if canonical.exists() {
+        return canonical;
+    }
+    let legacy = project_root
+        .join(crate::brand::LEGACY.workspace_dir)
+        .join(FILE_NAME);
+    if legacy.exists() {
+        return legacy;
+    }
+    canonical
 }
 
 pub async fn get(State(state): State<AppState>) -> Json<IpcBody<Value>> {
     // CAP-1: lock-read the live project_root so the MCP registry file
-    // (.termul/mcp-servers.json) follows the active project on a switch.
+    // (<workspace dir>/mcp-servers.json) follows the active project on a switch.
     let project_root = state.project_root.read().clone();
-    let path = registry_path(&project_root);
+    let path = registry_read_path(&project_root);
     match fs::read(&path).await {
         Ok(bytes) if bytes.len() > MAX_REGISTRY_BYTES => Json(IpcBody::err(
             "MCP registry exceeds the 1 MiB limit",

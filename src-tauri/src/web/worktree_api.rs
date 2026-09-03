@@ -41,8 +41,8 @@ use crate::web::fs_api::{check_local_only, resolve_request_path, IpcBody};
 use crate::web::git_api::ensure_within_project_boundary;
 use crate::web::ws::AppState;
 use crate::worktree::{
-    BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult, WorktreeError,
-    WorktreeManager,
+    BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult, WorkspaceDirs,
+    WorktreeError, WorktreeManager,
 };
 
 /// `POST /worktree/list { projectPath }` body.
@@ -249,7 +249,7 @@ pub async fn create(
         Err(resp) => return resp,
     };
     // If a custom target_path was provided, boundary-check it too (the default
-    // is `<project>/.termul/worktrees/<name>/` which is inside the boundary).
+    // is `<project>/<workspace dir>/worktrees/<name>/`, inside the boundary).
     let target_path = match req.target_path.as_deref() {
         Some(tp) => {
             match resolve_project_path::<GitWorktreeEntry>(tp, &state, Some(provenance), true) {
@@ -266,6 +266,10 @@ pub async fn create(
     let branch = req.branch;
     let is_new_branch = req.is_new_branch;
     let start_ref = req.start_ref;
+    // FORBID-07: the brand seam is thread-local, so it is resolved here on the
+    // request thread and the resolved value is moved into the blocking closure.
+    // Reading it inside the closure would silently return the shipped default.
+    let workspace_dirs = WorkspaceDirs::resolve();
     let result = tokio::task::spawn_blocking(move || {
         WorktreeManager::create(
             &project_path,
@@ -274,6 +278,7 @@ pub async fn create(
             is_new_branch,
             start_ref.as_deref(),
             target_path.as_deref(),
+            workspace_dirs,
         )
     })
     .await
@@ -498,8 +503,10 @@ pub async fn copy_include_files(
         Ok(s) => s,
         Err(resp) => return resp,
     };
+    // FORBID-07: resolved on the request thread, moved into the closure.
+    let workspace_dirs = WorkspaceDirs::resolve();
     let result = tokio::task::spawn_blocking(move || {
-        WorktreeManager::copy_worktree_include_files(&project_path, &worktree_path)
+        WorktreeManager::copy_worktree_include_files(&project_path, &worktree_path, workspace_dirs)
     })
     .await
     .map_err(|e| format!("worktree copy-include-files task failed: {e}"));

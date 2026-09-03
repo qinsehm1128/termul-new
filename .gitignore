@@ -87,7 +87,13 @@ VERIFICATION_CHECKLIST.md
 
 # Personal notes & specs (local only)
 /ntfd/
+
+# This app's own per-repository workspace directory (worktrees, archives,
+# mcp-servers.json). Both names are listed: the pre-rename one still exists in
+# repositories a shipped build has touched, and un-ignoring it would dump a
+# tree of worktrees into `git status`.
 .termul/
+.se-manager/
 
 # Maestro knowledge corpus, run state and embeddings (~90 MB of local tooling
 # data: sessions, specs, knowhow, vector index). Machine-local, not project code.

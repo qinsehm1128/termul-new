@@ -34,8 +34,14 @@
 //! `worktree_api` hands `WorktreeManager` to `tokio::task::spawn_blocking`,
 //! and `override_canonical` is deliberately thread-local, so the injected value
 //! is **not** visible inside that closure. `mcp_servers_api` resolves its path
-//! on the request thread and therefore does see it. Both facts are load-bearing
-//! for how the reds below liquidate — see each test.
+//! on the request thread and therefore does see it. Both facts were load-bearing
+//! for how the reds below liquidated.
+//!
+//! T-M08 resolved that asymmetry rather than working around it:
+//! `worktree_api::create` now calls `WorkspaceDirs::resolve()` on the request
+//! thread and moves the resolved value into the blocking closure, and
+//! `WorktreeManager` never reads the seam itself. `tests/brand_seam_thread_affinity.rs`
+//! is the standing gate on that (FORBID-07).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -237,7 +243,6 @@ async fn harness_reaches_the_real_routes_over_the_frozen_legacy_repo() {
 /// `.termul` (`src/web/mcp_servers_api.rs:21`). Today the write goes to
 /// `.termul/` regardless of the seam, which is what this catches.
 #[tokio::test]
-#[should_panic(expected = "MCP registry write ignored the brand seam")]
 async fn mcp_registry_write_lands_under_the_canonical_workspace_dir() {
     let temp = TempDir::new().unwrap();
     let repo = materialise_legacy_repo(&temp);
@@ -274,7 +279,6 @@ async fn mcp_registry_write_lands_under_the_canonical_workspace_dir() {
 /// The write above is the same call; only the assertion differs, so this is
 /// registered separately rather than sequenced behind the first assertion.
 #[tokio::test]
-#[should_panic(expected = "legacy MCP registry was rewritten after the rename")]
 async fn legacy_mcp_registry_is_read_only_after_the_rename() {
     let temp = TempDir::new().unwrap();
     let repo = materialise_legacy_repo(&temp);
@@ -305,16 +309,14 @@ async fn legacy_mcp_registry_is_read_only_after_the_rename() {
 /// A worktree created with no explicit `targetPath` must land under the
 /// canonical workspace directory, while the legacy worktree stays where it is.
 ///
-/// `WorktreeManager::create` builds `"{project}/.termul/worktrees/{name}/"`
-/// (`src/worktree/mod.rs:488`) *inside* a `spawn_blocking` closure, so the
-/// thread-local override is not visible there — the closure reads
-/// `DEFAULT_CANONICAL`. This red therefore liquidates when the Wave-5 flip sets
-/// `DEFAULT_CANONICAL.workspace_dir` **and** line 488 reads the seam instead of
-/// a literal. Wave 4 gets the choice: resolve the brand on the request thread
-/// and move the resolved value into the closure, or keep resolving inside it.
-/// Either shape satisfies this assertion; a literal does not.
+/// `WorktreeManager::create` used to build `"{project}/.termul/worktrees/{name}/"`
+/// from a literal, *inside* a `spawn_blocking` closure — where the thread-local
+/// override is not visible and a seam read would have returned
+/// `DEFAULT_CANONICAL` regardless. T-M08 took the only shape that actually
+/// works: `worktree_api::create` resolves `WorkspaceDirs` on the request thread
+/// and passes it in, so what this test injects is what the closure builds with.
+/// A literal, or a seam read moved inside the closure, both fail here.
 #[tokio::test]
-#[should_panic(expected = "default worktree target ignored the brand seam")]
 async fn default_worktree_target_lands_under_the_canonical_workspace_dir() {
     let temp = TempDir::new().unwrap();
     let repo = materialise_legacy_repo(&temp);
@@ -362,5 +364,82 @@ async fn default_worktree_target_lands_under_the_canonical_workspace_dir() {
          the workspace directory is {canonical_dir:?}, so the default target \
          must contain {expected_segment:?}, but the route placed it at \
          {placed:?}. src/worktree/mod.rs:488 formats a hardcoded \".termul\"."
+    );
+}
+
+/// Creating a worktree teaches `.gitignore` the *new* directory without
+/// un-teaching it the old one, and says it once.
+///
+/// Three separate failure modes in one flow, none of which the assertions above
+/// would notice:
+///
+/// * dropping the pre-rename line — the repository may still hold that
+///   directory, and un-ignoring it dumps a whole worktree tree into the user's
+///   `git status`;
+/// * never adding the new line — the directory this build writes to shows up as
+///   untracked instead;
+/// * checking "is either line present" rather than each line on its own — which
+///   looks correct on the first create and silently appends a duplicate on the
+///   second, or never appends the new line at all because the old one is there.
+///
+/// The frozen fixture's ignore file already carries the pre-rename line
+/// (`fake-user-repo/gitignore`), so the "still there" half is anchored to a
+/// sha256-guarded artifact rather than to something this test wrote itself.
+#[tokio::test]
+async fn creating_a_worktree_adds_the_canonical_ignore_line_and_keeps_the_legacy_one() {
+    let temp = TempDir::new().unwrap();
+    let repo = materialise_legacy_repo(&temp);
+    let state = app_state(repo.clone());
+
+    let gitignore = repo.join(".gitignore");
+    let legacy_line = format!("{}/", brand::LEGACY.workspace_dir);
+    let before = std::fs::read_to_string(&gitignore).expect("the fixture ships a .gitignore");
+    assert!(
+        before.lines().any(|line| line.trim() == legacy_line),
+        "the frozen fixture must already ignore {legacy_line:?}; got:\n{before}"
+    );
+
+    let _guard = brand::override_canonical(post_rename());
+    let canonical_line = format!("{}/", brand::canonical().workspace_dir);
+    assert_ne!(
+        canonical_line, legacy_line,
+        "the post-rename injection did not take"
+    );
+
+    for name in ["feat-payments", "feat-search"] {
+        let response = worktree_api::create(
+            State(state.clone()),
+            axum::Extension(IngressProvenance::LocalOperator),
+            Json(WorktreeCreateRequest {
+                project_path: repo.to_string_lossy().into_owned(),
+                name: name.to_string(),
+                branch: name.to_string(),
+                is_new_branch: true,
+                start_ref: None,
+                target_path: None,
+            }),
+        )
+        .await;
+        let bytes = axum::body::to_bytes(
+            axum::response::IntoResponse::into_response(response).into_body(),
+            usize::MAX,
+        )
+        .await
+        .unwrap();
+        let created: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(created["success"], true, "worktree create {name}: {created}");
+    }
+
+    let after = std::fs::read_to_string(&gitignore).expect("read .gitignore back");
+    let count = |needle: &str| after.lines().filter(|line| line.trim() == needle).count();
+    assert_eq!(
+        count(&canonical_line),
+        1,
+        "two creates must leave exactly one {canonical_line:?} line; got:\n{after}"
+    );
+    assert_eq!(
+        count(&legacy_line),
+        1,
+        "the pre-rename ignore line must survive untouched and unduplicated; got:\n{after}"
     );
 }

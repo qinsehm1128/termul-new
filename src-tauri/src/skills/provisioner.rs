@@ -187,7 +187,11 @@ impl ConversationSkillProvisioner {
                 .map(|path| path.to_string_lossy().into_owned())
                 .collect(),
         };
-        let manifest_dir = workspace_cwd.join(".termul");
+        // M-08: the manifest lives in this app's per-repository workspace
+        // directory, so it moves with that directory's name. Nothing is
+        // relocated — a manifest a pre-rename build left behind stays where it
+        // is and is still read (see `read_manifest`).
+        let manifest_dir = workspace_cwd.join(crate::brand::canonical().workspace_dir);
         self.durable_fs
             .create_dir_durable(&manifest_dir, DirectoryPermissions::PrivateOwnerOnly)?;
         self.durable_fs.replace_bytes(
@@ -287,7 +291,10 @@ mod tests {
         assert!(root
             .join(".claude/skills/termul-scheduled-tasks/SKILL.md")
             .is_file());
-        assert!(root.join(".termul/managed-skills.json").is_file());
+        assert!(root
+            .join(crate::brand::canonical().workspace_dir)
+            .join("managed-skills.json")
+            .is_file());
         assert!(receipt
             .mirrored_paths
             .iter()

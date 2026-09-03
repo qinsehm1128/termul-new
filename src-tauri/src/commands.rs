@@ -15,7 +15,7 @@ use crate::trackers::{
 };
 use crate::worktree::{
     BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult, RemoveResult,
-    WorktreeManager,
+    WorkspaceDirs, WorktreeManager,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -1307,6 +1307,7 @@ pub async fn worktree_create(
         is_new_branch,
         start_ref.as_deref(),
         target_path.as_deref(),
+        WorkspaceDirs::resolve(),
     ) {
         Ok(entry) => Ok(IpcResult::success(WorktreeInfo {
             name: entry.name,
@@ -1373,7 +1374,11 @@ pub async fn worktree_remove_all_managed(
     worktrees_json: String,
 ) -> Result<IpcResult<Vec<RemoveResult>>, String> {
     let validated_path = validate_and_stringify!(&project_path);
-    match WorktreeManager::remove_all_managed(&validated_path, &worktrees_json) {
+    match WorktreeManager::remove_all_managed(
+        &validated_path,
+        &worktrees_json,
+        WorkspaceDirs::resolve(),
+    ) {
         Ok(results) => Ok(IpcResult::success(results)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -1386,7 +1391,7 @@ pub async fn worktree_parse_gitignore(
     project_path: String,
 ) -> Result<IpcResult<Vec<GitignoreDirInfo>>, String> {
     let validated_path = validate_and_stringify!(&project_path);
-    match WorktreeManager::parse_gitignore_dirs(&validated_path) {
+    match WorktreeManager::parse_gitignore_dirs(&validated_path, WorkspaceDirs::resolve()) {
         Ok(dirs) => {
             let infos: Vec<GitignoreDirInfo> = dirs
                 .into_iter()
@@ -1465,7 +1470,7 @@ pub async fn worktree_ensure_symlinks(
     Ok(IpcResult::success(infos))
 }
 
-/// Archive a worktree by moving it to `.termul/archives/`.
+/// Archive a worktree by moving it to `<workspace dir>/archives/`.
 #[tauri::command]
 pub async fn worktree_archive(
     project_path: String,
@@ -1473,7 +1478,11 @@ pub async fn worktree_archive(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_worktree = validate_and_stringify!(&worktree_path);
-    match WorktreeManager::archive(&validated_project, &validated_worktree) {
+    match WorktreeManager::archive(
+        &validated_project,
+        &validated_worktree,
+        WorkspaceDirs::resolve(),
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -1487,7 +1496,11 @@ pub async fn worktree_restore(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_archive = validate_and_stringify!(&archive_path);
-    match WorktreeManager::restore(&validated_project, &validated_archive) {
+    match WorktreeManager::restore(
+        &validated_project,
+        &validated_archive,
+        WorkspaceDirs::resolve(),
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -1564,8 +1577,15 @@ pub async fn worktree_copy_include_files(
     let validated_project = validate_and_stringify!(&project_path);
     let validated_worktree = validate_and_stringify!(&worktree_path);
     // Filesystem walk + copy is blocking; offload from the async runtime.
+    // FORBID-07: the brand seam is resolved here, before the closure, because a
+    // thread-local read inside `spawn_blocking` would ignore it silently.
+    let workspace_dirs = WorkspaceDirs::resolve();
     match tokio::task::spawn_blocking(move || {
-        WorktreeManager::copy_worktree_include_files(&validated_project, &validated_worktree)
+        WorktreeManager::copy_worktree_include_files(
+            &validated_project,
+            &validated_worktree,
+            workspace_dirs,
+        )
     })
     .await
     {
@@ -4395,11 +4415,11 @@ pub async fn remote_sync_chat_history(
 }
 
 /// Mirror the desktop app-store MCP registry to the active project's
-/// `.termul/mcp-servers.json` (CAP-7 — registry sync gap).
+/// `<workspace dir>/mcp-servers.json` (CAP-7 — registry sync gap).
 ///
 /// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`
 /// (tauri-plugin-store, app-data dir), while the web `GET /mcp-servers` route
-/// reads `{project_root}/.termul/mcp-servers.json`. Without this bridge the web
+/// reads `{project_root}/<workspace dir>/mcp-servers.json`. Without this bridge the web
 /// route never sees desktop-configured servers, so `McpBadge` stays hidden on
 /// web/mobile. Called best-effort after every desktop MCP save and on project
 /// switch — a sync failure is logged but never blocks the app-store save.
@@ -4419,7 +4439,7 @@ pub async fn remote_sync_mcp_registry(
 }
 
 /// Testable core of `remote_sync_mcp_registry`: writes `registry` to
-/// `{active_project_root}/.termul/mcp-servers.json` via `atomic_file::replace`.
+/// `{active_project_root}/<workspace dir>/mcp-servers.json` via `atomic_file::replace`.
 /// Extracted so a Rust unit test can exercise the write path without a Tauri
 /// `AppHandle` (CAP-7 regression guard).
 pub(crate) async fn sync_mcp_registry_to_project_file(
@@ -7563,7 +7583,7 @@ mod remote_sync_mcp_registry_tests {
         assert!(result.success, "expected success, got {:?}", result.error);
 
         // The sync must write the exact file the web `GET /mcp-servers` route
-        // reads (`{project_root}/.termul/mcp-servers.json`).
+        // reads (`{project_root}/<workspace dir>/mcp-servers.json`).
         let file = registry_path(&dir);
         let bytes = std::fs::read(&file).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
