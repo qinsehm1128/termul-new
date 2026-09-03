@@ -1,11 +1,11 @@
 /**
- * Termul brand mark.
+ * Se brand mark.
  *
  * Inline SVG so it can inherit the current text color via `currentColor`,
  * which keeps it legible on both light and dark themes. Source artwork lives
  * at `landing/public/termul.svg` (white fill); this is the theme-aware variant.
  */
-export function TermulMark({
+export function SeMark({
   size = 22,
   className
 }: {
