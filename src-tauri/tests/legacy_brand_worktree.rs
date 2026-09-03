@@ -193,9 +193,9 @@ async fn read_registry(state: &AppState) -> termul_manager_lib::web::fs_api::Ipc
 
 /// Control test — proves the harness itself is wired.
 ///
-/// If this ever fails, every `should_panic` below is suspect: they could be
-/// panicking on a broken fixture path or a mis-built `AppState` rather than on
-/// the contract they name.
+/// If this ever fails, every assertion below is suspect: they could be failing
+/// on a broken fixture path or a mis-built `AppState` rather than on the
+/// contract they name.
 #[tokio::test]
 async fn harness_reaches_the_real_routes_over_the_frozen_legacy_repo() {
     let temp = TempDir::new().unwrap();
