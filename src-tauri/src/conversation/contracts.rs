@@ -645,7 +645,7 @@ mod tests {
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::AllocatingWorkspace,
             last_seq: 0,
-            created_by: ConversationCreator::Legacy,
+            created_by: ConversationCreator::SeManager,
             title: None,
             title_source: None,
         };
@@ -668,7 +668,7 @@ mod tests {
                 "projectAttachment": null,
                 "lifecycleState": "allocating_workspace",
                 "lastSeq": 0,
-                "createdBy": "termul",
+                "createdBy": "se-manager",
                 "title": null,
                 "titleSource": null
             })

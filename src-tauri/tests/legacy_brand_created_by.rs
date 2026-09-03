@@ -260,7 +260,17 @@ impl<'ast> Visit<'ast> for TestModScan {
 #[derive(Default)]
 struct ProductionScan {
     string_literals: Vec<String>,
-    constructs_creator: bool,
+    /// Which variants this file stamps onto a record it writes. Recorded by
+    /// identifier because that is all the source says; the identifier is turned
+    /// back into a wire value through the enum's own serde attributes rather
+    /// than through a second copy of the mapping.
+    constructed_variants: BTreeSet<String>,
+}
+
+impl ProductionScan {
+    fn constructs_creator(&self) -> bool {
+        !self.constructed_variants.is_empty()
+    }
 }
 
 impl<'ast> Visit<'ast> for ProductionScan {
@@ -294,7 +304,8 @@ impl<'ast> Visit<'ast> for ProductionScan {
             .collect();
         // `ConversationCreator::<Variant>` in expression position — a write.
         if segments.len() >= 2 && segments[segments.len() - 2] == CREATOR_ENUM {
-            self.constructs_creator = true;
+            self.constructed_variants
+                .insert(segments[segments.len() - 1].clone());
         }
         visit::visit_expr_path(self, node);
     }
@@ -415,7 +426,7 @@ fn the_wire_value_has_no_greppable_literal_where_it_is_decided() {
 fn every_production_write_point_is_accounted_for() {
     let found: Vec<String> = scan_production()
         .into_iter()
-        .filter(|(_, scan)| scan.constructs_creator)
+        .filter(|(_, scan)| scan.constructs_creator())
         .map(|(relative, _)| relative)
         .filter(|relative| relative != CONTRACTS_FILE)
         .collect();
@@ -430,6 +441,75 @@ fn every_production_write_point_is_accounted_for() {
         "the set of production sites that construct a {CREATOR_ENUM} has changed. Each one \
          decides what a record this app writes today claims about its own origin, and none of \
          them contains a literal that a rename pass could see."
+    );
+}
+
+/// Every variant's wire value, read from the enum's own `#[serde(rename = "…")]`
+/// attributes. The mapping is never written down a second time here — if the
+/// rename moves, this moves with it, which is what keeps the guard below from
+/// comparing a constant with a copy of itself.
+fn variant_wire_values() -> BTreeMap<String, String> {
+    creator_enum()
+        .variants
+        .iter()
+        .map(|variant| {
+            let wire = serde_words(&variant.attrs)
+                .into_iter()
+                .find_map(|(name, value)| (name == "rename").then_some(value).flatten())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{CREATOR_ENUM}::{} has no explicit #[serde(rename = \"…\")]; \
+                         the_wire_value_is_decoupled_from_the_variant_identifier covers why \
+                         that is not allowed",
+                        variant.ident
+                    )
+                });
+            (variant.ident.to_string(), wire)
+        })
+        .collect()
+}
+
+/// The other half of the blast radius: not *where* production stamps a creator,
+/// but *what it stamps*.
+///
+/// `every_production_write_point_is_accounted_for` pins the file set and would
+/// stay green with every one of those files writing the pre-rename value — which
+/// is not hypothetical. Reverting `creation.rs`'s single token during T-A04 left
+/// the entire suite green: the primary write point, the one every conversation
+/// this app creates passes through, had no assertion on its value anywhere.
+/// That is F-01's exact shape one level down — a half-flip that compiles, reads
+/// correctly in review, and silently stamps a mixed corpus.
+///
+/// Compared through the serde rename map rather than the identifier, so a later
+/// identifier refactor cannot make this pass by accident.
+#[test]
+fn every_production_write_point_stamps_the_canonical_creator() {
+    let wire_values = variant_wire_values();
+    let canonical = brand::canonical().created_by;
+
+    let offenders: Vec<String> = scan_production()
+        .into_iter()
+        .filter(|(relative, _)| relative != CONTRACTS_FILE)
+        .flat_map(|(relative, scan)| {
+            scan.constructed_variants
+                .into_iter()
+                .map(move |variant| (relative.clone(), variant))
+        })
+        .filter_map(|(relative, variant)| {
+            let emitted = wire_values.get(&variant).cloned().unwrap_or_else(|| {
+                panic!("{CREATOR_ENUM}::{variant} is constructed in {relative} but is not a variant")
+            });
+            (emitted != canonical).then(|| format!("{relative} writes {emitted:?}"))
+        })
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "a production write point stamps a createdBy other than the canonical \
+         {canonical:?}: {offenders:?}. FORBID-04 allows reading the legacy value forever \
+         and re-emitting it never — a record written today must claim today's creator, or \
+         the corpus splits into two batches that disagree about their own origin for no \
+         reason a reader can recover."
     );
 }
 

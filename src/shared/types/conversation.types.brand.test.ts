@@ -90,10 +90,13 @@ describe('conversation createdBy across the rename', () => {
   // above worth having: the override set inside this test body is what a call
   // made now observes.
   it('resolves the canonical createdBy at call time, not at import time', () => {
+    // The injected value has to differ from the shipped one or the test proves
+    // nothing. Now that the contract has flipped, the legacy value is the one
+    // spelling `brandCanonical()` never returns on its own.
     const before = brandCanonical().createdBy
-    __setBrandCanonicalOverride({ createdBy: 'se-manager' })
+    __setBrandCanonicalOverride({ createdBy: LEGACY.createdBy })
     expect(brandCanonical().createdBy).not.toBe(before)
-    expect(brandCanonical().createdBy).toBe('se-manager')
+    expect(brandCanonical().createdBy).toBe(LEGACY.createdBy)
     // LEGACY is immovable by design — it is what is already on disk.
     expect(LEGACY.createdBy).toBe(recordOnDisk().createdBy)
   })

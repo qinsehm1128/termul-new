@@ -161,7 +161,7 @@ pub const LEGACY: BrandCanonical = BrandCanonical {
 /// lands, its entry here still equals the corresponding [`LEGACY`] value — that
 /// gap is precisely what makes the Wave-1 harness tests go red.
 pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
-    created_by: "termul",
+    created_by: "se-manager",
     plan_fence: "termul-plan",
     workspace_dir: ".termul",
     display_name: "Termul",

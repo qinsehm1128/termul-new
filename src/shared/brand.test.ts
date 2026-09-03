@@ -20,24 +20,26 @@ afterEach(() => {
 
 describe('brand seam', () => {
   it('returns the shipped canonical values by default', () => {
-    expect(brandCanonical().createdBy).toBe('termul')
+    expect(brandCanonical().createdBy).toBe('se-manager')
     expect(brandCanonical().workspaceDir).toBe('.termul')
   })
 
   it('returns injected values while an override is in force', () => {
-    __setBrandCanonicalOverride({ createdBy: 'se-manager' })
-    expect(brandCanonical().createdBy).toBe('se-manager')
+    // Injected value deliberately differs from the shipped one; once a contract
+    // has flipped, re-injecting its shipped value proves nothing.
+    __setBrandCanonicalOverride({ createdBy: LEGACY.createdBy })
+    expect(brandCanonical().createdBy).toBe(LEGACY.createdBy)
   })
 
   it('leaves un-overridden fields at their shipped values', () => {
-    __setBrandCanonicalOverride({ createdBy: 'se-manager' })
+    __setBrandCanonicalOverride({ createdBy: LEGACY.createdBy })
     expect(brandCanonical().planFence).toBe('se-plan')
   })
 
   it('restores the shipped values when the override is cleared', () => {
-    __setBrandCanonicalOverride({ createdBy: 'se-manager' })
+    __setBrandCanonicalOverride({ createdBy: LEGACY.createdBy })
     __resetBrandCanonicalOverride()
-    expect(brandCanonical().createdBy).toBe('termul')
+    expect(brandCanonical().createdBy).toBe('se-manager')
   })
 
   it('never lets an override reach the LEGACY values', () => {

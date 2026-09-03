@@ -150,7 +150,7 @@ export const LEGACY: BrandCanonical = {
  * that gap is precisely what makes the Wave-1 harness tests go red.
  */
 const DEFAULT_CANONICAL: BrandCanonical = {
-  createdBy: 'termul',
+  createdBy: 'se-manager',
   planFence: 'se-plan',
   themeId: 'se',
   themeFamilyLight: 'se-light',

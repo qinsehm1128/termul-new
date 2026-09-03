@@ -130,7 +130,12 @@ impl LegacyConversationReader {
                         project_attachment: None,
                         lifecycle_state: ConversationLifecycleState::Ready,
                         last_seq: 0,
-                        created_by: ConversationCreator::Legacy,
+                        // The projection is a record *this* build emits now, so
+                        // it claims this build's creator (decision OD-04). The
+                        // fact that the underlying data predates the rename is
+                        // carried by `source_key` / `source_record_sha256`, not
+                        // by `created_by`.
+                        created_by: ConversationCreator::SeManager,
                         title: None,
                         title_source: None,
                     },

@@ -480,7 +480,7 @@ async fn stage_one(
             ConversationLifecycleState::AgentFailed
         },
         last_seq: 0,
-        created_by: ConversationCreator::Legacy,
+        created_by: ConversationCreator::SeManager,
         title: None,
         title_source: None,
     };
