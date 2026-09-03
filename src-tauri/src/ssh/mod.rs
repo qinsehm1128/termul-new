@@ -6,6 +6,7 @@
 pub mod config_parser;
 pub mod connection;
 pub mod credential_store;
+pub mod known_hosts_migration;
 pub mod port_forward;
 pub mod profile_manager;
 pub mod sftp;

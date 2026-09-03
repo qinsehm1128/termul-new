@@ -70,6 +70,9 @@ use syn::visit::{self, Visit};
 use syn::{Expr, ExprField, Ident, Lit, Member};
 use termul_manager_lib::brand::{self, BrandCanonical};
 use termul_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
+use termul_manager_lib::known_hosts_migration::{
+    self, migrate_app_known_hosts, KnownHostsMigration, KnownHostsMigrationError,
+};
 
 /// The production site under test.
 const PRODUCTION_FILE: &str = "src/ssh/connection.rs";
@@ -381,6 +384,168 @@ fn assert_byte_identical_store(source: &Path, migrated: &Path) {
 }
 
 // ---------------------------------------------------------------------------
+// M-15 — the startup migration, executed end to end
+// ---------------------------------------------------------------------------
+
+/// The store must arrive under the new name intact, and the old file must still
+/// be sitting there afterwards (FORBID-05: copy, never move).
+///
+/// This calls `migrate_app_known_hosts` — the exact entry point `lib.rs` wires
+/// into startup — rather than a test-only helper, so what is proved here is what
+/// ships.
+#[test]
+fn the_startup_migration_carries_the_frozen_store_byte_for_byte() {
+    let _lock = env_lock();
+    let (_temp, _base, home, legacy) = plant_ssh_dir();
+    let _env = EnvScope::new().set("HOME", &home).set("USERPROFILE", &home);
+    let _brand = brand::override_canonical(post_rename());
+
+    let outcome = migrate_app_known_hosts().expect("the startup migration runs");
+    assert_eq!(
+        outcome,
+        KnownHostsMigration::Copied {
+            bytes: frozen_store_bytes().len() as u64
+        },
+        "the whole frozen store must be carried"
+    );
+
+    let migrated = legacy.with_file_name(post_rename().ssh_known_hosts_file);
+    // sha256 equality both ways, and the @cert-authority / @revoked lines
+    // verbatim — a parse-and-rewrite implementation cannot satisfy this.
+    assert_byte_identical_store(&legacy, &migrated);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&migrated)
+            .expect("stat the migrated store")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the host-key store must stay owner-only; got {:o}",
+            mode & 0o777
+        );
+    }
+
+    assert_eq!(
+        fs::read(home.join(".ssh/known_hosts")).expect("the user's own store is still there"),
+        b"# the user's own file; system ssh owns it\n",
+        "the migration must not touch the user's shared known_hosts"
+    );
+}
+
+/// Idempotent. Startup runs this every launch; the second and every subsequent
+/// run must be a no-op, not a re-copy that could clobber keys accepted since.
+#[test]
+fn a_second_startup_finds_the_store_already_migrated_and_writes_nothing() {
+    let _lock = env_lock();
+    let (_temp, _base, home, legacy) = plant_ssh_dir();
+    let _env = EnvScope::new().set("HOME", &home).set("USERPROFILE", &home);
+    let _brand = brand::override_canonical(post_rename());
+
+    migrate_app_known_hosts().expect("first startup");
+    let migrated = legacy.with_file_name(post_rename().ssh_known_hosts_file);
+    let modified_before = fs::metadata(&migrated)
+        .expect("stat the migrated store")
+        .modified()
+        .expect("mtime");
+
+    assert_eq!(
+        migrate_app_known_hosts().expect("second startup"),
+        KnownHostsMigration::AlreadyMigrated
+    );
+    assert_eq!(
+        fs::metadata(&migrated)
+            .expect("stat again")
+            .modified()
+            .expect("mtime"),
+        modified_before,
+        "the second run must not write"
+    );
+}
+
+/// An existing destination is never overwritten. By the second launch after a
+/// rename the canonical store may already hold hosts accepted since — copying
+/// over it would be the same data loss in the other direction.
+#[test]
+fn an_existing_canonical_store_is_never_overwritten() {
+    let _lock = env_lock();
+    let (_temp, _base, home, legacy) = plant_ssh_dir();
+    let migrated = legacy.with_file_name(post_rename().ssh_known_hosts_file);
+    let accepted_since = b"live.example.com ssh-ed25519 AAAAaccepted-after-the-rename\n";
+    fs::write(&migrated, accepted_since).expect("plant a live canonical store");
+
+    let _env = EnvScope::new().set("HOME", &home).set("USERPROFILE", &home);
+    let _brand = brand::override_canonical(post_rename());
+
+    assert_eq!(
+        migrate_app_known_hosts().expect("the startup migration runs"),
+        KnownHostsMigration::AlreadyMigrated
+    );
+    assert_eq!(
+        fs::read(&migrated).expect("read the canonical store"),
+        accepted_since,
+        "host keys accepted since the rename must not be discarded"
+    );
+    assert_eq!(
+        sha256(&fs::read(&legacy).expect("read the legacy store")),
+        sha256(&frozen_store_bytes()),
+        "and the legacy store is still untouched"
+    );
+}
+
+/// Failure is explicit, and it is recorded.
+///
+/// "Migration failed" must never be indistinguishable from "there was nothing
+/// to carry": that is precisely the fail-open state F-02 describes. The Err and
+/// the recorded interlock are what
+/// `ssh::connection::tests::accept_new_refuses_and_writes_nothing_after_a_failed_migration`
+/// then consumes to refuse unknown hosts.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_destination_returns_err_and_records_the_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = env_lock();
+    let (_temp, _base, home, legacy) = plant_ssh_dir();
+    let ssh_dir = legacy.parent().expect("the .ssh dir").to_path_buf();
+    let _env = EnvScope::new().set("HOME", &home).set("USERPROFILE", &home);
+    let _brand = brand::override_canonical(post_rename());
+
+    known_hosts_migration::set_migration_failed_for_test(false);
+    fs::set_permissions(&ssh_dir, fs::Permissions::from_mode(0o500))
+        .expect("make the directory read-only");
+    let outcome = migrate_app_known_hosts();
+    let recorded = known_hosts_migration::migration_failed();
+    // Restore before asserting so a failure cannot leave the interlock set for
+    // the rest of this process or block the tempdir's cleanup.
+    fs::set_permissions(&ssh_dir, fs::Permissions::from_mode(0o700)).expect("restore mode");
+    known_hosts_migration::set_migration_failed_for_test(false);
+
+    let error = outcome.expect_err("an unwritable destination must not return Ok");
+    assert!(
+        matches!(error, KnownHostsMigrationError::Write { .. }),
+        "the error must name the write that failed, got {error:?}"
+    );
+    assert!(
+        recorded,
+        "a failed migration must set the interlock verify_host_key reads; without \
+         it the accept-new path silently re-trusts every host the user already knew"
+    );
+    assert!(
+        !ssh_dir.join(post_rename().ssh_known_hosts_file).exists(),
+        "a failed migration must not leave a partial store behind"
+    );
+    assert_eq!(
+        sha256(&fs::read(&legacy).expect("read the legacy store")),
+        sha256(&frozen_store_bytes()),
+        "and it must not have damaged the store it failed to copy"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The ledger — reds that go green when the capability lands
 // ---------------------------------------------------------------------------
 
@@ -390,7 +555,6 @@ fn assert_byte_identical_store(source: &Path, migrated: &Path) {
 /// production source cannot be renamed without orphaning the store already
 /// written under it.
 #[test]
-#[should_panic(expected = "still hardcodes the legacy app-managed known_hosts file name")]
 fn app_known_hosts_file_name_is_not_frozen_into_a_literal() {
     let facts = production_facts();
     let legacy = brand::LEGACY.ssh_known_hosts_file;
@@ -407,7 +571,6 @@ fn app_known_hosts_file_name_is_not_frozen_into_a_literal() {
 /// can erase a literal; it can never author a `brand::canonical()` call, so
 /// this positive assertion cannot be laundered green.
 #[test]
-#[should_panic(expected = "must read crate::brand::canonical().ssh_known_hosts_file")]
 fn app_known_hosts_path_is_built_from_the_brand_seam() {
     let _guard = brand::override_canonical(post_rename());
     assert_ne!(
@@ -503,7 +666,6 @@ fn migration_carries_the_app_managed_known_hosts_store() {
 /// migration did not complete and refuse. Structural, because `verify_host_key`
 /// is a private associated fn in a private module and cannot be called here.
 #[test]
-#[should_panic(expected = "accept-new is not gated on the host-key store migration")]
 fn accept_new_is_gated_on_a_successful_store_migration() {
     let facts = production_facts();
     // The compat read has to exist for the gate to be meaningful: production

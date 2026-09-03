@@ -1,7 +1,7 @@
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
-const SERVICE_NAME: &str = "com.termul.manager";
+use crate::brand;
+use crate::credentials::{self, CredentialError};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SecureStorageRequest {
@@ -56,31 +56,106 @@ impl SecureStorageResponse<()> {
     }
 }
 
-fn get_entry(key: &str) -> Result<Entry, String> {
-    Entry::new(SERVICE_NAME, key).map_err(|_| "keyring entry is unavailable".to_string())
+/// The keychain service this build writes to. Read through the brand seam on
+/// the calling thread (FORBID-07) so a rename is a single edit in `brand.rs`
+/// instead of a literal frozen into this file.
+fn service() -> &'static str {
+    brand::canonical().keychain_service
+}
+
+fn describe(error: &CredentialError, unavailable: &str, failed: &str) -> String {
+    match error {
+        // The message deliberately omits the backend's own text: it can name
+        // the account whose secret was requested.
+        CredentialError::Unavailable(_) => unavailable.to_string(),
+        CredentialError::Backend(_) => failed.to_string(),
+    }
 }
 
 /// Crate-private keyring helpers for host-owned credentials. Callers must not
 /// log returned values, account names, or underlying backend errors.
-pub(crate) fn keyring_get(key: &str) -> Result<Option<String>, String> {
-    match get_entry(key)?.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("keyring credential retrieval failed".to_string()),
+///
+/// Reads consult the canonical service first and fall back to
+/// `brand::LEGACY.keychain_service`, because every secret already on a user's
+/// machine was written under the legacy name; a getter that only asked the
+/// canonical service would return `None` for all of them and the user would
+/// watch their stored project environment variables go blank with no error.
+/// A value found under the legacy service is copied forward so later reads are
+/// direct — the legacy entry is never deleted (FORBID-05).
+pub fn keyring_get(key: &str) -> Result<Option<String>, String> {
+    let backend = credentials::backend();
+    let canonical = service();
+
+    let read = |from: &str| {
+        backend.get(from, key).map_err(|error| {
+            describe(
+                &error,
+                "keyring entry is unavailable",
+                "keyring credential retrieval failed",
+            )
+        })
+    };
+
+    if let Some(value) = read(canonical)? {
+        return Ok(Some(value));
     }
+
+    let legacy = brand::LEGACY.keychain_service;
+    if legacy == canonical {
+        return Ok(None);
+    }
+    let Some(value) = read(legacy)? else {
+        return Ok(None);
+    };
+    // Copy-forward is best effort: a failure here must not turn a successful
+    // read into an error, it only means the next read falls back again.
+    if let Err(error) = backend.set(canonical, key, &value) {
+        log::warn!(
+            "[secure-storage] failed to carry a credential to the current keychain service: {}",
+            describe(
+                &error,
+                "keyring entry is unavailable",
+                "keyring credential storage failed",
+            )
+        );
+    }
+    Ok(Some(value))
 }
 
-pub(crate) fn keyring_set(key: &str, value: &str) -> Result<(), String> {
-    get_entry(key)?
-        .set_password(value)
-        .map_err(|_| "keyring credential storage failed".to_string())
+pub fn keyring_set(key: &str, value: &str) -> Result<(), String> {
+    credentials::backend()
+        .set(service(), key, value)
+        .map_err(|error| {
+            describe(
+                &error,
+                "keyring entry is unavailable",
+                "keyring credential storage failed",
+            )
+        })
 }
 
-pub(crate) fn keyring_delete(key: &str) -> Result<(), String> {
-    match get_entry(key)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("keyring credential deletion failed".to_string()),
+/// Deletes from both services: the user asked for the secret to be gone, and
+/// leaving the legacy copy behind would resurrect it on the next fallback read.
+/// This is the one path allowed to touch a legacy entry, because it is the user
+/// deleting their own credential rather than a migration discarding data.
+pub fn keyring_delete(key: &str) -> Result<(), String> {
+    let backend = credentials::backend();
+    let canonical = service();
+    let describe_delete = |error: CredentialError| {
+        describe(
+            &error,
+            "keyring entry is unavailable",
+            "keyring credential deletion failed",
+        )
+    };
+
+    backend.delete(canonical, key).map_err(describe_delete)?;
+
+    let legacy = brand::LEGACY.keychain_service;
+    if legacy != canonical {
+        backend.delete(legacy, key).map_err(describe_delete)?;
     }
+    Ok(())
 }
 
 #[tauri::command]

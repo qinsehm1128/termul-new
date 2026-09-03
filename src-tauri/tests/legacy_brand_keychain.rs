@@ -16,35 +16,41 @@
 //! of both services and their key shapes, and the expectations come from
 //! `brand::LEGACY` / `brand::canonical()`.
 //!
-//! # Why these reds are structural rather than behavioural
+//! # The seam these tests execute through (T-A00)
 //!
-//! The brief asked for a behavioural test: pre-seed the legacy entries, inject
-//! the canonical service names, and assert the new names read the values while
-//! the legacy entries survive. That test cannot be written today, for two
-//! independent reasons — both verified, not assumed:
+//! Originally the behavioural test — pre-seed the legacy entries, inject the
+//! canonical service names, assert the new names read the values while the
+//! legacy entries survive — could not be written at all, for two independent
+//! reasons:
 //!
-//! 1. **No reachable production seam.** `mod secure_storage` and `mod ssh` are
-//!    private to `termul_manager_lib` (`src/lib.rs:20`, `src/lib.rs:30`) and
-//!    neither is re-exported. `keyring_get`/`keyring_set` are additionally
-//!    `pub(crate)`. Nothing under `tests/` can call the credential paths at all,
-//!    directly or through the web routes — no HTTP handler touches them.
+//! 1. **No reachable production seam.** `mod secure_storage` and `mod ssh` were
+//!    private to `termul_manager_lib` and neither was re-exported;
+//!    `keyring_get`/`keyring_set` were additionally `pub(crate)`. Nothing under
+//!    `tests/` could call the credential paths at all.
 //!
-//! 2. **No injection point.** Both modules call `keyring::Entry::new(SERVICE_NAME, key)`
-//!    directly, so the backend is whatever the compile-time cargo feature
-//!    selected — on macOS the user's real login keychain. `keyring::mock` (which
-//!    keyring 3.6 exposes unconditionally, no feature flag needed) cannot stand
-//!    in for it: its builder reports `CredentialPersistence::EntryOnly` and
-//!    hands every `Entry::new` a *fresh empty* credential, so a pre-seeded
-//!    legacy keychain is not representable. `set_default_credential_builder` is
-//!    also process-global (`RwLock`), not thread-local, so it does not compose
-//!    with the thread-local brand seam the way the other harness files rely on.
+//! 2. **No injection point.** Both modules called
+//!    `keyring::Entry::new(SERVICE_NAME, key)` directly, so the backend was
+//!    whatever the compile-time cargo feature selected — on macOS the user's
+//!    real login keychain. `keyring::mock` cannot stand in: its builder reports
+//!    `CredentialPersistence::EntryOnly` and hands every `Entry::new` a *fresh
+//!    empty* credential, so a pre-seeded legacy keychain is not representable.
+//!    `set_default_credential_builder` is process-global (`RwLock`), not
+//!    thread-local, so it does not compose with the thread-local brand seam the
+//!    way the rest of this harness relies on.
+//!
+//! `src/credentials.rs` closes both: it is a public façade every credential
+//! read/write goes through, and its backend is injectable *per thread*, the same
+//! shape as `brand::override_canonical`.
+//! `production_reads_a_credential_seeded_under_the_legacy_service` is therefore
+//! a real behavioural test — it calls production `keyring_get`,
+//! `credential_store::get_password` and `get_passphrase` against a keychain that
+//! only holds legacy-service entries.
 //!
 //! `fake_keychain_backend_holds_the_legacy_entries_the_canonical_service_cannot_see`
-//! below builds the store keyring *does* let a client supply, seeds it from the
-//! frozen fixture, and executes the lookup — proving the mechanism works and
-//! measuring the exact gap. The remaining tests assert the file-level shape the
-//! Wave-4 change has to produce. See the report for the production seam this
-//! needs.
+//! remains as the oracle underneath it: it proves, at the raw `keyring::Entry`
+//! level, that a `(service, user)`-keyed store really does distinguish the two
+//! services, so "the canonical service read it" is a statement about the
+//! migration rather than about a store that collapsed the two names.
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -56,6 +62,8 @@ use keyring::{Entry, Error};
 use serde_json::Value;
 
 use termul_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
+use termul_manager_lib::credentials::{self, CredentialBackend, CredentialError};
+use termul_manager_lib::{keyring_get, ssh_credential_store};
 
 /// Keychain service names the app writes *after* the rename.
 fn post_rename() -> BrandCanonical {
@@ -113,6 +121,36 @@ impl FixtureKeychain {
             .lock()
             .unwrap()
             .contains_key(&(service.to_string(), user.to_string()))
+    }
+
+    fn peek(&self, service: &str, user: &str) -> Option<String> {
+        self.secrets
+            .lock()
+            .unwrap()
+            .get(&(service.to_string(), user.to_string()))
+            .map(|secret| String::from_utf8(secret.clone()).expect("fixture secrets are UTF-8"))
+    }
+}
+
+/// The same store, seen through the production façade instead of through
+/// `keyring::Entry`. One type backs both so a test cannot accidentally compare
+/// two different notions of "the keychain".
+impl CredentialBackend for FixtureKeychain {
+    fn get(&self, service: &str, key: &str) -> Result<Option<String>, CredentialError> {
+        Ok(self.peek(service, key))
+    }
+
+    fn set(&self, service: &str, key: &str, value: &str) -> Result<(), CredentialError> {
+        self.seed(service, key, value);
+        Ok(())
+    }
+
+    fn delete(&self, service: &str, key: &str) -> Result<(), CredentialError> {
+        self.secrets
+            .lock()
+            .unwrap()
+            .remove(&(service.to_string(), key.to_string()));
+        Ok(())
     }
 }
 
@@ -321,6 +359,158 @@ fn fake_keychain_backend_holds_the_legacy_entries_the_canonical_service_cannot_s
 }
 
 // ---------------------------------------------------------------------------
+// The behavioural test the seam makes possible
+// ---------------------------------------------------------------------------
+
+/// Entries that are deliberately **absent** from the frozen fixture.
+///
+/// This is what makes the test below mutation-sensitive. `installed_keychain()`
+/// has already pointed `keyring`'s process-global builder at the fixture store,
+/// so an implementation that bypasses the façade and calls `Entry::new` still
+/// reaches a fake keychain rather than the developer's login keychain — but it
+/// reaches one that has never heard of these keys, and the assertions go red.
+const INJECTED_PROJECT_KEY: &str =
+    "project:5e2a9d31-64c8-4b17-9a03-2d7f81c4e6b9:env:AWS_SECRET_ACCESS_KEY";
+const INJECTED_PROJECT_SECRET: &str = "legacy-service-project-secret";
+const INJECTED_PROFILE_ID: &str = "7c0f2e45-1b93-48da-a6e7-5904d3b81fa2";
+const INJECTED_SSH_PASSWORD: &str = "legacy-service-ssh-password";
+const INJECTED_SSH_PASSPHRASE: &str = "legacy-service-ssh-passphrase";
+
+/// A keychain holding nothing but pre-rename entries, injected through the
+/// production façade.
+fn keychain_with_only_legacy_entries() -> Arc<FixtureKeychain> {
+    let store = Arc::new(FixtureKeychain::default());
+    store.seed(
+        brand::LEGACY.keychain_service,
+        INJECTED_PROJECT_KEY,
+        INJECTED_PROJECT_SECRET,
+    );
+    store.seed(
+        brand::LEGACY.keychain_ssh_service,
+        &format!("{INJECTED_PROFILE_ID}-password"),
+        INJECTED_SSH_PASSWORD,
+    );
+    store.seed(
+        brand::LEGACY.keychain_ssh_service,
+        &format!("{INJECTED_PROFILE_ID}-passphrase"),
+        INJECTED_SSH_PASSPHRASE,
+    );
+    store
+}
+
+/// The whole point of M-09 and M-10, executed against production code.
+///
+/// The canonical service names are the *post*-rename ones and the keychain
+/// holds only pre-rename entries — exactly the state every existing install is
+/// in the moment the rename ships. Production must still find all three
+/// credentials, must copy them forward, and must leave the originals in place.
+#[test]
+fn production_reads_a_credential_seeded_under_the_legacy_service() {
+    // Pin keyring's process-global builder to the fixture store first, so a
+    // regression that bypasses the façade cannot reach a real login keychain.
+    let _global = installed_keychain();
+
+    let post = post_rename();
+    let _brand = brand::override_canonical(post);
+    assert_ne!(
+        post.keychain_service, brand::LEGACY.keychain_service,
+        "the post-rename injection must be a different spelling or this proves nothing"
+    );
+
+    let store = keychain_with_only_legacy_entries();
+    let password_key = format!("{INJECTED_PROFILE_ID}-password");
+    let passphrase_key = format!("{INJECTED_PROFILE_ID}-passphrase");
+    assert_eq!(
+        store.peek(post.keychain_service, INJECTED_PROJECT_KEY),
+        None,
+        "precondition: nothing has been written under the canonical service yet"
+    );
+    assert_eq!(
+        store.peek(post.keychain_ssh_service, &password_key),
+        None,
+        "precondition: nothing has been written under the canonical SSH service yet"
+    );
+
+    let _backend = credentials::override_backend(Arc::clone(&store) as Arc<dyn CredentialBackend>);
+
+    assert_eq!(
+        keyring_get(INJECTED_PROJECT_KEY).expect("the project secret read succeeds"),
+        Some(INJECTED_PROJECT_SECRET.to_string()),
+        "M-09: a project environment secret written before the rename must still \
+         be readable after it"
+    );
+    assert_eq!(
+        ssh_credential_store::get_password(INJECTED_PROFILE_ID).expect("the SSH password read succeeds"),
+        Some(INJECTED_SSH_PASSWORD.to_string()),
+        "M-10: an SSH password written before the rename must still be readable"
+    );
+    assert_eq!(
+        ssh_credential_store::get_passphrase(INJECTED_PROFILE_ID)
+            .expect("the SSH passphrase read succeeds"),
+        Some(INJECTED_SSH_PASSPHRASE.to_string()),
+        "M-10: a private-key passphrase written before the rename must still be readable"
+    );
+
+    // Carried forward, so later reads no longer depend on the fallback.
+    assert_eq!(
+        store.peek(post.keychain_service, INJECTED_PROJECT_KEY),
+        Some(INJECTED_PROJECT_SECRET.to_string())
+    );
+    assert_eq!(
+        store.peek(post.keychain_ssh_service, &password_key),
+        Some(INJECTED_SSH_PASSWORD.to_string())
+    );
+    assert_eq!(
+        store.peek(post.keychain_ssh_service, &passphrase_key),
+        Some(INJECTED_SSH_PASSPHRASE.to_string())
+    );
+
+    // And copied, not moved (FORBID-05): a user who downgrades still has them.
+    assert!(
+        store.contains(brand::LEGACY.keychain_service, INJECTED_PROJECT_KEY),
+        "the legacy project entry must survive the migration"
+    );
+    assert!(
+        store.contains(brand::LEGACY.keychain_ssh_service, &password_key),
+        "the legacy SSH password entry must survive the migration"
+    );
+    assert!(
+        store.contains(brand::LEGACY.keychain_ssh_service, &passphrase_key),
+        "the legacy SSH passphrase entry must survive the migration"
+    );
+}
+
+/// The credential seam must be thread-local for the same reason the brand seam
+/// is (`brand::tests::override_does_not_leak_into_other_threads`): cargo runs
+/// test fns on parallel threads inside one process. A process-global injection —
+/// which is exactly what `keyring::set_default_credential_builder` is, and why
+/// it could not serve as this seam — would hand one test's fake keychain to
+/// every sibling test and make every result here non-deterministic.
+#[test]
+fn an_injected_credential_backend_is_invisible_to_other_threads() {
+    let _global = installed_keychain();
+
+    let store = keychain_with_only_legacy_entries();
+    let _backend = credentials::override_backend(Arc::clone(&store) as Arc<dyn CredentialBackend>);
+
+    assert_eq!(
+        keyring_get(INJECTED_PROJECT_KEY).expect("this thread reads the injected keychain"),
+        Some(INJECTED_PROJECT_SECRET.to_string())
+    );
+
+    let observed = std::thread::spawn(|| keyring_get(INJECTED_PROJECT_KEY))
+        .join()
+        .expect("the sibling thread completes")
+        .expect("the sibling thread's read succeeds");
+    assert_eq!(
+        observed, None,
+        "a sibling thread must fall back to the shipped backend; if it saw the \
+         injected keychain, every assertion in this harness would depend on \
+         which test happened to run first"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The ledger: file-level shape the Wave-4 change must produce
 // ---------------------------------------------------------------------------
 
@@ -341,7 +531,6 @@ fn assert_no_frozen_service_literal(relative: &str, service: &str, line: &str) {
 }
 
 #[test]
-#[should_panic(expected = "still hardcodes the legacy keychain service")]
 fn desktop_keychain_service_is_not_frozen_into_a_literal() {
     assert_no_frozen_service_literal(
         "src/secure_storage.rs",
@@ -351,7 +540,6 @@ fn desktop_keychain_service_is_not_frozen_into_a_literal() {
 }
 
 #[test]
-#[should_panic(expected = "still hardcodes the legacy keychain service")]
 fn ssh_keychain_service_is_not_frozen_into_a_literal() {
     assert_no_frozen_service_literal(
         "src/ssh/credential_store.rs",
@@ -375,7 +563,6 @@ fn assert_reads_fall_back_to_legacy(relative: &str, legacy_field: &str, loses: &
 }
 
 #[test]
-#[should_panic(expected = "never consults brand::LEGACY.keychain_ssh_service")]
 fn ssh_credential_reads_fall_back_to_the_legacy_service() {
     assert_reads_fall_back_to_legacy(
         "src/ssh/credential_store.rs",
@@ -385,7 +572,6 @@ fn ssh_credential_reads_fall_back_to_the_legacy_service() {
 }
 
 #[test]
-#[should_panic(expected = "never consults brand::LEGACY.keychain_service")]
 fn desktop_credential_reads_fall_back_to_the_legacy_service() {
     assert_reads_fall_back_to_legacy(
         "src/secure_storage.rs",

@@ -8,6 +8,10 @@ mod browser_tab_manager;
 mod cli_session;
 mod commands;
 pub mod conversation;
+/// The injectable seam every OS-keychain read/write goes through. Public
+/// because the brand-migration harness in `tests/` links this crate as an
+/// external dependency and has to be able to substitute the backend.
+pub mod credentials;
 mod editor_workspaces;
 mod host_admission;
 mod logging;
@@ -32,6 +36,13 @@ mod trackers;
 mod updater_api;
 pub mod web;
 mod worktree;
+
+// The credential paths the brand migration has to be able to exercise for real.
+// `secure_storage` and `ssh` stay private: only the two credential surfaces are
+// re-exported, not the Tauri commands or the SSH manager around them.
+pub use secure_storage::{keyring_delete, keyring_get, keyring_set};
+pub use ssh::credential_store as ssh_credential_store;
+pub use ssh::known_hosts_migration;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
@@ -1520,6 +1531,15 @@ pub fn run() {
             // Startup diagnostic banner (issue #244): version, OS/arch, build
             // channel, session id, and resolved log path on a single line.
             logging::log_startup_banner(&handle);
+
+            // The app-managed SSH host-key store migrates unconditionally, here,
+            // rather than through the merge banner like the other legacy roots:
+            // SSH is used this session whether or not the user ever starts the
+            // merge, and a store left behind under the pre-rename name reads as
+            // empty, turning every previously trusted host into an unknown one
+            // that accept-new would re-trust. Run synchronously on the setup
+            // thread — `brand::canonical()` is thread-local (FORBID-07).
+            crate::ssh::known_hosts_migration::run_at_startup();
 
             // Conversation admission is the first app-managed storage/resource boundary.
             let app_data_dir = handle

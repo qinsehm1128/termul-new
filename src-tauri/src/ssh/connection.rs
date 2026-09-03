@@ -3,6 +3,7 @@
 //! Manages SSH connection lifecycle including connect, disconnect,
 //! heartbeat monitoring, and auto-reconnect with exponential backoff.
 
+use crate::ssh::known_hosts_migration;
 use crate::ssh::profile_manager::SSHProfile;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -249,8 +250,12 @@ impl SSHConnectionManager {
     /// persisted here (appended) instead of rewriting the user's shared
     /// `~/.ssh/known_hosts`, whose format (markers like `@cert-authority` /
     /// `@revoked`, unsupported key types, comments) libssh2's writer would drop.
+    ///
+    /// The file name comes from the brand seam, resolved on the calling thread
+    /// (FORBID-07), so a rename is a single edit in `brand.rs` and the store
+    /// written under the previous name can be migrated rather than orphaned.
     fn app_known_hosts_path() -> Option<std::path::PathBuf> {
-        Self::ssh_dir().map(|d| d.join("known_hosts_termul"))
+        Self::ssh_dir().map(|d| d.join(crate::brand::canonical().ssh_known_hosts_file))
     }
 
     /// Verify the server host key against the user's `known_hosts` plus the
@@ -304,9 +309,17 @@ impl SSHConnectionManager {
             )),
             CheckResult::NotFound => {
                 // accept-new: remember this host by appending a single OpenSSH
-                // line to the app-managed file (never rewriting the user's).
-                Self::append_known_host(host, port, key, key_type);
-                Ok(())
+                // line to the app-managed file (never rewriting the user's) —
+                // but only if that file is known to be complete.
+                let ssh_dir = Self::ssh_dir();
+                Self::accept_new(
+                    ssh_dir.as_deref(),
+                    known_hosts_migration::migration_failed(),
+                    host,
+                    port,
+                    key,
+                    key_type,
+                )
             }
             CheckResult::Failure => {
                 Err("Host key verification failed: unable to check known_hosts".to_string())
@@ -314,10 +327,76 @@ impl SSHConnectionManager {
         }
     }
 
+    /// Whether an unknown host may be trusted on first use.
+    ///
+    /// `check_port` cannot distinguish "this user had no known hosts" from
+    /// "this user's known hosts were left behind under the pre-rename file
+    /// name", and the second must never take the accept-new branch: the store
+    /// reads empty, every host the user already trusted looks new, and whatever
+    /// answers on that address is re-trusted — the exact state a
+    /// man-in-the-middle needs, produced by a rename.
+    ///
+    /// This is the same policy as the "the app-managed file exists but cannot be
+    /// read → fail closed" branch in `verify_host_key`, extended to cover a
+    /// store that may be incomplete. Verification of hosts that *are* known is
+    /// unaffected; only first-use trust is refused.
+    fn guard_accept_new(ssh_dir: Option<&Path>, migration_failed: bool) -> Result<(), String> {
+        if migration_failed {
+            return Err(
+                "Host key verification failed: the app-managed known_hosts store could not be \
+                 migrated, so previously trusted hosts may be missing. Refusing to trust a new \
+                 host key until the store is readable."
+                    .to_string(),
+            );
+        }
+
+        let Some(directory) = ssh_dir else {
+            return Ok(());
+        };
+        let legacy = crate::brand::LEGACY.ssh_known_hosts_file;
+        let canonical = crate::brand::canonical().ssh_known_hosts_file;
+        if legacy != canonical
+            && directory.join(legacy).exists()
+            && !directory.join(canonical).exists()
+        {
+            return Err(format!(
+                "Host key verification failed: the app-managed known_hosts store still exists as \
+                 {legacy} and was not carried over to {canonical}, so previously trusted hosts \
+                 are invisible. Refusing to trust a new host key until it is."
+            ));
+        }
+        Ok(())
+    }
+
+    /// Trust an unknown host on first use, recording it in the app-managed
+    /// store — unless [`Self::guard_accept_new`] says the store may be
+    /// incomplete, in which case nothing is written and the connection fails.
+    fn accept_new(
+        ssh_dir: Option<&Path>,
+        migration_failed: bool,
+        host: &str,
+        port: u16,
+        key: &[u8],
+        key_type: ssh2::HostKeyType,
+    ) -> Result<(), String> {
+        Self::guard_accept_new(ssh_dir, migration_failed)?;
+        if let Some(directory) = ssh_dir {
+            let path = directory.join(crate::brand::canonical().ssh_known_hosts_file);
+            Self::append_known_host(&path, host, port, key, key_type);
+        }
+        Ok(())
+    }
+
     /// Append a single OpenSSH-format known_hosts line to the app-managed file.
     /// Best-effort: failures are logged, not fatal (the host was still accepted
     /// for this session under TOFU).
-    fn append_known_host(host: &str, port: u16, key: &[u8], key_type: ssh2::HostKeyType) {
+    fn append_known_host(
+        path: &Path,
+        host: &str,
+        port: u16,
+        key: &[u8],
+        key_type: ssh2::HostKeyType,
+    ) {
         use std::io::Write;
 
         let key_type_str = match key_type {
@@ -345,10 +424,6 @@ impl SSHConnectionManager {
         let key_b64 = base64_encode(key);
         let line = format!("{} {} {}\n", host_entry, key_type_str, key_b64);
 
-        let path = match Self::app_known_hosts_path() {
-            Some(p) => p,
-            None => return,
-        };
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 log::warn!("[SSH] Failed to create {:?}: {}", parent, e);
@@ -832,6 +907,150 @@ mod tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    /// The post-rename spelling. Deliberately different from
+    /// `brand::LEGACY.ssh_known_hosts_file` so nothing below passes by accident.
+    const RENAMED_STORE: &str = "known_hosts_se-manager";
+
+    fn renamed_brand() -> crate::brand::BrandCanonical {
+        crate::brand::BrandCanonical {
+            ssh_known_hosts_file: RENAMED_STORE,
+            ..crate::brand::DEFAULT_CANONICAL
+        }
+    }
+
+    /// An ed25519-shaped blob; `append_known_host` only base64s it.
+    const HOST_KEY: &[u8] = b"\x00\x00\x00\x0bssh-ed25519 example blob";
+
+    #[test]
+    fn accept_new_records_an_unknown_host_when_the_store_is_whole() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _brand = crate::brand::override_canonical(renamed_brand());
+
+        SSHConnectionManager::accept_new(
+            Some(temp.path()),
+            false,
+            "example.com",
+            22,
+            HOST_KEY,
+            ssh2::HostKeyType::Ed25519,
+        )
+        .expect("a complete store accepts a new host");
+
+        let recorded =
+            std::fs::read_to_string(temp.path().join(RENAMED_STORE)).expect("store was written");
+        assert!(
+            recorded.starts_with("example.com ssh-ed25519 "),
+            "unexpected line: {recorded:?}"
+        );
+    }
+
+    /// A failed migration must fail *closed*. If it failed open, the canonical
+    /// store reads empty, every host the user already trusted looks new, and
+    /// accept-new re-trusts whatever answers.
+    #[test]
+    fn accept_new_refuses_and_writes_nothing_after_a_failed_migration() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _brand = crate::brand::override_canonical(renamed_brand());
+
+        let error = SSHConnectionManager::accept_new(
+            Some(temp.path()),
+            true,
+            "example.com",
+            22,
+            HOST_KEY,
+            ssh2::HostKeyType::Ed25519,
+        )
+        .expect_err("a failed store migration must refuse an unknown host");
+        assert!(
+            error.contains("could not be migrated"),
+            "unexpected error: {error}"
+        );
+
+        assert!(
+            !temp.path().join(RENAMED_STORE).exists(),
+            "nothing may be appended to a store that may be incomplete"
+        );
+        assert_eq!(
+            std::fs::read_dir(temp.path())
+                .expect("read the ssh dir")
+                .count(),
+            0,
+            "the refused accept-new must leave the directory untouched"
+        );
+    }
+
+    /// The other half of the same policy: the migration never ran, so the store
+    /// is sitting there under the previous name. `check_port` cannot tell that
+    /// from a first-ever connection, so the gate has to.
+    #[test]
+    fn accept_new_refuses_while_the_store_is_left_behind_under_the_legacy_name() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(crate::brand::LEGACY.ssh_known_hosts_file),
+            b"build-01.example.com ssh-ed25519 AAAAtrusted-long-ago\n",
+        )
+        .expect("plant the legacy store");
+        let _brand = crate::brand::override_canonical(renamed_brand());
+
+        let error = SSHConnectionManager::accept_new(
+            Some(temp.path()),
+            false,
+            "example.com",
+            22,
+            HOST_KEY,
+            ssh2::HostKeyType::Ed25519,
+        )
+        .expect_err("an uncarried store must refuse an unknown host");
+        assert!(
+            error.contains(crate::brand::LEGACY.ssh_known_hosts_file),
+            "the error must name the store that was left behind: {error}"
+        );
+        assert!(
+            !temp.path().join(RENAMED_STORE).exists(),
+            "nothing may be appended while the old store is unread"
+        );
+    }
+
+    /// Once the migration has carried the store across, first-use trust works
+    /// again — the gate is a safety interlock, not a permanent refusal.
+    #[test]
+    fn accept_new_resumes_once_the_store_has_been_carried_across() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let trusted = b"build-01.example.com ssh-ed25519 AAAAtrusted-long-ago\n";
+        std::fs::write(
+            temp.path().join(crate::brand::LEGACY.ssh_known_hosts_file),
+            trusted,
+        )
+        .expect("plant the legacy store");
+        std::fs::write(temp.path().join(RENAMED_STORE), trusted).expect("plant the carried store");
+        let _brand = crate::brand::override_canonical(renamed_brand());
+
+        SSHConnectionManager::accept_new(
+            Some(temp.path()),
+            false,
+            "example.com",
+            22,
+            HOST_KEY,
+            ssh2::HostKeyType::Ed25519,
+        )
+        .expect("a carried store accepts a new host");
+    }
+
+    /// Every build until the rename lands: the two names are the same, so the
+    /// "left behind" branch must never fire on the store the app is using.
+    #[test]
+    fn an_unrenamed_store_is_never_treated_as_left_behind() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(crate::brand::LEGACY.ssh_known_hosts_file),
+            b"build-01.example.com ssh-ed25519 AAAAtrusted-long-ago\n",
+        )
+        .expect("plant the store");
+
+        SSHConnectionManager::guard_accept_new(Some(temp.path()), false)
+            .expect("no rename has happened; accept-new must behave exactly as before");
     }
 
     #[test]
