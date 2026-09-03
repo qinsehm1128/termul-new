@@ -175,7 +175,7 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     skill_name: "termul-scheduled-tasks",
     skill_marker: "<!-- managed-by-termul:termul-scheduled-tasks -->",
     skill_manifest_key: "managedByTermul",
-    frp_proxy_name: "termul",
+    frp_proxy_name: "se-manager",
     state_dir: "termul",
     state_dir_windows: "Termul",
     ws_subprotocol: "termul-terminal-v2.binary",
