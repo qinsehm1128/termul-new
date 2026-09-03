@@ -1,3 +1,4 @@
+import { brandCanonical, LEGACY } from '@shared/brand'
 import { useCallback, useEffect } from 'react'
 import { runtimeT } from '@/i18n/runtime'
 import { acpApi, persistenceApi, terminalApi } from '@/lib/api'
@@ -179,6 +180,16 @@ export function useAppSettingsLoader(): void {
             appearanceMode: settings.appearanceMode ?? 'light'
           }
           shouldPersistSettings = true
+        }
+
+        // A settings blob written before the rename still names the brand
+        // theme by its legacy id. Normalize once, here at the read boundary,
+        // so nothing downstream has to know two spellings and the theme picker
+        // highlights the row the user actually chose. In-memory only: the
+        // write side does not flip this wave, so this must not mark the blob
+        // dirty and re-persist it.
+        if (settings.colorTheme === LEGACY.themeId) {
+          settings = { ...settings, colorTheme: brandCanonical().themeId }
         }
 
         if (rawAppearance === undefined && !hasLegacyLightThemeId) {

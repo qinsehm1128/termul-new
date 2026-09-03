@@ -1,3 +1,4 @@
+import { acceptedBrandValues } from '@shared/brand'
 import { openerApi } from '@/lib/api'
 import { randomUUID } from '@/lib/uuid'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
@@ -20,7 +21,10 @@ export async function openTerminalUrlInDedicatedBrowser(url: string): Promise<vo
 export async function openTerminalUrl(url: string): Promise<void> {
   const { terminalUrlOpenMode } = useAppSettingsStore.getState().settings
 
-  if (terminalUrlOpenMode === 'termul') {
+  // Membership, not equality: settings persisted before the rename carry the
+  // legacy enum member, and a user who chose the built-in browser must not be
+  // silently moved back to the system one.
+  if (acceptedBrandValues('urlOpenMode').includes(terminalUrlOpenMode)) {
     await openTerminalUrlInDedicatedBrowser(url)
     return
   }

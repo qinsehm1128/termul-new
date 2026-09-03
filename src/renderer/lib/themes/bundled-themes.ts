@@ -1,3 +1,4 @@
+import { brandCanonical, LEGACY } from '@shared/brand'
 import { BUNDLED_LIGHT_COLOR_THEMES } from './bundled-light-themes'
 import type { ColorThemeDefinition } from './types'
 
@@ -333,9 +334,70 @@ export const DEFAULT_COLOR_THEME_ID = 'termul'
 
 export const COLOR_THEME_LIST = Object.values(BUNDLED_COLOR_THEMES)
 
-export function getColorThemeDefinition(themeId: string): ColorThemeDefinition {
-  if (!Object.prototype.hasOwnProperty.call(BUNDLED_COLOR_THEMES, themeId)) {
-    return BUNDLED_COLOR_THEMES[DEFAULT_COLOR_THEME_ID]
+/** Memo for {@link resolvedColorThemes}, keyed by the two brand ids it bakes in. */
+let cachedBrandThemeKey: string | null = null
+let cachedResolvedThemes: Record<string, ColorThemeDefinition> | null = null
+
+/**
+ * The bundled themes keyed by every id that must resolve today: the brand
+ * theme's canonical id and its light twin, plus the ids a pre-rename install
+ * persisted. Both spellings answer with the *canonical* identity, so a user
+ * who picked the theme before the rename keeps it rather than being dropped
+ * onto the default by `getColorThemeDefinition`'s silent fallback.
+ *
+ * Built here rather than captured at module scope: `brandCanonical()` is an
+ * overridable seam, and a table frozen at import time would still answer with
+ * the pre-rename identity after the seam moved. Memoized on the two ids so a
+ * lookup stays a hash probe, and short-circuited to the authored table while
+ * canonical and legacy are still the same value — which is every read until
+ * Wave 5 flips them.
+ */
+function resolvedColorThemes(): Record<string, ColorThemeDefinition> {
+  const { themeId, themeFamilyLight } = brandCanonical()
+  if (themeId === LEGACY.themeId && themeFamilyLight === LEGACY.themeFamilyLight) {
+    return BUNDLED_COLOR_THEMES
   }
-  return BUNDLED_COLOR_THEMES[themeId]
+
+  const brandKey = `${themeId} ${themeFamilyLight}`
+  if (cachedResolvedThemes !== null && cachedBrandThemeKey === brandKey) {
+    return cachedResolvedThemes
+  }
+
+  const dark: ColorThemeDefinition = {
+    ...BUNDLED_COLOR_THEMES[LEGACY.themeId],
+    id: themeId,
+    familyId: themeId
+  }
+  const light: ColorThemeDefinition = {
+    ...BUNDLED_COLOR_THEMES[LEGACY.themeFamilyLight],
+    id: themeFamilyLight,
+    familyId: themeId
+  }
+  const resolved: Record<string, ColorThemeDefinition> = {
+    ...BUNDLED_COLOR_THEMES,
+    [LEGACY.themeId]: dark,
+    [themeId]: dark,
+    [LEGACY.themeFamilyLight]: light,
+    [themeFamilyLight]: light
+  }
+
+  cachedBrandThemeKey = brandKey
+  cachedResolvedThemes = resolved
+  return resolved
+}
+
+/**
+ * Whether `themeId` names a bundled theme — under its canonical id or under
+ * the id a pre-rename install persisted.
+ */
+export function hasBundledColorTheme(themeId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(resolvedColorThemes(), themeId)
+}
+
+export function getColorThemeDefinition(themeId: string): ColorThemeDefinition {
+  const themes = resolvedColorThemes()
+  if (!Object.prototype.hasOwnProperty.call(themes, themeId)) {
+    return themes[DEFAULT_COLOR_THEME_ID]
+  }
+  return themes[themeId]
 }

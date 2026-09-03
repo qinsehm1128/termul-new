@@ -3,9 +3,9 @@ import { forEachTerminal } from '@/utils/terminal-registry'
 import { ansi16FromPalette } from './ansi-palette'
 import { applyThemeToTerminal } from './apply-theme-to-terminal'
 import {
-  BUNDLED_COLOR_THEMES,
   DEFAULT_COLOR_THEME_ID,
-  getColorThemeDefinition
+  getColorThemeDefinition,
+  hasBundledColorTheme
 } from './bundled-themes'
 import { darkenHex, hexToHslComponents, lightenHex, mixHex } from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
@@ -143,7 +143,7 @@ export function getActiveTerminalTheme(): ITheme {
 }
 
 export function isKnownColorThemeId(themeId: string): boolean {
-  return Object.prototype.hasOwnProperty.call(BUNDLED_COLOR_THEMES, themeId)
+  return hasBundledColorTheme(themeId)
 }
 
 /** @internal for tests */

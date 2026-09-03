@@ -25,7 +25,7 @@ import {
   brandCanonical,
   LEGACY
 } from '@shared/brand'
-import { afterEach, describe, expect, it, test } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { isKnownColorThemeId } from './apply-color-theme'
 import { DEFAULT_COLOR_THEME_ID, getColorThemeDefinition } from './bundled-themes'
 
@@ -62,12 +62,10 @@ describe('persisted color theme id across the rename', () => {
     expect(isKnownColorThemeId(persistedColorTheme(LIGHT_FIXTURE))).toBe(true)
   })
 
-  // LEDGER (Wave 4) — expected failure. `BUNDLED_COLOR_THEMES` is keyed by a
-  // hardcoded 'termul' and neither `getColorThemeDefinition` nor
-  // `isKnownColorThemeId` consults `brandCanonical()`, so a persisted dark
-  // theme cannot resolve to its post-rename identity. Delete this test,
-  // `.fails` and all, once a legacy id resolves to the canonical theme.
-  test.fails('resolves the persisted dark theme to its post-rename identity', () => {
+  // T-A03 landed: `getColorThemeDefinition` and `isKnownColorThemeId` both go
+  // through a table re-keyed from `brandCanonical()`, so the persisted dark id
+  // resolves to the canonical theme instead of the silent default fallback.
+  it('resolves the persisted dark theme to its post-rename identity', () => {
     __setBrandCanonicalOverride(CANONICAL_OVERRIDE)
     const persisted = persistedColorTheme(DARK_FIXTURE)
 
@@ -81,11 +79,9 @@ describe('persisted color theme id across the rename', () => {
     expect(resolved.appearance).toBe('dark')
   })
 
-  // LEDGER (Wave 4) — expected failure. Same root cause on the light twin,
-  // which the default-theme fallback can never impersonate: it is not the
-  // default. Delete this test, `.fails` and all, once a legacy light id
-  // resolves to the canonical light theme.
-  test.fails('resolves the persisted light theme to its post-rename identity', () => {
+  // T-A03 landed on the light twin too — the one the default-theme fallback
+  // can never impersonate, because it is not the default.
+  it('resolves the persisted light theme to its post-rename identity', () => {
     __setBrandCanonicalOverride(CANONICAL_OVERRIDE)
     const persisted = persistedColorTheme(LIGHT_FIXTURE)
 

@@ -21,7 +21,7 @@ import {
   brandCanonical,
   LEGACY
 } from '@shared/brand'
-import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -100,12 +100,10 @@ describe('terminal url open mode across the rename', () => {
     expectBuiltInBrowserBranch('https://example.com')
   })
 
-  // LEDGER (Wave 4) — expected failure. `openTerminalUrl` compares the
-  // persisted mode against a hardcoded 'termul' and consults neither
-  // `brandCanonical()` nor `LEGACY`, so the mode written *after* the flip falls
-  // through to the system browser. Delete this test, `.fails` and all, once the
-  // branch accepts the canonical mode alongside the legacy one.
-  test.fails('honours the post-rename mode', async () => {
+  // T-A03 landed: `openTerminalUrl` tests the persisted mode for membership in
+  // `acceptedBrandValues('urlOpenMode')`, so the mode written after the flip
+  // reaches the built-in browser instead of falling through to the system one.
+  it('honours the post-rename mode', async () => {
     __setBrandCanonicalOverride({ urlOpenMode: 'se' })
     loadPersistedMode(brandCanonical().urlOpenMode)
 
