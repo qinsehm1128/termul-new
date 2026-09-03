@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { readPersistedPanelSize } from '@/hooks/use-persisted-panel-size'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
+import { EDITOR_REVEAL_LINE_EVENT } from '@/lib/editor-events'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -930,13 +931,13 @@ export function FileExplorer({
           window as unknown as { __termulPendingRevealLine?: typeof revealDetail }
         ).__termulPendingRevealLine = revealDetail
         window.dispatchEvent(
-          new CustomEvent('termul:reveal-line', {
+          new CustomEvent(EDITOR_REVEAL_LINE_EVENT, {
             detail: revealDetail
           })
         )
         requestAnimationFrame(() => {
           window.dispatchEvent(
-            new CustomEvent('termul:reveal-line', {
+            new CustomEvent(EDITOR_REVEAL_LINE_EVENT, {
               detail: revealDetail
             })
           )

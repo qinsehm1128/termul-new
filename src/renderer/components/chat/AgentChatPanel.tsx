@@ -447,7 +447,7 @@ export function AgentChatPanel({
       // `showOskSpacer` gate ensures this only fires in the mobile web shell.
       style={
         showOskSpacer
-          ? { paddingBottom: `var(--termul-keyboard-height, ${osk.keyboardHeight}px)` }
+          ? { paddingBottom: `var(--se-keyboard-height, ${osk.keyboardHeight}px)` }
           : undefined
       }
     >

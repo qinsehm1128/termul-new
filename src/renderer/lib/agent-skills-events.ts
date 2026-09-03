@@ -1,4 +1,4 @@
-export const AGENT_SKILLS_CHANGED_EVENT = 'termul:agent-skills-changed'
+export const AGENT_SKILLS_CHANGED_EVENT = 'se:agent-skills-changed'
 
 export interface AgentSkillsChangedDetail {
   root: string

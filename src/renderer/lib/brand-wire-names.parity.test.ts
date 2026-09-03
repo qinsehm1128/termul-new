@@ -8,9 +8,9 @@
  * property written by one file and read by another). Nothing type-checks these
  * pairings, and the existing tests do not close them either — most visibly
  * `use-osk-viewport.test.ts`, which asserts the hook writes
- * `--termul-keyboard-height` and then asserts it can read that same literal
- * back out of the style object it just watched being set. A rename that missed
- * the consumer keeps it green.
+ * `--se-keyboard-height` and then asserts it can read that same literal back
+ * out of the style object it just watched being set. A rename that missed the
+ * consumer keeps it green.
  *
  * So nothing here is written down as a literal. Each name is extracted from
  * its declaring file on disk, and the consumers are found by scanning the
@@ -19,7 +19,7 @@
  * knows is the prefix it asks the brand seam for.
  *
  * On the CSS-property contract, note what the scan actually finds:
- * `--termul-keyboard-height` is written in `hooks/use-osk-viewport.ts` and read
+ * `--se-keyboard-height` is written in `hooks/use-osk-viewport.ts` and read
  * in `components/chat/AgentChatPanel.tsx`. It is *not* in `index.css` —
  * `index.css` declares no brand-prefixed custom property at all. The stylesheet
  * is still read from disk and folded into the consumer scan so the pairing
@@ -108,7 +108,7 @@ afterEach(() => {
  *
  * The property under test is that the wire name has exactly *one* spelling on
  * disk. A dispatcher and a listener that each carry their own copy of
- * `'termul:color-theme-changed'` type-check, run, and pass every existing test
+ * `'se:color-theme-changed'` type-check, run, and pass every existing test
  * — right up until a rename touches one copy and not the other. Requiring the
  * literal to exist in exactly one file, and every other participant to go
  * through the exported symbol, makes that divergence impossible to introduce
@@ -165,6 +165,17 @@ describeEventContract(
   'AGENT_SKILLS_CHANGED_EVENT'
 )
 
+// The reveal-line event used to be an inline literal at both ends — a
+// dispatcher in `FileExplorer` and a listener in `CodeEditor`, each holding its
+// own copy of the string. That is exactly the drift this file exists to
+// prevent, so T-A09 gave it a declaring module and brought it under the same
+// contract as the other two.
+describeEventContract(
+  'EDITOR_REVEAL_LINE_EVENT',
+  'src/renderer/lib/editor-events.ts',
+  'EDITOR_REVEAL_LINE_EVENT'
+)
+
 describe('brand-prefixed CSS custom properties', () => {
   const prefix = brandCanonical().cssVarPrefix
   const writePattern = new RegExp(
@@ -208,7 +219,7 @@ describe('brand-prefixed CSS custom properties', () => {
   })
 
   it('matches every consumed property back to a writer', () => {
-    // The reverse direction: a `var(--termul-…)` that nothing sets renders as
+    // The reverse direction: a `var(--se-…)` that nothing sets renders as
     // the fallback forever, silently.
     const unwritten = [...new Set([...readVia.keys(), ...declaredInCss.keys()])]
       .filter((name) => !written.has(name))

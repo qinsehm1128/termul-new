@@ -175,7 +175,7 @@ describe('useOskViewport', () => {
     expect(result.current.offsetTop).toBe(0)
   })
 
-  it('detects iOS scroll OSK and mirrors --termul-keyboard-height to documentElement', async () => {
+  it('detects iOS scroll OSK and mirrors --se-keyboard-height to documentElement', async () => {
     // Align baseline (window.innerHeight) with the stub's starting height so
     // keyboardHeight assertions are exact (jsdom's default innerHeight is 768,
     // but the stub starts at 800 — the baseline captured at mount is the
@@ -198,7 +198,7 @@ describe('useOskViewport', () => {
     expect(result.current.height).toBe(baseline - 300)
     expect(result.current.offsetTop).toBe(300)
 
-    const cssVar = document.documentElement.style.getPropertyValue('--termul-keyboard-height')
+    const cssVar = document.documentElement.style.getPropertyValue('--se-keyboard-height')
     expect(cssVar).toBe('300px')
   })
 
@@ -261,7 +261,7 @@ describe('useOskViewport', () => {
     expect(rafCalls).toBeLessThan(5)
   })
 
-  it('restores --termul-keyboard-height to 0px when OSK closes', async () => {
+  it('restores --se-keyboard-height to 0px when OSK closes', async () => {
     const baseline = window.innerHeight
     const vv = installVisualViewport({ height: baseline, offsetTop: 0 })
     const { result } = renderHook(() => useOskViewport())
@@ -271,9 +271,7 @@ describe('useOskViewport', () => {
       vv.fireResize()
     })
     await waitFor(() =>
-      expect(document.documentElement.style.getPropertyValue('--termul-keyboard-height')).toBe(
-        '300px'
-      )
+      expect(document.documentElement.style.getPropertyValue('--se-keyboard-height')).toBe('300px')
     )
 
     await act(async () => {
@@ -281,6 +279,6 @@ describe('useOskViewport', () => {
       vv.fireResize()
     })
     await waitFor(() => expect(result.current.isOskOpen).toBe(false))
-    expect(document.documentElement.style.getPropertyValue('--termul-keyboard-height')).toBe('0px')
+    expect(document.documentElement.style.getPropertyValue('--se-keyboard-height')).toBe('0px')
   })
 })

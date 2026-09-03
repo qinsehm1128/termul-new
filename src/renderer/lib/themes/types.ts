@@ -65,7 +65,7 @@ export interface ResolvedSyntaxColors {
   link: string
 }
 
-export const COLOR_THEME_CHANGED_EVENT = 'termul:color-theme-changed'
+export const COLOR_THEME_CHANGED_EVENT = 'se:color-theme-changed'
 
 export interface ColorThemeChangedDetail {
   themeId: string

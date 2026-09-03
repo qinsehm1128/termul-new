@@ -9,6 +9,7 @@ import {
   registerEditorContentFlusher,
   unregisterEditorContentFlusher
 } from '@/lib/editor-content-flush'
+import { EDITOR_REVEAL_LINE_EVENT } from '@/lib/editor-events'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import { TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
 import { TocPanel } from './TocPanel'
@@ -224,8 +225,8 @@ export function CodeEditor({
       pendingRevealTermRef.current = undefined
     }
 
-    window.addEventListener('termul:reveal-line', handler)
-    return () => window.removeEventListener('termul:reveal-line', handler)
+    window.addEventListener(EDITOR_REVEAL_LINE_EVENT, handler)
+    return () => window.removeEventListener(EDITOR_REVEAL_LINE_EVENT, handler)
   }, [filePath, isVisible, scrollToLine, view])
 
   useEffect(() => {

@@ -2,6 +2,7 @@ import type { EditorView } from '@codemirror/view'
 import { render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useCodeMirror } from '@/hooks/use-codemirror'
+import { EDITOR_REVEAL_LINE_EVENT } from '@/lib/editor-events'
 import { CodeEditor } from './CodeEditor'
 
 const mockFocus = vi.fn()
@@ -107,7 +108,7 @@ describe('CodeEditor', () => {
     )
 
     window.dispatchEvent(
-      new CustomEvent('termul:reveal-line', {
+      new CustomEvent(EDITOR_REVEAL_LINE_EVENT, {
         detail: {
           filePath: '/project/src/example.ts',
           lineNumber: 7,
