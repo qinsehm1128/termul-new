@@ -59,7 +59,7 @@ struct HomeView: View {
 
     private var toolbar: some View {
         HStack {
-            Text("Termul Remote")
+            Text("Se Remote")
                 .font(.system(.headline, design: .serif))
             Spacer()
             Button {
@@ -80,7 +80,7 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Termul Remote")
+            Text("Se Remote")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(SeTheme.muted)
                 .textCase(.uppercase)

@@ -196,7 +196,7 @@ enum RemoteLinkError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            String(localized: "That does not look like a Termul access link.")
+            String(localized: "That does not look like a Se access link.")
         case .httpsRequired:
             String(localized: "Public hosts need HTTPS. A LAN address such as 192.168.x.x is allowed over HTTP.")
         case .missingToken:

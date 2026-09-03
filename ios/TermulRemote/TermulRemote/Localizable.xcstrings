@@ -808,12 +808,12 @@
         }
       }
     },
-    "Termul Remote" : {
+    "Se Remote" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Termul Remote"
+            "value" : "Se Remote"
           }
         }
       }
@@ -829,12 +829,12 @@
         }
       }
     },
-    "That does not look like a Termul access link." : {
+    "That does not look like a Se access link." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这不像是 Termul 的访问链接。"
+            "value" : "这不像是 Se 的访问链接。"
           }
         }
       }

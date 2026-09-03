@@ -7,13 +7,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Termul"
+            "value" : "Se"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Termul"
+            "value" : "Se"
           }
         }
       }
@@ -25,7 +25,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "TermulRemote"
+            "value" : "SeRemote"
           }
         }
       }
@@ -36,13 +36,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Termul uses the camera to scan the desktop remote-access QR code."
+            "value" : "Se uses the camera to scan the desktop remote-access QR code."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Termul 使用相机扫描桌面远程访问二维码。"
+            "value" : "Se 使用相机扫描桌面远程访问二维码。"
           }
         }
       }
