@@ -72,6 +72,20 @@ pub struct BrandCanonical {
     pub skill_name: &'static str,
     /// HTML marker identifying a skill file this app wrote.
     pub skill_marker: &'static str,
+    /// On-disk key of the managed-skill manifest's ownership flag
+    /// (`.termul/managed-skills.json`).
+    ///
+    /// `ManagedSkillManifestV1` carries `#[serde(rename_all = "camelCase",
+    /// deny_unknown_fields)]` (`src/skills/provisioner.rs:67-76`), so the Rust
+    /// field identifier `managed_by_termul` *is* this JSON key — there is no
+    /// literal anywhere to grep for. `deny_unknown_fields` then means a manifest
+    /// already on a user's disk stops deserializing the instant the key moves.
+    ///
+    /// Serde attributes accept literals only, so production cannot read this
+    /// constant. It exists to give the value a single source that a source-text
+    /// parity check can compare the attribute against; see
+    /// `tests/legacy_brand_skill_manifest.rs`.
+    pub skill_manifest_key: &'static str,
     /// frp `[[proxies]]` registration name.
     pub frp_proxy_name: &'static str,
     /// Standalone-server state root directory name (unix, lowercase).
@@ -110,6 +124,7 @@ pub const LEGACY: BrandCanonical = BrandCanonical {
     mcp_server_name: "termul",
     skill_name: "termul-scheduled-tasks",
     skill_marker: "<!-- managed-by-termul:termul-scheduled-tasks -->",
+    skill_manifest_key: "managedByTermul",
     frp_proxy_name: "termul",
     state_dir: "termul",
     state_dir_windows: "Termul",
@@ -143,6 +158,7 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     mcp_server_name: "termul",
     skill_name: "termul-scheduled-tasks",
     skill_marker: "<!-- managed-by-termul:termul-scheduled-tasks -->",
+    skill_manifest_key: "managedByTermul",
     frp_proxy_name: "termul",
     state_dir: "termul",
     state_dir_windows: "Termul",

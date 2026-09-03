@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "managedByTermul": true,
+  "skillName": "termul-scheduled-tasks",
+  "templateVersion": 2,
+  "sha256": "44a56ef212ad858a7a5917e82d08689013497f8760026ec152848ccbb158edb1",
+  "paths": [
+    "/Users/alice/Documents/Termul/quiet-harbor-4821/.agents/skills/termul-scheduled-tasks/SKILL.md",
+    "/Users/alice/Documents/Termul/quiet-harbor-4821/.claude/skills/termul-scheduled-tasks/SKILL.md"
+  ]
+}

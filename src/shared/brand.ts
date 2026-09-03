@@ -79,6 +79,18 @@ export interface BrandCanonical {
   readonly skillName: string
   /** HTML marker identifying a skill file this app wrote. */
   readonly skillMarker: string
+  /**
+   * On-disk key of the managed-skill manifest's ownership flag
+   * (`.termul/managed-skills.json`).
+   *
+   * Mirrors `brand.rs`'s `skill_manifest_key`. The Rust struct that owns this
+   * file carries `#[serde(rename_all = "camelCase", deny_unknown_fields)]`, so
+   * the field identifier *is* the JSON key and there is no literal to grep for;
+   * `deny_unknown_fields` means an existing user manifest stops deserializing
+   * the moment the key moves. Held here so both sides keep an identical field
+   * set — nothing in the renderer reads this file.
+   */
+  readonly skillManifestKey: string
   /** frp `[[proxies]]` registration name. */
   readonly frpProxyName: string
   /** Standalone-server state root directory name (unix, lowercase). */
@@ -123,6 +135,7 @@ export const LEGACY: BrandCanonical = {
   mcpServerName: 'termul',
   skillName: 'termul-scheduled-tasks',
   skillMarker: '<!-- managed-by-termul:termul-scheduled-tasks -->',
+  skillManifestKey: 'managedByTermul',
   frpProxyName: 'termul',
   stateDir: 'termul',
   iosDefaultsPrefix: 'termul.',
@@ -165,6 +178,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   mcpServerName: 'termul',
   skillName: 'termul-scheduled-tasks',
   skillMarker: '<!-- managed-by-termul:termul-scheduled-tasks -->',
+  skillManifestKey: 'managedByTermul',
   frpProxyName: 'termul',
   stateDir: 'termul',
   iosDefaultsPrefix: 'termul.',
