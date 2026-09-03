@@ -187,8 +187,8 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     env_prefix: "TERMUL_",
     dom_global_prefix: "__se",
     deep_link_scheme: "termul",
-    storage_prefix: "termul-store:",
-    storage_key_prefix: "termul:",
+    storage_prefix: "se-store:",
+    storage_key_prefix: "se:",
 };
 
 thread_local! {

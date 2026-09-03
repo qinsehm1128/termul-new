@@ -1,4 +1,4 @@
-import { LEGACY } from '@shared/brand'
+import { brandCanonical } from '@shared/brand'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import {
   ChevronDown,
@@ -36,12 +36,16 @@ import { FileTreeContextMenuContent } from './FileTreeContextMenu'
 import { FileTreeNodeWrapper } from './FileTreeNode'
 
 /**
- * Still the legacy prefix: the width is read and written under one key, so
- * naming the canonical one here would flip the write too (that is T-A08's).
- * Safe at module scope in a way `brandCanonical()` would not be — `LEGACY` is
- * permanent and the brand seam cannot move it.
+ * The canonical prefix (T-A08): the width is read and written under one key, so
+ * this flips the write. `readPersistedPanelSize` still probes the legacy
+ * spelling, which is what carries an existing width over.
+ *
+ * A function, not the module-scope `const` it replaced — `brandCanonical()`
+ * captured at module scope would freeze before a test could move the seam.
  */
-const EXPLORER_WIDTH_STORAGE_KEY = `${LEGACY.storageKeyPrefix}file-explorer-width`
+function explorerWidthStorageKey(): string {
+  return `${brandCanonical().storageKeyPrefix}file-explorer-width`
+}
 
 interface InlineInputState {
   parentPath: string
@@ -121,7 +125,7 @@ export function FileExplorer({
   // one place that knows a width persisted before the rename still lives under
   // the legacy prefix. The clamp and fallback are the same numbers as before.
   const [explorerWidth, setExplorerWidth] = useState(() =>
-    readPersistedPanelSize(EXPLORER_WIDTH_STORAGE_KEY, 256, 220, 560)
+    readPersistedPanelSize(explorerWidthStorageKey(), 256, 220, 560)
   )
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -195,7 +199,7 @@ export function FileExplorer({
 
   useEffect(() => {
     try {
-      window.localStorage?.setItem(EXPLORER_WIDTH_STORAGE_KEY, String(explorerWidth))
+      window.localStorage?.setItem(explorerWidthStorageKey(), String(explorerWidth))
     } catch {
       // Ignore localStorage access failures in restricted environments.
     }

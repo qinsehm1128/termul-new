@@ -1,4 +1,4 @@
-import { LEGACY } from '@shared/brand'
+import { brandCanonical } from '@shared/brand'
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
 import { motion } from 'framer-motion'
@@ -408,10 +408,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isTerminalListVisible = useTerminalListPanelVisible()
   const isSidebarVisible = useSidebarVisible()
   const [cliRailHeight, setCliRailHeight] = usePersistedPanelSize(
-    // Still the legacy prefix: `usePersistedPanelSize` reads and writes the
-    // same key, so naming the canonical one here would flip the write too.
-    // T-A08 does that; `readPersistedPanelSize` already reads both.
-    `${LEGACY.storageKeyPrefix}cli-session-rail-height`,
+    // Canonical prefix (T-A08). `usePersistedPanelSize` reads and writes the
+    // same key, so this flips the write; `readPersistedPanelSize` still probes
+    // the legacy spelling, which is what carries an existing height over.
+    // Resolved here rather than at module scope — the brand seam is overridable.
+    `${brandCanonical().storageKeyPrefix}cli-session-rail-height`,
     { initial: 260, min: 140, max: 720 }
   )
   const isMobileWebShell = useMobileWebShell()
@@ -2725,7 +2726,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               >
                 <ResizableRail
                   side="left"
-                  storageKey={`${LEGACY.storageKeyPrefix}sidebar-width`}
+                  storageKey={`${brandCanonical().storageKeyPrefix}sidebar-width`}
                   initial={240}
                   min={180}
                   max={420}
@@ -2809,7 +2810,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   >
                     <ResizableRail
                       side="right"
-                      storageKey={`${LEGACY.storageKeyPrefix}file-explorer-width`}
+                      storageKey={`${brandCanonical().storageKeyPrefix}file-explorer-width`}
                       initial={256}
                       min={220}
                       max={560}

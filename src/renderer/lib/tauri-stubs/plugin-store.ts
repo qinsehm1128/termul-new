@@ -17,21 +17,22 @@
  * The class shape and method signatures are preserved so every existing
  * consumer unblocks without per-consumer edits.
  */
-import { acceptedBrandValues, LEGACY } from '@shared/brand'
+import { acceptedBrandValues, brandCanonical } from '@shared/brand'
 
 /**
- * The prefix a write lands under — still the legacy one.
+ * The prefix a write lands under — the canonical one (T-A08).
  *
- * A web install's projects, editor layout and panel sizes already sit under
- * this namespace, and FORBID-04 rules out emitting both spellings, so the flip
- * is a single deliberate edit (T-A08) rather than a dual-write window. Every
- * read below accepts both prefixes, which is what makes that edit safe.
+ * A web install's projects, editor layout and panel sizes still sit under the
+ * legacy namespace, and FORBID-04 rules out emitting both spellings, so this is
+ * a single deliberate edit rather than a dual-write window. Every read below
+ * accepts both prefixes, which is what makes it safe: the first write to a key
+ * moves it forward, and until then the legacy copy is what answers.
  *
  * A function, not a `const`: the brand seam is overridable, and a prefix
  * captured at module scope would freeze before a test could move it.
  */
 function writePrefix(): string {
-  return LEGACY.storagePrefix
+  return brandCanonical().storagePrefix
 }
 
 /**

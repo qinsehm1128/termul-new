@@ -16,7 +16,7 @@ import {
 } from '../lib/testimonial-ui';
 import type { AdminTestimonial, TestimonialStatus } from '../types/testimonials';
 
-const SESSION_TOKEN_KEY = 'termul:testimonial-admin-token';
+const SESSION_TOKEN_KEY = 'se:testimonial-admin-token';
 type LoadStatus = 'idle' | 'loading' | 'error';
 const statusMeta: Record<
   TestimonialStatus,

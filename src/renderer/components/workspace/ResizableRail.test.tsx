@@ -11,7 +11,7 @@ describe('ResizableRail', () => {
     render(
       <ResizableRail
         side="left"
-        storageKey="termul:sidebar-width"
+        storageKey="se:sidebar-width"
         initial={240}
         min={180}
         max={420}
@@ -34,7 +34,7 @@ describe('ResizableRail', () => {
     render(
       <ResizableRail
         side="right"
-        storageKey="termul:file-explorer-width"
+        storageKey="se:file-explorer-width"
         initial={256}
         min={220}
         max={560}

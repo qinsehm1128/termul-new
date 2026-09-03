@@ -25,7 +25,7 @@ import {
   brandCanonical,
   LEGACY
 } from '@shared/brand'
-import { afterEach, describe, expect, it, test } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { readPersistedPanelSize } from '@/hooks/use-persisted-panel-size'
 import { Store } from './plugin-store'
 
@@ -118,12 +118,12 @@ describe('persisted localStorage namespaces across the rename', () => {
     }
   })
 
-  // LEDGER (Wave 4) — expected failure. `STORAGE_PREFIX` is a hardcoded
-  // 'termul-store:' and the `Store` stub never consults `brandCanonical()`, so
-  // a value written today still lands in the legacy namespace. Delete this
-  // test, `.fails` and all, once the stub writes the canonical prefix (and
-  // reads the legacy one).
-  test.fails('writes new values into the post-rename namespace', async () => {
+  // Was a Wave-4 ledger entry (`test.fails`): the stub's write prefix was a
+  // hardcoded legacy 'termul-store:' that never consulted `brandCanonical()`, so
+  // a value written today still landed in the legacy namespace. T-A08 pointed
+  // `writePrefix()` at the seam, which discharged the entry; the `.fails` is
+  // gone and this stands as a live guard against the write drifting back.
+  it('writes new values into the post-rename namespace', async () => {
     __setBrandCanonicalOverride(CANONICAL_OVERRIDE)
     const dump = loadDump()
     const sample = namespacedEntries(dump)[0]

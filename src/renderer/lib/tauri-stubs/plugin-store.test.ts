@@ -67,7 +67,7 @@ describe('plugin-store localStorage stub', () => {
   it('degrades silently on corrupt JSON (returns undefined)', async () => {
     const store = await Store.load('corrupt.json')
     // write raw garbage straight into localStorage under the namespace
-    localStorage.setItem('termul-store:corrupt.json::bad', '{not-json')
+    localStorage.setItem('se-store:corrupt.json::bad', '{not-json')
     expect(await store.get('bad')).toBeUndefined()
   })
 
@@ -119,7 +119,7 @@ describe('plugin-store localStorage stub', () => {
 
   it('clear() on a namespace containing `::` does not bleed into a namespace it prefixes', async () => {
     // `a.json` and `a::b.json` — without namespace escaping, `clear()` on
-    // `a.json` prefix-matches `termul-store:a.json::` over `termul-store:a::b.json::`
+    // `a.json` prefix-matches `se-store:a.json::` over `se-store:a::b.json::`
     // and would delete `a::b.json`'s keys too.
     const a = await Store.load('a.json')
     const ab = await Store.load('a::b.json')

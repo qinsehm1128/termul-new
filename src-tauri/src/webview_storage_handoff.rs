@@ -723,12 +723,18 @@ mod tests {
         fs::write(handoff_path(app_data), b"{ this is not json").unwrap();
         assert!(pending(app_data).is_none(), "unparseable");
 
+        let entries: BTreeMap<String, String> = [(
+            format!("{}theme", brand::LEGACY.storage_key_prefix),
+            "dark".to_string(),
+        )]
+        .into_iter()
+        .collect();
         fs::write(
             handoff_path(app_data),
             serde_json::to_vec(&serde_json::json!({
                 "schemaVersion": HANDOFF_SCHEMA_VERSION + 1,
                 "writtenUnder": brand::LEGACY.bundle_id,
-                "entries": { "termul:theme": "dark" }
+                "entries": entries
             }))
             .unwrap(),
         )
