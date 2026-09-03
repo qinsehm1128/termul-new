@@ -378,7 +378,7 @@ impl ServerConfig {
     ///
     /// Patch 15: empty env var values (`XDG_STATE_HOME=""`, `HOME=""`,
     /// `LOCALAPPDATA=""`) are filtered out so the manifests do not land in a
-    /// relative `./termul` dir (CWD-dependent, unbounded). A truly unset env
+    /// relative `./<state dir>` (CWD-dependent, unbounded). A truly unset env
     /// var falls through to the next branch; an empty-string env var now
     /// behaves the same way (the next branch or the temp-dir fallback).
     /// Resolve the standalone visible Conversation workspace base. CLI wins over the
@@ -1295,7 +1295,7 @@ mod tests {
 
     // Patch 15: `service_account_state_dir` filters out empty env var values
     // so an empty `XDG_STATE_HOME` / `HOME` / `LOCALAPPDATA` does not produce
-    // a relative `./termul` dir.
+    // a relative `./<state dir>`.
     #[test]
     fn service_account_state_dir_falls_through_empty_env_var() {
         let cfg = ServerConfig {
@@ -1318,7 +1318,7 @@ mod tests {
         // test runner, so we assert the contract indirectly: the resolved
         // path is EITHER under $HOME / $XDG_STATE_HOME (when set + non-empty)
         // OR falls back to the OS temp dir. In both cases it must NOT be a
-        // relative `./termul` path (which would be CWD-dependent).
+        // relative `./<state dir>` path (which would be CWD-dependent).
         let resolved = cfg.service_account_state_dir();
         assert!(
             resolved.is_absolute(),
