@@ -164,7 +164,7 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   envPrefix: 'SE_',
   workspaceDir: '.se-manager',
   displayName: 'Se',
-  displayNameFull: 'Termul Manager',
+  displayNameFull: 'Se Manager',
   packageName: 'se-manager',
   serverBinary: 'se-server',
   bundleId: 'com.se-manager.app',

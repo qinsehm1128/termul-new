@@ -165,7 +165,7 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     plan_fence: "termul-plan",
     workspace_dir: ".se-manager",
     display_name: "Se",
-    display_name_full: "Termul Manager",
+    display_name_full: "Se Manager",
     package_name: "se-manager",
     server_binary: "se-server",
     bundle_id: "com.se-manager.app",

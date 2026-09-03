@@ -1,6 +1,6 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Termul Manager",
+	"productName": "Se Manager",
 	"version": "0.5.9",
 	"identifier": "com.se-manager.app",
 	"build": {
@@ -68,8 +68,8 @@
 		"publisher": "qinsehm1128",
 		"copyright": "Copyright © 2025 gnoviawan; © 2026 qinsehm1128. MIT licensed.",
 		"category": "Productivity",
-		"shortDescription": "Termul Manager - Project-aware terminal manager",
-		"longDescription": "Termul Manager is a desktop application built with Tauri for enhanced productivity. Organize terminals by project with persistent sessions and snapshots.",
+		"shortDescription": "Se Manager - Project-aware terminal manager",
+		"longDescription": "Se Manager is a desktop application built with Tauri for enhanced productivity. Organize terminals by project with persistent sessions and snapshots.",
 		"windows": {
 			"nsis": {
 				"displayLanguageSelector": false
