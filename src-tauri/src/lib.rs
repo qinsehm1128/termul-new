@@ -36,6 +36,7 @@ mod ssh;
 mod trackers;
 mod updater_api;
 pub mod web;
+pub mod webview_storage_handoff;
 mod worktree;
 
 // The credential paths the brand migration has to be able to exercise for real.
@@ -1542,6 +1543,14 @@ pub fn run() {
             // thread — `brand::canonical()` is thread-local (FORBID-07).
             crate::ssh::known_hosts_migration::run_at_startup();
 
+            // WebView storage does not always ride along with app_data_dir
+            // (M-05). Windows keeps `EBWebView` under %LOCALAPPDATA%, outside
+            // the Roaming tree `legacy_appdata` carries forward, so it needs
+            // this extra pass; Linux's webview directory is already inside
+            // app_data_dir and macOS cannot be migrated by copying at all —
+            // both are no-ops here. Same setup thread, same reason (FORBID-07).
+            crate::webview_storage_handoff::run_at_startup(&handle);
+
             // Conversation admission is the first app-managed storage/resource boundary.
             let app_data_dir = handle
                 .path()
@@ -2284,6 +2293,10 @@ pub fn run() {
             commands::conversation_suspend_binding,
             commands::conversation_replace_binding,
             commands::conversation_delete,
+            // macOS WebView storage handoff across the identifier rename (M-05)
+            webview_storage_handoff::webview_storage_handoff_capture,
+            webview_storage_handoff::webview_storage_handoff_pending,
+            webview_storage_handoff::webview_storage_handoff_mark_consumed,
             // Workspace manifest (legacy read-only compatibility)
             commands::workspace_manifest_get,
             commands::workspace_manifest_write,
