@@ -171,7 +171,7 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     keychain_ssh_service: "termul-ssh",
     ssh_known_hosts_file: "known_hosts_termul",
     keychain_pairing_service: "com.termul.remote.pairing",
-    mcp_server_name: "termul",
+    mcp_server_name: "se-manager",
     skill_name: "termul-scheduled-tasks",
     skill_marker: "<!-- managed-by-termul:termul-scheduled-tasks -->",
     skill_manifest_key: "managedByTermul",

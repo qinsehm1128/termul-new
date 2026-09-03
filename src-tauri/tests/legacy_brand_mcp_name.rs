@@ -9,14 +9,15 @@
 //! is a frozen snapshot of that remote-side memory, and it is sha256-guarded by
 //! `legacy_brand_fixture_manifest.rs`.
 //!
-//! Reading it from disk is what makes this test un-fakeable. The existing
-//! in-crate assertion at `src/acp/manager.rs:5625`
-//! (`assert_eq!(serde_json::to_value(&servers[0]).unwrap()["name"], "termul")`)
-//! is a copy of the literal it checks: a repo-wide `sed s/termul/se-manager/g`
-//! rewrites the production string *and* the assertion in one stroke and the
-//! suite stays green while every already-installed agent keeps looking for a
-//! server that no longer exists. That assertion is NOT deleted here — a later
-//! task owns it. This file is what replaces its value.
+//! Reading it from disk is what makes this test un-fakeable. The in-crate
+//! assertion this file replaces lived in
+//! `manager.rs::reopen_methods_prepend_internal_mcp_to_configured_servers` and
+//! compared the generated server name against an inline copy of the same
+//! literal production emitted: a repo-wide `sed` rewrites the production string
+//! *and* the assertion in one stroke and the suite stays green while every
+//! already-installed agent keeps looking for a server that no longer exists.
+//! T-A19 deleted it; the surviving assertion over there is the one that test is
+//! actually about (the internal server is prepended to the configured ones).
 //!
 //! # Why this is a source-text parity check rather than a call
 //!
@@ -35,17 +36,26 @@
 //! can delete a literal but can never *create* a `crate::brand::canonical()`
 //! call, so this check cannot be laundered green.
 //!
-//! Two spellings, one identity: today the server name is `"termul"`
-//! (`manager.rs:3029`) and the `current_exe()` fallback binary is
-//! `"termul-manager"` (`manager.rs:3018`). The rename unifies both onto
-//! `se-manager`, so both must resolve through the same seam.
+//! Two spellings, one identity: before T-A19 the server name and the
+//! `current_exe()` fallback binary were two different literals inside one
+//! function — see `brand::LEGACY.mcp_server_name` and
+//! `brand::LEGACY.package_name` for what each one was. Both now resolve through
+//! a single hoisted `crate::brand::canonical()`, so they can no longer drift.
 //!
-//! # Seam Wave 4 must add
+//! # Seam status
 //!
-//! `build_internal_plan_stdio` must read `crate::brand::canonical().mcp_server_name`
-//! and `crate::brand::canonical().package_name`, and the compat path must keep
-//! honouring `crate::brand::LEGACY.mcp_server_name` for agents whose persisted
-//! config still names the old server.
+//! Landed by T-A19: `build_internal_plan_stdio` reads
+//! `crate::brand::canonical().mcp_server_name` and
+//! `crate::brand::canonical().package_name`. Both ledger entries below are
+//! struck.
+//!
+//! Not covered here, and deliberately: there is no compatibility read for the
+//! *old* server name. Nothing in this repo resolves an agent-supplied server
+//! name — the internal server is re-injected into `mcp_servers` on every session
+//! open, so the name this build emits is the only one in play. An agent whose
+//! own memory or prompt still names the pre-rename server addresses a tool that
+//! is not there; that is OD-01 in the plan and it is an agent-side concern this
+//! crate cannot close.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -214,8 +224,10 @@ fn the_frozen_agent_config_records_the_pre_rename_identity() {
 }
 
 /// (a) The MCP server name this repo generates must come from the brand seam.
+///
+/// Ledger entry struck by T-A19: `build_internal_plan_stdio` hoists
+/// `crate::brand::canonical()` and names the server from it.
 #[test]
-#[should_panic(expected = "must read crate::brand::canonical().mcp_server_name")]
 fn internal_plan_mcp_server_name_comes_from_the_brand_seam() {
     let memory = read_agent_memory();
     let _guard = brand::override_canonical(post_rename());
@@ -241,8 +253,11 @@ fn internal_plan_mcp_server_name_comes_from_the_brand_seam() {
 }
 
 /// (b) The `current_exe()` fallback binary must come from the *same* source.
+///
+/// Ledger entry struck by T-A19: the fallback `PathBuf` is built from the same
+/// hoisted `crate::brand::canonical()` the server name comes from, so the two
+/// spellings can no longer drift apart.
 #[test]
-#[should_panic(expected = "must read crate::brand::canonical().package_name")]
 fn internal_plan_fallback_binary_comes_from_the_same_brand_seam() {
     let memory = read_agent_memory();
     let _guard = brand::override_canonical(post_rename());

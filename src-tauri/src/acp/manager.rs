@@ -1058,7 +1058,7 @@ pub struct AcpManager {
     /// one agent lifetime. Cleared on agent drop (driver self-reap) so a
     /// re-spawned agent re-warmups.
     warmup_done: Arc<Mutex<HashSet<AgentId>>>,
-    /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
+    /// Host-injected `plan` MCP server (one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
     /// `new_session_with_context` doesn't block a Tokio worker thread on the
     /// bind + port-publish handshake). Injects a self-spawned stdio child
@@ -2999,7 +2999,7 @@ fn gate_mcp_servers(caps: &AgentCapabilities, servers: &[McpServer]) -> Result<(
     Ok(())
 }
 
-/// Build the internal `termul` MCP server config (for the `plan` tool; stdio self-spawn) to
+/// Build the internal `plan` MCP server config (stdio self-spawn) to
 /// prepend into a session's `mcp_servers`. The agent spawns
 /// `current_exe() --internal-mcp-plan-server` as a child; the child reads
 /// `TERMUL_PLAN_PORT` / `_TOKEN` / `_SESSION_ID` / `_AGENT_ID` from env,
@@ -3007,15 +3007,22 @@ fn gate_mcp_servers(caps: &AgentCapabilities, servers: &[McpServer]) -> Result<(
 /// the parent TCP listener. The internal server is `McpServer::Stdio`, which
 /// `gate_mcp_servers` accepts unconditionally (stdio is mandatory in ACP), so
 /// no gate relaxation is needed.
+///
+/// The server name and the `current_exe()` fallback binary are two spellings of
+/// one identity the *agent* persists in its own MCP configuration, so both come
+/// from the brand seam rather than from literals here. It is resolved on the
+/// calling thread: every caller reaches this from inside its own `async fn`
+/// body, never from a `spawn_blocking` closure (FORBID-07).
 fn build_internal_plan_stdio(
     agent_id: &str,
     port: u16,
     token: &str,
     provisional_sid: &str,
 ) -> Vec<McpServer> {
+    let brand = crate::brand::canonical();
     let exe = std::env::current_exe().unwrap_or_else(|e| {
         log::warn!("[host-mcp] current_exe() failed ({e}); falling back to PATH lookup");
-        std::path::PathBuf::from("termul-manager")
+        std::path::PathBuf::from(brand.package_name)
     });
     let env = vec![
         EnvVariable::new(crate::acp::host_mcp::ENV_PORT, port.to_string()),
@@ -3026,7 +3033,7 @@ fn build_internal_plan_stdio(
         ),
         EnvVariable::new(crate::acp::host_mcp::ENV_AGENT_ID, agent_id.to_string()),
     ];
-    let stdio = McpServerStdio::new("termul".to_string(), exe)
+    let stdio = McpServerStdio::new(brand.mcp_server_name.to_string(), exe)
         .args(vec![crate::acp::host_mcp::CHILD_ARG.to_string()])
         .env(env);
     vec![McpServer::Stdio(stdio)]
@@ -5620,9 +5627,16 @@ mod tests {
             .await
             .unwrap();
 
+        // The internal server's *name* is deliberately not asserted here. It used
+        // to be, against an inline copy of the very literal `build_internal_plan_stdio`
+        // emitted — an assertion one repo-wide rename rewrites in step with
+        // production, so it stays green while every already-installed agent keeps
+        // addressing a server that no longer exists. `tests/legacy_brand_mcp_name.rs`
+        // (T-H09) carries that contract instead, against a frozen agent-side MCP
+        // config on disk. What is left here is what this test is actually about:
+        // the internal server is *prepended* to the configured ones.
         for servers in capture.await.unwrap() {
             assert_eq!(servers.len(), 2);
-            assert_eq!(serde_json::to_value(&servers[0]).unwrap()["name"], "termul");
             assert_eq!(
                 serde_json::to_value(&servers[1]).unwrap()["name"],
                 "configured"
