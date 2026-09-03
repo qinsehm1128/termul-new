@@ -62,4 +62,39 @@ describe('conversation createdBy across the rename', () => {
     expect(parsed.createdBy).toBe(brandCanonical().createdBy)
     expect(parsed.lastSeq).toBe(onDisk.lastSeq)
   })
+
+  // T-H22 — the TypeScript half of "the wire value must not be frozen at
+  // module load". `brand.ts` warns about exactly this: a value captured into a
+  // top-level `const` freezes before a test can override it, so the accepting
+  // parser Wave 4 writes would consult a snapshot rather than the seam, the
+  // test above would go green, and nothing would actually have changed.
+  //
+  // Vacuously true today — `conversation.types.ts` compares against a literal
+  // and imports neither symbol — and that is stated rather than hidden. It
+  // becomes load-bearing the moment the parser starts reading the seam, which
+  // is the change it exists to constrain.
+  it('never freezes the createdBy values into a module-level constant', () => {
+    const source = readFileSync(
+      join(process.cwd(), 'src/shared/types/conversation.types.ts'),
+      'utf8'
+    )
+    const moduleScopeCaptures = source
+      .split('\n')
+      .filter((line) => /^(export\s+)?(const|let|var)\s/.test(line))
+      .filter((line) => line.includes('brandCanonical(') || /\bLEGACY\.createdBy\b/.test(line))
+
+    expect(moduleScopeCaptures).toEqual([])
+  })
+
+  // And the seam really is live at call time, which is what makes the guard
+  // above worth having: the override set inside this test body is what a call
+  // made now observes.
+  it('resolves the canonical createdBy at call time, not at import time', () => {
+    const before = brandCanonical().createdBy
+    __setBrandCanonicalOverride({ createdBy: 'se-manager' })
+    expect(brandCanonical().createdBy).not.toBe(before)
+    expect(brandCanonical().createdBy).toBe('se-manager')
+    // LEGACY is immovable by design — it is what is already on disk.
+    expect(LEGACY.createdBy).toBe(recordOnDisk().createdBy)
+  })
 })
