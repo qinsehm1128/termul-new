@@ -224,6 +224,20 @@ function infoPlistBuildSettings(key: string): string[] {
   )
 }
 
+/**
+ * The bundle identifier every build configuration sets, deduplicated. Throws
+ * through `expect` if the configurations disagree, because a per-configuration
+ * identifier would mean the two builds own different keychains and containers.
+ */
+function projectBundleIds(): string[] {
+  const bundleIds = [...read(PBXPROJ).matchAll(/PRODUCT_BUNDLE_IDENTIFIER = (.*);/g)].map((match) =>
+    match[1].replace(/^"|"$/g, '')
+  )
+  expect(bundleIds.length, `${PBXPROJ} sets no bundle identifier`).toBeGreaterThan(0)
+  expect(new Set(bundleIds).size, 'build configurations disagree on the bundle id').toBe(1)
+  return bundleIds
+}
+
 /** The schemes `Info.plist` registers with the system. */
 function registeredUrlSchemes(): string[] {
   const plist = read(INFO_PLIST)
@@ -391,13 +405,22 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
   // here. Pinning the doc to the project's real value means that rename cannot
   // land without updating this line — the failure is forced instead of hoped for.
   it('documents the bundle identifier the project actually sets', () => {
-    const bundleIds = [...read(PBXPROJ).matchAll(/PRODUCT_BUNDLE_IDENTIFIER = (.*);/g)].map(
-      (match) => match[1].replace(/^"|"$/g, '')
-    )
+    expect(read(IOS_README)).toContain(projectBundleIds()[0])
+  })
 
-    expect(bundleIds.length, `${PBXPROJ} sets no bundle identifier`).toBeGreaterThan(0)
-    expect(new Set(bundleIds).size, 'build configurations disagree on the bundle id').toBe(1)
-    expect(read(IOS_README)).toContain(bundleIds[0])
+  // `CFBundleURLName` was covered by nothing until T-A22 and was still spelling
+  // the pre-rename identifier long after the rest of the URL type had moved.
+  // Apple's convention is that it equals the bundle identifier — it is the name
+  // the system shows when it asks which app should own a scheme — so it is a
+  // second place the same string gets typed, and it drifts exactly the way the
+  // `os_log` subsystem did. Pinned to the project rather than to a literal, for
+  // the same reason as the README assertion above.
+  it('names the URL type after the bundle identifier the project sets', () => {
+    const plist = read(INFO_PLIST)
+    const block = /<key>CFBundleURLName<\/key>\s*<string>(.*?)<\/string>/.exec(plist)
+    expect(block, `${INFO_PLIST} no longer declares CFBundleURLName`).not.toBeNull()
+
+    expect((block as RegExpExecArray)[1]).toBe(projectBundleIds()[0])
   })
 
   it('bakes the post-rename display name into the base Info.plist fallback', () => {

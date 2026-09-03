@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -35,7 +36,10 @@ function report(overrides: Partial<PermissionReport> = {}): PermissionReport {
   return {
     supported: true,
     osVersion: '26.0',
-    bundleId: 'com.termul-manager.app',
+    // What the Rust probe reports is whatever `tauri.conf.json` gave the bundle,
+    // so the fixture derives it instead of carrying its own copy;
+    // `scripts/tests/bundle-identifier-parity.test.ts` pins the two together.
+    bundleId: brandCanonical().bundleId,
     signing: { kind: 'adhoc', teamId: null, grantsSurviveRebuild: false },
     probes: [
       probe('fullDiskAccess', 'denied', false, 'EACCES /Library/.../TCC.db'),

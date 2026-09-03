@@ -16,6 +16,9 @@
  */
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+// Relative rather than `@shared/*`: this file is executed as
+// `bun scripts/mobile-host-probe.ts`, and the repo tsconfig maps only `@/*`.
+import { appDataCandidates } from './app-data-roots'
 
 export const DEFAULT_LOCAL_ORIGIN = 'http://127.0.0.1:18787'
 export const HISTORY_TAIL_WINDOW = 60
@@ -174,14 +177,7 @@ export function historyAfterSeq(hostWatermark: number, cachedWatermark = 0): num
   return 0
 }
 
-export function appDataCandidates(home = homedir()): string[] {
-  return [
-    join(home, 'Library', 'Application Support', 'com.termul-manager.app.dev'),
-    join(home, 'Library', 'Application Support', 'com.termul-manager.app'),
-    join(home, '.local', 'share', 'com.termul-manager.app.dev'),
-    join(home, '.local', 'share', 'com.termul-manager.app')
-  ]
-}
+export { appDataCandidates }
 
 export function secretsPaths(home = homedir()): string[] {
   return appDataCandidates(home).map((root) => join(root, 'remote-tunnel', 'secrets.json'))

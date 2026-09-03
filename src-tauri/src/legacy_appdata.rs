@@ -229,14 +229,22 @@ mod tests {
         );
     }
 
+    /// With `canonical == legacy` there is nothing to carry and the source
+    /// would be the destination — a pass that copies a live root onto itself.
+    ///
+    /// This needed no injection until T-A22 flipped `bundle_id`; the state it
+    /// pins is now only reachable by injecting `LEGACY` wholesale, which
+    /// reproduces the pre-flip build exactly. Asserting it against today's
+    /// shipped values instead would assert a different thing entirely: the
+    /// `legacy_name == name` guard would never be reached, and deleting that
+    /// guard would leave the test green.
     #[test]
     fn matching_legacy_root_is_none_before_the_rename_lands() {
         let temp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(temp.path().join(brand::DEFAULT_CANONICAL.bundle_id)).unwrap();
-        // No override: canonical still equals legacy, so there is nothing to
-        // carry and the source would be the destination.
+        fs::create_dir_all(temp.path().join(brand::LEGACY.bundle_id)).unwrap();
+        let _brand = brand::override_canonical(brand::LEGACY);
         assert_eq!(
-            matching_legacy_root(&temp.path().join(brand::DEFAULT_CANONICAL.bundle_id)),
+            matching_legacy_root(&temp.path().join(brand::LEGACY.bundle_id)),
             None
         );
     }
@@ -338,12 +346,17 @@ mod tests {
         );
     }
 
+    /// The read-side twin of the guard above, and injected for the same reason
+    /// since T-A22. Both trees are planted so that dropping the `legacy !=
+    /// current` filter reports the user's live roots as legacy data to merge.
     #[test]
     fn legacy_appdata_roots_is_empty_before_the_rename_lands() {
         let temp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(temp.path().join(brand::DEFAULT_CANONICAL.bundle_id)).unwrap();
+        fs::create_dir_all(temp.path().join(brand::LEGACY.bundle_id)).unwrap();
+        fs::create_dir_all(temp.path().join(brand::LEGACY.bundle_id_dev)).unwrap();
+        let _brand = brand::override_canonical(brand::LEGACY);
         assert!(
-            legacy_appdata_roots(&temp.path().join(brand::DEFAULT_CANONICAL.bundle_id)).is_empty(),
+            legacy_appdata_roots(&temp.path().join(brand::LEGACY.bundle_id)).is_empty(),
             "with canonical == legacy there is no separate legacy root to read"
         );
     }

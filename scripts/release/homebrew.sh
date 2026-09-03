@@ -102,7 +102,21 @@ EOF
 
   cat >>"$output_file" <<'EOF'
 
+  # Both identifiers. The rename moved every one of these roots, and the
+  # startup carry-forward copies rather than moves, so a machine that ran the
+  # app before and after the rename holds two full sets. Naming only the
+  # current one would leave the pre-rename set — conversations, the
+  # remote-tunnel token, the WebKit store — behind after an explicit uninstall.
+  # This does not contradict "migration copies, never deletes": migration runs
+  # without being asked, `zap` runs only when the user asks for it.
   zap trash: [
+    "~/Library/Application Support/com.se-manager.app",
+    "~/Library/Caches/com.se-manager.app",
+    "~/Library/HTTPStorages/com.se-manager.app",
+    "~/Library/Logs/com.se-manager.app",
+    "~/Library/Preferences/com.se-manager.app.plist",
+    "~/Library/Saved Application State/com.se-manager.app.savedState",
+    "~/Library/WebKit/com.se-manager.app",
     "~/Library/Application Support/com.termul-manager.app",
     "~/Library/Caches/com.termul-manager.app",
     "~/Library/HTTPStorages/com.termul-manager.app",

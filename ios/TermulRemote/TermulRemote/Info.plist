@@ -8,7 +8,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.termul.remote</string>
+			<string>com.se-manager.remote</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>se</string>

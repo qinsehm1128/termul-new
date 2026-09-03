@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { describe, expect, it } from 'vitest'
 import {
   appDataCandidates,
@@ -61,8 +62,8 @@ describe('mobile-host-probe helpers', () => {
 
   it('looks in the desktop dev and prod app-data trees, never the keychain', () => {
     const roots = appDataCandidates('/Users/demo')
-    expect(roots.some((path) => path.endsWith('com.termul-manager.app.dev'))).toBe(true)
-    expect(roots.some((path) => path.endsWith('com.termul-manager.app'))).toBe(true)
+    expect(roots.some((path) => path.endsWith(brandCanonical().bundleIdDev))).toBe(true)
+    expect(roots.some((path) => path.endsWith(brandCanonical().bundleId))).toBe(true)
     expect(
       secretsPaths('/Users/demo').every((path) => path.endsWith('remote-tunnel/secrets.json'))
     ).toBe(true)

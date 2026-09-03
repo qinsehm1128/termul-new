@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { invokeMock, isTauriRef } = vi.hoisted(() => ({
@@ -22,7 +23,7 @@ import {
 const REPORT: PermissionReport = {
   supported: true,
   osVersion: '26.0',
-  bundleId: 'com.termul-manager.app',
+  bundleId: brandCanonical().bundleId,
   signing: { kind: 'adhoc', teamId: null, grantsSurviveRebuild: false },
   probes: []
 }

@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn reads_an_adhoc_signature_as_unstable() {
         let output = "Executable=/Applications/Termul Manager.app/Contents/MacOS/Termul Manager\n\
-             Identifier=com.termul-manager.app\n\
+             Identifier=com.se-manager.app\n\
              CodeDirectory v=20400 size=100 flags=0x20002(adhoc,linker-signed) hashes=3+2\n\
              Signature=adhoc\n\
              Info.plist entries=42\n\
@@ -944,7 +944,7 @@ mod tests {
 
     #[test]
     fn reads_a_developer_id_signature_as_stable() {
-        let output = "Identifier=com.termul-manager.app\n\
+        let output = "Identifier=com.se-manager.app\n\
              Signature=adhoc-not-really\n\
              Authority=Developer ID Application: Someone (ABCDE12345)\n\
              Authority=Developer ID Certification Authority\n\
