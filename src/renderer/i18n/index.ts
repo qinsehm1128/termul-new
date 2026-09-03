@@ -9,7 +9,7 @@ function applyDocumentLocalization(language: UiLanguage): void {
   document.documentElement.dir = 'ltr'
   document.title = i18n.t('app.documentTitle', {
     ns: 'common',
-    defaultValue: 'Termul Manager'
+    defaultValue: 'Se Manager'
   })
 }
 
