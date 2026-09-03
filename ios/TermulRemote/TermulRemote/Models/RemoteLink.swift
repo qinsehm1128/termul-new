@@ -85,23 +85,39 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         try container.encode(createdAt, forKey: .createdAt)
     }
 
-    /// Deep-link scheme this build owns.
+    /// Deep-link schemes this build owns, read out of its own `CFBundleURLTypes`
+    /// registration rather than typed here a second time.
     ///
-    /// `Info.plist` still registers only the pre-rename scheme, so the system
-    /// does not hand this app a `se://` URL yet — registering it is T-A14's.
-    /// Accepting it here already means a link pasted or scanned by hand parses.
-    private static let deepLinkScheme = "se"
-
-    /// Pre-rename scheme. Read-only compatibility: links a user bookmarked or
-    /// shared before the rename keep opening.
-    private static let legacyDeepLinkScheme = "termul"
+    /// The registration is the single source on purpose. The system routes a URL
+    /// to this app *because* that entry exists, so a scheme spelled again as a
+    /// literal here can drift from it, and the drift fails in the worst
+    /// direction: the app is launched with a URL its own parser then rejects, and
+    /// `RemoteLinkError.invalidURL` names no cause a user or a log could act on.
+    ///
+    /// The pre-rename `termul` scheme is deliberately absent, not forgotten.
+    /// Dropping it is a locked decision: a `termul://` link saved outside the app
+    /// — a Safari bookmark, a message thread — stops opening. Nothing the desktop
+    /// hands out is affected, because pairing has never produced a deep link; the
+    /// QR and the copy button both carry an `https` access URL, which reaches
+    /// ``parseAccessURL(_:)`` without consulting this set at all.
+    private static let deepLinkSchemes: Set<String> = {
+        guard let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] else {
+            HostLog.session.error("Bundle registers no CFBundleURLTypes; deep links cannot be parsed")
+            return []
+        }
+        let schemes = Set(types.flatMap { ($0["CFBundleURLSchemes"] as? [String]) ?? [] }.map { $0.lowercased() })
+        if schemes.isEmpty {
+            HostLog.session.error("CFBundleURLTypes registers no scheme; deep links cannot be parsed")
+        }
+        return schemes
+    }()
 
     static func parse(_ raw: String) throws -> RemoteLink {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
             throw RemoteLinkError.invalidURL
         }
-        if scheme == deepLinkScheme || scheme == legacyDeepLinkScheme {
+        if deepLinkSchemes.contains(scheme) {
             return try parseDeepLink(url)
         }
         return try parseAccessURL(url)

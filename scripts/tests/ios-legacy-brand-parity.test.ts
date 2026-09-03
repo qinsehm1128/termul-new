@@ -40,7 +40,7 @@ import {
   brandCanonical,
   LEGACY
 } from '@shared/brand'
-import { afterEach, describe, expect, it, test } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 const repoRoot = process.cwd()
 
@@ -99,19 +99,62 @@ function appSwiftFiles(): string[] {
   return found.sort()
 }
 
-/** Files that spell `value` as an exact quoted Swift string literal. */
+/**
+ * `relativePath`'s Swift source with comments stripped.
+ *
+ * Every assertion below is about what the app *does*, and a doc comment that
+ * merely names a constant is not that. This is not a hypothetical distinction:
+ * the first draft of the same-origin test asserted that the parser mentions
+ * `CFBundleURLTypes`, and it stayed green when the entire lookup was deleted,
+ * because the doc comment above it still said the word.
+ *
+ * Whole-line comments go, which is where doc comments live. A trailing comment
+ * is stripped only from a line that holds no `"`, so a string literal such as
+ * `"https://…"` can never be truncated at its own `//` — the conservative
+ * direction, since the residue can only produce a false red, never a false
+ * green.
+ */
+function swiftCode(relativePath: string): string {
+  return read(relativePath)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n')
+    .map((line) => {
+      if (line.trimStart().startsWith('//')) return ''
+      return line.includes('"') ? line : line.replace(/\/\/.*$/, '')
+    })
+    .join('\n')
+}
+
+/** Files that spell `value` as an exact quoted Swift string literal, in code. */
 function filesSpelling(value: string): string[] {
   const needle = `"${value}"`
-  return appSwiftFiles().filter((relative) => read(relative).includes(needle))
+  return appSwiftFiles().filter((relative) => swiftCode(relative).includes(needle))
 }
 
 /**
- * Every brand-bearing iOS value, as `(legacy, canonical, declaringFile)`.
+ * Every iOS value that names something already sitting on a user's device, as
+ * `(legacy, canonical, declaringFile)`.
  *
  * The `UserDefaults` suffixes come from the frozen fixture and the prefix from
  * the brand seam, so a canonical key is *computed* rather than transcribed.
+ *
+ * The deep-link scheme is deliberately **not** here, and the omission is the
+ * substantive difference between it and these six. These six address data the
+ * app itself wrote — chosen language, saved desks, pairing secrets, cached
+ * transcripts — so dropping the legacy spelling silently destroys it, and every
+ * assertion below therefore demands both spellings. A URL scheme addresses
+ * nothing: it is a name the app claims from the system, and T-A14's locked
+ * decision is to stop claiming the old one. Folding it in here would have forced
+ * an assertion that contradicts that decision, so it gets its own two tests at
+ * the bottom of this file instead — stricter, not laxer: exactly one spelling,
+ * in exactly one place, and the legacy one nowhere.
  */
-function sites(): { legacy: string; canonical: string; declaredIn: string; what: string }[] {
+function persistenceSites(): {
+  legacy: string
+  canonical: string
+  declaredIn: string
+  what: string
+}[] {
   const record = dump()
   const entries = record.userDefaults.map((entry) => {
     expect(entry.key.startsWith(LEGACY.iosDefaultsPrefix)).toBe(true)
@@ -137,12 +180,6 @@ function sites(): { legacy: string; canonical: string; declaredIn: string; what:
       canonical: brandCanonical().iosCacheDir,
       declaredIn: `${APP_ROOT}/${record.applicationSupportDirectory.declaredIn}`,
       what: 'Application Support directory'
-    },
-    {
-      legacy: record.urlScheme.value,
-      canonical: brandCanonical().deepLinkScheme,
-      declaredIn: `${APP_ROOT}/${record.urlScheme.declaredIn}`,
-      what: 'deep-link URL scheme'
     }
   ]
 }
@@ -180,7 +217,7 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
     // reader both reference one constant, a string comparison has a single
     // source and can only certify itself. A second independent literal is a
     // second thing to miss.
-    for (const site of sites()) {
+    for (const site of persistenceSites()) {
       expect(filesSpelling(site.legacy), `${site.what} (${site.legacy})`).toEqual([site.declaredIn])
     }
   })
@@ -189,34 +226,21 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
     // Green today because the legacy value is the *only* value. It becomes
     // load-bearing when Wave 5 lands: deleting the legacy read strands every
     // device that has not re-paired.
-    for (const site of sites()) {
-      expect(read(site.declaredIn), `${site.what} lost its legacy read`).toContain(site.legacy)
+    for (const site of persistenceSites()) {
+      expect(swiftCode(site.declaredIn), `${site.what} lost its legacy read`).toContain(site.legacy)
     }
   })
 
-  it('registers the scheme the parser compares against', () => {
-    const record = dump()
-    expect(registeredUrlSchemes()).toContain(record.urlScheme.value)
-    expect(read(`${APP_ROOT}/${record.urlScheme.declaredIn}`)).toContain(
-      `"${record.urlScheme.value}"`
-    )
-  })
-
-  // Landed by T-M11: every site carries the post-rename value *and* keeps the
-  // legacy one as a compatibility read. Both halves in one assertion on
-  // purpose: flipping without the fallback loses the user's saved desks, their
-  // pairing secrets and their cached transcripts, and keeping the fallback
+  // Landed by T-M11: every persistence site carries the post-rename value *and*
+  // keeps the legacy one as a compatibility read. Both halves in one assertion
+  // on purpose: flipping without the fallback loses the user's saved desks,
+  // their pairing secrets and their cached transcripts, and keeping the fallback
   // without flipping is not a rename.
-  //
-  // CONFLICTS WITH the URL-scheme ledger entry below, and deliberately so —
-  // this one requires `"se"` in `RemoteLink.swift`, that one requires its
-  // absence. Only the scheme site is affected; the other six are independent.
-  // T-A14 owns the reconciliation and must resolve both entries together.
   it('carries the post-rename value alongside a legacy read at every site', () => {
     __setBrandCanonicalOverride(POST_RENAME)
-    const missing = sites()
+    const missing = persistenceSites()
       .filter((site) => {
-        const source = read(site.declaredIn)
+        const source = swiftCode(site.declaredIn)
         return !source.includes(`"${site.canonical}"`) || !source.includes(`"${site.legacy}"`)
       })
       .map((site) => `${site.what} @ ${site.declaredIn}`)
@@ -224,19 +248,38 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
     expect(missing).toEqual([])
   })
 
-  // LEDGER (Wave 5) — expected failure. `Info.plist` and `RemoteLink.swift`
-  // each hold their own copy of the scheme today, so the registration and the
-  // comparison can drift apart: the system would still hand the app a
-  // `termul://` URL that its own parser rejects, with no error naming a cause.
-  // They must end up same-sourced — one Swift constant, and a plist value
-  // driven from the build settings rather than typed twice.
-  test.fails('sources the URL scheme once across Info.plist and the Swift parser', () => {
+  // Was the Wave-5 ledger red, resolved by T-A14. `Info.plist` and
+  // `RemoteLink.swift` each used to hold their own copy of the scheme, so the
+  // registration and the comparison could drift apart: the system would hand the
+  // app a URL that its own parser then rejects, with no error naming a cause.
+  // The parser now derives the scheme from `CFBundleURLTypes` in its own bundle,
+  // so there is one spelling and it is the registered one.
+  it('sources the URL scheme once, from the registration the parser reads', () => {
     __setBrandCanonicalOverride(POST_RENAME)
     const record = dump()
     const parser = `${APP_ROOT}/${record.urlScheme.declaredIn}`
+    const source = swiftCode(parser)
 
     expect(registeredUrlSchemes()).toEqual([brandCanonical().deepLinkScheme])
-    // The parser must not hold a second, independent copy of the same string.
-    expect(read(parser).includes(`"${brandCanonical().deepLinkScheme}"`)).toBe(false)
+    // The parser must not hold a second, independent copy of the same string...
+    expect(source).not.toContain(`"${brandCanonical().deepLinkScheme}"`)
+    // ...and the reason it does not is that it reads the registration. Without
+    // this half, deleting the scheme check outright would satisfy the half above.
+    expect(source, `${parser} no longer reads its own registration`).toContain(
+      'forInfoDictionaryKey: "CFBundleURLTypes"'
+    )
+  })
+
+  // T-A14's locked decision, and the one contract in this file that gets no
+  // compatibility read. A `termul://` link a user saved outside the app — a
+  // Safari bookmark, a message thread — stops opening. That is affordable only
+  // because the desktop never generated one (R-OQ3): the pairing QR and the copy
+  // button both hand out an `https` access URL, which never reaches the scheme
+  // comparison. Asserting the absence in both places is what stops the old
+  // scheme from being quietly restored on one side alone.
+  it('drops the legacy scheme entirely rather than accepting both', () => {
+    const record = dump()
+    expect(registeredUrlSchemes()).not.toContain(record.urlScheme.value)
+    expect(filesSpelling(record.urlScheme.value)).toEqual([])
   })
 })
