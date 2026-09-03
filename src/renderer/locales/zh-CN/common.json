@@ -187,5 +187,30 @@
       "skipped": "已跳过",
       "interrupted": "已中断"
     }
+  },
+  "brandMigration": {
+    "title": "发现旧版数据",
+    "description": "Se 可以把上一版安装留下的数据归并到新的位置。",
+    "copyOnly": "归并只做拷贝，不会删除你的旧数据。",
+    "rootsLabel": "将要归并的位置",
+    "pathUnavailable": "无文件路径（由系统保管）",
+    "status": {
+      "pending": "待归并",
+      "migrated": "已归并",
+      "skipped": "已跳过",
+      "notApplicable": "不适用",
+      "failed": "失败"
+    },
+    "tccTitle": "macOS 隐私权限",
+    "start": "开始归并",
+    "running": "正在归并…",
+    "later": "稍后",
+    "doneTitle": "归并完成",
+    "failedTitle": "归并失败",
+    "reason": "原因：{{reason}}",
+    "ssh": {
+      "failedTitle": "SSH 已知主机迁移失败",
+      "failedBody": "主机密钥校验已进入 fail-closed：此前已信任的主机可能拒绝连接，需要重新确认其密钥。"
+    }
   }
 }

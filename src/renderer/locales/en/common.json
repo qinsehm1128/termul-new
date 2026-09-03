@@ -187,5 +187,30 @@
       "skipped": "Skipped",
       "interrupted": "Interrupted"
     }
+  },
+  "brandMigration": {
+    "title": "Legacy data found",
+    "description": "Se can merge the data left behind by the previous install into its new locations.",
+    "copyOnly": "Merging only copies. Your old data is never deleted.",
+    "rootsLabel": "Locations to merge",
+    "pathUnavailable": "No file path (stored by the system)",
+    "status": {
+      "pending": "Will be merged",
+      "migrated": "Already merged",
+      "skipped": "Skipped",
+      "notApplicable": "Not applicable",
+      "failed": "Failed"
+    },
+    "tccTitle": "macOS privacy permissions",
+    "start": "Start merge",
+    "running": "Merging…",
+    "later": "Later",
+    "doneTitle": "Merge finished",
+    "failedTitle": "Merge failed",
+    "reason": "Reason: {{reason}}",
+    "ssh": {
+      "failedTitle": "SSH known-hosts migration failed",
+      "failedBody": "Host-key checking is now fail-closed: hosts you had already trusted may refuse to connect until you confirm their keys again."
+    }
   }
 }

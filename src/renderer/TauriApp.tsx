@@ -7,6 +7,7 @@ import { ConversationHostStatus } from '@/components/conversation/ConversationHo
 import { ConversationRecoveryPanel } from '@/components/conversation/ConversationRecoveryPanel'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
+import { BrandMigrationBanner } from '@/components/migration/BrandMigrationBanner'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -48,6 +49,9 @@ export default function TauriApp(): React.JSX.Element {
             <PortableAppEffects />
             <ConversationHostStatus />
             <ConversationRecoveryPanel />
+            {/* Desktop-only: legacy brand data lives on the local disk / keychain.
+                Renders nothing until the host reports something to merge. */}
+            <BrandMigrationBanner />
             <Toaster />
             <Sonner />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
