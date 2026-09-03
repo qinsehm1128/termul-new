@@ -46,7 +46,7 @@ export const FeatureSection = () => {
         {/* Left Sticky Sidebar */}
         <div className="lg:w-1/3 lg:sticky lg:top-32 flex flex-col gap-12 w-full">
           <SectionHeader
-            eyebrow="Termul Features"
+            eyebrow="Se Features"
             title="Everything in one workspace."
             description="Terminals, editors, browsers, and annotations — organized by project."
           />

@@ -19,9 +19,9 @@ export function TestimonialSubmitPage() {
   const [message, setMessage] = useState('');
 
   useSeoMeta({
-    title: 'Submit a Termul Testimonial',
+    title: 'Submit a Se Testimonial',
     description:
-      'Share how Termul helps your workflow. Approved testimonials may appear on the Termul landing page.',
+      'Share how Se helps your workflow. Approved testimonials may appear on the Se landing page.',
     robots: 'index,follow',
   });
 
@@ -53,7 +53,7 @@ export function TestimonialSubmitPage() {
       <div className="mx-auto grid max-w-6xl gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
         <SectionHeader
           eyebrow="Share your workflow"
-          title="Tell developers how Termul helps you."
+          title="Tell developers how Se helps you."
           description="Send a short testimonial with your name, role, and avatar. We review submissions before they appear publicly."
           className="lg:sticky lg:top-32"
         />
@@ -78,7 +78,7 @@ export function TestimonialSubmitPage() {
                 minLength={20}
                 maxLength={500}
                 rows={6}
-                placeholder="Termul helps me..."
+                placeholder="Se helps me..."
                 className={testimonialTextareaClass}
               />
             </label>

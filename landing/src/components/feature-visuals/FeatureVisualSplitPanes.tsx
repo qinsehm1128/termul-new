@@ -10,7 +10,7 @@ export function FeatureVisualSplitPanes() {
         <div className="flex flex-1 min-h-[150px]">
           <div className="flex-1 bg-deep-slate p-3 font-mono text-[10px] text-gray-400 flex flex-col gap-1 border-r border-white/5">
             <div className="text-[9px] text-cyan-500/70 mb-1 uppercase tracking-wide">Terminal</div>
-            <div className="text-gray-500">~/Projects/termul</div>
+            <div className="text-gray-500">~/Projects/se-manager</div>
             <div>
               <span className="text-green-400">➜</span> npm test
             </div>

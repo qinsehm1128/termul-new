@@ -21,7 +21,7 @@ export const Hero = () => {
         </h1>
 
         <p className="text-lg md:text-xl max-w-2xl mb-10 animate-in delay-200 text-slate-600">
-          Termul treats workspaces as first-class citizens. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+          Se treats workspaces as first-class citizens. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
         </p>
 
         <div className="mb-20 animate-in delay-300">
@@ -31,7 +31,7 @@ export const Hero = () => {
         <div className="relative w-full max-w-5xl mx-auto animate-in delay-400">
           <img
             src="/termulmock.png"
-            alt="Termul application with project workspaces, multiple terminals, and file explorer"
+            alt="Se application with project workspaces, multiple terminals, and file explorer"
             className="w-full h-auto rounded-lg shadow-2xl shadow-black/10"
             width={1024}
             height={640}

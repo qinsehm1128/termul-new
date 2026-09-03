@@ -9,7 +9,7 @@ export function FeatureVisualGitWorktree() {
           <div className="px-2 flex flex-col gap-0.5">
             <div className="px-2 py-1.5 rounded-md bg-rose-500/15 border border-rose-500/25 text-[10px] text-rose-300 flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
-              termul
+              se-manager
             </div>
             <div className="pl-3 flex flex-col gap-0.5">
               <div className="px-2 py-1.5 rounded-md text-[10px] text-gray-300 flex items-center gap-2 bg-white/[0.04] border border-white/10">
@@ -29,7 +29,7 @@ export function FeatureVisualGitWorktree() {
         </div>
         <div className="flex-1 flex flex-col bg-deep-slate">
           <div className="flex-1 p-4 font-mono text-[10px] text-gray-400 flex flex-col gap-1.5 justify-center">
-            <div className="text-gray-500">~/termul/.worktrees/feat-git-ui</div>
+            <div className="text-gray-500">~/se-manager/.worktrees/feat-git-ui</div>
             <div>
               <span className="text-green-400">➜</span> git status
             </div>

@@ -57,7 +57,7 @@ export function ScrollContainer({ children, onScrollTopChange }: ScrollContainer
       options={{
         scrollbars: {
           autoHide: 'move',
-          theme: 'os-theme-termul',
+          theme: 'os-theme-se',
         },
       }}
     >

@@ -1,6 +1,6 @@
-# Termul Landing Page
+# Se Landing Page
 
-A standalone Vite + React marketing page for Termul Manager, hosted on Cloudflare Pages.
+A standalone Vite + React marketing page for Se Manager, hosted on Cloudflare Pages.
 
 ## Prerequisites
 
@@ -100,7 +100,7 @@ TOKEN=$(grep TESTIMONIALS_ADMIN_TOKEN .dev.vars | cut -d= -f2)
 
 # submit (pending)
 curl -X POST $BASE/api/testimonials \
-  -F "quote=Termul keeps every project terminal in one workspace." \
+  -F "quote=Se keeps every project terminal in one workspace." \
   -F "name=Alex Chen" -F "role=Staff Engineer" -F "avatarUrl=https://example.com/a.png"
 
 # moderate (use the id returned above)

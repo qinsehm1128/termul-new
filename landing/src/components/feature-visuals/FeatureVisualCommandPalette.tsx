@@ -3,7 +3,7 @@ export function FeatureVisualCommandPalette() {
     <div className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden pointer-events-none">
       <div className="relative w-[90%] max-w-md bg-graphite rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden min-h-[180px]">
         <div className="h-7 bg-deep-slate border-b border-white/10 flex items-center px-3 gap-2">
-          <div className="text-[9px] text-gray-500 font-mono">termul</div>
+          <div className="text-[9px] text-gray-500 font-mono">se-manager</div>
         </div>
         <div className="relative flex-1 bg-deep-slate flex items-start justify-center pt-5 min-h-[150px]">
           <div className="w-[85%] rounded-lg border border-white/15 bg-deep-slate shadow-[0_20px_40px_rgba(0,0,0,0.6)] overflow-hidden">
@@ -17,7 +17,7 @@ export function FeatureVisualCommandPalette() {
                 Projects
               </div>
               <div className="px-3 py-1.5 flex items-center gap-2 bg-indigo-500/15 border-l-2 border-indigo-400">
-                <span className="text-[10px] text-indigo-300 font-mono">📌 termul</span>
+                <span className="text-[10px] text-indigo-300 font-mono">📌 se-manager</span>
                 <span className="ml-auto text-[8px] text-gray-500 font-mono">↵</span>
               </div>
               <div className="px-3 py-1.5 flex items-center gap-2">
