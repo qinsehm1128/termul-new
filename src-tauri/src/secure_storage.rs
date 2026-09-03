@@ -134,10 +134,16 @@ pub fn keyring_set(key: &str, value: &str) -> Result<(), String> {
         })
 }
 
-/// Deletes from both services: the user asked for the secret to be gone, and
-/// leaving the legacy copy behind would resurrect it on the next fallback read.
-/// This is the one path allowed to touch a legacy entry, because it is the user
-/// deleting their own credential rather than a migration discarding data.
+/// Deletes from both services — the current one and `brand::LEGACY`.
+///
+/// Do not "fix" this back to deleting only the canonical entry. FORBID-05 binds
+/// the *migration* path: a migration copies and never deletes, so it cannot
+/// destroy data the user did not ask to lose. A user-initiated delete is the
+/// opposite case. Purging only the canonical entry would let the very next
+/// `keyring_get` fall back to the legacy service and hand back a secret the user
+/// explicitly revoked.
+///
+/// Guarded by `tests/legacy_brand_keychain.rs::deleting_a_credential_purges_the_legacy_service_too`.
 pub fn keyring_delete(key: &str) -> Result<(), String> {
     let backend = credentials::backend();
     let canonical = service();

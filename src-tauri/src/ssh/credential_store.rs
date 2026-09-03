@@ -95,12 +95,16 @@ pub fn get_passphrase(profile_id: &str) -> Result<Option<String>, String> {
     read_with_legacy_fallback(&key, "Failed to retrieve passphrase from keychain")
 }
 
-/// Delete a credential from the current service **and** the legacy one.
+/// Delete a credential from the current service **and** `brand::LEGACY`.
 ///
-/// The user asked for the secret to be gone; leaving the pre-rename copy behind
-/// would resurrect it on the next fallback read in `get_password` /
-/// `get_passphrase`. This is a user-initiated deletion, not a migration
-/// discarding data.
+/// Do not "fix" this back to deleting only the canonical entry. FORBID-05 binds
+/// the *migration* path: `read_with_legacy_fallback` above copies and never
+/// deletes, so a migration cannot destroy data the user did not ask to lose. A
+/// user-initiated delete is the opposite case. Purging only the canonical entry
+/// would let the very next `get_password` / `get_passphrase` fall back to the
+/// legacy service and hand back an SSH password the user explicitly revoked.
+///
+/// Guarded by `tests/legacy_brand_keychain.rs::deleting_a_credential_purges_the_legacy_service_too`.
 fn delete_key(profile_id: &str, suffix: &str, label: &str) -> Result<(), String> {
     let key = format!("{}-{}", profile_id, suffix);
     let backend = credentials::backend();

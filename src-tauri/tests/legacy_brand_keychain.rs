@@ -63,7 +63,7 @@ use serde_json::Value;
 
 use termul_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
 use termul_manager_lib::credentials::{self, CredentialBackend, CredentialError};
-use termul_manager_lib::{keyring_get, ssh_credential_store};
+use termul_manager_lib::{keyring_delete, keyring_get, ssh_credential_store};
 
 /// Keychain service names the app writes *after* the rename.
 fn post_rename() -> BrandCanonical {
@@ -478,6 +478,82 @@ fn production_reads_a_credential_seeded_under_the_legacy_service() {
         store.contains(brand::LEGACY.keychain_ssh_service, &passphrase_key),
         "the legacy SSH passphrase entry must survive the migration"
     );
+}
+
+/// A user-initiated delete must purge the legacy service too, or the very next
+/// read resurrects the credential the user just revoked.
+///
+/// This is the boundary of FORBID-05, executed. The rule binds the *migration*:
+/// a compat read copies forward and never deletes, so it cannot destroy data the
+/// user did not ask to lose — `production_reads_a_credential_seeded_under_the_legacy_service`
+/// above asserts exactly that. A delete is the opposite case, and the two must
+/// not be collapsed: leaving the pre-rename entry behind would mean "delete my
+/// stored SSH password" silently did nothing.
+#[test]
+fn deleting_a_credential_purges_the_legacy_service_too() {
+    let _global = installed_keychain();
+
+    let post = post_rename();
+    let _brand = brand::override_canonical(post);
+
+    let store = keychain_with_only_legacy_entries();
+    let password_key = format!("{INJECTED_PROFILE_ID}-password");
+    let passphrase_key = format!("{INJECTED_PROFILE_ID}-passphrase");
+    let _backend = credentials::override_backend(Arc::clone(&store) as Arc<dyn CredentialBackend>);
+
+    // Read first, so the entries exist under *both* services — the realistic
+    // state after a compat read, and the state in which deleting only the
+    // canonical one looks like it worked.
+    keyring_get(INJECTED_PROJECT_KEY).expect("the project secret is readable");
+    ssh_credential_store::get_password(INJECTED_PROFILE_ID).expect("the SSH password is readable");
+    ssh_credential_store::get_passphrase(INJECTED_PROFILE_ID)
+        .expect("the SSH passphrase is readable");
+    assert!(
+        store.contains(post.keychain_service, INJECTED_PROJECT_KEY)
+            && store.contains(brand::LEGACY.keychain_service, INJECTED_PROJECT_KEY),
+        "precondition: the secret is now under both services"
+    );
+
+    keyring_delete(INJECTED_PROJECT_KEY).expect("deleting the project secret succeeds");
+    ssh_credential_store::delete_credentials(INJECTED_PROFILE_ID)
+        .expect("deleting the SSH credentials succeeds");
+
+    // The assertion that matters: a subsequent read must not fall back to the
+    // legacy service and hand the secret back.
+    assert_eq!(
+        keyring_get(INJECTED_PROJECT_KEY).expect("the read after delete succeeds"),
+        None,
+        "a deleted project environment secret must not be resurrected by the \
+         legacy-service fallback"
+    );
+    assert_eq!(
+        ssh_credential_store::get_password(INJECTED_PROFILE_ID)
+            .expect("the read after delete succeeds"),
+        None,
+        "a deleted SSH password must not be resurrected by the legacy-service fallback"
+    );
+    assert_eq!(
+        ssh_credential_store::get_passphrase(INJECTED_PROFILE_ID)
+            .expect("the read after delete succeeds"),
+        None,
+        "a deleted private-key passphrase must not be resurrected by the \
+         legacy-service fallback"
+    );
+
+    // And nothing is left under either spelling.
+    for (service, key) in [
+        (post.keychain_service, INJECTED_PROJECT_KEY),
+        (brand::LEGACY.keychain_service, INJECTED_PROJECT_KEY),
+        (post.keychain_ssh_service, password_key.as_str()),
+        (brand::LEGACY.keychain_ssh_service, password_key.as_str()),
+        (post.keychain_ssh_service, passphrase_key.as_str()),
+        (brand::LEGACY.keychain_ssh_service, passphrase_key.as_str()),
+    ] {
+        assert!(
+            !store.contains(service, key),
+            "{key:?} still exists under {service:?} after the user deleted it"
+        );
+    }
 }
 
 /// The credential seam must be thread-local for the same reason the brand seam
