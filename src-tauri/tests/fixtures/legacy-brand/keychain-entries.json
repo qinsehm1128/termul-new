@@ -1,0 +1,45 @@
+{
+  "note": "Frozen snapshot of the legacy desktop keychain entries a pre-rename install leaves behind. Two services, two different spellings.",
+  "services": [
+    {
+      "service": "com.termul.manager",
+      "purpose": "project environment variable ciphertext",
+      "entries": [
+        {
+          "key": "project:8d1e4a72-55c9-4f30-b6ad-91f0c3e2d748:env:DATABASE_URL",
+          "value": "postgres://acme:hunter2@db.internal:5432/acme"
+        },
+        {
+          "key": "project:8d1e4a72-55c9-4f30-b6ad-91f0c3e2d748:env:STRIPE_SECRET_KEY",
+          "value": "sk_live_51QexampleExampleExample"
+        },
+        {
+          "key": "project:1c7b3f90-2a44-4d6e-8f15-77b0e9a3c521:env:OPENAI_API_KEY",
+          "value": "sk-proj-exampleExampleExample"
+        }
+      ]
+    },
+    {
+      "service": "termul-ssh",
+      "purpose": "SSH passwords and private key passphrases",
+      "entries": [
+        {
+          "key": "b41d0e6a-9c32-4a77-8e51-3f6d2c8b90a4-password",
+          "value": "correct-horse-battery-staple"
+        },
+        {
+          "key": "b41d0e6a-9c32-4a77-8e51-3f6d2c8b90a4-passphrase",
+          "value": "id-ed25519-passphrase"
+        },
+        {
+          "key": "f92c5b81-77ae-4c03-95d2-6e1a4b7d38f0-password",
+          "value": "bastion-jump-host-pw"
+        }
+      ]
+    }
+  ],
+  "ssh_profile_ids": [
+    "b41d0e6a-9c32-4a77-8e51-3f6d2c8b90a4",
+    "f92c5b81-77ae-4c03-95d2-6e1a4b7d38f0"
+  ]
+}

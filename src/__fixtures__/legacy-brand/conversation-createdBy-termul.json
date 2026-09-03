@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "conversationId": "3f2a9c14-6b7d-4e58-9a01-2c5d8e7f4b60",
+  "createdAtUtc": "2026-02-17T09:41:23.000Z",
+  "creationPartition": {
+    "year": 2026,
+    "month": 2,
+    "day": 17,
+    "path": "2026/02/17"
+  },
+  "workspaceCwd": "/Users/example/Documents/Termul/quiet-harbor-4821",
+  "executionTarget": {
+    "kind": "worktree",
+    "projectId": "8d1e4a72-55c9-4f30-b6ad-91f0c3e2d748",
+    "worktreePath": "/Users/example/code/acme-api/.termul/worktrees/feat-billing",
+    "worktreeBranch": "feat-billing"
+  },
+  "projectAttachment": {
+    "schemaVersion": 1,
+    "projectId": "8d1e4a72-55c9-4f30-b6ad-91f0c3e2d748",
+    "attachedAtUtc": "2026-02-17T09:41:25.000Z",
+    "projectPathSnapshot": "/Users/example/code/acme-api",
+    "worktreePath": "/Users/example/code/acme-api/.termul/worktrees/feat-billing",
+    "worktreeBranch": "feat-billing"
+  },
+  "lifecycleState": "ready",
+  "lastSeq": 37,
+  "createdBy": "termul",
+  "title": "Billing webhook retry backoff",
+  "titleSource": "agent_supplied"
+}

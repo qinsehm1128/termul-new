@@ -1,0 +1,9 @@
+[
+  {
+    "id": "7c2e5a10-4b88-4f19-9d63-0a5c1e8f72b4",
+    "name": "Nightly dependency audit",
+    "cron": "0 3 * * *",
+    "timezone": "Asia/Shanghai",
+    "enabled": true
+  }
+]

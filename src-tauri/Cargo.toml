@@ -199,6 +199,10 @@ syn = { version = "2", features = ["full", "visit"] }
 # Swap/rollback file tests in `server_update` use a temp dir so they never
 # touch the real binary path.
 tempfile = "3"
+# The frozen legacy-brand fixture manifest guard recomputes sha256 per file.
+# `sha2` is already a normal dependency, but integration tests under `tests/`
+# link this crate as an external dependency and so cannot see it.
+sha2 = "0.10"
 
 # --- OS keychain backends for `keyring` (see note on the keyring dep above) ---
 # Windows Credential Manager

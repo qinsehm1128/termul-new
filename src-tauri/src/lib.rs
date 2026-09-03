@@ -3,6 +3,7 @@ mod acp;
 mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
+pub mod brand;
 mod browser_tab_manager;
 mod cli_session;
 mod commands;

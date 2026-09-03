@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "conversationId": "a18f4c72-3d90-4e21-b5c6-8f0a2d7e91b3",
+  "createdAtUtc": "2026-02-11T14:05:09.000Z",
+  "creationPartition": { "year": 2026, "month": 2, "day": 11, "path": "2026/02/11" },
+  "workspaceCwd": "/Users/example/Documents/Termul/dev-scratch-1180",
+  "executionTarget": { "kind": "workspace" },
+  "projectAttachment": null,
+  "lifecycleState": "ready",
+  "lastSeq": 4,
+  "createdBy": "termul"
+}

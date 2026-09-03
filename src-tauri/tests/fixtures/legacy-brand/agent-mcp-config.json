@@ -1,0 +1,16 @@
+{
+  "note": "Frozen snapshot of an agent-side persisted MCP configuration written by a pre-rename install. The server name below is the contract the agent remembers.",
+  "mcpServers": {
+    "termul": {
+      "command": "/Applications/Termul Manager.app/Contents/MacOS/termul-manager",
+      "args": ["--host-mcp-child"],
+      "env": {
+        "TERMUL_PLAN_PORT": "51763",
+        "TERMUL_PLAN_TOKEN": "0f3a9c7e2b184d5a",
+        "TERMUL_PLAN_SESSION_ID": "prov-3f2a9c14",
+        "TERMUL_PLAN_AGENT_ID": "claude-code"
+      }
+    }
+  },
+  "fallback_binary_name": "termul-manager"
+}

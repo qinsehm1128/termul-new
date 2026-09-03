@@ -1,0 +1,11 @@
+{
+  "termul-store:settings/app::colorTheme": "\"termul\"",
+  "termul-store:settings/app::appearanceMode": "\"dark\"",
+  "termul-store:settings/toc::isVisible": "true",
+  "termul-store:projects::list": "[{\"id\":\"8d1e4a72-55c9-4f30-b6ad-91f0c3e2d748\",\"name\":\"acme-api\"}]",
+  "termul-store:editor/layout::openTabs": "[\"src/dispatcher.ts\",\"src/retry.ts\"]",
+  "termul:sidebar-width": "312",
+  "termul:file-explorer-width": "268",
+  "termul:cli-session-rail-height": "180",
+  "unrelated-third-party-key": "left alone"
+}

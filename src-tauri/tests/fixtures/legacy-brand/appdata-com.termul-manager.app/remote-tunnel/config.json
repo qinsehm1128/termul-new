@@ -1,0 +1,6 @@
+{
+  "publishMode": "cloudflared",
+  "frpServerAddr": "tunnel.example.com",
+  "frpServerPort": 7000,
+  "frpCustomDomain": "termul.example.com"
+}

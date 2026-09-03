@@ -1,0 +1,1 @@
+{ "name": "termul-acp-local", "private": true, "dependencies": { "@zed-industries/claude-code-acp": "1.4.2" } }

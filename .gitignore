@@ -114,3 +114,9 @@ VERIFICATION_CHECKLIST.md
 
 # Local-only reference checkouts for comparative analysis (never committed)
 /reference/
+
+# Frozen legacy-brand fixture: a fake user repo whose own tracked
+# `gitignore` file and `.termul/` tree are the contract under test. Line 90
+# above would otherwise hide them from git, leaving the sha256 manifest
+# guarding files that were never committed.
+!/src-tauri/tests/fixtures/legacy-brand/fake-user-repo/.termul/
