@@ -13,6 +13,12 @@ const REGISTRY_URL: &str = "https://cdn.agentclientprotocol.com/registry/v1/late
 const CACHE_FILE: &str = "acp-registry-snapshot-cache.json";
 const FETCH_TIMEOUT_SECS: u64 = 15;
 
+// M-03 — the second of the two files under `app_cache_dir()`, and like its
+// sibling this cache is not migrated across the brand rename. The reasoning
+// and the merge-receipt text live in one place, on
+// `crate::agent_registry::CACHE_NOT_MIGRATED_NOTICE`; restating them here
+// would let the two drift.
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpRegistrySnapshotAgent {
@@ -188,6 +194,11 @@ pub async fn fetch_acp_registry_snapshot_with_cache_path(
     }
 }
 
+/// Resolve the snapshot cache under the *current* bundle's `app_cache_dir()`.
+///
+/// Deliberately single-rooted: there is no compatibility read of the
+/// pre-rename cache root, because this cache is not migrated
+/// (`crate::agent_registry::CACHE_NOT_MIGRATED_NOTICE`).
 fn cache_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()

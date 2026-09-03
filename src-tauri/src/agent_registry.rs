@@ -22,6 +22,27 @@ const REGISTRY_URL: &str = "https://cdn.agentclientprotocol.com/registry/v1/late
 const CACHE_FILE: &str = "acp-registry-cache.json";
 const FETCH_TIMEOUT_SECS: u64 = 15;
 
+/// M-03 — the brand rename moves `app_cache_dir()`, and this cache is not
+/// migrated. That is a decision, not an omission.
+///
+/// The old cache root holds exactly two files, this one and
+/// `acp-registry-snapshot-cache.json` (`acp_registry_snapshot::CACHE_FILE`).
+/// Both are verbatim copies of a public CDN document that any "Browse agents"
+/// action re-fetches. Losing them costs one HTTP GET; copying them forward
+/// would cost a migration step that can fail, has to be made idempotent, and
+/// buys nothing a cold start does not already give. Every other root in the
+/// merge plan holds data the app cannot reconstruct — this one does not.
+///
+/// Nothing deletes the old cache either (FORBID-05 is copy-only, and this root
+/// is not even copied): the operating system reclaims `app_cache_dir()` on its
+/// own schedule.
+///
+/// Surfaced verbatim in the merge receipt so the user sees a stated decision
+/// rather than a root that silently went missing from the list.
+pub const CACHE_NOT_MIGRATED_NOTICE: &str = "ACP registry cache: not migrated. \
+     It holds only a cached copy of the public ACP registry index, which is \
+     re-fetched on demand. Nothing is lost and nothing is deleted.";
+
 /// A single agent identity entry distilled from the ACP Registry. Only the
 /// identity fields are surfaced — `distribution` is intentionally omitted so it
 /// can never be mistaken for a TUI launch command.
@@ -101,6 +122,11 @@ fn parse_registry(body: &str) -> Result<Vec<AcpRegistryEntry>, String> {
     Ok(entries)
 }
 
+/// Resolve the cache file under the *current* bundle's `app_cache_dir()`.
+///
+/// Deliberately single-rooted: there is no compatibility read of the
+/// pre-rename cache root, because this cache is not migrated. See
+/// [`CACHE_NOT_MIGRATED_NOTICE`].
 fn cache_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()
