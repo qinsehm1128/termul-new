@@ -219,6 +219,67 @@ describe('BrandMigrationBanner', () => {
     expect(screen.queryByTestId('brand-migration-ssh-warning')).toBeNull()
   })
 
+  it('renders the receipt sshKnownHosts row, so a host-side re-run cannot hide behind the startup status', async () => {
+    const sshSignals = [signal('appDataDir'), signal('sshKnownHosts')]
+
+    // Faithful case: T-MIG-RUN carries the M-15 line verbatim from the startup
+    // pass, so the receipt row reads exactly what detection reported.
+    mockRunMigration.mockResolvedValue({
+      roots: [
+        { kind: 'appDataDir', label: 'label:appDataDir', status: 'migrated', reason: null },
+        {
+          kind: 'sshKnownHosts',
+          label: 'label:sshKnownHosts',
+          status: 'failed',
+          reason: 'permission denied'
+        }
+      ]
+    })
+    await renderBanner(detection({ signals: sshSignals, sshKnownHosts: sshFailed }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Start merge' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('brand-migration-done')).toBeInTheDocument()
+    })
+    expect(
+      screen
+        .getAllByTestId('brand-migration-root')
+        .map((item) => [item.getAttribute('data-kind'), item.getAttribute('data-status')])
+    ).toEqual([
+      ['appDataDir', 'migrated'],
+      ['sshKnownHosts', 'failed']
+    ])
+
+    // Regression case: the host re-ran M-15 and overwrote the status. The row
+    // must show what the receipt said — the contradiction against the startup
+    // warning below it is the whole point. Masking it with the startup value
+    // would make the forbidden re-run invisible.
+    cleanup()
+    mockRunMigration.mockResolvedValue({
+      roots: [
+        {
+          kind: 'sshKnownHosts',
+          label: 'label:sshKnownHosts',
+          status: 'migrated',
+          reason: null
+        }
+      ]
+    })
+    await renderBanner(detection({ signals: sshSignals, sshKnownHosts: sshFailed }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Start merge' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('brand-migration-done')).toBeInTheDocument()
+    })
+    const sshRow = screen
+      .getAllByTestId('brand-migration-root')
+      .find((item) => item.getAttribute('data-kind') === 'sshKnownHosts')
+    expect(sshRow).toHaveAttribute('data-status', 'migrated')
+    expect(sshRow).toHaveTextContent('Already merged')
+    // …while the startup failure is still reported, so the two disagree loudly.
+    expect(screen.getByTestId('brand-migration-ssh-warning')).toHaveAccessibleName(
+      'SSH known-hosts migration failed'
+    )
+  })
+
   it('surfaces a failed migration instead of reporting success', async () => {
     mockRunMigration.mockRejectedValue(new Error('disk full'))
     await renderBanner(detection())

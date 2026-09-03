@@ -80,17 +80,26 @@ const STATUS_LABEL_KEYS = {
 /**
  * The status shown next to one root.
  *
- * `sshKnownHosts` reports the STARTUP outcome, so it never reads "pending".
- * Every other root reads "pending" until a receipt says otherwise.
+ * Once a run has produced a receipt, the receipt is authoritative for EVERY
+ * row — `sshKnownHosts` included. That row is not a second migration: the host
+ * carries it verbatim from the startup pass. Rendering it rather than masking
+ * it with the locally-known startup value is deliberate, and it is what makes a
+ * host-side re-run *visible* instead of silent — an overwritten status shows up
+ * on screen next to a warning that still reports the startup outcome.
+ *
+ * Before any run there is no receipt, and `sshKnownHosts` reports the startup
+ * outcome directly, so it never reads "pending" in the pre-merge list. Every
+ * other root is "pending" until a receipt says otherwise.
  */
 function rootStatus(
   signal: LegacyDataSignal,
   detection: LegacyDataDetection,
   receipt: BrandMigrationReceipt | null
 ): BrandMigrationRootStatus | 'pending' {
-  if (signal.kind === 'sshKnownHosts') return detection.sshKnownHosts.state
   const entry = receipt?.roots.find((root) => root.kind === signal.kind)
-  return entry?.status ?? 'pending'
+  if (entry) return entry.status
+  if (signal.kind === 'sshKnownHosts') return detection.sshKnownHosts.state
+  return 'pending'
 }
 
 export function BrandMigrationBanner(): React.JSX.Element | null {
