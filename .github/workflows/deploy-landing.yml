@@ -62,5 +62,5 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: landing
-          command: pages deploy dist --project-name=termul-landing --branch=${{ github.ref_name == 'main' && 'main' || github.head_ref || github.ref_name }} --commit-dirty=true
+          command: pages deploy dist --project-name=se-landing --branch=${{ github.ref_name == 'main' && 'main' || github.head_ref || github.ref_name }} --commit-dirty=true
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
