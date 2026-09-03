@@ -1,5 +1,22 @@
 #!/usr/bin/env bash
 
+# Distribution identity — the ONLY place this script spells the product out.
+# `PRODUCT_NAME` mirrors `src-tauri/tauri.conf.json` -> productName (what Tauri
+# turns into every bundle file name); `PACKAGE_NAME` mirrors `package.json` ->
+# name and is the Homebrew cask token. The cask token used to be an independent
+# literal that matched neither upstream, which is exactly how a rename driven off
+# either one left it behind. `scripts/tests/artifact-name-derivation.test.ts`
+# reads both upstreams, recomputes these definitions, and rejects any artifact
+# name spelled out again below.
+PRODUCT_NAME="Se Manager"
+PACKAGE_NAME="se-manager"
+# Published release assets carry the dotted form: Tauri bundles under the
+# spaced product name (`Se Manager_0.5.9_aarch64.dmg`) and
+# `scripts/release/prepare-platform-artifacts.mjs` -> `releaseAssetName()`
+# replaces the spaces with dots when it stages them for the GitHub release.
+# The cask points at the published asset, so it needs the dotted form.
+BUNDLE_STEM="${PRODUCT_NAME// /.}"
+
 normalize_release_version() {
   local version="${1#v}"
   local core prerelease identifier
@@ -42,8 +59,8 @@ is_release_prerelease() {
 resolve_dmg_checksums() {
   local checksum_file="$1"
   local version="$2"
-  local arm_dmg="Termul.Manager_${version}_aarch64.dmg"
-  local intel_dmg="Termul.Manager_${version}_x64.dmg"
+  local arm_dmg="${BUNDLE_STEM}_${version}_aarch64.dmg"
+  local intel_dmg="${BUNDLE_STEM}_${version}_x64.dmg"
   local arm_sha256 intel_sha256
 
   arm_sha256="$(awk -v file="$arm_dmg" '$2 == file || $2 == "*" file { print $1 }' "$checksum_file")"
@@ -70,32 +87,35 @@ write_homebrew_cask() {
 
   mkdir -p "$(dirname "$output_file")"
   cat >"$output_file" <<EOF
-cask "termul" do
+cask "${PACKAGE_NAME}" do
   arch arm: "aarch64", intel: "x64"
 
   version "$version"
   sha256 arm:   "$arm_sha256",
          intel: "$intel_sha256"
 
-  url "https://github.com/qinsehm1128/termul-new/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"
-  name "Termul Manager"
+  url "https://github.com/qinsehm1128/termul-new/releases/download/v#{version}/${BUNDLE_STEM}_#{version}_#{arch}.dmg"
+  name "${PRODUCT_NAME}"
   desc "Terminal-native workspace and CLI agent manager"
   homepage "https://github.com/qinsehm1128/termul-new"
 
   auto_updates true
   depends_on macos: :catalina
 
-  app "Termul Manager.app"
+  app "${PRODUCT_NAME}.app"
 EOF
 
   if [[ "$version" == "0.4.8" ]]; then
-    cat >>"$output_file" <<'EOF'
+    # Unquoted heredoc: the app bundle name has to come from PRODUCT_NAME like
+    # every other artifact name here. Nothing in this block uses `$`, so
+    # expansion is safe; `#{appdir}` is Ruby interpolation and passes through.
+    cat >>"$output_file" <<EOF
 
   # v0.4.8 predates Developer ID signing and notarization. Do not copy this
   # narrowly scoped compatibility exception to later casks.
   postflight do
     system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Termul Manager.app"]
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/${PRODUCT_NAME}.app"]
   end
 EOF
   fi

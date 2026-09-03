@@ -7,14 +7,14 @@ import { describe, expect, test } from 'vitest'
 import { mergeUpdaterManifests, requiredPlatformKeys } from './merge-updater-manifests.mjs'
 
 const version = '1.2.3'
-const assetName = (suffix: string) => `Termul-${version}-${suffix}.bin`
+const assetName = (suffix: string) => `Se-${version}-${suffix}.bin`
 const record = (suffix: string) => ({
   url: `https://github.com/qinsehm1128/termul-new/releases/download/v${version}/${assetName(suffix)}`,
   signature: `signature-${suffix}`
 })
 
 async function fixtureDir() {
-  return mkdtemp(join(tmpdir(), 'termul-updater-manifest-'))
+  return mkdtemp(join(tmpdir(), 'se-updater-manifest-'))
 }
 
 async function writeManifest(
@@ -106,7 +106,7 @@ describe('mergeUpdaterManifests', () => {
       }
       return keys
     })
-    // The standalone `termul-server` is not a matrix entry — it has its own job.
+    // The standalone `se-server` is not a matrix entry — it has its own job.
     expected.push('linux-x86_64-server')
 
     expect([...requiredPlatformKeys].sort()).toEqual(expected.sort())

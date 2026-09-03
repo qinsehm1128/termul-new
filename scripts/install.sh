@@ -5,6 +5,22 @@ OWNER="qinsehm1128"
 REPO="termul-new"
 BASE_URL="https://github.com/${OWNER}/${REPO}"
 
+# Distribution identity — the ONLY place this script spells the product out.
+# `PRODUCT_NAME` mirrors `src-tauri/tauri.conf.json` -> productName, which is what
+# Tauri turns into every bundle file name; `PACKAGE_NAME` mirrors `package.json`
+# -> name, which is the Linux binary. Everything below composes from these three
+# values instead of repeating them, so a rename cannot land here by halves.
+# `scripts/tests/artifact-name-derivation.test.ts` reads both upstreams, recomputes
+# what these definitions must be, and rejects any artifact name spelled out again.
+PRODUCT_NAME="Se Manager"
+PACKAGE_NAME="se-manager"
+# Published release assets carry the dotted form: Tauri bundles under the
+# spaced product name (`Se Manager_0.5.9_aarch64.dmg`) and
+# `scripts/release/prepare-platform-artifacts.mjs` -> `releaseAssetName()`
+# replaces the spaces with dots when it stages them for the GitHub release.
+# This script downloads the published asset, so it needs the dotted form.
+BUNDLE_STEM="${PRODUCT_NAME// /.}"
+
 die() {
   printf '%s\n' "$*" >&2
   return 1
@@ -96,7 +112,7 @@ resolve_version() {
   version="${effective_url##*/}"
 
   if [[ ! "$version" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-    die "Could not resolve latest Termul version from ${BASE_URL}/releases/latest"
+    die "Could not resolve latest ${PRODUCT_NAME} version from ${BASE_URL}/releases/latest"
     return 1
   fi
 
@@ -215,7 +231,7 @@ install_macos() {
   esac
 
   normalized_version="$(asset_version "$version")"
-  asset_name="Termul.Manager_${normalized_version}_${suffix}.dmg"
+  asset_name="${BUNDLE_STEM}_${normalized_version}_${suffix}.dmg"
   tmpdir="$(mktemp -d)"
   dmg_path="${tmpdir}/${asset_name}"
   mount_dir="${tmpdir}/mount"
@@ -224,10 +240,10 @@ install_macos() {
   (
     set -euo pipefail
 
-    termul_macos_mounted=0
-    termul_macos_mount_dir="$mount_dir"
-    termul_macos_tmpdir="$tmpdir"
-    trap 'if [[ "${termul_macos_mounted:-0}" == "1" ]]; then hdiutil detach "${termul_macos_mount_dir:-}" >/dev/null 2>&1 || true; fi; rm -rf "${termul_macos_tmpdir:-}"' EXIT
+    se_macos_mounted=0
+    se_macos_mount_dir="$mount_dir"
+    se_macos_tmpdir="$tmpdir"
+    trap 'if [[ "${se_macos_mounted:-0}" == "1" ]]; then hdiutil detach "${se_macos_mount_dir:-}" >/dev/null 2>&1 || true; fi; rm -rf "${se_macos_tmpdir:-}"' EXIT
 
     if [[ -z "$sums_file" ]]; then
       sums_file="$(fetch_sha256sums "$version" "${tmpdir}/SHA256SUMS.txt")" || exit 1
@@ -237,10 +253,10 @@ install_macos() {
     verify_sha256 "$dmg_path" "$asset_name" "$sums_file" || exit 1
 
     hdiutil attach -nobrowse -mountpoint "$mount_dir" "$dmg_path" || exit 1
-    termul_macos_mounted=1
+    se_macos_mounted=1
 
-    app_source="${mount_dir}/Termul Manager.app"
-    app_target="${applications_dir}/Termul Manager.app"
+    app_source="${mount_dir}/${PRODUCT_NAME}.app"
+    app_target="${applications_dir}/${PRODUCT_NAME}.app"
     if [[ -e "$app_target" ]]; then
       if ! rm -rf "$app_target"; then
         sudo rm -rf "$app_target" || exit 1
@@ -252,9 +268,9 @@ install_macos() {
     fi
 
     hdiutil detach "$mount_dir" || exit 1
-    termul_macos_mounted=0
+    se_macos_mounted=0
     xattr -dr com.apple.quarantine "$app_target" 2>/dev/null || true
-    printf 'Installed Termul Manager to %s\n' "$app_target"
+    printf 'Installed %s to %s\n' "$PRODUCT_NAME" "$app_target"
   )
 }
 
@@ -268,8 +284,8 @@ install_linux() {
   local appimage_path
   local bin_dir="${SE_INSTALL_BIN_DIR:-${HOME}/.local/bin}"
   local desktop_dir="${SE_INSTALL_DESKTOP_DIR:-${HOME}/.local/share/applications}"
-  local target_path="${bin_dir}/termul-manager"
-  local desktop_path="${desktop_dir}/termul-manager.desktop"
+  local target_path="${bin_dir}/${PACKAGE_NAME}"
+  local desktop_path="${desktop_dir}/${PACKAGE_NAME}.desktop"
 
   if [[ "$arch" != "x86_64" ]]; then
     die "Unsupported Linux architecture: ${arch}"
@@ -277,15 +293,15 @@ install_linux() {
   fi
 
   normalized_version="$(asset_version "$version")"
-  asset_name="Termul.Manager_${normalized_version}_amd64.AppImage"
+  asset_name="${BUNDLE_STEM}_${normalized_version}_amd64.AppImage"
   tmpdir="$(mktemp -d)"
   appimage_path="${tmpdir}/${asset_name}"
 
   (
     set -euo pipefail
 
-    termul_linux_tmpdir="$tmpdir"
-    trap 'rm -rf "${termul_linux_tmpdir:-}"' EXIT
+    se_linux_tmpdir="$tmpdir"
+    trap 'rm -rf "${se_linux_tmpdir:-}"' EXIT
 
     if [[ -z "$sums_file" ]]; then
       sums_file="$(fetch_sha256sums "$version" "${tmpdir}/SHA256SUMS.txt")" || exit 1
@@ -300,7 +316,7 @@ install_linux() {
     cat >"$desktop_path" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Termul Manager
+Name=${PRODUCT_NAME}
 Exec=${target_path}
 Terminal=false
 Categories=Development;Utility;
@@ -310,11 +326,11 @@ DESKTOP
       *":${bin_dir}:"*)
         ;;
       *)
-        printf 'Warning: %s is not in PATH. Add it to run termul-manager from your shell.\n' "$bin_dir" >&2
+        printf 'Warning: %s is not in PATH. Add it to run %s from your shell.\n' "$bin_dir" "$PACKAGE_NAME" >&2
         ;;
     esac
 
-    printf 'Installed Termul Manager to %s\n' "$target_path"
+    printf 'Installed %s to %s\n' "$PRODUCT_NAME" "$target_path"
   )
 }
 
@@ -336,7 +352,7 @@ main() {
   # `install_linux` and the Intel-macOS branch are left intact — restoring either
   # target is a release-matrix entry plus relaxing this guard.
   if [[ "$os" != "darwin" || "$arch" != "aarch64" ]]; then
-    die "No published build for ${os}-${arch}. Termul ships macOS (Apple Silicon) and Windows x64; build from source for other platforms: ${BASE_URL}#-getting-started"
+    die "No published build for ${os}-${arch}. ${PRODUCT_NAME} ships macOS (Apple Silicon) and Windows x64; build from source for other platforms: ${BASE_URL}#-getting-started"
     return 1
   fi
 
@@ -345,10 +361,10 @@ main() {
 
   case "$os" in
     darwin)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${SE_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
+      confirm_install "Install ${PRODUCT_NAME} ${version} (${os}-${arch}) to ${SE_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
       ;;
     linux)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${SE_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
+      confirm_install "Install ${PRODUCT_NAME} ${version} (${os}-${arch}) to ${SE_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
       ;;
     *)
       die "Unsupported operating system: ${os}"
@@ -360,8 +376,8 @@ main() {
   (
     set -euo pipefail
 
-    termul_main_tmpdir="$tmpdir"
-    trap 'rm -rf "${termul_main_tmpdir:-}"' EXIT
+    se_main_tmpdir="$tmpdir"
+    trap 'rm -rf "${se_main_tmpdir:-}"' EXIT
 
     sums_file="$(fetch_sha256sums "$version" "${tmpdir}/SHA256SUMS.txt")" || exit 1
 

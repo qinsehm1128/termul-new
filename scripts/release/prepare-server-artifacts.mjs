@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Produces the per-channel `linux-x86_64-server` platform-manifest fragment
-// consumed by `merge-updater-manifests.mjs`. The standalone `termul-server`
+// consumed by `merge-updater-manifests.mjs`. The standalone `se-server`
 // binary is a plain `cargo build` artifact (not a Tauri bundle), so it is not
 // collected by `prepare-platform-artifacts.mjs` (which reads tauri-action's
 // desktop bundle output). This helper reads the binary's minisign signature
@@ -14,6 +14,13 @@ import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
 const SERVER_PLATFORM_KEY = 'linux-x86_64-server'
+
+/**
+ * The `[[bin]]` name from `src-tauri/Cargo.toml`. Held once so the two call
+ * sites below cannot drift apart; `scripts/tests/artifact-name-derivation.test.ts`
+ * reads Cargo.toml and pins this definition to it.
+ */
+const DEFAULT_SERVER_BINARY = 'se-server'
 
 function fail(message) {
   throw new Error(message)
@@ -39,7 +46,7 @@ function readArguments(argv) {
 }
 
 export async function prepareServerArtifacts({
-  binaryName = 'termul-server',
+  binaryName = DEFAULT_SERVER_BINARY,
   signaturePath,
   tag,
   version,
@@ -74,7 +81,7 @@ export async function prepareServerArtifacts({
 async function runCli() {
   const options = readArguments(process.argv.slice(2))
   await prepareServerArtifacts({
-    binaryName: options['binary-name'] ?? 'termul-server',
+    binaryName: options['binary-name'] ?? DEFAULT_SERVER_BINARY,
     signaturePath: options.signature,
     tag: options.tag,
     version: options.version,

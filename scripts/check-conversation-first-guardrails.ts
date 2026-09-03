@@ -134,7 +134,7 @@ const PR_GUARD_STEP_NAME = 'Check conversation-first guardrails'
 const PR_GUARD_RUN = 'bun run check:conversation-first'
 const SYNC_STEP_NAME = 'Synchronize stamped root lock entry'
 const SYNC_RUN =
-  'python3 scripts/sync-stamped-root-lock.py --manifest src-tauri/Cargo.toml --lockfile src-tauri/Cargo.lock --package termul-manager\n' +
+  'python3 scripts/sync-stamped-root-lock.py --manifest src-tauri/Cargo.toml --lockfile src-tauri/Cargo.lock --package se-manager\n' +
   'cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 --no-deps'
 const WINDOWS_TOKEN_SECURITY_RUN =
   'cargo test --locked web::auth::tests::windows_token_descriptor_rejects_foreign_owner_null_dacl_and_broad_allow_ace -- --exact'
@@ -1508,8 +1508,8 @@ function checkNativeCi(findings: GuardFinding[], validation: ParsedWorkflow): vo
   for (const required of [
     'cargo test --locked conversation::native_durability_tests',
     'cargo test --locked --test conversation_first_guardrails',
-    'cargo build --locked --bin termul-server --features standalone-server',
-    'cargo clippy --locked --bin termul-server --features standalone-server -- -D warnings',
+    'cargo build --locked --bin se-server --features standalone-server',
+    'cargo clippy --locked --bin se-server --features standalone-server -- -D warnings',
     WINDOWS_TOKEN_SECURITY_RUN
   ]) {
     if (!exactRuns.has(required)) {

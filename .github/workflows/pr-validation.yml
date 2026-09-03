@@ -392,13 +392,13 @@ jobs:
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
-      - name: Build termul-server (native host)
+      - name: Build se-server (native host)
         working-directory: src-tauri
-        run: cargo build --locked --bin termul-server --features standalone-server
+        run: cargo build --locked --bin se-server --features standalone-server
 
-      - name: Clippy termul-server (feature on)
+      - name: Clippy se-server (feature on)
         working-directory: src-tauri
-        run: cargo clippy --locked --bin termul-server --features standalone-server -- -D warnings
+        run: cargo clippy --locked --bin se-server --features standalone-server -- -D warnings
 
   rust-windows-check:
     name: Rust Windows Smoke Check
@@ -449,9 +449,9 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked web::auth::tests::windows_token_descriptor_rejects_foreign_owner_null_dacl_and_broad_allow_ace -- --exact
 
-      - name: Build termul-server (Windows host)
+      - name: Build se-server (Windows host)
         working-directory: src-tauri
-        run: cargo build --locked --bin termul-server --features standalone-server
+        run: cargo build --locked --bin se-server --features standalone-server
 
   build-check:
     name: Verify Tauri Frontend Build

@@ -50,7 +50,7 @@ const hooks = [
   'usePreventNativeContextMenu'
 ]
 
-const syncRun = `python3 scripts/sync-stamped-root-lock.py --manifest src-tauri/Cargo.toml --lockfile src-tauri/Cargo.lock --package termul-manager
+const syncRun = `python3 scripts/sync-stamped-root-lock.py --manifest src-tauri/Cargo.toml --lockfile src-tauri/Cargo.lock --package se-manager
 cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 --no-deps`
 
 function root(): string {
@@ -116,8 +116,8 @@ jobs:
       - run: cargo test --locked --test conversation_first_guardrails
   standalone-server-build:
     steps:
-      - run: cargo build --locked --bin termul-server --features standalone-server
-      - run: cargo clippy --locked --bin termul-server --features standalone-server -- -D warnings
+      - run: cargo build --locked --bin se-server --features standalone-server
+      - run: cargo clippy --locked --bin se-server --features standalone-server -- -D warnings
   rust-windows-check:
     steps:
       - run: cargo test --locked web::auth::tests::windows_token_descriptor_rejects_foreign_owner_null_dacl_and_broad_allow_ace -- --exact
@@ -145,8 +145,8 @@ jobs:
       - name: Synchronize stamped root lock entry
         run: |-
           ${syncRun.replace('\n', '\n          ')}
-      - name: Build termul-server
-        run: cargo build --locked --release --bin termul-server --features standalone-server
+      - name: Build se-server
+        run: cargo build --locked --release --bin se-server --features standalone-server
 `
 }
 
@@ -347,7 +347,7 @@ jobs:
   build:
     steps:
       - run: >
-          sh -c "cargo build --release --bin termul-server"
+          sh -c "cargo build --release --bin se-server"
 `
     expect(findings(sources, 'locked-rust-ci')).toHaveLength(1)
   })

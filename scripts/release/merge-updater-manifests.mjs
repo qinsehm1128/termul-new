@@ -21,7 +21,7 @@ export const requiredPlatformKeys = [
   'windows-x86_64-nsis',
   'darwin-aarch64',
   'darwin-aarch64-app',
-  // Standalone `termul-server` binary (linux-x64 only today) — a headless
+  // Standalone `se-server` binary (linux-x64 only today) — a headless
   // self-hosting target, not a desktop one, and still built. Each channel's
   // manifest covers both the desktop targets and the server target so a single
   // manifest drives both updaters.

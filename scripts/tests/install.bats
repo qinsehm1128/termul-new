@@ -81,7 +81,7 @@ if [[ \"\$1\" == 'attach' ]]; then
     fi
     prev=\"\$arg\"
   done
-  mkdir -p \"\$mountpoint/Termul Manager.app\"
+  mkdir -p \"\$mountpoint/Se Manager.app\"
 fi
 "
   stub_cmd cp "
@@ -197,10 +197,10 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
 
 @test "verify_sha256 succeeds for matching fixture" {
   load_install
-  local payload="$SE_TEST_TMP_DIR/Termul.Manager_1.2.3_amd64.AppImage"
+  local payload="$SE_TEST_TMP_DIR/Se.Manager_1.2.3_amd64.AppImage"
   printf '%s' "linux appimage payload" >"$payload"
 
-  run verify_sha256 "$payload" "Termul.Manager_1.2.3_amd64.AppImage" "$fixture_sums"
+  run verify_sha256 "$payload" "Se.Manager_1.2.3_amd64.AppImage" "$fixture_sums"
 
   [ "$status" -eq 0 ]
 }
@@ -208,15 +208,15 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
 @test "verify_sha256 fails missing and mismatched entries without creating install targets" {
   load_install
   local payload="$SE_TEST_TMP_DIR/payload"
-  local target="$SE_INSTALL_BIN_DIR/termul-manager"
+  local target="$SE_INSTALL_BIN_DIR/se-manager"
   printf '%s' "tampered payload" >"$payload"
 
-  run verify_sha256 "$payload" "Termul.Manager_9.9.9_amd64.AppImage" "$fixture_sums"
+  run verify_sha256 "$payload" "Se.Manager_9.9.9_amd64.AppImage" "$fixture_sums"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Integrity check failed, nothing was installed"* ]]
   [ ! -e "$target" ]
 
-  run verify_sha256 "$payload" "Termul.Manager_1.2.3_amd64.AppImage" "$fixture_sums"
+  run verify_sha256 "$payload" "Se.Manager_1.2.3_amd64.AppImage" "$fixture_sums"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Integrity check failed, nothing was installed"* ]]
   [ ! -e "$target" ]
@@ -226,7 +226,7 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   load_install
   unset SE_INSTALL_YES
 
-  run confirm_install "Install Termul Manager?"
+  run confirm_install "Install Se Manager?"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"SE_INSTALL_YES=1"* ]]
@@ -236,11 +236,11 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   load_install
   export SE_INSTALL_YES=1
 
-  run confirm_install "Install Termul Manager v1.2.3?"
+  run confirm_install "Install Se Manager v1.2.3?"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"SE_INSTALL_YES=1"* ]]
-  [[ "$output" == *"Install Termul Manager v1.2.3?"* ]]
+  [[ "$output" == *"Install Se Manager v1.2.3?"* ]]
 }
 
 @test "install_macos downloads correct DMG, verifies before copy fallback, detaches, then xattrs" {
@@ -253,15 +253,15 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   run install_macos "v1.2.3" "aarch64" "$fixture_sums"
 
   [ "$status" -eq 0 ]
-  grep -q "releases/download/v1.2.3/Termul.Manager_1.2.3_aarch64.dmg" "$SE_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_aarch64.dmg" "$SE_TEST_LOG"
+  grep -q "releases/download/v1.2.3/Se.Manager_1.2.3_aarch64.dmg" "$SE_TEST_LOG"
+  ! grep -q "Se.Manager_v1.2.3_aarch64.dmg" "$SE_TEST_LOG"
   local verify_line
   local attach_line
   local cp_line
   local sudo_line
   local detach_line
   local xattr_line
-  verify_line="$(grep -n "curl .*Termul.Manager_1.2.3_aarch64.dmg" "$SE_TEST_LOG" | head -n1 | cut -d: -f1)"
+  verify_line="$(grep -n "curl .*Se.Manager_1.2.3_aarch64.dmg" "$SE_TEST_LOG" | head -n1 | cut -d: -f1)"
   attach_line="$(grep -n "hdiutil attach" "$SE_TEST_LOG" | cut -d: -f1)"
   cp_line="$(grep -n "^cp " "$SE_TEST_LOG" | head -n1 | cut -d: -f1)"
   sudo_line="$(grep -n "^sudo cp" "$SE_TEST_LOG" | cut -d: -f1)"
@@ -285,8 +285,8 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   run install_macos "v1.2.3" "x86_64" "$fixture_sums"
 
   [ "$status" -ne 0 ]
-  grep -q "Termul.Manager_1.2.3_x64.dmg" "$SE_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_x64.dmg" "$SE_TEST_LOG"
+  grep -q "Se.Manager_1.2.3_x64.dmg" "$SE_TEST_LOG"
+  ! grep -q "Se.Manager_v1.2.3_x64.dmg" "$SE_TEST_LOG"
   grep -q "hdiutil detach" "$SE_TEST_LOG"
 }
 
@@ -295,7 +295,7 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   stub_curl_release_flow "mac dmg payload"
   stub_macos_install_tools
   stub_logging_rm
-  mkdir -p "$SE_INSTALL_APPLICATIONS_DIR/Termul Manager.app"
+  mkdir -p "$SE_INSTALL_APPLICATIONS_DIR/Se Manager.app"
   load_install
 
   run install_macos "v1.2.3" "aarch64" "$fixture_sums"
@@ -303,7 +303,7 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   [ "$status" -eq 0 ]
   local rm_line
   local cp_line
-  rm_line="$(grep -n "^rm -rf .*Termul Manager.app" "$SE_TEST_LOG" | head -n1 | cut -d: -f1)"
+  rm_line="$(grep -n "^rm -rf .*Se Manager.app" "$SE_TEST_LOG" | head -n1 | cut -d: -f1)"
   cp_line="$(grep -n "^cp -R " "$SE_TEST_LOG" | head -n1 | cut -d: -f1)"
   [ -n "$rm_line" ]
   [ -n "$cp_line" ]
@@ -318,11 +318,11 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   run install_linux "v1.2.3" "x86_64" "$fixture_sums"
 
   [ "$status" -eq 0 ]
-  grep -q "releases/download/v1.2.3/Termul.Manager_1.2.3_amd64.AppImage" "$SE_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_amd64.AppImage" "$SE_TEST_LOG"
-  [ -x "$SE_INSTALL_BIN_DIR/termul-manager" ]
-  [ -f "$SE_INSTALL_DESKTOP_DIR/termul-manager.desktop" ]
-  grep -q "Exec=$SE_INSTALL_BIN_DIR/termul-manager" "$SE_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+  grep -q "releases/download/v1.2.3/Se.Manager_1.2.3_amd64.AppImage" "$SE_TEST_LOG"
+  ! grep -q "Se.Manager_v1.2.3_amd64.AppImage" "$SE_TEST_LOG"
+  [ -x "$SE_INSTALL_BIN_DIR/se-manager" ]
+  [ -f "$SE_INSTALL_DESKTOP_DIR/se-manager.desktop" ]
+  grep -q "Exec=$SE_INSTALL_BIN_DIR/se-manager" "$SE_INSTALL_DESKTOP_DIR/se-manager.desktop"
   [[ "$output" == *"not in PATH"* ]]
 }
 
@@ -337,7 +337,7 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   run main
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Install Termul Manager v1.2.3 (darwin-aarch64) to $SE_INSTALL_APPLICATIONS_DIR?"* ]]
+  [[ "$output" == *"Install Se Manager v1.2.3 (darwin-aarch64) to $SE_INSTALL_APPLICATIONS_DIR?"* ]]
   [ "$(grep -c "hdiutil attach" "$SE_TEST_LOG")" -eq 1 ]
 }
 
@@ -357,7 +357,7 @@ printf '%s\\n' 'https://github.com/qinsehm1128/termul-new/releases/tag/v1.2.3'
   [ "$status" -ne 0 ]
   [[ "$output" == *"No published build for linux-x86_64"* ]]
   ! grep -q "curl" "$SE_TEST_LOG"
-  [ ! -e "$SE_INSTALL_BIN_DIR/termul-manager" ]
+  [ ! -e "$SE_INSTALL_BIN_DIR/se-manager" ]
 }
 
 @test "main refuses Intel macOS, which the release matrix no longer builds" {

@@ -52,8 +52,8 @@ teardown() {
   local arm_sha="$(printf 'a%.0s' {1..64})"
   local intel_sha="$(printf 'b%.0s' {1..64})"
   cat >"$checksums" <<EOF
-$arm_sha  Termul.Manager_0.4.8_aarch64.dmg
-$intel_sha *Termul.Manager_0.4.8_x64.dmg
+$arm_sha  Se.Manager_0.4.8_aarch64.dmg
+$intel_sha *Se.Manager_0.4.8_x64.dmg
 EOF
 
   run resolve_dmg_checksums "$checksums" "0.4.8"
@@ -67,23 +67,23 @@ EOF
   local arm_sha="$(printf 'a%.0s' {1..64})"
   local intel_sha="$(printf 'b%.0s' {1..64})"
 
-  printf '%s  %s\n' "$arm_sha" "Termul.Manager_0.4.8_aarch64.dmg" >"$checksums"
+  printf '%s  %s\n' "$arm_sha" "Se.Manager_0.4.8_aarch64.dmg" >"$checksums"
   run resolve_dmg_checksums "$checksums" "0.4.8"
   [ "$status" -ne 0 ]
   [[ "$output" == *"x64.dmg"* ]]
 
   cat >"$checksums" <<EOF
-not-a-hash  Termul.Manager_0.4.8_aarch64.dmg
-$intel_sha  Termul.Manager_0.4.8_x64.dmg
+not-a-hash  Se.Manager_0.4.8_aarch64.dmg
+$intel_sha  Se.Manager_0.4.8_x64.dmg
 EOF
   run resolve_dmg_checksums "$checksums" "0.4.8"
   [ "$status" -ne 0 ]
   [[ "$output" == *"aarch64.dmg"* ]]
 
   cat >"$checksums" <<EOF
-$arm_sha  Termul.Manager_0.4.8_aarch64.dmg
-$arm_sha  Termul.Manager_0.4.8_aarch64.dmg
-$intel_sha  Termul.Manager_0.4.8_x64.dmg
+$arm_sha  Se.Manager_0.4.8_aarch64.dmg
+$arm_sha  Se.Manager_0.4.8_aarch64.dmg
+$intel_sha  Se.Manager_0.4.8_x64.dmg
 EOF
   run resolve_dmg_checksums "$checksums" "0.4.8"
   [ "$status" -ne 0 ]
@@ -91,14 +91,14 @@ EOF
 }
 
 @test "generates the exact v0.4.8 xattr exception and omits it for future releases" {
-  local legacy="$SE_TEST_TMP_DIR/termul-0.4.8.rb"
-  local future="$SE_TEST_TMP_DIR/termul-0.4.9.rb"
+  local legacy="$SE_TEST_TMP_DIR/se-manager-0.4.8.rb"
+  local future="$SE_TEST_TMP_DIR/se-manager-0.4.9.rb"
   local arm_sha="6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69"
   local intel_sha="72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
 
   write_homebrew_cask "$legacy" "0.4.8" "$arm_sha" "$intel_sha"
   [ "$(grep -Fc 'com.apple.quarantine' "$legacy")" -eq 1 ]
-  grep -Fq 'args: ["-dr", "com.apple.quarantine", "#{appdir}/Termul Manager.app"]' "$legacy"
+  grep -Fq 'args: ["-dr", "com.apple.quarantine", "#{appdir}/Se Manager.app"]' "$legacy"
 
   write_homebrew_cask "$future" "0.4.9" "$arm_sha" "$intel_sha"
   ! grep -Fq 'com.apple.quarantine' "$future"

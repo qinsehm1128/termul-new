@@ -12,11 +12,11 @@
  * are read from disk and one is *computed* from the other, so a rename that
  * misses a consumer is detectable.
  *
- * Currently RED, and legitimately so: several scripts still hardcode names that
- * cannot be derived from `productName` or the package name (most visibly the
- * Homebrew cask token `termul`, which matches neither). Wave 6 (T-B01..T-B05)
- * closes that; until then the failure is registered with `test.fails()` as part
- * of the self-liquidating red/green ledger.
+ * Wave 6 (T-B01..T-B04) closed the last of these. The Homebrew cask token was
+ * the loudest one — it was `termul`, matching neither upstream, and was carried
+ * as a `test.fails()` ledger entry until T-B04 made it composed from the
+ * PACKAGE_NAME definition. The marker is gone because the gate passes, not
+ * because the assertion was removed.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,7 +32,15 @@ function productName(): string {
   return readJson('src-tauri/tauri.conf.json').productName as string
 }
 
-/** Tauri replaces spaces with dots when building bundle file names. */
+/**
+ * The stem a *published* release asset carries.
+ *
+ * Tauri bundles under the spaced product name (`Se Manager_0.5.9_aarch64.dmg`,
+ * confirmed against a real `bun run build`); `prepare-platform-artifacts.mjs` →
+ * `releaseAssetName()` replaces the spaces with dots when it stages assets for
+ * the GitHub release. Every consumer here downloads the published asset, so the
+ * dotted form is what they must compose.
+ */
 function bundleFileStem(): string {
   return productName().replaceAll(' ', '.')
 }
@@ -66,38 +74,65 @@ describe('artifact name derivation', () => {
     })
   })
 
+  /**
+   * Each consumer holds exactly ONE definition of each identity and composes
+   * every artifact name from it. Two things are checked, and both are needed:
+   *
+   * 1. the definition equals what the upstream says it must be — read from a
+   *    *different* file, so a rename that misses this one is detectable;
+   * 2. nothing downstream spells the artifact name out again — otherwise a
+   *    correct definition can sit next to a stale copy that is what actually
+   *    ships, which is exactly the drift the cask token used to carry.
+   */
   describe('consumers derive their names rather than hardcoding them', () => {
-    it('install.sh builds the macOS asset name from productName', () => {
-      // `Termul.Manager_${version}_${suffix}.dmg` — the stem must be computed
-      // from productName, not written out again.
-      expect(read('scripts/install.sh')).toContain(`${bundleFileStem()}_\${normalized_version}_`)
-    })
-
-    it('install.sh installs the .app under the productName bundle name', () => {
-      expect(read('scripts/install.sh')).toContain(`${productName()}.app`)
-    })
-
-    it('install.sh names the Linux binary after the package name', () => {
+    it('install.sh defines the product and package identity once, from the upstreams', () => {
+      const installSh = read('scripts/install.sh')
       const packageName = readJson('package.json').name as string
-      expect(read('scripts/install.sh')).toContain(`/${packageName}"`)
-      expect(read('scripts/install.sh')).toContain(`${packageName}.desktop`)
+      expect(installSh).toContain(`PRODUCT_NAME="${productName()}"`)
+      expect(installSh).toContain(`PACKAGE_NAME="${packageName}"`)
+      // The space -> dot transform lives in exactly one place.
+      expect(installSh).toContain('BUNDLE_STEM="${PRODUCT_NAME// /.}"')
     })
 
-    // REGISTERED RED (self-liquidating ledger entry). The cask token is
-    // currently `termul`, which is neither the package name nor a transform of
-    // productName — a rename driven off either upstream silently leaves it
-    // behind. T-B04 makes it derived; this `.fails()` then starts failing
-    // *because it passes*, forcing its own removal.
-    it.fails('the Homebrew cask token is derived from the package name', () => {
+    it('install.sh composes every artifact name from those definitions', () => {
+      const installSh = read('scripts/install.sh')
+      for (const composed of [
+        'asset_name="${BUNDLE_STEM}_${normalized_version}_${suffix}.dmg"',
+        'asset_name="${BUNDLE_STEM}_${normalized_version}_amd64.AppImage"',
+        'app_source="${mount_dir}/${PRODUCT_NAME}.app"',
+        'app_target="${applications_dir}/${PRODUCT_NAME}.app"',
+        'local target_path="${bin_dir}/${PACKAGE_NAME}"',
+        'local desktop_path="${desktop_dir}/${PACKAGE_NAME}.desktop"'
+      ]) {
+        expect(installSh).toContain(composed)
+      }
+      // No spelled-out bundle stem may survive alongside the definition. The
+      // trailing `_` is what a bundle file name always carries and what
+      // `PRODUCT_NAME="Se Manager"` never does.
+      expect(installSh).not.toContain(`${bundleFileStem()}_`)
+    })
+
+    // Ledger entry struck by T-B04. The cask token was `termul` — neither the
+    // package name nor a transform of productName — so a rename driven off
+    // either upstream silently left it behind. It is now composed from the
+    // PACKAGE_NAME definition, which the assertions below pin to package.json.
+    it('the Homebrew cask token is derived from the package name', () => {
       const packageName = readJson('package.json').name as string
-      expect(read('scripts/release/homebrew.sh')).toContain(`cask "${packageName}" do`)
+      const homebrew = read('scripts/release/homebrew.sh')
+      expect(homebrew).toContain(`PACKAGE_NAME="${packageName}"`)
+      expect(homebrew).toContain('cask "${PACKAGE_NAME}" do')
     })
 
     it('the Homebrew cask app and dmg names come from productName', () => {
       const homebrew = read('scripts/release/homebrew.sh')
-      expect(homebrew).toContain(`app "${productName()}.app"`)
-      expect(homebrew).toContain(`name "${productName()}"`)
-      expect(homebrew).toContain(`${bundleFileStem()}_#{version}_#{arch}.dmg`)
+      expect(homebrew).toContain(`PRODUCT_NAME="${productName()}"`)
+      expect(homebrew).toContain('BUNDLE_STEM="${PRODUCT_NAME// /.}"')
+      expect(homebrew).toContain('app "${PRODUCT_NAME}.app"')
+      expect(homebrew).toContain('name "${PRODUCT_NAME}"')
+      expect(homebrew).toContain('${BUNDLE_STEM}_#{version}_#{arch}.dmg')
+      expect(homebrew).toContain('local arm_dmg="${BUNDLE_STEM}_${version}_aarch64.dmg"')
+      expect(homebrew).toContain('local intel_dmg="${BUNDLE_STEM}_${version}_x64.dmg"')
+      expect(homebrew).not.toContain(`${bundleFileStem()}_`)
     })
 
     it('the Homebrew zap list uses the shipped bundle identifier', () => {
@@ -112,7 +147,11 @@ describe('artifact name derivation', () => {
         .split(/^\[\[bin\]\]$/m)[1]
         ?.match(/name\s*=\s*"([^"]+)"/)?.[1]
       expect(serverBinary).toBeTruthy()
-      expect(read('scripts/release/prepare-server-artifacts.mjs')).toContain(`'${serverBinary}'`)
+      const prepare = read('scripts/release/prepare-server-artifacts.mjs')
+      expect(prepare).toContain(`const DEFAULT_SERVER_BINARY = '${serverBinary}'`)
+      // Both defaults reference the definition rather than repeating it.
+      expect(prepare).toContain('binaryName = DEFAULT_SERVER_BINARY')
+      expect(prepare).toContain("options['binary-name'] ?? DEFAULT_SERVER_BINARY")
     })
   })
 })

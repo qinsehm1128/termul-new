@@ -6,13 +6,13 @@ import { describe, expect, test } from 'vitest'
 import { prepareServerArtifacts, SERVER_PLATFORM_KEY } from './prepare-server-artifacts.mjs'
 
 async function fixtureDir() {
-  return mkdtemp(join(tmpdir(), 'termul-server-artifacts-'))
+  return mkdtemp(join(tmpdir(), 'se-server-artifacts-'))
 }
 
 describe('prepareServerArtifacts', () => {
   test('emits the linux-x86_64-server manifest fragment for the nightly moving tag', async () => {
     const dir = await fixtureDir()
-    const sigPath = join(dir, 'termul-server.sig')
+    const sigPath = join(dir, 'se-server.sig')
     await writeFile(sigPath, 'untrusted comment: ...\nRWSU...\ntrusted comment: ...\nfoo==\n')
 
     const outPath = join(dir, 'server-manifest.json')
@@ -24,10 +24,10 @@ describe('prepareServerArtifacts', () => {
     })
 
     expect(manifest.version).toBe('0.0.0-nightly.20260807.abc1234')
-    expect(manifest.assetNames).toEqual(['termul-server', 'termul-server.sig'])
+    expect(manifest.assetNames).toEqual(['se-server', 'se-server.sig'])
     expect(Object.keys(manifest.platforms)).toEqual([SERVER_PLATFORM_KEY])
     expect(manifest.platforms[SERVER_PLATFORM_KEY].url).toBe(
-      'https://github.com/qinsehm1128/termul-new/releases/download/nightly/termul-server'
+      'https://github.com/qinsehm1128/termul-new/releases/download/nightly/se-server'
     )
     // The full minisign signature text is preserved (trimmed).
     expect(manifest.platforms[SERVER_PLATFORM_KEY].signature).toContain('RWSU')
@@ -36,7 +36,7 @@ describe('prepareServerArtifacts', () => {
 
   test('targets the versioned tag for stable / insider RC channels', async () => {
     const dir = await fixtureDir()
-    const sigPath = join(dir, 'termul-server.sig')
+    const sigPath = join(dir, 'se-server.sig')
     await writeFile(sigPath, 'sig\n')
 
     const manifest = await prepareServerArtifacts({
@@ -47,7 +47,7 @@ describe('prepareServerArtifacts', () => {
     })
 
     expect(manifest.platforms[SERVER_PLATFORM_KEY].url).toBe(
-      'https://github.com/qinsehm1128/termul-new/releases/download/v0.5.0-rc.1/termul-server'
+      'https://github.com/qinsehm1128/termul-new/releases/download/v0.5.0-rc.1/se-server'
     )
   })
 
