@@ -38,6 +38,72 @@ pub const ACTIVE_PROBE_IDS: &[&str] = &[
     ID_DOWNLOADS_FOLDER,
 ];
 
+/// M-13 — the one root in the merge plan that has no migration at all.
+///
+/// TCC keys every grant on the bundle identifier (plus the code signature).
+/// Changing the identifier presents a *different* application to TCC, so every
+/// grant the user has already given resets to "not yet asked". There is no
+/// supported API to carry a grant from one identifier to another, and writing
+/// `TCC.db` directly is blocked by SIP. So this is not a defect to be fixed
+/// and not a copy to be scheduled — it is a property of the platform, and the
+/// only correct handling is to say so *before* the merge runs rather than let
+/// the user discover it as a terminal command dying with no explanation.
+///
+/// `parse_codesign_output` already reports the neighbouring case in
+/// [`SigningIdentity::grants_survive_rebuild`]: an ad-hoc signed build loses
+/// its grants on every rebuild. The identifier change loses them once, for
+/// everyone.
+pub const TCC_GRANTS_RESET_NOTICE: &str = "macOS privacy permissions cannot be \
+     migrated. The rename changes this app's bundle identifier, and macOS ties \
+     every privacy approval to that identifier, so macOS will ask again the \
+     first time something needs one. Nothing is lost — you will simply be \
+     prompted, or you can re-approve in System Settings > Privacy & Security.";
+
+/// The privacy categories [`TCC_GRANTS_RESET_NOTICE`] is about, as the
+/// `NS*UsageDescription` keys that declare them.
+///
+/// Kept in step with `Info.plist` by
+/// `tcc_reset_categories_match_the_declared_usage_descriptions`: the plist is
+/// what macOS actually reads, so it — not this list — is the oracle. A key
+/// added there without a line here means the merge notice would understate
+/// what the user is about to lose.
+pub const TCC_GRANTS_RESET_CATEGORIES: &[&str] = &[
+    "NSAppleEventsUsageDescription",
+    "NSBluetoothAlwaysUsageDescription",
+    "NSCalendarsUsageDescription",
+    "NSCameraUsageDescription",
+    "NSContactsUsageDescription",
+    "NSDesktopFolderUsageDescription",
+    "NSDocumentsFolderUsageDescription",
+    "NSDownloadsFolderUsageDescription",
+    "NSFileProviderDomainUsageDescription",
+    "NSLocalNetworkUsageDescription",
+    "NSLocationWhenInUseUsageDescription",
+    "NSMicrophoneUsageDescription",
+    "NSMotionUsageDescription",
+    "NSNetworkVolumesUsageDescription",
+    "NSPhotoLibraryUsageDescription",
+    "NSRemindersUsageDescription",
+    "NSRemovableVolumesUsageDescription",
+    "NSScreenCaptureUsageDescription",
+    "NSSpeechRecognitionUsageDescription",
+    "NSSystemAdministrationUsageDescription",
+];
+
+/// The M-13 notice, or `None` on a platform that has no TCC.
+///
+/// The merge entry point renders whatever this returns *before* offering the
+/// "start merge" action; a `None` means the platform has nothing to warn about
+/// and the entry point must not invent a warning.
+#[must_use]
+pub fn tcc_grants_reset_notice() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some(TCC_GRANTS_RESET_NOTICE)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionState {
@@ -684,6 +750,57 @@ pub fn open_privacy_pane(id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M-13 — `Info.plist` is the oracle, not the list beside the notice.
+    ///
+    /// macOS reads the plist; the merge notice reads
+    /// [`TCC_GRANTS_RESET_CATEGORIES`]. If a usage description is added to the
+    /// plist and not here, the notice quietly understates which approvals the
+    /// user is about to have to give again — which is the one thing this
+    /// unmigratable root is supposed to prevent. Reading the file rather than
+    /// restating its contents is what makes that detectable.
+    #[test]
+    fn tcc_reset_categories_match_the_declared_usage_descriptions() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Info.plist");
+        let plist = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {} failed: {e}", path.display()));
+
+        let declared: std::collections::BTreeSet<String> = plist
+            .lines()
+            .filter_map(|line| {
+                let key = line.trim().strip_prefix("<key>")?.strip_suffix("</key>")?;
+                key.ends_with("UsageDescription").then(|| key.to_string())
+            })
+            .collect();
+        assert!(
+            !declared.is_empty(),
+            "{} declares no NS*UsageDescription keys; this test has lost its subject",
+            path.display()
+        );
+
+        let listed: std::collections::BTreeSet<String> = TCC_GRANTS_RESET_CATEGORIES
+            .iter()
+            .map(|key| (*key).to_string())
+            .collect();
+        assert_eq!(
+            listed,
+            declared,
+            "TCC_GRANTS_RESET_CATEGORIES has drifted from {}. Every declared \
+             usage description is a privacy approval the bundle-id change \
+             resets, so the merge notice must name all of them and nothing else.",
+            path.display()
+        );
+    }
+
+    /// The notice is platform-gated, and the gate is the platform rather than a
+    /// build flag: a non-macOS build must not render a macOS-only warning.
+    #[test]
+    fn the_tcc_notice_is_offered_exactly_on_macos() {
+        assert_eq!(
+            tcc_grants_reset_notice().is_some(),
+            cfg!(target_os = "macos")
+        );
+    }
 
     #[test]
     fn treats_macos_15_and_newer_as_gated() {
