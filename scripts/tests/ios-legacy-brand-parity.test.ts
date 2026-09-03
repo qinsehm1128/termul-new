@@ -47,6 +47,7 @@ const repoRoot = process.cwd()
 /** The app's own Swift sources. `ios/Vendor/` is third-party and out of scope. */
 const APP_ROOT = 'ios/TermulRemote/TermulRemote'
 const INFO_PLIST = `${APP_ROOT}/Info.plist`
+const PBXPROJ = 'ios/TermulRemote/TermulRemote.xcodeproj/project.pbxproj'
 const FIXTURE = 'src/__fixtures__/legacy-brand/ios-defaults-dump.json'
 
 /**
@@ -57,7 +58,8 @@ const POST_RENAME = {
   iosDefaultsPrefix: 'se.',
   iosCacheDir: 'SeRemote',
   keychainPairingService: 'com.se-manager.remote.pairing',
-  deepLinkScheme: 'se'
+  deepLinkScheme: 'se',
+  displayName: 'Se'
 } as const
 
 interface DefaultsEntry {
@@ -184,6 +186,20 @@ function persistenceSites(): {
   ]
 }
 
+/**
+ * Every value the Xcode project bakes into the generated `Info.plist` under
+ * `INFOPLIST_KEY_<key>`, one per build configuration.
+ *
+ * These are the *base* values. A localized `InfoPlist.xcstrings` entry overrides
+ * them for a matched locale, which is exactly what made the residual below hard
+ * to see.
+ */
+function infoPlistBuildSettings(key: string): string[] {
+  return [...read(PBXPROJ).matchAll(new RegExp(`INFOPLIST_KEY_${key} = (.*);`, 'g'))].map((match) =>
+    match[1].replace(/^"|"$/g, '')
+  )
+}
+
 /** The schemes `Info.plist` registers with the system. */
 function registeredUrlSchemes(): string[] {
   const plist = read(INFO_PLIST)
@@ -281,5 +297,33 @@ describe('iOS legacy-brand parity (source text only — no runtime evidence)', (
     const record = dump()
     expect(registeredUrlSchemes()).not.toContain(record.urlScheme.value)
     expect(filesSpelling(record.urlScheme.value)).toEqual([])
+  })
+
+  // Correction U-02. `InfoPlist.xcstrings` was flipped to `Se` early, and that
+  // is what hid this: a localized value wins for a matched locale, so en and
+  // zh-Hans already displayed `Se` while the *base* fallback in the build
+  // settings still said `Termul`. Measured on the built product rather than
+  // inferred — `TermulRemote.app/Info.plist` carried
+  // `CFBundleDisplayName = Termul` next to localized tables reading `Se`.
+  //
+  // Guarded here because it was owned by no task until Wave 5: the display name
+  // is not one of the seven contracts above, so nothing else in this file would
+  // have noticed it. Directory and target renaming remains T-B08's.
+  it('bakes the post-rename display name into the base Info.plist fallback', () => {
+    __setBrandCanonicalOverride(POST_RENAME)
+    const displayNames = infoPlistBuildSettings('CFBundleDisplayName')
+
+    // Guards the regexp itself: an empty match set would pass every loop below.
+    expect(displayNames.length, `${PBXPROJ} sets no base display name`).toBeGreaterThan(0)
+    for (const value of displayNames) {
+      expect(value).toBe(brandCanonical().displayName)
+    }
+
+    const cameraReasons = infoPlistBuildSettings('NSCameraUsageDescription')
+    expect(cameraReasons.length, `${PBXPROJ} sets no camera usage description`).toBeGreaterThan(0)
+    for (const value of cameraReasons) {
+      expect(value).toContain(brandCanonical().displayName)
+      expect(value).not.toContain(LEGACY.displayName)
+    }
   })
 })
