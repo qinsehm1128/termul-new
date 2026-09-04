@@ -20,7 +20,11 @@ export type TerminalBoardStatusKey = 'live' | 'hidden' | 'disconnected' | 'atten
 
 export function terminalBoardStatus(terminal: Terminal): TerminalBoardStatusKey {
   if (terminal.needsAttention) return 'attention'
-  if (terminal.healthStatus === 'disconnected' || terminal.healthStatus === 'crashed') {
+  if (
+    terminal.healthStatus === 'disconnected' ||
+    terminal.healthStatus === 'crashed' ||
+    terminal.healthStatus === 'exited'
+  ) {
     return 'disconnected'
   }
   if (terminal.ptyId && !isOpenTerminalView(terminal)) return 'hidden'

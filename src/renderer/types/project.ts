@@ -84,7 +84,16 @@ export function isWorktreeSeManaged(worktree: Pick<Worktree, 'path'>): boolean {
   )
 }
 
-export type TerminalHealthStatus = TerminalResourceHydrationStatus | 'crashed' | 'hibernated'
+/**
+ * `exited` is a clean shell exit (status 0); `crashed` is a non-zero or
+ * signal-killed one. They are separate because the UI treats them differently:
+ * a clean exit is the expected end of a session, not a project-level error.
+ */
+export type TerminalHealthStatus =
+  | TerminalResourceHydrationStatus
+  | 'exited'
+  | 'crashed'
+  | 'hibernated'
 export type TerminalViewState = 'visible' | 'hidden' | 'detached'
 
 export interface Terminal {

@@ -35,9 +35,19 @@ export function useTerminalResourceLifecycle(): void {
       const store = useTerminalStore.getState()
       store.updateTerminalExitCode(terminal.id, exitCode)
       store.setTerminalClaim(ptyId, undefined)
+      // `exitCode` is already in hand, so use it: mapping every exit to
+      // `crashed` labelled an ordinary `exit 0` / Ctrl-D as a pane exception
+      // and put a blocking crash surface over a terminal nobody had lost.
+      // A missing code means the process went away without one (signal,
+      // transport loss), which is not a clean exit.
+      const exitedCleanly = exitCode === 0
       store.setTerminalHealthStatus(
         terminal.id,
-        terminal.healthStatus === 'disconnected' ? 'disconnected' : 'crashed'
+        terminal.healthStatus === 'disconnected'
+          ? 'disconnected'
+          : exitedCleanly
+            ? 'exited'
+            : 'crashed'
       )
       void performSessionWorkspaceWrite(conversationId)
     })

@@ -3,7 +3,7 @@ import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
 import type { IDisposable } from '@xterm/xterm'
 import { Terminal } from '@xterm/xterm'
-import { AlertTriangle, RefreshCcw } from 'lucide-react'
+import { AlertTriangle, CircleCheck, RefreshCcw } from 'lucide-react'
 import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -2514,6 +2514,8 @@ function ConnectedTerminalComponent({
   }
 
   const isCrashed = healthStatus === 'crashed'
+  const hasExited = healthStatus === 'exited'
+  const showProcessEnded = isCrashed || hasExited
   const cleanupStageLabel = cleanupRecovery
     ? t(`cleanup.stages.${cleanupRecovery.cleanupStage}`)
     : ''
@@ -2604,38 +2606,57 @@ function ConnectedTerminalComponent({
               </div>
             </div>
           )}
-          {isCrashed && !cleanupRecovery && (
-            <div className="absolute inset-0 z-50 flex animate-in items-center justify-center bg-background/78 p-4 text-foreground fade-in duration-150">
-              <div className="w-full max-w-md rounded-md border border-destructive/35 bg-card p-4 shadow-[0_18px_60px_hsl(var(--background)/0.7),inset_0_1px_0_0_hsl(var(--foreground)/0.05)]">
-                <div className="flex items-start gap-3">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-destructive/10">
+          {showProcessEnded && !cleanupRecovery && (
+            // Anchored banner, not `inset-0`. A full-bleed overlay sat on top of
+            // the xterm surface without `pointer-events-none`, so it ate every
+            // click, wheel and drag while leaving the scrollback legible through
+            // its 78% background — the terminal looked frozen when the only
+            // thing actually gone was the process. The output stays readable,
+            // selectable and scrollable after the shell ends.
+            <div
+              className="pointer-events-none absolute inset-x-3 top-3 z-[60] flex animate-in justify-center fade-in duration-150"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-md border border-border bg-card p-3 shadow-[0_12px_36px_hsl(var(--background)/0.55),inset_0_1px_0_0_hsl(var(--foreground)/0.05)]">
+                <div
+                  className={`flex size-8 shrink-0 items-center justify-center rounded-md ${
+                    isCrashed ? 'bg-destructive/10' : 'bg-muted'
+                  }`}
+                >
+                  {isCrashed ? (
                     <AlertTriangle className="text-destructive" size={16} />
-                  </div>
-                  <div className="min-w-0 flex-1">
+                  ) : (
+                    <CircleCheck className="text-muted-foreground" size={16} />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  {isCrashed && (
                     <div className="mb-1 text-2xs font-medium text-destructive">
                       {t('crash.criticalError')} · {t('crash.paneException')}
                     </div>
-                    <h3 className="text-sm font-semibold tracking-[-0.01em]">
-                      {t('crash.sessionInterrupted')}
-                    </h3>
-                    <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-                      {t('crash.description')}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      if (targetId) void restartTerminalResource(targetId)
-                    }}
-                    className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-colors hover:bg-foreground/88 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <RefreshCcw size={14} /> {t('crash.reconnect')}
-                  </button>
-                  <div className="font-mono text-3xs text-muted-foreground/60">
-                    REF::{targetId?.slice(0, 8)}
+                  )}
+                  <h3 className="text-sm font-semibold tracking-[-0.01em]">
+                    {isCrashed ? t('crash.sessionInterrupted') : t('crash.exitedTitle')}
+                  </h3>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                    {isCrashed ? t('crash.description') : t('crash.exitedDescription')}
+                  </p>
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (targetId) void restartTerminalResource(targetId)
+                      }}
+                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-colors hover:bg-foreground/88 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <RefreshCcw size={14} />{' '}
+                      {isCrashed ? t('crash.reconnect') : t('crash.restart')}
+                    </button>
+                    <div className="font-mono text-3xs text-muted-foreground/60">
+                      REF::{targetId?.slice(0, 8)}
+                    </div>
                   </div>
                 </div>
               </div>

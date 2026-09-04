@@ -44,7 +44,10 @@
     "paneException": "Terminal Pane Exception",
     "sessionInterrupted": "Session Interrupted",
     "description": "The terminal process exited unexpectedly. This usually happens if the shell crashes or the PTY is killed by the OS.",
-    "reconnect": "Reconnect Session"
+    "reconnect": "Reconnect Session",
+    "exitedTitle": "Process Ended",
+    "exitedDescription": "The shell exited normally. The output above stays scrollable and selectable; restart to run a new session.",
+    "restart": "Restart Session"
   },
   "links": {
     "openFileFailed": "Failed to open file from terminal output.",

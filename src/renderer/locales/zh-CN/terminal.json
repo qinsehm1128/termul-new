@@ -44,7 +44,10 @@
     "paneException": "终端窗格异常",
     "sessionInterrupted": "会话已中断",
     "description": "终端进程意外退出。这通常是因为 Shell 崩溃或 PTY 被操作系统终止。",
-    "reconnect": "重新连接会话"
+    "reconnect": "重新连接会话",
+    "exitedTitle": "进程已结束",
+    "exitedDescription": "Shell 已正常退出。上方输出仍可滚动和选取；如需新会话请重新启动。",
+    "restart": "重新启动会话"
   },
   "links": {
     "openFileFailed": "无法打开终端输出中的文件。",

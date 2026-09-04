@@ -967,9 +967,31 @@ impl CleanupDriver for SystemCleanupDriver {
         if Instant::now() >= deadline {
             return Err(TerminalCleanupFailureReason::DeadlineExceeded);
         }
-        child
+        #[cfg(unix)]
+        let pgid = child.process_id().map(|pid| pid as i32);
+
+        let killed = child
             .kill()
-            .map_err(|_| TerminalCleanupFailureReason::Error)
+            .map_err(|_| TerminalCleanupFailureReason::Error);
+
+        // `child.kill()` only ever reaches the direct child: on unix it is
+        // SIGHUP, a short grace, then SIGKILL against that one pid. Everything
+        // the shell started (agent CLIs, node, ssh) survives as an orphan still
+        // holding the pty slave, which on Linux keeps the reader's `read()`
+        // blocked forever. Windows already tree-kills through its Job Object;
+        // this is the missing unix half.
+        //
+        // `portable_pty` runs `setsid()` in `pre_exec`, so the child leads its
+        // own session and `pgid == pid` — this can never reach our own group.
+        // Sent after `child.kill()` so the shell still gets its SIGHUP grace,
+        // and it mints no new time budget of its own.
+        #[cfg(unix)]
+        if let Some(pgid) = pgid {
+            // ESRCH just means the group is already empty.
+            unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        }
+
+        killed
     }
 
     fn try_wait(
@@ -987,7 +1009,7 @@ impl CleanupDriver for SystemCleanupDriver {
 
     fn join_thread(
         &self,
-        _stage: TerminalCleanupStage,
+        stage: TerminalCleanupStage,
         handle: &mut Option<std::thread::JoinHandle<()>>,
         deadline: Instant,
     ) -> Result<(), TerminalCleanupFailureReason> {
@@ -1000,9 +1022,19 @@ impl CleanupDriver for SystemCleanupDriver {
             drop(handle);
             return Err(TerminalCleanupFailureReason::DeadlineExceeded);
         }
-        handle
-            .join()
-            .map_err(|_| TerminalCleanupFailureReason::ThreadPanicked)
+        if handle.join().is_err() {
+            // The join exists to prove the worker is no longer running, and a
+            // panicked thread has proven exactly that. Reporting it as a
+            // cleanup failure quarantines a terminal whose thread is already
+            // gone, and every retry re-joins the same dead thread and fails the
+            // same way — permanently unkillable. Record it loudly and let the
+            // stage pass.
+            log::warn!(
+                "[pty-cleanup] cleanup_stage={stage} stable_result=WORKER_PANICKED \
+                 note=thread already terminated; treating join as satisfied"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -1130,6 +1162,17 @@ pub struct TerminalInstance {
     pub writer: Arc<AsyncMutex<Option<Box<dyn Write + Send>>>>,
     pub reader_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
     pub flusher_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
+    /// "No more PTY input is coming." The flusher drains once more and exits.
+    ///
+    /// The reader sets it on EOF/error, but it MUST NOT be reachable only from
+    /// there: the flusher would then outlive any reader that ended without
+    /// running its tail (panic, or a spawn that never got that far), and
+    /// `join_thread_until(FlusherJoin)` polls `is_finished()` — against an
+    /// immortal thread that never returns true, every terminate attempt burns
+    /// the whole deadline and quarantines, retry included. Observed live: a
+    /// process with 9 flusher threads and 8 readers, the odd one parked in
+    /// `thread::sleep` forever. Cleanup owns this flag too.
+    done_flag: Arc<AtomicBool>,
     lifecycle_state: Arc<RwLock<TerminalLifecycleState>>,
     cleanup_gate: Arc<AsyncMutex<()>>,
     cleanup_job: Arc<Mutex<Option<Arc<TerminalCleanupJob>>>>,
@@ -1696,6 +1739,13 @@ impl PtyManager {
             }
         }
 
+        // The child is reaped, so no further PTY bytes can arrive. Retire the
+        // flusher here rather than waiting for the reader to do it: that
+        // dependency is exactly what makes a reader which ended without running
+        // its tail leave an unjoinable flusher behind, and `join_thread_until`
+        // can never win against a thread that never finishes.
+        instance.done_flag.store(true, Ordering::Release);
+
         Self::join_thread_until(
             &instance,
             &instance.flusher_handle,
@@ -2026,6 +2076,7 @@ impl PtyManager {
                 writer: Arc::new(AsyncMutex::new(Some(writer))),
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
+                done_flag: Arc::new(AtomicBool::new(false)),
                 lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
                 cleanup_gate: Arc::new(AsyncMutex::new(())),
                 cleanup_job: Arc::new(Mutex::new(None)),
@@ -2050,7 +2101,9 @@ impl PtyManager {
 
             // Start reader + flusher threads
             let pending_buf = Arc::new(Mutex::new(Vec::with_capacity(READ_BUF)));
-            let done_flag = Arc::new(AtomicBool::new(false));
+            // Owned by the instance so cleanup can retire the flusher without
+            // depending on the reader reaching its tail. See `done_flag` docs.
+            let done_flag = instance.done_flag.clone();
 
             let reader_instance = instance.clone();
             let terminal_events = self.terminal_events.clone();
@@ -2188,6 +2241,7 @@ impl PtyManager {
                 writer: Arc::new(AsyncMutex::new(Some(writer))),
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
+                done_flag: Arc::new(AtomicBool::new(false)),
                 lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
                 cleanup_gate: Arc::new(AsyncMutex::new(())),
                 cleanup_job: Arc::new(Mutex::new(None)),
@@ -2213,7 +2267,9 @@ impl PtyManager {
 
             // Start reader + flusher threads
             let pending_buf = Arc::new(Mutex::new(Vec::with_capacity(READ_BUF)));
-            let done_flag = Arc::new(AtomicBool::new(false));
+            // Owned by the instance so cleanup can retire the flusher without
+            // depending on the reader reaching its tail. See `done_flag` docs.
+            let done_flag = instance.done_flag.clone();
 
             // Spawn flusher thread first
             let flusher_pending = pending_buf.clone();
@@ -3884,6 +3940,7 @@ mod tests {
             writer: Arc::new(AsyncMutex::new(None)),
             reader_handle: Arc::new(AsyncMutex::new(Some(std::thread::spawn(|| {})))),
             flusher_handle: Arc::new(AsyncMutex::new(Some(std::thread::spawn(|| {})))),
+            done_flag: Arc::new(AtomicBool::new(false)),
             lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
             cleanup_gate: Arc::new(AsyncMutex::new(())),
             cleanup_job: Arc::new(Mutex::new(None)),
@@ -3913,6 +3970,62 @@ mod tests {
         manager.active_terminal_slots.fetch_add(1, Ordering::SeqCst);
         manager.claims.issue(terminal_id, conversation_id, None);
         instance
+    }
+
+    /// Regression: the flusher's exit condition must be reachable from cleanup.
+    ///
+    /// Live evidence from a running build: 9 flusher threads against 8 readers,
+    /// the odd one parked in `thread::sleep` forever because its reader ended
+    /// without running the tail that sets `done_flag`. `join_thread_until`
+    /// polls `is_finished()`, so that terminal could never be terminated —
+    /// every attempt, retry included, burned the full deadline and quarantined.
+    #[tokio::test]
+    async fn terminate_retires_a_flusher_whose_reader_never_set_done_flag() {
+        let manager = crate::web::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-immortal-flusher");
+
+        // A flusher with the production exit condition: `done_flag` only.
+        let flusher_done = Arc::clone(&instance.done_flag);
+        *instance.flusher_handle.lock().await = Some(std::thread::spawn(move || {
+            while !flusher_done.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }));
+        // The reader is gone and never set the flag — the defective state.
+        assert!(!instance.done_flag.load(Ordering::Acquire));
+
+        let receipt = manager
+            .terminate("term-immortal-flusher")
+            .await
+            .expect("cleanup must not depend on the reader having set done_flag");
+        assert!(receipt.released_slot, "the terminal slot must be released");
+        assert!(
+            instance.done_flag.load(Ordering::Acquire),
+            "cleanup owns the flusher retirement signal"
+        );
+    }
+
+    /// Regression: a panicked worker is a terminated worker.
+    ///
+    /// Mapping the join failure to `ThreadPanicked` quarantined a terminal
+    /// whose thread was already gone, and every retry re-joined the same dead
+    /// thread for the same failure — permanently unkillable.
+    #[tokio::test]
+    async fn terminate_treats_a_panicked_worker_as_joined() {
+        let manager = crate::web::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-panicked-reader");
+
+        let panicked = std::thread::spawn(|| panic!("reader blew up"));
+        while !panicked.is_finished() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        *instance.reader_handle.lock().await = Some(panicked);
+
+        let receipt = manager
+            .terminate("term-panicked-reader")
+            .await
+            .expect("a dead thread satisfies the join it is being waited on for");
+        assert!(receipt.released_slot, "the terminal slot must be released");
     }
 
     #[test]
@@ -5032,6 +5145,7 @@ mod tests {
             writer: Arc::new(AsyncMutex::new(None)),
             reader_handle: Arc::new(AsyncMutex::new(None)),
             flusher_handle: Arc::new(AsyncMutex::new(None)),
+            done_flag: Arc::new(AtomicBool::new(false)),
             lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
             cleanup_gate: Arc::new(AsyncMutex::new(())),
             cleanup_job: Arc::new(Mutex::new(None)),

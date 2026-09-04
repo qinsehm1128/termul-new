@@ -554,6 +554,39 @@ describe('ConnectedTerminal', () => {
     })
   })
 
+  // The crash surface used to be `absolute inset-0 z-50` with no
+  // `pointer-events-none`, so it sat on top of the xterm element and ate every
+  // click, wheel and drag while the scrollback stayed legible through its
+  // translucent background — a terminal that looked frozen when the only thing
+  // gone was the process.
+  it.each([['crashed'], ['exited']])(
+    'does not cover the terminal surface after the process %s',
+    async (status) => {
+      mockTerminalStoreState.terminals = [
+        { id: 'terminal-ended', ptyId: 'terminal-ended', healthStatus: status }
+      ]
+      const { container } = render(<ConnectedTerminal terminalId="terminal-ended" />)
+
+      const banner = await vi.waitFor(() => {
+        const node = container.querySelector('[role="status"]')
+        expect(node).not.toBeNull()
+        return node as HTMLElement
+      })
+
+      // Nothing spanning the whole pane may take pointer events.
+      const covering = Array.from(container.querySelectorAll('div')).filter((node) => {
+        const cls = node.className
+        return typeof cls === 'string' && cls.includes('inset-0')
+      })
+      for (const surface of covering) {
+        expect(surface.className).toContain('pointer-events-none')
+      }
+
+      expect(banner.className).toContain('pointer-events-none')
+      expect(banner.className).not.toContain('inset-0')
+    }
+  )
+
   it('should not respawn the terminal or re-register listeners when the terminal PTY changes via restart', async () => {
     const { rerender } = render(<ConnectedTerminal />)
 
