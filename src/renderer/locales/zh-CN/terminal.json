@@ -135,7 +135,8 @@
       "live": "运行中",
       "hidden": "已隐藏",
       "disconnected": "已断开",
-      "attention": "需要关注"
+      "attention": "需要关注",
+      "exited": "已结束"
     }
   },
   "lifecycle": {

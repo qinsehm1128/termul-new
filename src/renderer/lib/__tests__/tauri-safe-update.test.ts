@@ -56,6 +56,28 @@ describe('tauri-safe-update', () => {
     expect(hasActiveTerminalSessions()).toBe(false)
   })
 
+  // A terminal whose process already ended cannot lose work to a restart, so
+  // it must not keep raising the "running terminals" update warning.
+  it.each([
+    ['exited'],
+    ['crashed']
+  ])('returns false when the only terminal has %s', (healthStatus) => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: 't1',
+          name: 'Ended',
+          projectId: 'p1',
+          shell: 'bash',
+          isHidden: false,
+          healthStatus
+        }
+      ]
+    } as never)
+
+    expect(hasActiveTerminalSessions()).toBe(false)
+  })
+
   it('returns true when at least one visible non-hibernated terminal exists', () => {
     useTerminalStore.setState({
       terminals: [

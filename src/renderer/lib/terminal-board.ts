@@ -16,15 +16,15 @@ export interface TerminalBoardGroupBlock {
   projects: TerminalBoardProjectBlock[]
 }
 
-export type TerminalBoardStatusKey = 'live' | 'hidden' | 'disconnected' | 'attention'
+export type TerminalBoardStatusKey = 'live' | 'hidden' | 'exited' | 'disconnected' | 'attention'
 
 export function terminalBoardStatus(terminal: Terminal): TerminalBoardStatusKey {
   if (terminal.needsAttention) return 'attention'
-  if (
-    terminal.healthStatus === 'disconnected' ||
-    terminal.healthStatus === 'crashed' ||
-    terminal.healthStatus === 'exited'
-  ) {
+  // `exited` is its own key: `disconnected` means the transport or resume
+  // failed, which is a problem to act on. A shell that ended with status 0 is
+  // not, and must not be shown with the same alarming tone.
+  if (terminal.healthStatus === 'exited') return 'exited'
+  if (terminal.healthStatus === 'disconnected' || terminal.healthStatus === 'crashed') {
     return 'disconnected'
   }
   if (terminal.ptyId && !isOpenTerminalView(terminal)) return 'hidden'

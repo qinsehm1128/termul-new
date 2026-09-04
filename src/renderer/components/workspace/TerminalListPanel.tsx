@@ -12,6 +12,7 @@ import { useTerminalStore } from '@/stores/terminal-store'
 const STATUS_DOT: Record<TerminalBoardStatusKey, string> = {
   live: 'bg-emerald-500',
   hidden: 'bg-muted-foreground/60',
+  exited: 'bg-muted-foreground/60',
   disconnected: 'bg-destructive',
   attention: 'bg-amber-500'
 }

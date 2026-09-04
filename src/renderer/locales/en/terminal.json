@@ -135,7 +135,8 @@
       "live": "Live",
       "hidden": "Hidden",
       "disconnected": "Disconnected",
-      "attention": "Needs attention"
+      "attention": "Needs attention",
+      "exited": "Ended"
     }
   },
   "lifecycle": {

@@ -99,7 +99,10 @@ export type WebTerminalRequestType =
 export type TerminalCwdSource = 'workspace' | 'executionTarget'
 
 /** Exact sanitized PTY cleanup stages emitted by both native transports. */
-export const TERMINAL_CLEANUP_STAGES = ['kill', 'wait', 'flusher_join', 'reader_join'] as const
+/** Cleanup stage order. The reader is joined before the flusher: it is the
+ *  producer, and retiring the consumer first both dropped its tail output and
+ *  reported a stuck reader as a flusher-stage timeout. */
+export const TERMINAL_CLEANUP_STAGES = ['kill', 'wait', 'reader_join', 'flusher_join'] as const
 
 export type TerminalCleanupStage = (typeof TERMINAL_CLEANUP_STAGES)[number]
 

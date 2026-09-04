@@ -104,4 +104,16 @@ describe('terminalBoardStatus', () => {
       'disconnected'
     )
   })
+
+  // `disconnected` means the transport or resume failed — something to act on.
+  // A shell that ended with status 0 is not, and reusing the key showed those
+  // terminals with the same alarming tone as a real failure.
+  it('keeps a clean exit separate from a transport failure', () => {
+    expect(terminalBoardStatus(terminal('e', { ptyId: 'pty', healthStatus: 'exited' }))).toBe(
+      'exited'
+    )
+    expect(terminalBoardStatus(terminal('f', { ptyId: 'pty', healthStatus: 'crashed' }))).toBe(
+      'disconnected'
+    )
+  })
 })

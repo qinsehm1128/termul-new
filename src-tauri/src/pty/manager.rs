@@ -706,8 +706,8 @@ pub(crate) fn tracks_session_workspace_ref(options: &SpawnOptions) -> bool {
 pub enum TerminalCleanupStage {
     Kill,
     Wait,
-    FlusherJoin,
     ReaderJoin,
+    FlusherJoin,
 }
 
 impl TerminalCleanupStage {
@@ -758,6 +758,11 @@ pub struct TerminalCleanupReceipt {
     pub attempt: u64,
     pub released_slot: bool,
     pub already_removed: bool,
+    /// A worker thread had panicked by the time cleanup joined it. Resources are
+    /// released either way, but the teardown was degraded: that worker may have
+    /// left output unpublished or an exit event unsent. Kept on the receipt so
+    /// a caller can tell a clean teardown from a salvaged one.
+    pub worker_panicked: bool,
 }
 
 /// Internal classification retained for deterministic tests and sanitized logging.
@@ -952,7 +957,16 @@ pub(crate) trait CleanupDriver: Send + Sync {
         stage: TerminalCleanupStage,
         handle: &mut Option<std::thread::JoinHandle<()>>,
         deadline: Instant,
-    ) -> Result<(), TerminalCleanupFailureReason>;
+    ) -> Result<WorkerExit, TerminalCleanupFailureReason>;
+}
+
+/// How a worker thread ended. A panic still satisfies the join — the thread is
+/// gone, which is what the join waits for — but it is a degraded teardown and
+/// must stay visible instead of being folded into an ordinary success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerExit {
+    Clean,
+    Panicked,
 }
 
 #[derive(Debug, Default)]
@@ -985,10 +999,22 @@ impl CleanupDriver for SystemCleanupDriver {
         // own session and `pgid == pid` — this can never reach our own group.
         // Sent after `child.kill()` so the shell still gets its SIGHUP grace,
         // and it mints no new time budget of its own.
+        // Only ever reached while the caller still holds an un-reaped child, so
+        // the pid is still reserved by us and cannot have been recycled. That
+        // gate lives in `cleanup_terminal_resources_sync` (`!child_reaped`) and
+        // in the reader, which marks the flag when its own `try_wait` reaps.
+        // Signalling a pid we no longer own could hit an unrelated process.
         #[cfg(unix)]
         if let Some(pgid) = pgid {
-            // ESRCH just means the group is already empty.
-            unsafe { libc::killpg(pgid, libc::SIGKILL) };
+            if unsafe { libc::killpg(pgid, libc::SIGKILL) } != 0 {
+                let error = std::io::Error::last_os_error();
+                // ESRCH just means the group is already empty.
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    log::warn!(
+                        "[pty-cleanup] process-group sweep failed pgid={pgid} error={error}"
+                    );
+                }
+            }
         }
 
         killed
@@ -1012,9 +1038,9 @@ impl CleanupDriver for SystemCleanupDriver {
         stage: TerminalCleanupStage,
         handle: &mut Option<std::thread::JoinHandle<()>>,
         deadline: Instant,
-    ) -> Result<(), TerminalCleanupFailureReason> {
+    ) -> Result<WorkerExit, TerminalCleanupFailureReason> {
         let Some(handle) = handle.take() else {
-            return Ok(());
+            return Ok(WorkerExit::Clean);
         };
         if Instant::now() >= deadline {
             // Dropping the JoinHandle detaches the thread so unresolved
@@ -1023,6 +1049,7 @@ impl CleanupDriver for SystemCleanupDriver {
             return Err(TerminalCleanupFailureReason::DeadlineExceeded);
         }
         if handle.join().is_err() {
+            // Fall through to `WorkerExit::Panicked` below.
             // The join exists to prove the worker is no longer running, and a
             // panicked thread has proven exactly that. Reporting it as a
             // cleanup failure quarantines a terminal whose thread is already
@@ -1033,8 +1060,9 @@ impl CleanupDriver for SystemCleanupDriver {
                 "[pty-cleanup] cleanup_stage={stage} stable_result=WORKER_PANICKED \
                  note=thread already terminated; treating join as satisfied"
             );
+            return Ok(WorkerExit::Panicked);
         }
-        Ok(())
+        Ok(WorkerExit::Clean)
     }
 }
 
@@ -1112,7 +1140,7 @@ impl CleanupDriver for ScriptedCleanupDriver {
         stage: TerminalCleanupStage,
         handle: &mut Option<std::thread::JoinHandle<()>>,
         deadline: Instant,
-    ) -> Result<(), TerminalCleanupFailureReason> {
+    ) -> Result<WorkerExit, TerminalCleanupFailureReason> {
         if self.observe_and_should_fail(stage, deadline) {
             return Err(TerminalCleanupFailureReason::Error);
         }
@@ -1642,12 +1670,12 @@ impl PtyManager {
         stage: TerminalCleanupStage,
         driver: &dyn CleanupDriver,
         job: &TerminalCleanupJob,
-    ) -> Result<(), TerminalCleanupFailure> {
+    ) -> Result<WorkerExit, TerminalCleanupFailure> {
         job.set_stage(stage);
         let mut handle = handle_slot.blocking_lock();
         loop {
             let Some(current) = handle.as_ref() else {
-                return Ok(());
+                return Ok(WorkerExit::Clean);
             };
             if current.is_finished() {
                 return driver
@@ -1739,24 +1767,36 @@ impl PtyManager {
             }
         }
 
-        // The child is reaped, so no further PTY bytes can arrive. Retire the
-        // flusher here rather than waiting for the reader to do it: that
-        // dependency is exactly what makes a reader which ended without running
-        // its tail leave an unjoinable flusher behind, and `join_thread_until`
-        // can never win against a thread that never finishes.
-        instance.done_flag.store(true, Ordering::Release);
-
-        Self::join_thread_until(
-            &instance,
-            &instance.flusher_handle,
-            TerminalCleanupStage::FlusherJoin,
-            driver.as_ref(),
-            &job,
-        )?;
-        Self::join_thread_until(
+        // Producer before consumer.
+        //
+        // The reader is the only thing that can still append to `pending_buf`;
+        // a reaped child does not mean the master is drained. Joining the
+        // flusher first meant retiring the consumer while the producer was
+        // still running, so anything the reader appended after the flusher's
+        // final drain was dropped from the output log, the broadcast and the
+        // frontend channel. It also mislabelled the failure: a reader stuck in
+        // `read()` surfaced to the user as the *flusher* stage timing out.
+        let reader_exit = Self::join_thread_until(
             &instance,
             &instance.reader_handle,
             TerminalCleanupStage::ReaderJoin,
+            driver.as_ref(),
+            &job,
+        )?;
+
+        // The reader is gone, so no further bytes can arrive and the flusher may
+        // retire. It normally set this itself on the way out; setting it here
+        // covers the reader that ended without running its tail (a panic, or a
+        // spawn that never reached it). Without that fallback the flusher runs
+        // forever and `join_thread_until` — which polls `is_finished()` — can
+        // never succeed, so every terminate on that terminal, retry included,
+        // burns the whole deadline and quarantines.
+        instance.done_flag.store(true, Ordering::Release);
+
+        let flusher_exit = Self::join_thread_until(
+            &instance,
+            &instance.flusher_handle,
+            TerminalCleanupStage::FlusherJoin,
             driver.as_ref(),
             &job,
         )?;
@@ -1775,6 +1815,8 @@ impl PtyManager {
             attempt: job.attempt,
             released_slot: false,
             already_removed: false,
+            worker_panicked: reader_exit == WorkerExit::Panicked
+                || flusher_exit == WorkerExit::Panicked,
         })
     }
 
@@ -2412,21 +2454,39 @@ impl PtyManager {
         done_flag.store(true, Ordering::Release);
 
         // Get real child exit status where possible.
+        //
+        // `try_wait` REAPS the child, which frees its pid for reuse. Cleanup
+        // signals by pid (`kill`, and the process-group sweep), so it must be
+        // told the pid is spent — otherwise a later terminate on this record
+        // would signal whatever process the OS has since given that number to.
+        // Marking `child_reaped` here makes cleanup skip its whole kill/wait
+        // block, which is correct: the child is already gone.
         let exit_code = match instance.child.try_lock() {
-            Ok(mut guard) => match guard.as_mut() {
-                Some(child) => match child.try_wait() {
-                    Ok(Some(status)) => {
-                        let code_u32 = status.exit_code();
-                        i32::try_from(code_u32).ok()
+            Ok(mut guard) => {
+                let reaped = match guard.as_mut() {
+                    Some(child) => match child.try_wait() {
+                        Ok(Some(status)) => Some(i32::try_from(status.exit_code()).ok()),
+                        Ok(None) => None,
+                        Err(e) => {
+                            log::warn!("[PTY {}] Failed to query child exit status: {}", id, e);
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                match reaped {
+                    Some(code) => {
+                        guard.take();
+                        instance
+                            .cleanup_progress
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .child_reaped = true;
+                        code
                     }
-                    Ok(None) => None,
-                    Err(e) => {
-                        log::warn!("[PTY {}] Failed to query child exit status: {}", id, e);
-                        None
-                    }
-                },
-                None => None,
-            },
+                    None => None,
+                }
+            }
             Err(_) => None,
         };
 
@@ -2735,6 +2795,7 @@ impl PtyManager {
                 attempt: 0,
                 released_slot: false,
                 already_removed: true,
+                worker_panicked: false,
             });
         };
 
@@ -2753,6 +2814,7 @@ impl PtyManager {
                     attempt: instance.cleanup_attempts.load(Ordering::Acquire),
                     released_slot: false,
                     already_removed: true,
+                    worker_panicked: false,
                 });
             }
 
@@ -4005,6 +4067,89 @@ mod tests {
         );
     }
 
+    /// Regression: cleanup must not retire the flusher while the reader can
+    /// still produce. Joining the consumer first dropped everything the reader
+    /// appended after the flusher's final drain.
+    #[tokio::test]
+    async fn terminate_does_not_drop_tail_output_produced_during_cleanup() {
+        let manager = crate::web::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-tail-output");
+        let mut outputs = instance.broadcast_tx.subscribe();
+
+        let pending: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let done = Arc::clone(&instance.done_flag);
+
+        // A reader that keeps producing for a beat after the child is reaped —
+        // a drained kernel buffer is not instantaneous.
+        let reader_pending = Arc::clone(&pending);
+        let reader_done = Arc::clone(&done);
+        *instance.reader_handle.lock().await = Some(std::thread::spawn(move || {
+            for _ in 0..5 {
+                std::thread::sleep(Duration::from_millis(2));
+                reader_pending.lock().unwrap().extend_from_slice(b"tail");
+            }
+            reader_done.store(true, Ordering::Release);
+        }));
+
+        // The production flusher shape: drain on a tick, one final drain, exit.
+        let flusher_pending = Arc::clone(&pending);
+        let flusher_done = Arc::clone(&done);
+        let flusher_tx = Arc::clone(&instance.broadcast_tx);
+        let flusher_log = Arc::clone(&instance.output_log);
+        let flusher_bytes = Arc::clone(&instance.output_log_bytes);
+        let flusher_seq = Arc::clone(&instance.next_output_seq);
+        *instance.flusher_handle.lock().await = Some(std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(1));
+            let batch = {
+                let mut guard = flusher_pending.lock().unwrap();
+                (!guard.is_empty()).then(|| std::mem::take(&mut *guard))
+            };
+            if let Some(batch) = batch {
+                let chunk = TerminalOutputChunk {
+                    seq: flusher_seq.fetch_add(1, Ordering::Relaxed) + 1,
+                    data: batch,
+                };
+                flusher_log.write().push_back(chunk.clone());
+                flusher_bytes.fetch_add(chunk.data.len(), Ordering::Relaxed);
+                let _ = flusher_tx.send(chunk);
+            }
+            if flusher_done.load(Ordering::Acquire) {
+                let leftover = {
+                    let mut guard = flusher_pending.lock().unwrap();
+                    (!guard.is_empty()).then(|| std::mem::take(&mut *guard))
+                };
+                if let Some(leftover) = leftover {
+                    let chunk = TerminalOutputChunk {
+                        seq: flusher_seq.fetch_add(1, Ordering::Relaxed) + 1,
+                        data: leftover,
+                    };
+                    flusher_log.write().push_back(chunk.clone());
+                    flusher_bytes.fetch_add(chunk.data.len(), Ordering::Relaxed);
+                    let _ = flusher_tx.send(chunk);
+                }
+                break;
+            }
+        }));
+
+        manager
+            .terminate("term-tail-output")
+            .await
+            .expect("cleanup must complete");
+
+        let mut published = Vec::new();
+        while let Ok(chunk) = outputs.try_recv() {
+            published.extend_from_slice(&chunk.data);
+        }
+        assert_eq!(
+            published, b"tailtailtailtailtail",
+            "every byte the reader produced during cleanup must reach the output log"
+        );
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "nothing may be left unflushed once cleanup returns"
+        );
+    }
+
     /// Regression: a panicked worker is a terminated worker.
     ///
     /// Mapping the join failure to `ThreadPanicked` quarantined a terminal
@@ -4026,6 +4171,10 @@ mod tests {
             .await
             .expect("a dead thread satisfies the join it is being waited on for");
         assert!(receipt.released_slot, "the terminal slot must be released");
+        assert!(
+            receipt.worker_panicked,
+            "a salvaged teardown must stay distinguishable from a clean one"
+        );
     }
 
     #[test]
@@ -4188,8 +4337,8 @@ mod tests {
         for stage in [
             TerminalCleanupStage::Kill,
             TerminalCleanupStage::Wait,
-            TerminalCleanupStage::FlusherJoin,
             TerminalCleanupStage::ReaderJoin,
+            TerminalCleanupStage::FlusherJoin,
         ] {
             let manager = crate::web::test_pty_manager();
             let driver = Arc::new(ScriptedCleanupDriver::default());
@@ -4219,16 +4368,16 @@ mod tests {
                 TerminalCleanupStage::Wait => {
                     vec![TerminalCleanupStage::Kill, TerminalCleanupStage::Wait]
                 }
-                TerminalCleanupStage::FlusherJoin => vec![
-                    TerminalCleanupStage::Kill,
-                    TerminalCleanupStage::Wait,
-                    TerminalCleanupStage::FlusherJoin,
-                ],
                 TerminalCleanupStage::ReaderJoin => vec![
                     TerminalCleanupStage::Kill,
                     TerminalCleanupStage::Wait,
-                    TerminalCleanupStage::FlusherJoin,
                     TerminalCleanupStage::ReaderJoin,
+                ],
+                TerminalCleanupStage::FlusherJoin => vec![
+                    TerminalCleanupStage::Kill,
+                    TerminalCleanupStage::Wait,
+                    TerminalCleanupStage::ReaderJoin,
+                    TerminalCleanupStage::FlusherJoin,
                 ],
             };
             assert_eq!(
@@ -4376,7 +4525,7 @@ mod tests {
             stage: TerminalCleanupStage,
             handle: &mut Option<std::thread::JoinHandle<()>>,
             deadline: Instant,
-        ) -> Result<(), TerminalCleanupFailureReason> {
+        ) -> Result<WorkerExit, TerminalCleanupFailureReason> {
             SystemCleanupDriver.join_thread(stage, handle, deadline)
         }
     }
@@ -4546,7 +4695,7 @@ mod tests {
             stage: TerminalCleanupStage,
             handle: &mut Option<std::thread::JoinHandle<()>>,
             deadline: Instant,
-        ) -> Result<(), TerminalCleanupFailureReason> {
+        ) -> Result<WorkerExit, TerminalCleanupFailureReason> {
             SystemCleanupDriver.join_thread(stage, handle, deadline)
         }
     }
