@@ -2406,6 +2406,102 @@ mod tests {
         .unwrap_or_else(|(code, message)| panic!("{type_} failed: {code} {message}"))
     }
 
+    /// End-to-end on the real spawn path: a real shell, a real terminate.
+    ///
+    /// Asserts what the implementation actually delivers — the shell dies, the
+    /// cleanup completes, the slot comes back — and pins the boundary the
+    /// process-group sweep cannot cross. The app spawns login+interactive
+    /// shells, so job control gives every job its own process group and a
+    /// backgrounded child is NOT swept. That is recorded here deliberately: if
+    /// terminate ever grows session-wide kill, this assertion is what has to
+    /// change, on purpose rather than by accident.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminate_reclaims_a_real_terminal_and_bounds_what_it_sweeps() {
+        let state = terminal_test_state();
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().canonicalize().unwrap();
+        let marker = cwd.join("child.pid");
+
+        let spawned = state
+            .pty
+            .spawn(
+                SpawnOptions {
+                    conversation_id: Some(conversation_id()),
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    cols: Some(80),
+                    rows: Some(24),
+                    shell: Some("/bin/sh".into()),
+                    env: Some(HashMap::from([("PS1".into(), "$ ".into())])),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn a real PTY");
+        let terminal_id = spawned.info.id.clone();
+        let shell_pid = spawned.info.pid as i32;
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            alive(shell_pid),
+            "the shell must be running before we start"
+        );
+
+        state
+            .pty
+            .write(
+                &terminal_id,
+                &format!("sleep 120 & echo $! > {}\n", marker.display()),
+            )
+            .await
+            .expect("write to the live PTY");
+
+        let child_pid = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Ok(raw) = std::fs::read_to_string(&marker) {
+                    if let Ok(pid) = raw.trim().parse::<i32>() {
+                        break pid;
+                    }
+                }
+                assert!(std::time::Instant::now() < deadline, "child never reported");
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        };
+
+        let same_group = unsafe { libc::getpgid(child_pid) } == unsafe { libc::getpgid(shell_pid) };
+
+        state
+            .pty
+            .terminate(&terminal_id)
+            .await
+            .expect("cleanup must complete on a real terminal");
+
+        let settle = |pid: i32| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+        settle(shell_pid);
+        assert!(!alive(shell_pid), "the shell itself must be gone");
+        assert!(
+            state.pty.get(&terminal_id).is_none(),
+            "the terminal slot must be reclaimed"
+        );
+
+        if same_group {
+            settle(child_pid);
+            assert!(
+                !alive(child_pid),
+                "a child sharing the shell's group is swept with it"
+            );
+        } else {
+            // Job control moved it out of reach. Documented, not silently ignored.
+            let _ = unsafe { libc::kill(child_pid, libc::SIGKILL) };
+        }
+    }
+
     #[tokio::test]
     async fn mobile_set_display_mode_changes_live_pty_window_then_restores() {
         let state = terminal_test_state();

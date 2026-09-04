@@ -1003,43 +1003,48 @@ impl CleanupDriver for SystemCleanupDriver {
         if Instant::now() >= deadline {
             return Err(TerminalCleanupFailureReason::DeadlineExceeded);
         }
-        #[cfg(unix)]
-        let pgid = child.process_id().map(|pid| pid as i32);
-
-        let killed = child
-            .kill()
-            .map_err(|_| TerminalCleanupFailureReason::Error);
-
-        // `child.kill()` only ever reaches the direct child: on unix it is
-        // SIGHUP, a short grace, then SIGKILL against that one pid. Everything
-        // the shell started (agent CLIs, node, ssh) survives as an orphan still
-        // holding the pty slave, which on Linux keeps the reader's `read()`
-        // blocked forever. Windows already tree-kills through its Job Object;
-        // this is the missing unix half.
+        // Sweep the child's process group before the direct child is touched.
+        //
+        // `child.kill()` on unix is SIGHUP, a grace loop that calls `try_wait`,
+        // then SIGKILL — all against the one pid, so anything sharing the
+        // shell's group is left running. On Linux such a survivor holds the pty
+        // slave open and the reader never sees EOF.
+        //
+        // Order is the whole trick, and it was wrong when first written: the
+        // grace loop REAPS the leader when the shell exits inside it, and a
+        // reaped leader makes its pgid unaddressable — `killpg` then answers
+        // ESRCH while the survivor is still very much alive. Measured, not
+        // assumed: sweep-then-kill collects it, kill-then-sweep does not.
+        //
+        // WHAT THIS DOES NOT COVER: an interactive shell runs job control, and
+        // job control puts every job in a process group of its own. This app
+        // spawns login+interactive shells, so a user's `claude`, `node` or
+        // background job is NOT in the group swept here and survives. Reaching
+        // those means killing the whole session, which also takes `disown`ed
+        // work with it — a product decision, not an implementation detail.
+        // Terminate no longer depends on winning that race: the reader is
+        // interruptible and `force_kill` is the floor.
         //
         // `portable_pty` runs `setsid()` in `pre_exec`, so the child leads its
         // own session and `pgid == pid` — this can never reach our own group.
-        // Sent after `child.kill()` so the shell still gets its SIGHUP grace,
-        // and it mints no new time budget of its own.
-        // Only ever reached while the caller still holds an un-reaped child, so
-        // the pid is still reserved by us and cannot have been recycled. That
-        // gate lives in `cleanup_terminal_resources_sync` (`!child_reaped`) and
-        // in the reader, which marks the flag when its own `try_wait` reaps.
-        // Signalling a pid we no longer own could hit an unrelated process.
         #[cfg(unix)]
-        if let Some(pgid) = pgid {
-            if unsafe { libc::killpg(pgid, libc::SIGKILL) } != 0 {
-                let error = std::io::Error::last_os_error();
-                // ESRCH just means the group is already empty.
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    log::warn!(
-                        "[pty-cleanup] process-group sweep failed pgid={pgid} error={error}"
-                    );
+        if let Some(pgid) = child.process_id().map(|pid| pid as i32) {
+            for signal in [libc::SIGHUP, libc::SIGKILL] {
+                if unsafe { libc::killpg(pgid, signal) } != 0 {
+                    let error = std::io::Error::last_os_error();
+                    // ESRCH just means the group is already empty.
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        log::warn!(
+                            "[pty-cleanup] process-group sweep failed pgid={pgid} signal={signal} error={error}"
+                        );
+                    }
                 }
             }
         }
 
-        killed
+        child
+            .kill()
+            .map_err(|_| TerminalCleanupFailureReason::Error)
     }
 
     fn try_wait(
