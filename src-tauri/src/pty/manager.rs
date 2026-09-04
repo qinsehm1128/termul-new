@@ -459,6 +459,15 @@ const ORPHAN_CHECK_INTERVAL_MS: u64 = 30_000; // 30 seconds
 /// One absolute budget shared by child kill/wait and both thread joins.
 pub const TERMINAL_CLEANUP_DEADLINE: Duration = Duration::from_secs(5);
 const TERMINAL_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// How long the reader waits on `poll` before rechecking `stop_requested`.
+/// Bounds how late a stopped reader exits; well inside the cleanup deadline.
+#[cfg(unix)]
+const READER_POLL_TIMEOUT_MS: libc::c_int = 50;
+
+#[cfg(unix)]
+type RawFd = std::os::fd::RawFd;
+#[cfg(not(unix))]
+type RawFd = std::os::raw::c_int;
 
 // ADR-002.3: Flusher thread constants
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(4);
@@ -763,6 +772,10 @@ pub struct TerminalCleanupReceipt {
     /// left output unpublished or an exit event unsent. Kept on the receipt so
     /// a caller can tell a clean teardown from a salvaged one.
     pub worker_panicked: bool,
+    /// Resources were released without the graceful path completing: a worker
+    /// was detached rather than joined, or a child abandoned rather than reaped.
+    /// The slot is free and the record is gone, but teardown was not clean.
+    pub forced: bool,
 }
 
 /// Internal classification retained for deterministic tests and sanitized logging.
@@ -958,6 +971,15 @@ pub(crate) trait CleanupDriver: Send + Sync {
         handle: &mut Option<std::thread::JoinHandle<()>>,
         deadline: Instant,
     ) -> Result<WorkerExit, TerminalCleanupFailureReason>;
+}
+
+/// Result of waiting for the reader's descriptor to become readable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaitOutcome {
+    Readable,
+    /// A stop was requested and the descriptor is quiet — nothing left to lose.
+    Stop,
+    Failed,
 }
 
 /// How a worker thread ended. A panic still satisfies the join — the thread is
@@ -1201,6 +1223,14 @@ pub struct TerminalInstance {
     /// process with 9 flusher threads and 8 readers, the odd one parked in
     /// `thread::sleep` forever. Cleanup owns this flag too.
     done_flag: Arc<AtomicBool>,
+    /// "Stop when you have nothing left to read." Distinct from `done_flag`,
+    /// which means "the producer has finished": this one is a request, and the
+    /// reader still drains everything the kernel already buffered before acting
+    /// on it. Collapsing the two would trade an unkillable terminal for lost
+    /// tail output. Unix only — it is what lets a reader parked in `read()` be
+    /// interrupted at all; on Windows the read stays uninterruptible and the
+    /// forced-release floor in `force_kill` covers it.
+    stop_requested: Arc<AtomicBool>,
     lifecycle_state: Arc<RwLock<TerminalLifecycleState>>,
     cleanup_gate: Arc<AsyncMutex<()>>,
     cleanup_job: Arc<Mutex<Option<Arc<TerminalCleanupJob>>>>,
@@ -1356,6 +1386,13 @@ impl TerminalInstance {
     /// a renderer ref. Protected terminals (e.g. a backgrounded project's live
     /// terminals) are never reaped, even with zero renderer refs.
     pub fn is_orphan_reapable(&self, timeout: Duration) -> bool {
+        // Only a live resource is reapable. A terminal already terminating or
+        // quarantined has a cleanup job of its own; re-terminating it every
+        // sweep re-ran a sequence that had already failed and burned a blocking
+        // thread for the full deadline each time.
+        if !self.is_active() {
+            return false;
+        }
         should_reap_orphan(
             self.is_protected(),
             self.is_orphan(),
@@ -1699,10 +1736,29 @@ impl PtyManager {
         driver: Arc<dyn CleanupDriver>,
         job: Arc<TerminalCleanupJob>,
     ) -> Result<TerminalCleanupReceipt, TerminalCleanupFailure> {
-        // Drop input exactly once. A failed cleanup leaves the remaining child/thread handles in
-        // place so an explicit retry can continue from the last proven stage.
-        instance.writer.blocking_lock().take();
+        // Stop accepting input for the duration of the teardown, but hold the
+        // writer rather than dropping it: a failed cleanup leaves the child and
+        // thread handles in place so a retry can resume from the last proven
+        // stage, and the terminal keeps being shown. Discarding the writer
+        // outright made that survivor permanently unable to accept a keystroke
+        // — the tab was still there and still refused to type.
+        let parked_writer = instance.writer.blocking_lock().take();
+        let outcome = Self::cleanup_stages(&instance, driver.as_ref(), &job);
+        if outcome.is_err() {
+            // Only restore if nothing else claimed the slot meanwhile.
+            let mut writer = instance.writer.blocking_lock();
+            if writer.is_none() {
+                *writer = parked_writer;
+            }
+        }
+        outcome
+    }
 
+    fn cleanup_stages(
+        instance: &Arc<TerminalInstance>,
+        driver: &dyn CleanupDriver,
+        job: &Arc<TerminalCleanupJob>,
+    ) -> Result<TerminalCleanupReceipt, TerminalCleanupFailure> {
         {
             let mut progress = instance
                 .cleanup_progress
@@ -1715,20 +1771,20 @@ impl PtyManager {
                         job.set_stage(TerminalCleanupStage::Kill);
                         if Instant::now() >= job.deadline {
                             return Err(Self::cleanup_failure(
-                                &instance,
+                                instance,
                                 TerminalCleanupStage::Kill,
                                 TerminalCleanupFailureReason::DeadlineExceeded,
-                                &job,
+                                job,
                             ));
                         }
                         driver
                             .kill(child.as_mut(), job.deadline)
                             .map_err(|reason| {
                                 Self::cleanup_failure(
-                                    &instance,
+                                    instance,
                                     TerminalCleanupStage::Kill,
                                     reason,
-                                    &job,
+                                    job,
                                 )
                             })?;
                         progress.kill_completed = true;
@@ -1738,10 +1794,10 @@ impl PtyManager {
                         job.set_stage(TerminalCleanupStage::Wait);
                         if Instant::now() >= job.deadline {
                             return Err(Self::cleanup_failure(
-                                &instance,
+                                instance,
                                 TerminalCleanupStage::Wait,
                                 TerminalCleanupFailureReason::DeadlineExceeded,
-                                &job,
+                                job,
                             ));
                         }
                         match driver.try_wait(child.as_mut(), job.deadline) {
@@ -1753,10 +1809,10 @@ impl PtyManager {
                             Ok(None) => Self::sleep_until_next_cleanup_poll(job.deadline),
                             Err(reason) => {
                                 return Err(Self::cleanup_failure(
-                                    &instance,
+                                    instance,
                                     TerminalCleanupStage::Wait,
                                     reason,
-                                    &job,
+                                    job,
                                 ))
                             }
                         }
@@ -1766,6 +1822,13 @@ impl PtyManager {
                 }
             }
         }
+
+        // Ask the reader to stop. It drains everything still buffered before
+        // acting on this, so it cannot cost tail output; it exists so a reader
+        // parked in `read()` — the case the cleanup chain previously had no
+        // answer for at all — becomes reachable instead of merely waited out
+        // until the deadline.
+        instance.stop_requested.store(true, Ordering::Release);
 
         // Producer before consumer.
         //
@@ -1777,11 +1840,11 @@ impl PtyManager {
         // frontend channel. It also mislabelled the failure: a reader stuck in
         // `read()` surfaced to the user as the *flusher* stage timing out.
         let reader_exit = Self::join_thread_until(
-            &instance,
+            instance,
             &instance.reader_handle,
             TerminalCleanupStage::ReaderJoin,
-            driver.as_ref(),
-            &job,
+            driver,
+            job,
         )?;
 
         // The reader is gone, so no further bytes can arrive and the flusher may
@@ -1794,11 +1857,11 @@ impl PtyManager {
         instance.done_flag.store(true, Ordering::Release);
 
         let flusher_exit = Self::join_thread_until(
-            &instance,
+            instance,
             &instance.flusher_handle,
             TerminalCleanupStage::FlusherJoin,
-            driver.as_ref(),
-            &job,
+            driver,
+            job,
         )?;
 
         // All fallible stages passed. Drop platform/master handles before ownership is removed.
@@ -1817,6 +1880,7 @@ impl PtyManager {
             already_removed: false,
             worker_panicked: reader_exit == WorkerExit::Panicked
                 || flusher_exit == WorkerExit::Panicked,
+            forced: false,
         })
     }
 
@@ -2119,6 +2183,7 @@ impl PtyManager {
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
                 done_flag: Arc::new(AtomicBool::new(false)),
+                stop_requested: Arc::new(AtomicBool::new(false)),
                 lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
                 cleanup_gate: Arc::new(AsyncMutex::new(())),
                 cleanup_job: Arc::new(Mutex::new(None)),
@@ -2146,6 +2211,7 @@ impl PtyManager {
             // Owned by the instance so cleanup can retire the flusher without
             // depending on the reader reaching its tail. See `done_flag` docs.
             let done_flag = instance.done_flag.clone();
+            let stop_requested = instance.stop_requested.clone();
 
             let reader_instance = instance.clone();
             let terminal_events = self.terminal_events.clone();
@@ -2176,7 +2242,9 @@ impl PtyManager {
                 );
             });
 
-            // Spawn reader thread
+            // ConPTY exposes no descriptor to wait on, so this reader stays
+            // uninterruptible; `force_kill` is the floor for it.
+            let reader_poll_fd: Option<RawFd> = None;
             let reader_task = std::thread::spawn(move || {
                 log::info!(
                     "[PTY {}] Windows ConPTY reader thread starting",
@@ -2190,6 +2258,8 @@ impl PtyManager {
                     terminal_id,
                     pending_buf,
                     done_flag,
+                    stop_requested,
+                    reader_poll_fd,
                 );
             });
 
@@ -2262,10 +2332,43 @@ impl PtyManager {
 
             let pid = child.process_id().unwrap_or(0);
 
-            let reader = pty_pair
-                .master
-                .try_clone_reader()
-                .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
+            // Own the reader's descriptor instead of taking `try_clone_reader`'s
+            // opaque `Box<dyn Read>`, so the reader thread can `poll` the exact
+            // fd it reads from and stay interruptible. Without a descriptor to
+            // wait on, a reader parked in `read()` had no exit at all: nothing
+            // in the cleanup chain could reach it, and `master.take()` does not
+            // touch this dup.
+            //
+            // Deliberately NOT `O_NONBLOCK`: `dup` shares the file status flags
+            // with the original description, so setting it here would also make
+            // the writer non-blocking. `poll` needs no such flag.
+            #[cfg(unix)]
+            let (reader, reader_poll_fd) = {
+                use std::os::fd::FromRawFd;
+                let master_fd = pty_pair
+                    .master
+                    .as_raw_fd()
+                    .ok_or_else(|| "PTY master exposes no descriptor".to_string())?;
+                let duplicated = unsafe { libc::dup(master_fd) };
+                if duplicated < 0 {
+                    return Err(format!(
+                        "Failed to duplicate PTY reader descriptor: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                // `File` owns `duplicated` and closes it when the reader ends;
+                // the raw copy is only ever passed to `poll`, never closed.
+                let file = unsafe { std::fs::File::from_raw_fd(duplicated) };
+                (Box::new(file) as Box<dyn Read + Send>, Some(duplicated))
+            };
+            #[cfg(not(unix))]
+            let (reader, reader_poll_fd) = (
+                pty_pair
+                    .master
+                    .try_clone_reader()
+                    .map_err(|e| format!("Failed to clone PTY reader: {}", e))?,
+                None,
+            );
             let writer = pty_pair
                 .master
                 .take_writer()
@@ -2284,6 +2387,7 @@ impl PtyManager {
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
                 done_flag: Arc::new(AtomicBool::new(false)),
+                stop_requested: Arc::new(AtomicBool::new(false)),
                 lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
                 cleanup_gate: Arc::new(AsyncMutex::new(())),
                 cleanup_job: Arc::new(Mutex::new(None)),
@@ -2312,6 +2416,7 @@ impl PtyManager {
             // Owned by the instance so cleanup can retire the flusher without
             // depending on the reader reaching its tail. See `done_flag` docs.
             let done_flag = instance.done_flag.clone();
+            let stop_requested = instance.stop_requested.clone();
 
             // Spawn flusher thread first
             let flusher_pending = pending_buf.clone();
@@ -2352,6 +2457,8 @@ impl PtyManager {
                     terminal_id,
                     pending_buf,
                     done_flag,
+                    stop_requested,
+                    reader_poll_fd,
                 );
             });
 
@@ -2375,6 +2482,58 @@ impl PtyManager {
         }
     }
 
+    /// Block until the reader's descriptor has data, or until a stop request
+    /// can be honoured without losing anything still buffered.
+    ///
+    /// On platforms with no descriptor to wait on (Windows ConPTY) this is a
+    /// no-op and the following `read` blocks exactly as before; `force_kill`
+    /// is the floor there.
+    fn wait_for_readable(
+        poll_fd: Option<RawFd>,
+        stop_requested: &AtomicBool,
+        id: &str,
+    ) -> WaitOutcome {
+        let Some(_fd) = poll_fd else {
+            return WaitOutcome::Readable;
+        };
+
+        #[cfg(unix)]
+        loop {
+            let mut descriptor = libc::pollfd {
+                fd: _fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut descriptor, 1, READER_POLL_TIMEOUT_MS) };
+            if ready > 0 {
+                // Readable, or hung up / errored — either way `read` resolves it
+                // immediately and owns the EOF and error reporting.
+                return WaitOutcome::Readable;
+            }
+            if ready == 0 {
+                // Quiet for a full slice: nothing is buffered, so stopping now
+                // cannot drop output.
+                if stop_requested.load(Ordering::Acquire) {
+                    return WaitOutcome::Stop;
+                }
+                continue;
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            log::error!("[PTY {id}] poll on reader descriptor failed: {error}");
+            return WaitOutcome::Failed;
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = (stop_requested, id);
+            WaitOutcome::Readable
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     /// ADR-002.3: Reader thread — reads PTY data into pending buffer, no direct IPC.
     /// Pushes raw bytes to pending_buf, handles overflow protection.
     /// Sets done_flag to true on EOF or error so flusher can finalize.
@@ -2387,6 +2546,8 @@ impl PtyManager {
         terminal_id: String,
         pending_buf: Arc<Mutex<Vec<u8>>>,
         done_flag: Arc<AtomicBool>,
+        stop_requested: Arc<AtomicBool>,
+        poll_fd: Option<RawFd>,
     ) {
         let mut buffer = [0u8; READ_BUF];
         let id = terminal_id.clone();
@@ -2398,6 +2559,20 @@ impl PtyManager {
         log::info!("[PTY {}] Reader thread starting", id);
 
         loop {
+            // Wait for readability in bounded slices so a stop request is
+            // observable. `WaitOutcome::Stop` is only ever returned once the fd
+            // has gone quiet, so a stop still drains whatever the kernel had
+            // buffered — cutting the read short instead would lose the tail the
+            // cleanup ordering was fixed to preserve.
+            match Self::wait_for_readable(poll_fd, &stop_requested, &id) {
+                WaitOutcome::Readable => {}
+                WaitOutcome::Stop => {
+                    log::info!("[PTY {}] stop requested and drained, reader exiting", id);
+                    break;
+                }
+                WaitOutcome::Failed => break,
+            }
+
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     log::info!("[PTY {}] EOF reached, reader thread exiting", id);
@@ -2796,6 +2971,7 @@ impl PtyManager {
                 released_slot: false,
                 already_removed: true,
                 worker_panicked: false,
+                forced: false,
             });
         };
 
@@ -2815,6 +2991,7 @@ impl PtyManager {
                     released_slot: false,
                     already_removed: true,
                     worker_panicked: false,
+                    forced: false,
                 });
             }
 
@@ -2893,26 +3070,7 @@ impl PtyManager {
 
         match result {
             Ok(mut receipt) if is_current => {
-                *instance.lifecycle_state.write() = TerminalLifecycleState::Removed;
-                let removed = {
-                    let mut terminals = self.terminals.write();
-                    let owns_entry = terminals
-                        .get(&instance.id)
-                        .is_some_and(|tracked| Arc::ptr_eq(tracked, &instance));
-                    if owns_entry {
-                        terminals.remove(&instance.id);
-                    }
-                    owns_entry
-                };
-                if removed {
-                    self.release_terminal_slot();
-                    self.view_refs.lock().remove(&instance.id);
-                    self.cwd_tracker.stop_tracking(&instance.id);
-                    self.git_tracker.remove_terminal(&instance.id);
-                    self.exit_code_tracker.remove_terminal(&instance.id);
-                    self.terminal_events.remove(&instance.id);
-                    self.claims.remove(&instance.id);
-                }
+                let removed = self.deregister_terminal(&instance);
                 receipt.released_slot = removed;
                 receipt.already_removed = !removed;
                 log::info!(
@@ -2997,12 +3155,150 @@ impl PtyManager {
         self.terminate(id).await
     }
 
-    /// Deprecated compatibility alias retained for older web handlers.
+    /// Drop the record and every tracker keyed on it, releasing its slot.
+    ///
+    /// Returns whether this call is the one that owned the removal.
+    fn deregister_terminal(&self, instance: &Arc<TerminalInstance>) -> bool {
+        *instance.lifecycle_state.write() = TerminalLifecycleState::Removed;
+        let removed = {
+            let mut terminals = self.terminals.write();
+            let owns_entry = terminals
+                .get(&instance.id)
+                .is_some_and(|tracked| Arc::ptr_eq(tracked, instance));
+            if owns_entry {
+                terminals.remove(&instance.id);
+            }
+            owns_entry
+        };
+        if removed {
+            self.release_terminal_slot();
+            self.view_refs.lock().remove(&instance.id);
+            self.cwd_tracker.stop_tracking(&instance.id);
+            self.git_tracker.remove_terminal(&instance.id);
+            self.exit_code_tracker.remove_terminal(&instance.id);
+            self.terminal_events.remove(&instance.id);
+            self.claims.remove(&instance.id);
+        }
+        removed
+    }
+
+    /// The failure the retained cleanup job settled on, for a forced release
+    /// that is not re-running the graceful path.
+    fn retained_cleanup_failure(&self, id: &str) -> TerminalCleanupFailure {
+        let job = self.get(id).and_then(|instance| {
+            instance
+                .cleanup_job
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        });
+        match job {
+            Some(job) => TerminalCleanupFailure {
+                terminal_id: id.to_string(),
+                job_id: job.job_id,
+                stage: job.stage(),
+                reason: TerminalCleanupFailureReason::DeadlineExceeded,
+                elapsed_ms: u64::try_from(job.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                attempt: job.attempt,
+                in_flight: false,
+            },
+            None => TerminalCleanupFailure {
+                terminal_id: id.to_string(),
+                job_id: 0,
+                stage: TerminalCleanupStage::Kill,
+                reason: TerminalCleanupFailureReason::DeadlineExceeded,
+                elapsed_ms: 0,
+                attempt: 0,
+                in_flight: false,
+            },
+        }
+    }
+
+    /// Terminate, and if the graceful path still cannot finish, release the
+    /// resource anyway.
+    ///
+    /// `Quarantined` used to be terminal: a terminal whose cleanup failed kept
+    /// its slot forever, `require_active` refused to close its view, and resume
+    /// could not mint a claim for it — a tab that could be neither killed nor
+    /// closed, with every retry re-running the same losing sequence. Graceful
+    /// cleanup is still tried first and is still preferred; this is the floor
+    /// under it, so a stuck worker costs one abandoned thread instead of a
+    /// permanently wedged terminal.
+    ///
+    /// What it gives up: a worker that will not stop is detached rather than
+    /// joined (the OS reclaims it at process exit, the same trade
+    /// `acp::join_thread_bounded` already makes), and an unreapable child is
+    /// left to be reaped by process exit. Both are bounded and logged.
     pub async fn force_kill(
         &self,
         id: &str,
     ) -> Result<TerminalCleanupReceipt, TerminalCleanupFailure> {
-        self.terminate(id).await
+        // A terminal already in `Quarantined` has had its graceful attempt and
+        // lost. Re-running it would just wedge a second blocking job on the same
+        // worker and report itself in-flight — the retry would block the very
+        // escalation it was asking for.
+        let failure =
+            if self.terminal_lifecycle_state(id) == Some(TerminalLifecycleState::Quarantined) {
+                self.retained_cleanup_failure(id)
+            } else {
+                match self.terminate(id).await {
+                    Ok(receipt) => return Ok(receipt),
+                    // An in-flight job still owns the blocking work and its handles;
+                    // forcing underneath it would race that thread. The caller retries.
+                    Err(failure) if failure.in_flight => return Err(failure),
+                    Err(failure) => failure,
+                }
+            };
+
+        let Some(instance) = self.get(id) else {
+            return Ok(TerminalCleanupReceipt {
+                terminal_id: id.to_string(),
+                job_id: failure.job_id,
+                elapsed_ms: failure.elapsed_ms,
+                attempt: failure.attempt,
+                released_slot: false,
+                already_removed: true,
+                worker_panicked: false,
+                forced: true,
+            });
+        };
+
+        // Give the workers their stop signal one more time, then stop waiting.
+        instance.done_flag.store(true, Ordering::Release);
+        let detached_reader = instance.reader_handle.lock().await.take().is_some();
+        let detached_flusher = instance.flusher_handle.lock().await.take().is_some();
+        instance.writer.lock().await.take();
+        instance.master.lock().await.take();
+        #[cfg(target_os = "windows")]
+        if let Some(conpty_handles) = &instance.conpty_handles {
+            conpty_handles.lock().take();
+        }
+        let abandoned_child = instance.child.lock().await.take().is_some();
+
+        let removed = self.deregister_terminal(&instance);
+        log::warn!(
+            "[pty-cleanup] terminal_id={} cleanup_stage={} elapsed_ms={} state_transition=Quarantined->Removed capacity_counter={} shutdown_phase=force_release stable_result=FORCED attempt={} job_id={} detached_reader={} detached_flusher={} abandoned_child={}",
+            failure.terminal_id,
+            failure.stage,
+            failure.elapsed_ms,
+            self.active_terminal_slot_count(),
+            failure.attempt,
+            failure.job_id,
+            detached_reader,
+            detached_flusher,
+            abandoned_child
+        );
+
+        Ok(TerminalCleanupReceipt {
+            terminal_id: failure.terminal_id,
+            job_id: failure.job_id,
+            elapsed_ms: failure.elapsed_ms,
+            attempt: failure.attempt,
+            released_slot: removed,
+            already_removed: !removed,
+            worker_panicked: failure.reason == TerminalCleanupFailureReason::ThreadPanicked,
+            forced: true,
+        })
     }
 
     /// Add a renderer reference to an active terminal.
@@ -4003,6 +4299,7 @@ mod tests {
             reader_handle: Arc::new(AsyncMutex::new(Some(std::thread::spawn(|| {})))),
             flusher_handle: Arc::new(AsyncMutex::new(Some(std::thread::spawn(|| {})))),
             done_flag: Arc::new(AtomicBool::new(false)),
+            stop_requested: Arc::new(AtomicBool::new(false)),
             lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
             cleanup_gate: Arc::new(AsyncMutex::new(())),
             cleanup_job: Arc::new(Mutex::new(None)),
@@ -4064,6 +4361,153 @@ mod tests {
         assert!(
             instance.done_flag.load(Ordering::Acquire),
             "cleanup owns the flusher retirement signal"
+        );
+    }
+
+    /// Regression: a reader parked in `read()` must be interruptible.
+    ///
+    /// Real pty, and a process that keeps the slave open past the shell so the
+    /// descriptor never reaches EOF on its own. Before `stop_requested` there
+    /// was no way to reach that reader at all — cleanup could only wait out the
+    /// deadline and quarantine.
+    #[cfg(unix)]
+    #[test]
+    fn reader_stops_on_request_even_without_eof() {
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+
+        let pty = portable_pty::native_pty_system()
+            .openpty(portable_pty::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let master_fd = pty.master.as_raw_fd().expect("master fd");
+        let duplicated = unsafe { libc::dup(master_fd) };
+        assert!(duplicated >= 0);
+        let mut reader = unsafe { std::fs::File::from_raw_fd(duplicated) };
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        let worker = std::thread::spawn(move || {
+            let mut buffer = [0u8; 64];
+            loop {
+                match PtyManager::wait_for_readable(Some(duplicated), &stop_thread, "test") {
+                    WaitOutcome::Readable => {}
+                    WaitOutcome::Stop | WaitOutcome::Failed => break,
+                }
+                if reader.read(&mut buffer).unwrap_or(0) == 0 {
+                    break;
+                }
+            }
+        });
+
+        // Nothing is writing, so the descriptor never becomes readable and a
+        // plain blocking `read` would park here forever.
+        std::thread::sleep(Duration::from_millis(120));
+        assert!(!worker.is_finished(), "the reader must still be waiting");
+
+        stop.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            worker.is_finished(),
+            "a stop request must reach a reader that has no EOF coming"
+        );
+        worker.join().expect("reader thread");
+        drop(pty);
+    }
+
+    /// Regression: `Quarantined` must not be a dead end.
+    ///
+    /// A terminal whose cleanup could not finish kept its slot forever, refused
+    /// to close its view, and could not mint a resume claim — neither killable
+    /// nor closable, with every retry re-running the same losing sequence.
+    #[tokio::test]
+    async fn force_kill_releases_a_terminal_whose_worker_will_not_stop() {
+        let manager = crate::web::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-wedged");
+
+        // A worker that ignores every stop signal there is.
+        let wedged = Arc::new(AtomicBool::new(false));
+        let wedged_thread = Arc::clone(&wedged);
+        *instance.reader_handle.lock().await = Some(std::thread::spawn(move || {
+            while !wedged_thread.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }));
+
+        let failure = manager
+            .terminate("term-wedged")
+            .await
+            .expect_err("the graceful path cannot join a wedged worker");
+        assert_eq!(failure.stage, TerminalCleanupStage::ReaderJoin);
+        // The observer and the blocking job expire at the same instant, so the
+        // job may still be settling when terminate returns.
+        wait_for_cleanup_state(&manager, "term-wedged", TerminalLifecycleState::Quarantined).await;
+        assert_eq!(manager.active_terminal_slot_count(), 1);
+
+        let receipt = manager
+            .force_kill("term-wedged")
+            .await
+            .expect("forced release must not be blocked by the wedged worker");
+        assert!(
+            receipt.forced,
+            "the receipt must record a degraded teardown"
+        );
+        assert!(receipt.released_slot);
+        assert_eq!(manager.active_terminal_slot_count(), 0);
+        assert!(manager.get("term-wedged").is_none());
+
+        wedged.store(true, Ordering::Release);
+    }
+
+    /// Regression: a terminal that survives a failed cleanup must still accept
+    /// input. Dropping the writer up front left the surviving tab visible and
+    /// permanently unable to type.
+    #[tokio::test]
+    async fn failed_cleanup_returns_the_writer_to_the_surviving_terminal() {
+        let manager = crate::web::test_pty_manager();
+        let driver = Arc::new(ScriptedCleanupDriver::default());
+        driver.fail_once(TerminalCleanupStage::Kill);
+        manager.install_cleanup_driver(driver);
+        let instance = install_cleanup_fixture(&manager, "term-writer-restore");
+        *instance.writer.lock().await = Some(Box::new(Vec::new()));
+
+        manager
+            .terminate("term-writer-restore")
+            .await
+            .expect_err("the scripted kill stage must fail");
+
+        assert!(
+            instance.writer.lock().await.is_some(),
+            "a quarantined terminal is still shown, so it must still be writable"
+        );
+    }
+
+    /// Regression: orphan reaping must skip resources that are not active.
+    /// Re-terminating a quarantined terminal every sweep re-ran a sequence that
+    /// had already failed and burned a blocking thread for the full deadline.
+    #[test]
+    fn orphan_reaping_skips_non_active_resources() {
+        let manager = crate::web::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-orphan-state");
+        // The fixture starts with no renderer refs, so it is already an orphan.
+        instance.set_protected(false);
+
+        assert!(
+            instance.is_orphan_reapable(Duration::ZERO),
+            "an active, unprotected orphan is reapable"
+        );
+
+        *instance.lifecycle_state.write() = TerminalLifecycleState::Quarantined;
+        assert!(
+            !instance.is_orphan_reapable(Duration::ZERO),
+            "a quarantined terminal already owns a cleanup job"
         );
     }
 
@@ -5295,6 +5739,7 @@ mod tests {
             reader_handle: Arc::new(AsyncMutex::new(None)),
             flusher_handle: Arc::new(AsyncMutex::new(None)),
             done_flag: Arc::new(AtomicBool::new(false)),
+            stop_requested: Arc::new(AtomicBool::new(false)),
             lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
             cleanup_gate: Arc::new(AsyncMutex::new(())),
             cleanup_job: Arc::new(Mutex::new(None)),

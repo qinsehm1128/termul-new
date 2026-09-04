@@ -6,7 +6,8 @@ use crate::path_validation;
 use crate::pty::claims::{ClaimError, RotatedClaim};
 use crate::pty::manager::{
     SpawnedTerminal, TerminalAttachResult, TerminalCleanupFailure, TerminalCleanupStage,
-    TerminalReplay, TerminalResumeGrant, TerminalResumeRequest, TerminalSpawnIntentV1,
+    TerminalLifecycleState, TerminalReplay, TerminalResumeGrant, TerminalResumeRequest,
+    TerminalSpawnIntentV1,
 };
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::remote;
@@ -1040,7 +1041,19 @@ pub(crate) async fn terminal_terminate_resource(
         }
     }
 
-    if let Err(cleanup) = pty_manager.terminate(terminal_id).await {
+    // A terminal already sitting in `Quarantined` has had its graceful attempt
+    // and lost. Repeating it verbatim is what made "retry termination" a button
+    // that could never succeed, so the retry escalates: still graceful first,
+    // but it releases the resource rather than quarantining a second time.
+    let already_quarantined = pty_manager.terminal_lifecycle_state(terminal_id)
+        == Some(TerminalLifecycleState::Quarantined);
+    let cleanup_result = if already_quarantined {
+        pty_manager.force_kill(terminal_id).await
+    } else {
+        pty_manager.terminate(terminal_id).await
+    };
+
+    if let Err(cleanup) = cleanup_result {
         let failure = TerminalResourceFailureV1::from_cleanup(
             crate::conversation::TERMINAL_TERMINATE_FAILED,
             cleanup,
