@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+#
+# G5 — legacy brand residue gate.
+#
+# Fails (exit 1) when a legacy brand string survives anywhere outside an
+# explicitly registered site. Every exemption below is a named path — or a named
+# `path:line:text` triple — that a reviewer can read and check. Nothing is
+# hidden by `.gitignore`, by omitting `--hidden`, or by a wildcard that happens
+# to swallow a real hit.
+#
+# Two hard rules this file exists to enforce on itself:
+#
+#   1. Text mode is forced (`rg -a`). A raw NUL byte in a `.ts` file makes
+#      `file(1)` classify it as `data` and makes an ordinary grep skip the whole
+#      file as binary — a residual scan would then report success while missing
+#      every match in it. That happened once during the rename (a memo-key
+#      delimiter in `bundled-themes.ts`), so it is guarded rather than trusted.
+#   2. `ALLOWED_SITE` entries pin a line NUMBER as well as the text. If the text
+#      is still present but has moved, the gate reports DRIFT and fails, forcing
+#      the exemption to be re-audited instead of silently following the string
+#      around the file.
+#
+# Stages:
+#   1. legacy-literal scan   — the `termul` family, all case forms
+#   2. case-form census      — Termul / termul / TERMUL counted separately
+#   3. reverse `SE_` scan    — delegated to the frozen env-name inventory gate
+#   4. FORBID-07             — brand-seam thread-affinity gate
+#
+# Usage: bash scripts/check-brand-residue.sh [--no-suites]
+#   --no-suites  run stages 1-2 only (no bun/cargo), for a fast local check.
+
+set -uo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+RUN_SUITES=1
+[[ "${1:-}" == "--no-suites" ]] && RUN_SUITES=0
+
+# --------------------------------------------------------------------------
+# Directories and binary shapes the scan never enters. These are build output,
+# vendored code, VCS internals and image blobs — not exemptions for our code.
+# --------------------------------------------------------------------------
+SCAN_GLOBS=(
+  -g '!node_modules'
+  -g '!reference'
+  -g '!dist'
+  -g '!dist-web'
+  -g '!target'
+  -g '!.git'
+  -g '!.workflow'
+  -g '!*.lock'
+  -g '!bun.lock*'
+  -g '!*.png'
+  -g '!*.icns'
+  -g '!*.ico'
+  -g '!*.webp'
+  -g '!*.jpg'
+  -g '!*.jpeg'
+)
+
+# --------------------------------------------------------------------------
+# WHITELIST A — whole files that are legitimate homes for a legacy literal.
+#
+# FORBID-04: `LEGACY_*` constants live in exactly two files, and the frozen
+# fixture roots are byte-pinned pre-rename user data (FORBID-03). Nothing else
+# may hold a legacy brand string by charter.
+# --------------------------------------------------------------------------
+ALLOWED_PATHS=(
+  'src/shared/brand.ts'
+  'src-tauri/src/brand.rs'
+  'src/__fixtures__/legacy-brand/'
+  'src-tauri/tests/fixtures/legacy-brand/'
+  # This file. A scanner has to spell what it looks for; it cannot be its own
+  # subject, for the same reason `env-name-parity.test.ts` excludes itself.
+  'scripts/check-brand-residue.sh'
+)
+
+# --------------------------------------------------------------------------
+# WHITELIST B — untracked working files owned by the user, deliberately not
+# renamed and deliberately not committed (R-SCOPE-UNTRACKED-DOCS). Named one by
+# one rather than by wildcard so that a seventh file appearing under
+# `docs/borrowing/` is a new decision rather than a silent inheritance.
+#
+# FLIP TRIGGER: if any of these is ever `git add`ed, delete its line here and
+# rename the file under D5 (same trigger as T-D06).
+# --------------------------------------------------------------------------
+ALLOWED_PATHS+=(
+  'config.toml'
+  'docs/borrowing/README.md'
+  'docs/borrowing/grok-bot-borrowing-plan.md'
+  'docs/borrowing/nyaterm-borrowing-plan.md'
+  'docs/borrowing/obsidian-doc-capability-feasibility.md'
+  'docs/borrowing/terminal-renderer-dom-fallback.md'
+  'docs/borrowing/thinkrail-borrowing-plan.md'
+  'docs/leftover-glyphs-handoff.md'
+)
+
+# --------------------------------------------------------------------------
+# WHITELIST C — individual registered sites, as `path:line:text`.
+#
+# `text` must be a substring of the matched line. Both the line number and the
+# text must agree; a match on text at a different line is reported as DRIFT.
+# --------------------------------------------------------------------------
+ALLOWED_SITES=(
+  # -- serde attributes. A serde attribute takes a string literal and cannot
+  #    take a `const`, so the legacy value has to be spelled at the attribute.
+  #    Each is guarded by a source-text test that asserts it equals the brand
+  #    constant character for character, so the exemption cannot drift apart
+  #    from `brand.rs` without a red test.
+  'src-tauri/src/skills/provisioner.rs:134:#[serde(alias = "managedByTermul")]'
+  'src-tauri/src/conversation/contracts.rs:314:#[serde(rename = "termul")]'
+
+  # -- iOS compatibility reads. Six `legacy*` constants, each read-only, each
+  #    naming a key or directory already on a paired phone. Swift has no
+  #    cross-module brand seam, so the value is spelled at the read site.
+  'ios/SeRemote/SeRemote/App/AppSettings.swift:46:legacyLanguageKey = "termul.app.language"'
+  'ios/SeRemote/SeRemote/App/AppSettings.swift:47:legacyAppearanceKey = "termul.app.appearance"'
+  'ios/SeRemote/SeRemote/Chat/ChatTranscriptCache.swift:127:legacyDirectoryName = "TermulRemote"'
+  'ios/SeRemote/SeRemote/Models/ConnectionStore.swift:20:legacyStorageKey = "termul.remote.savedLinks"'
+  'ios/SeRemote/SeRemote/Networking/KeychainStore.swift:10:legacyService = "com.termul.remote.pairing"'
+  'ios/SeRemote/SeRemote/Terminal/TerminalTextScale.swift:10:legacyStorageKey = "termul.companion.terminalTextScale"'
+
+  # -- upstream fork gate. `mannnrachman/termul` is a different repository;
+  #    these guards exist to keep the workflow from running in forks.
+  ".github/workflows/fork-monitor.yml:25:mannnrachman/termul"
+  ".github/workflows/fork-monitor.yml:53:mannnrachman/termul"
+  ".github/workflows/fork-monitor.yml:96:mannnrachman/termul"
+  ".github/workflows/fork-monitor.yml:122:mannnrachman/termul"
+)
+
+# --------------------------------------------------------------------------
+# OUT-OF-SCOPE REGISTER — real, live, correct references to names this session
+# is not renaming. Reported on every run, never silently dropped, and never
+# pointed at a nonexistent address to make the gate green.
+#
+# Each entry is `path:pattern`; `pattern` is an extended regex matched against
+# the line text. Paths are named individually.
+# --------------------------------------------------------------------------
+OUT_OF_SCOPE=(
+  # ---- Class A: `qinsehm1128/termul-new` is the repository this project
+  #      actually lives in today. Renaming a GitHub repository is out of scope
+  #      for this session; every one of these URLs resolves right now and
+  #      changing it would point release/update traffic at nothing.
+  'package.json:qinsehm1128/termul-new'
+  'README.md:qinsehm1128/termul-new'
+  'CONTRIBUTING.md:(qinsehm1128/termul-new|YOUR_USERNAME/termul|cd termul$)'
+  'src-tauri/tauri.conf.json:qinsehm1128/termul-new'
+  'src-tauri/src/lib.rs:qinsehm1128/termul-new'
+  'src-tauri/src/updater_api.rs:qinsehm1128/termul-new'
+  'src-tauri/src/server_update.rs:(qinsehm1128/termul-new|termul GitHub)'
+  'src/renderer/lib/tauri-updater-api.ts:qinsehm1128/termul-new'
+  'src/renderer/lib/tauri-updater-api.test.ts:qinsehm1128/termul-new'
+  'src/renderer/lib/__tests__/tauri-updater-api.test.ts:qinsehm1128/termul-new'
+  'src/renderer/lib/__tests__/tauri-release-notes.test.ts:qinsehm1128/termul-new'
+  'src/renderer/lib/tauri-release-notes.ts:qinsehm1128/termul-new'
+  'scripts/install.sh:REPO="termul-new"'
+  'scripts/release/homebrew.sh:qinsehm1128/termul-new'
+  'scripts/release/merge-updater-manifests.mjs:qinsehm1128/termul-new'
+  'scripts/release/merge-updater-manifests.test.ts:qinsehm1128/termul-new'
+  'scripts/release/prepare-platform-artifacts.mjs:qinsehm1128/termul-new'
+  'scripts/release/prepare-platform-artifacts.test.ts:qinsehm1128/termul-new'
+  'scripts/release/prepare-server-artifacts.mjs:qinsehm1128/termul-new'
+  'scripts/release/prepare-server-artifacts.test.ts:qinsehm1128/termul-new'
+  'scripts/tests/install.bats:qinsehm1128/termul-new'
+  '.github/workflows/publish-homebrew.yml:(qinsehm1128/termul-new|homebrew-termul-new)'
+  '.github/workflows/star-history.yml:qinsehm1128/termul-new'
+  '.github/ISSUE_TEMPLATE/config.yml:qinsehm1128/termul-new'
+
+  # ---- Class B: the AUR package name is registered off-site. Renaming it is a
+  #      packaging action outside this repository (vars.AUR_PACKAGE).
+  '.github/workflows/publish-aur.yml:termul'
+  'src/renderer/lib/tauri-updater-api.ts:yay -S termul-manager'
+  'src/renderer/components/UpdateAvailableToast.tsx:yay -S termul-manager'
+
+  # ---- Class C: UPSTREAM repository. `gnoviawan/termul` is the project this
+  #      codebase derives from. It MUST STAY — it is attribution, not residue.
+  'landing/src/data/contributors.ts:gnoviawan/termul'
+  'landing/scripts/sync-contributors.ts:gnoviawan/termul'
+
+  # ---- Class D: `termul.dev` — the live production domain. Domain migration is
+  #      out of scope in policy.json; these are canonical URLs, sitemap entries
+  #      and OG tags that must keep resolving.
+  'landing/index.html:termul\.dev'
+  'landing/public/robots.txt:termul\.dev'
+  'landing/public/sitemap.xml:termul\.dev'
+  'landing/react-ssg.config.ts:termul\.dev'
+  'landing/README.md:termul\.dev'
+  'landing/tests/testimonials-api.test.ts:termul\.dev'
+
+  # ---- Class E: landing asset filenames. Renaming these needs a `git mv` of
+  #      binaries plus a Cloudflare cache purge; deferred with T-B07.
+  'landing/index.html:(bg-termul\.webp|termulmock\.png|termul\.svg)'
+  'landing/src/components/sections/Hero.tsx:(bg-termul\.webp|termulmock\.png|termul\.svg)'
+  'landing/src/components/ui/Logo.tsx:termul\.svg'
+  'landing/src/data/features.ts:(bg-termul\.webp|termulmock\.png|termul\.svg)'
+  'landing/src/lib/links.ts:qinsehm1128/termul-new'
+
+  # ---- Class F: `@termulmanager` is an unregistered social handle. Pointing it
+  #      at `@semanager` before that handle is registered would publish a dead
+  #      link, so it stays until the handle exists.
+  'landing/index.html:@termulmanager'
+)
+
+# --------------------------------------------------------------------------
+
+red=0
+declare -a RESIDUE=()
+declare -a DRIFT=()
+declare -a REGISTERED=()
+
+is_allowed_path() {
+  local path="$1" allowed
+  for allowed in "${ALLOWED_PATHS[@]}"; do
+    if [[ "$allowed" == */ ]]; then
+      [[ "$path" == "$allowed"* ]] && return 0
+    else
+      [[ "$path" == "$allowed" ]] && return 0
+    fi
+  done
+  return 1
+}
+
+# Returns 0 = registered here, 1 = not registered, 2 = text found but line moved.
+check_site() {
+  local path="$1" line="$2" text="$3" entry site_path site_line site_text drift=1
+  for entry in "${ALLOWED_SITES[@]}"; do
+    site_path="${entry%%:*}"
+    local rest="${entry#*:}"
+    site_line="${rest%%:*}"
+    site_text="${rest#*:}"
+    [[ "$site_path" == "$path" ]] || continue
+    [[ "$text" == *"$site_text"* ]] || continue
+    [[ "$site_line" == "$line" ]] && return 0
+    drift=2
+  done
+  return $drift
+}
+
+is_out_of_scope() {
+  local path="$1" text="$2" entry oos_path oos_pattern
+  for entry in "${OUT_OF_SCOPE[@]}"; do
+    oos_path="${entry%%:*}"
+    oos_pattern="${entry#*:}"
+    [[ "$oos_path" == "$path" ]] || continue
+    [[ "$text" =~ $oos_pattern ]] && return 0
+  done
+  return 1
+}
+
+echo "== stage 1/4 — legacy brand literal scan (text mode forced) =="
+
+while IFS= read -r hit; do
+  path="${hit%%:*}"
+  path="${path#./}"
+  rest="${hit#*:}"
+  line="${rest%%:*}"
+  text="${rest#*:}"
+
+  is_allowed_path "$path" && continue
+
+  check_site "$path" "$line" "$text"
+  case $? in
+    0) continue ;;
+    2) DRIFT+=("$path:$line: $text") ; continue ;;
+  esac
+
+  if is_out_of_scope "$path" "$text"; then
+    REGISTERED+=("$path:$line: $text")
+    continue
+  fi
+
+  RESIDUE+=("$path:$line: $text")
+done < <(rg -a -i -n --hidden 'termul' "${SCAN_GLOBS[@]}" . 2>/dev/null)
+
+if ((${#DRIFT[@]})); then
+  echo
+  echo "-- DRIFTED REGISTRATIONS (${#DRIFT[@]}) — text still present, line number moved."
+  echo "   Re-audit the site and update its ALLOWED_SITES line number."
+  printf '   %s\n' "${DRIFT[@]}"
+  red=1
+fi
+
+if ((${#RESIDUE[@]})); then
+  echo
+  echo "-- UNREGISTERED LEGACY BRAND RESIDUE (${#RESIDUE[@]})"
+  printf '   %s\n' "${RESIDUE[@]}"
+  red=1
+else
+  echo "   ok — zero unregistered legacy brand strings."
+fi
+
+echo
+echo "-- out_of_scope_pending register: ${#REGISTERED[@]} occurrence(s) matched."
+echo "   (real current GitHub repo / AUR package / upstream attribution /"
+echo "    live domain / asset filenames / unregistered social handle)"
+
+echo
+echo "== stage 2/4 — case-form census =="
+for form in Termul termul TERMUL; do
+  count=$(rg -a -o --hidden --case-sensitive "$form" "${SCAN_GLOBS[@]}" . 2>/dev/null | wc -l | tr -d ' ')
+  printf '   %-8s %s occurrence(s) repo-wide (whitelisted + registered included)\n' "$form" "$count"
+done
+
+if ((RUN_SUITES == 0)); then
+  echo
+  echo "== stages 3-4 skipped (--no-suites) =="
+  exit "$red"
+fi
+
+echo
+echo "== stage 3/4 — reverse SE_ scan (frozen env-name inventory) =="
+# The reverse scan is not a bare `rg 'SE_[A-Z0-9_]+'`: a bare match fires on the
+# `SE_` inside `PARSE_FAILED` and `RESPONSE_ID`, and has nothing to compare its
+# output against. `env-name-parity.test.ts` walks the same tree with a
+# `(?:^|[^A-Za-z0-9])SE_` boundary and diffs the result against the sha256-frozen
+# 65-name inventory, so one NEW unregistered `SE_<NAME>` makes the set unequal
+# and the test red. Its `SE_FILE_OBJECT` exclusion is itself guarded by a test
+# that the name is still imported from `windows_sys`, so the exclusion cannot rot
+# into a hiding place.
+#
+# Note the shape of the placeholder above: this file is scanned by that same
+# inventory gate, so spelling a screaming-snake name here would itself register
+# as a 66th env name. The angle brackets keep it out of the character class.
+if bunx vitest run scripts/tests/env-name-parity.test.ts; then
+  echo "   ok — reverse SE_ scan matches the frozen inventory."
+else
+  echo "   FAIL — reverse SE_ scan diverged from the frozen inventory."
+  red=1
+fi
+
+echo
+echo "== stage 4/4 — FORBID-07 brand-seam thread affinity =="
+if (cd src-tauri && cargo test --test brand_seam_thread_affinity); then
+  echo "   ok — thread-affinity gate green."
+else
+  echo "   FAIL — thread-affinity gate red."
+  red=1
+fi
+
+echo
+if ((red)); then
+  echo "RESULT: FAIL"
+else
+  echo "RESULT: PASS"
+fi
+exit "$red"

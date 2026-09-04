@@ -304,6 +304,13 @@ jobs:
         working-directory: src-tauri
         run: cargo check --locked --all-targets
 
+      # G5 residue gate. Placed here rather than in `validate` because its last
+      # two stages need both Bun and a compiled crate, and `cargo check
+      # --all-targets` above has already built the test targets — so the gate
+      # costs seconds instead of a second full Rust build.
+      - name: Legacy brand residue gate
+        run: bash scripts/check-brand-residue.sh
+
       - name: Cargo test
         working-directory: src-tauri
         run: cargo test --locked
