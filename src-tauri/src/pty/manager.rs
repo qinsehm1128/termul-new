@@ -1386,11 +1386,16 @@ impl TerminalInstance {
     /// a renderer ref. Protected terminals (e.g. a backgrounded project's live
     /// terminals) are never reaped, even with zero renderer refs.
     pub fn is_orphan_reapable(&self, timeout: Duration) -> bool {
-        // Only a live resource is reapable. A terminal already terminating or
-        // quarantined has a cleanup job of its own; re-terminating it every
-        // sweep re-ran a sequence that had already failed and burned a blocking
-        // thread for the full deadline each time.
-        if !self.is_active() {
+        // A terminal with a cleanup job in flight is not reapable — the sweep
+        // would race that job. `Quarantined` stays reapable on purpose: it is
+        // the state that most needs collecting, and the sweep escalates it to a
+        // forced release rather than re-running the graceful attempt that
+        // already failed. Excluding it outright leaked its slot forever
+        // whenever nobody happened to click retry.
+        if matches!(
+            self.lifecycle_state(),
+            TerminalLifecycleState::Terminating | TerminalLifecycleState::Removed
+        ) {
             return false;
         }
         should_reap_orphan(
@@ -1736,22 +1741,16 @@ impl PtyManager {
         driver: Arc<dyn CleanupDriver>,
         job: Arc<TerminalCleanupJob>,
     ) -> Result<TerminalCleanupReceipt, TerminalCleanupFailure> {
-        // Stop accepting input for the duration of the teardown, but hold the
-        // writer rather than dropping it: a failed cleanup leaves the child and
-        // thread handles in place so a retry can resume from the last proven
-        // stage, and the terminal keeps being shown. Discarding the writer
-        // outright made that survivor permanently unable to accept a keystroke
-        // — the tab was still there and still refused to type.
-        let parked_writer = instance.writer.blocking_lock().take();
-        let outcome = Self::cleanup_stages(&instance, driver.as_ref(), &job);
-        if outcome.is_err() {
-            // Only restore if nothing else claimed the slot meanwhile.
-            let mut writer = instance.writer.blocking_lock();
-            if writer.is_none() {
-                *writer = parked_writer;
-            }
-        }
-        outcome
+        // Drop input exactly once, and do not give it back on failure.
+        //
+        // Restoring it would be theatre: `write` gates on `require_active`, and
+        // a terminal whose cleanup failed is `Quarantined`, so every keystroke
+        // is refused before the writer is even consulted. Past the kill stage
+        // the child is dead too, so the descriptor leads nowhere. Quarantine is
+        // a staging state on the way out — `force_kill`, which the retry now
+        // escalates to, is what resolves it, not a recovered keyboard.
+        instance.writer.blocking_lock().take();
+        Self::cleanup_stages(&instance, driver.as_ref(), &job)
     }
 
     fn cleanup_stages(
@@ -1934,7 +1933,19 @@ impl PtyManager {
                         "[pty-cleanup] terminal_id={} shutdown_phase=orphan_reap stable_result=START",
                         id
                     );
-                    if let Err(failure) = manager.terminate(&id).await {
+                    // An orphan that already failed its graceful attempt is
+                    // escalated rather than retried: repeating it burns a
+                    // blocking thread for the full deadline every sweep and has
+                    // already been shown not to work, while leaving it alone
+                    // strands its slot for good.
+                    let quarantined = manager.terminal_lifecycle_state(&id)
+                        == Some(TerminalLifecycleState::Quarantined);
+                    let outcome = if quarantined {
+                        manager.force_kill(&id).await
+                    } else {
+                        manager.terminate(&id).await
+                    };
+                    if let Err(failure) = outcome {
                         log::warn!(
                             "[pty-cleanup] terminal_id={} cleanup_stage={} elapsed_ms={} state_transition=Terminating->Quarantined capacity_counter={} shutdown_phase=orphan_reap stable_result=TERMINATE_FAILED",
                             failure.terminal_id,
@@ -3182,35 +3193,38 @@ impl PtyManager {
         removed
     }
 
-    /// The failure the retained cleanup job settled on, for a forced release
-    /// that is not re-running the graceful path.
-    fn retained_cleanup_failure(&self, id: &str) -> TerminalCleanupFailure {
+    /// The failure the retained cleanup job actually settled on.
+    ///
+    /// Returns `None` while the job has not published a result yet, so the
+    /// caller waits instead of forcing underneath a live blocking thread.
+    /// Synthesising a reason here instead would have made every forced release
+    /// report `DeadlineExceeded`, hiding real `Error`/`ThreadPanicked` outcomes
+    /// and mis-deriving `worker_panicked` on the receipt.
+    fn retained_cleanup_failure(&self, id: &str) -> Option<TerminalCleanupFailure> {
         let job = self.get(id).and_then(|instance| {
             instance
                 .cleanup_job
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone()
-        });
-        match job {
-            Some(job) => TerminalCleanupFailure {
-                terminal_id: id.to_string(),
-                job_id: job.job_id,
-                stage: job.stage(),
-                reason: TerminalCleanupFailureReason::DeadlineExceeded,
-                elapsed_ms: u64::try_from(job.started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                attempt: job.attempt,
-                in_flight: false,
-            },
-            None => TerminalCleanupFailure {
-                terminal_id: id.to_string(),
-                job_id: 0,
-                stage: TerminalCleanupStage::Kill,
-                reason: TerminalCleanupFailureReason::DeadlineExceeded,
-                elapsed_ms: 0,
-                attempt: 0,
-                in_flight: false,
-            },
+        })?;
+        let settled = job
+            .result
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        match settled {
+            Some(Err(failure)) => Some(failure),
+            // Quarantined with a settled *success*, or with nothing settled at
+            // all, both mean the state and the job disagree. Report it rather
+            // than inventing a failure to match.
+            other => {
+                log::error!(
+                    "[pty-cleanup] terminal_id={id} stable_result=INVARIANT_VIOLATION note=quarantined without a settled failure settled_ok={}",
+                    other.is_some()
+                );
+                None
+            }
         }
     }
 
@@ -3237,18 +3251,21 @@ impl PtyManager {
         // lost. Re-running it would just wedge a second blocking job on the same
         // worker and report itself in-flight — the retry would block the very
         // escalation it was asking for.
-        let failure =
-            if self.terminal_lifecycle_state(id) == Some(TerminalLifecycleState::Quarantined) {
-                self.retained_cleanup_failure(id)
-            } else {
-                match self.terminate(id).await {
-                    Ok(receipt) => return Ok(receipt),
-                    // An in-flight job still owns the blocking work and its handles;
-                    // forcing underneath it would race that thread. The caller retries.
-                    Err(failure) if failure.in_flight => return Err(failure),
-                    Err(failure) => failure,
-                }
-            };
+        let failure = if let Some(retained) = (self.terminal_lifecycle_state(id)
+            == Some(TerminalLifecycleState::Quarantined))
+        .then(|| self.retained_cleanup_failure(id))
+        .flatten()
+        {
+            retained
+        } else {
+            match self.terminate(id).await {
+                Ok(receipt) => return Ok(receipt),
+                // An in-flight job still owns the blocking work and its handles;
+                // forcing underneath it would race that thread. The caller retries.
+                Err(failure) if failure.in_flight => return Err(failure),
+                Err(failure) => failure,
+            }
+        };
 
         let Some(instance) = self.get(id) else {
             return Ok(TerminalCleanupReceipt {
@@ -4466,37 +4483,17 @@ mod tests {
         wedged.store(true, Ordering::Release);
     }
 
-    /// Regression: a terminal that survives a failed cleanup must still accept
-    /// input. Dropping the writer up front left the surviving tab visible and
-    /// permanently unable to type.
-    #[tokio::test]
-    async fn failed_cleanup_returns_the_writer_to_the_surviving_terminal() {
-        let manager = crate::web::test_pty_manager();
-        let driver = Arc::new(ScriptedCleanupDriver::default());
-        driver.fail_once(TerminalCleanupStage::Kill);
-        manager.install_cleanup_driver(driver);
-        let instance = install_cleanup_fixture(&manager, "term-writer-restore");
-        *instance.writer.lock().await = Some(Box::new(Vec::new()));
-
-        manager
-            .terminate("term-writer-restore")
-            .await
-            .expect_err("the scripted kill stage must fail");
-
-        assert!(
-            instance.writer.lock().await.is_some(),
-            "a quarantined terminal is still shown, so it must still be writable"
-        );
-    }
-
-    /// Regression: orphan reaping must skip resources that are not active.
-    /// Re-terminating a quarantined terminal every sweep re-ran a sequence that
-    /// had already failed and burned a blocking thread for the full deadline.
+    /// Regression: orphan reaping must not race a live cleanup job, and must
+    /// not abandon a quarantined orphan either.
+    ///
+    /// Excluding every non-active state stopped the futile re-terminate loop
+    /// but stranded the slot for good whenever nobody clicked retry; the sweep
+    /// escalates instead.
     #[test]
-    fn orphan_reaping_skips_non_active_resources() {
+    fn orphan_reaping_skips_in_flight_but_still_collects_quarantined() {
         let manager = crate::web::test_pty_manager();
-        let instance = install_cleanup_fixture(&manager, "term-orphan-state");
         // The fixture starts with no renderer refs, so it is already an orphan.
+        let instance = install_cleanup_fixture(&manager, "term-orphan-state");
         instance.set_protected(false);
 
         assert!(
@@ -4504,11 +4501,49 @@ mod tests {
             "an active, unprotected orphan is reapable"
         );
 
-        *instance.lifecycle_state.write() = TerminalLifecycleState::Quarantined;
+        *instance.lifecycle_state.write() = TerminalLifecycleState::Terminating;
         assert!(
             !instance.is_orphan_reapable(Duration::ZERO),
-            "a quarantined terminal already owns a cleanup job"
+            "a job is already running; the sweep must not race it"
         );
+
+        *instance.lifecycle_state.write() = TerminalLifecycleState::Quarantined;
+        assert!(
+            instance.is_orphan_reapable(Duration::ZERO),
+            "a quarantined orphan is exactly what the sweep must still collect"
+        );
+    }
+
+    /// The escalation the sweep depends on: a quarantined orphan that nobody
+    /// retries still gives its slot back.
+    #[tokio::test]
+    async fn quarantined_orphan_is_released_by_escalation() {
+        let manager = crate::web::test_pty_manager();
+        let driver = Arc::new(ScriptedCleanupDriver::default());
+        driver.fail_once(TerminalCleanupStage::Kill);
+        manager.install_cleanup_driver(driver);
+        let instance = install_cleanup_fixture(&manager, "term-orphan-quarantined");
+        instance.set_protected(false);
+
+        manager
+            .terminate("term-orphan-quarantined")
+            .await
+            .expect_err("the scripted kill stage must fail");
+        wait_for_cleanup_state(
+            &manager,
+            "term-orphan-quarantined",
+            TerminalLifecycleState::Quarantined,
+        )
+        .await;
+        assert_eq!(manager.active_terminal_slot_count(), 1);
+        assert!(instance.is_orphan_reapable(Duration::ZERO));
+
+        let receipt = manager
+            .force_kill("term-orphan-quarantined")
+            .await
+            .expect("escalation must release the slot");
+        assert!(receipt.released_slot);
+        assert_eq!(manager.active_terminal_slot_count(), 0);
     }
 
     /// Regression: cleanup must not retire the flusher while the reader can
