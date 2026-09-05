@@ -220,8 +220,31 @@ pub fn override_canonical(next: BrandCanonical) -> BrandOverrideGuard {
     BrandOverrideGuard { previous }
 }
 
-/// Reverts an [`override_canonical`] call when dropped.
-#[doc(hidden)]
+/// Carry one thread's canonical values onto another thread, until the guard
+/// drops.
+///
+/// The seam is thread-local by design (see [`THREAD_OVERRIDE`]), and that has a
+/// consequence for every piece of work handed to `spawn_blocking`: the worker
+/// starts with an empty slot, so a nested [`canonical`] call there silently
+/// reads [`DEFAULT_CANONICAL`] and ignores whatever the origin thread had
+/// injected. Nothing fails — the worker just quietly does the production thing
+/// while a harness test believes it is exercising the injected one (FORBID-07).
+///
+/// Capture on the origin thread with [`canonical`], move the (`Copy`) result
+/// across, and install it here as the worker's first statement.
+///
+/// Unlike [`override_canonical`] this is a **production** API: it injects
+/// nothing of its own, it only keeps one thread's answer equal to another's. In
+/// a build with no override in force it installs [`DEFAULT_CANONICAL`] over
+/// `None`, which [`canonical`] cannot distinguish from the empty slot — so the
+/// production path is unchanged by construction.
+#[must_use = "the adopted values are reverted when the guard is dropped"]
+pub fn adopt_canonical(values: BrandCanonical) -> BrandOverrideGuard {
+    let previous = THREAD_OVERRIDE.with(|slot| slot.replace(Some(values)));
+    BrandOverrideGuard { previous }
+}
+
+/// Reverts an [`override_canonical`] or [`adopt_canonical`] call when dropped.
 pub struct BrandOverrideGuard {
     previous: Option<BrandCanonical>,
 }
@@ -299,5 +322,45 @@ mod tests {
 
         let observed = std::thread::spawn(|| canonical().created_by).join().unwrap();
         assert_eq!(observed, DEFAULT_CANONICAL.created_by);
+    }
+
+    /// The other half of the test above. Thread isolation is what `spawn_blocking`
+    /// work has to defeat on purpose: the worker needs the *origin* thread's
+    /// answer, and reading `canonical()` there instead would hand it
+    /// `DEFAULT_CANONICAL` without any symptom.
+    #[test]
+    fn adopt_carries_the_origin_threads_values_onto_a_worker() {
+        let _guard = override_canonical(injected());
+        let carried = canonical();
+        assert_ne!(
+            carried.created_by, DEFAULT_CANONICAL.created_by,
+            "the carried value must differ from the shipped one or this proves nothing"
+        );
+
+        let (adopted, unadopted) = std::thread::spawn(move || {
+            // What a worker sees without adopting: the shipped values.
+            let unadopted = canonical().created_by;
+            let _worker_guard = adopt_canonical(carried);
+            (canonical().created_by, unadopted)
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(adopted, injected().created_by);
+        assert_eq!(unadopted, DEFAULT_CANONICAL.created_by);
+    }
+
+    /// Adoption has to be invisible in production, where no override is in force:
+    /// installing `DEFAULT_CANONICAL` over an empty slot must read back exactly
+    /// like the empty slot did.
+    #[test]
+    fn adopt_is_a_no_op_when_nothing_is_overridden() {
+        let carried = canonical();
+        assert_eq!(carried, DEFAULT_CANONICAL);
+        {
+            let _guard = adopt_canonical(carried);
+            assert_eq!(canonical(), DEFAULT_CANONICAL);
+        }
+        assert_eq!(canonical(), DEFAULT_CANONICAL);
     }
 }

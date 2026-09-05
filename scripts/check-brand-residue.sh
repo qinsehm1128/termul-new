@@ -225,7 +225,7 @@ ALLOWED_SITES=(
   'docs/development-guide.md:170:- `termul-data.json` — general app persistence'
   'docs/development-guide.md:171:- `termul-sessions.json` — session persistence'
   'docs/architecture.md:260:- verified, fail-closed legacy ACP import from `termul-data.json`'
-  'src-tauri/src/migration_run.rs:222:// reconstruct their keys from `termul-data.json` and'
+  'src-tauri/src/migration_run.rs:225:// reconstruct their keys from `termul-data.json` and'
   'src-tauri/src/commands.rs:4433:/// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`'
   'src/renderer/lib/tauri-session-api.ts:7:*   shaped `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),'
   'src/renderer/lib/tauri-session-api.ts:60:* `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),'

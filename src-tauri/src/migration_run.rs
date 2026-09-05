@@ -199,8 +199,11 @@ impl BrandMigrationJournalV1 {
 /// user needs to see which root failed, and losing six good rows to report one
 /// bad one helps nobody.
 ///
-/// Reads the brand seam on the calling thread (FORBID-07). Nothing here is
-/// handed to `spawn_blocking`.
+/// Reads the brand seam on the calling thread (FORBID-07). The IPC entry point
+/// does hand this whole function to `spawn_blocking` — see
+/// [`run_brand_migration`] — and carries the seam across with
+/// [`brand::adopt_canonical`] before calling it, so every nested read below
+/// still answers with the values the origin thread had.
 pub fn run_migration(roots: &LegacyRoots) -> Result<BrandMigrationReceipt> {
     fs::create_dir_all(&roots.app_data_dir).map_err(|error| {
         MigrationError::new(
@@ -700,26 +703,81 @@ pub fn journal_path(app_data_dir: &Path) -> std::path::PathBuf {
 // IPC
 // ---------------------------------------------------------------------------
 
+/// The most recent recorded pass, or `None` when the merge has never run here.
+///
+/// The journal is the only durable record that a merge happened: every legacy
+/// root survives the pass by design (FORBID-05), so "is there legacy data on
+/// disk" stays true forever and cannot answer "is there anything left to do".
+/// Reads only; a journal that will not parse reads as "never ran", which costs
+/// a prompt rather than data.
+#[must_use]
+pub fn last_run(app_data_dir: &Path) -> Option<BrandMigrationRunV1> {
+    let mut journal = read_journal(&journal_path(app_data_dir))?;
+    journal.runs.pop()
+}
+
 /// Run the user-initiated merge.
 ///
 /// Unlike detection, this one *does* report failure: the user pressed a button
 /// and is owed an answer. A per-root failure still comes back inside a
 /// successful envelope, as a row — the error envelope is reserved for the pass
 /// never having run at all.
+///
+/// `async` + `spawn_blocking` because the pass copies an application-data tree
+/// whose size is the user's, not ours — hundreds of megabytes is an ordinary
+/// install, and Tauri runs a non-`async` command on the main thread, which
+/// would freeze the window for the whole copy.
 #[tauri::command]
-pub fn run_brand_migration(app: tauri::AppHandle) -> IpcResult<BrandMigrationReceipt> {
-    let roots = match LegacyRoots::resolve(&app) {
-        Ok(roots) => roots,
-        Err(error) => return IpcResult::error(error, "BRAND_MIGRATION_FAILED"),
-    };
-    match run_migration(&roots) {
-        Ok(receipt) => IpcResult::success(receipt),
-        Err(error) if error.code == MigrationErrorCode::MigrationInProgress => IpcResult::error(
-            "another process is already migrating this installation".to_string(),
-            "BRAND_MIGRATION_IN_PROGRESS",
+pub async fn run_brand_migration(app: tauri::AppHandle) -> IpcResult<BrandMigrationReceipt> {
+    // FORBID-07: captured here, on the thread that owns the seam. Every root
+    // below reads `brand::canonical()` through several layers of helper, and a
+    // worker that started with an empty slot would read the shipped values and
+    // report success over roots it never looked at.
+    let canonical = brand::canonical();
+    let joined = tokio::task::spawn_blocking(move || {
+        let _brand = brand::adopt_canonical(canonical);
+        let roots = LegacyRoots::resolve(&app)
+            .map_err(|error| IpcResult::error(error, "BRAND_MIGRATION_FAILED"))?;
+        run_migration(&roots).map_err(|error| match error.code {
+            MigrationErrorCode::MigrationInProgress => IpcResult::error(
+                "another process is already migrating this installation".to_string(),
+                "BRAND_MIGRATION_IN_PROGRESS",
+            ),
+            _ => IpcResult::error(error.to_string(), "BRAND_MIGRATION_FAILED"),
+        })
+    })
+    .await;
+    match joined {
+        Ok(Ok(receipt)) => IpcResult::success(receipt),
+        Ok(Err(failure)) => failure,
+        Err(join_error) => IpcResult::error(
+            format!("the merge worker did not finish: {join_error}"),
+            "BRAND_MIGRATION_FAILED",
         ),
-        Err(error) => IpcResult::error(error.to_string(), "BRAND_MIGRATION_FAILED"),
     }
+}
+
+/// The last recorded merge, for the settings panel and the banner's
+/// "is anything still owed" decision.
+///
+/// Read-only and infallible in the same sense detection is: an unreadable
+/// journal reports `None` rather than painting an error over the panel.
+#[tauri::command]
+pub async fn brand_migration_last_run(
+    app: tauri::AppHandle,
+) -> IpcResult<Option<BrandMigrationRunV1>> {
+    let canonical = brand::canonical();
+    let joined = tokio::task::spawn_blocking(move || {
+        let _brand = brand::adopt_canonical(canonical);
+        LegacyRoots::resolve(&app)
+            .ok()
+            .and_then(|roots| last_run(&roots.app_data_dir))
+    })
+    .await;
+    IpcResult::success(joined.unwrap_or_else(|join_error| {
+        log::warn!("[brand-migration] could not read the journal: {join_error}");
+        None
+    }))
 }
 
 #[cfg(test)]
@@ -814,5 +872,50 @@ mod tests {
             .notices
             .iter()
             .all(|notice| notice.status == BrandMigrationRootStatus::NotApplicable));
+    }
+
+    /// What stops the banner nagging forever.
+    ///
+    /// Every legacy root survives the merge by design, so "legacy data exists"
+    /// is permanently true and cannot answer "is anything still owed". The
+    /// journal is the only thing that can, and the *latest* run is the one that
+    /// counts — an early failed attempt must not outvote a later clean one.
+    #[test]
+    fn last_run_reports_nothing_until_a_merge_has_run_and_then_the_newest_one() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app_data_dir = temp.path().canonicalize().expect("canonicalize");
+        let roots = LegacyRoots {
+            app_data_dir: app_data_dir.clone(),
+            app_local_data_dir: None,
+            workspace_base: app_data_dir.join("workspace"),
+            state_root_parent: None,
+            project_roots: Vec::new(),
+            ssh_dir: None,
+            platform: HostPlatform::MacOs,
+        };
+
+        assert!(
+            last_run(&app_data_dir).is_none(),
+            "a host that never merged has nothing to report"
+        );
+
+        run_migration(&roots).expect("first merge");
+        let first = last_run(&app_data_dir).expect("the first run is recorded");
+
+        run_migration(&roots).expect("second merge");
+        let second = last_run(&app_data_dir).expect("the second run is recorded");
+
+        assert_ne!(
+            first.run_id, second.run_id,
+            "last_run must follow the newest pass, not the first one written"
+        );
+        assert_eq!(
+            read_journal(&journal_path(&app_data_dir))
+                .expect("journal")
+                .runs
+                .len(),
+            2,
+            "the ledger stays append-only — reading the last run must not consume the others"
+        );
     }
 }

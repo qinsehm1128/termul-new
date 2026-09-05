@@ -2313,10 +2313,12 @@ pub fn run() {
             commands::conversation_suspend_binding,
             commands::conversation_replace_binding,
             commands::conversation_delete,
-            // Pre-rename brand data: the read-only probe, and the merge the
-            // user starts from the banner. The probe is safe to call at any
-            // time; the merge is never triggered automatically.
+            // Pre-rename brand data: the read-only probe, the journal read, and
+            // the merge the user starts from the banner or the settings panel.
+            // The two reads are safe to call at any time; the merge is never
+            // triggered automatically.
             migration_detect::detect_legacy_brand_data,
+            migration_run::brand_migration_last_run,
             migration_run::run_brand_migration,
             // macOS WebView storage handoff across the identifier rename (M-05)
             webview_storage_handoff::webview_storage_handoff_capture,

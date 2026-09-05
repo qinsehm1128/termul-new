@@ -57,6 +57,22 @@
 //! single resolved field) into the closure as a captured value. The two
 //! regression tests at the bottom execute both sides of that so the failure mode
 //! is executable knowledge rather than a comment somebody has to find.
+//!
+//! # The second sanctioned shape: adopt on arrival
+//!
+//! Passing one resolved field in stops working when the closure reads a dozen of
+//! them through layers of shared helper — the brand-migration commands are that
+//! case, and threading a `BrandCanonical` parameter through
+//! `LegacyRoots::resolve`, `legacy_appdata`, `web::config` and
+//! `conversation::bootstrap` purely to satisfy a scan would be a large refactor
+//! of code with no other reason to change.
+//!
+//! `brand::adopt_canonical` covers it: resolve on the origin thread, move the
+//! `Copy` value across, and install it as the worker's override before anything
+//! else runs. Every nested read then answers what the origin thread would have.
+//! [`adopts_first`] states the three conditions the scan requires, and the two
+//! tests at the very bottom execute the shape and the one way of writing it that
+//! looks right and does nothing.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -84,6 +100,12 @@ const OFF_THREAD_SPAWNS: &[&str] = &["spawn_blocking", "spawn"];
 
 /// The seam function. Any call to it, however qualified.
 const SEAM_FN: &str = "canonical";
+
+/// The sanctioned way to cross the thread boundary: install the origin thread's
+/// already-resolved values on the worker before doing anything else.
+///
+/// See [`adopts_first`] for why merely *containing* a call to it is not enough.
+const ADOPT_FN: &str = "adopt_canonical";
 
 fn manifest_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -310,6 +332,64 @@ fn calls_a_seam_helper(expr: &Expr, readers: &SeamReaders) -> Option<String> {
     scan.hit
 }
 
+// ---------------------------------------------------------------------------
+// The sanctioned crossing
+// ---------------------------------------------------------------------------
+
+/// Whether `payload` is a closure that adopts the origin thread's values as its
+/// very first act.
+///
+/// Some work genuinely cannot pass the seam in as a value: the brand-migration
+/// pass reads a dozen different fields through eight layers of shared helper,
+/// and threading a `BrandCanonical` parameter through all of them to satisfy a
+/// scan would be a large refactor of code that has no other reason to change.
+/// `brand::adopt_canonical` is the alternative — resolve on the origin thread,
+/// move the (`Copy`) value across, install it — and after it every nested
+/// `canonical()` read on the worker answers exactly what the origin thread
+/// would have.
+///
+/// Three conditions, and each one closes a hole that would otherwise make this
+/// exemption worse than no exemption at all:
+///
+/// 1. **First statement.** Anything before it runs against `DEFAULT_CANONICAL`,
+///    which is F-05 with an alibi. Merely *containing* an adopt call somewhere
+///    in the body would wave through a closure that resolves its roots and only
+///    then adopts.
+/// 2. **Named binding.** `let _ = adopt_canonical(..)` drops the guard on the
+///    spot and reverts the override before a single line of work runs — a
+///    perfect no-op that reads as correct. `#[must_use]` does not catch it,
+///    because `let _ =` is exactly how a `must_use` is silenced.
+/// 3. **The direct-read rule still applies**, checked before this one, so
+///    `adopt_canonical(canonical())` — reading the seam off-thread to feed its
+///    own repair — is still an offence.
+fn adopts_first(payload: &Expr) -> bool {
+    let Expr::Closure(closure) = payload else {
+        return false;
+    };
+    let Expr::Block(block) = closure.body.as_ref() else {
+        return false;
+    };
+    let Some(syn::Stmt::Local(local)) = block.block.stmts.first() else {
+        return false;
+    };
+    if matches!(local.pat, syn::Pat::Wild(_)) {
+        return false;
+    }
+    let Some(init) = local.init.as_ref() else {
+        return false;
+    };
+    let Expr::Call(call) = init.expr.as_ref() else {
+        return false;
+    };
+    let Expr::Path(path) = call.func.as_ref() else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == ADOPT_FN)
+}
+
 /// The scan result for one file.
 struct Scan {
     /// `<fn name>` for each spawn whose payload reads the seam.
@@ -317,6 +397,10 @@ struct Scan {
     /// How many off-thread spawns were examined at all. Zero here would mean
     /// the scanner stopped matching and every green below is worthless.
     spawns_examined: usize,
+    /// How many payloads were waved through by `adopts_first`. Counted so the
+    /// exemption cannot quietly stop matching and leave the gate green for the
+    /// wrong reason — the same guard `spawns_examined` provides for the scan.
+    adoptions: usize,
 }
 
 #[derive(Default)]
@@ -324,6 +408,7 @@ struct SpawnVisitor<'a> {
     enclosing: Vec<String>,
     offences: Vec<String>,
     spawns_examined: usize,
+    adoptions: usize,
     /// Helpers that read the seam for their caller, from [`seam_reading_fns`].
     seam_readers: Option<&'a SeamReaders>,
 }
@@ -357,9 +442,19 @@ impl SpawnVisitor<'_> {
     fn examine(&mut self, arguments: impl Iterator<Item = Expr>) {
         self.spawns_examined += 1;
         for argument in arguments {
+            // Absolute, and checked before the exemption below: a seam read on
+            // the worker is wrong even in a closure that also adopts, because
+            // `adopt_canonical(canonical())` repairs the boundary with a value
+            // it fetched from the wrong side of it.
             if reads_the_seam(&argument) {
                 self.offences.push(format!("{} (reads {SEAM_FN}() directly)", self.site()));
                 break;
+            }
+            // A closure that installs the origin thread's values first has
+            // already answered the question this gate asks. See `adopts_first`.
+            if adopts_first(&argument) {
+                self.adoptions += 1;
+                continue;
             }
             let helper = self
                 .seam_readers
@@ -433,6 +528,7 @@ fn scan_file(relative: &str, seam_readers: &SeamReaders) -> Scan {
     Scan {
         offences: visitor.offences,
         spawns_examined: visitor.spawns_examined,
+        adoptions: visitor.adoptions,
     }
 }
 
@@ -450,9 +546,11 @@ fn no_brand_seam_read_inside_a_closure_that_leaves_the_calling_thread() {
     let seam_readers = seam_reading_fns();
     let mut offences = Vec::new();
     let mut spawns_examined = 0usize;
+    let mut adoptions = 0usize;
     for relative in source_files() {
         let scan = scan_file(&relative, &seam_readers);
         spawns_examined += scan.spawns_examined;
+        adoptions += scan.adoptions;
         for site in scan.offences {
             offences.push(format!("{relative}::{site}"));
         }
@@ -481,6 +579,17 @@ fn no_brand_seam_read_inside_a_closure_that_leaves_the_calling_thread() {
          returns DEFAULT_CANONICAL regardless of any injected override — the code compiles, \
          looks right, and its tests pass while doing nothing. Resolve on the calling thread and \
          move the resolved value in. See FORBID-07."
+    );
+
+    // Last, because a broken exemption also produces offences and the assertion
+    // above names them precisely. What only this can catch is the exemption
+    // *widening* — matching a payload it should not, which shows up as zero
+    // offences and a count that moved.
+    assert_eq!(
+        adoptions, 3,
+        "the adopt-first exemption matched {adoptions} payloads, not the 3 brand-migration \
+         commands that use it. Either a new adopting call site appeared without this count \
+         moving, or the matcher has drifted and is exempting something it should not."
     );
 }
 
@@ -588,5 +697,78 @@ fn a_seam_read_inside_a_spawned_thread_silently_ignores_the_override() {
         observed,
         injected().workspace_dir,
         "the injection did not take, so this proves nothing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Adopt on arrival, executed
+// ---------------------------------------------------------------------------
+
+/// The shape the scan exempts, doing the thing the exemption claims it does.
+///
+/// The read here is *indirect* on purpose — through a helper, the way
+/// `LegacyRoots::resolve` is — because a closure that reads the seam directly is
+/// an offence whether it adopts or not, and a test that only demonstrated the
+/// direct case would not cover the exemption at all.
+#[tokio::test]
+async fn adopting_on_arrival_makes_a_nested_read_answer_the_origin_threads_values() {
+    fn nested_helper_that_reads_the_seam() -> &'static str {
+        brand::canonical().workspace_dir
+    }
+
+    let _guard = brand::override_canonical(injected());
+    let carried = brand::canonical();
+
+    let observed = tokio::task::spawn_blocking(move || {
+        let _brand = brand::adopt_canonical(carried);
+        nested_helper_that_reads_the_seam()
+    })
+    .await
+    .expect("blocking task joins");
+
+    assert_eq!(
+        observed,
+        injected().workspace_dir,
+        "adoption must make a nested seam read on the worker answer what the origin thread saw"
+    );
+    assert_ne!(
+        observed, DEFAULT_CANONICAL.workspace_dir,
+        "the injection did not take, so this proves nothing"
+    );
+}
+
+/// Why `adopts_first` refuses a wildcard binding.
+///
+/// `let _ = adopt_canonical(..)` drops the guard at the end of that statement,
+/// so the override is reverted before the first line of real work — and
+/// `#[must_use]` cannot save anyone, because `let _ =` is precisely how a
+/// `must_use` is silenced. It reads as correct and does nothing, which is the
+/// same class of defect this whole file exists for.
+#[tokio::test]
+async fn a_wildcard_binding_reverts_the_adoption_before_any_work_runs() {
+    fn nested_helper_that_reads_the_seam() -> &'static str {
+        brand::canonical().workspace_dir
+    }
+
+    let _guard = brand::override_canonical(injected());
+    let carried = brand::canonical();
+
+    let observed = tokio::task::spawn_blocking(move || {
+        let _ = brand::adopt_canonical(carried);
+        nested_helper_that_reads_the_seam()
+    })
+    .await
+    .expect("blocking task joins");
+
+    assert_eq!(
+        observed, DEFAULT_CANONICAL.workspace_dir,
+        "a wildcard-bound guard is dropped immediately, so the worker is back on the shipped \
+         values by the time it does anything — this is why the scan requires a named binding"
+    );
+    assert_ne!(
+        observed,
+        injected().workspace_dir,
+        "if this ever passes, the guard's Drop no longer reverts and `adopts_first` can stop \
+         caring how the binding is spelled"
     );
 }

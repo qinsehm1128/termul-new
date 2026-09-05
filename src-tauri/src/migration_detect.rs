@@ -602,18 +602,40 @@ fn ssh_profile_ids(app_data_dir: &Path) -> Vec<String> {
 /// detector that can paint a failure over a workspace for something the user
 /// never asked for and cannot act on; the failure is logged instead and the
 /// answer degrades to "nothing found", which costs a prompt and never data.
+///
+/// `async` + `spawn_blocking` because this runs on every desktop start and the
+/// keychain probe is the slow part: `backend.get` is a synchronous round-trip
+/// per reconstructed key, once per project secret and twice per SSH profile. On
+/// the main thread — where Tauri runs a non-`async` command — that is a stall
+/// across the first paint.
 #[tauri::command]
-pub fn detect_legacy_brand_data(app: tauri::AppHandle) -> IpcResult<LegacyDataDetection> {
-    match LegacyRoots::resolve(&app) {
-        Ok(roots) => IpcResult::success(detect_legacy_data(&roots)),
-        Err(error) => {
-            log::warn!(
-                "[brand-migration] legacy-data detection could not resolve its roots: {error}. \
-                 Reporting no legacy data; every legacy root is still on disk."
-            );
-            IpcResult::success(LegacyRoots::nothing_found())
+pub async fn detect_legacy_brand_data(app: tauri::AppHandle) -> IpcResult<LegacyDataDetection> {
+    // FORBID-07: captured on the thread that owns the seam, adopted on the
+    // worker. Every probe below asks whether LEGACY and canonical differ, so a
+    // worker reading an empty slot would answer those questions about the
+    // shipped values rather than the injected ones.
+    let canonical = brand::canonical();
+    let joined = tokio::task::spawn_blocking(move || {
+        let _brand = brand::adopt_canonical(canonical);
+        match LegacyRoots::resolve(&app) {
+            Ok(roots) => detect_legacy_data(&roots),
+            Err(error) => {
+                log::warn!(
+                    "[brand-migration] legacy-data detection could not resolve its roots: \
+                     {error}. Reporting no legacy data; every legacy root is still on disk."
+                );
+                LegacyRoots::nothing_found()
+            }
         }
-    }
+    })
+    .await;
+    IpcResult::success(joined.unwrap_or_else(|join_error| {
+        log::warn!(
+            "[brand-migration] the detection worker did not finish: {join_error}. Reporting no \
+             legacy data; every legacy root is still on disk."
+        );
+        LegacyRoots::nothing_found()
+    }))
 }
 
 #[cfg(test)]
