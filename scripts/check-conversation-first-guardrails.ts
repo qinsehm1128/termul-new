@@ -1554,7 +1554,21 @@ function checkStampedPackaging(findings: GuardFinding[], workflow: ParsedWorkflo
       continue
     }
     const stampPosition = steps.indexOf(stamps[0])
-    const next = steps[stampPosition + 1]
+    // The rule is "nothing may observe the repository between stamping the
+    // version and synchronizing the root lock". Pinning the toolchain does not
+    // observe it: `sync-stamped-root-lock.py` imports `tomllib`, stdlib only
+    // from Python 3.11, and the ubuntu-22.04 runner ships 3.10 — so the sync
+    // step has to be preceded by an interpreter pin, and the workflows do
+    // exactly that. Skip that one step shape and nothing else; any other step
+    // in the gap is still a finding.
+    let cursor = stampPosition + 1
+    while (
+      steps[cursor]?.usesScalar &&
+      steps[cursor]?.uses?.startsWith('actions/setup-python@')
+    ) {
+      cursor += 1
+    }
+    const next = steps[cursor]
     if (!next || !next.nameScalar || next.name !== SYNC_STEP_NAME) {
       findings.push({
         rule: 'stamped-root-lock',
