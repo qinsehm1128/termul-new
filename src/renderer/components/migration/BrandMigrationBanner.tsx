@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button'
 import {
   type BrandMigrationReceipt,
   type BrandMigrationRootStatus,
+  type BrandMigrationRun,
   brandMigrationApi,
+  hasFailedRoots,
   type LegacyDataDetection,
   type LegacyDataSignal
 } from '@/lib/brand-migration-api'
@@ -32,6 +34,22 @@ import { cn } from '@/lib/utils'
  *   its own name and its own consequence sentence, and "Later" does not hide
  *   it. "Later" defers a merge the user can still do; it must not defer a
  *   security posture that has already changed underneath them.
+ *
+ * # Why the prompt is not keyed on `hasLegacyData` alone
+ *
+ * It used to be, and that was a bug with no exit: the merge never deletes a
+ * legacy root, so `hasLegacyData` is still true the instant after a successful
+ * pass and stays true for the rest of the install's life. "Later" is
+ * session-scoped on purpose, so nothing suppressed the prompt across restarts
+ * either — the banner returned at every single start, forever, to a user with
+ * nothing left to do.
+ *
+ * The journal is the only durable record that the work happened, so the prompt
+ * asks it: a recorded run with no failed root means the merge is done and the
+ * banner stays away. A run that *did* fail keeps prompting, because that user
+ * really does have data that has not come across — and for them "Don't show
+ * again" is offered, since a root that cannot be carried may never succeed and
+ * Settings → Data migration is a permanent way back in.
  */
 
 /**
@@ -41,30 +59,36 @@ import { cn } from '@/lib/utils'
  */
 const DISMISS_STORAGE_KEY = `${brandCanonical().storageKeyPrefix}brand-migration-dismissed`
 
-function canUseSessionStorage(): boolean {
+/**
+ * Permanent dismissal, for the user whose merge keeps failing on a root that
+ * will not budge. `localStorage`, so it outlives the run — the opposite
+ * lifetime to the key above, and the reason the two are separate keys.
+ */
+const SILENCED_STORAGE_KEY = `${brandCanonical().storageKeyPrefix}brand-migration-silenced`
+
+/** `undefined` when the area is unreachable (sandboxed / privacy-restricted). */
+function storageArea(kind: 'session' | 'local'): Storage | undefined {
   try {
-    return typeof sessionStorage !== 'undefined'
+    const area = kind === 'session' ? sessionStorage : localStorage
+    return typeof area === 'undefined' ? undefined : area
   } catch {
-    // Accessing sessionStorage can throw in sandboxed / privacy-restricted contexts.
+    return undefined
+  }
+}
+
+function readFlag(kind: 'session' | 'local', key: string): boolean {
+  try {
+    return storageArea(kind)?.getItem(key) === '1'
+  } catch {
     return false
   }
 }
 
-function readDismissed(): boolean {
-  if (!canUseSessionStorage()) return false
+function persistFlag(kind: 'session' | 'local', key: string): void {
   try {
-    return sessionStorage.getItem(DISMISS_STORAGE_KEY) === '1'
+    storageArea(kind)?.setItem(key, '1')
   } catch {
-    return false
-  }
-}
-
-function persistDismissed(): void {
-  if (!canUseSessionStorage()) return
-  try {
-    sessionStorage.setItem(DISMISS_STORAGE_KEY, '1')
-  } catch {
-    // Best-effort: an in-memory dismissal still holds for this mount.
+    // Best-effort: the in-memory state still holds for this mount.
   }
 }
 
@@ -107,17 +131,24 @@ export function BrandMigrationBanner(): React.JSX.Element | null {
   const headingId = useId()
   const sshHeadingId = useId()
   const [detection, setDetection] = useState<LegacyDataDetection | null>(null)
-  const [dismissed, setDismissed] = useState<boolean>(() => readDismissed())
+  const [lastRun, setLastRun] = useState<BrandMigrationRun | null>(null)
+  const [dismissed, setDismissed] = useState<boolean>(() =>
+    readFlag('session', DISMISS_STORAGE_KEY)
+  )
+  const [silenced, setSilenced] = useState<boolean>(() => readFlag('local', SILENCED_STORAGE_KEY))
   const [receipt, setReceipt] = useState<BrandMigrationReceipt | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    void brandMigrationApi.detectLegacyData().then((result) => {
-      if (cancelled) return
-      setDetection(result)
-    })
+    void Promise.all([brandMigrationApi.detectLegacyData(), brandMigrationApi.lastRun()]).then(
+      ([probe, run]) => {
+        if (cancelled) return
+        setDetection(probe)
+        setLastRun(run)
+      }
+    )
     return () => {
       cancelled = true
     }
@@ -142,8 +173,13 @@ export function BrandMigrationBanner(): React.JSX.Element | null {
   }, [])
 
   const dismiss = useCallback((): void => {
-    persistDismissed()
+    persistFlag('session', DISMISS_STORAGE_KEY)
     setDismissed(true)
+  }, [])
+
+  const silence = useCallback((): void => {
+    persistFlag('local', SILENCED_STORAGE_KEY)
+    setSilenced(true)
   }, [])
 
   const presentSignals = useMemo(
@@ -154,9 +190,15 @@ export function BrandMigrationBanner(): React.JSX.Element | null {
   if (!detection) return null
 
   const sshFailure = detection.sshKnownHosts.state === 'failed' ? detection.sshKnownHosts : null
-  // The merge half of the banner. "Later" closes it; so does a run the user has
-  // already acknowledged by dismissing the receipt.
-  const showMergePrompt = detection.hasLegacyData && !dismissed
+  // A recorded pass with nothing failed means the work is done, whatever the
+  // probe says about roots still sitting on disk — they are meant to.
+  const settled = lastRun !== null && !hasFailedRoots(lastRun)
+  // The merge half of the banner. "Later" closes it for the run, "Don't show
+  // again" for good, and a settled journal keeps it from ever opening.
+  const showMergePrompt = detection.hasLegacyData && !settled && !dismissed && !silenced
+  // Only offered once a pass has actually failed: before that, "Later" is the
+  // right escape hatch and a permanent one would hide work the user still wants.
+  const canSilence = hasFailedRoots(lastRun)
 
   // The SSH failure outlives the merge prompt, so an otherwise-empty banner
   // still renders when that startup migration failed.
@@ -227,6 +269,13 @@ export function BrandMigrationBanner(): React.JSX.Element | null {
             </p>
           )}
 
+          {/* Where to find this again. Without it, "Later" reads as the last
+              chance — which it no longer is, now that a settled journal keeps
+              the banner from coming back on its own. */}
+          <p data-testid="brand-migration-settings-hint" className="text-muted-foreground">
+            {t('brandMigration.settingsHint')}
+          </p>
+
           {error !== null && (
             <p role="alert" data-testid="brand-migration-error" className="text-destructive">
               {t('brandMigration.failedTitle')} — {t('brandMigration.reason', { reason: error })}
@@ -234,6 +283,17 @@ export function BrandMigrationBanner(): React.JSX.Element | null {
           )}
 
           <div className="flex items-center justify-end gap-2 pt-1">
+            {canSilence && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                data-testid="brand-migration-silence"
+                onClick={silence}
+              >
+                {t('brandMigration.never')}
+              </Button>
+            )}
             <Button type="button" variant="ghost" size="sm" onClick={dismiss}>
               {t('brandMigration.later')}
             </Button>

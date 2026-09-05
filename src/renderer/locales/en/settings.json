@@ -21,6 +21,7 @@
     "shortcuts": "Keyboard Shortcuts",
     "updates": "Updates",
     "privacy": "Privacy & Permissions",
+    "dataMigration": "Data migration",
     "diagnostics": "Diagnostics & Logs",
     "reset": "Reset Settings"
   },
@@ -287,6 +288,35 @@
     "openSettings": "Open Settings",
     "recheck": "Re-check all",
     "deniedCaveat": "\"Not granted\" can also mean macOS has never asked. Approve in System Settings, then re-check — this list only updates when a check runs. If Local Network already reads as on in System Settings but still shows here as not granted, macOS has the grant stuck: unmount any mounted installer disk images, delete other copies of the app, then quit and relaunch."
+  },
+  "dataMigration": {
+    "description": "Merge data left behind by the previous install into its new locations.",
+    "neverRun": "This merge has not run on this computer yet.",
+    "lastRunAt": "Last merge: {{when}}",
+    "lastRunFailed": "The last merge could not carry every location. Nothing was lost — the originals are still where they were. Running it again is safe.",
+    "copyOnly": "Merging only copies. Your old data is never deleted.",
+    "pathUnavailable": "No file path (stored by the system)",
+    "tccTitle": "macOS privacy permissions",
+    "start": "Start merge",
+    "rerun": "Run merge again",
+    "running": "Merging…",
+    "repeatable": "Safe to run as many times as you like: anything already in place is left untouched.",
+    "status": {
+      "pending": "Will be merged",
+      "migrated": "Merged",
+      "skipped": "Nothing left to do",
+      "notApplicable": "Not applicable",
+      "failed": "Failed"
+    },
+    "roots": {
+      "appDataDir": "Application data",
+      "keychainService": "Keychain credentials",
+      "standaloneStateRoot": "Standalone server state",
+      "localStorage": "WebView storage",
+      "documentsWorkspace": "Session workspaces",
+      "repoWorkspaceDir": "Repository workspace directories",
+      "sshKnownHosts": "SSH host-key store"
+    }
   },
   "diagnostics": {
     "description": "Export or copy application logs to troubleshoot issues.",

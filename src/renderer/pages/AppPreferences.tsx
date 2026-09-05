@@ -1,3 +1,4 @@
+import { LEGACY } from '@shared/brand'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import {
   AlertCircle,
@@ -8,6 +9,7 @@ import {
   ExternalLink,
   FileText,
   FolderOpen,
+  HardDriveDownload,
   Keyboard,
   Monitor,
   Network,
@@ -25,6 +27,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
 import { CliResumeDefaultsSettings } from '@/components/settings/CliResumeDefaultsSettings'
+import { DataMigrationSettings } from '@/components/settings/DataMigrationSettings'
 import { MacosPermissionsSettings } from '@/components/settings/MacosPermissionsSettings'
 import { McpServersSettings } from '@/components/settings/McpServersSettings'
 import { RemoteAccessSettings } from '@/components/settings/RemoteAccessSettings'
@@ -117,6 +120,12 @@ const APP_PREF_CATEGORY_DEFS = [
   { id: 'updates', labelKey: 'categories.updates', icon: <Download size={16} /> },
   // macOS-only; filtered out of the sidebar and the search index below.
   { id: 'privacy', labelKey: 'categories.privacy', icon: <ShieldCheck size={16} /> },
+  // Desktop-only; same filtering.
+  {
+    id: 'data-migration',
+    labelKey: 'categories.dataMigration',
+    icon: <HardDriveDownload size={16} />
+  },
   { id: 'diagnostics', labelKey: 'categories.diagnostics', icon: <FileText size={16} /> },
   { id: 'reset', labelKey: 'categories.reset', icon: <RotateCcw size={16} /> }
 ] as const
@@ -283,6 +292,27 @@ const APP_PREF_SEARCH_DEFS = [
     ]
   },
   {
+    categoryId: 'data-migration',
+    labelKey: 'categories.dataMigration',
+    descriptionKey: 'dataMigration.description',
+    keywords: [
+      'migration',
+      'migrate',
+      'legacy',
+      'previous version',
+      'old data',
+      'import',
+      'merge',
+      'keychain',
+      'upgrade',
+      // The pre-rename product name: a user looking for their old data will
+      // search for what the app used to be called. Read from the brand module
+      // rather than spelled out — this file is not one of the two allowed to
+      // carry a legacy brand literal.
+      LEGACY.displayName.toLowerCase()
+    ]
+  },
+  {
     categoryId: 'diagnostics',
     labelKey: 'categories.diagnostics',
     descriptionKey: 'diagnostics.description',
@@ -296,8 +326,12 @@ const APP_PREF_SEARCH_DEFS = [
   }
 ] as const
 
-/** Read once at module load; `isMac` is itself a module-level constant. */
-const HOST = { isMac }
+/**
+ * Read once at module load; `isMac` is itself a module-level constant and
+ * `isTauriContext()` answers from a global the shell installs before any
+ * module here evaluates.
+ */
+const HOST = { isMac, isDesktop: isTauriContext() }
 
 const TERMINAL_RENDERER_TRANSLATION_KEYS = {
   auto: 'options.renderer.auto',
@@ -1666,6 +1700,27 @@ export default function AppPreferences(): React.JSX.Element {
                   </p>
                 </div>
                 <MacosPermissionsSettings />
+              </div>
+            </SettingsSection>
+          )}
+
+          {/* Merge of data left by the pre-rename install. Desktop-only: there
+              is no legacy install reachable from a browser client. */}
+          {isSettingsCategoryAvailable('data-migration', HOST) && (
+            <SettingsSection id="data-migration">
+              <div className="flex items-start gap-6 border-b border-border/70 pb-6">
+                <div className="w-1/3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <HardDriveDownload size={16} className="text-primary" />
+                    <h2 className="text-lg font-medium text-foreground">
+                      {tSettings('categories.dataMigration')}
+                    </h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {tSettings('dataMigration.description')}
+                  </p>
+                </div>
+                <DataMigrationSettings />
               </div>
             </SettingsSection>
           )}

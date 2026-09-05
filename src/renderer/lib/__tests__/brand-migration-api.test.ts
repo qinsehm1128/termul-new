@@ -24,8 +24,16 @@ vi.mock('../tauri-runtime', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
-import type { BrandMigrationReceipt, LegacyDataDetection } from '../brand-migration-api'
-import { browserBrandMigrationApi, createTauriBrandMigrationApi } from '../brand-migration-api'
+import type {
+  BrandMigrationReceipt,
+  BrandMigrationRun,
+  LegacyDataDetection
+} from '../brand-migration-api'
+import {
+  browserBrandMigrationApi,
+  createTauriBrandMigrationApi,
+  hasFailedRoots
+} from '../brand-migration-api'
 import { logFrontendError } from '../log-api'
 import { isTauriContext } from '../tauri-runtime'
 
@@ -42,6 +50,13 @@ const detection: LegacyDataDetection = {
 
 const receipt: BrandMigrationReceipt = {
   roots: [{ kind: 'appDataDir', label: 'App data', status: 'migrated', reason: null }]
+}
+
+const run: BrandMigrationRun = {
+  runId: '2b6d6a05-3bdd-4dcb-8434-f3a8a1854457',
+  startedAtUtc: '2026-09-05T03:21:00Z',
+  roots: receipt.roots,
+  notices: [{ id: 'M-03', status: 'notApplicable', detail: 'cache is rebuilt on demand' }]
 }
 
 describe('brandMigrationApi (Tauri IPC)', () => {
@@ -143,9 +158,73 @@ describe('brandMigrationApi (Tauri IPC)', () => {
     })
   })
 
+  describe('lastRun', () => {
+    it('unwraps the IpcResult success envelope, including the null case', async () => {
+      mockInvoke.mockResolvedValue({ success: true, data: run })
+
+      const result = await createTauriBrandMigrationApi().lastRun()
+
+      expect(mockInvoke).toHaveBeenCalledWith('brand_migration_last_run', undefined)
+      expect(result).toEqual(run)
+
+      // A host that never merged answers `null` inside a *successful* envelope;
+      // reading that as a failure would make the banner prompt forever again.
+      mockInvoke.mockResolvedValue({ success: true, data: null })
+      await expect(createTauriBrandMigrationApi().lastRun()).resolves.toBeNull()
+    })
+
+    it('degrades to null and warns when the host cannot read the journal', async () => {
+      mockInvoke.mockResolvedValue({
+        success: false,
+        error: 'journal unreadable',
+        code: 'BRAND_MIGRATION_FAILED'
+      })
+
+      await expect(createTauriBrandMigrationApi().lastRun()).resolves.toBeNull()
+      expect(mockLogFrontendError).toHaveBeenCalledWith({
+        level: 'warn',
+        source: 'brand-migration.lastRun',
+        message: 'brand_migration_last_run failed: journal unreadable (BRAND_MIGRATION_FAILED)'
+      })
+    })
+
+    it('returns null without invoking outside the Tauri runtime', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+
+      await expect(createTauriBrandMigrationApi().lastRun()).resolves.toBeNull()
+      expect(mockInvoke).not.toHaveBeenCalled()
+    })
+  })
+
+  /**
+   * The predicate the banner keys its prompt on. Getting it backwards in either
+   * direction is a real bug with no visible symptom: too eager and a user with
+   * unmigrated data is never told, too shy and the banner nags forever.
+   */
+  describe('hasFailedRoots', () => {
+    it('is false for no run and for a run whose rows all landed', () => {
+      expect(hasFailedRoots(null)).toBe(false)
+      expect(hasFailedRoots(run)).toBe(false)
+      expect(hasFailedRoots({ ...run, roots: [] })).toBe(false)
+    })
+
+    it('is true as soon as one row failed, whatever the others did', () => {
+      expect(
+        hasFailedRoots({
+          ...run,
+          roots: [
+            { kind: 'appDataDir', label: 'App data', status: 'migrated', reason: null },
+            { kind: 'keychainService', label: 'Keychain', status: 'failed', reason: 'locked' }
+          ]
+        })
+      ).toBe(true)
+    })
+  })
+
   describe('browser impl', () => {
     it('reports nothing to migrate and never touches IPC', async () => {
       await expect(browserBrandMigrationApi.detectLegacyData()).resolves.toBeNull()
+      await expect(browserBrandMigrationApi.lastRun()).resolves.toBeNull()
       await expect(browserBrandMigrationApi.runMigration()).rejects.toThrow(
         'run_brand_migration is desktop-only'
       )

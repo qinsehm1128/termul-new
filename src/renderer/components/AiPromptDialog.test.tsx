@@ -31,7 +31,9 @@ describe('AiPromptDialog template metadata', () => {
       'Standard prompt for Cursor AI editor'
     )
     expect(screen.getByText('Cursor Default — Paste this into Cursor')).toBeInTheDocument()
-    const generatedPrompt = screen.getByText(/I'm working on the feature\/i18n branch in Se Manager/)
+    const generatedPrompt = screen.getByText(
+      /I'm working on the feature\/i18n branch in Se Manager/
+    )
     const englishPrompt = generatedPrompt.textContent
 
     await act(async () => {

@@ -205,7 +205,9 @@
     "start": "Start merge",
     "running": "Merging…",
     "later": "Later",
+    "never": "Don't show again",
     "doneTitle": "Merge finished",
+    "settingsHint": "You can run this any time from Settings → Data migration.",
     "failedTitle": "Merge failed",
     "reason": "Reason: {{reason}}",
     "ssh": {

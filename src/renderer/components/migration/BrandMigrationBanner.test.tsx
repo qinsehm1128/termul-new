@@ -2,20 +2,29 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   BrandMigrationReceipt,
+  BrandMigrationRootReceipt,
+  BrandMigrationRun,
   LegacyDataDetection,
   LegacyDataSignal,
   SshKnownHostsStatus
 } from '@/lib/brand-migration-api'
 import { BrandMigrationBanner } from './BrandMigrationBanner'
 
-const { mockDetectLegacyData, mockRunMigration } = vi.hoisted(() => ({
+const { mockDetectLegacyData, mockLastRun, mockRunMigration } = vi.hoisted(() => ({
   mockDetectLegacyData: vi.fn(),
+  mockLastRun: vi.fn(),
   mockRunMigration: vi.fn()
 }))
 
-vi.mock('@/lib/brand-migration-api', () => ({
+// `importOriginal` rather than a bare factory: the component also imports the
+// pure `hasFailedRoots` from this module, and a hand-written stand-in for it
+// would let the banner's suppression rule and the rule the app ships diverge
+// without a single test noticing.
+vi.mock('@/lib/brand-migration-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/brand-migration-api')>()),
   brandMigrationApi: {
     detectLegacyData: mockDetectLegacyData,
+    lastRun: mockLastRun,
     runMigration: mockRunMigration
   }
 }))
@@ -61,8 +70,27 @@ const receipt: BrandMigrationReceipt = {
 
 const sshFailed: SshKnownHostsStatus = { state: 'failed', reason: 'permission denied' }
 
-async function renderBanner(value: LegacyDataDetection | null): Promise<void> {
+/** A recorded pass whose rows carry `statuses`, in order. */
+function recordedRun(...statuses: BrandMigrationRootReceipt['status'][]): BrandMigrationRun {
+  return {
+    runId: '2b6d6a05-3bdd-4dcb-8434-f3a8a1854457',
+    startedAtUtc: '2026-09-05T03:21:00Z',
+    roots: statuses.map((status, index) => ({
+      kind: index === 0 ? 'appDataDir' : 'documentsWorkspace',
+      label: `label:row${index}`,
+      status,
+      reason: null
+    })),
+    notices: []
+  }
+}
+
+async function renderBanner(
+  value: LegacyDataDetection | null,
+  lastRun: BrandMigrationRun | null = null
+): Promise<void> {
   mockDetectLegacyData.mockResolvedValue(value)
+  mockLastRun.mockResolvedValue(lastRun)
   render(<BrandMigrationBanner />)
   if (value === null) return
   await waitFor(() => {
@@ -73,6 +101,8 @@ async function renderBanner(value: LegacyDataDetection | null): Promise<void> {
 describe('BrandMigrationBanner', () => {
   beforeEach(() => {
     mockDetectLegacyData.mockReset()
+    mockLastRun.mockReset()
+    mockLastRun.mockResolvedValue(null)
     mockRunMigration.mockReset()
     mockRunMigration.mockResolvedValue(receipt)
   })
@@ -277,6 +307,63 @@ describe('BrandMigrationBanner', () => {
     // …while the startup failure is still reported, so the two disagree loudly.
     expect(screen.getByTestId('brand-migration-ssh-warning')).toHaveAccessibleName(
       'SSH known-hosts migration failed'
+    )
+  })
+
+  /**
+   * The defect this whole predicate exists for. The merge copies and never
+   * deletes, so every legacy root is still on disk the moment it finishes and
+   * `hasLegacyData` never goes false again. Keying the prompt on that alone
+   * meant the banner came back at every single app start, forever, to a user
+   * with nothing left to do — and "Later" is session-scoped, so nothing
+   * suppressed it across restarts either.
+   */
+  it('stays away once a clean pass is recorded, even though the legacy data is still there', async () => {
+    await renderBanner(detection(), recordedRun('migrated', 'skipped'))
+
+    await waitFor(() => {
+      expect(mockLastRun).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId('brand-migration-banner')).toBeNull()
+    // Not because the probe went quiet — it still reports every root.
+    expect(await mockDetectLegacyData.mock.results[0]?.value).toMatchObject({
+      hasLegacyData: true
+    })
+  })
+
+  it('keeps prompting when the recorded pass left a root failed, and offers a permanent way out', async () => {
+    await renderBanner(detection(), recordedRun('migrated', 'failed'))
+
+    // Still owed work, so the prompt is due.
+    expect(await screen.findByTestId('brand-migration-banner')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start merge' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('brand-migration-silence'))
+    expect(screen.queryByTestId('brand-migration-banner')).toBeNull()
+
+    // Unlike "Later", this one outlives the run.
+    cleanup()
+    await renderBanner(detection(), recordedRun('migrated', 'failed'))
+    await waitFor(() => {
+      expect(mockLastRun).toHaveBeenCalledTimes(2)
+    })
+    expect(screen.queryByTestId('brand-migration-banner')).toBeNull()
+  })
+
+  it('withholds the permanent dismissal until a pass has actually failed', async () => {
+    // Nothing recorded yet: "Later" is the right escape hatch, and a permanent
+    // one here would let a user bury work they have never even attempted.
+    await renderBanner(detection(), null)
+    await screen.findByTestId('brand-migration-banner')
+    expect(screen.queryByTestId('brand-migration-silence')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Later' })).toBeInTheDocument()
+  })
+
+  it('points at the settings panel, so "Later" is not read as the last chance', async () => {
+    await renderBanner(detection())
+
+    expect(await screen.findByTestId('brand-migration-settings-hint')).toHaveTextContent(
+      'You can run this any time from Settings → Data migration.'
     )
   })
 

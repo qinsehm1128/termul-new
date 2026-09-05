@@ -21,6 +21,7 @@
     "shortcuts": "键盘快捷键",
     "updates": "更新",
     "privacy": "隐私与授权",
+    "dataMigration": "数据迁移",
     "diagnostics": "诊断与日志",
     "reset": "重置设置"
   },
@@ -287,6 +288,35 @@
     "openSettings": "打开设置",
     "recheck": "重新检测全部",
     "deniedCaveat": "「未授权」也可能只是 macOS 从未问过你。在系统设置中批准后请重新检测 —— 此处状态只在检测运行时更新。如果系统设置里显示已开启、这里却仍是未授权，说明授权卡住了：卸载所有已挂载的安装镜像、删除本 app 的其它副本，然后退出并重新启动。"
+  },
+  "dataMigration": {
+    "description": "把上一版安装留下的数据归并到新的位置。",
+    "neverRun": "这台电脑还没有执行过归并。",
+    "lastRunAt": "上次归并：{{when}}",
+    "lastRunFailed": "上次归并有位置没能搬过来。数据没有丢失，原件仍在原处，可以再执行一次。",
+    "copyOnly": "归并只做拷贝，不会删除你的旧数据。",
+    "pathUnavailable": "无文件路径（由系统保管）",
+    "tccTitle": "macOS 隐私权限",
+    "start": "开始归并",
+    "rerun": "重新归并",
+    "running": "正在归并…",
+    "repeatable": "可以反复执行：已经到位的内容会原样保留，不会被覆盖。",
+    "status": {
+      "pending": "待归并",
+      "migrated": "已归并",
+      "skipped": "无需处理",
+      "notApplicable": "不适用",
+      "failed": "失败"
+    },
+    "roots": {
+      "appDataDir": "应用数据",
+      "keychainService": "钥匙串凭据",
+      "standaloneStateRoot": "独立服务端状态",
+      "localStorage": "WebView 存储",
+      "documentsWorkspace": "会话工作区",
+      "repoWorkspaceDir": "仓库工作区目录",
+      "sshKnownHosts": "SSH 主机密钥库"
+    }
   },
   "diagnostics": {
     "description": "导出或复制应用日志以排查问题。",

@@ -185,9 +185,7 @@ describe('ExecutionTargetPicker', () => {
     render(<Harness />)
 
     await choose('Additional reachable directories', 'Plus the worktree')
-    expect(
-      screen.getByText(/\/projects\/se-worktree · feature\/conversations/)
-    ).toBeInTheDocument()
+    expect(screen.getByText(/\/projects\/se-worktree · feature\/conversations/)).toBeInTheDocument()
     expect(screen.getByText('No project attachment')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Attach project context' }))

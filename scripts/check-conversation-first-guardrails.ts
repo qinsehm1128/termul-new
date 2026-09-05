@@ -1562,10 +1562,7 @@ function checkStampedPackaging(findings: GuardFinding[], workflow: ParsedWorkflo
     // exactly that. Skip that one step shape and nothing else; any other step
     // in the gap is still a finding.
     let cursor = stampPosition + 1
-    while (
-      steps[cursor]?.usesScalar &&
-      steps[cursor]?.uses?.startsWith('actions/setup-python@')
-    ) {
+    while (steps[cursor]?.usesScalar && steps[cursor]?.uses?.startsWith('actions/setup-python@')) {
       cursor += 1
     }
     const next = steps[cursor]

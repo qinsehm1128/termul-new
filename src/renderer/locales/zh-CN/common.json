@@ -205,7 +205,9 @@
     "start": "开始归并",
     "running": "正在归并…",
     "later": "稍后",
+    "never": "不再提示",
     "doneTitle": "归并完成",
+    "settingsHint": "之后可以随时在「设置 → 数据迁移」里重新执行。",
     "failedTitle": "归并失败",
     "reason": "原因：{{reason}}",
     "ssh": {
