@@ -35,7 +35,7 @@ function summary(index: number, projectId: string | null = null): ConversationRe
       : null,
     lifecycleState: 'ready',
     lastSeq: index,
-    createdBy: 'termul'
+    createdBy: 'se-manager'
   }
 }
 

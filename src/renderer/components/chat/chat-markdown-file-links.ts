@@ -1,6 +1,18 @@
+import { brandCanonical } from '@shared/brand'
 import { findFilePathMatches } from '@/lib/file-path-links'
 
-export const FILE_PATH_LINK_PREFIX = 'termul-file-path:'
+/**
+ * Href scheme for a file path the renderer turned into a link.
+ *
+ * The prefix ends up inside persisted chat markdown, so a flip that only knew
+ * the new spelling would break every file link in a transcript written before
+ * it. Writes use {@link FILE_PATH_LINK_PREFIX}; reads accept the legacy prefix
+ * too, and never write it back.
+ */
+export const FILE_PATH_LINK_PREFIX = `${brandCanonical().displayName.toLowerCase()}-file-path:`
+
+/** Every prefix a stored href may carry, most-current first. */
+const READABLE_FILE_PATH_PREFIXES = [FILE_PATH_LINK_PREFIX, 'termul-file-path:']
 
 type MarkdownNode = {
   type: string
@@ -59,9 +71,10 @@ export function remarkFilePathLinks(): (tree: MarkdownNode) => void {
 }
 
 export function filePathFromHref(href: string | undefined): string | null {
-  if (!href?.startsWith(FILE_PATH_LINK_PREFIX)) return null
+  const prefix = READABLE_FILE_PATH_PREFIXES.find((candidate) => href?.startsWith(candidate))
+  if (!href || !prefix) return null
   try {
-    return decodeURIComponent(href.slice(FILE_PATH_LINK_PREFIX.length))
+    return decodeURIComponent(href.slice(prefix.length))
   } catch {
     return null
   }

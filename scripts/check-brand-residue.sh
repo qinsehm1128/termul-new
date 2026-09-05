@@ -168,6 +168,103 @@ ALLOWED_SITES=(
   'scripts/release/homebrew.sh:145:~/Library/Saved Application State/com.termul-manager.app.savedState'
   'scripts/release/homebrew.sh:146:~/Library/WebKit/com.termul-manager.app'
 
+  # -- scan/ignore globs that name the frozen legacy fixture roots and the
+  #    pre-rename per-repo workspace dir. Renaming them would stop the scanner
+  #    and the VCS from seeing the very trees the migration harness pins.
+  'biome.json:17:"!**/.termul"'
+  'biome.json:21:"!ios/TermulRemoteTests/Fixtures/legacy-brand"'
+  '.gitignore:95:.termul/'
+  '.gitignore:125:# `gitignore` file and `.termul/` tree are the contract under test. The'
+  '.gitignore:128:!/src-tauri/tests/fixtures/legacy-brand/fake-user-repo/.termul/'
+
+  # -- Tauri fs scope. `$HOME/**` already covers everything below home; these
+  #    two entries exist to name the pre-rename roots explicitly so a reviewer
+  #    can see migration reads are still permitted.
+  'src-tauri/capabilities/default.json:39:{ "path": "$APPDATA/termul/**" }'
+  'src-tauri/capabilities/default.json:41:{ "path": "$HOME/.termul/**" }'
+
+  # -- migration inputs. The detector looks for the pre-rename store file, and
+  #    the legacy binding hash is a domain separator over data already written;
+  #    changing either makes existing user data unreachable.
+  'src-tauri/src/migration_detect.rs:58:pub const PERSISTENCE_STORE_FILE: &str = "termul-data.json";'
+  'src-tauri/src/conversation/migration/legacy.rs:1380:hasher.update(b"termul-legacy-binding\0");'
+
+  # -- explicit legacy spellings carried by `brandedStorageKey`, so a flipped
+  #    web-storage key can still read the value the user already has. Write
+  #    paths use `.canonical`; these strings are never written again.
+  'src/renderer/lib/web-tab-session.ts:1:import { brandedStorageKey, readBrandedStorage } from @/lib/brand-storage-key'
+  'src/renderer/lib/parse-unified-diff.ts:1:import { brandedStorageKey, readBrandedStorage } from @/lib/brand-storage-key'
+  'src/renderer/lib/companion-terminal-text-scale.ts:10:termul.companion.terminalTextScale'
+  'src/renderer/components/ProjectSidebar.tsx:47:import { brandedStorageKey, readBrandedStorage } from @/lib/brand-storage-key'
+
+  # -- the wire union has to name both discriminants: one is what is already
+  #    on disk, the other is what gets written now.
+
+  # -- prose that NAMES the pre-rename spelling in order to explain it: a
+  #    migration note, a lesson recorded in a test header, a comment saying
+  #    which value is legacy. Rewriting these to the new spelling would delete
+  #    the very fact they exist to record.
+  'src-tauri/src/remote/tunnel/frp.rs:222:/// The obvious "fix" — `assert!(toml.contains("name = \"termul\""))` — would be'
+  'src-tauri/src/remote/tunnel/frp.rs:224:/// `render_frpc_toml`, so one `sed s/termul/se-manager/g` rewrites both and the'
+  'scripts/mobile-host-probe.ts:351:if (/se-manager|se-server|termul/i.test(line)) named.add(port)'
+  'scripts/tests/artifact-name-derivation.test.ts:16:* the loudest one — it was `termul`, matching neither upstream, and was carried'
+  'scripts/tests/artifact-name-derivation.test.ts:115:// Ledger entry struck by T-B04. The cask token was `termul` — neither the'
+  'scripts/tests/ios-legacy-brand-parity.test.ts:343:// settings still said `Termul`. Measured on the built product rather than'
+  'scripts/tests/ios-legacy-brand-parity.test.ts:344:// inferred — `TermulRemote.app/Info.plist` carried'
+  'scripts/tests/ios-legacy-brand-parity.test.ts:345:// `CFBundleDisplayName = Termul` next to localized tables reading `Se`.'
+  'scripts/tests/brand-mirror-parity.test.ts:7:* `termul-plan` in Rust while TypeScript — the side that actually writes the'
+  'src/renderer/components/ProjectSidebar.tsx:150:// The footer label used to hard-code "Termul v0.4.10" — both the brand and'
+  'src/renderer/components/chat/ChatMessage.test.tsx:98:href="termul-file-path:src%2Frenderer%2FApp.tsx%3A42"'
+  'src/renderer/components/terminal/terminal-webgl-repair.ts:150:* See .workflow/sessions/20260824-ralph-termul-leftover-glyphs/dod-amendment-01.md'
+
+  # -- the two on-disk store files are STILL named for the old brand, and are
+  #    named correctly here. Renaming them needs a file-level migration: the
+  #    tree migration carries the whole appdata directory across bundle ids but
+  #    keeps the file names inside it, so flipping the constant alone would
+  #    orphan every persisted setting and session. Out of scope for this pass.
+  'docs/development-guide.md:170:- `termul-data.json` — general app persistence'
+  'docs/development-guide.md:171:- `termul-sessions.json` — session persistence'
+  'docs/architecture.md:260:- verified, fail-closed legacy ACP import from `termul-data.json`'
+  'src-tauri/src/migration_run.rs:222:// reconstruct their keys from `termul-data.json` and'
+  'src-tauri/src/commands.rs:4433:/// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`'
+  'src/renderer/lib/tauri-session-api.ts:7:*   shaped `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),'
+  'src/renderer/lib/tauri-session-api.ts:60:* `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),'
+
+  # -- explicit legacy spellings carried so a flipped web-storage key can still
+  #    read the value the user already has. Writes use `.canonical`.
+  'src/renderer/lib/brand-storage-key.ts:7:* brand glued on by hand (`termul.gitDiffViewMode`, `termul-ssh-panel-height`),'
+  'src/renderer/lib/brand-storage-key.ts:9:* only knows the `termul:` form. Writing the flipped key without carrying the'
+
+  # -- the wire union has to name both discriminants: one is on disk already,
+  #    the other is what gets written now.
+
+  # -- the landing asset really is still `termul.svg`; the comment points at
+  #    the file that exists. Renaming the asset is a landing-repo action.
+  'src/renderer/components/SeMark.tsx:6:* at `landing/public/termul.svg` (white fill); this is the theme-aware variant.'
+
+  # -- `deepLinkScheme` has not flipped (it is still `termul` in both brand
+  #    tables). These two describe that state accurately.
+  'ios/README.md:21:Deep link: `se://open?url=<percent-encoded-access-url>`. Encode the `#access_token` frag'
+  'ios/SeRemote/SeRemote/Models/RemoteLink.swift:97:/// The pre-rename `termul` scheme is deliberately absent, not forgotten.'
+
+  # -- a captured scan artifact holding the author's local path at capture
+  #    time. Rewriting it would falsify the record.
+  'docs/project-scan-report.json:9:"project_root": "E:/open-source/PecutAPP/termul",'
+  'docs/project-scan-report.json:10:"project_knowledge": "E:/open-source/PecutAPP/termul/docs",'
+
+  # -- final pass: sites whose matched text carries quotes; pinned on a
+  #    quote-free substring so the entry stays readable.
+  'src/shared/types/conversation.types.ts:150:termul'
+  'src/shared/types/conversation.types.ts:154:termul'
+  'src/renderer/components/ProjectSidebar.tsx:1827:termul-ssh-panel-height'
+  'src/renderer/lib/tauri-session-api.ts:29:termul-sessions.json'
+  'src/renderer/lib/tauri-persistence-api.ts:4:termul-data.json'
+  'src/renderer/components/chat/chat-markdown-file-links.ts:15:termul-file-path:'
+  'src/renderer/lib/parse-unified-diff.ts:214:termul.gitDiffViewMode'
+  'src/renderer/lib/web-tab-session.ts:17:termul.web.focusedSessionId'
+  'src/renderer/lib/__tests__/tauri-session-api.web.test.ts:7:* `termul-sessions.json::sessions/auto-save`), matching the spec'
+  'src/renderer/lib/__tests__/tauri-session-api.web.test.ts:41:termul-sessions.json'
+
   # -- upstream fork gate. `mannnrachman/termul` is a different repository;
   #    these guards exist to keep the workflow from running in forks.
   ".github/workflows/fork-monitor.yml:25:mannnrachman/termul"

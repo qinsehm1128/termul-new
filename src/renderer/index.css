@@ -10,7 +10,7 @@
 
 @layer base {
   :root {
-    /* Termul graphite — warm, low-contrast IDE chrome. */
+    /* Se graphite — warm, low-contrast IDE chrome. */
     --background: 72 12% 7%; /* #12130f */
     --foreground: 48 12% 89%; /* warm paper-white */
 

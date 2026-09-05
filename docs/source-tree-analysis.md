@@ -9,7 +9,7 @@ Se Manager is organized as a single desktop application repository with a clear 
 ## Complete Directory Structure
 
 ```text
-termul/
+se-manager/
 ├── .github/                     # CI, PR validation, release, packaging workflows
 │   └── workflows/
 ├── docs/                        # Generated docs, operational notes, verification docs

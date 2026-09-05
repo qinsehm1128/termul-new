@@ -210,7 +210,7 @@ describe('MobileChatShell', () => {
         projectAttachment: null,
         lifecycleState: 'ready',
         lastSeq: 4,
-        createdBy: 'termul'
+        createdBy: 'se-manager'
       }
     ])
     useConversationStore.getState().setActiveConversationId('018f7a1c-1b4d-7c8a-9f01-0123456789ab')

@@ -5,9 +5,9 @@ import { filterProjects, PROJECT_SEARCH_THRESHOLD, shouldShowProjectSearch } fro
 const projects: Project[] = [
   {
     id: '1',
-    name: 'Termul Desktop',
+    name: 'Sequoia Desktop',
     color: 'blue',
-    path: '/home/me/code/termul',
+    path: '/home/me/code/sequoia',
     gitBranch: 'main'
   },
   {
@@ -35,7 +35,7 @@ describe('filterProjects', () => {
   })
 
   it('matches on project name (case-insensitive)', () => {
-    const result = filterProjects(projects, { searchQuery: 'termul' })
+    const result = filterProjects(projects, { searchQuery: 'sequoia' })
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('1')
   })

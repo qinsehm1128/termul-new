@@ -80,7 +80,7 @@ const conversation: ConversationRecordV2 = {
   projectAttachment: null,
   lifecycleState: 'ready',
   lastSeq: 0,
-  createdBy: 'termul'
+  createdBy: 'se-manager'
 }
 const redactedRecoveryItem: RecoveryItemV1 = {
   recoveryId: 'a'.repeat(64),

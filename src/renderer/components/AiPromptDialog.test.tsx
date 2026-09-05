@@ -6,8 +6,8 @@ import { AiPromptDialog } from './AiPromptDialog'
 const context = {
   sourceBranch: 'feature/i18n',
   targetBranch: 'main',
-  worktreePath: '/tmp/termul-i18n',
-  projectName: 'Termul'
+  worktreePath: '/tmp/se-i18n',
+  projectName: 'Se Manager'
 }
 
 describe('AiPromptDialog template metadata', () => {
@@ -31,7 +31,7 @@ describe('AiPromptDialog template metadata', () => {
       'Standard prompt for Cursor AI editor'
     )
     expect(screen.getByText('Cursor Default — Paste this into Cursor')).toBeInTheDocument()
-    const generatedPrompt = screen.getByText(/I'm working on the feature\/i18n branch in Termul/)
+    const generatedPrompt = screen.getByText(/I'm working on the feature\/i18n branch in Se Manager/)
     const englishPrompt = generatedPrompt.textContent
 
     await act(async () => {

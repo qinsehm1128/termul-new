@@ -1,7 +1,7 @@
 SE_TEST_REPO_ROOT="$(cd "${BATS_TEST_DIRNAME:-$(dirname "${BASH_SOURCE[0]}")}/../.." && pwd)"
 
 make_tmp() {
-  SE_TEST_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/termul-install-test.XXXXXX")"
+  SE_TEST_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/se-manager-install-test.XXXXXX")"
   SE_TEST_STUB_BIN="$SE_TEST_TMP_DIR/bin"
   mkdir -p "$SE_TEST_STUB_BIN"
 

@@ -65,8 +65,8 @@ homepage testimonials marquee are served by a Cloudflare Pages Function
 (`functions/api/[[path]].ts`) backed by a D1 database and an R2 bucket. Bindings
 are declared in `wrangler.toml`:
 
-- `DB` — D1 database `termul` (table schema in `migrations/0001_testimonials.sql`)
-- `TESTIMONIAL_AVATARS` — R2 bucket `termul` for uploaded avatar images
+- `DB` — D1 database `se` (table schema in `migrations/0001_testimonials.sql`)
+- `TESTIMONIAL_AVATARS` — R2 bucket `se` for uploaded avatar images
 - `TESTIMONIALS_ADMIN_TOKEN` — bearer token guarding the `/api/admin/*` routes
 
 ### Local development
@@ -119,11 +119,11 @@ provisioning a fresh environment.
 1. Authenticate: `bunx wrangler login`.
 2. Create the D1 database and copy its `database_id` into `wrangler.toml`:
    ```bash
-   bunx wrangler d1 create termul
+   bunx wrangler d1 create se
    ```
 3. Create the R2 bucket:
    ```bash
-   bunx wrangler r2 bucket create termul
+   bunx wrangler r2 bucket create se
    ```
 4. Apply migrations to the remote database:
    ```bash

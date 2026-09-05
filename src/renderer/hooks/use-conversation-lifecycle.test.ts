@@ -35,7 +35,7 @@ const conversation: ConversationRecordV2 = {
   projectAttachment: null,
   lifecycleState: 'ready',
   lastSeq: 4,
-  createdBy: 'termul'
+  createdBy: 'se-manager'
 }
 
 function updated(revision: number): ConversationLifecycleOutcome {

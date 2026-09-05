@@ -74,7 +74,7 @@ const mobileConversation: ConversationRecordV2 = {
   projectAttachment: null,
   lifecycleState: 'ready',
   lastSeq: 0,
-  createdBy: 'termul'
+  createdBy: 'se-manager'
 }
 
 const mobileProject: Project = {
@@ -321,7 +321,7 @@ describe('Conversation-first responsive phone matrix', () => {
           projectAttachment: null,
           lifecycleState: 'ready',
           lastSeq: 0,
-          createdBy: 'termul'
+          createdBy: 'se-manager'
         },
         workspace: { status: 'missing', conversationId: ID }
       }

@@ -83,7 +83,7 @@ function summary(
       : null,
     lifecycleState: 'ready',
     lastSeq: 4,
-    createdBy: 'termul'
+    createdBy: 'se-manager'
   }
 }
 

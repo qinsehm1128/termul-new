@@ -749,7 +749,7 @@ describe('AgentLauncher ACP new thread', () => {
             projectAttachment: null,
             lifecycleState: 'ready',
             lastSeq: 0,
-            createdBy: 'termul'
+            createdBy: 'se-manager'
           }
         }
       } as never)

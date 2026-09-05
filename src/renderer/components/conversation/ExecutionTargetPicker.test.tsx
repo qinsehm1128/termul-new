@@ -45,7 +45,7 @@ const identity: ConversationRecordV2 = {
   projectAttachment: null,
   lifecycleState: 'initializing_agent',
   lastSeq: 4,
-  createdBy: 'termul'
+  createdBy: 'se-manager'
 }
 
 const readyConversation: ConversationRecordV2 = {
@@ -57,7 +57,7 @@ const attachment: ProjectAttachment = {
   schemaVersion: 1,
   projectId: 'p1',
   attachedAtUtc: '2026-08-15T10:00:00.000Z',
-  projectPathSnapshot: '/projects/termul',
+  projectPathSnapshot: '/projects/se',
   worktreePath: null,
   worktreeBranch: null
 }
@@ -65,9 +65,9 @@ const attachment: ProjectAttachment = {
 const projects: Project[] = [
   {
     id: 'p1',
-    name: 'Termul',
+    name: 'Se Manager',
     color: 'blue',
-    path: '/projects/termul',
+    path: '/projects/se',
     isGitRepo: true,
     gitBranch: 'main',
     activeWorktreeId: 'w1',
@@ -75,7 +75,7 @@ const projects: Project[] = [
       {
         id: 'w1',
         name: 'feature',
-        path: '/projects/termul-worktree',
+        path: '/projects/se-worktree',
         branch: 'feature/conversations',
         createdAt: '2026-08-15T09:00:00.000Z'
       }
@@ -170,7 +170,7 @@ describe('ExecutionTargetPicker', () => {
 
     await choose('Additional reachable directories', 'Plus the project root')
 
-    expect(screen.getByText('/projects/termul')).toBeInTheDocument()
+    expect(screen.getByText('/projects/se')).toBeInTheDocument()
     expect(screen.getAllByText(identity.workspaceCwd).length).toBeGreaterThan(0)
     expect(screen.getByText(identity.conversationId)).toBeInTheDocument()
     expect(screen.getByText(identity.createdAtUtc)).toBeInTheDocument()
@@ -186,7 +186,7 @@ describe('ExecutionTargetPicker', () => {
 
     await choose('Additional reachable directories', 'Plus the worktree')
     expect(
-      screen.getByText(/\/projects\/termul-worktree · feature\/conversations/)
+      screen.getByText(/\/projects\/se-worktree · feature\/conversations/)
     ).toBeInTheDocument()
     expect(screen.getByText('No project attachment')).toBeInTheDocument()
 
@@ -212,7 +212,7 @@ describe('ExecutionTargetPicker', () => {
     const projectTarget: ExecutionTarget = {
       kind: 'project_root',
       projectId: 'p1',
-      projectRoot: '/projects/termul'
+      projectRoot: '/projects/se'
     }
     const targetOutcome = aggregateOutcome(
       attachedOutcome.conversation,
@@ -247,7 +247,7 @@ describe('ExecutionTargetPicker', () => {
 
     await choose('Additional reachable directories', 'Plus the project root')
     expect(await screen.findByText(/Reachable scope updated/)).toBeInTheDocument()
-    expect(screen.getByText('/projects/termul')).toBeInTheDocument()
+    expect(screen.getByText('/projects/se')).toBeInTheDocument()
 
     await choose('Additional reachable directories', 'Conversation directory only')
     await waitFor(() => expect(conversationApi.updateExecutionTarget).toHaveBeenCalledTimes(2))

@@ -244,8 +244,8 @@ describe('file-path-links resolution', () => {
 
   it('rejects relative paths that escape the allowed roots', async () => {
     const result = await resolveFilePathCandidate('../../outside.ts', {
-      cwd: '/repo/apps/termul',
-      projectRoot: '/repo/apps/termul'
+      cwd: '/repo/apps/se',
+      projectRoot: '/repo/apps/se'
     })
 
     expect(result).toEqual({ ok: false, reason: 'not-found' })
@@ -254,8 +254,8 @@ describe('file-path-links resolution', () => {
 
   it('rejects absolute paths outside the allowed roots', async () => {
     const result = await resolveFilePathCandidate('/etc/hosts', {
-      cwd: '/repo/apps/termul',
-      projectRoot: '/repo/apps/termul'
+      cwd: '/repo/apps/se',
+      projectRoot: '/repo/apps/se'
     })
 
     expect(result).toEqual({ ok: false, reason: 'not-found' })

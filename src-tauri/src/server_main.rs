@@ -950,7 +950,7 @@ fn usage() -> &'static str {
         --project-root PATH         Project-root boundary for /fs/* routes (default: $SE_PROJECT_ROOT or $HOME)\n\
         --projects-file PATH        VFS-roots registry file (default: $SE_PROJECTS_FILE; missing = empty list)\n\
         --sessions-dir PATH         Legacy sessions input root (default: $SE_SESSIONS_DIR or service-account state dir)\n\
-        --conversation-workspace-root PATH  Visible Conversation workspaces (default: $SE_CONVERSATION_WORKSPACE_ROOT or <project-root>/Termul)\n\
+        --conversation-workspace-root PATH  Visible Conversation workspaces (default: $SE_CONVERSATION_WORKSPACE_ROOT or <project-root>/Se)\n\
         --workspace-manifests-dir PATH  Legacy workspace-manifests input root (default: <state dir>/workspace-manifests)\n\
         --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
         --remote-access-token-file PATH  Operator-owned bearer token file (required)\n\

@@ -33,7 +33,7 @@ function summary(overrides: Partial<ConversationRecordV2> = {}): ConversationRec
     conversationId,
     createdAtUtc: '2026-08-15T09:45:15.123Z',
     creationPartition: { year: 2026, month: 8, day: 15, path: '2026/08/15' },
-    workspaceCwd: '/workspaces/termul',
+    workspaceCwd: '/workspaces/se',
     executionTarget: { kind: 'workspace' },
     projectAttachment: {
       schemaVersion: 1,
@@ -45,7 +45,7 @@ function summary(overrides: Partial<ConversationRecordV2> = {}): ConversationRec
     },
     lifecycleState: 'ready',
     lastSeq: 4,
-    createdBy: 'termul',
+    createdBy: 'se-manager',
     title: 'Fix the layout',
     ...overrides
   }
@@ -80,7 +80,7 @@ describe('ConversationList row language', () => {
   it('keeps a folder preview only when it differs from the title, as path-secondary mono', () => {
     renderList()
 
-    const preview = screen.getByText('termul')
+    const preview = screen.getByText('se')
     expect(preview).toHaveClass('font-mono')
     expect(preview).not.toHaveTextContent('last-turn')
     expect(screen.getByText('Fix the layout')).toBeInTheDocument()
@@ -131,7 +131,7 @@ describe('ConversationList row language', () => {
     // its basename carries no information and must not be rendered.
     useConversationStore.getState().replaceSummaries([
       summary({
-        workspaceCwd: `/Users/me/Documents/Termul/sessions/2026/08/15/${conversationId}`
+        workspaceCwd: `/Users/me/Documents/Se/sessions/2026/08/15/${conversationId}`
       })
     ])
     renderList()

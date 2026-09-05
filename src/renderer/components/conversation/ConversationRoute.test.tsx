@@ -47,7 +47,7 @@ const conversation: ConversationRecordV2 = {
   projectAttachment: null,
   lifecycleState: 'ready',
   lastSeq: 2,
-  createdBy: 'termul'
+  createdBy: 'se-manager'
 }
 
 const secondConversation: ConversationRecordV2 = {

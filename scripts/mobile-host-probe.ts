@@ -1,5 +1,5 @@
 /**
- * Live e2e probe that walks the iPhone TermulRemote path against a desktop host.
+ * Live e2e probe that walks the iPhone SeRemote path against a desktop host.
  *
  * Start the desktop first (`bun run dev`) and turn on Remote Access. Then:
  *
@@ -345,7 +345,10 @@ export function listenPortsFromLsof(text: string): {
     if (!port) continue
     if (match?.[1]) loopback.add(port)
     if (match?.[2]) wildcard.add(port)
-    if (/termul|Termul/i.test(line)) named.add(port)
+    // Matches the process name `lsof` prints. Both spellings on purpose: a
+    // machine can be running a pre-rename build alongside a renamed one, and a
+    // probe that only knows the current name silently reports no listener.
+    if (/se-manager|se-server|termul/i.test(line)) named.add(port)
   }
   return { named: [...named], wildcard: [...wildcard], loopback: [...loopback] }
 }

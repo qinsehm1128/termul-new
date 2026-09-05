@@ -5,7 +5,7 @@ import { useComposerAttachments } from './use-composer-attachments'
 
 const { toastError, writeBytesToTempFile } = vi.hoisted(() => ({
   toastError: vi.fn(),
-  writeBytesToTempFile: vi.fn(async () => '/tmp/termul/pasted.png')
+  writeBytesToTempFile: vi.fn(async () => '/tmp/se/pasted.png')
 }))
 
 vi.mock('sonner', () => ({ toast: { error: toastError } }))

@@ -38,7 +38,7 @@ const projectlessConversation: ConversationRecordV2 = {
   projectAttachment: null,
   lifecycleState: 'allocating_workspace',
   lastSeq: 0,
-  createdBy: 'termul'
+  createdBy: 'se-manager'
 }
 
 const opaqueBinding: AgentSessionBinding = {
@@ -185,7 +185,7 @@ describe('Conversation runtime-neutral wire contracts', () => {
       schemaVersion: 1 as const,
       projectId: 'project-1',
       attachedAtUtc: '2026-08-15T10:00:00.000Z',
-      projectPathSnapshot: '/projects/termul',
+      projectPathSnapshot: '/projects/se',
       worktreePath: null,
       worktreeBranch: null
     }

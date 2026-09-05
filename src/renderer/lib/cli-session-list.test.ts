@@ -11,7 +11,7 @@ function session(
   return {
     schemaVersion: CLI_SESSION_SCHEMA_VERSION,
     sessionId: overrides.id,
-    cwd: '/work/termul',
+    cwd: '/work/se',
     title: 'Session',
     createdAt: '2026-08-01T00:00:00.000Z',
     updatedAt: '2026-08-20T00:00:00.000Z',
@@ -57,6 +57,6 @@ describe('cli-session-list', () => {
     const byAgent = groupCliSessions([older, newer], 'agent')
     expect(byAgent.map((group) => group.key)).toEqual(['claude-code', 'codex'])
     const byFolder = groupCliSessions([older, newer], 'folder')
-    expect(byFolder.map((group) => group.label).sort()).toEqual(['other', 'termul'])
+    expect(byFolder.map((group) => group.label).sort()).toEqual(['other', 'se'])
   })
 })

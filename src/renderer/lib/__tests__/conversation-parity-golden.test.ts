@@ -60,7 +60,7 @@ const attachment: ProjectAttachment = {
   schemaVersion: 1,
   projectId: 'project-1',
   attachedAtUtc: '2026-08-15T10:00:00.000Z',
-  projectPathSnapshot: '/projects/termul',
+  projectPathSnapshot: '/projects/se',
   worktreePath: null,
   worktreeBranch: null
 }
@@ -94,7 +94,7 @@ function aggregateOutcome(
       executionTarget,
       lifecycleState: 'ready',
       lastSeq: previousRevision + 1,
-      createdBy: 'termul'
+      createdBy: 'se-manager'
     }
   }
 }

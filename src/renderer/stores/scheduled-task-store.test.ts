@@ -23,7 +23,7 @@ beforeEach(() => {
   })
 })
 
-it('loads the Termul-wide catalog without a project filter', async () => {
+it('loads the Se-wide catalog without a project filter', async () => {
   listTasks.mockResolvedValue({ success: true, data: [] })
 
   await useScheduledTaskStore.getState().load()

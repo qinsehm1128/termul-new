@@ -17,7 +17,7 @@ describe('decideResume', () => {
       'local'
     )
   })
-  it('prefers resume for a Termul conversation when both capabilities are advertised', () => {
+  it('prefers resume for a Se Manager conversation when both capabilities are advertised', () => {
     const caps: AgentCapabilities = { loadSession: true, sessionCapabilities: { resume: {} } }
     expect(decideResume({ connected: true, capabilities: caps, localHistoryAvailable: true })).toBe(
       'resume'

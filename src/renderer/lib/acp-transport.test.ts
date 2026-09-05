@@ -204,7 +204,7 @@ class FakeWebSocket {
           : {
               persistence: 'conversation',
               conversationId: '11111111-1111-4111-8111-111111111111',
-              workspaceCwd: '/visible/Termul/sessions/2026/08/16/conversation',
+              workspaceCwd: '/visible/Se/sessions/2026/08/16/conversation',
               executionCwd: payload.cwd,
               sessionId,
               modes: null,

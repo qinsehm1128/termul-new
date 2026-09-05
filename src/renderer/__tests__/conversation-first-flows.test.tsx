@@ -74,14 +74,14 @@ const conversation: ConversationRecordV2 = {
   projectAttachment: null,
   lifecycleState: 'ready',
   lastSeq: 0,
-  createdBy: 'termul'
+  createdBy: 'se-manager'
 }
 
 const project: Project = {
   id: 'project-1',
-  name: 'Termul',
+  name: 'Se Manager',
   color: 'blue',
-  path: '/projects/termul',
+  path: '/projects/se',
   isGitRepo: true,
   gitBranch: 'main',
   activeWorktreeId: 'worktree-1',
@@ -89,7 +89,7 @@ const project: Project = {
     {
       id: 'worktree-1',
       name: 'Conversation repair',
-      path: '/projects/termul-worktree',
+      path: '/projects/se-worktree',
       branch: 'feature/conversation-repair',
       createdAt: '2026-08-15T09:00:00.000Z'
     }

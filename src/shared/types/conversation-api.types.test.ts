@@ -21,7 +21,7 @@ function conversation() {
     projectAttachment: null,
     lifecycleState: 'ready' as const,
     lastSeq: 4,
-    createdBy: 'termul' as const
+    createdBy: 'se-manager' as const
   }
 }
 

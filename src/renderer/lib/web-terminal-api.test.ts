@@ -144,12 +144,12 @@ class FakeWebSocket {
             {
               id: 'pty-desktop-1',
               shell: 'zsh',
-              cwd: '/tmp/termul',
+              cwd: '/tmp/se',
               pid: 9,
               cols: 80,
               rows: 24,
               projectId: req.payload.projectId,
-              title: 'termul',
+              title: 'se',
               gitBranch: 'dev'
             }
           ]
@@ -164,7 +164,7 @@ class FakeWebSocket {
         data: {
           id: req.payload.terminalId,
           shell: 'zsh',
-          cwd: '/tmp/termul',
+          cwd: '/tmp/se',
           pid: 9,
           cols: 80,
           rows: 24,
@@ -1440,7 +1440,7 @@ describe('WebTerminalClient frame handling & request lifecycle', () => {
       expect(listed.data.terminals).toHaveLength(1)
       expect(listed.data.terminals[0]).toMatchObject({
         id: 'pty-desktop-1',
-        title: 'termul',
+        title: 'se',
         projectId: 'proj-1'
       })
     }

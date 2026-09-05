@@ -930,7 +930,7 @@ mod tests {
 
     #[test]
     fn reads_an_adhoc_signature_as_unstable() {
-        let output = "Executable=/Applications/Termul Manager.app/Contents/MacOS/Termul Manager\n\
+        let output = "Executable=/Applications/Se Manager.app/Contents/MacOS/Se Manager\n\
              Identifier=com.se-manager.app\n\
              CodeDirectory v=20400 size=100 flags=0x20002(adhoc,linker-signed) hashes=3+2\n\
              Signature=adhoc\n\

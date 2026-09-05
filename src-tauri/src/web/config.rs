@@ -77,7 +77,7 @@ pub(crate) fn legacy_state_root_pair(parent: &Path) -> Option<(PathBuf, PathBuf)
 /// The state-root directory name on this platform: the one written today, and
 /// the one a pre-rename install left behind.
 ///
-/// Windows capitalises the component (`%LOCALAPPDATA%\Termul`) while the unix
+/// Windows capitalises the component (`%LOCALAPPDATA%\Se`) while the unix
 /// roots do not, so the pair is chosen per platform rather than lower-cased at
 /// the call site.
 fn state_dir_names() -> (&'static str, &'static str) {
@@ -311,7 +311,7 @@ pub struct ServerConfig {
     /// Standalone-only durable session root. Desktop shared-live uses `None`.
     pub sessions_dir: Option<PathBuf>,
     /// Standalone visible Conversation workspace base. CLI wins over the environment; when
-    /// neither is set this is `<project_root>/Termul`.
+    /// neither is set this is `<project_root>/Se`.
     pub conversation_workspace_root: PathBuf,
     /// CAP-5 / Story 5: workspace-manifests root override. `None` means
     /// "use `<service_account_state_dir>/workspace-manifests`" — the
@@ -404,7 +404,7 @@ impl ServerConfig {
     /// var falls through to the next branch; an empty-string env var now
     /// behaves the same way (the next branch or the temp-dir fallback).
     /// Resolve the standalone visible Conversation workspace base. CLI wins over the
-    /// environment, which wins over `<project_root>/Termul`.
+    /// environment, which wins over `<project_root>/Se`.
     #[must_use]
     pub fn conversation_workspace_root(&self) -> PathBuf {
         self.conversation_workspace_root.clone()
@@ -955,7 +955,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
             sessions_dir: None,
-            conversation_workspace_root: PathBuf::from("/tmp/Termul"),
+            conversation_workspace_root: PathBuf::from("/tmp/Se"),
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
@@ -976,7 +976,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
             sessions_dir: None,
-            conversation_workspace_root: PathBuf::from("/tmp/Termul"),
+            conversation_workspace_root: PathBuf::from("/tmp/Se"),
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
@@ -1331,7 +1331,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
             sessions_dir: None,
-            conversation_workspace_root: PathBuf::from("/tmp/Termul"),
+            conversation_workspace_root: PathBuf::from("/tmp/Se"),
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,

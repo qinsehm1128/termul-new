@@ -15,7 +15,7 @@ Se 里其实有三套不同的列表，外加两块附属界面。难看的原�
 | 桌面终端标签 | `src/renderer/components/TerminalTabBar.tsx` | 已打开的 PTY 视图 | `terminal.id` / `ptyId` |
 | 隐藏运行条 | `src/renderer/layouts/WorkspaceLayout.tsx`（隐藏运行条） | 只关了视图、进程还在的 PTY | 同上 |
 | 手机网页聊天与终端 | `src/renderer/components/mobile/MobileChatShell.tsx` | 会话下的终端 + 重新打开 | 同上 |
-| iOS 首页 | `ios/TermulRemote/TermulRemote/Views/HostHomeView.swift` | 会话 vs 项目 | 会话 vs 项目 |
+| iOS 首页 | `ios/SeRemote/SeRemote/Views/HostHomeView.swift` | 会话 vs 项目 | 会话 vs 项目 |
 
 ```mermaid
 flowchart LR

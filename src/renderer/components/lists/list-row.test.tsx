@@ -41,7 +41,7 @@ describe('list primitives', () => {
   })
 
   it('pathBasename keeps the last folder', () => {
-    expect(pathBasename('/Users/dev/projects/termul')).toBe('termul')
+    expect(pathBasename('/Users/dev/projects/se')).toBe('se')
     expect(pathBasename('C:\\work\\repo')).toBe('repo')
     expect(pathBasename(null)).toBe('')
   })

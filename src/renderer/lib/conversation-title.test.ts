@@ -19,7 +19,7 @@ function record(overrides: Partial<ConversationRecordV2> = {}): ConversationReco
     projectAttachment: null,
     lifecycleState: 'ready',
     lastSeq: 1,
-    createdBy: 'termul',
+    createdBy: 'se-manager',
     ...overrides
   }
 }

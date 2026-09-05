@@ -16,10 +16,10 @@ describe('useAgentSkills', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
     list.mockResolvedValueOnce([
       {
-        name: 'termul-scheduled-tasks',
+        name: 'se-manager-scheduled-tasks',
         description: 'Create project-managed scheduled tasks.',
         scope: 'project',
-        path: '/conversation/workspace/.agents/skills/termul-scheduled-tasks/SKILL.md'
+        path: '/conversation/workspace/.agents/skills/se-manager-scheduled-tasks/SKILL.md'
       }
     ])
 

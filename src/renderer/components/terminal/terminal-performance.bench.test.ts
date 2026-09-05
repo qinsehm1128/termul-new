@@ -122,7 +122,7 @@ describe.skipIf(!hasCanvas)('Terminal performance baseline (xterm 6.1 beta)', ()
 
   afterAll(() => {
     // Print summary table after all benchmarks run
-    console.log('\n=== Termul xterm 6.1 Beta Baseline Benchmark Results ===\n')
+    console.log('\n=== Se Manager xterm 6.1 Beta Baseline Benchmark Results ===\n')
     console.log('| Benchmark | Lines | Chars | Duration (ms) | Lines/sec | Chars/sec |')
     console.log('|-----------|------:|------:|--------------:|----------:|----------:|')
     for (const r of results) {

@@ -2196,15 +2196,25 @@ impl PtyManager {
         if options.program.is_none() {
             env.insert("SHELL".to_string(), shell_path.clone());
         }
-        // Identify this PTY as Termul so ~/.zshrc can feature-gate (starship,
-        // shared history) the same way Ghostty/Orca do. Overwrite inherited
-        // Cursor/Ghostty TERM_PROGRAM — the child pane is Termul, not its parent.
+        // Identify this PTY by the current brand so ~/.zshrc can feature-gate
+        // (starship, shared history) the same way Ghostty/Orca do. Overwrite an
+        // inherited Cursor/Ghostty TERM_PROGRAM — the child pane is ours, not
+        // its parent's.
+        //
+        // Read from the brand seam rather than spelled here: this value is what
+        // a user's shell config matches on, so a rename that missed it would
+        // leave every terminal announcing the old product name forever. A user
+        // who gated on the pre-rename value has to update their rc file; that
+        // is the visible half of a rename, not a regression.
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
         env.insert("FORCE_COLOR".to_string(), "3".to_string());
         env.insert("CLICOLOR".to_string(), "1".to_string());
         env.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
-        env.insert("TERM_PROGRAM".to_string(), "Termul".to_string());
+        env.insert(
+            "TERM_PROGRAM".to_string(),
+            crate::brand::canonical().display_name.to_string(),
+        );
         env.insert(
             "TERM_PROGRAM_VERSION".to_string(),
             env!("CARGO_PKG_VERSION").to_string(),

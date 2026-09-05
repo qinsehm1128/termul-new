@@ -47,8 +47,8 @@ describe('mobile-host-probe helpers', () => {
 
   it('builds the same WebSocket paths the iPhone companion uses', () => {
     expect(wsUrl('http://127.0.0.1:18787', '/ws')).toBe('ws://127.0.0.1:18787/ws')
-    expect(wsUrl('https://termul.example.test', '/terminal/ws')).toBe(
-      'wss://termul.example.test/terminal/ws'
+    expect(wsUrl('https://se.example.test', '/terminal/ws')).toBe(
+      'wss://se.example.test/terminal/ws'
     )
   })
 
@@ -75,7 +75,7 @@ describe('mobile-host-probe helpers', () => {
 
   it('finds LAN listeners bound to all interfaces, not only 127.0.0.1', () => {
     const text = [
-      'TermulMan 1234 qs  12u  IPv4 0x1  0t0  TCP *:51234 (LISTEN)',
+      'SeManager 1234 qs  12u  IPv4 0x1  0t0  TCP *:51234 (LISTEN)',
       'vite      5678 qs  21u  IPv4 0x2  0t0  TCP 127.0.0.1:5180 (LISTEN)'
     ].join('\n')
     const ports = listenPortsFromLsof(text)

@@ -14,7 +14,7 @@ vi.mock('@/stores/acp-store', () => ({
 
 /** A real-world worst case: an absolute path with no spaces to break on. */
 const LONG_ACTION =
-  'Write /Users/qs/Documents/Termul/sessions/2026/08/28/38ceadcf-158a-4283-98be-7094bcc1d076/VoiceCard/Sources/VoiceCard/Panel/SettingsWindowController.swift'
+  'Write /Users/qs/Documents/Se/sessions/2026/08/28/38ceadcf-158a-4283-98be-7094bcc1d076/VoiceCard/Sources/VoiceCard/Panel/SettingsWindowController.swift'
 
 function permission(overrides: Partial<PendingPermission> = {}): PendingPermission {
   return {

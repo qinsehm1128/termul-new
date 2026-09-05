@@ -32,7 +32,7 @@ function sanitizeNotificationText(
  * highlight border on the finished terminal (cross-OS, no notification-click needed).
  *
  * Notification format:
- *   Title: <project name>  (or "Termul" if project unknown)
+ *   Title: <project name>  (or the brand display name if project unknown)
  *   Body:  <terminal name> — DONE
  *          or <terminal name> — Failed (exit code: N) for non-zero exit
  */
