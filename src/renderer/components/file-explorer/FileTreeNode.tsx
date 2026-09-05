@@ -12,7 +12,7 @@ import { isRejectedMove, useFileExplorerStore } from '@/stores/file-explorer-sto
 import { MaterialFileIcon } from './MaterialFileIcon'
 
 /** Distinct from the pane DnD payload so neither drop target claims the other's drag. */
-const TREE_MOVE_MIME = 'application/x-termul-tree-move'
+const TREE_MOVE_MIME = 'application/x-se-tree-move'
 
 interface FileTreeNodeProps {
   entry: DirectoryEntry

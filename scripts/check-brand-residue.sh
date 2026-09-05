@@ -76,6 +76,42 @@ ALLOWED_PATHS=(
 )
 
 # --------------------------------------------------------------------------
+# WHITELIST A2 — tests whose SUBJECT is the legacy contract itself.
+#
+# A migration harness has to spell the pre-rename value: `expect(LEGACY.themeId)
+# .toBe('termul')` is the assertion, and rewriting it to read the constant it is
+# checking turns the test into a tautology that passes no matter what the
+# constant holds. Same for the Rust harnesses that seed a legacy keychain entry
+# or a pre-rename on-disk tree and then prove production still reads it.
+#
+# Named one file at a time rather than by a `*brand*` glob: a glob would also
+# swallow a future `brand-new-feature.test.ts` that has no business holding a
+# legacy literal.
+#
+# FLIP TRIGGER: when a harness stops testing a legacy contract, delete its line.
+# --------------------------------------------------------------------------
+ALLOWED_PATHS+=(
+  'src/shared/brand.test.ts'
+  'src/shared/types/conversation.types.brand.test.ts'
+  'src/__fixtures__/legacy-brand-manifest.test.ts'
+  'src/renderer/lib/browser/terminal-url-navigation.brand.test.ts'
+  'src/renderer/lib/tauri-stubs/plugin-store.brand.test.ts'
+  'src/renderer/lib/themes/theme-id.brand.test.ts'
+  'src/renderer/stores/acp-store.brand.test.ts'
+  'src-tauri/tests/brand_migration_e2e.rs'
+  'src-tauri/tests/brand_seam_thread_affinity.rs'
+  'src-tauri/tests/legacy_brand_appdata_roots.rs'
+  'src-tauri/tests/legacy_brand_created_by.rs'
+  'src-tauri/tests/legacy_brand_fixture_manifest.rs'
+  'src-tauri/tests/legacy_brand_keychain.rs'
+  'src-tauri/tests/legacy_brand_skill_manifest.rs'
+  'src-tauri/tests/legacy_brand_skill_marker.rs'
+  'src-tauri/tests/legacy_brand_ssh_known_hosts.rs'
+  'src-tauri/tests/legacy_brand_state_roots.rs'
+  'src-tauri/tests/legacy_brand_worktree.rs'
+)
+
+# --------------------------------------------------------------------------
 # WHITELIST B — untracked working files owned by the user, deliberately not
 # renamed and deliberately not committed (R-SCOPE-UNTRACKED-DOCS). Named one by
 # one rather than by wildcard so that a seventh file appearing under
@@ -119,6 +155,18 @@ ALLOWED_SITES=(
   'ios/SeRemote/SeRemote/Models/ConnectionStore.swift:20:legacyStorageKey = "termul.remote.savedLinks"'
   'ios/SeRemote/SeRemote/Networking/KeychainStore.swift:10:legacyService = "com.termul.remote.pairing"'
   'ios/SeRemote/SeRemote/Terminal/TerminalTextScale.swift:10:legacyStorageKey = "termul.companion.terminalTextScale"'
+
+  # -- homebrew `zap trash`. The cask must remove BOTH identifiers' data roots:
+  #    a user uninstalling today may have installed before the rename. The block
+  #    lists the canonical paths first and the legacy ones after, and the
+  #    in-file comment explains why removing them is not a migration violation.
+  'scripts/release/homebrew.sh:140:~/Library/Application Support/com.termul-manager.app'
+  'scripts/release/homebrew.sh:141:~/Library/Caches/com.termul-manager.app'
+  'scripts/release/homebrew.sh:142:~/Library/HTTPStorages/com.termul-manager.app'
+  'scripts/release/homebrew.sh:143:~/Library/Logs/com.termul-manager.app'
+  'scripts/release/homebrew.sh:144:~/Library/Preferences/com.termul-manager.app.plist'
+  'scripts/release/homebrew.sh:145:~/Library/Saved Application State/com.termul-manager.app.savedState'
+  'scripts/release/homebrew.sh:146:~/Library/WebKit/com.termul-manager.app'
 
   # -- upstream fork gate. `mannnrachman/termul` is a different repository;
   #    these guards exist to keep the workflow from running in forks.
@@ -194,6 +242,20 @@ OUT_OF_SCOPE=(
   'landing/src/components/ui/Logo.tsx:termul\.svg'
   'landing/src/data/features.ts:(bg-termul\.webp|termulmock\.png|termul\.svg)'
   'landing/src/lib/links.ts:qinsehm1128/termul-new'
+
+  # ---- Class A (cont.): the same live repository, reached from files the
+  #      register did not name yet. Each URL resolves today; repointing it
+  #      would break a download, a release link or a tap lookup.
+  'README.md:(gnoviawan/termul|cd termul-new)'
+  'docs/deployment-guide.md:(qinsehm1128/termul-new|homebrew-termul-new)'
+  'landing/index.html:qinsehm1128/termul-new'
+  'landing/scripts/sync-contributors.ts:qinsehm1128/termul-new'
+  'src/renderer/App.test.tsx:qinsehm1128/termul-new'
+  'src/renderer/lib/__tests__/tauri-opener-api.web.test.ts:qinsehm1128/termul-new'
+
+  # ---- Class C (cont.): upstream attribution. `gnoviawan/termul` is the
+  #      project this codebase derives from; the PR numbers only exist there.
+  'docs/terminal-runtime-evaluation.md:(gnoviawan/termul|qinsehm1128/termul-new|Termul (terminal performance|xterm 6\\.1 migration|minimize/restore fix) PR)'
 
   # ---- Class F: `@termulmanager` is an unregistered social handle. Pointing it
   #      at `@semanager` before that handle is registered would publish a dead

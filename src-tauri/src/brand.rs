@@ -162,7 +162,7 @@ pub const LEGACY: BrandCanonical = BrandCanonical {
 /// gap is precisely what makes the Wave-1 harness tests go red.
 pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     created_by: "se-manager",
-    plan_fence: "termul-plan",
+    plan_fence: "se-plan",
     workspace_dir: ".se-manager",
     display_name: "Se",
     display_name_full: "Se Manager",

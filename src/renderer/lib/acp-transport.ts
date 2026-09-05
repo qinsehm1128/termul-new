@@ -126,7 +126,7 @@ export interface AcpTransport {
    * On-demand MCP client probe (Se's own rmcp client connection — NOT the
    * agent's). Stateless: takes the renderer-supplied wire config, opens a fresh
    * rmcp client, calls `initialize` + `tools/list`, then closes. Desktop↔web
-   * parity: on web the probe runs on the termul-server host via
+   * parity: on web the probe runs on the se-server host via
    * `POST /mcp-servers/probe`. Never logs env/header values, tokens, or
    * credentials. The probe never throws on a disconnected server — it returns
    * `ProbeResult { status: 'disconnected', error }`; only transport/parse
@@ -865,7 +865,7 @@ export class WsAcpTransport implements AcpTransport {
 
   async probeMcpServer(server: McpServerConfig): Promise<ProbeResult> {
     // Web parity: POST /mcp-servers/probe runs the rmcp client on the
-    // termul-server host (where stdio commands execute). The route returns
+    // se-server host (where stdio commands execute). The route returns
     // `IpcBody<ProbeResult>`; a `success:false` body is a transport/config
     // failure (mapped to AcpTransportError), while `success:true` carries the
     // probe outcome (which may itself be `status:'disconnected'` — that is a

@@ -2,7 +2,7 @@
  * WS relay protocol frame schema (Story 1.4).
  *
  * Single source of truth for the wire contract between the standalone
- * `termul-server` WS relay (`src-tauri/src/web/ws.rs`) and any browser client.
+ * `se-server` WS relay (`src-tauri/src/web/ws.rs`) and any browser client.
  * Mirrors the Rust structs/enums in `web/ws.rs` one-to-one.
  *
  * # Wire casing (AC3 — deviation from architecture text, MUST follow)

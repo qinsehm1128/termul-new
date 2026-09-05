@@ -2,7 +2,7 @@
  * Persistence API Singleton
  *
  * Desktop (Tauri): `tauriPersistenceApi` — plugin-store file.
- * Web (termul-server): `webPersistenceApi` — server-side JSON store over the
+ * Web (se-server): `webPersistenceApi` — server-side JSON store over the
  * authenticated WS protocol (issue #613), so web-client state survives browser
  * switches / refreshes instead of per-browser localStorage.
  */

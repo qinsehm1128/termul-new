@@ -189,7 +189,7 @@ export function RemoteAccessSettings(): React.JSX.Element {
             hint={t('remoteAccess.namedHostnameHint')}
             value={hostname}
             onChange={setHostname}
-            placeholder="termul.example.com"
+            placeholder="se.example.com"
           />
           <Field
             id="cf-local-port"
@@ -241,7 +241,7 @@ export function RemoteAccessSettings(): React.JSX.Element {
             hint={t('remoteAccess.frpCustomDomainHint')}
             value={frpDomain}
             onChange={setFrpDomain}
-            placeholder="termul.example.com"
+            placeholder="se.example.com"
           />
           <Field
             id="frp-remote-port"
@@ -331,7 +331,7 @@ export function RemoteAccessSettings(): React.JSX.Element {
             hint={t('remoteAccess.sshPublicHostnameHint')}
             value={sshPublicHostname}
             onChange={setSshPublicHostname}
-            placeholder="termul.example.com"
+            placeholder="se.example.com"
           />
           <Field
             id="ssh-private-key"

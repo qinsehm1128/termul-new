@@ -19,7 +19,7 @@ import { isTauriContext } from './tauri-runtime'
  *
  * `navigator.clipboard.readText()/writeText()` are only available in secure
  * contexts (HTTPS or localhost). The shared `dist-web` bundle is served by
- * `termul-server` over plain HTTP on a bare IP, where `navigator.clipboard` is
+ * `se-server` over plain HTTP on a bare IP, where `navigator.clipboard` is
  * `undefined` — the browser path threw on every Ctrl+V, so terminal paste
  * broke. The browser path here keeps the native Async Clipboard API as the
  * primary path and falls back to:
@@ -156,10 +156,10 @@ export function __resetClipboardFallbackForTesting(): void {
 /** Lazily create an off-screen textarea used by the writeText fallback. */
 function getHiddenTextarea(): HTMLTextAreaElement | null {
   if (typeof document === 'undefined') return null
-  let ta = document.getElementById('termul-clipboard-fallback') as HTMLTextAreaElement | null
+  let ta = document.getElementById('se-clipboard-fallback') as HTMLTextAreaElement | null
   if (!ta) {
     ta = document.createElement('textarea')
-    ta.id = 'termul-clipboard-fallback'
+    ta.id = 'se-clipboard-fallback'
     ta.style.position = 'fixed'
     ta.style.top = '0'
     ta.style.left = '0'

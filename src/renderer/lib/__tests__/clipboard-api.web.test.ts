@@ -3,7 +3,7 @@
  *
  * Pins that `browserClipboardApi.readText()` resolves via the paste-event
  * capture fallback when `navigator.clipboard` is undefined (plain-HTTP
- * `termul-server` non-secure context), and that `writeText()` falls back to
+ * `se-server` non-secure context), and that `writeText()` falls back to
  * the hidden-textarea + `execCommand('copy')` path symmetrically.
  */
 
@@ -109,7 +109,7 @@ describe('clipboard-api browser fallback (CAP-2 / GH-588)', () => {
     expect(result.success).toBe(true)
     expect(execSpy).toHaveBeenCalledWith('copy')
     // A hidden textarea was attached to the DOM to hold the text.
-    const ta = document.getElementById('termul-clipboard-fallback') as HTMLTextAreaElement | null
+    const ta = document.getElementById('se-clipboard-fallback') as HTMLTextAreaElement | null
     expect(ta, 'hidden fallback textarea should exist').not.toBeNull()
     expect(ta!.value).toBe('copy-via-fallback')
   })

@@ -1,3 +1,5 @@
+import { brandedStorageKey, readBrandedStorage } from '@/lib/brand-storage-key'
+
 /**
  * Tab↔session focus pointer for the browser / web client (architecture D6).
  *
@@ -12,7 +14,7 @@
  * Do NOT treat `acp-store.activeSessionId` as the cross-tab isolation boundary.
  */
 
-const STORAGE_KEY = 'termul.web.focusedSessionId'
+const STORAGE_KEY = brandedStorageKey('web.focusedSessionId', 'termul.web.focusedSessionId')
 
 function canUseSessionStorage(): boolean {
   try {
@@ -27,7 +29,7 @@ function canUseSessionStorage(): boolean {
 export function getTabFocusedSessionId(): string | null {
   if (!canUseSessionStorage()) return null
   try {
-    const value = sessionStorage.getItem(STORAGE_KEY)
+    const value = readBrandedStorage(sessionStorage, STORAGE_KEY)
     return value && value.length > 0 ? value : null
   } catch {
     return null
@@ -39,9 +41,9 @@ export function setTabFocusedSessionId(sessionId: string | null): void {
   if (!canUseSessionStorage()) return
   try {
     if (sessionId === null || sessionId === '') {
-      sessionStorage.removeItem(STORAGE_KEY)
+      sessionStorage.removeItem(STORAGE_KEY.canonical)
     } else {
-      sessionStorage.setItem(STORAGE_KEY, sessionId)
+      sessionStorage.setItem(STORAGE_KEY.canonical, sessionId)
     }
   } catch {
     // Ignore quota / private-mode failures — focus is best-effort.

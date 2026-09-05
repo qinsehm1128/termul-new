@@ -558,7 +558,7 @@ export async function acpProbeRuntime(): Promise<AcpRuntimeAvailability> {
  * the connected/disconnected status + tool list. Stateless — the renderer
  * supplies the full `McpServerConfig` (no registry-store coupling). Never
  * logs env/header values, tokens, or credentials. Desktop↔web parity: the
- * probe runs on the termul-server host via `POST /mcp-servers/probe` on web.
+ * probe runs on the se-server host via `POST /mcp-servers/probe` on web.
  *
  * Delegates to the canonical `acp-mcp-probe.ts` facade so the transport-facade
  * (`acpApi`) and the standalone facade share ONE contract: never throws on a

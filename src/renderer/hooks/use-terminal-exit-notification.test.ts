@@ -108,13 +108,13 @@ describe('terminal exit notification logic', () => {
     )
   })
 
-  it('falls back to Termul when project not found', () => {
+  it('falls back to the brand display name when project not found', () => {
     useProjectStore.setState({ projects: [], activeProjectId: '' })
 
     const { emitExit } = renderExitHook()
     emitExit('pty-1', 0)
 
-    expect(sendDesktopNotification).toHaveBeenCalledWith('Termul', 'Build Server — DONE')
+    expect(sendDesktopNotification).toHaveBeenCalledWith('Se', 'Build Server — DONE')
   })
 
   it('does not send notification for unknown ptyId', () => {

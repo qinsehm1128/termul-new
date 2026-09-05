@@ -2,7 +2,7 @@
  * Web persistence API (issue #613).
  *
  * Persists web-client app state (settings, terminal layout, editor state,
- * command history, snapshots, SSH profiles) to the termul-server's
+ * command history, snapshots, SSH profiles) to the se-server's
  * server-side JSON store over the authenticated `/ws` protocol instead of
  * per-browser localStorage, so state survives browser switches, refreshes,
  * and device changes.

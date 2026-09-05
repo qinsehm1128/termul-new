@@ -2129,7 +2129,7 @@ function ManualInstallBanner({
           {entry.unavailableReason ??
             t(
               'launcher.manualInstallDescription',
-              'Install {{name}} from the vendor, then point Termul at the binary.',
+              'Install {{name}} from the vendor, then point Se Manager at the binary.',
               { name: entry.agent.name }
             )}
         </p>

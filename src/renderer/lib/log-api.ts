@@ -4,7 +4,7 @@
  * Routes renderer errors to the backend log file so they survive a closed
  * production DevTools console. In the Tauri runtime this calls the
  * `log_frontend_error` command; in web/remote mode (`!isTauriContext()`) it
- * POSTs to the termul-server `/log/frontend-error` route (CAP-2 parity), which
+ * POSTs to the se-server `/log/frontend-error` route (CAP-2 parity), which
  * writes the same sanitized line via `tracing`. All native access stays behind
  * this facade per the project's adapter-boundary rule; components and the
  * ErrorBoundary import from here, never `invoke` directly.

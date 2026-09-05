@@ -64,7 +64,7 @@ const ARBITRARY_COMMAND_PROMPT =
 const ARBITRARY_COMMAND_TERMINAL_PROMPT =
   'This agent requests the ACP terminal capability, which allows it to execute arbitrary commands on your machine. Are you sure you want to allow this?'
 const ALLOW_ALL_PERMISSION_PROMPT =
-  'This agent requests full tool permission. Termul will automatically accept allow options without asking each time.'
+  'This agent requests full tool permission. Se Manager will automatically accept allow options without asking each time.'
 
 type ConfirmStep = 'idle' | 'confirm' | 'confirmTerminal' | 'confirmPermission'
 

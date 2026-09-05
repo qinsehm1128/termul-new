@@ -172,7 +172,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
     expect(screen.getByText('Loading your conversation…')).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'Termul' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Se' })).toBeInTheDocument()
     expect(mockOpen).toHaveBeenCalledTimes(1)
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
@@ -182,7 +182,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     restoringRef.current = { s1: true }
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
-    const mark = screen.getByRole('img', { name: 'Termul' })
+    const mark = screen.getByRole('img', { name: 'Se' })
     expect(mark).toHaveClass('animate-pulse')
     expect(mark).toHaveClass('motion-reduce:animate-none')
     expect(

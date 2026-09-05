@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import type { TerminalDisplayMode } from '@shared/types/ipc.types'
 import {
   Camera,
@@ -230,7 +231,7 @@ export function MobileChatShell({
     if (sessionTitle) return sessionTitle
     if (activeGroupName) return activeGroupName
     if (activeProject?.name) return activeProject.name
-    return 'Termul'
+    return brandCanonical().displayName
   }, [
     surface,
     activeTerminal?.name,

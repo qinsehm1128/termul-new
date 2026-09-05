@@ -1400,7 +1400,7 @@ describe('Parity Checklist Automation', () => {
   })
 
   // GH-587/588/589: Web non-secure-context + cross-OS parity. The shared
-  // `dist-web` bundle is served by `termul-server` over plain HTTP on a bare
+  // `dist-web` bundle is served by `se-server` over plain HTTP on a bare
   // IP, where `crypto.randomUUID` / `navigator.clipboard` are unavailable and
   // `navigator.platform` reflects the client browser, not the host. These
   // static assertions pin the three fallback seams so a regression (re-adding a

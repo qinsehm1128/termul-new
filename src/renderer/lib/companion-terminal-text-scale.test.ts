@@ -32,7 +32,7 @@ describe('companion terminal text scale', () => {
     expect(setCompanionTerminalTextScale(1.42)).toBe(1.5)
     expect(getCompanionTerminalTextScale()).toBe(1.5)
     if (typeof localStorage !== 'undefined') {
-      expect(localStorage.getItem(COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY)).toBe('1.5')
+      expect(localStorage.getItem(COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY.canonical)).toBe('1.5')
     }
   })
 })

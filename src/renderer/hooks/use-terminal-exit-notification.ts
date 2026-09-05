@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import { useEffect } from 'react'
 import { i18n } from '@/i18n'
 import { terminalApi } from '@/lib/api'
@@ -60,7 +61,7 @@ export function useTerminalExitNotification(): void {
 
       const project = useProjectStore.getState().projects.find((p) => p.id === terminal.projectId)
 
-      const title = sanitizeNotificationText(project?.name ?? 'Termul')
+      const title = sanitizeNotificationText(project?.name ?? brandCanonical().displayName)
       const terminalName = sanitizeNotificationText(terminal.name)
 
       const body =

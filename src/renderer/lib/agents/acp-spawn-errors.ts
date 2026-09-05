@@ -124,7 +124,7 @@ export class AmbiguousAuthError extends Error {
       runtimeT(
         'agents',
         'spawn.ambiguousAuth',
-        'This agent advertises multiple sign-in methods ({{names}}). Termul does not choose one automatically; select a single-method agent or configure the provider directly.',
+        'This agent advertises multiple sign-in methods ({{names}}). Se Manager does not choose one automatically; select a single-method agent or configure the provider directly.',
         { names }
       )
     )

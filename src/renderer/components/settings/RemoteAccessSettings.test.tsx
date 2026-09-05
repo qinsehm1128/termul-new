@@ -56,7 +56,7 @@ describe('RemoteAccessSettings', () => {
     getMock.mockResolvedValue({ success: true, data: VIEW })
     setMock.mockResolvedValue({
       success: true,
-      data: { ...VIEW, provider: 'cloudflareNamed', cloudflareNamedHostname: 'termul.example.com' }
+      data: { ...VIEW, provider: 'cloudflareNamed', cloudflareNamedHostname: 'se.example.com' }
     })
   })
 

@@ -9,7 +9,7 @@
  *
  * Branches on `isTauriContext()`:
  * - Desktop: Tauri `invoke('acp_probe_mcp_server', { server })`.
- * - Web/remote: `POST /mcp-servers/probe` runs the probe on the termul-server
+ * - Web/remote: `POST /mcp-servers/probe` runs the probe on the se-server
  *   host (where stdio commands execute — matches GH-287's web-parity decision)
  *   and returns the same `IpcBody<ProbeResult>` shape.
  *

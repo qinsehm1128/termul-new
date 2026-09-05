@@ -6,7 +6,7 @@
  * map to `IpcResult { success: false, code: 'NETWORK_ERROR' }` so the
  * renderer never sees a thrown exception from the network layer.
  *
- * Routes (same-origin under `termul-server`):
+ * Routes (same-origin under `se-server`):
  * - `GET  /acp/catalog` — list (optional `?refresh=true`).
  * - `POST /acp/catalog/opt-in` — set opt-in.
  *
@@ -23,7 +23,7 @@ import { isTauriContext } from './tauri-runtime'
 
 /**
  * Same-origin base for the embedded server. In web/remote mode the browser is
- * served by `termul-server` itself, so `window.location.origin` is the server.
+ * served by `se-server` itself, so `window.location.origin` is the server.
  * Returns the empty string under Tauri (desktop build) so a misconfigured
  * call fails fast rather than hitting a phantom origin.
  */

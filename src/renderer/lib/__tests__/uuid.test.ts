@@ -2,7 +2,7 @@
  * Unit tests for the safe-uuid helper (CAP-1 / GH-587).
  *
  * Pins that the helper returns a valid RFC-4122 v4 UUID in a non-secure
- * context where `crypto.randomUUID` is undefined (plain-HTTP `termul-server`),
+ * context where `crypto.randomUUID` is undefined (plain-HTTP `se-server`),
  * and that it delegates to the native API when available.
  */
 

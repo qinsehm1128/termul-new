@@ -2,7 +2,7 @@
  * Safe UUID helper (CAP-1 / GH-587).
  *
  * `crypto.randomUUID()` is only available in secure contexts (HTTPS or
- * localhost). The shared `dist-web` bundle is served by `termul-server` over
+ * localhost). The shared `dist-web` bundle is served by `se-server` over
  * plain HTTP on a bare IP, where `crypto.randomUUID` is `undefined` — every
  * direct call site threw `TypeError: crypto.randomUUID is not a function`,
  * blank-screening the web client. This helper centralizes a safe fallback so

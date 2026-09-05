@@ -21,7 +21,7 @@ describe('web-tab-session', () => {
   it('persists focus within the same sessionStorage (same tab / refresh)', () => {
     setTabFocusedSessionId('session-a')
     expect(getTabFocusedSessionId()).toBe('session-a')
-    expect(sessionStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBe('session-a')
+    expect(sessionStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY.canonical)).toBe('session-a')
   })
 
   it('clears focus via set(null) and clearTabFocusedSessionId', () => {
@@ -38,7 +38,7 @@ describe('web-tab-session', () => {
     setTabFocusedSessionId('session-a')
     setTabFocusedSessionId('')
     expect(getTabFocusedSessionId()).toBeNull()
-    expect(sessionStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBeNull()
+    expect(sessionStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY.canonical)).toBeNull()
   })
 
   it('isolates focus across simulated tabs (fresh sessionStorage context)', () => {
@@ -57,14 +57,14 @@ describe('web-tab-session', () => {
   })
 
   it('keeps localStorage and sessionStorage independent', () => {
-    localStorage.setItem(WEB_TAB_FOCUSED_SESSION_KEY, 'local-value')
-    sessionStorage.setItem(WEB_TAB_FOCUSED_SESSION_KEY, 'session-value')
+    localStorage.setItem(WEB_TAB_FOCUSED_SESSION_KEY.canonical, 'local-value')
+    sessionStorage.setItem(WEB_TAB_FOCUSED_SESSION_KEY.canonical, 'session-value')
 
-    expect(localStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBe('local-value')
-    expect(sessionStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBe('session-value')
+    expect(localStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY.canonical)).toBe('local-value')
+    expect(sessionStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY.canonical)).toBe('session-value')
 
     sessionStorage.clear()
-    expect(localStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBe('local-value')
+    expect(localStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY.canonical)).toBe('local-value')
   })
 
   it('starts each test with both storage areas empty', () => {

@@ -1,10 +1,14 @@
+import { brandedStorageKey, readBrandedStorage } from '@/lib/brand-storage-key'
 export const COMPANION_TERMINAL_TEXT_SCALES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
 
 export type CompanionTerminalTextScale = (typeof COMPANION_TERMINAL_TEXT_SCALES)[number]
 
 export const DEFAULT_COMPANION_TERMINAL_TEXT_SCALE = 1.25
 
-export const COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY = 'termul.companion.terminalTextScale'
+export const COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY = brandedStorageKey(
+  'companion.terminalTextScale',
+  'termul.companion.terminalTextScale'
+)
 
 const MIN_SCALE = COMPANION_TERMINAL_TEXT_SCALES[0]
 const MAX_SCALE = COMPANION_TERMINAL_TEXT_SCALES[COMPANION_TERMINAL_TEXT_SCALES.length - 1]
@@ -73,7 +77,7 @@ export function readStoredCompanionTerminalTextScale(): number {
     return DEFAULT_COMPANION_TERMINAL_TEXT_SCALE
   }
   try {
-    const raw = localStorage.getItem(COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY)
+    const raw = readBrandedStorage(localStorage, COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY)
     if (raw == null) {
       return DEFAULT_COMPANION_TERMINAL_TEXT_SCALE
     }
@@ -88,7 +92,7 @@ function writeStoredCompanionTerminalTextScale(value: number): void {
     return
   }
   try {
-    localStorage.setItem(COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY, String(value))
+    localStorage.setItem(COMPANION_TERMINAL_TEXT_SCALE_STORAGE_KEY.canonical, String(value))
   } catch {
     // Private mode can reject writes; in-memory scale still works.
   }

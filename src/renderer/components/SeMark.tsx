@@ -19,7 +19,7 @@ export function SeMark({
       viewBox="0 0 569 507"
       xmlns="http://www.w3.org/2000/svg"
       role="img"
-      aria-label="Termul"
+      aria-label="Se"
       className={className}
       style={{ fillRule: 'evenodd', clipRule: 'evenodd' }}
     >

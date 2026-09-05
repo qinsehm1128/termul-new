@@ -83,14 +83,14 @@ function statusLabel(status: ProbeStatus | undefined): string {
     return runtimeT(
       'mcp',
       'badge.status.connectedDetail',
-      'Connected (Termul can reach this server)'
+      'Connected (Se Manager can reach this server)'
     )
   }
   if (status === 'disconnected') {
     return runtimeT(
       'mcp',
       'badge.status.disconnectedDetail',
-      'Disconnected (Termul could not reach this server)'
+      'Disconnected (Se Manager could not reach this server)'
     )
   }
   return runtimeT('mcp', 'badge.status.notProbedDetail', 'Not probed yet — click to test')

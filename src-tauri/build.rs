@@ -2,7 +2,7 @@ use std::path::Path;
 
 fn main() {
     // The Vite web build output (`../dist-web/`) is embedded into BOTH the
-    // standalone `termul-server` binary and the desktop app (the desktop's
+    // standalone `se-server` binary and the desktop app (the desktop's
     // in-process shared-live server serves the embedded bundle in a release
     // install). Watch it so a web-client rebuild triggers a cargo rebuild, for
     // both build targets.
@@ -21,7 +21,7 @@ fn main() {
     // every static route — a silent deploy bug. Emit a `web_embed_missing` cfg
     // so the release path (NOT debug) hits a `compile_error!` in `assets.rs`
     // telling the operator to run `bun run build:web` first. The Vite build
-    // MUST run before `cargo build --bin termul-server` (rust-embed embeds at
+    // MUST run before `cargo build --bin se-server` (rust-embed embeds at
     // build time) — CI enforces this ordering (`.github/workflows/*`).
     if !Path::new("../dist-web/index.html").exists() {
         println!("cargo:rustc-cfg=web_embed_missing");

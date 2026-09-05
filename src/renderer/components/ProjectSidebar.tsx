@@ -1,3 +1,4 @@
+import { brandCanonical } from '@shared/brand'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { LayoutGroup, motion, Reorder } from 'framer-motion'
 import {
@@ -43,8 +44,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
 import { clipboardApi, dialogApi, shellApi } from '@/lib/api'
+import { brandedStorageKey, readBrandedStorage } from '@/lib/brand-storage-key'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
+import { getCurrentAppVersion } from '@/lib/tauri-release-notes'
 import { cn } from '@/lib/utils'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
 import { isRejectedMove, useFileExplorerStore } from '@/stores/file-explorer-store'
@@ -144,6 +147,19 @@ export function ProjectSidebar({
   const [showArchived, setShowArchived] = useState(false)
 
   // Group management states
+  // The footer label used to hard-code "Termul v0.4.10" — both the brand and
+  // the number were stale. Read the real one.
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void getCurrentAppVersion().then((version) => {
+      if (!cancelled) setAppVersion(version)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editGroupName, setEditGroupName] = useState('')
   const [newGroupModal, setNewGroupModal] = useState<{
@@ -1284,7 +1300,11 @@ export function ProjectSidebar({
       {/* Version - pinned bottom */}
       <div className="border-t border-sidebar-border/60 px-2 py-1">
         <div className="inline-flex h-6 w-full items-center justify-center">
-          <span className="text-3xs text-muted-foreground/60">Termul v0.4.10</span>
+          <span className="text-3xs text-muted-foreground/60">
+            {appVersion
+              ? `${brandCanonical().displayNameFull} v${appVersion}`
+              : brandCanonical().displayNameFull}
+          </span>
         </div>
       </div>
 
@@ -1804,7 +1824,7 @@ function ArchivedProjectItem({
 // SSH Resizable Section
 // ============================================================================
 
-const SSH_HEIGHT_KEY = 'termul-ssh-panel-height'
+const SSH_HEIGHT_KEY = brandedStorageKey('ssh-panel-height', 'termul-ssh-panel-height')
 const SSH_MIN_HEIGHT = 48
 const SSH_MAX_HEIGHT = 400
 const SSH_DEFAULT_HEIGHT = 140
@@ -1822,7 +1842,7 @@ function SSHResizableSection({
   const isVisible = useSSHPanelVisible()
   const [height, setHeight] = useState(() => {
     try {
-      const saved = localStorage.getItem(SSH_HEIGHT_KEY)
+      const saved = readBrandedStorage(localStorage, SSH_HEIGHT_KEY)
       if (saved) {
         const parsed = parseInt(saved, 10)
         if (parsed >= SSH_MIN_HEIGHT && parsed <= SSH_MAX_HEIGHT) return parsed
@@ -1874,7 +1894,7 @@ function SSHResizableSection({
         activeDragCleanup.current = null
         // Persist
         try {
-          localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current))
+          localStorage.setItem(SSH_HEIGHT_KEY.canonical, String(latestHeight.current))
         } catch {
           // Ignore storage errors in restricted environments.
         }
@@ -1894,7 +1914,7 @@ function SSHResizableSection({
   // Persist on height change (debounced via ref)
   useEffect(() => {
     try {
-      localStorage.setItem(SSH_HEIGHT_KEY, String(height))
+      localStorage.setItem(SSH_HEIGHT_KEY.canonical, String(height))
     } catch {
       // Ignore storage errors in restricted environments.
     }
@@ -1910,7 +1930,7 @@ function SSHResizableSection({
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
     try {
-      localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current))
+      localStorage.setItem(SSH_HEIGHT_KEY.canonical, String(latestHeight.current))
     } catch {
       // Ignore storage errors in restricted environments.
     }

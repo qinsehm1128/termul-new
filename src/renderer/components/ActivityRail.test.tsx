@@ -112,10 +112,10 @@ describe('ActivityRail', () => {
     expect(onToggleThemePicker).toHaveBeenCalledTimes(1)
   })
 
-  it('renders the Termul brand mark', () => {
+  it('renders the brand mark', () => {
     renderRail()
 
-    expect(screen.getByRole('img', { name: 'Termul' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Se' })).toBeInTheDocument()
   })
 
   it('separates project actions from the conversations workspace', () => {

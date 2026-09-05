@@ -1,3 +1,4 @@
+import { brandedStorageKey, readBrandedStorage } from '@/lib/brand-storage-key'
 export type DiffLineKind = 'header' | 'context' | 'deletion' | 'addition' | 'meta'
 
 export interface ParsedDiffLine {
@@ -210,7 +211,7 @@ export function parseUnifiedDiffSplit(diff: string): SplitDiffRow[] {
   return rows
 }
 
-export const GIT_DIFF_VIEW_MODE_KEY = 'termul.gitDiffViewMode'
+export const GIT_DIFF_VIEW_MODE_KEY = brandedStorageKey('gitDiffViewMode', 'termul.gitDiffViewMode')
 
 export type GitDiffViewMode = 'inline' | 'split'
 
@@ -218,7 +219,7 @@ export function loadGitDiffViewMode(): GitDiffViewMode {
   if (typeof localStorage === 'undefined') {
     return 'inline'
   }
-  const stored = localStorage.getItem(GIT_DIFF_VIEW_MODE_KEY)
+  const stored = readBrandedStorage(localStorage, GIT_DIFF_VIEW_MODE_KEY)
   return stored === 'split' ? 'split' : 'inline'
 }
 
@@ -226,5 +227,5 @@ export function saveGitDiffViewMode(mode: GitDiffViewMode): void {
   if (typeof localStorage === 'undefined') {
     return
   }
-  localStorage.setItem(GIT_DIFF_VIEW_MODE_KEY, mode)
+  localStorage.setItem(GIT_DIFF_VIEW_MODE_KEY.canonical, mode)
 }
