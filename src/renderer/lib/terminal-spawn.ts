@@ -16,7 +16,7 @@ import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { terminalTabId, useWorkspaceStore } from '@/stores/workspace-store'
 
 export interface SpawnTerminalOptions {
   /** Override the active Conversation scope (used by restart). */
@@ -31,11 +31,15 @@ export interface SpawnTerminalOptions {
   extraEnv?: Record<string, string>
 }
 
-export interface SpawnTerminalResult {
-  success: boolean
-  error?: string
-  terminalId?: string
-}
+/**
+ * A discriminated union, not a bag of optionals: every success path here
+ * produces a terminal id and no failure path does, and saying so in the type
+ * means a caller that wants the id has to check `success` first — the compiler
+ * enforces what a second runtime guard could only restate.
+ */
+export type SpawnTerminalResult =
+  | { success: true; terminalId: string; error?: undefined }
+  | { success: false; error?: string; terminalId?: undefined }
 
 /**
  * Spawn a new terminal in a specific workspace pane.
@@ -244,4 +248,32 @@ export async function openTerminalAtCwd(
     message: `Terminal spawn failed (projectId=${projectId}, cwd=${cwd}): ${result.error ?? 'unknown error'}`
   })
   return { status: 'spawn-failed', error: result.error }
+}
+
+/**
+ * Spawn a terminal into a fresh pane split off `paneId` on the given side.
+ *
+ * Split *after* spawning rather than before, and deliberately so: `splitPane`
+ * wants the new pane's first tab up front, but a terminal has no tab id until
+ * the PTY exists. Spawning into the current pane and then handing that tab to
+ * `moveTabToNewSplit` reuses the exact path a tab-drag already takes, so a
+ * split made from the menu and one made by dragging produce the same tree —
+ * including the same-direction collapse that keeps three side-by-side
+ * terminals a flat row instead of a right-leaning staircase.
+ *
+ * A failed spawn leaves no split behind, because there is no tab to move.
+ */
+export async function spawnTerminalInSplit(
+  paneId: string,
+  projectId: string,
+  cwd: string,
+  position: 'left' | 'right' | 'top' | 'bottom',
+  options?: SpawnTerminalOptions
+): Promise<SpawnTerminalResult> {
+  const result = await spawnTerminalInPane(paneId, projectId, cwd, options)
+  if (!result.success) return result
+
+  const workspaceStore = useWorkspaceStore.getState()
+  workspaceStore.moveTabToNewSplit(terminalTabId(result.terminalId), paneId, paneId, position)
+  return result
 }

@@ -81,6 +81,7 @@ function ConversationAgentChatPanel({
 interface PaneContentProps {
   pane: LeafNode
   onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
+  onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
@@ -92,6 +93,7 @@ interface PaneContentProps {
 export function PaneContent({
   pane,
   onAddTerminal,
+  onSplitTerminal,
   onAddBrowserTab,
   onCloseTerminal,
   onRenameTerminal,
@@ -263,6 +265,16 @@ export function PaneContent({
   const handleAddBrowserTabForPane = useMemo(
     () => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
     [onAddBrowserTab, pane.id]
+  )
+  // Bound to *this* pane rather than the active one: a right-click reaches a
+  // terminal without focusing its pane, and splitting whichever pane happened
+  // to be active would put the new terminal somewhere the user never pointed.
+  const handleSplitTerminalForPane = useMemo(
+    () =>
+      onSplitTerminal
+        ? (position: 'left' | 'right' | 'top' | 'bottom') => onSplitTerminal(pane.id, position)
+        : undefined,
+    [onSplitTerminal, pane.id]
   )
 
   return (
@@ -488,6 +500,7 @@ export function PaneContent({
                         initialModes={terminal.pendingModes}
                         className="w-full h-full"
                         isVisible={isVisible}
+                        onSplit={handleSplitTerminalForPane}
                       />
                     </Suspense>
                     {/* Agent loading overlay: shown until ConnectedTerminal attaches

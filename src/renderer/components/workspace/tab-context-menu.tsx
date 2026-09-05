@@ -1,10 +1,20 @@
-import { Copy, CopyX, Edit2, Skull, X, XCircle } from 'lucide-react'
+import {
+  ArrowLeftToLine,
+  ArrowRightToLine,
+  Copy,
+  CopyX,
+  Edit2,
+  Skull,
+  X,
+  XCircle
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 
@@ -28,7 +38,29 @@ export type TabContextMenuKind =
   | 'git-history'
   | 'agent-chat'
 
-interface TabContextMenuProps {
+/**
+ * The bulk-close actions are scoped to the tab *kind* whose menu was opened —
+ * "Close all" on a terminal tab closes terminals, not the editor sitting beside
+ * it in the same pane.
+ *
+ * A pane's tab list is mixed, unlike a browser's, so the literal reading of
+ * these labels would let one click on a terminal tab kill an unsaved editor or
+ * a browser session the user never had in mind. Same-kind scoping is the only
+ * reading where nothing is destroyed by surprise, and it is what the existing
+ * editor "Close all" already did before these were added.
+ */
+export interface TabBulkCloseHandlers {
+  /** Close every same-kind tab to the left of this one. */
+  onCloseLeft?: () => void
+  /** Close every same-kind tab to the right of this one. */
+  onCloseRight?: () => void
+  /** Close every other same-kind tab in this pane. */
+  onCloseOthers?: () => void
+  /** Close every same-kind tab in this pane. */
+  onCloseAll?: () => void
+}
+
+interface TabContextMenuProps extends TabBulkCloseHandlers {
   kind: TabContextMenuKind
   /** Primary close action (every kind). */
   onClose: () => void
@@ -36,10 +68,6 @@ interface TabContextMenuProps {
   onRename?: () => void
   /** Terminal kill (destructive styling). */
   onKill?: () => void
-  /** Editor: close every other editor tab. */
-  onCloseOthers?: () => void
-  /** Editor: close all editor tabs. */
-  onCloseAll?: () => void
   /** Editor: copy the file path. */
   onCopyPath?: () => void
   /** Disable close/kill while a close is already in flight (terminal). */
@@ -53,6 +81,8 @@ export function TabContextMenu({
   onClose,
   onRename,
   onKill,
+  onCloseLeft,
+  onCloseRight,
   onCloseOthers,
   onCloseAll,
   onCopyPath,
@@ -61,6 +91,41 @@ export function TabContextMenu({
 }: TabContextMenuProps): React.JSX.Element {
   const { t } = useTranslation('workspace')
   const closeDisabled = isClosing
+
+  /**
+   * The bulk block, identical for every kind that has one.
+   *
+   * `undefined` for an action means "there is nothing on that side" — the tab
+   * bar decides, because only it knows the tab's position. A disabled item
+   * would be equally honest but adds four permanently-greyed rows to the menu
+   * of the first and last tab, which is most of the time.
+   */
+  const bulkItems = (onCloseLeft || onCloseRight || onCloseOthers || onCloseAll) && (
+    <>
+      <ContextMenuSeparator />
+      {onCloseLeft && (
+        <ContextMenuItem onSelect={onCloseLeft}>
+          <ArrowLeftToLine className="mr-2 h-4 w-4" /> {t('tabs.closeLeft')}
+        </ContextMenuItem>
+      )}
+      {onCloseRight && (
+        <ContextMenuItem onSelect={onCloseRight}>
+          <ArrowRightToLine className="mr-2 h-4 w-4" /> {t('tabs.closeRight')}
+        </ContextMenuItem>
+      )}
+      {onCloseOthers && (
+        <ContextMenuItem onSelect={onCloseOthers}>
+          <CopyX className="mr-2 h-4 w-4" /> {t('tabs.closeOthers')}
+        </ContextMenuItem>
+      )}
+      {onCloseAll && (
+        <ContextMenuItem onSelect={onCloseAll}>
+          <XCircle className="mr-2 h-4 w-4" /> {t('tabs.closeAll')}
+        </ContextMenuItem>
+      )}
+    </>
+  )
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
@@ -80,6 +145,7 @@ export function TabContextMenu({
                 <Skull className="mr-2 h-4 w-4" /> {t('tabs.killProcess')}
               </ContextMenuItem>
             )}
+            {bulkItems}
           </>
         )}
 
@@ -88,20 +154,14 @@ export function TabContextMenu({
             <ContextMenuItem onSelect={onClose}>
               <X className="mr-2 h-4 w-4" /> {t('tabs.close')}
             </ContextMenuItem>
-            {onCloseOthers && (
-              <ContextMenuItem onSelect={onCloseOthers}>
-                <CopyX className="mr-2 h-4 w-4" /> {t('tabs.closeOthers')}
-              </ContextMenuItem>
-            )}
-            {onCloseAll && (
-              <ContextMenuItem onSelect={onCloseAll}>
-                <XCircle className="mr-2 h-4 w-4" /> {t('tabs.closeAll')}
-              </ContextMenuItem>
-            )}
+            {bulkItems}
             {onCopyPath && (
-              <ContextMenuItem onSelect={onCopyPath}>
-                <Copy className="mr-2 h-4 w-4" /> {t('tabs.copyPath')}
-              </ContextMenuItem>
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={onCopyPath}>
+                  <Copy className="mr-2 h-4 w-4" /> {t('tabs.copyPath')}
+                </ContextMenuItem>
+              </>
             )}
           </>
         )}

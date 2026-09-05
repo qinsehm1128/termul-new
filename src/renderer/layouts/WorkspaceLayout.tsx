@@ -94,7 +94,7 @@ import {
   openBoardTerminal,
   peekPendingTerminalFocus
 } from '@/lib/terminal-board-navigation'
-import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { spawnTerminalInPane, spawnTerminalInSplit } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
@@ -303,6 +303,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [pendingTerminalRoot, setPendingTerminalRoot] = useState<{
     paneId: string
     shellName?: string
+    /** Carried across the project prompt so a split request is not lost by it. */
+    splitPosition?: 'left' | 'right' | 'top' | 'bottom'
   } | null>(null)
   const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
   // Mobile-only full-width Sheet rendering GitPanel (single-column mobile branch).
@@ -1358,13 +1360,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Terminal creation callbacks - defined before keyboard shortcut useEffect
   const handleCreateTerminalInPane = useCallback(
-    async (paneId: string, shellName?: string, targetProjectId?: string) => {
+    async (
+      paneId: string,
+      shellName?: string,
+      targetProjectId?: string,
+      // When set, the terminal lands in a fresh pane on that side of `paneId`
+      // instead of as another tab in it. Threaded through here rather than
+      // given its own function so the cwd / Conversation-scope / group-prompt
+      // resolution above it has exactly one implementation.
+      splitPosition?: 'left' | 'right' | 'top' | 'bottom'
+    ) => {
       // Terminals are Conversation-scoped only inside an open Conversation;
       // the regular project workspace keeps scope-less project terminals.
       const inConversationScope =
         location.pathname.startsWith('/c/') && Boolean(activeConversationId)
       if (!inConversationScope && activeGroupProjects.length > 1 && !targetProjectId) {
-        setPendingTerminalRoot({ paneId, shellName })
+        setPendingTerminalRoot({ paneId, shellName, splitPosition })
         return
       }
       const terminalProjectId = targetProjectId ?? activeProjectId
@@ -1373,12 +1384,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
         ? (activeConversation?.workspaceCwd ?? getDefaultCwdForProject(activeProjectId))
         : getDefaultCwdForProject(terminalProjectId)
 
-      const result = await spawnTerminalInPane(paneId, terminalProjectId, cwd, {
+      const spawnOptions = {
         shell: shellName || terminalProject?.defaultShell || appDefaultShell || undefined,
         envVars: terminalProject?.envVars,
         maxTerminalsPerProject: maxTerminals,
         conversationId: inConversationScope ? (activeConversationId ?? undefined) : undefined
-      })
+      }
+      const result = splitPosition
+        ? await spawnTerminalInSplit(paneId, terminalProjectId, cwd, splitPosition, spawnOptions)
+        : await spawnTerminalInPane(paneId, terminalProjectId, cwd, spawnOptions)
       if (!result.success) {
         toast.error(
           result.error ||
@@ -1432,6 +1446,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
       } else {
         handleCreateTerminalInPane(targetPaneId)
       }
+    },
+    [handleCreateTerminalInPane]
+  )
+
+  const handleSplitTerminal = useCallback(
+    (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => {
+      void handleCreateTerminalInPane(paneId, undefined, undefined, position)
     },
     [handleCreateTerminalInPane]
   )
@@ -2313,6 +2334,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     <PaneRenderer
                       node={fullscreenPane ?? paneRoot}
                       onAddTerminal={handleAddTerminal}
+                      onSplitTerminal={handleSplitTerminal}
                       onAddBrowserTab={handleNewBrowserTab}
                       onCloseTerminal={handleCloseTerminal}
                       onRenameTerminal={renameTerminal}
@@ -2394,7 +2416,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
                       updateGroup(activeGroupId, { preferredProjectId: project.id })
                     }
                     setPendingTerminalRoot(null)
-                    void handleCreateTerminalInPane(pending.paneId, pending.shellName, project.id)
+                    void handleCreateTerminalInPane(
+                      pending.paneId,
+                      pending.shellName,
+                      project.id,
+                      pending.splitPosition
+                    )
                   }}
                 >
                   <span

@@ -198,6 +198,8 @@
     "newBrowser": "新建浏览器标签页",
     "rename": "重命名",
     "close": "关闭",
+    "closeLeft": "关闭左侧标签页",
+    "closeRight": "关闭右侧标签页",
     "killProcess": "终止进程",
     "closeOthers": "关闭其他标签页",
     "closeAll": "全部关闭",

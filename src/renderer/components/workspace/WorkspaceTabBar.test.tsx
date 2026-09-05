@@ -580,6 +580,119 @@ describe('WorkspaceTabBar', () => {
     expect(mockCloseTab).toHaveBeenCalledWith('pane-a', 'browser-1')
   })
 
+  describe('bulk close from the tab context menu', () => {
+    const threeTerminals: WorkspaceTab[] = [
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+      { type: 'terminal', id: 'tab-2', terminalId: 'term-2' },
+      { type: 'terminal', id: 'tab-3', terminalId: 'term-3' }
+    ]
+
+    /** Open the context menu on the nth tab and return its visible items. */
+    async function openMenuOn(container: HTMLElement, index: number): Promise<HTMLElement[]> {
+      const tabEl = container.querySelectorAll('[draggable="true"]')[index] as HTMLElement
+      fireEvent.contextMenu(tabEl)
+      await waitFor(() => {
+        expect(screen.queryAllByRole('menuitem').length).toBeGreaterThan(0)
+      })
+      return screen.getAllByRole('menuitem')
+    }
+
+    it('closes every terminal to the left of the clicked tab', async () => {
+      const onCloseTerminal = vi.fn()
+      const { container } = render(
+        <WorkspaceTabBar
+          paneId="pane-a"
+          tabs={threeTerminals}
+          activeTabId="tab-3"
+          onCloseTerminal={onCloseTerminal}
+        />
+      )
+      await flushShellEffect()
+
+      const items = await openMenuOn(container, 2)
+      fireEvent.click(
+        items.find((i) => i.textContent?.includes('Close to the Left')) as HTMLElement
+      )
+
+      expect(onCloseTerminal.mock.calls).toEqual([
+        ['term-1', 'tab-1'],
+        ['term-2', 'tab-2']
+      ])
+    })
+
+    it('closes every terminal to the right of the clicked tab', async () => {
+      const onCloseTerminal = vi.fn()
+      const { container } = render(
+        <WorkspaceTabBar
+          paneId="pane-a"
+          tabs={threeTerminals}
+          activeTabId="tab-1"
+          onCloseTerminal={onCloseTerminal}
+        />
+      )
+      await flushShellEffect()
+
+      const items = await openMenuOn(container, 0)
+      fireEvent.click(
+        items.find((i) => i.textContent?.includes('Close to the Right')) as HTMLElement
+      )
+
+      expect(onCloseTerminal.mock.calls).toEqual([
+        ['term-2', 'tab-2'],
+        ['term-3', 'tab-3']
+      ])
+    })
+
+    it('omits the side actions when that side is empty', async () => {
+      const { container } = render(
+        <WorkspaceTabBar paneId="pane-a" tabs={threeTerminals} activeTabId="tab-1" />
+      )
+      await flushShellEffect()
+
+      const items = await openMenuOn(container, 0)
+      const labels = items.map((i) => i.textContent ?? '')
+      expect(labels.some((l) => l.includes('Close to the Right'))).toBe(true)
+      // Nothing to the left of the first tab, so the row is absent rather than
+      // present-and-inert.
+      expect(labels.some((l) => l.includes('Close to the Left'))).toBe(false)
+    })
+
+    /**
+     * A pane's tab list is mixed, so "Close all" from a terminal must not take
+     * an editor with it — that would destroy unsaved work from a menu the user
+     * opened on something else entirely.
+     */
+    it('leaves other tab kinds alone', async () => {
+      const onCloseTerminal = vi.fn()
+      const onCloseEditorTab = vi.fn()
+      const mixed: WorkspaceTab[] = [
+        { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
+        { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+        { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+      ]
+
+      const { container } = render(
+        <WorkspaceTabBar
+          paneId="pane-a"
+          tabs={mixed}
+          activeTabId="tab-2"
+          onCloseTerminal={onCloseTerminal}
+          onCloseEditorTab={onCloseEditorTab}
+        />
+      )
+      await flushShellEffect()
+
+      const items = await openMenuOn(container, 2)
+      fireEvent.click(items.find((i) => i.textContent?.includes('Close All')) as HTMLElement)
+
+      expect(onCloseTerminal.mock.calls).toEqual([
+        ['term-1', 'tab-1'],
+        ['term-2', 'tab-2']
+      ])
+      expect(onCloseEditorTab).not.toHaveBeenCalled()
+    })
+  })
+
   it('calls startTabDrag when dragging a terminal tab', async () => {
     const tabs: WorkspaceTab[] = [{ type: 'terminal', id: 'tab-1', terminalId: 'term-1' }]
 
@@ -746,8 +859,14 @@ describe('WorkspaceTabBar', () => {
     expect(mockHandleTabReorder).toHaveBeenCalledWith('pane-a', 'tab-2', 'after')
   })
 
-  it('does not show drop indicator when dragging from different pane', async () => {
-    // Mock dragPayload to indicate we're dragging a tab from a different pane
+  /**
+   * A tab torn out into its own pane is merged back by dragging it onto the
+   * other tab bar — the one gesture anyone tries first. It used to be the one
+   * gesture that did nothing: both the preview and the drop were gated on the
+   * drag having started in this pane, so the event fell through to the pane's
+   * centre drop zone, which appends and discards the aimed-at position.
+   */
+  it('accepts a tab dragged in from another pane, at the position aimed at', async () => {
     mockUsePaneDnd.mockReturnValue({
       startTabDrag: mockStartTabDrag,
       dragPayload: { type: 'tab', tabId: 'tab-3', sourcePaneId: 'pane-b' },
@@ -776,8 +895,44 @@ describe('WorkspaceTabBar', () => {
       clientY: 20,
       dataTransfer: { dropEffect: null }
     })
+    expect(mockSetReorderPreview).toHaveBeenCalledWith('pane-a', 'tab-2', expect.any(String))
 
-    // Should NOT call setReorderPreview when dragging from different pane
+    const stopPropagation = vi.fn()
+    fireEvent.drop(targetTab, { clientX: 50, clientY: 20, stopPropagation })
+
+    // The receiving pane's id, so the store moves the tab *here* rather than
+    // looking for it in a pane it already left.
+    expect(mockHandleTabReorder).toHaveBeenCalledWith('pane-a', 'tab-2', expect.any(String))
+  })
+
+  it('never marks the dragged tab as its own drop target', async () => {
+    mockUsePaneDnd.mockReturnValue({
+      startTabDrag: mockStartTabDrag,
+      dragPayload: { type: 'tab', tabId: 'tab-1', sourcePaneId: 'pane-a' },
+      reorderPreview: null,
+      setReorderPreview: mockSetReorderPreview,
+      clearReorderPreview: mockClearReorderPreview,
+      handleTabReorder: mockHandleTabReorder
+    })
+
+    const tabs: WorkspaceTab[] = [
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+      { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+    ]
+
+    const { container } = render(
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="tab-1" />
+    )
+
+    await flushShellEffect()
+
+    const selfTab = container.querySelectorAll('[draggable="true"]')[0] as HTMLElement
+    fireEvent.dragOver(selfTab, {
+      clientX: 50,
+      clientY: 20,
+      dataTransfer: { dropEffect: null }
+    })
+
     expect(mockSetReorderPreview).not.toHaveBeenCalled()
   })
 

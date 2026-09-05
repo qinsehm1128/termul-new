@@ -31,6 +31,7 @@ import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { ComposerPill } from './ComposerPill'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
+import { ConversationTerminalButton } from './ConversationTerminalButton'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
   extractFastModeOption,
@@ -732,6 +733,7 @@ export function ChatInputBar({
                   />
                 )}
                 {mcpBadge}
+                <ConversationTerminalButton />
                 <PermissionPolicyBadge session={session} />
               </div>
               <div

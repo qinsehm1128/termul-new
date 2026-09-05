@@ -37,7 +37,14 @@
     "copy": "Copy",
     "paste": "Paste",
     "selectAll": "Select All",
-    "restart": "Restart Terminal"
+    "restart": "Restart Terminal",
+    "split": {
+      "label": "Split terminal",
+      "left": "Left",
+      "right": "Right",
+      "up": "Up",
+      "down": "Down"
+    }
   },
   "crash": {
     "criticalError": "CRITICAL ERROR",

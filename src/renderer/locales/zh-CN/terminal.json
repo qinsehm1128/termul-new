@@ -37,7 +37,14 @@
     "copy": "复制",
     "paste": "粘贴",
     "selectAll": "全选",
-    "restart": "重启终端"
+    "restart": "重启终端",
+    "split": {
+      "label": "分栏新建终端",
+      "left": "左侧",
+      "right": "右侧",
+      "up": "上方",
+      "down": "下方"
+    }
   },
   "crash": {
     "criticalError": "严重错误",

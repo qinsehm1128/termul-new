@@ -3,7 +3,16 @@ import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
 import type { IDisposable } from '@xterm/xterm'
 import { Terminal } from '@xterm/xterm'
-import { AlertTriangle, CircleCheck, RefreshCcw } from 'lucide-react'
+import {
+  AlertTriangle,
+  CircleCheck,
+  PanelBottom,
+  PanelLeft,
+  PanelRight,
+  PanelTop,
+  RefreshCcw,
+  SplitSquareHorizontal
+} from 'lucide-react'
 import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -16,6 +25,9 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useCompanionTerminalGeometry } from '@/hooks/use-companion-terminal-geometry'
@@ -365,6 +377,15 @@ export interface ConnectedTerminalProps {
   initialModes?: TerminalModes | null
   searchRef?: React.Ref<TerminalSearchHandle>
   isVisible?: boolean
+  /**
+   * Open a new terminal in a fresh pane on the given side.
+   *
+   * Supplied by the pane, not resolved here: a terminal does not know which
+   * pane holds it, and reading the *active* pane instead would split the wrong
+   * one whenever the user right-clicks a terminal that is not focused.
+   * Absent (e.g. the mobile surface) the split items are omitted.
+   */
+  onSplit?: (position: 'left' | 'right' | 'top' | 'bottom') => void
 }
 
 function getInstrumentationProjectId(spawnOptions?: TerminalSpawnOptions): string | undefined {
@@ -532,7 +553,8 @@ function ConnectedTerminalComponent({
   initialScrollback,
   initialModes,
   searchRef,
-  isVisible = true
+  isVisible = true,
+  onSplit
 }: ConnectedTerminalProps): React.JSX.Element {
   const { t } = useTranslation('terminal')
   const tRef = useRef(t)
@@ -2684,6 +2706,31 @@ function ConnectedTerminalComponent({
         <ContextMenuItem onSelect={handleSelectAll} className="cursor-pointer">
           {t('contextMenu.selectAll')} <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
         </ContextMenuItem>
+        {onSplit && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuSub>
+              <ContextMenuSubTrigger className="cursor-pointer">
+                <SplitSquareHorizontal size={14} className="mr-2" />
+                {t('contextMenu.split.label')}
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                <ContextMenuItem onSelect={() => onSplit('left')} className="cursor-pointer">
+                  <PanelLeft size={14} className="mr-2" /> {t('contextMenu.split.left')}
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => onSplit('right')} className="cursor-pointer">
+                  <PanelRight size={14} className="mr-2" /> {t('contextMenu.split.right')}
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => onSplit('top')} className="cursor-pointer">
+                  <PanelTop size={14} className="mr-2" /> {t('contextMenu.split.up')}
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => onSplit('bottom')} className="cursor-pointer">
+                  <PanelBottom size={14} className="mr-2" /> {t('contextMenu.split.down')}
+                </ContextMenuItem>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          </>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem
           onSelect={() => {

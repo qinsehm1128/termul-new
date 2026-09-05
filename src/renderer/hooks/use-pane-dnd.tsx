@@ -27,8 +27,17 @@ interface PaneDndContextValue {
   startTabDrag: (tabId: string, paneId: string, event: React.DragEvent) => void
   startFileDrag: (filePath: string, event: React.DragEvent) => void
   handleDrop: (targetPaneId: string, position: DropPosition, event: React.DragEvent) => void
+  /**
+   * Drop a dragged tab onto another tab.
+   *
+   * `targetPaneId` is the pane whose tab bar received the drop, which is not
+   * necessarily where the drag began — dropping onto a *different* pane's tab
+   * bar moves the tab there and lands it at the position aimed at, rather than
+   * doing nothing (which is what it used to do, making the one obvious gesture
+   * for merging a torn-out tab back the one gesture that had no effect).
+   */
   handleTabReorder: (
-    sourcePaneId: string,
+    targetPaneId: string,
     targetTabId: string,
     position: TabReorderPosition
   ) => void
@@ -249,12 +258,13 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
   )
 
   const handleTabReorder = useCallback(
-    (sourcePaneId: string, targetTabId: string, position: TabReorderPosition) => {
-      if (dragPayload?.type !== 'tab' || !dragPayload.tabId) {
+    (targetPaneId: string, targetTabId: string, position: TabReorderPosition) => {
+      if (dragPayload?.type !== 'tab' || !dragPayload.tabId || !dragPayload.sourcePaneId) {
         return
       }
 
       const sourceTabId = dragPayload.tabId
+      const sourcePaneId = dragPayload.sourcePaneId
 
       // Don't reorder if dropping on self
       if (sourceTabId === targetTabId) {
@@ -262,17 +272,34 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
       }
 
       const store = useWorkspaceStore.getState()
-      const pane = findPaneById(store.root, sourcePaneId)
+      const targetPane = findPaneById(store.root, targetPaneId)
 
-      if (pane?.type !== 'leaf') {
+      if (targetPane?.type !== 'leaf') {
         return
       }
 
-      const tabs = pane.tabs
-      const sourceIndex = tabs.findIndex((t: WorkspaceTab) => t.id === sourceTabId)
+      const tabs = targetPane.tabs
       const targetIndex = tabs.findIndex((t: WorkspaceTab) => t.id === targetTabId)
 
-      if (sourceIndex === -1 || targetIndex === -1) {
+      if (targetIndex === -1) {
+        return
+      }
+
+      // Cross-pane: the tab is not in this list yet, so the drop index is read
+      // straight off the target — nothing is being removed ahead of it first.
+      if (sourcePaneId !== targetPaneId) {
+        store.moveTabToPane(
+          sourceTabId,
+          sourcePaneId,
+          targetPaneId,
+          position === 'after' ? targetIndex + 1 : targetIndex
+        )
+        clearReorderPreview()
+        return
+      }
+
+      const sourceIndex = tabs.findIndex((t: WorkspaceTab) => t.id === sourceTabId)
+      if (sourceIndex === -1) {
         return
       }
 
@@ -294,7 +321,7 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
       newTabs.splice(insertIndex, 0, movedTab)
 
       store.reorderTabsInPane(
-        sourcePaneId,
+        targetPaneId,
         newTabs.map((t: WorkspaceTab) => t.id)
       )
       clearReorderPreview()

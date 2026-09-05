@@ -9,6 +9,7 @@ import { PaneContent } from './PaneContent'
 interface PaneRendererProps {
   node: PaneNode
   onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
+  onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
@@ -20,6 +21,7 @@ interface PaneRendererProps {
 export function PaneRenderer({
   node,
   onAddTerminal,
+  onSplitTerminal,
   onAddBrowserTab,
   onCloseTerminal,
   onRenameTerminal,
@@ -32,6 +34,7 @@ export function PaneRenderer({
       <PaneLeafRenderer
         pane={node}
         onAddTerminal={onAddTerminal}
+        onSplitTerminal={onSplitTerminal}
         onAddBrowserTab={onAddBrowserTab}
         onCloseTerminal={onCloseTerminal}
         onRenameTerminal={onRenameTerminal}
@@ -45,6 +48,7 @@ export function PaneRenderer({
     <PaneSplitRenderer
       node={node}
       onAddTerminal={onAddTerminal}
+      onSplitTerminal={onSplitTerminal}
       onAddBrowserTab={onAddBrowserTab}
       onCloseTerminal={onCloseTerminal}
       onRenameTerminal={onRenameTerminal}
@@ -58,6 +62,7 @@ export function PaneRenderer({
 interface PaneLeafRendererProps {
   pane: LeafNode
   onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
+  onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
@@ -70,6 +75,7 @@ const PaneLeafRenderer = memo(
   ({
     pane,
     onAddTerminal,
+    onSplitTerminal,
     onAddBrowserTab,
     onCloseTerminal,
     onRenameTerminal,
@@ -82,6 +88,7 @@ const PaneLeafRenderer = memo(
         <PaneContent
           pane={pane}
           onAddTerminal={onAddTerminal}
+          onSplitTerminal={onSplitTerminal}
           onAddBrowserTab={onAddBrowserTab}
           onCloseTerminal={onCloseTerminal}
           onRenameTerminal={onRenameTerminal}
@@ -97,6 +104,7 @@ const PaneLeafRenderer = memo(
 interface PaneSplitRendererProps {
   node: SplitNode
   onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
+  onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
@@ -109,6 +117,7 @@ const PaneSplitRenderer = memo(
   ({
     node,
     onAddTerminal,
+    onSplitTerminal,
     onAddBrowserTab,
     onCloseTerminal,
     onRenameTerminal,
@@ -169,6 +178,7 @@ const PaneSplitRenderer = memo(
             isLast={index === node.children.length - 1}
             onDragging={handleDragging}
             onAddTerminal={onAddTerminal}
+            onSplitTerminal={onSplitTerminal}
             onAddBrowserTab={onAddBrowserTab}
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
@@ -189,6 +199,7 @@ interface PaneRendererPanelProps {
   isLast: boolean
   onDragging: (isDragging: boolean) => void
   onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
+  onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
@@ -205,6 +216,7 @@ const PaneRendererPanel = memo(
     isLast,
     onDragging,
     onAddTerminal,
+    onSplitTerminal,
     onAddBrowserTab,
     onCloseTerminal,
     onRenameTerminal,
@@ -218,6 +230,7 @@ const PaneRendererPanel = memo(
           <PaneRenderer
             node={child}
             onAddTerminal={onAddTerminal}
+            onSplitTerminal={onSplitTerminal}
             onAddBrowserTab={onAddBrowserTab}
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}

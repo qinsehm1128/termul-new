@@ -77,6 +77,56 @@ describe('workspace-store split/move invariants', () => {
     expect(useWorkspaceStore.getState().activePaneId).toBe(leaves[0].id)
   })
 
+  /**
+   * The default append is right for a drop on the pane *body*, where the user
+   * expressed no position. A drop on the tab bar does express one, and throwing
+   * it away is what made merging a torn-out tab back always dump it at the end.
+   */
+  it('honours an explicit insert index when moving a tab between panes', () => {
+    const store = useWorkspaceStore.getState()
+    const kept = createEditorTab('edit-/kept.ts')
+    const first = createEditorTab('edit-/first.ts')
+    const second = createEditorTab('edit-/second.ts')
+    const moved = createEditorTab('edit-/moved.ts')
+
+    store.addTabToPane('pane-root', kept)
+    store.splitPane('pane-root', 'horizontal', first, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const leftPane = split.children[0] as LeafNode
+    const rightPane = split.children[1] as LeafNode
+    store.addTabToPane(rightPane.id, second)
+    store.addTabToPane(leftPane.id, moved)
+
+    store.moveTabToPane(moved.id, leftPane.id, rightPane.id, 1)
+
+    const target = getLeavesFromNode(useWorkspaceStore.getState().root).find(
+      (leaf) => leaf.id === rightPane.id
+    )
+    expect(target?.tabs.map((t) => t.id)).toEqual([first.id, moved.id, second.id])
+    expect(target?.activeTabId).toBe(moved.id)
+  })
+
+  it('clamps an out-of-range insert index instead of dropping the tab', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    const tabB = createEditorTab('edit-/b.ts')
+
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', tabB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const leftPane = split.children[0] as LeafNode
+    const rightPane = split.children[1] as LeafNode
+
+    // Stale index: the target list shrank between the dragover and the drop.
+    store.moveTabToPane(tabA.id, leftPane.id, rightPane.id, 99)
+
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    expect(leaves).toHaveLength(1)
+    expect(leaves[0].tabs.map((t) => t.id)).toEqual([tabB.id, tabA.id])
+  })
+
   it('creates new split at left edge and places moved tab in leading pane', () => {
     const store = useWorkspaceStore.getState()
     const tabA = createEditorTab('edit-/a.ts')

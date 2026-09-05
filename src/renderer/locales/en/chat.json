@@ -30,7 +30,14 @@
     "queueMessage": "Queue message",
     "sendMessage": "Send message",
     "sendFailed": "Could not send your message. Try again.",
-    "updateMcpFailed": "Could not update the MCP server. Your previous setting was restored."
+    "updateMcpFailed": "Could not update the MCP server. Your previous setting was restored.",
+    "conversationTerminal": {
+      "start": "Terminal",
+      "close": "End this terminal",
+      "closeNamed": "End terminal {{name}}",
+      "manageAria": "Conversation terminals — {{count}} running. Open to end one.",
+      "residentHint": "These keep running until you end them here — closing the tab or the conversation leaves them alive."
+    }
   },
   "permissionPolicy": {
     "title": "Tool permissions",
@@ -164,7 +171,7 @@
       },
       "switchAgent": {
         "title": "Switch agent?",
-        "message": "Hand \u201c{{title}}\u201d over to a different agent? The conversation's identity, directory and transcript are kept \u2014 only the agent behind it changes.",
+        "message": "Hand “{{title}}” over to a different agent? The conversation's identity, directory and transcript are kept — only the agent behind it changes.",
         "confirm": "Switch agent"
       },
       "replace": {

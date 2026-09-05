@@ -5,11 +5,14 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { PaneDndProvider, usePaneDnd } from './use-pane-dnd'
 
+const mockFindPaneById = vi.fn()
+
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: {
     getState: vi.fn()
   },
-  editorTabId: (filePath: string) => `edit-${filePath}`
+  editorTabId: (filePath: string) => `edit-${filePath}`,
+  findPaneById: (...args: unknown[]) => mockFindPaneById(...args)
 }))
 
 vi.mock('@/stores/editor-store', () => ({
@@ -38,6 +41,7 @@ describe('use-pane-dnd routing', () => {
   const moveTabToNewSplit = vi.fn()
   const addTabToPane = vi.fn()
   const splitPane = vi.fn()
+  const reorderTabsInPane = vi.fn()
   const openFile = vi.fn()
 
   beforeEach(() => {
@@ -45,13 +49,16 @@ describe('use-pane-dnd routing', () => {
     moveTabToNewSplit.mockReset()
     addTabToPane.mockReset()
     splitPane.mockReset()
+    reorderTabsInPane.mockReset()
+    mockFindPaneById.mockReset()
     openFile.mockReset()
 
     ;(useWorkspaceStore.getState as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       moveTabToPane,
       moveTabToNewSplit,
       addTabToPane,
-      splitPane
+      splitPane,
+      reorderTabsInPane
     })
 
     ;(useEditorStore.getState as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -203,5 +210,86 @@ describe('use-pane-dnd routing', () => {
     })
 
     expect(result.current.previewTarget).toBeNull()
+  })
+
+  describe('handleTabReorder', () => {
+    /** Render the hook with a drag already in flight from `sourcePaneId`. */
+    function dragging(tabId: string, sourcePaneId: string) {
+      const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <PaneDndProvider>{children}</PaneDndProvider>
+      )
+      const { result } = renderHook(() => usePaneDnd(), { wrapper })
+      act(() => {
+        result.current.startTabDrag(tabId, sourcePaneId, createDragEvent())
+      })
+      return result
+    }
+
+    const twoTabs = {
+      type: 'leaf',
+      tabs: [
+        { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+        { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+      ]
+    }
+
+    /**
+     * Merging a torn-out tab back. The index is read straight off the target
+     * pane because the dragged tab is not in that list yet — subtracting the
+     * "source was earlier" offset here, as the same-pane path must, would land
+     * it one slot to the left of where it was dropped.
+     */
+    it('moves a tab in from another pane at the aimed-at index', () => {
+      mockFindPaneById.mockReturnValue(twoTabs)
+      const result = dragging('tab-9', 'pane-b')
+
+      act(() => {
+        result.current.handleTabReorder('pane-a', 'tab-2', 'before')
+      })
+      expect(moveTabToPane).toHaveBeenCalledWith('tab-9', 'pane-b', 'pane-a', 1)
+
+      act(() => {
+        result.current.handleTabReorder('pane-a', 'tab-2', 'after')
+      })
+      expect(moveTabToPane).toHaveBeenLastCalledWith('tab-9', 'pane-b', 'pane-a', 2)
+
+      // A cross-pane drop is a move, never a reorder of a list the tab is not in.
+      expect(reorderTabsInPane).not.toHaveBeenCalled()
+    })
+
+    it('still reorders within one pane without moving anything', () => {
+      mockFindPaneById.mockReturnValue(twoTabs)
+      const result = dragging('tab-1', 'pane-a')
+
+      act(() => {
+        result.current.handleTabReorder('pane-a', 'tab-2', 'after')
+      })
+
+      expect(reorderTabsInPane).toHaveBeenCalledWith('pane-a', ['tab-2', 'tab-1'])
+      expect(moveTabToPane).not.toHaveBeenCalled()
+    })
+
+    it('does nothing when a tab is dropped on itself', () => {
+      mockFindPaneById.mockReturnValue(twoTabs)
+      const result = dragging('tab-1', 'pane-a')
+
+      act(() => {
+        result.current.handleTabReorder('pane-a', 'tab-1', 'after')
+      })
+
+      expect(reorderTabsInPane).not.toHaveBeenCalled()
+      expect(moveTabToPane).not.toHaveBeenCalled()
+    })
+
+    it('does nothing when the target tab is no longer in the target pane', () => {
+      mockFindPaneById.mockReturnValue(twoTabs)
+      const result = dragging('tab-9', 'pane-b')
+
+      act(() => {
+        result.current.handleTabReorder('pane-a', 'tab-gone', 'before')
+      })
+
+      expect(moveTabToPane).not.toHaveBeenCalled()
+    })
   })
 })

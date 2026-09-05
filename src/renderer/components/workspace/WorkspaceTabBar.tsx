@@ -34,7 +34,7 @@ import { editorTabId, useLeafCount, useWorkspaceStore } from '@/stores/workspace
 import { isConversationScopedTerminal, type Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab } from './EditorTab'
-import { TabContextMenu } from './tab-context-menu'
+import { type TabBulkCloseHandlers, TabContextMenu } from './tab-context-menu'
 
 // Helper to compute drop position from mouse coordinates
 function computeTabPosition(target: HTMLElement, clientX: number): TabReorderPosition {
@@ -130,7 +130,7 @@ function TabLiveMark({
 
 // Inline TerminalTab matching the style from TerminalTabBar
 
-interface TerminalTabInlineProps {
+interface TerminalTabInlineProps extends TabBulkCloseHandlers {
   terminal: Terminal
   isActive: boolean
   isDragging: boolean
@@ -156,6 +156,10 @@ function TerminalTabInline({
   onSelect,
   onClose,
   onRename,
+  onCloseLeft,
+  onCloseRight,
+  onCloseOthers,
+  onCloseAll,
   onDragStart,
   onDragOver,
   onDragLeave,
@@ -203,6 +207,10 @@ function TerminalTabInline({
       onClose={onClose}
       onRename={handleRenameFromMenu}
       isClosing={isClosing}
+      onCloseLeft={onCloseLeft}
+      onCloseRight={onCloseRight}
+      onCloseOthers={onCloseOthers}
+      onCloseAll={onCloseAll}
     >
       <div
         draggable={!isEditing}
@@ -288,7 +296,7 @@ function TerminalTabInline({
   )
 }
 
-interface EditorTabWrapperProps {
+interface EditorTabWrapperProps extends TabBulkCloseHandlers {
   tab: { type: 'editor'; id: string; filePath: string }
   isActive: boolean
   isDragging: boolean
@@ -296,8 +304,6 @@ interface EditorTabWrapperProps {
   dropPosition: TabReorderPosition | null
   onSelect: () => void
   onClose: () => void
-  onCloseOthers: () => void
-  onCloseAll: () => void
   onCopyPath: () => void
   onDragStart: (e: React.DragEvent) => void
   onDragOver: (e: React.DragEvent) => void
@@ -313,6 +319,8 @@ function EditorTabWrapper({
   dropPosition,
   onSelect,
   onClose,
+  onCloseLeft,
+  onCloseRight,
   onCloseOthers,
   onCloseAll,
   onCopyPath,
@@ -352,6 +360,8 @@ function EditorTabWrapper({
         operationStatus={operationStatus}
         onSelect={onSelect}
         onClose={onClose}
+        onCloseLeft={onCloseLeft}
+        onCloseRight={onCloseRight}
         onCloseOthers={onCloseOthers}
         onCloseAll={onCloseAll}
         onCopyPath={onCopyPath}
@@ -805,27 +815,92 @@ export function WorkspaceTabBar({
     [onCloseEditorTab, paneId]
   )
 
-  const handleCloseOtherEditorTabs = useCallback(
-    (filePath: string) => {
-      const editorTabs = tabs.filter(
-        (t): t is WorkspaceTab & { type: 'editor' } =>
-          t.type === 'editor' && t.filePath !== filePath
-      )
-      for (const tab of editorTabs) {
-        handleCloseEditorTab(tab.filePath)
+  /**
+   * Close one tab through the same path its own × uses.
+   *
+   * Routed per kind rather than through `closeTab` for all of them, because
+   * three of the five own state outside the pane tree — a terminal has a PTY, a
+   * browser tab has a session and annotations, an editor may be mid-save. A
+   * bulk action that dropped the tab and left that behind would leak exactly
+   * the things that cost the most to leak.
+   */
+  const closeTabByKind = useCallback(
+    (tab: WorkspaceTab): void => {
+      switch (tab.type) {
+        case 'terminal':
+          onCloseTerminal?.(tab.terminalId, tab.id)
+          return
+        case 'editor':
+          handleCloseEditorTab(tab.filePath)
+          return
+        case 'browser':
+          useBrowserSessionStore.getState().removeTab(tab.browserTabId)
+          useAnnotationStore.getState().clearAnnotationsForTab(tab.browserTabId)
+          useWorkspaceStore.getState().closeTab(paneId, tab.id)
+          return
+        case 'git':
+        case 'git-history':
+          useWorkspaceStore.getState().removeTab(tab.id)
+          return
+        default:
+          useWorkspaceStore.getState().closeTab(paneId, tab.id)
       }
     },
-    [tabs, handleCloseEditorTab]
+    [onCloseTerminal, handleCloseEditorTab, paneId]
   )
 
-  const handleCloseAllEditorTabs = useCallback(() => {
-    const editorTabs = tabs.filter(
-      (t): t is WorkspaceTab & { type: 'editor' } => t.type === 'editor'
-    )
-    for (const tab of editorTabs) {
-      handleCloseEditorTab(tab.filePath)
-    }
-  }, [tabs, handleCloseEditorTab])
+  /**
+   * Bulk close, scoped to `anchor`'s kind and positioned relative to it.
+   *
+   * `side` is read against the pane's full tab order, so "to the left" means
+   * what the user sees, while only same-kind tabs in that range are closed —
+   * see the note on `TabContextMenuProps` for why the scope is not literal.
+   *
+   * The list is snapshotted before the first close, since each one mutates the
+   * pane's tabs underneath us.
+   */
+  const closeTabsRelativeTo = useCallback(
+    (anchor: WorkspaceTab, side: 'left' | 'right' | 'others' | 'all'): void => {
+      const anchorIndex = tabs.findIndex((t) => t.id === anchor.id)
+      if (anchorIndex === -1) return
+      const inScope = (tab: WorkspaceTab, index: number): boolean => {
+        switch (side) {
+          case 'left':
+            return index < anchorIndex
+          case 'right':
+            return index > anchorIndex
+          case 'others':
+            return tab.id !== anchor.id
+          case 'all':
+            return true
+        }
+      }
+      const doomed = tabs.filter((tab, index) => tab.type === anchor.type && inScope(tab, index))
+      for (const tab of doomed) closeTabByKind(tab)
+    },
+    [tabs, closeTabByKind]
+  )
+
+  /**
+   * The bulk handlers for one tab, with the two positional ones left
+   * `undefined` when that side holds no same-kind tab — the menu then omits the
+   * row rather than showing one that cannot do anything.
+   */
+  const bulkCloseHandlers = useCallback(
+    (tab: WorkspaceTab) => {
+      const index = tabs.findIndex((t) => t.id === tab.id)
+      const sameKind = tabs.filter((t) => t.type === tab.type)
+      const hasLeft = tabs.some((t, i) => i < index && t.type === tab.type)
+      const hasRight = tabs.some((t, i) => i > index && t.type === tab.type)
+      return {
+        onCloseLeft: hasLeft ? () => closeTabsRelativeTo(tab, 'left') : undefined,
+        onCloseRight: hasRight ? () => closeTabsRelativeTo(tab, 'right') : undefined,
+        onCloseOthers: sameKind.length > 1 ? () => closeTabsRelativeTo(tab, 'others') : undefined,
+        onCloseAll: () => closeTabsRelativeTo(tab, 'all')
+      }
+    },
+    [tabs, closeTabsRelativeTo]
+  )
 
   const handleTabDragStart = useCallback(
     (tabId: string, e: React.DragEvent) => {
@@ -839,8 +914,11 @@ export function WorkspaceTabBar({
       e.preventDefault()
       e.dataTransfer.dropEffect = 'move'
 
+      // Deliberately not gated on the drag having started in this pane: a tab
+      // dragged in from another pane gets the same insertion marker, because
+      // dropping it here is now a real move rather than a no-op.
       if (dragPayload?.type !== 'tab') return
-      if (dragPayload.sourcePaneId !== paneId) return
+      if (dragPayload.tabId === tabId) return
 
       const position = computeTabPosition(e.currentTarget as HTMLElement, e.clientX)
       setReorderPreview(paneId, tabId, position)
@@ -867,12 +945,13 @@ export function WorkspaceTabBar({
 
   const handleTabDrop = useCallback(
     (tabId: string, e: React.DragEvent) => {
-      // Only prevent/stop if this is a same-pane tab reorder
-      // Otherwise, let the event bubble for cross-pane drops
-      if (dragPayload?.type !== 'tab' || dragPayload.sourcePaneId !== paneId) {
+      if (dragPayload?.type !== 'tab') {
         return
       }
 
+      // Stopped in both directions now. A cross-pane drop used to be left to
+      // bubble to the pane's centre drop zone, which appended the tab to the
+      // end and threw away the position the user aimed at.
       e.preventDefault()
       e.stopPropagation()
 
@@ -954,6 +1033,7 @@ export function WorkspaceTabBar({
                           onRename={(name) => {
                             if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
                           }}
+                          {...bulkCloseHandlers(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}
@@ -973,8 +1053,7 @@ export function WorkspaceTabBar({
                         setActivePane(paneId)
                       }}
                       onClose={() => handleCloseEditorTab(tab.filePath)}
-                      onCloseOthers={() => handleCloseOtherEditorTabs(tab.filePath)}
-                      onCloseAll={handleCloseAllEditorTabs}
+                      {...bulkCloseHandlers(tab)}
                       onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}

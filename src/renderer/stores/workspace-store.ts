@@ -160,7 +160,19 @@ export interface WorkspaceState {
     position?: Exclude<DropPosition, 'center'>
   ) => void
   addTabToPane: (paneId: string, tab: WorkspaceTab) => void
-  moveTabToPane: (tabId: string, sourcePaneId: string, targetPaneId: string) => void
+  /**
+   * Move a tab to another pane, optionally at a specific index.
+   *
+   * `insertIndex` is what lets a tab dropped on another pane's *tab bar* land
+   * where the user aimed. Omitted, the tab appends — which is the right answer
+   * for a drop on the pane body, where no position was expressed.
+   */
+  moveTabToPane: (
+    tabId: string,
+    sourcePaneId: string,
+    targetPaneId: string,
+    insertIndex?: number
+  ) => void
   moveTabToNewSplit: (
     tabId: string,
     sourcePaneId: string,
@@ -428,7 +440,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }))
     },
 
-    moveTabToPane: (tabId: string, sourcePaneId: string, targetPaneId: string): void => {
+    moveTabToPane: (
+      tabId: string,
+      sourcePaneId: string,
+      targetPaneId: string,
+      insertIndex?: number
+    ): void => {
       if (sourcePaneId === targetPaneId) return
       const { root } = get()
 
@@ -455,7 +472,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         if (leaf.tabs.some((t) => t.id === tabId)) {
           return { ...leaf, activeTabId: tabId }
         }
-        return { ...leaf, tabs: [...leaf.tabs, tab], activeTabId: tabId }
+        const tabs = [...leaf.tabs]
+        // Clamped rather than trusted: the index was computed against the tab
+        // list the drag started over, and a concurrent close could have made it
+        // stale. `splice` past the end appends, which is also the fallback the
+        // no-index call wants.
+        tabs.splice(
+          insertIndex === undefined ? tabs.length : Math.max(0, Math.min(insertIndex, tabs.length)),
+          0,
+          tab
+        )
+        return { ...leaf, tabs, activeTabId: tabId }
       })
 
       // Collapse empty source pane

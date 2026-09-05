@@ -30,7 +30,14 @@
     "queueMessage": "将消息加入队列",
     "sendMessage": "发送消息",
     "sendFailed": "无法发送消息，请重试。",
-    "updateMcpFailed": "无法更新 MCP 服务器，已恢复之前的设置。"
+    "updateMcpFailed": "无法更新 MCP 服务器，已恢复之前的设置。",
+    "conversationTerminal": {
+      "start": "终端",
+      "close": "结束这个终端",
+      "closeNamed": "结束终端 {{name}}",
+      "manageAria": "会话终端 — 正在运行 {{count}} 个。展开可结束其中一个。",
+      "residentHint": "它们会一直运行，直到你在这里结束；关掉标签页或关掉会话都不会停掉它们。"
+    }
   },
   "permissionPolicy": {
     "title": "工具权限",

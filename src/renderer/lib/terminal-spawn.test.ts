@@ -16,7 +16,8 @@ const {
   mockTerminals,
   mockSetActiveWorktree,
   mockActivePaneId,
-  mockLogFrontendError
+  mockLogFrontendError,
+  mockMoveTabToNewSplit
 } = vi.hoisted(() => ({
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
@@ -31,7 +32,8 @@ const {
   // Mutable so the no-pane branch can be exercised without re-registering the
   // workspace-store mock. Defaults to an active pane so existing tests pass.
   mockActivePaneId: { current: 'pane-1' as string | null },
-  mockLogFrontendError: vi.fn()
+  mockLogFrontendError: vi.fn(),
+  mockMoveTabToNewSplit: vi.fn()
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
@@ -52,9 +54,11 @@ vi.mock('@/stores/workspace-store', () => ({
     getState: () => ({
       activePaneId: mockActivePaneId.current,
       addTabToPane: mockAddTabToPane,
-      addTerminalTab: mockAddTerminalTab
+      addTerminalTab: mockAddTerminalTab,
+      moveTabToNewSplit: mockMoveTabToNewSplit
     })
-  }
+  },
+  terminalTabId: (terminalId: string) => `term-${terminalId}`
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -94,7 +98,7 @@ vi.mock('@/lib/env-parser', () => ({
   resolveEnvForSpawn: () => ({ env: {}, hasProjectEnv: false })
 }))
 
-import { openTerminalAtCwd, spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { openTerminalAtCwd, spawnTerminalInPane, spawnTerminalInSplit } from '@/lib/terminal-spawn'
 
 describe('spawnTerminalInPane', () => {
   beforeEach(() => {
@@ -266,6 +270,66 @@ describe('spawnTerminalInPane', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Failed to create terminal')
+  })
+})
+
+describe('spawnTerminalInSplit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTerminals.length = 0
+    mockActivePaneId.current = 'pane-1'
+    mockIsTerminalLimitReached.mockReturnValue(false)
+    mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
+    mockFindTerminalByPtyId.mockReturnValue(undefined)
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: true,
+      data: { id: 'pty-1', shell: 'bash', cwd: '/test/worktree', claim: 'claim-pty-1' }
+    })
+  })
+
+  /**
+   * Spawn first, split second. `splitPane` needs the new pane's first tab up
+   * front and a terminal has no tab id before its PTY exists, so the tab is
+   * created in the origin pane and then handed to the same mover a tab-drag
+   * uses — which is what makes a menu split and a dragged split produce the
+   * same tree.
+   */
+  it.each([
+    ['left' as const],
+    ['right' as const],
+    ['top' as const],
+    ['bottom' as const]
+  ])('spawns into the origin pane then moves the tab into a new %s split', async (position) => {
+    const result = await spawnTerminalInSplit('pane-1', 'proj-1', '/test/worktree', position)
+
+    expect(result.success).toBe(true)
+    expect(mockAddTabToPane).toHaveBeenCalledWith('pane-1', expect.anything())
+    expect(mockMoveTabToNewSplit).toHaveBeenCalledWith(
+      'term-term-new-1',
+      'pane-1',
+      'pane-1',
+      position
+    )
+  })
+
+  /** A split with nothing in it is worse than no split: it cannot be closed. */
+  it('leaves no empty split behind when the spawn fails', async () => {
+    mockTerminalApiSpawn.mockResolvedValue({ success: false, error: 'no pty for you' })
+
+    const result = await spawnTerminalInSplit('pane-1', 'proj-1', '/test/worktree', 'right')
+
+    expect(result.success).toBe(false)
+    expect(mockMoveTabToNewSplit).not.toHaveBeenCalled()
+  })
+
+  it('does not split when the terminal limit refuses the spawn', async () => {
+    mockIsTerminalLimitReached.mockReturnValue(true)
+
+    const result = await spawnTerminalInSplit('pane-1', 'proj-1', '/test/worktree', 'bottom')
+
+    expect(result.success).toBe(false)
+    expect(mockTerminalApiSpawn).not.toHaveBeenCalled()
+    expect(mockMoveTabToNewSplit).not.toHaveBeenCalled()
   })
 })
 

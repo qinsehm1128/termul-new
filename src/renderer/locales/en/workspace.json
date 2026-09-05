@@ -198,6 +198,8 @@
     "newBrowser": "New Browser Tab",
     "rename": "Rename",
     "close": "Close",
+    "closeLeft": "Close to the Left",
+    "closeRight": "Close to the Right",
     "killProcess": "Kill Process",
     "closeOthers": "Close Others",
     "closeAll": "Close All",

@@ -2,7 +2,7 @@ import { Check, Loader2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import { cn } from '@/lib/utils'
-import { TabContextMenu } from './tab-context-menu'
+import { type TabBulkCloseHandlers, TabContextMenu } from './tab-context-menu'
 
 function getBasename(filePath: string): string {
   const parts = filePath.split(/[\\/]/)
@@ -16,15 +16,13 @@ function getExtname(filePath: string): string {
   return name.slice(dotIndex)
 }
 
-interface EditorTabProps {
+interface EditorTabProps extends TabBulkCloseHandlers {
   filePath: string
   isActive: boolean
   isDirty: boolean
   operationStatus?: 'idle' | 'saving' | 'reloading' | 'saved'
   onSelect: () => void
   onClose: () => void
-  onCloseOthers?: () => void
-  onCloseAll?: () => void
   onCopyPath?: () => void
 }
 
@@ -35,6 +33,8 @@ export function EditorTab({
   operationStatus = 'idle',
   onSelect,
   onClose,
+  onCloseLeft,
+  onCloseRight,
   onCloseOthers,
   onCloseAll,
   onCopyPath
@@ -51,6 +51,8 @@ export function EditorTab({
     <TabContextMenu
       kind="editor"
       onClose={onClose}
+      onCloseLeft={onCloseLeft}
+      onCloseRight={onCloseRight}
       onCloseOthers={onCloseOthers}
       onCloseAll={onCloseAll}
       onCopyPath={onCopyPath}
