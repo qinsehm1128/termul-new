@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactElement } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -559,33 +559,80 @@ describe('ConnectedTerminal', () => {
   // click, wheel and drag while the scrollback stayed legible through its
   // translucent background — a terminal that looked frozen when the only thing
   // gone was the process.
-  it.each([['crashed'], ['exited']])(
-    'does not cover the terminal surface after the process %s',
-    async (status) => {
-      mockTerminalStoreState.terminals = [
-        { id: 'terminal-ended', ptyId: 'terminal-ended', healthStatus: status }
-      ]
-      const { container } = render(<ConnectedTerminal terminalId="terminal-ended" />)
+  // The phone-takeover surface used to be `absolute inset-0 z-40` with no
+  // `pointer-events-none`, so it blocked reading the output as well as typing
+  // into it. Blocking belongs on the input path, not on the pointer path.
+  it('blocks input but not reading while a phone owns the terminal', async () => {
+    let emitDisplayMode: ((event: { terminalId: string; mode: string }) => void) | undefined
+    vi.mocked(terminalApi).onDisplayModeChanged?.mockImplementation((handler: never) => {
+      emitDisplayMode = handler as never
+      return vi.fn()
+    })
 
-      const banner = await vi.waitFor(() => {
-        const node = container.querySelector('[role="status"]')
-        expect(node).not.toBeNull()
-        return node as HTMLElement
-      })
+    const { container } = render(<ConnectedTerminal terminalId="terminal-parked" />)
 
-      // Nothing spanning the whole pane may take pointer events.
-      const covering = Array.from(container.querySelectorAll('div')).filter((node) => {
-        const cls = node.className
-        return typeof cls === 'string' && cls.includes('inset-0')
-      })
-      for (const surface of covering) {
-        expect(surface.className).toContain('pointer-events-none')
+    await vi.waitFor(() => {
+      expect(emitDisplayMode).toBeDefined()
+      expect(mockTerminalInstance.onData).toHaveBeenCalled()
+    })
+
+    const emitTerminalData = mockTerminalInstance.onData.mock.calls.at(-1)?.[0] as (
+      data: string
+    ) => void
+    vi.mocked(terminalApi).write.mockClear()
+
+    // Desktop input reaches the PTY while the desktop owns the terminal.
+    emitTerminalData('a')
+    await vi.waitFor(() => {
+      expect(vi.mocked(terminalApi).write).toHaveBeenCalled()
+    })
+
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-parked', mode: 'phone' })
+    })
+
+    vi.mocked(terminalApi).write.mockClear()
+    emitTerminalData('b')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(vi.mocked(terminalApi).write).not.toHaveBeenCalled()
+
+    const banner = container.querySelector('[role="status"]') as HTMLElement | null
+    expect(banner).not.toBeNull()
+    for (const node of Array.from(container.querySelectorAll('div'))) {
+      const cls = node.className
+      if (typeof cls === 'string' && cls.includes('inset-0')) {
+        expect(cls).toContain('pointer-events-none')
       }
-
-      expect(banner.className).toContain('pointer-events-none')
-      expect(banner.className).not.toContain('inset-0')
     }
-  )
+  })
+
+  it.each([
+    ['crashed'],
+    ['exited']
+  ])('does not cover the terminal surface after the process %s', async (status) => {
+    mockTerminalStoreState.terminals = [
+      { id: 'terminal-ended', ptyId: 'terminal-ended', healthStatus: status }
+    ]
+    const { container } = render(<ConnectedTerminal terminalId="terminal-ended" />)
+
+    const banner = await vi.waitFor(() => {
+      const node = container.querySelector('[role="status"]')
+      expect(node).not.toBeNull()
+      return node as HTMLElement
+    })
+
+    // Nothing spanning the whole pane may take pointer events.
+    const covering = Array.from(container.querySelectorAll('div')).filter((node) => {
+      const cls = node.className
+      return typeof cls === 'string' && cls.includes('inset-0')
+    })
+    for (const surface of covering) {
+      expect(surface.className).toContain('pointer-events-none')
+    }
+
+    expect(banner.className).toContain('pointer-events-none')
+    expect(banner.className).not.toContain('inset-0')
+  })
 
   it('should not respawn the terminal or re-register listeners when the terminal PTY changes via restart', async () => {
     const { rerender } = render(<ConnectedTerminal />)

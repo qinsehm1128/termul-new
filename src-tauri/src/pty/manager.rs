@@ -991,6 +991,51 @@ pub(crate) enum WorkerExit {
     Panicked,
 }
 
+/// Every live pid in `sid`, excluding the session leader itself.
+///
+/// The leader is signalled through the normal child handle, and its pid must
+/// stay reserved until cleanup reaps it — signalling it here as well would risk
+/// the reuse hazard the group sweep is careful to avoid.
+#[cfg(unix)]
+fn session_members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+    all_pids()
+        .into_iter()
+        .filter(|pid| *pid != sid && *pid > 1)
+        .filter(|pid| unsafe { libc::getsid(*pid) } == sid)
+        .collect()
+}
+
+#[cfg(all(unix, target_os = "macos"))]
+fn all_pids() -> Vec<libc::pid_t> {
+    // Sized from a first probe, then re-read; a process appearing in between
+    // just gets caught on the next sweep.
+    let needed = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if needed <= 0 {
+        return Vec::new();
+    }
+    // Slack so a burst of new processes cannot silently truncate the list.
+    let capacity = needed as usize + 64;
+    let mut pids = vec![0 as libc::pid_t; capacity];
+    let bytes = (capacity * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+    let written = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+    if written <= 0 {
+        return Vec::new();
+    }
+    pids.truncate(written as usize);
+    pids
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn all_pids() -> Vec<libc::pid_t> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<libc::pid_t>().ok())
+        .collect()
+}
+
 #[derive(Debug, Default)]
 struct SystemCleanupDriver;
 
@@ -1016,28 +1061,46 @@ impl CleanupDriver for SystemCleanupDriver {
         // ESRCH while the survivor is still very much alive. Measured, not
         // assumed: sweep-then-kill collects it, kill-then-sweep does not.
         //
-        // WHAT THIS DOES NOT COVER: an interactive shell runs job control, and
-        // job control puts every job in a process group of its own. This app
-        // spawns login+interactive shells, so a user's `claude`, `node` or
-        // background job is NOT in the group swept here and survives. Reaching
-        // those means killing the whole session, which also takes `disown`ed
-        // work with it — a product decision, not an implementation detail.
-        // Terminate no longer depends on winning that race: the reader is
-        // interruptible and `force_kill` is the floor.
+        // The group alone is not enough: an interactive shell runs job control,
+        // and job control puts every job in a process group of its own. This
+        // app spawns login+interactive shells, so a user's `claude`, `node` or
+        // background job is NOT in the shell's group. The session sweep below
+        // is what reaches them — the shell is a session leader (`setsid` in
+        // `pre_exec`), so its session is exactly "everything this terminal
+        // started".
         //
         // `portable_pty` runs `setsid()` in `pre_exec`, so the child leads its
         // own session and `pgid == pid` — this can never reach our own group.
         #[cfg(unix)]
-        if let Some(pgid) = child.process_id().map(|pid| pid as i32) {
+        if let Some(leader) = child.process_id().map(|pid| pid as libc::pid_t) {
             for signal in [libc::SIGHUP, libc::SIGKILL] {
-                if unsafe { libc::killpg(pgid, signal) } != 0 {
+                if unsafe { libc::killpg(leader, signal) } != 0 {
                     let error = std::io::Error::last_os_error();
                     // ESRCH just means the group is already empty.
                     if error.raw_os_error() != Some(libc::ESRCH) {
                         log::warn!(
-                            "[pty-cleanup] process-group sweep failed pgid={pgid} signal={signal} error={error}"
+                            "[pty-cleanup] process-group sweep failed pgid={leader} signal={signal} error={error}"
                         );
                     }
+                }
+            }
+
+            // Then everything else this terminal's session still holds — the
+            // job-control groups the sweep above cannot address. Read the
+            // membership once and signal that snapshot: re-reading between
+            // SIGHUP and SIGKILL would let a pid recycled in between take the
+            // SIGKILL. Anything that left the session on purpose (its own
+            // `setsid`) is out of scope by construction.
+            let members = session_members(leader);
+            if !members.is_empty() {
+                log::info!(
+                    "[pty-cleanup] session sweep sid={leader} members={}",
+                    members.len()
+                );
+            }
+            for signal in [libc::SIGHUP, libc::SIGKILL] {
+                for member in &members {
+                    unsafe { libc::kill(*member, signal) };
                 }
             }
         }

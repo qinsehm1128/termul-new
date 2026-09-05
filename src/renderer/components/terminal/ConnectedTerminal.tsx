@@ -880,6 +880,11 @@ function ConnectedTerminalComponent({
   const handleTerminalData = useCallback(async (data: string): Promise<void> => {
     const ptyId = ptyIdRef.current
     if (!ptyId) return
+    // A phone owns this terminal's geometry, so the desktop must not type into
+    // it. Blocking input here rather than with a full-bleed overlay is what
+    // lets the overlay pass pointer events through: the output stays
+    // scrollable, selectable and copyable while the keyboard stays disabled.
+    if (parkedByPhoneRef.current) return
 
     // Track command input for history
     if (data === '\r' || data === '\n') {
@@ -2541,11 +2546,11 @@ function ConnectedTerminalComponent({
           </div>
           {parkedByPhone && !isMobileWebShell ? (
             <div
-              className="absolute inset-0 z-40 flex items-center justify-center bg-background/80 p-4 backdrop-blur-[2px]"
+              className="pointer-events-none absolute inset-x-3 top-3 z-40 flex justify-center"
               role="status"
               aria-live="polite"
             >
-              <div className="w-full max-w-sm rounded-md border border-border bg-card p-4 text-foreground shadow-lg">
+              <div className="pointer-events-auto w-full max-w-sm rounded-md border border-border bg-card p-4 text-foreground shadow-lg">
                 <h3 className="text-sm font-semibold tracking-[-0.01em]">
                   {t('parkedByPhone.title')}
                 </h3>

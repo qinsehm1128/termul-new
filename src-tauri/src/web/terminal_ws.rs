@@ -2408,16 +2408,15 @@ mod tests {
 
     /// End-to-end on the real spawn path: a real shell, a real terminate.
     ///
-    /// Asserts what the implementation actually delivers — the shell dies, the
-    /// cleanup completes, the slot comes back — and pins the boundary the
-    /// process-group sweep cannot cross. The app spawns login+interactive
-    /// shells, so job control gives every job its own process group and a
-    /// backgrounded child is NOT swept. That is recorded here deliberately: if
-    /// terminate ever grows session-wide kill, this assertion is what has to
-    /// change, on purpose rather than by accident.
+    /// The shell dies, its children die with it, the slot comes back.
+    ///
+    /// A process-group kill alone cannot do this: the app spawns
+    /// login+interactive shells, so job control gives every job its own group
+    /// and a backgrounded child is out of the shell's group entirely. Only the
+    /// session sweep reaches it.
     #[cfg(unix)]
     #[tokio::test]
-    async fn terminate_reclaims_a_real_terminal_and_bounds_what_it_sweeps() {
+    async fn terminate_reclaims_a_real_terminal_and_its_session() {
         let state = terminal_test_state();
         let temp = tempfile::tempdir().unwrap();
         let cwd = temp.path().canonicalize().unwrap();
@@ -2469,8 +2468,6 @@ mod tests {
             }
         };
 
-        let same_group = unsafe { libc::getpgid(child_pid) } == unsafe { libc::getpgid(shell_pid) };
-
         state
             .pty
             .terminate(&terminal_id)
@@ -2490,16 +2487,12 @@ mod tests {
             "the terminal slot must be reclaimed"
         );
 
-        if same_group {
-            settle(child_pid);
-            assert!(
-                !alive(child_pid),
-                "a child sharing the shell's group is swept with it"
-            );
-        } else {
-            // Job control moved it out of reach. Documented, not silently ignored.
-            let _ = unsafe { libc::kill(child_pid, libc::SIGKILL) };
-        }
+        settle(child_pid);
+        assert!(
+            !alive(child_pid),
+            "the session sweep must reach the shell's children, including the \
+             job-control groups a process-group kill cannot address"
+        );
     }
 
     #[tokio::test]
