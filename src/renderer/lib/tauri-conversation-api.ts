@@ -20,7 +20,8 @@ import {
   parseConversationHostStatus,
   parseConversationOpenOutcome,
   parseConversationRecordV2Array,
-  parseLegacyConversationResolution
+  parseLegacyConversationResolution,
+  parsePreparedConversation
 } from '@shared/types/conversation-api.types'
 import type { IpcDataDecoder, IpcResult } from '@shared/types/ipc.types'
 import { listen } from '@tauri-apps/api/event'
@@ -106,6 +107,15 @@ export function createTauriConversationApi(): ConversationApi {
     openConversation: (conversationId) =>
       withConversationId(conversationId, () =>
         invokeConversation('conversation_open', parseConversationOpenOutcome, { conversationId })
+      ),
+    prepareTerminalConversation: (request) =>
+      invokeConversation('conversation_prepare_terminal', parsePreparedConversation, { request }),
+    provisionTerminalConversation: (conversationId, terminalId) =>
+      withConversationId(conversationId, () =>
+        invokeConversation('conversation_provision_terminal', () => null, {
+          conversationId,
+          terminalId
+        })
       ),
     renameConversation: (conversationId, title) =>
       withConversationId(conversationId, () =>

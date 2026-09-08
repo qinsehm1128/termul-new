@@ -28,6 +28,9 @@ export function createConversationFacadeApi(
     getConversation: (conversationId) => coreApi.getConversation(conversationId),
     getCurrentBinding: (conversationId) => coreApi.getCurrentBinding(conversationId),
     openConversation: (conversationId) => coreApi.openConversation(conversationId),
+    prepareTerminalConversation: (request) => coreApi.prepareTerminalConversation(request),
+    provisionTerminalConversation: (conversationId, terminalId) =>
+      coreApi.provisionTerminalConversation(conversationId, terminalId),
     renameConversation: (conversationId, title) =>
       coreApi.renameConversation(conversationId, title),
     resolveLegacyConversationId: (key) => coreApi.resolveLegacyConversationId(key),

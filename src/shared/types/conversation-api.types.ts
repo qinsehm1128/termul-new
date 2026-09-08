@@ -2,6 +2,7 @@ import {
   type AgentSessionBinding,
   type ConversationAggregateMutationOutcome,
   type ConversationId,
+  type ConversationLifecycleState,
   type ConversationRecordV2,
   type ExecutionTarget,
   type ProjectAttachment,
@@ -96,12 +97,69 @@ export type ConversationApplicationRequestType =
   | 'detach_project'
   | 'update_execution_target'
 
+export interface PrepareTerminalConversationRequest {
+  schemaVersion: number
+  executionTarget: ExecutionTarget
+  projectAttachment?: ProjectAttachment | null
+}
+
+/** Mirrors Rust `PreparedConversation`. */
+export interface PreparedConversation {
+  schemaVersion: number
+  conversationId: ConversationId
+  createdAtUtc: string
+  creationPartition: { year: number; month: number; day: number; path: string }
+  workspaceCwd: string
+  /** Where the terminal must be spawned. */
+  executionCwd: string
+  additionalDirectories?: string[]
+  lifecycleState: ConversationLifecycleState
+}
+
+/** Validate a host-prepared Conversation without cloning it. */
+export function parsePreparedConversation(value: unknown): PreparedConversation {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('preparedConversation must be an object')
+  }
+  const candidate = value as Record<string, unknown>
+  parseConversationId(String(candidate.conversationId))
+  if (typeof candidate.workspaceCwd !== 'string' || !candidate.workspaceCwd.trim()) {
+    throw new TypeError('preparedConversation.workspaceCwd must be a non-empty string')
+  }
+  // The caller spawns the terminal here; an empty value would silently land it
+  // in the process CWD instead of the Conversation's own directory.
+  if (typeof candidate.executionCwd !== 'string' || !candidate.executionCwd.trim()) {
+    throw new TypeError('preparedConversation.executionCwd must be a non-empty string')
+  }
+  if (typeof candidate.lifecycleState !== 'string') {
+    throw new TypeError('preparedConversation.lifecycleState must be a string')
+  }
+  return value as PreparedConversation
+}
+
 export interface ConversationApi {
   getHostStatus(): Promise<IpcResult<ConversationHostStatus>>
   listConversations(): Promise<IpcResult<ConversationRecordV2[]>>
   getConversation(conversationId: ConversationId): Promise<IpcResult<ConversationRecordV2>>
   getCurrentBinding(conversationId: ConversationId): Promise<IpcResult<ConversationBindingSnapshot>>
   openConversation(conversationId: ConversationId): Promise<IpcResult<ConversationOpenOutcome>>
+  /**
+   * Allocate a terminal-backed Conversation and its workspace directory.
+   *
+   * Stops before the terminal exists: the caller spawns it through the ordinary
+   * terminal path (so it gets a tab, the per-project limit, project env and
+   * worktree symlinks) and then calls `provisionTerminalConversation`. Until
+   * that lands the Conversation stays in `allocating_workspace`, where the
+   * host's interrupted-creation sweep can reconcile it.
+   */
+  prepareTerminalConversation(
+    request: PrepareTerminalConversationRequest
+  ): Promise<IpcResult<PreparedConversation>>
+  /** Carry a prepared terminal-backed Conversation to `ready`. */
+  provisionTerminalConversation(
+    conversationId: ConversationId,
+    terminalId: string
+  ): Promise<IpcResult<null>>
   renameConversation(
     conversationId: ConversationId,
     title: string

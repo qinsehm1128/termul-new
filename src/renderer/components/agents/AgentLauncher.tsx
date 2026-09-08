@@ -10,7 +10,8 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
-  Loader2
+  Loader2,
+  SquareTerminal
 } from 'lucide-react'
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -91,6 +92,7 @@ import { resolveConversationSessionId } from '@/lib/conversation-binding'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { isLoopbackWebClient } from '@/lib/tauri-runtime'
+import { launchTerminalConversation } from '@/lib/terminal-conversation-launch'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
@@ -104,6 +106,7 @@ import {
   useAcpSession,
   useAcpStore
 } from '@/stores/acp-store'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useConversationStore } from '@/stores/conversation-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -1073,6 +1076,59 @@ export function AgentLauncher({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [preparedSessionId, pendingOptions, t])
 
+  const [terminalLaunching, setTerminalLaunching] = useState(false)
+
+  /**
+   * Start a Conversation backed by a terminal instead of an agent.
+   *
+   * Shares the execution target — the folder choice above applies unchanged —
+   * and nothing else: no config, model, mode or prompt applies to a shell.
+   */
+  const launchTerminal = useCallback(async () => {
+    const targetError = validateExecutionTarget(executionTarget)
+    if (targetError) {
+      toast.error(t(`launcher.errors.${targetError}`, 'Select a valid execution target'))
+      return
+    }
+    if (terminalLaunching) return
+    setTerminalLaunching(true)
+    try {
+      const attachment =
+        projectAttachment ??
+        (executionTarget.kind === 'workspace'
+          ? null
+          : (defaultProjectContext(selectedProject)?.projectAttachment ?? null))
+      const result = await launchTerminalConversation({
+        paneId,
+        executionTarget,
+        projectAttachment: attachment,
+        projectId: conversationProjectId ?? '',
+        maxTerminalsPerProject: useAppSettingsStore.getState().settings.maxTerminalsPerProject
+      })
+      if (!result.success) {
+        toast.error(result.error)
+        return
+      }
+      onLaunched?.(result.conversationId)
+      useWorkspaceStore.getState().addAgentChatTab(result.conversationId, paneId)
+      useWorkspaceStore.getState().hideAgentLauncher()
+      console.info(
+        `[agentLauncher.launchTerminal] conversationId=${result.conversationId} terminalId=${result.terminalId} target=${executionTarget.kind}`
+      )
+    } finally {
+      setTerminalLaunching(false)
+    }
+  }, [
+    executionTarget,
+    projectAttachment,
+    selectedProject,
+    conversationProjectId,
+    paneId,
+    onLaunched,
+    terminalLaunching,
+    t
+  ])
+
   const launch = useCallback(async () => {
     const targetError = validateExecutionTarget(executionTarget)
     if (targetError) {
@@ -1841,6 +1897,17 @@ export function AgentLauncher({
                     label={t('common.agent', 'Agent')}
                   />
                 )}
+                <button
+                  type="button"
+                  data-testid="launcher-start-terminal"
+                  onClick={() => void launchTerminal()}
+                  disabled={terminalLaunching}
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label={t('launcher.startTerminal', 'Start a terminal in this folder')}
+                  title={t('launcher.startTerminal', 'Start a terminal in this folder')}
+                >
+                  <SquareTerminal size={16} />
+                </button>
                 <button
                   type="button"
                   onClick={() => launch()}

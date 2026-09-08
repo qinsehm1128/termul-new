@@ -340,6 +340,11 @@ const {
   mockSetActiveWorktree: vi.fn()
 }))
 
+const launchTerminalConversationMock = vi.fn()
+vi.mock('@/lib/terminal-conversation-launch', () => ({
+  launchTerminalConversation: (...args: unknown[]) => launchTerminalConversationMock(...args)
+}))
+
 vi.mock('@/lib/worktree-api', () => ({
   worktreeApi: {
     create: mockWorktreeCreate,
@@ -2122,5 +2127,47 @@ describe('AgentLauncher placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-command-name="compact"]')).not.toBeNull()
     })
+  })
+})
+
+describe('AgentLauncher — terminal-backed conversation', () => {
+  it('starts a terminal in the selected folder without touching the agent path', async () => {
+    // The folder choice above is the only thing the two paths share; a shell has
+    // no config, model, mode or prompt.
+    launchTerminalConversationMock.mockResolvedValue({
+      success: true,
+      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+      terminalId: 'terminal-1'
+    })
+    renderLauncher()
+
+    fireEvent.click(screen.getByTestId('launcher-start-terminal'))
+
+    await waitFor(() => expect(launchTerminalConversationMock).toHaveBeenCalledTimes(1))
+    // Inherits the launcher's resolved target and attachment verbatim — that is
+    // the "same folder semantics as an agent chat" requirement, and it is the
+    // only thing carried over.
+    expect(launchTerminalConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paneId: 'pane1',
+        executionTarget: { kind: 'project_root', projectId: 'p1', projectRoot: '/work' },
+        projectId: 'p1',
+        projectAttachment: expect.objectContaining({ projectId: 'p1' })
+      })
+    )
+    // Nothing from the agent path runs.
+    expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a launch failure instead of opening an empty conversation', async () => {
+    launchTerminalConversationMock.mockResolvedValue({
+      success: false,
+      error: 'terminal limit reached'
+    })
+    renderLauncher()
+
+    fireEvent.click(screen.getByTestId('launcher-start-terminal'))
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('terminal limit reached'))
   })
 })

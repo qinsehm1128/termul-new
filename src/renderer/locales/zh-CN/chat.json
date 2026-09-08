@@ -414,5 +414,12 @@
     "everySeconds": "每 {{count}} 秒",
     "revisionHash": "第 {{revision}} 版 · {{hash}}…",
     "notActive": "该草稿在你审核并确认精确修订与哈希前不会执行。"
+  },
+  "launcher": {
+    "startTerminal": "在这个文件夹里开一个终端"
+  },
+  "terminalConversation": {
+    "prepareFailed": "创建会话失败",
+    "provisionFailed": "终端已启动，但会话没能完成登记"
   }
 }

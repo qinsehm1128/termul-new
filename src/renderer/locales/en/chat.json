@@ -414,5 +414,12 @@
     "everySeconds": "Every {{count}} seconds",
     "revisionHash": "Revision {{revision}} · {{hash}}…",
     "notActive": "This draft cannot run until you review and confirm its exact revision and hash."
+  },
+  "launcher": {
+    "startTerminal": "Start a terminal in this folder"
+  },
+  "terminalConversation": {
+    "prepareFailed": "Failed to create the conversation",
+    "provisionFailed": "The terminal started but the conversation could not be finalized"
   }
 }
