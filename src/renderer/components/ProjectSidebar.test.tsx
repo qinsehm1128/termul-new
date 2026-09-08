@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useConversationStore } from '@/stores/conversation-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -1315,5 +1316,92 @@ describe('ProjectSidebar cross-project file drop', () => {
     // a project row has no destination without it.
     expect(row('2')).toHaveAttribute('data-project-path', '/work/two')
     expect(row('3')).not.toHaveAttribute('data-project-path')
+  })
+})
+
+describe('ProjectSidebar ordering', () => {
+  const unsorted: Project[] = [
+    { id: 'z', name: 'zeta-web', color: 'blue' },
+    { id: 'p10', name: '项目10', color: 'blue' },
+    { id: 'a', name: 'alpha-service', color: 'blue' },
+    { id: 'p9', name: '项目9', color: 'blue' },
+    { id: 'B', name: 'Beta-tools', color: 'blue' }
+  ]
+  const allNames = unsorted.map((p) => p.name)
+
+  /** Project names in the order the sidebar actually renders them. */
+  const renderedOrder = (container: HTMLElement): string[] => {
+    const found: string[] = []
+    for (const node of Array.from(container.querySelectorAll('*'))) {
+      const text = node.textContent?.trim()
+      if (text && allNames.includes(text) && !found.includes(text)) found.push(text)
+    }
+    return found
+  }
+
+  const setSortMode = (projectSortMode: 'name' | 'manual'): void => {
+    useAppSettingsStore.setState({
+      settings: { ...useAppSettingsStore.getState().settings, projectSortMode }
+    })
+  }
+
+  beforeEach(() => {
+    setSortMode('name')
+  })
+
+  it('orders latin names alphabetically, ignoring case', () => {
+    // Asserted as relative order rather than an absolute list: where CJK sorts
+    // against latin is a locale decision, and pinning it would make this test
+    // about ICU rather than about the sidebar.
+    const order = renderedOrder(renderWithRouter({ projects: unsorted }).container)
+    expect(order.indexOf('alpha-service')).toBeLessThan(order.indexOf('Beta-tools'))
+    expect(order.indexOf('Beta-tools')).toBeLessThan(order.indexOf('zeta-web'))
+  })
+
+  it('orders embedded numbers naturally', () => {
+    const order = renderedOrder(renderWithRouter({ projects: unsorted }).container)
+    expect(order.indexOf('项目9')).toBeLessThan(order.indexOf('项目10'))
+  })
+
+  it('renders every project exactly once', () => {
+    const order = renderedOrder(renderWithRouter({ projects: unsorted }).container)
+    expect(order.slice().sort()).toEqual(allNames.slice().sort())
+  })
+
+  it('keeps insertion order in manual mode', () => {
+    setSortMode('manual')
+    const order = renderedOrder(renderWithRouter({ projects: unsorted }).container)
+    expect(order).toEqual(allNames)
+  })
+
+  it('turns dragging off while sorting by name', () => {
+    // Without this, a drag in name mode would visibly snap back — the list
+    // re-collates the moment the store updates. Gating drag on the mode is the
+    // whole reason the toggle exists rather than sorting unconditionally.
+    renderWithRouter({ projects: unsorted })
+    expect(screen.getByTestId('ungrouped-projects-container')).toHaveAttribute(
+      'data-can-reorder',
+      'false'
+    )
+  })
+
+  it('turns dragging back on in manual mode', () => {
+    setSortMode('manual')
+    renderWithRouter({ projects: unsorted })
+    expect(screen.getByTestId('ungrouped-projects-container')).toHaveAttribute(
+      'data-can-reorder',
+      'true'
+    )
+  })
+
+  it('toggles the mode from the header button', async () => {
+    renderWithRouter({ projects: unsorted })
+    const button = screen.getByTestId('header-project-sort-mode')
+    expect(button).toHaveAttribute('data-sort-mode', 'name')
+
+    fireEvent.click(button)
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.projectSortMode).toBe('manual')
+    })
   })
 })

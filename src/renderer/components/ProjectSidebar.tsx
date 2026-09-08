@@ -4,6 +4,7 @@ import { LayoutGroup, motion, Reorder } from 'framer-motion'
 import {
   AlertTriangle,
   Archive,
+  ArrowDownAZ,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -13,6 +14,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  GripVertical,
   Palette,
   Plus,
   RotateCcw,
@@ -41,15 +43,18 @@ import {
 } from '@/components/ui/context-menu'
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
 import { clipboardApi, dialogApi, shellApi } from '@/lib/api'
 import { brandedStorageKey, readBrandedStorage } from '@/lib/brand-storage-key'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
+import { isManualOrderingEnabled, sortProjects } from '@/lib/project-sort'
 import { getCurrentAppVersion } from '@/lib/tauri-release-notes'
 import { cn } from '@/lib/utils'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { isRejectedMove, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
@@ -726,9 +731,28 @@ export function ProjectSidebar({
       ? projects.find((p) => p.id === colorPicker.targetId)
       : groups.find((g) => g.id === colorPicker.targetId)
 
+  // Sidebar ordering. `'name'` also turns drag off: a dragged project would
+  // otherwise snap straight back to its collated position.
+  const projectSortMode = useAppSettingsStore((state) => state.settings.projectSortMode)
+  const updateAppSetting = useUpdateAppSetting()
+
   // Split active and archived projects
-  const activeProjects = useMemo(() => projects.filter((p) => !p.isArchived), [projects])
-  const archivedProjects = useMemo(() => projects.filter((p) => p.isArchived), [projects])
+  const activeProjects = useMemo(
+    () =>
+      sortProjects(
+        projects.filter((p) => !p.isArchived),
+        projectSortMode
+      ),
+    [projects, projectSortMode]
+  )
+  const archivedProjects = useMemo(
+    () =>
+      sortProjects(
+        projects.filter((p) => p.isArchived),
+        projectSortMode
+      ),
+    [projects, projectSortMode]
+  )
 
   // The search box only renders once the list is long enough to be worth filtering.
   const showSearch = shouldShowProjectSearch(projects.length)
@@ -777,14 +801,19 @@ export function ProjectSidebar({
         .filter((p): p is Project => p !== undefined)
       return {
         group: g,
-        projects: projectsInGroup
+        projects: sortProjects(projectsInGroup, projectSortMode)
       }
     })
-  }, [groups, filteredActiveProjects])
+  }, [groups, filteredActiveProjects, projectSortMode])
 
   const ungroupedActiveProjects = useMemo(() => {
     return filteredActiveProjects.filter((p) => !groupedProjectIds.has(p.id))
   }, [filteredActiveProjects, groupedProjectIds])
+
+  // Search already suppressed drag (the filtered list is not the real order);
+  // sort mode is the second reason, and both funnel through one flag so the
+  // three Reorder call sites cannot drift apart.
+  const canReorderProjects = isManualOrderingEnabled(projectSortMode) && !isSearching
 
   const visibleGroups = useMemo(() => {
     return groupProjectsMap.filter((gp) => gp.projects.length > 0 || !isSearching)
@@ -819,6 +848,23 @@ export function ProjectSidebar({
       <div className="flex h-8 items-center justify-between border-b border-sidebar-border/70 px-2.5">
         <span className="label-section text-sidebar-foreground">{t('title')}</span>
         <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() =>
+              void updateAppSetting(
+                'projectSortMode',
+                projectSortMode === 'name' ? 'manual' : 'name'
+              )
+            }
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-sidebar-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            title={t(`sortMode.${projectSortMode}`)}
+            aria-label={t(`sortMode.${projectSortMode}`)}
+            aria-pressed={projectSortMode === 'name'}
+            data-testid="header-project-sort-mode"
+            data-sort-mode={projectSortMode}
+          >
+            {projectSortMode === 'name' ? <ArrowDownAZ size={14} /> : <GripVertical size={14} />}
+          </button>
           <button
             onClick={handleCreateGroup}
             className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-sidebar-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -1073,7 +1119,7 @@ export function ProjectSidebar({
                             axis="y"
                             values={gpProjects}
                             onReorder={(reordered) => {
-                              if (isSearching) return
+                              if (!canReorderProjects) return
                               reorderProjectInGroup(
                                 group.id,
                                 reordered.map((p) => p.id)
@@ -1089,7 +1135,7 @@ export function ProjectSidebar({
                                 <Reorder.Item
                                   key={project.id}
                                   value={project}
-                                  drag={isSearching ? false : 'y'}
+                                  drag={canReorderProjects ? 'y' : false}
                                   layout="position"
                                   className="list-none"
                                   whileDrag={{
@@ -1172,11 +1218,12 @@ export function ProjectSidebar({
                   axis="y"
                   values={ungroupedActiveProjects}
                   onReorder={(reordered) => {
-                    if (isSearching) return
+                    if (!canReorderProjects) return
                     onReorderProjects(reordered.map((p) => p.id))
                   }}
                   className="flex flex-col mt-1"
                   data-testid="ungrouped-projects-container"
+                  data-can-reorder={canReorderProjects}
                 >
                   {ungroupedActiveProjects.map((project) => {
                     const hasActivity = projectHasActivity(project.id)
@@ -1185,7 +1232,7 @@ export function ProjectSidebar({
                       <Reorder.Item
                         key={project.id}
                         value={project}
-                        drag={isSearching ? false : 'y'}
+                        drag={canReorderProjects ? 'y' : false}
                         layout="position"
                         className="list-none"
                         whileDrag={{

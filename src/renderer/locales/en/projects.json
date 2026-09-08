@@ -281,5 +281,9 @@
     }
   },
   "openTerminal": "Open terminal",
-  "openTerminalFor": "Open a terminal in {{name}}"
+  "openTerminalFor": "Open a terminal in {{name}}",
+  "sortMode": {
+    "name": "Sorted by name — click for manual order",
+    "manual": "Manual order — click to sort by name"
+  }
 }

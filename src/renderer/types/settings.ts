@@ -1,4 +1,7 @@
 ﻿import { acceptedBrandValues, brandCanonical } from '@shared/brand'
+import type { ProjectSortMode } from '@/lib/project-sort'
+
+export type { ProjectSortMode }
 
 // Context bar visibility settings
 export interface ContextBarSettings {
@@ -60,6 +63,12 @@ export interface AppSettings {
   terminalScreenReaderMode: boolean
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
+  /**
+   * Sidebar project ordering. `'name'` collates like a file manager; `'manual'`
+   * keeps the drag order. Also gates drag itself — offering it while the list
+   * re-sorts by name would make a dragged project snap back.
+   */
+  projectSortMode: ProjectSortMode
   maxTerminalsPerProject: number // Maximum terminals allowed per project
   orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
   orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
@@ -333,6 +342,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalScreenReaderMode: false,
   defaultShell: '',
   defaultProjectColor: 'blue',
+  projectSortMode: 'name',
   maxTerminalsPerProject: 10,
   orphanDetectionEnabled: true,
   orphanDetectionTimeout: 600000, // 10 minutes

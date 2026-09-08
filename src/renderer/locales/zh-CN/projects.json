@@ -281,5 +281,9 @@
     }
   },
   "openTerminal": "打开终端",
-  "openTerminalFor": "在 {{name}} 中打开终端"
+  "openTerminalFor": "在 {{name}} 中打开终端",
+  "sortMode": {
+    "name": "按名称排序 — 点击切换为手动排序",
+    "manual": "手动排序 — 点击切换为按名称排序"
+  }
 }
