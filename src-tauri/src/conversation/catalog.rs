@@ -18,8 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::conversation::contracts::{
-    format_created_at_utc, ConversationErrorCode, ConversationId, ConversationLifecycleState,
-    ConversationRecordV2, ConversationTitleSource, CreationPartition, CONVERSATION_SCHEMA_VERSION,
+    format_created_at_utc, ConversationBackend, ConversationErrorCode, ConversationId,
+    ConversationLifecycleState, ConversationRecordV2, ConversationTitleSource, CreationPartition,
+    CONVERSATION_SCHEMA_VERSION,
 };
 use crate::conversation::durable_fs::{DurableFileSystem, DurableFsError};
 use crate::conversation::event_log::{
@@ -237,6 +238,12 @@ pub struct ConversationCatalogEntryV1 {
     pub workspace_cwd: String,
     pub project_id: Option<String>,
     pub lifecycle_state: ConversationLifecycleState,
+    /// Defaulted rather than versioned: every catalog written before terminal
+    /// backends existed describes an agent Conversation, which is exactly what
+    /// `ConversationBackend::default()` says. The catalog is a rebuildable
+    /// projection, so a stale entry self-corrects on the next scan.
+    #[serde(default)]
+    pub backend: ConversationBackend,
     pub title: Option<String>,
     pub title_source: Option<ConversationTitleSource>,
     pub last_activity_at_utc: String,
@@ -739,6 +746,7 @@ fn entry_from_frontier(
             .as_ref()
             .map(|attachment| attachment.project_id.clone()),
         lifecycle_state: record.lifecycle_state,
+        backend: frontier.backend.unwrap_or_default(),
         title: frontier.summary.title.clone(),
         title_source: frontier.summary.title_source,
         last_activity_at_utc: format_created_at_utc(&last_activity_at_utc),

@@ -37,6 +37,7 @@ pub enum ConversationMutation {
     BindingRebind,
     BindingSuspend,
     BindingReplace,
+    TerminalProvision,
     ProjectAttachmentAdd,
     ProjectAttachmentDetach,
     ExecutionTargetUpdate,
@@ -56,7 +57,7 @@ pub enum ConversationMutation {
 }
 
 impl ConversationMutation {
-    pub const RUNTIME: [Self; 23] = [
+    pub const RUNTIME: [Self; 24] = [
         Self::CreateConversation,
         Self::CreationRetry,
         Self::CreationRecovery,
@@ -68,6 +69,7 @@ impl ConversationMutation {
         Self::BindingRebind,
         Self::BindingSuspend,
         Self::BindingReplace,
+        Self::TerminalProvision,
         Self::ProjectAttachmentAdd,
         Self::ProjectAttachmentDetach,
         Self::ExecutionTargetUpdate,
@@ -107,6 +109,7 @@ impl ConversationMutation {
             Self::BindingRebind => "binding_rebind",
             Self::BindingSuspend => "binding_suspend",
             Self::BindingReplace => "binding_replace",
+            Self::TerminalProvision => "terminal_provision",
             Self::ProjectAttachmentAdd => "project_attachment_add",
             Self::ProjectAttachmentDetach => "project_attachment_detach",
             Self::ExecutionTargetUpdate => "execution_target_update",
@@ -354,6 +357,18 @@ impl ConversationWriter {
         let permit = self.authorize(conversation_id, ConversationMutation::BindingBind)?;
         self.repository
             .bind_agent_session(&permit, conversation_id, binding, recorded_at_utc)
+            .await
+    }
+
+    pub(crate) async fn provision_terminal_backend(
+        self: &Arc<Self>,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+        recorded_at_utc: DateTime<Utc>,
+    ) -> Result<ConversationEventRecordV2> {
+        let permit = self.authorize(conversation_id, ConversationMutation::TerminalProvision)?;
+        self.repository
+            .provision_terminal_backend(&permit, conversation_id, terminal_id, recorded_at_utc)
             .await
     }
 

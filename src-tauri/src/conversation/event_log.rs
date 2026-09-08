@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 use crate::conversation::contracts::{
     encoded_json_len_bounded, format_created_at_utc, parse_created_at_utc, AgentSessionBinding,
-    AgentSessionBindingState, ConversationErrorCode, ConversationId, ConversationLifecycleState,
-    ConversationTitleSource, ExecutionTarget, ProjectAttachment,
+    AgentSessionBindingState, ConversationBackend, ConversationErrorCode, ConversationId,
+    ConversationLifecycleState, ConversationTitleSource, ExecutionTarget, ProjectAttachment,
     AGENT_SESSION_BINDING_SCHEMA_VERSION, MAX_CONVERSATION_HISTORY_PAGE_BYTES,
     MAX_CONVERSATION_RECORD_BYTES, PROJECT_ATTACHMENT_SCHEMA_VERSION,
 };
@@ -87,6 +87,14 @@ pub enum ConversationEventType {
     BindingRebound,
     BindingSuspended,
     BindingReplaced,
+    /// A terminal-backed Conversation finished provisioning.
+    ///
+    /// The terminal-mode counterpart of `BindingBound`: it is what carries such
+    /// a Conversation to `Ready`, and its presence is what marks the backend as
+    /// `Terminal`. It lives in the `Bindings` stream because it answers the
+    /// same question those events answer — what is behind this Conversation —
+    /// and folding both from one stream keeps that answer single-valued.
+    TerminalProvisioned,
     ProjectAttached,
     ProjectDetached,
     ExecutionTargetUpdated,
@@ -102,7 +110,8 @@ impl ConversationEventType {
             | Self::BindingDetached
             | Self::BindingRebound
             | Self::BindingSuspended
-            | Self::BindingReplaced => ConversationEventStream::Bindings,
+            | Self::BindingReplaced
+            | Self::TerminalProvisioned => ConversationEventStream::Bindings,
             Self::ProjectAttached | Self::ProjectDetached | Self::ExecutionTargetUpdated => {
                 ConversationEventStream::Attachments
             }
@@ -289,6 +298,10 @@ pub struct ConversationFrontier {
     /// An empty `entries` array is a durable clear.
     pub latest_plan: Option<Arc<Value>>,
     pub lifecycle_state: Option<ConversationLifecycleState>,
+    /// Which backend event came first. `None` means the log has not declared
+    /// one yet — a Conversation still allocating, or one whose only events are
+    /// messages. Readers fall back to `ConversationBackend::default()`.
+    pub backend: Option<ConversationBackend>,
     pub last_seq: u64,
 }
 
@@ -991,18 +1004,32 @@ pub fn apply_event(
         ));
     }
 
+    // Checked before any materialization runs. `apply_binding_event` would
+    // otherwise have already pushed the binding by the time a contradicting
+    // backend was noticed, leaving a refused event half-applied in the
+    // frontier the caller still holds.
+    let declared = declared_backend(record.type_);
+    if let Some(backend) = declared {
+        check_backend_transition(frontier.backend, backend, record, path)?;
+    }
+
     apply_binding_event(&mut frontier.binding, record, path)?;
     apply_attachment_event(&mut frontier.attachment, record, path)?;
     apply_execution_target_event(&mut frontier.execution_target, record, path)?;
     apply_durable_replacements(frontier, record, path)?;
     apply_summary_event(&mut frontier.summary, record)?;
+
+    if let Some(backend) = declared {
+        frontier.backend = Some(backend);
+    }
     match record.type_ {
         ConversationEventType::CreationFailed => {
             frontier.lifecycle_state = Some(ConversationLifecycleState::AgentFailed);
         }
         ConversationEventType::BindingBound
         | ConversationEventType::BindingReplaced
-        | ConversationEventType::BindingRebound => {
+        | ConversationEventType::BindingRebound
+        | ConversationEventType::TerminalProvisioned => {
             frontier.lifecycle_state = Some(ConversationLifecycleState::Ready);
         }
         _ => {}
@@ -2326,6 +2353,45 @@ fn same_opaque_binding(left: &AgentSessionBinding, right: &AgentSessionBinding) 
         && left.bound_at_utc == right.bound_at_utc
 }
 
+/// Which backend, if any, an event declares.
+///
+/// Only the events that carry a Conversation to `Ready` declare one — those are
+/// exactly the events that say something ran.
+const fn declared_backend(type_: ConversationEventType) -> Option<ConversationBackend> {
+    match type_ {
+        ConversationEventType::BindingBound
+        | ConversationEventType::BindingReplaced
+        | ConversationEventType::BindingRebound => Some(ConversationBackend::Agent),
+        ConversationEventType::TerminalProvisioned => Some(ConversationBackend::Terminal),
+        _ => None,
+    }
+}
+
+/// Refuse to change the answer to "what runs behind this Conversation".
+///
+/// First writer wins, and a contradicting event is a corrupt log rather than a
+/// late reinterpretation. Without this the two `Ready` paths could interleave —
+/// an agent binding landing on a terminal Conversation would silently hand it
+/// the whole ACP surface (mode/model pickers, detach/rebind/replace) that it
+/// has no session to service, and the failure would surface far from the write
+/// that caused it.
+fn check_backend_transition(
+    current: Option<ConversationBackend>,
+    next: ConversationBackend,
+    record: &ConversationEventRecordV2,
+    path: &Path,
+) -> Result<()> {
+    match current {
+        Some(existing) if existing != next => Err(history_error(
+            record.conversation_id,
+            path,
+            record.seq,
+            &format!("Conversation backend is already {existing:?} and cannot become {next:?}"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn history_error(
     conversation_id: ConversationId,
     path: &Path,
@@ -2714,6 +2780,134 @@ mod tests {
         let error = scan_event_log(&directory, id, &durable_fs).unwrap_err();
         assert_eq!(error.stable_code(), "CONVERSATION_RECORD_TOO_LARGE");
         assert_eq!(error.kind, EventLogErrorKind::RecordTooLarge);
+    }
+
+    /// A `binding_bound` record that the fold accepts.
+    fn agent_binding_record(seq: u64) -> ConversationEventRecordV2 {
+        let recorded_at_utc = parse_created_at_utc("2026-08-15T09:45:15.000Z").unwrap();
+        ConversationEventRecordV2::new(
+            ConversationId::parse(ID).unwrap(),
+            seq,
+            recorded_at_utc,
+            ConversationEventType::BindingBound,
+            serde_json::to_value(BindingEventPayloadV1 {
+                binding: AgentSessionBinding {
+                    schema_version: AGENT_SESSION_BINDING_SCHEMA_VERSION,
+                    binding_id: Uuid::from_u128(u128::from(seq) + 1),
+                    agent_session_id: format!("session-{seq}"),
+                    runtime_agent_id: "runtime".to_string(),
+                    stable_agent_namespace: "config:test".to_string(),
+                    execution_cwd: "/workspace".to_string(),
+                    bound_at_utc: recorded_at_utc,
+                    state: AgentSessionBindingState::Active,
+                },
+            })
+            .unwrap(),
+        )
+    }
+
+    fn terminal_provisioned_record(seq: u64) -> ConversationEventRecordV2 {
+        ConversationEventRecordV2::new(
+            ConversationId::parse(ID).unwrap(),
+            seq,
+            parse_created_at_utc("2026-08-15T09:45:15.000Z").unwrap(),
+            ConversationEventType::TerminalProvisioned,
+            json!({ "terminalId": "terminal-1" }),
+        )
+    }
+
+    #[test]
+    fn terminal_provisioned_reaches_ready_without_any_agent_binding() {
+        // The whole point of the event: before it existed, `Ready` was
+        // reachable only through a binding, so a Conversation with no agent
+        // stalled in `initializing_agent` and was closed to `agent_failed` on
+        // the next repository rebuild.
+        let mut frontier = ConversationFrontier::default();
+        apply_event(&mut frontier, &terminal_provisioned_record(1)).unwrap();
+
+        assert_eq!(
+            frontier.lifecycle_state,
+            Some(ConversationLifecycleState::Ready)
+        );
+        assert_eq!(frontier.backend, Some(ConversationBackend::Terminal));
+        // No agent binding is materialized, so nothing downstream can mistake
+        // this for a Conversation that has a session to talk to.
+        assert!(frontier.binding.current.is_none());
+        assert_eq!(frontier.binding.history.len(), 0);
+    }
+
+    #[test]
+    fn binding_bound_declares_the_agent_backend() {
+        let mut frontier = ConversationFrontier::default();
+        apply_event(&mut frontier, &agent_binding_record(1)).unwrap();
+
+        assert_eq!(
+            frontier.lifecycle_state,
+            Some(ConversationLifecycleState::Ready)
+        );
+        assert_eq!(frontier.backend, Some(ConversationBackend::Agent));
+        assert!(frontier.binding.current.is_some());
+    }
+
+    #[test]
+    fn a_terminal_conversation_refuses_a_later_agent_binding() {
+        let mut frontier = ConversationFrontier::default();
+        apply_event(&mut frontier, &terminal_provisioned_record(1)).unwrap();
+
+        let error = apply_event(&mut frontier, &agent_binding_record(2)).unwrap_err();
+        assert_eq!(error.kind, EventLogErrorKind::InvalidBindingHistory);
+        // The backend survives the rejected event rather than being half-applied.
+        assert_eq!(frontier.backend, Some(ConversationBackend::Terminal));
+        assert!(frontier.binding.current.is_none());
+    }
+
+    #[test]
+    fn an_agent_conversation_refuses_a_later_terminal_provision() {
+        let mut frontier = ConversationFrontier::default();
+        apply_event(&mut frontier, &agent_binding_record(1)).unwrap();
+
+        let error = apply_event(&mut frontier, &terminal_provisioned_record(2)).unwrap_err();
+        assert_eq!(error.kind, EventLogErrorKind::InvalidBindingHistory);
+        assert_eq!(frontier.backend, Some(ConversationBackend::Agent));
+    }
+
+    #[test]
+    fn repeating_the_terminal_provision_is_not_a_contradiction() {
+        // Same backend twice is a retry, not corruption — only a *different*
+        // backend is a corrupt log.
+        let mut frontier = ConversationFrontier::default();
+        apply_event(&mut frontier, &terminal_provisioned_record(1)).unwrap();
+        apply_event(&mut frontier, &terminal_provisioned_record(2)).unwrap();
+
+        assert_eq!(frontier.backend, Some(ConversationBackend::Terminal));
+        assert_eq!(
+            frontier.lifecycle_state,
+            Some(ConversationLifecycleState::Ready)
+        );
+        assert_eq!(frontier.last_seq, 2);
+    }
+
+    #[test]
+    fn a_log_with_no_backend_event_declares_no_backend() {
+        // `None` is not the same as `Agent`: a Conversation that is still
+        // allocating has not chosen yet, and readers that default it to `Agent`
+        // are making a display choice, not reading one from the log.
+        let mut frontier = ConversationFrontier::default();
+        apply_event(&mut frontier, &record(1, ConversationEventType::UserPrompt)).unwrap();
+
+        assert_eq!(frontier.backend, None);
+        assert_eq!(frontier.lifecycle_state, None);
+    }
+
+    #[test]
+    fn terminal_provisioned_is_written_to_the_bindings_stream() {
+        // It answers the same question the binding events answer, so it has to
+        // fold from the same stream — split across two files, the "what backs
+        // this Conversation" answer could be read in either order.
+        assert_eq!(
+            ConversationEventType::TerminalProvisioned.stream(),
+            ConversationEventStream::Bindings
+        );
     }
 
     #[test]

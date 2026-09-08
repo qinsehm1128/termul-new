@@ -299,6 +299,31 @@ pub enum ConversationLifecycleState {
     Deleted,
 }
 
+/// What actually runs behind a Conversation.
+///
+/// This is a *discriminator*, not a capability list, and it exists because the
+/// absence of an agent binding does not mean "terminal". A Conversation has no
+/// current binding while it is `AgentFailed`, after a detach or suspend, and
+/// for legacy compatibility records — all of which are agent-backed and should
+/// still offer the launcher as their restart surface. Only an explicit,
+/// durable declaration can separate those from a Conversation that never wanted
+/// an agent in the first place.
+///
+/// Backed by the first backend event in the log and never rewritten
+/// afterwards: the backend is chosen when the Conversation is created, and a
+/// later rebind must not be able to reinterpret what the user asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationBackend {
+    /// An ACP agent session. The default so that every record written before
+    /// this discriminator existed keeps its original meaning.
+    #[default]
+    Agent,
+    /// A terminal in the Conversation's own workspace. No ACP session is ever
+    /// created, so binding lifecycle actions do not apply.
+    Terminal,
+}
+
 /// Who stamped a `ConversationRecordV2`.
 ///
 /// Every wire value is pinned by an explicit `#[serde(rename = "…")]` and the

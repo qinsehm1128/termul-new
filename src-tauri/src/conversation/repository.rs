@@ -29,9 +29,9 @@ use crate::conversation::catalog::{
 #[cfg(test)]
 use crate::conversation::catalog::{CatalogAdmissionMetrics, ConversationCatalogGeneration};
 use crate::conversation::contracts::{
-    encoded_json_len_bounded, AgentSessionBinding, AgentSessionBindingState, ConversationErrorCode,
-    ConversationHistorySummaryV1, ConversationId, ConversationLifecycleState, ConversationRecordV2,
-    ConversationTitleSource, ExecutionTarget, ProjectAttachment,
+    encoded_json_len_bounded, AgentSessionBinding, AgentSessionBindingState, ConversationBackend,
+    ConversationErrorCode, ConversationHistorySummaryV1, ConversationId, ConversationLifecycleState,
+    ConversationRecordV2, ConversationTitleSource, ExecutionTarget, ProjectAttachment,
     AGENT_SESSION_BINDING_SCHEMA_VERSION, CONVERSATION_SCHEMA_VERSION,
     MAX_CONVERSATION_RECORD_BYTES, PROJECT_ATTACHMENT_SCHEMA_VERSION,
 };
@@ -1957,6 +1957,50 @@ impl ConversationRepository {
                     error.to_string(),
                 )
             })?,
+        )
+        .await
+    }
+
+    /// Declare a Conversation terminal-backed and carry it to `Ready`.
+    ///
+    /// The terminal-mode counterpart of [`Self::bind_agent_session`]. Refuses
+    /// when a binding already exists so the contradiction is reported at the
+    /// write that causes it — the replay fold would also reject it, but only on
+    /// the next open, by which point the durable log is already unreadable.
+    pub(crate) async fn provision_terminal_backend(
+        self: &Arc<Self>,
+        permit: &RepositoryWritePermit,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+        recorded_at_utc: DateTime<Utc>,
+    ) -> Result<ConversationEventRecordV2> {
+        self.validate_write_permit(permit, conversation_id, "provision_terminal_backend")?;
+        let terminal_id = terminal_id.trim();
+        if terminal_id.is_empty() {
+            return Err(repository_error(
+                ConversationErrorCode::ValidationError,
+                "provision_terminal_backend",
+                Some(conversation_id),
+                "terminalId must not be empty".to_string(),
+            ));
+        }
+        let frontier = self.conversation_frontier(conversation_id)?;
+        if frontier.binding.current.is_some()
+            || frontier.backend == Some(ConversationBackend::Agent)
+        {
+            return Err(repository_error(
+                ConversationErrorCode::ValidationError,
+                "provision_terminal_backend",
+                Some(conversation_id),
+                "an agent-backed Conversation cannot become terminal-backed".to_string(),
+            ));
+        }
+        self.append_event(
+            permit,
+            conversation_id,
+            recorded_at_utc,
+            ConversationEventType::TerminalProvisioned,
+            serde_json::json!({ "terminalId": terminal_id }),
         )
         .await
     }
