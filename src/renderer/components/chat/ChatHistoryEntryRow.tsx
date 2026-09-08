@@ -1,3 +1,4 @@
+import { isAgentBackedConversation } from '@shared/types/conversation.types'
 import type { ConversationLifecycleOutcome } from '@shared/types/conversation-lifecycle.types'
 import {
   Bot,
@@ -102,6 +103,14 @@ export function ConversationLifecycleActions({
   const suspendAgentBinding = useAcpStore((state) => state.suspendAgentBinding)
   const replaceAgentBinding = useAcpStore((state) => state.replaceAgentBinding)
   const agentConfigs = useAcpStore((state) => state.agentConfigs) ?? EMPTY_AGENT_CONFIGS
+  // Detach / rebind / suspend / replace all act on an ACP binding. A
+  // terminal-backed Conversation has none, so each would fail with
+  // CONVERSATION_BINDING_NOT_FOUND — after the user confirmed a
+  // destructive-sounding dialog. Close view, rename, and delete stay: those are
+  // properties of the Conversation, not of an agent.
+  const agentBacked = useConversationStore((state) =>
+    conversationId ? isAgentBackedConversation(state.summariesById[conversationId]) : true
+  )
   // Which configured agent the pending 'replace' should bind to. `null` means
   // restart on the current agent, which is what 'replace' has always done.
   const [switchTargetConfigId, setSwitchTargetConfigId] = useState<string | null>(null)
@@ -183,48 +192,52 @@ export function ConversationLifecycleActions({
             <X className="mr-2 size-4" aria-hidden="true" />
             {t('lifecycle.closeView')}
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setPendingAction('detach')}>
-            <Unlink className="mr-2 size-4" aria-hidden="true" />
-            {t('lifecycle.detach')}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setPendingAction('rebind')}>
-            <Link2 className="mr-2 size-4" aria-hidden="true" />
-            {t('lifecycle.rebind')}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setPendingAction('suspend')}>
-            <PauseCircle className="mr-2 size-4" aria-hidden="true" />
-            {t('lifecycle.suspend')}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() => {
-              setSwitchTargetConfigId(null)
-              setPendingAction('replace')
-            }}
-          >
-            <RefreshCw className="mr-2 size-4" aria-hidden="true" />
-            {t('lifecycle.replace')}
-          </DropdownMenuItem>
-          {agentConfigs.length > 0 && (
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Bot className="mr-2 size-4" aria-hidden="true" />
-                {t('lifecycle.switchAgent')}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-52">
-                {agentConfigs.map((config) => (
-                  <DropdownMenuItem
-                    key={config.id}
-                    onSelect={() => {
-                      setSwitchTargetConfigId(config.id)
-                      setPendingAction('replace')
-                    }}
-                  >
-                    {config.name}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
+          {agentBacked && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setPendingAction('detach')}>
+                <Unlink className="mr-2 size-4" aria-hidden="true" />
+                {t('lifecycle.detach')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPendingAction('rebind')}>
+                <Link2 className="mr-2 size-4" aria-hidden="true" />
+                {t('lifecycle.rebind')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPendingAction('suspend')}>
+                <PauseCircle className="mr-2 size-4" aria-hidden="true" />
+                {t('lifecycle.suspend')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  setSwitchTargetConfigId(null)
+                  setPendingAction('replace')
+                }}
+              >
+                <RefreshCw className="mr-2 size-4" aria-hidden="true" />
+                {t('lifecycle.replace')}
+              </DropdownMenuItem>
+              {agentConfigs.length > 0 && (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Bot className="mr-2 size-4" aria-hidden="true" />
+                    {t('lifecycle.switchAgent')}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-52">
+                    {agentConfigs.map((config) => (
+                      <DropdownMenuItem
+                        key={config.id}
+                        onSelect={() => {
+                          setSwitchTargetConfigId(config.id)
+                          setPendingAction('replace')
+                        }}
+                      >
+                        {config.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )}
+            </>
           )}
           <DropdownMenuItem
             onSelect={() => {
