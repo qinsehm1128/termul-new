@@ -2131,6 +2131,35 @@ describe('AgentLauncher placeholder', () => {
 })
 
 describe('AgentLauncher — terminal-backed conversation', () => {
+  it('starts the terminal on the click that picks it, with no second step', async () => {
+    // A terminal has nothing to configure and no prompt to write. Making it a
+    // selectable mode left the user in front of a composer with nothing to type
+    // into it, waiting to press send for no reason.
+    launchTerminalConversationMock.mockResolvedValue({
+      success: true,
+      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+      terminalId: 'terminal-1'
+    })
+    renderLauncher()
+    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
+    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
+
+    await waitFor(() => expect(launchTerminalConversationMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('leaves the composer describing the agent it was already on', async () => {
+    // Picking terminal is an action, not a selection: it must not repaint the
+    // pill or strip the agent's chips, because nothing about the agent changed.
+    renderLauncher()
+    const pillBefore = screen.getByLabelText(/Select ACP agent/i).textContent
+    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
+    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
+
+    expect(screen.getByLabelText(/Select ACP agent/i).textContent).toBe(pillBefore)
+    expect(screen.getByLabelText(/Select model/i)).toBeInTheDocument()
+    expect(screen.getByTestId('launcher-start-chat')).toBeInTheDocument()
+  })
+
   it('offers terminal as a peer of the agents in the picker, not a stray button', async () => {
     // The first attempt put this behind an unlabeled icon wedged between the
     // agent config chips and send. Nothing about it said "run a shell instead
@@ -2156,38 +2185,6 @@ describe('AgentLauncher — terminal-backed conversation', () => {
     expect(terminalRow.compareDocumentPosition(acpHeading) & 4).toBe(4)
   })
 
-  it('replaces the agent config chips once terminal is chosen', async () => {
-    // Model / thinking / mode describe an agent. Left on screen in terminal
-    // mode they would claim to configure something that never runs.
-    renderLauncher()
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-
-    await waitFor(() => expect(screen.getByTestId('launcher-start-terminal')).toBeInTheDocument())
-    expect(screen.queryByTestId('launcher-start-chat')).not.toBeInTheDocument()
-    // The model chip is the visible one; `acp-model-options` only exists once
-    // its popover is open, so asserting on that alone passes vacuously.
-    expect(screen.queryByLabelText(/Select model/i)).not.toBeInTheDocument()
-  })
-
-  it('returns to the agent it was on when an agent is picked again', async () => {
-    // Terminal is a mode of this composer. Leaving it stuck would make the
-    // picker show an agent while the send button still started a shell.
-    renderLauncher()
-    // One open: the popover stays open when an inner row is clicked, so
-    // reopening it here would toggle it shut instead.
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-    await waitFor(() => expect(screen.getByTestId('launcher-start-terminal')).toBeInTheDocument())
-
-    const defaultAgent = defaultReadyAgent()
-    fireEvent.click(await screen.findByText(pickerLabel(defaultAgent.agent.name)))
-
-    await waitFor(() => expect(screen.getByTestId('launcher-start-chat')).toBeInTheDocument())
-    expect(screen.queryByTestId('launcher-start-terminal')).not.toBeInTheDocument()
-    expect(screen.getByLabelText(/Select model/i)).toBeInTheDocument()
-  })
-
   it('starts a terminal in the selected folder without touching the agent path', async () => {
     // The folder choice above is the only thing the two paths share; a shell has
     // no config, model, mode or prompt.
@@ -2199,7 +2196,6 @@ describe('AgentLauncher — terminal-backed conversation', () => {
     renderLauncher()
     fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
     fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-    fireEvent.click(await screen.findByTestId('launcher-start-terminal'))
 
     await waitFor(() => expect(launchTerminalConversationMock).toHaveBeenCalledTimes(1))
     // Inherits the launcher's resolved target and attachment verbatim — that is
@@ -2240,7 +2236,6 @@ describe('AgentLauncher — terminal-backed conversation', () => {
     )
     fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
     fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-    fireEvent.click(await screen.findByTestId('launcher-start-terminal'))
 
     await waitFor(() =>
       expect(onLaunched).toHaveBeenCalledWith('018f7a1c-1b4d-7c8a-9f01-0123456789ab')
@@ -2255,7 +2250,6 @@ describe('AgentLauncher — terminal-backed conversation', () => {
     renderLauncher()
     fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
     fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-    fireEvent.click(await screen.findByTestId('launcher-start-terminal'))
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('terminal limit reached'))
   })

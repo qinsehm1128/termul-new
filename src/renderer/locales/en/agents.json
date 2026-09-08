@@ -166,7 +166,7 @@
     "installed": "{{name}} installed",
     "configured": "{{name}} configured",
     "terminalOption": "Terminal",
-    "terminalOptionHint": "no agent",
+    "terminalOptionHint": "opens now",
     "backendPicker": "Run with"
   },
   "settings": {

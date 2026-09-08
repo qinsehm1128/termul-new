@@ -1077,10 +1077,6 @@ export function AgentLauncher({
   }, [preparedSessionId, pendingOptions, t])
 
   const [terminalLaunching, setTerminalLaunching] = useState(false)
-  // Terminal is a peer of the agents in the picker, so it is a *mode* of this
-  // composer rather than a separate button: while it is selected the agent's
-  // model/mode/config chips describe nothing that will run.
-  const [terminalMode, setTerminalMode] = useState(false)
 
   /**
    * Start a Conversation backed by a terminal instead of an agent.
@@ -1855,86 +1851,70 @@ export function AgentLauncher({
                   selectedConfig={selectedConfig}
                   disabled={Boolean(installingConfigId) || savingManualPath}
                   installingConfigId={installingConfigId}
-                  onSelectAgent={(entry) => {
-                    setTerminalMode(false)
-                    handleSelectAgent(entry)
-                  }}
-                  terminalSelected={terminalMode}
-                  onSelectTerminal={() => setTerminalMode(true)}
+                  onSelectAgent={handleSelectAgent}
+                  onStartTerminal={() => void launchTerminal()}
                 />
-                {!terminalMode && (
-                  <>
-                    <AcpModelPicker
-                      selectedEntry={selectedEntry}
-                      modelOption={modelOption}
-                      loading={showModelLoading}
-                      connecting={false}
-                      stale={Boolean(prepareError && hasCachedModels)}
-                      setupError={prepareError}
-                      signInMethod={signInMethod}
-                      onSignIn={() => void handleSignIn()}
-                      disabled={
-                        Boolean(installingConfigId) ||
-                        savingManualPath ||
-                        (!optionsInteractive && !prepareError)
-                      }
-                      onRetry={handleRetryPrepare}
-                      onSelectModel={handleSetModel}
-                    />
-                    {thoughtLevel && (
-                      <ConfigChip
-                        option={thoughtLevel}
-                        disabled={!optionsInteractive}
-                        promoted
-                        onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
-                      />
-                    )}
-                    {fastMode && (
-                      <FastModeToggle
-                        option={fastMode}
-                        disabled={!optionsInteractive}
-                        onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
-                      />
-                    )}
-                    {nonFastGenericOptions.map((option) => (
-                      <ConfigChip
-                        key={option.id}
-                        option={option}
-                        disabled={!optionsInteractive}
-                        onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
-                      />
-                    ))}
-                    {modePreviewSession && (
-                      <ModeChip
-                        session={modePreviewSession}
-                        disabled={!optionsInteractive}
-                        onSelect={handleSetMode}
-                        label={t('common.agent', 'Agent')}
-                      />
-                    )}
-                  </>
+                <AcpModelPicker
+                  selectedEntry={selectedEntry}
+                  modelOption={modelOption}
+                  loading={showModelLoading}
+                  connecting={false}
+                  stale={Boolean(prepareError && hasCachedModels)}
+                  setupError={prepareError}
+                  signInMethod={signInMethod}
+                  onSignIn={() => void handleSignIn()}
+                  disabled={
+                    Boolean(installingConfigId) ||
+                    savingManualPath ||
+                    (!optionsInteractive && !prepareError)
+                  }
+                  onRetry={handleRetryPrepare}
+                  onSelectModel={handleSetModel}
+                />
+                {thoughtLevel && (
+                  <ConfigChip
+                    option={thoughtLevel}
+                    disabled={!optionsInteractive}
+                    promoted
+                    onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
+                  />
+                )}
+                {fastMode && (
+                  <FastModeToggle
+                    option={fastMode}
+                    disabled={!optionsInteractive}
+                    onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
+                  />
+                )}
+                {nonFastGenericOptions.map((option) => (
+                  <ConfigChip
+                    key={option.id}
+                    option={option}
+                    disabled={!optionsInteractive}
+                    onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
+                  />
+                ))}
+                {modePreviewSession && (
+                  <ModeChip
+                    session={modePreviewSession}
+                    disabled={!optionsInteractive}
+                    onSelect={handleSetMode}
+                    label={t('common.agent', 'Agent')}
+                  />
                 )}
                 <button
                   type="button"
-                  data-testid={terminalMode ? 'launcher-start-terminal' : 'launcher-start-chat'}
-                  onClick={() => (terminalMode ? void launchTerminal() : launch())}
-                  disabled={terminalMode ? terminalLaunching : !canLaunch}
+                  data-testid="launcher-start-chat"
+                  onClick={() => launch()}
+                  disabled={!canLaunch}
                   className={cn(
                     'flex size-8 shrink-0 items-center justify-center rounded-md transition-colors duration-150',
-                    (terminalMode ? !terminalLaunching : canLaunch)
+                    canLaunch
                       ? 'bg-foreground text-background hover:bg-foreground/90'
                       : 'cursor-not-allowed bg-muted text-muted-foreground'
                   )}
-                  aria-label={
-                    terminalMode
-                      ? t('launcher.startTerminal', 'Start a terminal in this folder')
-                      : t('launcher.startChat', 'Start agent chat')
-                  }
-                  title={
-                    terminalMode
-                      ? t('launcher.startTerminal', 'Start a terminal in this folder')
-                      : t('launcher.startChat', 'Start agent chat')
-                  }
+                  aria-label={t('launcher.startChat', 'Start agent chat')}
+                  title={t('launcher.startChat', 'Start agent chat')}
                 >
                   <ArrowUp size={16} />
                 </button>
@@ -2262,8 +2242,7 @@ function AcpAgentPicker({
   disabled,
   installingConfigId,
   onSelectAgent,
-  terminalSelected,
-  onSelectTerminal
+  onStartTerminal
 }: {
   agents: readonly SupportedAcpAgentEntry[]
   selectedEntry: SupportedAcpAgentEntry | null
@@ -2271,17 +2250,19 @@ function AcpAgentPicker({
   disabled: boolean
   installingConfigId: string | null
   onSelectAgent: (entry: SupportedAcpAgentEntry) => void
-  /** Terminal is a peer of the agents here, not a separate control. */
-  terminalSelected: boolean
-  onSelectTerminal: () => void
+  /**
+   * Starts a terminal immediately. Unlike an agent, a terminal has nothing to
+   * configure and no prompt to write, so offering it as a selectable *mode*
+   * left the user in front of a composer with nothing to type into it.
+   */
+  onStartTerminal: () => void
 }): React.JSX.Element {
   const t = useRuntimeTranslation('agents')
   const [query, setQuery] = useState('')
   const visibleAgents = useMemo(() => filterSupportedAcpAgents(agents, query), [agents, query])
   const rawLabel =
     selectedConfig?.name ?? selectedEntry?.agent.name ?? t('launcher.agentPicker', 'ACP Agent')
-  const agentLabel = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
-  const label = terminalSelected ? t('launcher.terminalOption', 'Terminal') : agentLabel
+  const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
@@ -2291,15 +2272,11 @@ function AcpAgentPicker({
           className="max-w-[260px]"
           chevron
         >
-          {terminalSelected ? (
-            <SquareTerminal size={13} aria-hidden="true" />
-          ) : (
-            <EntryGlyph
-              config={selectedConfig}
-              templateId={selectedEntry?.agent.id}
-              name={selectedEntry?.agent.name}
-            />
-          )}
+          <EntryGlyph
+            config={selectedConfig}
+            templateId={selectedEntry?.agent.id}
+            name={selectedEntry?.agent.name}
+          />
           <span className="truncate">{label}</span>
         </ComposerPill>
       </PopoverTrigger>
@@ -2314,18 +2291,15 @@ function AcpAgentPicker({
         <button
           type="button"
           data-testid="launcher-pick-terminal"
-          onClick={onSelectTerminal}
-          className={cn(
-            'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-            terminalSelected && 'bg-accent'
-          )}
+          onClick={onStartTerminal}
+          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
         >
           <SquareTerminal size={16} className="shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">
             {t('launcher.terminalOption', 'Terminal')}
           </span>
           <span className="shrink-0 text-3xs text-muted-foreground">
-            {t('launcher.terminalOptionHint', 'no agent')}
+            {t('launcher.terminalOptionHint', 'opens now')}
           </span>
         </button>
         <div className="my-1 h-px bg-border/60" />
