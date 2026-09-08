@@ -25,10 +25,10 @@ use crate::conversation::catalog::{
     ConversationProvenanceFileV1, ConversationProvenanceSourceV1, PROVENANCE_SCHEMA_VERSION,
 };
 use crate::conversation::contracts::{
-    AgentSessionBinding, AgentSessionBindingState, ConversationCreator, ConversationId,
-    ConversationLifecycleState, ConversationRecordV2, CreationPartition, ExecutionTarget,
-    ProjectAttachment, AGENT_SESSION_BINDING_SCHEMA_VERSION, CONVERSATION_SCHEMA_VERSION,
-    PROJECT_ATTACHMENT_SCHEMA_VERSION,
+    AgentSessionBinding, AgentSessionBindingState, ConversationBackend, ConversationCreator,
+    ConversationId, ConversationLifecycleState, ConversationRecordV2, CreationPartition,
+    ExecutionTarget, ProjectAttachment, AGENT_SESSION_BINDING_SCHEMA_VERSION,
+    CONVERSATION_SCHEMA_VERSION, PROJECT_ATTACHMENT_SCHEMA_VERSION,
 };
 use crate::conversation::durable_fs::{DirectoryPermissions, DurableFileSystem};
 use crate::conversation::event_log::{ConversationEventRecordV2, ConversationEventType};
@@ -479,6 +479,8 @@ async fn stage_one(
         } else {
             ConversationLifecycleState::AgentFailed
         },
+        // Every legacy record predates terminal backends: it had an agent.
+        backend: ConversationBackend::Agent,
         last_seq: 0,
         created_by: ConversationCreator::SeManager,
         title: None,

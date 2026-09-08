@@ -605,6 +605,13 @@ pub struct ConversationRecordV2 {
     pub execution_target: ExecutionTarget,
     pub project_attachment: Option<ProjectAttachment>,
     pub lifecycle_state: ConversationLifecycleState,
+    /// Materialized the same way `lifecycle_state` is: written at creation as
+    /// the caller's intent, then reconciled from the event frontier on every
+    /// scan, which is authoritative. Defaulted so records written before
+    /// terminal backends existed keep reading as the agent Conversations they
+    /// are.
+    #[serde(default)]
+    pub backend: ConversationBackend,
     pub last_seq: u64,
     pub created_by: ConversationCreator,
     pub title: Option<String>,
@@ -669,6 +676,7 @@ mod tests {
             execution_target: ExecutionTarget::Workspace,
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::AllocatingWorkspace,
+            backend: crate::conversation::ConversationBackend::Agent,
             last_seq: 0,
             created_by: ConversationCreator::SeManager,
             title: None,
@@ -692,6 +700,10 @@ mod tests {
                 "executionTarget": { "kind": "workspace" },
                 "projectAttachment": null,
                 "lifecycleState": "allocating_workspace",
+                // Always emitted, never omitted: the TypeScript parser accepts
+                // it as optional so an older host stays readable, but a record
+                // this host writes states its backend outright.
+                "backend": "agent",
                 "lastSeq": 0,
                 "createdBy": "se-manager",
                 "title": null,

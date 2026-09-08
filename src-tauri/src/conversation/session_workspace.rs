@@ -1674,6 +1674,7 @@ mod tests {
                         execution_target: ExecutionTarget::Workspace,
                         project_attachment: None,
                         lifecycle_state: ConversationLifecycleState::Ready,
+                        backend: crate::conversation::ConversationBackend::Agent,
                         last_seq: 0,
                         created_by: ConversationCreator::Legacy,
                         title: None,

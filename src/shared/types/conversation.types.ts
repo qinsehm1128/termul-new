@@ -104,6 +104,18 @@ export const CONVERSATION_LIFECYCLE_STATES = [
 
 export type ConversationLifecycleState = (typeof CONVERSATION_LIFECYCLE_STATES)[number]
 
+export const CONVERSATION_BACKENDS = ['agent', 'terminal'] as const
+
+/**
+ * What runs behind a Conversation. Mirrors Rust `ConversationBackend`.
+ *
+ * Not inferable from "has no binding": a Conversation also has no current
+ * binding while it is `agent_failed`, after a detach or suspend, and for legacy
+ * compatibility records — all agent-backed, all still owed the launcher as
+ * their restart surface.
+ */
+export type ConversationBackend = (typeof CONVERSATION_BACKENDS)[number]
+
 export const CONVERSATION_ERROR_CODES = [
   'CONVERSATION_INVALID_ID',
   'CONVERSATION_INVALID_CREATED_AT',
@@ -145,6 +157,11 @@ export interface ConversationRecordV2 {
   executionTarget: ExecutionTarget
   projectAttachment: ProjectAttachment | null
   lifecycleState: ConversationLifecycleState
+  /**
+   * Absent from any host or record predating terminal backends. Read it through
+   * `conversationBackendOf` rather than defaulting at each call site.
+   */
+  backend?: ConversationBackend
   lastSeq: number
   /**
    * Mirrors Rust `ConversationCreator`. `'termul'` is what pre-rename installs
@@ -372,7 +389,7 @@ export function parseConversationRecordV2(value: unknown): ConversationRecordV2 
       'lastSeq',
       'createdBy'
     ],
-    ['title', 'titleSource']
+    ['title', 'titleSource', 'backend']
   )
   if (candidate.title !== undefined && candidate.title !== null) {
     nonEmptyString(candidate.title, 'conversation.title')
@@ -393,6 +410,12 @@ export function parseConversationRecordV2(value: unknown): ConversationRecordV2 
     !CONVERSATION_LIFECYCLE_STATES.includes(candidate.lifecycleState as ConversationLifecycleState)
   ) {
     throw new TypeError('conversation lifecycleState is invalid')
+  }
+  if (
+    candidate.backend !== undefined &&
+    !CONVERSATION_BACKENDS.includes(candidate.backend as ConversationBackend)
+  ) {
+    throw new TypeError('conversation backend is invalid')
   }
   nonNegativeInteger(candidate.lastSeq, 'conversation.lastSeq')
   // Both values are resolved here rather than at module scope on purpose:
@@ -506,4 +529,25 @@ export function parseConversationAggregateMutationOutcome(
     throw new TypeError('detachProject must clear the project attachment')
   }
   return value as ConversationAggregateMutationOutcome
+}
+
+/**
+ * The backend a Conversation runs on, resolved for readers.
+ *
+ * `agent` is the answer for every record written before the discriminator
+ * existed and for any host that does not send it, which is what those records
+ * have always meant. Centralised so a missing field cannot be read as
+ * "unknown backend" in one place and "terminal" in another.
+ */
+export function conversationBackendOf(
+  record: Pick<ConversationRecordV2, 'backend'> | null | undefined
+): ConversationBackend {
+  return record?.backend ?? 'agent'
+}
+
+/** Whether ACP-only affordances (binding lifecycle, mode/model pickers) apply. */
+export function isAgentBackedConversation(
+  record: Pick<ConversationRecordV2, 'backend'> | null | undefined
+): boolean {
+  return conversationBackendOf(record) === 'agent'
 }

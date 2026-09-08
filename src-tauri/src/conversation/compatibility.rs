@@ -15,8 +15,8 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 
 use crate::conversation::contracts::{
-    ConversationCreator, ConversationId, ConversationLifecycleState, ConversationRecordV2,
-    CreationPartition, ExecutionTarget, CONVERSATION_SCHEMA_VERSION,
+    ConversationBackend, ConversationCreator, ConversationId, ConversationLifecycleState,
+    ConversationRecordV2, CreationPartition, ExecutionTarget, CONVERSATION_SCHEMA_VERSION,
 };
 use crate::conversation::migration::layout::ReaderPrecedence;
 use crate::conversation::migration::legacy::{CreatedAtSource, MigrationMapV1};
@@ -129,6 +129,8 @@ impl LegacyConversationReader {
                         execution_target: ExecutionTarget::Workspace,
                         project_attachment: None,
                         lifecycle_state: ConversationLifecycleState::Ready,
+                        // Every legacy record predates terminal backends: it had an agent.
+                        backend: ConversationBackend::Agent,
                         last_seq: 0,
                         // The projection is a record *this* build emits now, so
                         // it claims this build's creator (decision OD-04). The
@@ -378,6 +380,8 @@ mod tests {
             execution_target: ExecutionTarget::Workspace,
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::Ready,
+            // Every legacy record predates terminal backends: it had an agent.
+            backend: ConversationBackend::Agent,
             last_seq: 0,
             created_by: ConversationCreator::Legacy,
             title: None,

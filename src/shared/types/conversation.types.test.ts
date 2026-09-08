@@ -8,7 +8,9 @@ import {
   CONVERSATION_LIFECYCLE_STATES,
   CONVERSATION_SCHEMA_VERSION,
   type ConversationRecordV2,
+  conversationBackendOf,
   type ExecutionTarget,
+  isAgentBackedConversation,
   isConversationId,
   parseAgentSessionBinding,
   parseConversationAggregateMutationOutcome,
@@ -169,6 +171,43 @@ describe('Conversation runtime-neutral wire contracts', () => {
     expect(terminalRef).not.toHaveProperty('environment')
     expect(terminalRef).not.toHaveProperty('output')
     expect(terminalRef).not.toHaveProperty('projectId')
+  })
+
+  describe('backend discriminator', () => {
+    it('reads a record with no backend field as agent-backed', () => {
+      // Every record on disk today predates the discriminator. Reading those as
+      // anything but `agent` would silently reclassify the user's whole history.
+      expect(conversationBackendOf(projectlessConversation)).toBe('agent')
+      expect(isAgentBackedConversation(projectlessConversation)).toBe(true)
+    })
+
+    it('reads an explicit terminal backend', () => {
+      const record = { ...projectlessConversation, backend: 'terminal' as const }
+      expect(conversationBackendOf(record)).toBe('terminal')
+      expect(isAgentBackedConversation(record)).toBe(false)
+    })
+
+    it('defaults a missing record to agent rather than throwing', () => {
+      // Call sites read this while a Conversation is still opening.
+      expect(conversationBackendOf(null)).toBe('agent')
+      expect(conversationBackendOf(undefined)).toBe('agent')
+    })
+
+    it('accepts a record carrying a known backend', () => {
+      const record = { ...projectlessConversation, backend: 'terminal' as const }
+      expect(parseConversationRecordV2(record)).toBe(record)
+    })
+
+    it('rejects a backend value outside the vocabulary', () => {
+      // An unknown backend must not fall through to the agent default: the UI
+      // would offer ACP controls for something it cannot describe.
+      expect(() =>
+        parseConversationRecordV2({ ...projectlessConversation, backend: 'ssh' })
+      ).toThrow()
+      expect(() =>
+        parseConversationRecordV2({ ...projectlessConversation, backend: null })
+      ).toThrow()
+    })
   })
 
   it('contains no hidden or default project semantics', () => {

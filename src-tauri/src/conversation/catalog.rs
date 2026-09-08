@@ -724,6 +724,12 @@ fn apply_scanned_lifecycle(record: &mut ConversationRecordV2, frontier: &Convers
     if let Some(lifecycle_state) = frontier.lifecycle_state {
         record.lifecycle_state = lifecycle_state;
     }
+    // The log is the authority on what actually ran. A record written at
+    // creation carries only the caller's intent, which an interrupted creation
+    // never got to honour.
+    if let Some(backend) = frontier.backend {
+        record.backend = backend;
+    }
 }
 
 fn entry_from_frontier(
@@ -746,7 +752,7 @@ fn entry_from_frontier(
             .as_ref()
             .map(|attachment| attachment.project_id.clone()),
         lifecycle_state: record.lifecycle_state,
-        backend: frontier.backend.unwrap_or_default(),
+        backend: record.backend,
         title: frontier.summary.title.clone(),
         title_source: frontier.summary.title_source,
         last_activity_at_utc: format_created_at_utc(&last_activity_at_utc),
@@ -1039,11 +1045,54 @@ mod tests {
             execution_target: ExecutionTarget::Workspace,
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::Ready,
+            backend: crate::conversation::ConversationBackend::Agent,
             last_seq: 0,
             created_by: ConversationCreator::Legacy,
             title: None,
             title_source: None,
         }
+    }
+
+    #[test]
+    fn the_event_log_overrides_the_backend_a_record_only_intended() {
+        // A record states the caller's intent at creation. An interrupted
+        // creation never got to honour it, so the log — which only names a
+        // backend once something actually ran — has to win.
+        let mut record = record(FIRST, "2026-08-15T09:45:15.123Z");
+        record.backend = ConversationBackend::Terminal;
+        let mut frontier = ConversationFrontier::default();
+        frontier.backend = Some(ConversationBackend::Agent);
+
+        apply_scanned_lifecycle(&mut record, &frontier);
+
+        assert_eq!(record.backend, ConversationBackend::Agent);
+    }
+
+    #[test]
+    fn a_log_that_names_no_backend_leaves_the_recorded_intent_alone() {
+        // Nothing has run yet. Overwriting the intent with a default here would
+        // erase the only evidence of what the user asked for.
+        let mut record = record(FIRST, "2026-08-15T09:45:15.123Z");
+        record.backend = ConversationBackend::Terminal;
+        let frontier = ConversationFrontier::default();
+        assert_eq!(frontier.backend, None);
+
+        apply_scanned_lifecycle(&mut record, &frontier);
+
+        assert_eq!(record.backend, ConversationBackend::Terminal);
+    }
+
+    #[test]
+    fn the_catalog_entry_reports_the_reconciled_backend() {
+        let mut record = record(FIRST, "2026-08-15T09:45:15.123Z");
+        record.backend = ConversationBackend::Agent;
+        let mut frontier = ConversationFrontier::default();
+        frontier.backend = Some(ConversationBackend::Terminal);
+
+        apply_scanned_lifecycle(&mut record, &frontier);
+        let entry = entry_from_frontier(&record, &frontier);
+
+        assert_eq!(entry.backend, ConversationBackend::Terminal);
     }
 
     fn large_catalog(

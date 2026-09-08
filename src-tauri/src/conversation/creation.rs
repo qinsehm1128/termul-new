@@ -727,6 +727,7 @@ impl ConversationCreationService {
             // Project attribution is recorded through append-only attachment history below.
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::AllocatingWorkspace,
+            backend: request_backend,
             last_seq: 0,
             created_by: ConversationCreator::SeManager,
             title: None,
@@ -1699,6 +1700,7 @@ mod tests {
             execution_target: ExecutionTarget::Workspace,
             project_attachment: None,
             lifecycle_state: ConversationLifecycleState::Ready,
+            backend: crate::conversation::ConversationBackend::Agent,
             last_seq: 0,
             created_by: ConversationCreator::SeManager,
             title: None,
