@@ -91,9 +91,20 @@ export async function spawnTerminalInPane(
     }
   }
 
-  // Resolve shell: explicit → project default → app default → undefined (backend picks)
+  // Resolve shell: explicit → project default → app default → undefined (backend picks).
+  //
+  // The app default was documented here but never read, so the preference in
+  // Settings silently did nothing for every spawn. It matters most to a
+  // Conversation terminal, which usually has no project to inherit from.
+  //
+  // `||` rather than `??` at every step: these are strings, and an empty one is
+  // "not configured", not a shell path the host should try to execute.
   const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-  const shell = options?.shell ?? project?.defaultShell ?? undefined
+  const shell =
+    options?.shell ||
+    project?.defaultShell ||
+    useAppSettingsStore.getState().settings.defaultShell ||
+    undefined
 
   try {
     // Ensure worktree symlinks are present when spawning into a worktree path

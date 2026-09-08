@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hoist mocks so they're available when vi.mock factories run
 const {
+  mockAppDefaultShell,
+  mockProjectDefaultShell,
   mockAddTerminal,
   mockSetTerminalPtyId,
   mockSetTerminalClaim,
@@ -19,6 +21,8 @@ const {
   mockLogFrontendError,
   mockMoveTabToNewSplit
 } = vi.hoisted(() => ({
+  mockAppDefaultShell: { current: '' as string },
+  mockProjectDefaultShell: { current: 'bash' as string },
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
   mockSetTerminalClaim: vi.fn(),
@@ -64,7 +68,15 @@ vi.mock('@/stores/workspace-store', () => ({
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: {
     getState: () => ({
-      projects: [{ id: 'proj-1', name: 'Test', path: '/test', defaultShell: 'bash', envVars: [] }],
+      projects: [
+        {
+          id: 'proj-1',
+          name: 'Test',
+          path: '/test',
+          defaultShell: mockProjectDefaultShell.current,
+          envVars: []
+        }
+      ],
       setActiveWorktree: mockSetActiveWorktree
     })
   }
@@ -72,7 +84,9 @@ vi.mock('@/stores/project-store', () => ({
 
 vi.mock('@/stores/app-settings-store', () => ({
   useAppSettingsStore: {
-    getState: () => ({ settings: { maxTerminalsPerProject: 10 } })
+    getState: () => ({
+      settings: { maxTerminalsPerProject: 10, defaultShell: mockAppDefaultShell.current }
+    })
   }
 }))
 
@@ -397,6 +411,62 @@ describe('openTerminalAtCwd', () => {
         source: 'terminal-spawn.openTerminalAtCwd',
         message: expect.stringContaining('Shell not found')
       })
+    )
+  })
+})
+
+describe('spawnTerminalInPane — default shell precedence', () => {
+  beforeEach(() => {
+    mockAppDefaultShell.current = ''
+    mockProjectDefaultShell.current = 'bash'
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: true,
+      data: { id: 'pty-1', shell: 'bash', cwd: '/test', claim: 'claim-pty-1' }
+    })
+  })
+
+  it('uses the app default when the project has none', async () => {
+    // The Settings preference was read nowhere, so it silently did nothing.
+    // It matters most here: a Conversation terminal usually has no project.
+    mockProjectDefaultShell.current = ''
+    mockAppDefaultShell.current = '/bin/fish'
+
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test')
+
+    expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ shell: '/bin/fish' })
+    )
+  })
+
+  it('lets the project override the app default', async () => {
+    mockProjectDefaultShell.current = '/bin/zsh'
+    mockAppDefaultShell.current = '/bin/fish'
+
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test')
+
+    expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ shell: '/bin/zsh' })
+    )
+  })
+
+  it('treats an unset preference as absent, not as a shell path', async () => {
+    // `??` would forward '' to the host, which would try to execute it.
+    mockProjectDefaultShell.current = ''
+    mockAppDefaultShell.current = ''
+
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test')
+
+    expect(mockTerminalApiSpawn.mock.calls.at(-1)?.[0].shell).toBeUndefined()
+  })
+
+  it('still lets an explicit shell win over both defaults', async () => {
+    mockProjectDefaultShell.current = '/bin/zsh'
+    mockAppDefaultShell.current = '/bin/fish'
+
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test', { shell: '/bin/bash' })
+
+    expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ shell: '/bin/bash' })
     )
   })
 })
