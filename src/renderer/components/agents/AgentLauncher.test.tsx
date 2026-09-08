@@ -2143,6 +2143,19 @@ describe('AgentLauncher — terminal-backed conversation', () => {
     expect(await screen.findByTestId('launcher-pick-terminal')).toBeInTheDocument()
   })
 
+  it('does not file terminal under the ACP Agent heading', async () => {
+    // First attempt put the row directly beneath a heading reading "ACP AGENT",
+    // which is exactly what a terminal is not. The heading has to belong to the
+    // agent list below it.
+    renderLauncher()
+    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
+
+    const terminalRow = await screen.findByTestId('launcher-pick-terminal')
+    const acpHeading = screen.getByText('ACP Agent')
+    // Node.DOCUMENT_POSITION_FOLLOWING === 4: the heading comes *after* the row.
+    expect(terminalRow.compareDocumentPosition(acpHeading) & 4).toBe(4)
+  })
+
   it('replaces the agent config chips once terminal is chosen', async () => {
     // Model / thinking / mode describe an agent. Left on screen in terminal
     // mode they would claim to configure something that never runs.

@@ -166,7 +166,8 @@
     "installed": "{{name}} 已安装",
     "configured": "{{name}} 已配置",
     "terminalOption": "终端",
-    "terminalOptionHint": "不用 agent"
+    "terminalOptionHint": "不用 agent",
+    "backendPicker": "用什么跑"
   },
   "settings": {
     "enterBinaryPath": "请输入 ACP 二进制文件路径。",

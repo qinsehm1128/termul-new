@@ -2305,7 +2305,7 @@ function AcpAgentPicker({
         className="w-72 p-1 shadow-[0_12px_36px_hsl(var(--background)/0.65),inset_0_1px_0_0_hsl(var(--foreground)/0.05)]"
       >
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-          {t('launcher.agentPicker', 'ACP Agent')}
+          {t('launcher.backendPicker', 'Run with')}
         </div>
         <button
           type="button"
@@ -2325,6 +2325,9 @@ function AcpAgentPicker({
           </span>
         </button>
         <div className="my-1 h-px bg-border/60" />
+        <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+          {t('launcher.agentPicker', 'ACP Agent')}
+        </div>
         <div className="px-2 pb-1">
           <Input
             value={query}

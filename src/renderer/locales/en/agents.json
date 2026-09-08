@@ -166,7 +166,8 @@
     "installed": "{{name}} installed",
     "configured": "{{name}} configured",
     "terminalOption": "Terminal",
-    "terminalOptionHint": "no agent"
+    "terminalOptionHint": "no agent",
+    "backendPicker": "Run with"
   },
   "settings": {
     "enterBinaryPath": "Enter the path to the ACP binary.",
