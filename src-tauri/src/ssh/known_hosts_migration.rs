@@ -363,7 +363,9 @@ mod tests {
             .filter(|line| line.trim_start().starts_with('@'))
             .collect();
         assert!(
-            markers.iter().any(|line| line.starts_with("@cert-authority")),
+            markers
+                .iter()
+                .any(|line| line.starts_with("@cert-authority")),
             "the @cert-authority line was lost: {markers:?}"
         );
         assert!(
@@ -407,7 +409,10 @@ mod tests {
         let outcome = migrate_app_known_hosts_in(temp.path()).expect("second run");
         assert_eq!(outcome, KnownHostsMigration::AlreadyMigrated);
         assert_eq!(
-            fs::metadata(&migrated).expect("stat again").modified().expect("mtime"),
+            fs::metadata(&migrated)
+                .expect("stat again")
+                .modified()
+                .expect("mtime"),
             modified_before,
             "the second run must not write"
         );
@@ -481,8 +486,11 @@ mod tests {
             }
         );
         assert_eq!(
-            fs::read(temp.path().join(brand::DEFAULT_CANONICAL.ssh_known_hosts_file))
-                .expect("read the store under the shipped name"),
+            fs::read(
+                temp.path()
+                    .join(brand::DEFAULT_CANONICAL.ssh_known_hosts_file)
+            )
+            .expect("read the store under the shipped name"),
             expected
         );
         assert_eq!(

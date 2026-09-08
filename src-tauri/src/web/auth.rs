@@ -2441,7 +2441,10 @@ mod tests {
         let scoped = test_tracing::lock_scoped("task-002-capture").await;
         let scoped_id = scoped.id();
         log::info!(target: "se_manager::web::auth", "scoped-capture-record");
-        test_tracing::emit_unscoped_for_tests("se_manager::web::auth", "unrelated-concurrent-record");
+        test_tracing::emit_unscoped_for_tests(
+            "se_manager::web::auth",
+            "unrelated-concurrent-record",
+        );
         let scoped_messages = test_tracing::messages_for(scoped_id, "se_manager::web::auth");
         assert!(
             scoped_messages

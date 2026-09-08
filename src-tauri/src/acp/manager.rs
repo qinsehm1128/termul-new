@@ -1965,6 +1965,8 @@ impl AcpManager {
                 conversation_id: context.conversation_id,
                 project_attachment,
                 execution_target,
+                // The ACP path is the agent backend by construction.
+                backend: crate::conversation::ConversationBackend::Agent,
             };
             let value = creation
                 .prepare_conversation(request)

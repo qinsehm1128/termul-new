@@ -143,26 +143,25 @@ fn main() -> ExitCode {
     runtime.block_on(async move {
         // The standalone host crosses the same synchronous Conversation admission gate as
         // Desktop before opening any app-managed store, manager, PTY, or network route.
-        let conversation_bootstrap =
-            match se_manager_lib::conversation::ConversationBootstrap::run(
-                se_manager_lib::conversation::HostConversationRoots::standalone(
-                    cfg.service_account_state_dir(),
-                    cfg.conversation_workspace_root(),
-                    cfg.sessions_dir.clone(),
-                    cfg.workspace_manifests_dir.clone(),
-                ),
-                se_manager_lib::conversation::MigrationHostMode::Standalone,
-            ) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    error!(
-                        code = error.code,
-                        operation = error.operation,
-                        "Conversation bootstrap aborted startup"
-                    );
-                    return ExitCode::from(1);
-                }
-            };
+        let conversation_bootstrap = match se_manager_lib::conversation::ConversationBootstrap::run(
+            se_manager_lib::conversation::HostConversationRoots::standalone(
+                cfg.service_account_state_dir(),
+                cfg.conversation_workspace_root(),
+                cfg.sessions_dir.clone(),
+                cfg.workspace_manifests_dir.clone(),
+            ),
+            se_manager_lib::conversation::MigrationHostMode::Standalone,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                error!(
+                    code = error.code,
+                    operation = error.operation,
+                    "Conversation bootstrap aborted startup"
+                );
+                return ExitCode::from(1);
+            }
+        };
         info!(
             phase = ?conversation_bootstrap.migration_phase,
             precedence = ?conversation_bootstrap.reader_precedence,
@@ -243,17 +242,16 @@ fn main() -> ExitCode {
             .service_account_state_dir()
             .join("scheduled-tasks")
             .join("v1");
-        let scheduled_task_store =
-            match se_manager_lib::ScheduledTaskStore::open_with_legacy_root(
-                scheduled_task_root.join("catalog"),
-                Some(scheduled_task_root.join("projects")),
-            ) {
-                Ok(store) => Arc::new(store),
-                Err(error) => {
-                    eprintln!("se-server: failed to open scheduled task store: {error}");
-                    return ExitCode::from(1);
-                }
-            };
+        let scheduled_task_store = match se_manager_lib::ScheduledTaskStore::open_with_legacy_root(
+            scheduled_task_root.join("catalog"),
+            Some(scheduled_task_root.join("projects")),
+        ) {
+            Ok(store) => Arc::new(store),
+            Err(error) => {
+                eprintln!("se-server: failed to open scheduled task store: {error}");
+                return ExitCode::from(1);
+            }
+        };
         let scheduled_tasks = se_manager_lib::scheduled_tasks::ScheduledTaskService::new(
             scheduled_task_store,
             Arc::new(
@@ -432,9 +430,7 @@ fn parse_conversation_maintenance_args(
                     "rollback" => {
                         se_manager_lib::conversation::MigrationMaintenanceAction::Rollback
                     }
-                    "reapply" => {
-                        se_manager_lib::conversation::MigrationMaintenanceAction::Reapply
-                    }
+                    "reapply" => se_manager_lib::conversation::MigrationMaintenanceAction::Reapply,
                     "finalize" => {
                         se_manager_lib::conversation::MigrationMaintenanceAction::Finalize
                     }
@@ -528,11 +524,7 @@ fn schedule_standalone_conversation_maintenance(
     };
     let request_id = approval_receipt
         .as_ref()
-        .map(
-            |receipt: &se_manager_lib::conversation::ApprovalReceiptV1| {
-                receipt.request_id.clone()
-            },
-        )
+        .map(|receipt: &se_manager_lib::conversation::ApprovalReceiptV1| receipt.request_id.clone())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let request = se_manager_lib::conversation::MigrationMaintenanceRequestV1 {
         action: maintenance.action,
@@ -540,18 +532,17 @@ fn schedule_standalone_conversation_maintenance(
         requested_at_utc: Utc::now(),
         approval_receipt,
     };
-    let control = match se_manager_lib::conversation::ConversationMigrationControlService::new(
-        &state_root,
-    ) {
-        Ok(control) => control,
-        Err(error) => {
-            error!(
-                code = error.code.as_str(),
-                "failed to create maintenance control"
-            );
-            return ExitCode::from(1);
-        }
-    };
+    let control =
+        match se_manager_lib::conversation::ConversationMigrationControlService::new(&state_root) {
+            Ok(control) => control,
+            Err(error) => {
+                error!(
+                    code = error.code.as_str(),
+                    "failed to create maintenance control"
+                );
+                return ExitCode::from(1);
+            }
+        };
     match control.request(request) {
         Ok(receipt) => {
             match serde_json::to_string(&receipt) {

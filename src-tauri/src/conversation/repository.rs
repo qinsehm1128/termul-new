@@ -30,9 +30,9 @@ use crate::conversation::catalog::{
 use crate::conversation::catalog::{CatalogAdmissionMetrics, ConversationCatalogGeneration};
 use crate::conversation::contracts::{
     encoded_json_len_bounded, AgentSessionBinding, AgentSessionBindingState, ConversationBackend,
-    ConversationErrorCode, ConversationHistorySummaryV1, ConversationId, ConversationLifecycleState,
-    ConversationRecordV2, ConversationTitleSource, ExecutionTarget, ProjectAttachment,
-    AGENT_SESSION_BINDING_SCHEMA_VERSION, CONVERSATION_SCHEMA_VERSION,
+    ConversationErrorCode, ConversationHistorySummaryV1, ConversationId,
+    ConversationLifecycleState, ConversationRecordV2, ConversationTitleSource, ExecutionTarget,
+    ProjectAttachment, AGENT_SESSION_BINDING_SCHEMA_VERSION, CONVERSATION_SCHEMA_VERSION,
     MAX_CONVERSATION_RECORD_BYTES, PROJECT_ATTACHMENT_SCHEMA_VERSION,
 };
 use crate::conversation::durable_fs::{DirectoryPermissions, DurableFileSystem};

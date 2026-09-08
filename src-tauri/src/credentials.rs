@@ -170,10 +170,11 @@ mod tests {
     impl MapBackend {
         fn seeded(service: &str, key: &str, value: &str) -> Arc<Self> {
             let backend = Arc::new(Self::default());
-            backend.entries.lock().unwrap().insert(
-                (service.to_string(), key.to_string()),
-                value.to_string(),
-            );
+            backend
+                .entries
+                .lock()
+                .unwrap()
+                .insert((service.to_string(), key.to_string()), value.to_string());
             backend
         }
     }

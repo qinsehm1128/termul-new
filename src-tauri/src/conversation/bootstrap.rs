@@ -1609,6 +1609,7 @@ mod tests {
                     project_id: "project-1".to_string(),
                     project_root: project_path.clone(),
                 },
+                backend: crate::conversation::ConversationBackend::Agent,
             })
             .await
             .unwrap();

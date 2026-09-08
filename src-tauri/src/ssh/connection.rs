@@ -1126,7 +1126,10 @@ mod tests {
                 let pattern = parts.next().expect("a host pattern");
                 let _key_type = parts.next().expect("a key type");
                 let key = parts.next().expect("a base64 key");
-                match pattern.strip_prefix('[').and_then(|rest| rest.split_once("]:")) {
+                match pattern
+                    .strip_prefix('[')
+                    .and_then(|rest| rest.split_once("]:"))
+                {
                     Some((host, port)) => (host, port.parse().expect("a port"), key),
                     None => (pattern, 22, key),
                 }
@@ -1154,7 +1157,10 @@ mod tests {
                 .decode(key)
                 .expect("the frozen store's keys are base64");
             assert!(
-                matches!(known_hosts.check_port(host, *port, &blob), CheckResult::Match),
+                matches!(
+                    known_hosts.check_port(host, *port, &blob),
+                    CheckResult::Match
+                ),
                 "{host}:{port} was trusted before the rename but is not recognised in {}; \
                  accept-new would re-trust whatever answers on that address",
                 store.display()
@@ -1169,7 +1175,9 @@ mod tests {
             .filter(|line| line.trim_start().starts_with('@'))
             .collect();
         assert!(
-            markers.iter().any(|line| line.starts_with("@cert-authority")),
+            markers
+                .iter()
+                .any(|line| line.starts_with("@cert-authority")),
             "the @cert-authority line did not survive: {markers:?}"
         );
         assert!(

@@ -281,7 +281,10 @@ mod tests {
 
         // Idempotent.
         let second = carry_forward(&legacy, &canonical).unwrap();
-        assert!(second.is_noop(), "a second pass must copy nothing: {second:?}");
+        assert!(
+            second.is_noop(),
+            "a second pass must copy nothing: {second:?}"
+        );
     }
 
     #[cfg(unix)]

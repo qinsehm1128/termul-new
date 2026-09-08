@@ -43,7 +43,7 @@ pub use catalog::{
 };
 pub use contracts::{
     format_created_at_utc, parse_created_at_utc, AgentSessionBinding, AgentSessionBindingState,
-    ConversationCreator, ConversationErrorCode, ConversationHistoryPageV1,
+    ConversationBackend, ConversationCreator, ConversationErrorCode, ConversationHistoryPageV1,
     ConversationHistoryPageValidationError, ConversationHistoryRecordV1, ConversationId,
     ConversationIdPathError, ConversationLifecycleState, ConversationRecordV2,
     ConversationTitleSource, CreatedAtUtcError, CreationPartition, ExecutionTarget,

@@ -335,6 +335,7 @@ async fn lifecycle_matrix() {
                             conversation_id: Some(fixture.id),
                             project_attachment: None,
                             execution_target: ExecutionTarget::Workspace,
+                            backend: ConversationBackend::Agent,
                         },
                         expected_revision,
                         None,

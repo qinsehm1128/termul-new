@@ -536,10 +536,7 @@ impl BrowserTabManager {
             || "null".to_string(),
             |id| format!("'{}'", Self::escape_js_string_literal(id)),
         );
-        let js = format!(
-            "window.__se_update_marker_selection({});",
-            selected_id_js,
-        );
+        let js = format!("window.__se_update_marker_selection({});", selected_id_js,);
         webview
             .eval(&js)
             .map_err(|e| format!("Failed to update annotation marker selection: {}", e))?;

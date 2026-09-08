@@ -21,10 +21,10 @@ use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
 use crate::conversation::contracts::{
-    format_created_at_utc, AgentSessionBinding, AgentSessionBindingState, ConversationCreator,
-    ConversationErrorCode, ConversationId, ConversationLifecycleState, ConversationRecordV2,
-    CreationPartition, ExecutionTarget, ProjectAttachment, AGENT_SESSION_BINDING_SCHEMA_VERSION,
-    CONVERSATION_SCHEMA_VERSION,
+    format_created_at_utc, AgentSessionBinding, AgentSessionBindingState, ConversationBackend,
+    ConversationCreator, ConversationErrorCode, ConversationId, ConversationLifecycleState,
+    ConversationRecordV2, CreationPartition, ExecutionTarget, ProjectAttachment,
+    AGENT_SESSION_BINDING_SCHEMA_VERSION, CONVERSATION_SCHEMA_VERSION,
 };
 use crate::conversation::durable_fs::{DirectoryPermissions, DurableFileSystem, DurableFsError};
 use crate::conversation::event_log::{
@@ -55,6 +55,10 @@ pub struct PrepareConversationRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_attachment: Option<ProjectAttachment>,
     pub execution_target: ExecutionTarget,
+    /// What the caller intends to run. Defaulted so every existing caller and
+    /// every payload already on the wire keeps asking for an agent.
+    #[serde(default)]
+    pub backend: ConversationBackend,
 }
 
 impl PrepareConversationRequest {
@@ -65,6 +69,7 @@ impl PrepareConversationRequest {
             conversation_id: None,
             project_attachment: None,
             execution_target,
+            backend: ConversationBackend::Agent,
         }
     }
 }
@@ -682,6 +687,7 @@ impl ConversationCreationService {
             "[conversation-creation] prepare start conversation_id={} retry=false",
             conversation_id
         );
+        let request_backend = request.backend;
         let creation_partition = CreationPartition::from_created_at(created_at_utc);
         let private_directory = self
             .private_locator
@@ -753,18 +759,67 @@ impl ConversationCreationService {
             conversation_id
         );
 
-        let record = self
-            .writer
-            .update_metadata(
-                conversation_id,
-                ConversationMetadataUpdate {
-                    lifecycle_state: Some(ConversationLifecycleState::InitializingAgent),
-                    execution_target: None,
-                    title: None,
-                    title_source: None,
-                },
-                ConversationMutation::MetadataUpdate,
-            )
+        // Only an agent-backed Conversation announces that an agent is coming
+        // up. A terminal-backed one has nothing to initialize between here and
+        // its terminal, and claiming otherwise would make the interrupted-
+        // creation sweep report a failed agent for a Conversation that never
+        // wanted one. It stays in `allocating_workspace` until
+        // `provision_terminal` carries it to `Ready`.
+        let record = if request_backend == ConversationBackend::Agent {
+            self.writer
+                .update_metadata(
+                    conversation_id,
+                    ConversationMetadataUpdate {
+                        lifecycle_state: Some(ConversationLifecycleState::InitializingAgent),
+                        execution_target: None,
+                        title: None,
+                        title_source: None,
+                    },
+                    ConversationMutation::MetadataUpdate,
+                )
+                .await
+                .map_err(map_repository_error)?
+        } else {
+            // The agent branch gets the current record back from its metadata
+            // update; the terminal branch performs no update, so read the
+            // record that `create_conversation` (plus any attachment append)
+            // actually left behind rather than the pre-write local.
+            self.repository
+                .get_conversation(conversation_id)
+                .map_err(map_repository_error)?
+        };
+        self.writer
+            .sync_conversation(conversation_id, ConversationMutation::ConversationSync)
+            .await
+            .map_err(map_repository_error)?;
+        log::info!(
+            "[conversation-creation] prepare success conversation_id={} lifecycle={:?} backend={:?}",
+            conversation_id,
+            record.lifecycle_state,
+            request_backend
+        );
+        Ok(prepared_from_record(
+            &record,
+            execution_cwd,
+            additional_directories,
+        ))
+    }
+
+    /// Carry a terminal-backed Conversation to `Ready`.
+    ///
+    /// Called once its first terminal exists. Creation deliberately leaves the
+    /// Conversation in `allocating_workspace` until this lands, so an
+    /// interrupted creation is reconciled by the existing sweep instead of
+    /// presenting a Conversation that claims to be ready with nothing running.
+    pub async fn provision_terminal(
+        &self,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+    ) -> Result<()> {
+        let lock = self.creation_lock(conversation_id);
+        let _guard = lock.lock().await;
+        self.writer
+            .provision_terminal_backend(conversation_id, terminal_id, Utc::now())
             .await
             .map_err(map_repository_error)?;
         self.writer
@@ -772,14 +827,9 @@ impl ConversationCreationService {
             .await
             .map_err(map_repository_error)?;
         log::info!(
-            "[conversation-creation] prepare success conversation_id={} lifecycle=initializing_agent",
-            conversation_id
+            "[conversation-creation] terminal backend provisioned conversation_id={conversation_id} terminal_id={terminal_id}"
         );
-        Ok(prepared_from_record(
-            &record,
-            execution_cwd,
-            additional_directories,
-        ))
+        Ok(())
     }
 
     async fn prepare_conversation_locked(
@@ -1731,6 +1781,13 @@ mod tests {
         PrepareConversationRequest::new(target)
     }
 
+    fn terminal_request(target: ExecutionTarget) -> PrepareConversationRequest {
+        PrepareConversationRequest {
+            backend: ConversationBackend::Terminal,
+            ..PrepareConversationRequest::new(target)
+        }
+    }
+
     fn retry(
         conversation_id: ConversationId,
         target: ExecutionTarget,
@@ -1740,6 +1797,7 @@ mod tests {
             conversation_id: Some(conversation_id),
             project_attachment: None,
             execution_target: target,
+            backend: ConversationBackend::Agent,
         }
     }
 
@@ -2055,6 +2113,116 @@ mod tests {
         assert_eq!(
             history[1].agent_session_id,
             "provider/session:opaque?generation=2"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_terminal_conversation_never_claims_an_agent_is_initializing() {
+        // `initializing_agent` is not a harmless placeholder: the repository
+        // rebuild closes every stale one to `agent_failed`, so a terminal
+        // Conversation parked there would report a failed agent it never had.
+        let fixture = fixture(&["2026-08-15T09:45:15.123Z"], &[ID]);
+        let prepared = fixture
+            .service
+            .prepare_conversation(terminal_request(ExecutionTarget::Workspace))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fixture
+                .repository
+                .get_conversation(prepared.conversation_id)
+                .unwrap()
+                .lifecycle_state,
+            ConversationLifecycleState::AllocatingWorkspace
+        );
+        // The workspace directory is still created — the folder semantics are
+        // identical to an agent Conversation, which is the whole point.
+        assert!(PathBuf::from(&prepared.workspace_cwd).is_dir());
+    }
+
+    #[tokio::test]
+    async fn an_agent_conversation_still_announces_its_initializing_agent() {
+        let fixture = fixture(&["2026-08-15T09:45:15.123Z"], &[ID]);
+        let prepared = fixture
+            .service
+            .prepare_conversation(request(ExecutionTarget::Workspace))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fixture
+                .repository
+                .get_conversation(prepared.conversation_id)
+                .unwrap()
+                .lifecycle_state,
+            ConversationLifecycleState::InitializingAgent
+        );
+    }
+
+    #[tokio::test]
+    async fn provisioning_a_terminal_carries_the_conversation_to_ready() {
+        let fixture = fixture(
+            &["2026-08-15T09:45:15.123Z", "2026-08-15T09:45:16.000Z"],
+            &[ID],
+        );
+        let prepared = fixture
+            .service
+            .prepare_conversation(terminal_request(ExecutionTarget::Workspace))
+            .await
+            .unwrap();
+
+        fixture
+            .service
+            .provision_terminal(prepared.conversation_id, "terminal-1")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fixture
+                .repository
+                .get_conversation(prepared.conversation_id)
+                .unwrap()
+                .lifecycle_state,
+            ConversationLifecycleState::Ready
+        );
+        let frontier = fixture
+            .repository
+            .conversation_frontier(prepared.conversation_id)
+            .unwrap();
+        assert_eq!(frontier.backend, Some(ConversationBackend::Terminal));
+        // Ready without an agent session is exactly what this path is for.
+        assert!(frontier.binding.current.is_none());
+    }
+
+    #[tokio::test]
+    async fn provisioning_a_terminal_refuses_an_agent_backed_conversation() {
+        let fixture = fixture(
+            &["2026-08-15T09:45:15.123Z", "2026-08-15T09:45:16.000Z"],
+            &[ID, BINDING_ID],
+        );
+        let prepared = fixture
+            .service
+            .create_with_agent_gate(request(ExecutionTarget::Workspace), |_prepared| async {
+                Ok(binding("agent/opaque:first"))
+            })
+            .await
+            .unwrap();
+
+        let error = fixture
+            .service
+            .provision_terminal(prepared.conversation_id, "terminal-1")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ConversationErrorCode::ValidationError);
+        // Rejected at the write, so the durable log stays readable.
+        assert_eq!(
+            fixture
+                .repository
+                .conversation_frontier(prepared.conversation_id)
+                .unwrap()
+                .backend,
+            Some(ConversationBackend::Agent)
         );
     }
 

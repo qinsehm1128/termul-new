@@ -850,8 +850,9 @@ fn lifecycle_error(
 mod tests {
     use super::*;
     use crate::conversation::contracts::{
-        parse_created_at_utc, ConversationCreator, CreationPartition, ExecutionTarget,
-        ProjectAttachment, CONVERSATION_SCHEMA_VERSION, PROJECT_ATTACHMENT_SCHEMA_VERSION,
+        parse_created_at_utc, ConversationBackend, ConversationCreator, CreationPartition,
+        ExecutionTarget, ProjectAttachment, CONVERSATION_SCHEMA_VERSION,
+        PROJECT_ATTACHMENT_SCHEMA_VERSION,
     };
     use crate::conversation::durable_fs::DurableFileSystem;
     use crate::conversation::locator::{ConversationLocator, SessionWorkspaceLocator};
@@ -1270,6 +1271,7 @@ mod tests {
                     conversation_id: Some(fixture.id),
                     project_attachment: None,
                     execution_target: ExecutionTarget::Workspace,
+                    backend: ConversationBackend::Agent,
                 },
                 before.last_seq,
                 Some("agent-runtime-other".to_string()),
@@ -1318,6 +1320,7 @@ mod tests {
                     conversation_id: Some(fixture.id),
                     project_attachment: None,
                     execution_target: ExecutionTarget::Workspace,
+                    backend: ConversationBackend::Agent,
                 },
                 before.last_seq,
                 None,
@@ -1337,6 +1340,7 @@ mod tests {
                     conversation_id: Some(fixture.id),
                     project_attachment: None,
                     execution_target: ExecutionTarget::Workspace,
+                    backend: ConversationBackend::Agent,
                 },
                 before.last_seq,
                 None,
@@ -1409,6 +1413,7 @@ mod tests {
                     conversation_id: Some(fixture.id),
                     project_attachment: None,
                     execution_target: ExecutionTarget::Workspace,
+                    backend: ConversationBackend::Agent,
                 },
                 before.last_seq,
                 None,
@@ -1456,6 +1461,7 @@ mod tests {
                     conversation_id: Some(fixture.id),
                     project_attachment: None,
                     execution_target: ExecutionTarget::Workspace,
+                    backend: ConversationBackend::Agent,
                 },
                 before.last_seq,
                 None,

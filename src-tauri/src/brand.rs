@@ -23,7 +23,6 @@
 
 use std::cell::Cell;
 
-
 /// Every canonical brand identifier the app writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrandCanonical {
@@ -203,9 +202,7 @@ thread_local! {
 /// Always call this rather than caching the result in a `static` — a cached
 /// value freezes before a test can override it.
 pub fn canonical() -> BrandCanonical {
-    THREAD_OVERRIDE
-        .with(Cell::get)
-        .unwrap_or(DEFAULT_CANONICAL)
+    THREAD_OVERRIDE.with(Cell::get).unwrap_or(DEFAULT_CANONICAL)
 }
 
 /// Test seam: force canonical values on **this thread** until the guard drops.
@@ -320,7 +317,9 @@ mod tests {
         assert_eq!(canonical().created_by, injected().created_by);
         assert_ne!(canonical().created_by, DEFAULT_CANONICAL.created_by);
 
-        let observed = std::thread::spawn(|| canonical().created_by).join().unwrap();
+        let observed = std::thread::spawn(|| canonical().created_by)
+            .join()
+            .unwrap();
         assert_eq!(observed, DEFAULT_CANONICAL.created_by);
     }
 
