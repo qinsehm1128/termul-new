@@ -230,6 +230,8 @@ export interface WebTerminalStateSnapshot {
   gitStatus: GitStatus | null
   exitCode: number | null
   exited: boolean
+  /** Latest OSC 0/2 title set by the child process, `null` if unset/cleared. */
+  oscTitle: string | null
 }
 
 export type WebTerminalEventPayload =
@@ -238,6 +240,7 @@ export type WebTerminalEventPayload =
   | { type: 'git_branch_changed'; terminal_id: string; branch: string | null }
   | { type: 'git_status_changed'; terminal_id: string; status: GitStatus | null }
   | { type: 'exit_code_changed'; terminal_id: string; exit_code: number }
+  | { type: 'osc_title_changed'; terminal_id: string; title: string | null }
   | {
       type: 'spawned'
       terminal_id: string

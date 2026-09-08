@@ -6,6 +6,7 @@ import { useAcpHistory } from '@/hooks/use-acp-history'
 import { useAcpListeners } from '@/hooks/use-acp-listeners'
 import { useAcpMcp } from '@/hooks/use-acp-mcp'
 import { useAcpSessionResume } from '@/hooks/use-acp-session-resume'
+import { useAgentTerminalState } from '@/hooks/use-agent-terminal-state'
 import { useAppSettingsLoader } from '@/hooks/use-app-settings'
 import { useAppliedColorThemeSync } from '@/hooks/use-color-theme'
 import { useContextBarSettings } from '@/hooks/use-context-bar-settings'
@@ -71,6 +72,7 @@ export function PortableAppEffects(): React.JSX.Element | null {
   useGitBranch()
   useGitStatus()
   useExitCode()
+  useAgentTerminalState()
   useContextBarSettings()
   useAppSettingsLoader()
   useAppliedLanguageSync()

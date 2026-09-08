@@ -16,6 +16,7 @@ import type {
   TerminalExitCodeChangedCallback,
   TerminalGitBranchChangedCallback,
   TerminalGitStatusChangedCallback,
+  TerminalOscTitleChangedCallback,
   TerminalResumeGrant,
   TerminalResumeRequest,
   TerminalScopedDataCallback,
@@ -47,6 +48,7 @@ const IPC_EVENTS = {
   TERMINAL_GIT_BRANCH_CHANGED: 'terminal-git-branch-changed',
   TERMINAL_GIT_STATUS_CHANGED: 'terminal-git-status-changed',
   TERMINAL_EXIT_CODE_CHANGED: 'terminal-exit-code-changed',
+  TERMINAL_OSC_TITLE_CHANGED: 'terminal-osc-title-changed',
   TERMINAL_SPAWNED: 'terminal-spawned',
   TERMINAL_DISPLAY_MODE_CHANGED: 'terminal-display-mode-changed'
 } as const
@@ -58,6 +60,7 @@ type EventPayloadMap = {
   [IPC_EVENTS.TERMINAL_GIT_BRANCH_CHANGED]: { terminalId: string; branch: string | null }
   [IPC_EVENTS.TERMINAL_GIT_STATUS_CHANGED]: { terminalId: string; status: GitStatus | null }
   [IPC_EVENTS.TERMINAL_EXIT_CODE_CHANGED]: { terminalId: string; exitCode: number }
+  [IPC_EVENTS.TERMINAL_OSC_TITLE_CHANGED]: { terminalId: string; oscTitle: string | null }
   [IPC_EVENTS.TERMINAL_SPAWNED]: TerminalSpawnedEvent
   [IPC_EVENTS.TERMINAL_DISPLAY_MODE_CHANGED]: TerminalDisplayModeChangedEvent
 }
@@ -851,6 +854,20 @@ export function createTauriTerminalApi(): TerminalApi {
      */
     async getExitCode(terminalId: string): Promise<IpcResult<number | null>> {
       return invokeIpc<number | null>(IPC_COMMANDS.GET_EXIT_CODE, { terminalId })
+    },
+
+    /**
+     * Subscribe to OSC 0/2 window title change events
+     * Returns cleanup function (UnlistenFn)
+     */
+    onOscTitleChanged(callback: TerminalOscTitleChangedCallback): () => void {
+      return subscribeSharedEvent(
+        IPC_EVENTS.TERMINAL_OSC_TITLE_CHANGED,
+        (payload) => {
+          callback(payload.terminalId, payload.oscTitle)
+        },
+        'terminal-osc-title-changed'
+      )
     },
 
     /**

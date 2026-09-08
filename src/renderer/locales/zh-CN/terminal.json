@@ -1,6 +1,11 @@
 {
   "title": "终端",
   "activity": "终端有活动",
+  "agentState": {
+    "working": "Agent 正在工作",
+    "blocked": "Agent 等待你的输入",
+    "idle": "Agent 空闲"
+  },
   "fileWatcher": {
     "changedExternally": "文件已在外部更改",
     "reload": "重新加载"

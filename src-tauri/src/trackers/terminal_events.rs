@@ -50,6 +50,14 @@ pub enum TerminalEvent {
         terminal_id: String,
         exit_code: i32,
     },
+    /// The child set the window title via OSC 0/2. Distinct from the
+    /// cwd-derived display title in the terminal catalog: this is what the
+    /// program running in the terminal calls itself, which is how an agent
+    /// reports whether it is working or waiting. `None` means it cleared it.
+    OscTitleChanged {
+        terminal_id: String,
+        title: Option<String>,
+    },
     Spawned {
         terminal_id: String,
         project_id: Option<String>,
@@ -75,6 +83,7 @@ impl TerminalEvent {
             | Self::GitBranchChanged { terminal_id, .. }
             | Self::GitStatusChanged { terminal_id, .. }
             | Self::ExitCodeChanged { terminal_id, .. }
+            | Self::OscTitleChanged { terminal_id, .. }
             | Self::Spawned { terminal_id, .. }
             | Self::DisplayModeChanged { terminal_id, .. } => terminal_id,
         }
@@ -89,6 +98,9 @@ pub struct TerminalStateSnapshot {
     pub git_status: Option<GitStatus>,
     pub exit_code: Option<i32>,
     pub exited: bool,
+    /// Latest OSC 0/2 title reported by the child, retained so a client that
+    /// attaches mid-session sees it without waiting for the next change.
+    pub osc_title: Option<String>,
 }
 
 #[derive(Clone)]
@@ -140,6 +152,7 @@ impl TerminalEventHub {
                 | TerminalEvent::GitBranchChanged { terminal_id, .. }
                 | TerminalEvent::GitStatusChanged { terminal_id, .. }
                 | TerminalEvent::ExitCodeChanged { terminal_id, .. }
+                | TerminalEvent::OscTitleChanged { terminal_id, .. }
                 | TerminalEvent::Spawned { terminal_id, .. }
                 | TerminalEvent::DisplayModeChanged { terminal_id, .. } => terminal_id.clone(),
             };
@@ -159,6 +172,7 @@ impl TerminalEventHub {
                 TerminalEvent::ExitCodeChanged { exit_code, .. } => {
                     snapshot.exit_code = Some(*exit_code)
                 }
+                TerminalEvent::OscTitleChanged { title, .. } => snapshot.osc_title = title.clone(),
                 TerminalEvent::Spawned { cwd, .. } => snapshot.cwd = Some(cwd.clone()),
                 TerminalEvent::DisplayModeChanged { .. } => {}
             }
@@ -200,6 +214,10 @@ impl TerminalEventHub {
             } => app.emit(
                 "terminal-exit-code-changed",
                 serde_json::json!({ "terminalId": terminal_id, "exitCode": exit_code }),
+            ),
+            TerminalEvent::OscTitleChanged { terminal_id, title } => app.emit(
+                "terminal-osc-title-changed",
+                serde_json::json!({ "terminalId": terminal_id, "oscTitle": title }),
             ),
             TerminalEvent::Spawned {
                 terminal_id,

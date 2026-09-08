@@ -184,6 +184,10 @@ vi.mock('./hooks/use-exit-code', () => ({
   useExitCode: () => undefined
 }))
 
+vi.mock('./hooks/use-agent-terminal-state', () => ({
+  useAgentTerminalState: () => undefined
+}))
+
 vi.mock('./hooks/use-app-settings', () => ({
   useAppSettingsLoader: () => undefined,
   useUpdateAppSetting: () => vi.fn(),

@@ -1,6 +1,11 @@
 {
   "title": "Terminal",
   "activity": "Terminal has activity",
+  "agentState": {
+    "working": "Agent is working",
+    "blocked": "Agent needs your input",
+    "idle": "Agent is idle"
+  },
   "fileWatcher": {
     "changedExternally": "File changed externally",
     "reload": "Reload"

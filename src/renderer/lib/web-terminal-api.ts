@@ -16,6 +16,7 @@ import type {
   TerminalExitCodeChangedCallback,
   TerminalGitBranchChangedCallback,
   TerminalGitStatusChangedCallback,
+  TerminalOscTitleChangedCallback,
   TerminalResumeGrant,
   TerminalResumeRequest,
   TerminalScopedDataCallback,
@@ -117,6 +118,7 @@ export class WebTerminalClient {
   private readonly branchCallbacks = new Set<TerminalGitBranchChangedCallback>()
   private readonly statusCallbacks = new Set<TerminalGitStatusChangedCallback>()
   private readonly exitCodeCallbacks = new Set<TerminalExitCodeChangedCallback>()
+  private readonly oscTitleCallbacks = new Set<TerminalOscTitleChangedCallback>()
   private readonly spawnedCallbacks = new Set<(event: TerminalSpawnedEvent) => void>()
   private readonly displayModeCallbacks = new Set<
     (event: TerminalDisplayModeChangedEvent) => void
@@ -564,6 +566,10 @@ export class WebTerminalClient {
     this.exitCodeCallbacks.add(callback)
     return () => this.exitCodeCallbacks.delete(callback)
   }
+  onOscTitle(callback: TerminalOscTitleChangedCallback): () => void {
+    this.oscTitleCallbacks.add(callback)
+    return () => this.oscTitleCallbacks.delete(callback)
+  }
 
   dispose(): void {
     this.disposed = true
@@ -712,6 +718,9 @@ export class WebTerminalClient {
         break
       case 'exit_code_changed':
         for (const callback of this.exitCodeCallbacks) callback(event.terminal_id, event.exit_code)
+        break
+      case 'osc_title_changed':
+        for (const callback of this.oscTitleCallbacks) callback(event.terminal_id, event.title)
         break
       case 'spawned':
         for (const callback of this.spawnedCallbacks) {
@@ -979,6 +988,7 @@ export function createWebTerminalApi(): TerminalApi {
     getGitStatus: (terminalId) =>
       client.request<GitStatus | null>('get_git_status', { terminalId }),
     onExitCodeChanged: (callback) => client.onExitCode(callback),
+    onOscTitleChanged: (callback) => client.onOscTitle(callback),
     getExitCode: (terminalId) => client.request('get_exit_code', { terminalId }),
     updateOrphanDetection: (enabled, timeout) =>
       client.request('update_orphan_detection', { enabled, timeout })

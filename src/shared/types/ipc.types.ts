@@ -363,6 +363,12 @@ export type TerminalGitStatusChangedCallback = (
   status: GitStatus | null
 ) => void
 export type TerminalExitCodeChangedCallback = (terminalId: string, exitCode: number) => void
+/**
+ * The child process set the window title via OSC 0/2. `title` is `null` when it
+ * cleared the title. Distinct from the cwd-derived display title in the terminal
+ * catalog: this is what the running program calls itself.
+ */
+export type TerminalOscTitleChangedCallback = (terminalId: string, title: string | null) => void
 
 // Git status interface
 export interface GitStatus {
@@ -519,6 +525,7 @@ export interface TerminalApi {
   getGitStatus: (terminalId: string) => Promise<IpcResult<GitStatus | null>>
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
+  onOscTitleChanged: (callback: TerminalOscTitleChangedCallback) => () => void
   updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
 }
 

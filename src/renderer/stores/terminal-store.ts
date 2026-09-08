@@ -17,6 +17,7 @@ import { useShallow } from 'zustand/shallow'
 import { disposeCachedTerminal } from '@/components/terminal/terminal-cache'
 import { i18n } from '@/i18n'
 import { formatNumber } from '@/i18n/format'
+import type { AgentTerminalState } from '@/lib/agents/agent-terminal-state'
 import { logFrontendError } from '@/lib/log-api'
 import { terminalApi } from '@/lib/terminal-api'
 import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
@@ -171,6 +172,10 @@ export interface TerminalState {
   updateTerminalGitBranch: (id: string, gitBranch: string | null) => void
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
+  /** Record the child's latest OSC 0/2 title (evidence for `agentState`). */
+  setTerminalOscTitle: (id: string, oscTitle: string | null) => void
+  /** Record the derived agent state; a no-op when it has not changed. */
+  setTerminalAgentState: (id: string, agentState: AgentTerminalState) => void
   updateTerminalScrollback: (id: string, scrollback: string[] | undefined) => void
   appendTranscript: (ptyId: string, data: string) => void
   peekTranscript: (ptyId: string) => string
@@ -779,6 +784,28 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, lastExitCode: exitCode } : t))
     }))
+  },
+
+  setTerminalOscTitle: (id: string, oscTitle: string | null): void => {
+    set((state) => {
+      // Agents repaint their title on every spinner frame. Bailing on an
+      // unchanged value keeps that off the store's subscriber fan-out.
+      const target = state.terminals.find((t) => t.id === id)
+      if (!target || (target.oscTitle ?? null) === oscTitle) return {}
+      return {
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, oscTitle } : t))
+      }
+    })
+  },
+
+  setTerminalAgentState: (id: string, agentState: AgentTerminalState): void => {
+    set((state) => {
+      const target = state.terminals.find((t) => t.id === id)
+      if (!target || target.agentState === agentState) return {}
+      return {
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, agentState } : t))
+      }
+    })
   },
 
   updateTerminalScrollback: (id: string, scrollback: string[] | undefined): void => {

@@ -2642,6 +2642,10 @@ impl PtyManager {
         let id = terminal_id.clone();
         // ADR-002.5: DA filter — intercepts DA queries and responds to PTY writer
         let mut da_filter = crate::pty::DaFilter::new();
+        // Owned by this thread: one reader per terminal, so the OSC parse state
+        // needs no lock. Retained title lives in the event hub snapshot.
+        let mut osc_title_tracker =
+            crate::trackers::OscTitleTracker::new(id.clone(), terminal_events.clone());
         // Clone writer Arc for the DA filter respond closure
         let da_writer = instance.writer.clone();
 
@@ -2669,6 +2673,12 @@ impl PtyManager {
                 }
                 Ok(n) => {
                     instance.update_activity();
+
+                    // Scan for OSC 0/2 titles. Fed raw bytes rather than the
+                    // lossy string below because a title sequence can straddle
+                    // this read boundary, and a chunk ending mid-codepoint
+                    // would corrupt the status glyph the title carries.
+                    osc_title_tracker.observe(&buffer[..n]);
 
                     // Parse exit codes from output
                     let data_str = String::from_utf8_lossy(&buffer[..n]);
@@ -4433,6 +4443,74 @@ mod tests {
     /// without running the tail that sets `done_flag`. `join_thread_until`
     /// polls `is_finished()`, so that terminal could never be terminated —
     /// every attempt, retry included, burned the full deadline and quarantined.
+    /// End-to-end on the real reader path: a real shell emits an OSC 0 title
+    /// and it reaches the event hub.
+    ///
+    /// The tracker's own tests cover the parser against synthetic bytes. They
+    /// cannot see whether `reader_loop` actually feeds it, which is the half
+    /// that silently does nothing if the wiring is wrong.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_real_shell_osc_title_reaches_the_event_hub() {
+        let manager = crate::web::test_pty_manager();
+        let mut events = manager.terminal_events().subscribe();
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().canonicalize().unwrap();
+
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    conversation_id: Some(
+                        ConversationId::parse("018f7a1c-1b4d-7c8a-9f01-0123456789ab").unwrap(),
+                    ),
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    cols: Some(80),
+                    rows: Some(24),
+                    shell: Some("/bin/sh".into()),
+                    env: Some(HashMap::from([("PS1".into(), "$ ".into())])),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn a real PTY");
+        let terminal_id = spawned.info.id.clone();
+
+        // The echoed command line contains `]0;se-osc-probe` as literal text
+        // with no ESC in front of it, so only printf's real output can match.
+        manager
+            .write(&terminal_id, "printf '\\033]0;se-osc-probe\\007'\n")
+            .await
+            .expect("write to the PTY");
+
+        let title = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match events
+                    .recv()
+                    .await
+                    .expect("terminal event stream stayed open")
+                {
+                    TerminalEvent::OscTitleChanged {
+                        terminal_id: id,
+                        title,
+                    } if id == terminal_id => return title,
+                    _ => continue,
+                }
+            }
+        })
+        .await
+        .expect("an OSC title event within the deadline");
+
+        assert_eq!(title.as_deref(), Some("se-osc-probe"));
+        assert_eq!(
+            manager.terminal_events().snapshot(&terminal_id).osc_title,
+            Some("se-osc-probe".to_string()),
+            "a client attaching later should see the retained title"
+        );
+
+        let _ = manager.terminate(&terminal_id).await;
+    }
+
     #[tokio::test]
     async fn terminate_retires_a_flusher_whose_reader_never_set_done_flag() {
         let manager = crate::web::test_pty_manager();

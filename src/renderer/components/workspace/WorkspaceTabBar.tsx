@@ -18,6 +18,7 @@ import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
 import { isAgentConnected } from '@/components/chat/is-agent-connected'
 import { pathBasename } from '@/components/lists'
 import { Skeleton } from '@/components/ui/skeleton'
+import { TabAgentMark, TabRunMark } from '@/components/workspace/tab-marks'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
@@ -105,27 +106,6 @@ function TabCloseButton({
       {spinning ? <Loader2 size={11} className="animate-spin" /> : <XIcon size={11} />}
     </button>
   )
-}
-
-function TabLiveMark({
-  attention,
-  activity,
-  running
-}: {
-  attention?: boolean
-  activity?: boolean
-  running?: boolean
-}): React.JSX.Element | null {
-  if (attention) {
-    return <span className="mr-0.5 h-1.5 w-1.5 shrink-0 bg-warning" aria-hidden />
-  }
-  if (activity) {
-    return <span className="mr-0.5 h-1.5 w-1.5 shrink-0 bg-primary" aria-hidden />
-  }
-  if (running) {
-    return <span className="mr-0.5 h-1.5 w-1.5 shrink-0 bg-primary/40" aria-hidden />
-  }
-  return null
 }
 
 // Inline TerminalTab matching the style from TerminalTabBar
@@ -230,11 +210,12 @@ function TerminalTabInline({
         className={cn(tabToneClass(isActive, isDragging), 'border-r border-border/50')}
       >
         <TabDropMark isDropTarget={isDropTarget} dropPosition={dropPosition} />
-        <TabLiveMark
+        <TabRunMark
           attention={terminal.needsAttention}
           activity={terminal.hasActivity}
           running={terminal.healthStatus === 'running'}
         />
+        <TabAgentMark state={terminal.agentState} />
 
         {terminal.kind === 'agent' && terminal.agentId ? (
           <AgentIcon

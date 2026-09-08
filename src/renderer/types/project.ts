@@ -3,6 +3,7 @@
 import { acceptedBrandValues } from '@shared/brand'
 import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
 import type { TerminalResourceHydrationStatus } from '@shared/types/session-workspace.types'
+import type { AgentTerminalState } from '@/lib/agents/agent-terminal-state'
 
 // Re-export for convenience
 export type { GitStatus, TerminalModes }
@@ -149,6 +150,18 @@ export interface Terminal {
   agentProgram?: string // Resolved/declared program for restore re-spawn (no prompt)
   agentArgs?: string[] // baseArgs only (seed prompt intentionally excluded for restore)
   kind?: 'shell' | 'agent' // Session type marker; defaults to 'shell' when unset
+  /**
+   * Latest OSC 0/2 title the child process set, or null once it cleared it.
+   * Evidence for `agentState`, not a display label — the tab keeps using
+   * `agentName`/`name`. In-memory only; auto-save ignores it.
+   */
+  oscTitle?: string | null
+  /**
+   * What the agent in this terminal is doing, derived from the OSC title and
+   * the screen tail. `'unknown'` means no usable evidence, which is deliberately
+   * distinct from `'idle'`. In-memory only; auto-save ignores it.
+   */
+  agentState?: AgentTerminalState
   /**
    * CAP-3: the reclaimable-terminal lease credential issued at spawn.
    * IN-MEMORY ONLY — never written to auto-save/snapshot persistence,
