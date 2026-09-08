@@ -1049,6 +1049,7 @@ mod tests {
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
             conversation: None,
+            conversation_creation: None,
             project_root: Arc::new(parking_lot::RwLock::new(
                 root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
             )),

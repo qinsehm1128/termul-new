@@ -343,6 +343,11 @@ pub struct AppState {
     /// Bootstrap-published Conversation application service. Production routers always provide
     /// the shared Arc; legacy unit fixtures that do not exercise Conversation routes use `None`.
     pub conversation: Option<Arc<crate::conversation::ConversationApplicationService>>,
+    /// Terminal-backed Conversation creation. Separate from `conversation`
+    /// because the application service deliberately owns reads and aggregate
+    /// mutations, not creation — the creation service is the only holder of the
+    /// preparation lock and the id/clock sources.
+    pub conversation_creation: Option<Arc<crate::conversation::ConversationCreationService>>,
     /// Host-owned versioned workspace manifest service (CAP-5 / Story 5).
     /// `None` when the desktop could not open `WorkspaceManifestService` at
     /// startup (degraded fresh-only mode) — routes return `Ok(None)` /

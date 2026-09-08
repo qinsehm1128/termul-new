@@ -379,6 +379,7 @@ fn main() -> ExitCode {
             projects_file,
             cfg,
             Arc::clone(&conversation_bootstrap.application),
+            Arc::clone(&conversation_bootstrap.creation),
             workspace_manifest,
             acp_catalog,
             acp_install,

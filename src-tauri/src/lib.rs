@@ -2299,6 +2299,8 @@ pub fn run() {
             commands::conversation_get_binding,
             commands::conversation_rename,
             commands::conversation_open,
+            commands::conversation_prepare_terminal,
+            commands::conversation_provision_terminal,
             commands::conversation_resolve_legacy_id,
             commands::conversation_attach_project,
             commands::conversation_detach_project,

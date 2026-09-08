@@ -327,6 +327,86 @@ pub async fn resolve_recovery(
     respond(result)
 }
 
+fn creation_service(
+    state: &AppState,
+) -> Result<Arc<crate::conversation::ConversationCreationService>, (String, String)> {
+    state.conversation_creation.clone().ok_or_else(|| {
+        (
+            "CONVERSATION_SERVICE_UNAVAILABLE".to_string(),
+            "bootstrap-published Conversation creation service is unavailable".to_string(),
+        )
+    })
+}
+
+/// Allocate a terminal-backed Conversation and its workspace directory.
+///
+/// Mutate capability, not read: this creates durable state and a directory on
+/// the host.
+pub async fn prepare_terminal(
+    State(state): State<AppState>,
+    Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
+    Extension(principal): Extension<RemotePrincipal>,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let result = match require(&authority, &principal, RemoteCapability::Mutate) {
+        Ok(()) => match creation_service(&state) {
+            Ok(creation) => {
+                match serde_json::from_value::<crate::conversation::PrepareConversationRequest>(
+                    request,
+                ) {
+                    Ok(mut parsed) => {
+                        // The route is the backend's identity; a payload that could
+                        // choose `agent` here would be a second, unaudited way to
+                        // create an agent Conversation.
+                        parsed.backend = crate::conversation::ConversationBackend::Terminal;
+                        creation
+                            .prepare_conversation(parsed)
+                            .await
+                            .map_err(|error| (format!("{:?}", error.code), error.detail))
+                    }
+                    Err(error) => Err((
+                        "VALIDATION_ERROR".to_string(),
+                        format!("payload validation failed: {error}"),
+                    )),
+                }
+            }
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    respond(result)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionTerminalBody {
+    terminal_id: String,
+}
+
+/// Carry a prepared terminal-backed Conversation to `ready`.
+pub async fn provision_terminal(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+    Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
+    Extension(principal): Extension<RemotePrincipal>,
+    Json(body): Json<ProvisionTerminalBody>,
+) -> impl IntoResponse {
+    let result = match require(&authority, &principal, RemoteCapability::Mutate)
+        .and_then(|()| parse_id(&conversation_id))
+    {
+        Ok(conversation_id) => match creation_service(&state) {
+            Ok(creation) => creation
+                .provision_terminal(conversation_id, &body.terminal_id)
+                .await
+                .map(|()| serde_json::Value::Null)
+                .map_err(|error| (format!("{:?}", error.code), error.detail)),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    respond(result)
+}
+
 fn require(
     authority: &RemoteAccessAuthority,
     principal: &RemotePrincipal,
@@ -465,6 +545,7 @@ mod tests {
                 projects_file: None,
                 history_mode: HistoryMode::LiveOnly,
                 conversation: Some(conversation),
+                conversation_creation: None,
                 workspace_manifest: None,
                 acp_catalog: None,
                 acp_install: None,
@@ -564,6 +645,7 @@ mod tests {
                 projects_file: None,
                 history_mode: HistoryMode::LiveOnly,
                 conversation: Some(conversation),
+                conversation_creation: None,
                 workspace_manifest: None,
                 acp_catalog: None,
                 acp_install: None,
@@ -586,6 +668,14 @@ mod tests {
                 get(super::current_binding),
             )
             .route("/conversations/{conversationId}/open", post(open))
+            .route(
+                "/conversations/prepare-terminal",
+                post(super::prepare_terminal),
+            )
+            .route(
+                "/conversations/{conversationId}/provision-terminal",
+                post(super::provision_terminal),
+            )
             .route("/conversation-recovery/resolve", post(resolve_recovery))
             .with_state(state)
             .layer(Extension(principal))
@@ -661,6 +751,64 @@ mod tests {
             assert!(body.success);
             assert_eq!(body.data.unwrap().canonical_route, format!("#/c/{ID}"));
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_conversation_routes_report_an_absent_creation_service() {
+        // The browser surface must fail with a named code rather than a 404 or a
+        // panic when the host published no creation service.
+        let (_temp, state) = state().await;
+        let app = app(state);
+
+        let prepare = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/conversations/prepare-terminal")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({
+                            "schemaVersion": 1,
+                            "executionTarget": { "kind": "workspace" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = json(prepare).await;
+        assert_eq!(body["success"], serde_json::json!(false));
+        assert_eq!(body["code"], "CONVERSATION_SERVICE_UNAVAILABLE");
+
+        let provision = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/conversations/{ID}/provision-terminal"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({ "terminalId": "terminal-1" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = json(provision).await;
+        assert_eq!(body["success"], serde_json::json!(false));
+        assert_eq!(body["code"], "CONVERSATION_SERVICE_UNAVAILABLE");
+    }
+
+    #[test]
+    fn the_production_router_exposes_both_terminal_conversation_routes() {
+        // Route drift is invisible to the handler tests above, which mount their
+        // own router.
+        let source = include_str!("router.rs");
+        assert!(source.contains("/conversations/prepare-terminal"));
+        assert!(source.contains("/conversations/{conversationId}/provision-terminal"));
+        assert!(source.contains("conversation_api::prepare_terminal"));
+        assert!(source.contains("conversation_api::provision_terminal"));
     }
 
     #[tokio::test]

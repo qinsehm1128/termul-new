@@ -192,6 +192,14 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 post(conversation_api::open),
             )
             .route(
+                "/conversations/prepare-terminal",
+                post(conversation_api::prepare_terminal),
+            )
+            .route(
+                "/conversations/{conversationId}/provision-terminal",
+                post(conversation_api::provision_terminal),
+            )
+            .route(
                 "/conversations/{conversationId}/rename",
                 post(conversation_api::rename),
             )
@@ -354,6 +362,7 @@ pub fn router(
     project_root: PathBuf,
     history_mode: HistoryMode,
     conversation: Option<Arc<crate::conversation::ConversationApplicationService>>,
+    conversation_creation: Option<Arc<crate::conversation::ConversationCreationService>>,
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
     acp_install: Option<Arc<AcpInstallService>>,
@@ -392,6 +401,7 @@ pub fn router(
         projects_file: projects_file.map(Arc::new),
         history_mode,
         conversation,
+        conversation_creation,
         workspace_manifest,
         acp_catalog,
         acp_install,
@@ -442,6 +452,7 @@ pub fn router_with_static(
                 projects_file: None,
                 history_mode: HistoryMode::LiveOnly,
                 conversation: None,
+                conversation_creation: None,
                 workspace_manifest: None,
                 acp_catalog: None,
                 acp_install: None,
@@ -555,6 +566,7 @@ mod tests {
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
             conversation: None,
+            conversation_creation: None,
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

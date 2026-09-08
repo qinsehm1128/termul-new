@@ -1860,6 +1860,7 @@ mod tests {
             projects_file: None,
             history_mode: crate::web::ws::HistoryMode::LiveOnly,
             conversation: None,
+            conversation_creation: None,
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

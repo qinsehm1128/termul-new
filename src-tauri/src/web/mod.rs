@@ -310,6 +310,7 @@ pub async fn serve(
     projects_file: Option<PathBuf>,
     cfg: ServerConfig,
     conversation: Arc<crate::conversation::ConversationApplicationService>,
+    conversation_creation: Arc<crate::conversation::ConversationCreationService>,
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
@@ -329,6 +330,7 @@ pub async fn serve(
         cfg,
         shutdown_signal_future(),
         Some(conversation),
+        Some(conversation_creation),
         workspace_manifest,
         acp_catalog,
         acp_install,
@@ -381,6 +383,7 @@ pub async fn serve_router(
     cfg: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
     conversation: Option<Arc<crate::conversation::ConversationApplicationService>>,
+    conversation_creation: Option<Arc<crate::conversation::ConversationCreationService>>,
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
@@ -461,6 +464,7 @@ pub async fn serve_router(
         cfg.project_root.clone(),
         history_mode,
         conversation,
+        conversation_creation,
         workspace_manifest,
         acp_catalog,
         acp_install,
@@ -819,6 +823,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Arc::clone(&authority),
         )
         .await
@@ -875,6 +880,7 @@ mod tests {
             async move {
                 let _ = shutdown_rx.await;
             },
+            None,
             None,
             None,
             None,

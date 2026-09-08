@@ -498,6 +498,7 @@ mod tests {
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
             conversation: Some(conversation),
+            conversation_creation: None,
             project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
             workspace_manifest: None,
             acp_catalog: None,
