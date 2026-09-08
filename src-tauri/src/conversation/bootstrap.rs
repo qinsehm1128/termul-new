@@ -124,9 +124,7 @@ impl HostConversationRoots {
                 ),
             }
         }
-        let legacy_workspace_bases = legacy_workspace_base(&workspace_base)
-            .into_iter()
-            .collect();
+        let legacy_workspace_bases = legacy_workspace_base(&workspace_base).into_iter().collect();
         Self {
             state_root,
             workspace_base,
@@ -155,9 +153,7 @@ impl HostConversationRoots {
         // on the caller's thread like the desktop constructor (FORBID-07), and
         // read-only in exactly the same sense: the user's workspaces are never
         // moved on the strength of this field.
-        let legacy_workspace_bases = legacy_workspace_base(&workspace_base)
-            .into_iter()
-            .collect();
+        let legacy_workspace_bases = legacy_workspace_base(&workspace_base).into_iter().collect();
         Self {
             state_root,
             workspace_base,
@@ -331,11 +327,20 @@ impl ConversationBootstrap {
             project_worktrees: Vec::new(),
         };
         let operation_key = migration_operation_key(&legacy_configuration);
+        // A journal carried forward from a previous install path still
+        // describes this operation; recognising its old key is what keeps a
+        // relocation from reading as a foreign migration.
+        let carried_from = crate::legacy_appdata::matching_legacy_root(&roots.state_root)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let adoptable_operation_keys =
+            superseded_operation_keys(&legacy_configuration, &carried_from);
         let mut report = migration_service
             .recover_and_run(MigrationContext {
                 lock_guard: &lock_guard,
                 host_state_root: &roots.state_root,
                 operation_key: &operation_key,
+                adoptable_operation_keys: &adoptable_operation_keys,
                 host_mode,
                 admission,
                 now_utc: Utc::now(),
@@ -359,6 +364,7 @@ impl ConversationBootstrap {
                         lock_guard: &lock_guard,
                         host_state_root: &roots.state_root,
                         operation_key: &operation_key,
+                        adoptable_operation_keys: &adoptable_operation_keys,
                         host_mode,
                         admission,
                         now_utc: Utc::now(),
@@ -479,6 +485,7 @@ impl ConversationBootstrap {
                 private_locator,
                 workspace_locator,
             )
+            .map(|service| service.with_legacy_workspace_roots(&roots.legacy_workspace_bases))
             .map_err(|source| {
                 bootstrap_error(
                     "CONVERSATION_CREATION_OPEN_FAILED",
@@ -612,24 +619,96 @@ fn create_absolute_directory(
         .map_err(|source| bootstrap_error("CONVERSATION_ROOT_INVALID", operation, source))
 }
 
-fn migration_operation_key(configuration: &LegacyRootConfiguration) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"conversation-layout-v2\0");
-    digest.update(configuration.host_state_root.as_os_str().as_encoded_bytes());
-    let mut legacy_roots = configuration
-        .known_roots()
-        .into_iter()
-        .map(|spec| spec.path)
-        .collect::<Vec<_>>();
-    legacy_roots.sort();
-    for root in legacy_roots {
-        digest.update(b"\0");
-        digest.update(root.as_os_str().as_encoded_bytes());
-    }
+fn hex(digest: Sha256) -> String {
     digest
         .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Idempotency key identifying *which migration operation* a journal describes.
+///
+/// Keyed on the SHAPE of the legacy source set, never on where that set happens
+/// to live. The absolute state root used to be hashed in, which made the key a
+/// function of the install path — so relocating the tree (a bundle-identifier
+/// change carrying `app_data_dir` forward, a user-chosen root) produced a
+/// journal whose key no longer matched its own contents, and startup aborted on
+/// data that was perfectly intact. The desktop host's three roots are always
+/// `<state_root>/{acp-sessions,acp-chat-history,workspace-manifests}`, so the
+/// absolute prefix contributed no distinguishing power at all — only fragility.
+///
+/// Roots outside the state root (standalone hosts point at arbitrary
+/// directories) still contribute their absolute path: there the location IS the
+/// identity, and two different external roots must not share a key.
+fn migration_operation_key(configuration: &LegacyRootConfiguration) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"conversation-layout-v2\0");
+    let mut entries = configuration
+        .known_roots()
+        .into_iter()
+        .map(|spec| {
+            let located = match spec.path.strip_prefix(&configuration.host_state_root) {
+                Ok(relative) => format!("state-root:{}", relative.display()),
+                Err(_) => format!("external:{}", spec.path.display()),
+            };
+            format!("{}\0{located}", spec.source_kind.as_str())
+        })
+        .collect::<Vec<_>>();
+    entries.sort();
+    for entry in entries {
+        digest.update(b"\0");
+        digest.update(entry.as_bytes());
+    }
+    hex(digest)
+}
+
+/// Keys this same operation would have carried under the superseded formula.
+///
+/// A journal already on disk was written before the key stopped depending on the
+/// install path, and possibly under a different root. `previous_state_roots` is
+/// therefore the channel-matched pre-rename root and nothing else: that is the
+/// only place [`crate::legacy_appdata::carry_forward`] can have brought this
+/// journal from. Passing every known legacy root instead would let a dev
+/// install's journal be adopted by a release one, which is the exact merge that
+/// module exists to prevent.
+///
+/// Recomputing the old formula for those roots turns "the key does not match"
+/// from an unexplained conflict into a recognised one, so the journal can be
+/// adopted rather than treated as a foreign operation.
+///
+/// This is deliberately an exact-match allowlist, not a tolerance: a key that
+/// matches none of these really does describe a different source set, and that
+/// case must still refuse to proceed.
+fn superseded_operation_keys(
+    configuration: &LegacyRootConfiguration,
+    previous_state_roots: &[PathBuf],
+) -> Vec<String> {
+    std::iter::once(&configuration.host_state_root)
+        .chain(previous_state_roots)
+        .map(|root| {
+            let relocated = LegacyRootConfiguration {
+                host_state_root: root.clone(),
+                standalone_session_roots: configuration.standalone_session_roots.clone(),
+                standalone_workspace_manifest_roots: configuration
+                    .standalone_workspace_manifest_roots
+                    .clone(),
+            };
+            let mut digest = Sha256::new();
+            digest.update(b"conversation-layout-v2\0");
+            digest.update(relocated.host_state_root.as_os_str().as_encoded_bytes());
+            let mut legacy_roots = relocated
+                .known_roots()
+                .into_iter()
+                .map(|spec| spec.path)
+                .collect::<Vec<_>>();
+            legacy_roots.sort();
+            for path in legacy_roots {
+                digest.update(b"\0");
+                digest.update(path.as_os_str().as_encoded_bytes());
+            }
+            hex(digest)
+        })
         .collect()
 }
 
@@ -756,6 +835,115 @@ mod legacy_root_declaration_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::brand;
+
+    fn desktop_config(state_root: &str) -> LegacyRootConfiguration {
+        LegacyRootConfiguration {
+            host_state_root: PathBuf::from(state_root),
+            standalone_session_roots: Vec::new(),
+            standalone_workspace_manifest_roots: Vec::new(),
+        }
+    }
+
+    /// The property the shipped crash violated. A desktop install's legacy
+    /// sources are always the same three directories under its own state root,
+    /// so moving that root — a bundle-identifier change, a user-chosen
+    /// location — describes the very same migration and must key the same.
+    #[test]
+    fn the_desktop_key_does_not_depend_on_where_the_root_lives() {
+        let a = migration_operation_key(&desktop_config("/Users/x/Library/com.a.app"));
+        let b = migration_operation_key(&desktop_config("/Users/x/.se-manager"));
+        let c = migration_operation_key(&desktop_config("/completely/elsewhere"));
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
+
+    /// Roots outside the state root are the standalone host's identity, so they
+    /// still have to separate two different source sets.
+    #[test]
+    fn external_roots_still_separate_distinct_source_sets() {
+        let base = desktop_config("/srv/state");
+        let with_one = LegacyRootConfiguration {
+            standalone_session_roots: vec![PathBuf::from("/mnt/alpha")],
+            ..base.clone()
+        };
+        let with_other = LegacyRootConfiguration {
+            standalone_session_roots: vec![PathBuf::from("/mnt/beta")],
+            ..base.clone()
+        };
+        assert_ne!(
+            migration_operation_key(&with_one),
+            migration_operation_key(&with_other)
+        );
+        assert_ne!(
+            migration_operation_key(&with_one),
+            migration_operation_key(&base)
+        );
+    }
+
+    /// An external root moving is a real identity change, unlike the state root.
+    #[test]
+    fn an_external_root_relocating_changes_the_key() {
+        let here = LegacyRootConfiguration {
+            standalone_session_roots: vec![PathBuf::from("/mnt/alpha")],
+            ..desktop_config("/srv/state")
+        };
+        let moved = LegacyRootConfiguration {
+            standalone_session_roots: vec![PathBuf::from("/mnt/alpha")],
+            ..desktop_config("/srv/other-state")
+        };
+        // Same external root, different state root: the external path is what
+        // carries identity here, and it did not move.
+        assert_eq!(
+            migration_operation_key(&here),
+            migration_operation_key(&moved)
+        );
+    }
+
+    /// The recognised-key list has to reproduce the SUPERSEDED formula exactly,
+    /// or journals already on users' disks stay unrecognised and still abort.
+    #[test]
+    fn superseded_keys_reproduce_the_retired_path_dependent_formula() {
+        let root = "/Users/x/Library/Application Support/com.termul-manager.app.dev";
+        let config = desktop_config(root);
+
+        // Recomputed by hand the way the retired formula did it.
+        let mut digest = Sha256::new();
+        digest.update(b"conversation-layout-v2\0");
+        digest.update(root.as_bytes());
+        let mut paths = config
+            .known_roots()
+            .into_iter()
+            .map(|spec| spec.path)
+            .collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            digest.update(b"\0");
+            digest.update(path.as_os_str().as_encoded_bytes());
+        }
+        let expected = hex(digest);
+
+        let keys =
+            superseded_operation_keys(&desktop_config("/somewhere/else"), &[PathBuf::from(root)]);
+        assert!(
+            keys.contains(&expected),
+            "the retired key for {root} is not recognised: {keys:?}"
+        );
+    }
+
+    /// The current root is always a candidate: that is the in-place upgrade
+    /// case, where only the formula changed and nothing moved.
+    #[test]
+    fn superseded_keys_cover_an_in_place_formula_upgrade() {
+        let config = desktop_config("/Users/x/state");
+        let keys = superseded_operation_keys(&config, &[]);
+        assert_eq!(keys.len(), 1);
+        assert_ne!(
+            keys[0],
+            migration_operation_key(&config),
+            "the retired formula must differ from the current one, or this whole path is dead code"
+        );
+    }
 
     #[test]
     fn fresh_desktop_and_standalone_roots_are_distinct_and_publish_identical_services() {
@@ -1303,6 +1491,43 @@ mod tests {
         assert_eq!(failure.code, "MIGRATION_JOURNAL_CORRUPT");
         assert_eq!(fs::read(journal_path).unwrap(), b"not-json");
         assert!(!state.join("conversations/v2").exists());
+    }
+
+    /// The shipped v0.6.0 crash, end to end.
+    ///
+    /// A user whose data lived under the pre-rename bundle identifier gets the
+    /// whole tree carried forward on first launch — journal included. That
+    /// journal's key was derived from the OLD root, so startup used to abort
+    /// with `MIGRATION_IDEMPOTENCY_CONFLICT` on data that was entirely intact.
+    /// Uses the real directory names so a future rename cannot quietly make
+    /// this test stop covering the case it was written for.
+    #[test]
+    fn a_journal_carried_forward_from_the_pre_rename_root_does_not_abort_startup() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path();
+        let canonical_root = parent.join(brand::canonical().bundle_id_dev);
+        let legacy_root = parent.join(brand::LEGACY.bundle_id_dev);
+
+        // Migrate once under the legacy identifier, exactly as the pre-rename
+        // build did.
+        let first = ConversationBootstrap::run(
+            HostConversationRoots::desktop(legacy_root.clone(), parent.join("visible")),
+            MigrationHostMode::Desktop,
+        )
+        .expect("the pre-rename install migrates cleanly");
+        assert_eq!(first.migration_phase, MigrationPhase::ObservationWindow);
+
+        // Rename lands: the canonical root does not exist yet, so bootstrap
+        // carries the legacy tree — journal and all — forward into it.
+        let carried = ConversationBootstrap::run(
+            HostConversationRoots::desktop(canonical_root.clone(), parent.join("visible")),
+            MigrationHostMode::Desktop,
+        )
+        .expect("a carried-forward journal must not abort startup");
+        assert_eq!(carried.migration_phase, MigrationPhase::ObservationWindow);
+
+        // And the legacy tree is still there, untouched.
+        assert!(legacy_root.join("conversation-migrations").is_dir());
     }
 
     #[test]

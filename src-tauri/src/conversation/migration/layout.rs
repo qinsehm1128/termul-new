@@ -109,6 +109,27 @@ impl ConversationLayoutDescriptorV1 {
         }
     }
 
+    /// Rebinds a descriptor whose `v2_root` was recorded under a previous host
+    /// root, and reports whether it changed.
+    ///
+    /// `v2_root` is always `<host_root>/conversations/v2` — it is derived, not
+    /// chosen — so it carries no information the host root does not already
+    /// give. Storing it absolute made it a tripwire that fires on relocation:
+    /// carrying the tree forward to a new bundle identifier left a descriptor
+    /// pointing at the old path, and `validate_for_host` reported the layout as
+    /// corrupt when nothing was wrong with it.
+    ///
+    /// Only the root is rebound. Schema version and the layout/precedence pair
+    /// are untouched, so a descriptor that is genuinely invalid stays invalid.
+    pub fn rebind_to_host(&mut self, host_root: &Path) -> bool {
+        let expected_v2_root = host_root.join("conversations").join("v2");
+        if Path::new(&self.v2_root) == expected_v2_root {
+            return false;
+        }
+        self.v2_root = expected_v2_root.to_string_lossy().into_owned();
+        true
+    }
+
     pub fn validate_for_host(&self, host_root: &Path) -> Result<()> {
         let expected_v2_root = host_root.join("conversations").join("v2");
         let valid_pair = matches!(
@@ -212,6 +233,53 @@ mod tests {
         DateTime::parse_from_rfc3339("2026-08-15T10:00:00.000Z")
             .unwrap()
             .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn rebinding_moves_only_the_derived_root() {
+        let old_host = Path::new("/old/root");
+        let new_host = Path::new("/new/root");
+        let mut descriptor = ConversationLayoutDescriptorV1::legacy(old_host, now());
+        let before = descriptor.clone();
+
+        assert!(descriptor.rebind_to_host(new_host));
+        assert_eq!(
+            Path::new(&descriptor.v2_root),
+            new_host.join("conversations").join("v2")
+        );
+        // Everything that is a real decision stays put.
+        assert_eq!(descriptor.schema_version, before.schema_version);
+        assert_eq!(descriptor.active_layout, before.active_layout);
+        assert_eq!(descriptor.reader_precedence, before.reader_precedence);
+        assert_eq!(descriptor.generation, before.generation);
+        assert_eq!(
+            descriptor.migration_operation_id,
+            before.migration_operation_id
+        );
+    }
+
+    #[test]
+    fn rebinding_an_already_correct_descriptor_reports_no_change() {
+        let host = Path::new("/root");
+        let mut descriptor = ConversationLayoutDescriptorV1::legacy(host, now());
+        assert!(!descriptor.rebind_to_host(host));
+    }
+
+    #[test]
+    fn rebinding_does_not_launder_a_genuinely_invalid_descriptor() {
+        // Rebinding fixes a stale root and nothing else. A descriptor whose
+        // layout and reader policy disagree is still invalid afterwards —
+        // otherwise the relocation path would become a way to smuggle a broken
+        // descriptor past validation.
+        let new_host = Path::new("/new/root");
+        let mut descriptor = ConversationLayoutDescriptorV1::legacy(Path::new("/old/root"), now());
+        descriptor.reader_precedence = ReaderPrecedence::ConversationV2Only;
+
+        assert!(descriptor.rebind_to_host(new_host));
+        assert_eq!(
+            descriptor.validate_for_host(new_host).unwrap_err().code,
+            MigrationErrorCode::MigrationLayoutCorrupt
+        );
     }
 
     fn journal(phase: MigrationPhase) -> MigrationJournalV1 {

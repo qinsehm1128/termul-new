@@ -327,6 +327,12 @@ pub struct MigrationContext<'a> {
     pub lock_guard: &'a HostMigrationLockGuard,
     pub host_state_root: &'a Path,
     pub operation_key: &'a str,
+    /// Keys a journal on disk may legitimately still carry for *this* operation
+    /// — an older key formula, or the same operation under a root the tree was
+    /// carried forward from. A journal holding one of these is adopted onto
+    /// `operation_key`; anything else is a genuine conflict. Empty disables
+    /// adoption entirely.
+    pub adoptable_operation_keys: &'a [String],
     pub host_mode: MigrationHostMode,
     pub admission: MigrationAdmissionState,
     pub now_utc: DateTime<Utc>,
@@ -424,7 +430,11 @@ impl ConversationMigrationService {
         self.validate_guard(context.lock_guard, context.host_state_root)?;
         journal::validate_sha256(context.operation_key)?;
         self.ensure_migration_dir()?;
-        let mut journal = self.load_or_create_journal(context.operation_key, context.now_utc)?;
+        let mut journal = self.load_or_create_journal(
+            context.operation_key,
+            context.adoptable_operation_keys,
+            context.now_utc,
+        )?;
         let mut descriptor = self.load_or_create_layout(context.now_utc)?;
         let mut reused_step_count = 0usize;
         log::info!(
@@ -1113,16 +1123,23 @@ impl ConversationMigrationService {
     fn load_or_create_journal(
         &self,
         operation_key: &str,
+        adoptable_operation_keys: &[String],
         now_utc: DateTime<Utc>,
     ) -> Result<MigrationJournalV1> {
         if self.journal_path.exists() {
-            let journal = self.load_journal()?;
+            let mut journal = self.load_journal()?;
             if journal.operation_key != operation_key {
-                return Err(MigrationError::new(
-                    MigrationErrorCode::MigrationIdempotencyConflict,
-                    "load_journal",
-                    "operation key does not match the durable migration operation",
-                ));
+                if !adoptable_operation_keys
+                    .iter()
+                    .any(|candidate| candidate == &journal.operation_key)
+                {
+                    return Err(MigrationError::new(
+                        MigrationErrorCode::MigrationIdempotencyConflict,
+                        "load_journal",
+                        "operation key does not match the durable migration operation",
+                    ));
+                }
+                self.adopt_journal(&mut journal, operation_key, now_utc)?;
             }
             Ok(journal)
         } else {
@@ -1130,6 +1147,43 @@ impl ConversationMigrationService {
             self.write_journal(&journal)?;
             Ok(journal)
         }
+    }
+
+    /// Rebinds a recognised journal onto the current operation key.
+    ///
+    /// Every entry in `completed_steps` is prefixed with the key that produced
+    /// it (`"<key>:inventory:<sha>"`), and the phase machinery reads those
+    /// receipts back by prefix. Rewriting the key alone would orphan all of
+    /// them, silently re-running work whose whole point is to be idempotent —
+    /// so the receipts are re-prefixed in the same pass, and the result is
+    /// written durably before the caller acts on it. `operation_id` and
+    /// `target_generation` are deliberately preserved: this is the same
+    /// operation observed from a new path, not a new one.
+    fn adopt_journal(
+        &self,
+        journal: &mut MigrationJournalV1,
+        operation_key: &str,
+        now_utc: DateTime<Utc>,
+    ) -> Result<()> {
+        let previous_key = std::mem::replace(&mut journal.operation_key, operation_key.to_string());
+        let previous_prefix = format!("{previous_key}:");
+        journal.completed_steps = std::mem::take(&mut journal.completed_steps)
+            .into_iter()
+            .map(|(key, receipt)| match key.strip_prefix(&previous_prefix) {
+                Some(suffix) => (format!("{operation_key}:{suffix}"), receipt),
+                None => (key, receipt),
+            })
+            .collect();
+        journal.updated_at_utc = now_utc;
+        log::warn!(
+            "[conversation-migration] adopted relocated journal operation_id={} phase={:?} from_key_prefix={} to_key_prefix={} steps={}",
+            journal.operation_id,
+            journal.phase,
+            operation_key_prefix(&previous_key),
+            operation_key_prefix(operation_key),
+            journal.completed_steps.len()
+        );
+        self.write_journal(journal)
     }
 
     fn load_journal(&self) -> Result<MigrationJournalV1> {
@@ -1194,14 +1248,29 @@ impl ConversationMigrationService {
                 error.to_string(),
             )
         })?;
-        let descriptor: ConversationLayoutDescriptorV1 =
-            serde_json::from_slice(&bytes).map_err(|error| {
+        let mut descriptor: ConversationLayoutDescriptorV1 = serde_json::from_slice(&bytes)
+            .map_err(|error| {
                 MigrationError::new(
                     MigrationErrorCode::MigrationLayoutCorrupt,
                     "read_layout",
                     error.to_string(),
                 )
             })?;
+        // A descriptor carried forward from a previous install path still
+        // points its derived `v2_root` at that path. Rebind before validating,
+        // then persist, so the relocation is settled once rather than re-derived
+        // on every start. Validation still runs and still rejects a genuinely
+        // malformed descriptor.
+        if descriptor.rebind_to_host(&self.canonical_host_root) {
+            log::warn!(
+                "[conversation-migration] rebound layout descriptor to relocated host root {}",
+                self.canonical_host_root.display()
+            );
+            // `write_layout` validates before it persists, so a descriptor that
+            // is malformed for reasons other than its root still fails here.
+            self.write_layout(&descriptor)?;
+            return Ok(descriptor);
+        }
         descriptor.validate_for_host(&self.canonical_host_root)?;
         Ok(descriptor)
     }
@@ -1520,11 +1589,192 @@ mod tests {
             lock_guard: guard,
             host_state_root: root,
             operation_key: OPERATION_KEY,
+            adoptable_operation_keys: &[],
             host_mode: MigrationHostMode::Desktop,
             admission: MigrationAdmissionState::default(),
             now_utc: at,
             callbacks,
         })
+    }
+
+    /// Runs with an explicit key, so a test can migrate under one identity and
+    /// then re-enter under another.
+    fn run_with_keys(
+        service: &ConversationMigrationService,
+        root: &Path,
+        guard: &HostMigrationLockGuard,
+        callbacks: &mut CountingCallbacks,
+        operation_key: &str,
+        adoptable_operation_keys: &[String],
+        at: DateTime<Utc>,
+    ) -> Result<MigrationReport> {
+        service.recover_and_run(MigrationContext {
+            lock_guard: guard,
+            host_state_root: root,
+            operation_key,
+            adoptable_operation_keys,
+            host_mode: MigrationHostMode::Desktop,
+            admission: MigrationAdmissionState::default(),
+            now_utc: at,
+            callbacks,
+        })
+    }
+
+    const RELOCATED_KEY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn journal_on_disk(root: &Path) -> MigrationJournalV1 {
+        let path = root
+            .join("conversation-migrations")
+            .join(MIGRATION_JOURNAL_FILE);
+        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    }
+
+    /// The shipped crash: a journal carried forward from a previous install path
+    /// still describes this operation, but its key was derived from that path.
+    /// Startup used to abort on data that was completely intact.
+    #[test]
+    fn adopts_a_journal_whose_key_came_from_a_previous_root() {
+        let (_temp, root, lock, service) = fixture();
+        let guard = lock.acquire().unwrap();
+        let mut callbacks = CountingCallbacks::default();
+
+        let first = run(&service, &root, &guard, &mut callbacks, now()).unwrap();
+        assert_eq!(first.phase, MigrationPhase::ObservationWindow);
+        let before = journal_on_disk(&root);
+        assert!(!before.completed_steps.is_empty());
+
+        // Re-enter under the key the relocated install computes, declaring the
+        // old one as recognised.
+        let adoptable = vec![OPERATION_KEY.to_string()];
+        let report = run_with_keys(
+            &service,
+            &root,
+            &guard,
+            &mut callbacks,
+            RELOCATED_KEY,
+            &adoptable,
+            now(),
+        )
+        .unwrap();
+
+        assert_eq!(report.operation_key, RELOCATED_KEY);
+        // Same operation, not a fresh one.
+        assert_eq!(report.operation_id, before.operation_id);
+        assert_eq!(report.target_generation, before.target_generation);
+    }
+
+    /// Adoption has to carry the step receipts with it. They are keyed by the
+    /// operation key, so rewriting the key alone would orphan every one of them
+    /// and silently re-run work that exists to be idempotent.
+    #[test]
+    fn adoption_reprefixes_completed_step_receipts() {
+        let (_temp, root, lock, service) = fixture();
+        let guard = lock.acquire().unwrap();
+        let mut callbacks = CountingCallbacks::default();
+        run(&service, &root, &guard, &mut callbacks, now()).unwrap();
+
+        let before = journal_on_disk(&root);
+        let adoptable = vec![OPERATION_KEY.to_string()];
+        run_with_keys(
+            &service,
+            &root,
+            &guard,
+            &mut callbacks,
+            RELOCATED_KEY,
+            &adoptable,
+            now(),
+        )
+        .unwrap();
+
+        let after = journal_on_disk(&root);
+        assert_eq!(after.operation_key, RELOCATED_KEY);
+        assert_eq!(after.completed_steps.len(), before.completed_steps.len());
+        assert!(
+            after
+                .completed_steps
+                .keys()
+                .all(|key| key.starts_with(RELOCATED_KEY)),
+            "receipts still carry the superseded prefix: {:?}",
+            after.completed_steps.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// A key that is not on the recognised list describes a different source
+    /// set. Adoption must not degrade into "accept any journal".
+    #[test]
+    fn refuses_a_journal_whose_key_is_not_recognised() {
+        let (_temp, root, lock, service) = fixture();
+        let guard = lock.acquire().unwrap();
+        let mut callbacks = CountingCallbacks::default();
+        run(&service, &root, &guard, &mut callbacks, now()).unwrap();
+
+        let unrelated =
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string();
+        let error = run_with_keys(
+            &service,
+            &root,
+            &guard,
+            &mut callbacks,
+            RELOCATED_KEY,
+            &[unrelated],
+            now(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, MigrationErrorCode::MigrationIdempotencyConflict);
+    }
+
+    /// An empty candidate list is the old, strict behaviour.
+    #[test]
+    fn an_empty_candidate_list_disables_adoption() {
+        let (_temp, root, lock, service) = fixture();
+        let guard = lock.acquire().unwrap();
+        let mut callbacks = CountingCallbacks::default();
+        run(&service, &root, &guard, &mut callbacks, now()).unwrap();
+
+        let error = run_with_keys(
+            &service,
+            &root,
+            &guard,
+            &mut callbacks,
+            RELOCATED_KEY,
+            &[],
+            now(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, MigrationErrorCode::MigrationIdempotencyConflict);
+    }
+
+    /// Adoption is durable: a second cold start must not have to adopt again.
+    #[test]
+    fn adoption_survives_a_restart_without_the_candidate_list() {
+        let (_temp, root, lock, service) = fixture();
+        let guard = lock.acquire().unwrap();
+        let mut callbacks = CountingCallbacks::default();
+        run(&service, &root, &guard, &mut callbacks, now()).unwrap();
+        let adoptable = vec![OPERATION_KEY.to_string()];
+        run_with_keys(
+            &service,
+            &root,
+            &guard,
+            &mut callbacks,
+            RELOCATED_KEY,
+            &adoptable,
+            now(),
+        )
+        .unwrap();
+
+        let restarted = ConversationMigrationService::new(&root).unwrap();
+        let report = run_with_keys(
+            &restarted,
+            &root,
+            &guard,
+            &mut callbacks,
+            RELOCATED_KEY,
+            &[],
+            now(),
+        )
+        .unwrap();
+        assert_eq!(report.operation_key, RELOCATED_KEY);
     }
 
     #[test]
@@ -1589,6 +1839,7 @@ mod tests {
                 lock_guard: &guard,
                 host_state_root: &root,
                 operation_key: OPERATION_KEY,
+                adoptable_operation_keys: &[],
                 host_mode: MigrationHostMode::Desktop,
                 admission: MigrationAdmissionState::default(),
                 now_utc: now(),
@@ -1763,6 +2014,7 @@ mod tests {
                 lock_guard: &guard,
                 host_state_root: &root,
                 operation_key: OPERATION_KEY,
+                adoptable_operation_keys: &[],
                 host_mode: MigrationHostMode::Desktop,
                 admission: MigrationAdmissionState::default(),
                 now_utc: now(),
@@ -1802,6 +2054,7 @@ mod tests {
                     lock_guard: &guard,
                     host_state_root: &root,
                     operation_key: OPERATION_KEY,
+                    adoptable_operation_keys: &[],
                     host_mode: MigrationHostMode::Desktop,
                     admission: MigrationAdmissionState::default(),
                     now_utc: now(),
@@ -1830,6 +2083,7 @@ mod tests {
                     lock_guard: &guard,
                     host_state_root: &root,
                     operation_key: OPERATION_KEY,
+                    adoptable_operation_keys: &[],
                     host_mode: MigrationHostMode::Desktop,
                     admission: MigrationAdmissionState::default(),
                     now_utc: now(),
@@ -1884,6 +2138,7 @@ mod tests {
                     lock_guard: &guard,
                     host_state_root: &root,
                     operation_key: OPERATION_KEY,
+                    adoptable_operation_keys: &[],
                     host_mode: MigrationHostMode::Desktop,
                     admission: MigrationAdmissionState::default(),
                     now_utc: now() + Duration::hours(1),
@@ -2084,6 +2339,7 @@ mod tests {
                 lock_guard: &guard,
                 host_state_root: &root,
                 operation_key: OPERATION_KEY,
+                adoptable_operation_keys: &[],
                 host_mode: MigrationHostMode::Standalone,
                 admission: MigrationAdmissionState {
                     pty_manager_active: true,
@@ -2192,6 +2448,7 @@ mod tests {
                 lock_guard: &guard,
                 host_state_root: &root,
                 operation_key: OPERATION_KEY,
+                adoptable_operation_keys: &[],
                 host_mode: MigrationHostMode::Desktop,
                 admission: MigrationAdmissionState::default(),
                 now_utc: now(),

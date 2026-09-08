@@ -230,6 +230,10 @@ pub struct ConversationCreationService {
     repository: Arc<ConversationRepository>,
     private_locator: ConversationLocator,
     workspace_locator: SessionWorkspaceLocator,
+    /// Workspace roots this host used before the visible session directory was
+    /// renamed. Read-only: they exist so a Conversation created under the old
+    /// name can still be resolved, never so its files can be moved.
+    legacy_workspace_locators: Vec<SessionWorkspaceLocator>,
     durable_fs: DurableFileSystem,
     clock: Arc<dyn Clock>,
     id_generator: Arc<dyn ConversationIdGenerator>,
@@ -274,11 +278,24 @@ impl ConversationCreationService {
             repository,
             private_locator,
             workspace_locator,
+            legacy_workspace_locators: Vec::new(),
             durable_fs,
             clock,
             id_generator,
             creation_locks: ParkingMutex::new(HashMap::new()),
         })
+    }
+
+    /// Declares the pre-rename workspace roots. Roots that do not exist are
+    /// dropped, so a host that never had one is unaffected.
+    #[must_use]
+    pub fn with_legacy_workspace_roots(mut self, roots: &[PathBuf]) -> Self {
+        self.legacy_workspace_locators = roots
+            .iter()
+            .filter(|root| root.is_dir())
+            .filter_map(|root| SessionWorkspaceLocator::new(root.clone()).ok())
+            .collect();
+        self
     }
 
     #[must_use]
@@ -1158,15 +1175,35 @@ impl ConversationCreationService {
             "canonical_workspace",
             Some(record.conversation_id),
         )?;
-        if canonical != record.workspace_cwd {
-            return Err(creation_error(
-                ConversationErrorCode::ConversationRecoveryRequired,
+        if canonical == record.workspace_cwd {
+            return Ok(workspace);
+        }
+        // A Conversation created before the visible session root was renamed
+        // still carries the path it was created at. `workspaceCwd` is immutable
+        // by contract and the user's session files are never moved, so the
+        // record is right and the canonical root is simply not where this one
+        // lives. Resolve it under the root it was actually created in.
+        for locator in &self.legacy_workspace_locators {
+            let candidate = locator
+                .workspace_dir(record.conversation_id, &record.creation_partition)
+                .map_err(|error| {
+                    map_locator_error("canonical_workspace", Some(record.conversation_id), error)
+                })?;
+            let candidate_utf8 = path_to_utf8(
+                &candidate,
                 "canonical_workspace",
                 Some(record.conversation_id),
-                "workspaceCwd does not match immutable locator output",
-            ));
+            )?;
+            if candidate_utf8 == record.workspace_cwd {
+                return Ok(candidate);
+            }
         }
-        Ok(workspace)
+        Err(creation_error(
+            ConversationErrorCode::ConversationRecoveryRequired,
+            "canonical_workspace",
+            Some(record.conversation_id),
+            "workspaceCwd does not match immutable locator output",
+        ))
     }
 
     /// Resolve the agent's filesystem scope: `(cwd, additional_directories)`.
@@ -1594,6 +1631,100 @@ mod tests {
             clock,
             ids,
         }
+    }
+
+    fn record_at(
+        conversation_id: ConversationId,
+        partition: &CreationPartition,
+        workspace_cwd: String,
+    ) -> ConversationRecordV2 {
+        ConversationRecordV2 {
+            schema_version: CONVERSATION_SCHEMA_VERSION,
+            conversation_id,
+            created_at_utc: DateTime::parse_from_rfc3339("2026-08-20T00:00:00.000Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            creation_partition: partition.clone(),
+            workspace_cwd,
+            execution_target: ExecutionTarget::Workspace,
+            project_attachment: None,
+            lifecycle_state: ConversationLifecycleState::Ready,
+            last_seq: 0,
+            created_by: ConversationCreator::SeManager,
+            title: None,
+            title_source: None,
+        }
+    }
+
+    /// A Conversation created before the visible session root was renamed keeps
+    /// pointing at the root it was created in — `workspaceCwd` is immutable and
+    /// the files are never moved. Resolving it must follow the record, not the
+    /// current canonical root.
+    #[test]
+    fn a_workspace_under_a_declared_legacy_root_resolves_to_where_it_actually_is() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let legacy_visible = base.join("Termul");
+        fs::create_dir_all(&legacy_visible).unwrap();
+
+        let harness = fixture(
+            &["2026-08-20T00:00:00.000Z"],
+            &["083e32d7-2667-4848-8e02-298a71b2acc9"],
+        );
+        let service = ConversationCreationService::with_sources(
+            ConversationWriter::for_test(Arc::clone(&harness.repository)),
+            ConversationLocator::new(harness.private_root.clone()).unwrap(),
+            SessionWorkspaceLocator::new(harness.visible_root.clone()).unwrap(),
+            DurableFileSystem::new(),
+            harness.clock.clone(),
+            harness.ids.clone(),
+        )
+        .unwrap()
+        .with_legacy_workspace_roots(&[legacy_visible.clone()]);
+
+        let conversation_id =
+            ConversationId::parse("083e32d7-2667-4848-8e02-298a71b2acc9").unwrap();
+        let partition = CreationPartition::try_new(2026, 8, 20).unwrap();
+        let legacy_workspace = SessionWorkspaceLocator::new(legacy_visible)
+            .unwrap()
+            .workspace_dir(conversation_id, &partition)
+            .unwrap();
+        let record = record_at(
+            conversation_id,
+            &partition,
+            legacy_workspace.to_string_lossy().into_owned(),
+        );
+
+        assert_eq!(
+            service.canonical_workspace_for(&record).unwrap(),
+            legacy_workspace
+        );
+    }
+
+    /// Tolerating a declared legacy root must not become "tolerate any path".
+    #[test]
+    fn a_workspace_under_no_known_root_is_still_a_recovery_case() {
+        let harness = fixture(
+            &["2026-08-20T00:00:00.000Z"],
+            &["083e32d7-2667-4848-8e02-298a71b2acc9"],
+        );
+        let conversation_id =
+            ConversationId::parse("083e32d7-2667-4848-8e02-298a71b2acc9").unwrap();
+        let partition = CreationPartition::try_new(2026, 8, 20).unwrap();
+        let record = record_at(
+            conversation_id,
+            &partition,
+            "/somewhere/nobody/declared".to_string(),
+        );
+
+        assert_eq!(
+            harness
+                .service
+                .canonical_workspace_for(&record)
+                .unwrap_err()
+                .code,
+            ConversationErrorCode::ConversationRecoveryRequired
+        );
     }
 
     fn request(target: ExecutionTarget) -> PrepareConversationRequest {
