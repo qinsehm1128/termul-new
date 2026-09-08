@@ -213,7 +213,8 @@
     "connecting": "Connecting…",
     "agentLauncher": "Agent launcher",
     "closeAgentLauncher": "Close agent launcher",
-    "closeAgentLauncherEsc": "Close agent launcher (Esc)"
+    "closeAgentLauncherEsc": "Close agent launcher (Esc)",
+    "terminalConversation": "This conversation runs in a terminal."
   },
   "mermaid": {
     "zoomIn": "Zoom In",

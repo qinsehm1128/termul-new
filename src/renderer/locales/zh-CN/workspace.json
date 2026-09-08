@@ -213,7 +213,8 @@
     "connecting": "正在连接…",
     "agentLauncher": "Agent 启动器",
     "closeAgentLauncher": "关闭 Agent 启动器",
-    "closeAgentLauncherEsc": "关闭 Agent 启动器（Esc）"
+    "closeAgentLauncherEsc": "关闭 Agent 启动器（Esc）",
+    "terminalConversation": "这个会话在终端里运行。"
   },
   "mermaid": {
     "zoomIn": "放大",

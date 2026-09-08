@@ -78,6 +78,7 @@ vi.mock('@/components/agents/AgentIcon', () => ({
   AgentIcon: () => <span data-testid="agent-icon-stub" />
 }))
 
+import { useConversationStore } from '@/stores/conversation-store'
 import { PaneContent } from './PaneContent'
 
 const editorPane: LeafNode = {
@@ -145,5 +146,71 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
 
     expect(screen.getByText('Something went wrong in Editor Pane')).toBeInTheDocument()
     expect(screen.getByText('Failed to load dynamic target chunk')).toBeInTheDocument()
+  })
+})
+
+describe('PaneContent — an agent-chat tab whose conversation has no agent', () => {
+  const conversationId = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
+  const chatPane: LeafNode = {
+    type: 'leaf',
+    id: 'pane-2',
+    activeTabId: 'tab-chat-1',
+    tabs: [{ type: 'agent-chat', id: 'tab-chat-1', conversationId }]
+  }
+
+  function seedConversation(backend?: 'agent' | 'terminal'): void {
+    useConversationStore.setState({
+      summariesById: {
+        [conversationId]: {
+          schemaVersion: 2,
+          conversationId,
+          createdAtUtc: '2026-08-15T09:45:15.123Z',
+          creationPartition: { year: 2026, month: 8, day: 15, path: '2026/08/15' },
+          workspaceCwd: '/conversations/terminal',
+          executionTarget: { kind: 'workspace' },
+          projectAttachment: null,
+          lifecycleState: 'ready',
+          ...(backend ? { backend } : {}),
+          lastSeq: 0,
+          createdBy: 'se-manager',
+          title: null,
+          titleSource: null
+        }
+      },
+      conversationIds: [conversationId],
+      openingById: {}
+    } as never)
+  }
+
+  afterEach(() => {
+    useConversationStore.setState({ summariesById: {}, conversationIds: {} } as never)
+  })
+
+  it('does not offer the launcher for a terminal-backed conversation', async () => {
+    // The launcher is a restart surface for an agent. Offering it here invites
+    // the user to start something this conversation never asked for.
+    seedConversation('terminal')
+    render(
+      <MemoryRouter>
+        <PaneContent pane={chatPane} />
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByTestId('conversation-terminal-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('launcher-stub')).not.toBeInTheDocument()
+  })
+
+  it('still offers the launcher when the conversation declares no backend', async () => {
+    // Every record predating the discriminator: an agent conversation whose
+    // agent is simply not currently bound.
+    seedConversation()
+    render(
+      <MemoryRouter>
+        <PaneContent pane={chatPane} />
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByTestId('launcher-stub')).toBeInTheDocument()
+    expect(screen.queryByTestId('conversation-terminal-empty')).not.toBeInTheDocument()
   })
 })

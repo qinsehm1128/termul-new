@@ -5,7 +5,7 @@ import type {
   ExecutionTarget,
   ProjectAttachment
 } from '@shared/types/conversation.types'
-import { isConversationId } from '@shared/types/conversation.types'
+import { conversationBackendOf, isConversationId } from '@shared/types/conversation.types'
 import type {
   ConversationHostStatus,
   ConversationOpenOutcome
@@ -785,6 +785,23 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       logStaleActivation(conversationId, activationEpoch, 'binding-index')
       return false
     }
+    // A terminal-backed Conversation has no agent session to resolve, and the
+    // binding-miss fallback below would hand it an `agent-chat` tab — which
+    // `PaneContent` renders as the launcher, the restart surface for an agent
+    // it never had. Its terminals were already restored by
+    // `loadSessionWorkspace` above, so the workspace layout owns the view from
+    // here. The active session is still cleared: the previously open
+    // Conversation's chat must not stay live behind this one.
+    if (conversationBackendOf(get().summariesById[conversationId]) === 'terminal') {
+      useAcpStore.getState().setActiveSession(null)
+      set((state) =>
+        activationIsCurrent(state, conversationId, activationEpoch)
+          ? { openingById: { ...state.openingById, [conversationId]: false } }
+          : {}
+      )
+      return true
+    }
+
     let acp = useAcpStore.getState()
     let sessionId = bindingSessionId(acp, conversationId)
     if (!sessionId) {

@@ -320,6 +320,56 @@ describe('ConversationStore canonical authority', () => {
     expect(addAgentChatTabMock).toHaveBeenCalledWith(projectlessId, undefined, false)
   })
 
+  it('opens a terminal-backed conversation without offering an agent tab', async () => {
+    // The no-binding fallback adds an `agent-chat` tab, which PaneContent
+    // renders as the launcher — the restart surface for an agent. A terminal
+    // Conversation has none, so being handed that tab is being told to start
+    // something it never asked for.
+    const terminalBacked = { ...projectless, backend: 'terminal' as const }
+    useConversationStore.setState({
+      summariesById: { [projectlessId]: terminalBacked },
+      conversationIds: [projectlessId]
+    })
+    vi.mocked(conversationApi.openConversation).mockResolvedValue({
+      success: true,
+      data: {
+        conversation: terminalBacked,
+        workspace: { status: 'missing', conversationId: projectlessId }
+      }
+    })
+    useAcpStore.setState({ activeSessionId: 'stale/session' })
+
+    const epoch = useConversationStore.getState().beginConversationActivation(projectlessId)
+    await expect(
+      useConversationStore.getState().activateConversation(projectlessId, epoch)
+    ).resolves.toBe(true)
+
+    expect(addAgentChatTabMock).not.toHaveBeenCalled()
+    // The previous Conversation's chat must not stay live behind this one.
+    expect(useAcpStore.getState().activeSessionId).toBeNull()
+    expect(useConversationStore.getState().openingById[projectlessId]).toBe(false)
+  })
+
+  it('still offers the agent tab for a conversation with no explicit backend', async () => {
+    // Every record written before the discriminator existed lands here; they
+    // are agent Conversations and must keep their restart surface.
+    expect(projectless).not.toHaveProperty('backend')
+    vi.mocked(conversationApi.openConversation).mockResolvedValue({
+      success: true,
+      data: {
+        conversation: projectless,
+        workspace: { status: 'missing', conversationId: projectlessId }
+      }
+    })
+
+    const epoch = useConversationStore.getState().beginConversationActivation(projectlessId)
+    await expect(
+      useConversationStore.getState().activateConversation(projectlessId, epoch)
+    ).resolves.toBe(true)
+
+    expect(addAgentChatTabMock).toHaveBeenCalledWith(projectlessId, undefined, false)
+  })
+
   it('reopens history from the host binding when the local index is empty', async () => {
     vi.mocked(conversationApi.openConversation).mockResolvedValue({
       success: true,

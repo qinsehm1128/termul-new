@@ -1,3 +1,4 @@
+import { conversationBackendOf } from '@shared/types/conversation.types'
 import type { ShellInfo } from '@shared/types/ipc.types'
 import { RefreshCcw, Unplug, X } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -50,6 +51,25 @@ function PaneSkeleton(): React.JSX.Element {
   return <Skeleton className="h-full w-full" />
 }
 
+/**
+ * What a terminal-backed Conversation shows where an agent chat would be.
+ *
+ * Reached only when a restored layout carries an `agent-chat` tab for a
+ * Conversation that has no agent — the terminals themselves are ordinary
+ * workspace tabs and render through their own path.
+ */
+function ConversationTerminalEmptyState(): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  return (
+    <div
+      data-testid="conversation-terminal-empty"
+      className="flex h-full w-full items-center justify-center p-6 text-center text-sm text-muted-foreground"
+    >
+      {t('pane.terminalConversation', 'This conversation runs in a terminal.')}
+    </div>
+  )
+}
+
 function ConversationAgentChatPanel({
   tab,
   paneId,
@@ -67,9 +87,19 @@ function ConversationAgentChatPanel({
   const opening = useConversationStore((state) =>
     tab.conversationId ? state.openingById[tab.conversationId] === true : false
   )
+  const isTerminalBacked = useConversationStore((state) =>
+    tab.conversationId
+      ? conversationBackendOf(state.summariesById[tab.conversationId]) === 'terminal'
+      : false
+  )
 
   if (!sessionId) {
     if (opening) return <PaneSkeleton />
+    // A terminal-backed Conversation has no agent to restart, so the launcher
+    // would be offering to start one it never asked for. Activation does not
+    // create this tab for those Conversations; this guard covers the tab
+    // arriving from a restored layout instead.
+    if (isTerminalBacked) return <ConversationTerminalEmptyState />
     // This tab already owns a Conversation; the launcher is its restart
     // surface, not a new-chat composer. Name the target explicitly — the
     // launcher deliberately no longer infers one from the sidebar selection.
