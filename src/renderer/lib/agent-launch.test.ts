@@ -267,6 +267,45 @@ describe('launchAgentInPane', () => {
     expect(mockTerminalApiWrite).toHaveBeenCalledWith('pty-1', 'claude --resume abc\r')
   })
 
+  it('binds a resumed agent to the open conversation', async () => {
+    // Without this the resumed agent is a plain project terminal: it never
+    // shows up in the Conversation's terminal list, and it loses the
+    // "closing the tab does not kill it" semantics conversation-scoped
+    // terminals have.
+    mockActiveConversationId.current = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
+    mockTerminals.push({ id: 'term-1', projectId: 'proj-1', ptyId: 'pty-1' })
+    const result = await launchAgentResumeInPane(
+      'pane-1',
+      'proj-1',
+      '/test',
+      claude,
+      {
+        schemaVersion: 1,
+        id: 'claude-code:abc:/tmp/a.jsonl',
+        agentId: 'claude-code',
+        sessionId: 'abc',
+        cwd: '/test',
+        title: 'Hello',
+        createdAt: null,
+        updatedAt: null,
+        messageCount: 1,
+        filePath: '/tmp/a.jsonl',
+        resumable: true
+      },
+      '',
+      '',
+      { shellSettleMs: 0 }
+    )
+
+    expect(result.success).toBe(true)
+    expect(mockSpawnTerminalInPane).toHaveBeenCalledWith(
+      'pane-1',
+      'proj-1',
+      '/test',
+      expect.objectContaining({ conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab' })
+    )
+  })
+
   it('resumes with extras before --resume and without a seed prompt', async () => {
     mockTerminals.push({ id: 'term-1', projectId: 'proj-1', ptyId: 'pty-1' })
     const result = await launchAgentResumeInPane(

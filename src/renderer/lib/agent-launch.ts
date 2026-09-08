@@ -277,7 +277,14 @@ export async function launchAgentResumeInPane(
   const maxTerminalsPerProject =
     options?.maxTerminalsPerProject ??
     useAppSettingsStore.getState().settings.maxTerminalsPerProject
+  // An open Conversation owns the terminal a resume lands in, exactly as it
+  // owns one started from the composer. Without this the resumed agent is a
+  // plain project terminal: it never appears in the Conversation's terminal
+  // list and loses the "closing the tab does not kill it" semantics that
+  // conversation-scoped terminals have.
+  const conversationId = useSessionWorkspaceSyncStore.getState().activeConversationId
   const spawned = await spawnTerminalInPane(paneId, projectId, cwd, {
+    ...(conversationId ? { conversationId } : {}),
     envVars: options?.envVars ?? project?.envVars,
     maxTerminalsPerProject,
     extraEnv

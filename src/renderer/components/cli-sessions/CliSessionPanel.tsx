@@ -36,13 +36,18 @@ import {
   groupCliSessions,
   sortCliSessions
 } from '@/lib/cli-session-list'
-import { buildCliSessionScopePaths, type CliSessionScopeMode } from '@/lib/cli-session-scope'
+import {
+  buildCliSessionScopePaths,
+  type CliSessionScopeMode,
+  resolveCliSessionDirectory
+} from '@/lib/cli-session-scope'
 import { cliSessionListTitle } from '@/lib/cli-session-title'
 import { formatRelativeTime } from '@/lib/git-time'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useCliSessionPanelVisible } from '@/stores/cli-session-panel-store'
+import { useConversationStore } from '@/stores/conversation-store'
 import { useActiveProject } from '@/stores/project-store'
 import { useActiveTerminal } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -83,8 +88,20 @@ export function CliSessionPanel({
   >({})
   const requestIdRef = useRef(0)
 
-  const directoryPath =
-    activeTerminal?.cwd ?? (activeProject ? getDefaultCwdForProject(activeProject.id) : null)
+  // An open Conversation is the subject: its own workspace directory is where
+  // its agents ran, and it is often outside any registered project. Without it
+  // first, opening this panel inside a Conversation lists the *project's*
+  // history instead of the folder the user is looking at.
+  const conversationWorkspaceCwd = useConversationStore((state) =>
+    state.activeConversationId
+      ? (state.summariesById[state.activeConversationId]?.workspaceCwd ?? null)
+      : null
+  )
+  const directoryPath = resolveCliSessionDirectory({
+    conversationWorkspaceCwd,
+    terminalCwd: activeTerminal?.cwd,
+    projectDefaultCwd: activeProject ? getDefaultCwdForProject(activeProject.id) : null
+  })
   const scopePaths = useMemo(
     () =>
       buildCliSessionScopePaths({
@@ -205,7 +222,10 @@ export function CliSessionPanel({
   const grouped = useMemo(() => groupCliSessions(filtered, group), [filtered, group])
 
   const handleResume = async (onceExtraArgs: string): Promise<void> => {
-    if (!resumeSession || !activeProject) return
+    // A Conversation-scoped session has no project attached, and the session's
+    // own recorded cwd is a better answer than any project default anyway.
+    // Requiring a project here made those sessions unresumable.
+    if (!resumeSession) return
     const def = getBuiltInAgent(resumeSession.agentId)
     const paneId = useWorkspaceStore.getState().activePaneId
     if (!def || !paneId) {
@@ -214,10 +234,10 @@ export function CliSessionPanel({
     }
     setResumeBusy(true)
     try {
-      const cwd = resumeSession.cwd || directoryPath || activeProject.path || ''
+      const cwd = resumeSession.cwd || directoryPath || activeProject?.path || ''
       const result = await launchAgentResumeInPane(
         paneId,
-        activeProject.id,
+        activeProject?.id ?? '',
         cwd,
         def,
         resumeSession,
