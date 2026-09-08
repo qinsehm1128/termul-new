@@ -2215,6 +2215,36 @@ describe('AgentLauncher — terminal-backed conversation', () => {
     )
     // Nothing from the agent path runs.
     expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
+    // And no chat tab is stacked on top of the terminal's own tab: that tab
+    // renders the launcher when it has no agent session, which put the user
+    // straight back on this screen with the terminal hidden underneath.
+    expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+  })
+
+  it('hands the new conversation to the caller so the route opens it', async () => {
+    // Navigation is what makes activation run, and activation is what decides
+    // the view for a terminal-backed Conversation. Without it the terminal is
+    // spawned but the launcher stays on screen.
+    launchTerminalConversationMock.mockResolvedValue({
+      success: true,
+      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+      terminalId: 'terminal-1'
+    })
+    const onLaunched = vi.fn()
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" onLaunched={onLaunched} />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
+    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
+    fireEvent.click(await screen.findByTestId('launcher-start-terminal'))
+
+    await waitFor(() =>
+      expect(onLaunched).toHaveBeenCalledWith('018f7a1c-1b4d-7c8a-9f01-0123456789ab')
+    )
   })
 
   it('surfaces a launch failure instead of opening an empty conversation', async () => {

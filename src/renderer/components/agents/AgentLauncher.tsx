@@ -1113,9 +1113,13 @@ export function AgentLauncher({
         toast.error(result.error)
         return
       }
+      // No `addAgentChatTab` here, deliberately. `spawnTerminalInPane` already
+      // added the terminal's tab and focused it; adding a chat tab on top
+      // covers it and — because that tab renders the launcher when it has no
+      // agent session — lands the user right back on this screen. `onLaunched`
+      // navigates to the Conversation, whose activation is what decides the
+      // view, and it hides the launcher itself.
       onLaunched?.(result.conversationId)
-      useWorkspaceStore.getState().addAgentChatTab(result.conversationId, paneId)
-      useWorkspaceStore.getState().hideAgentLauncher()
       console.info(
         `[agentLauncher.launchTerminal] conversationId=${result.conversationId} terminalId=${result.terminalId} target=${executionTarget.kind}`
       )
