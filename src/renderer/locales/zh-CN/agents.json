@@ -164,7 +164,9 @@
       "noModelOption": "此会话没有可用的模型选项"
     },
     "installed": "{{name}} 已安装",
-    "configured": "{{name}} 已配置"
+    "configured": "{{name}} 已配置",
+    "terminalOption": "终端",
+    "terminalOptionHint": "不用 agent"
   },
   "settings": {
     "enterBinaryPath": "请输入 ACP 二进制文件路径。",

@@ -164,7 +164,9 @@
       "noModelOption": "No model option is available for this session"
     },
     "installed": "{{name}} installed",
-    "configured": "{{name}} configured"
+    "configured": "{{name}} configured",
+    "terminalOption": "Terminal",
+    "terminalOptionHint": "no agent"
   },
   "settings": {
     "enterBinaryPath": "Enter the path to the ACP binary.",
