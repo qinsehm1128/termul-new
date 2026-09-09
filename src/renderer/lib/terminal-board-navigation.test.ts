@@ -79,6 +79,38 @@ describe('terminal-board-navigation', () => {
     expect((useWorkspaceStore.getState().root as LeafNode).activeTabId).toBe('term-term-1')
   })
 
+  it('opens a Conversation terminal in its Conversation, not the project workspace', () => {
+    // Every list surface routes through here, so ownership is read off the
+    // record instead of trusted from the caller. Selecting a project and
+    // navigating to `/` would send the user to the one workspace this terminal
+    // is not in — and would arm a pending focus that can never resolve.
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: 'term-conv',
+          name: 'conv',
+          projectId: 'p-cost',
+          conversationId: 'conv-1',
+          shell: 'zsh',
+          ptyId: 'pty-conv',
+          healthStatus: 'running',
+          viewState: 'visible'
+        }
+      ],
+      activeTerminalId: '',
+      ptyIdIndex: new Map([['pty-conv', 'term-conv']]),
+      cleanupRecoveries: {}
+    })
+    const navigate = vi.fn()
+
+    openBoardTerminal({ projectId: 'p-cost', terminalId: 'term-conv', navigate })
+
+    expect(navigate).toHaveBeenCalledWith('/c/conv-1')
+    expect(useProjectStore.getState().activeProjectId).toBe('')
+    expect(peekPendingTerminalFocus()).toBeNull()
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+  })
+
   it('opens a project without focusing a terminal', () => {
     const navigate = vi.fn()
     openBoardTerminal({ projectId: 'p-cost', terminalId: 'term-1', navigate })

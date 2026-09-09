@@ -61,6 +61,18 @@ const { mockTerminals } = vi.hoisted(() => ({
   ] as Array<Record<string, unknown>>
 }))
 
+vi.mock('@/stores/conversation-store', () => ({
+  useConversationStore: {
+    getState: () => ({
+      summariesById: {
+        'conv-agent': { conversationId: 'conv-agent', backend: 'agent' },
+        'conv-terminal': { conversationId: 'conv-terminal', backend: 'terminal' }
+      },
+      detailsById: {}
+    })
+  }
+}))
+
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: vi.fn((selector: (state: { terminals: typeof mockTerminals }) => unknown) =>
     selector({
@@ -1031,5 +1043,75 @@ describe('WorkspaceTabBar', () => {
     expect(terminalIcon).toHaveAttribute('width', '14')
     expect(terminalIcon).toHaveAttribute('height', '14')
     expect(container.querySelectorAll('.w-2.h-2.rounded-full.bg-primary').length).toBe(1)
+  })
+
+  describe('killing a terminal', () => {
+    beforeEach(() => {
+      mockTerminals.push(
+        { id: 'term-agent', name: 'Agent shell', shell: 'bash', conversationId: 'conv-agent' },
+        {
+          id: 'term-backend',
+          name: 'Backend shell',
+          shell: 'bash',
+          conversationId: 'conv-terminal'
+        }
+      )
+    })
+
+    it('labels the close button by what it actually does', async () => {
+      // An agent's shell survives its tab, so × closes a view. A Conversation
+      // whose entire content is the shell does not, so × ends the process.
+      // Labelling both "close view" told the user their × had been ignored.
+      const tabs: WorkspaceTab[] = [
+        { type: 'terminal', id: 'tab-agent', terminalId: 'term-agent' },
+        { type: 'terminal', id: 'tab-backend', terminalId: 'term-backend' }
+      ]
+
+      render(
+        <WorkspaceTabBar
+          paneId="pane-a"
+          tabs={tabs}
+          activeTabId="tab-agent"
+          onCloseTerminal={vi.fn()}
+        />
+      )
+      await flushShellEffect()
+
+      expect(screen.getByLabelText('Close view Agent shell')).toBeTruthy()
+      expect(screen.getByLabelText('Terminate process Backend shell')).toBeTruthy()
+    })
+
+    it('offers "Kill Process" only where the close button would not kill', async () => {
+      // The menu item existed but no tab bar ever passed a handler, so there
+      // was no reachable way to stop an agent's shell. Offering it on a tab
+      // whose × already kills would just be the same action twice.
+      const onTerminateTerminal = vi.fn()
+      const tabs: WorkspaceTab[] = [
+        { type: 'terminal', id: 'tab-agent', terminalId: 'term-agent' },
+        { type: 'terminal', id: 'tab-backend', terminalId: 'term-backend' }
+      ]
+
+      const { container } = render(
+        <WorkspaceTabBar
+          paneId="pane-a"
+          tabs={tabs}
+          activeTabId="tab-agent"
+          onCloseTerminal={vi.fn()}
+          onTerminateTerminal={onTerminateTerminal}
+        />
+      )
+      await flushShellEffect()
+
+      const tabEls = container.querySelectorAll('[draggable="true"]')
+      fireEvent.contextMenu(tabEls[0] as HTMLElement)
+      const kill = await screen.findByText('Kill Process')
+      fireEvent.click(kill)
+      expect(onTerminateTerminal).toHaveBeenCalledWith('term-agent', 'tab-agent')
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      fireEvent.contextMenu(tabEls[1] as HTMLElement)
+      await waitFor(() => expect(screen.queryByText('Close')).toBeTruthy())
+      expect(screen.queryByText('Kill Process')).toBeNull()
+    })
   })
 })

@@ -30,6 +30,31 @@ describe('scopeTerminals', () => {
     expect(scopeTerminals('project', context).map((t) => t.id)).toEqual(['t1'])
   })
 
+  it('should exclude a Conversation terminal attributed to the active project', () => {
+    // A Conversation terminal carries a project id so it can be labelled and
+    // grouped, but it belongs to its Conversation. Counting it here made the
+    // project chip claim terminals the project does not own.
+    const withConversation: TerminalSwitcherContext = {
+      ...context,
+      terminals: [
+        ...context.terminals,
+        { id: 'conv', name: 'conv', projectId: 'p1', shell: 'bash', conversationId: 'c1' }
+      ]
+    }
+    expect(scopeTerminals('project', withConversation).map((t) => t.id)).toEqual(['t1'])
+  })
+
+  it('should exclude Conversation terminals at group scope too', () => {
+    const withConversation: TerminalSwitcherContext = {
+      ...context,
+      terminals: [
+        ...context.terminals,
+        { id: 'conv', name: 'conv', projectId: 'p2', shell: 'bash', conversationId: 'c1' }
+      ]
+    }
+    expect(scopeTerminals('group', withConversation).map((t) => t.id)).toEqual(['t1', 't2'])
+  })
+
   it('should span every project in the group at group scope', () => {
     // This is the row the user gets by clicking a group in the sidebar. p3 is
     // outside the group and t4 has no project at all — neither may leak in.
@@ -95,6 +120,87 @@ describe('groupTerminalsByProject', () => {
     { id: 'p2', name: 'Beta', color: 'green' }
   ]
 
+  it("gives Conversation terminals their own chip instead of the project's", () => {
+    // They carry a project id for attribution, so grouping by that id folded
+    // them into the project's chip and made it claim terminals the project does
+    // not own. They are a different kind of thing and get their own group.
+    const conversationTerminal: Terminal = {
+      id: 'c-term',
+      name: 'c-term',
+      projectId: 'p1',
+      shell: 'bash',
+      conversationId: 'conv-1'
+    }
+    const entries = groupTerminalsByProject(
+      [terminal('t1', 'p1'), conversationTerminal],
+      projects,
+      [],
+      'No project',
+      new Map([['conv-1', 'Fix the parser']])
+    )
+
+    expect(entries.map((entry) => [entry.kind, entry.name, entry.terminals.length])).toEqual([
+      ['project', 'Alpha', 1],
+      ['conversation', 'Fix the parser', 1]
+    ])
+  })
+
+  it('gives every Conversation its own chip, not one chip for all of them', () => {
+    // A single shared chip opens exactly one target, so a second Conversation
+    // was counted but unreachable: the chip read "2" and clicking it always
+    // landed on the same one.
+    const entries = groupTerminalsByProject(
+      [
+        { id: 'a', name: 'a', projectId: 'p1', shell: 'bash', conversationId: 'conv-1' },
+        { id: 'b', name: 'b', projectId: 'p2', shell: 'bash', conversationId: 'conv-2' }
+      ],
+      projects,
+      [],
+      'No project',
+      new Map([
+        ['conv-1', 'First'],
+        ['conv-2', 'Second']
+      ])
+    )
+
+    expect(entries.map((entry) => [entry.name, entry.conversationId])).toEqual([
+      ['First', 'conv-1'],
+      ['Second', 'conv-2']
+    ])
+    expect(entries.every((entry) => entry.kind === 'conversation')).toBe(true)
+  })
+
+  it('keeps several terminals of one Conversation on a single chip', () => {
+    const entries = groupTerminalsByProject(
+      [
+        { id: 'a', name: 'a', projectId: 'p1', shell: 'bash', conversationId: 'conv-1' },
+        { id: 'b', name: 'b', projectId: 'p1', shell: 'bash', conversationId: 'conv-1' }
+      ],
+      projects,
+      ['b'],
+      'No project',
+      new Map([['conv-1', 'One chat']])
+    )
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0].terminals.map((t) => t.id)).toEqual(['a', 'b'])
+    // Recency decides which of its terminals the chip opens.
+    expect(entries[0].targetTerminalId).toBe('b')
+    expect(entries[0].conversationId).toBe('conv-1')
+  })
+
+  it('falls back to a short id when the Conversation has no name yet', () => {
+    const entries = groupTerminalsByProject(
+      [{ id: 'a', name: 'a', shell: 'bash', conversationId: '018f7a1c-1b4d-7c8a' }],
+      projects,
+      [],
+      'No project',
+      new Map()
+    )
+
+    expect(entries[0].name).toBe('018f7a1c')
+  })
+
   it('should collapse several terminals of one project into a single entry', () => {
     // The reported symptom: terminals named after their project rendered as
     // visually identical neighbouring chips.
@@ -102,7 +208,8 @@ describe('groupTerminalsByProject', () => {
       [terminal('t1', 'p1'), terminal('t2', 'p1'), terminal('t3', 'p2')],
       projects,
       [],
-      'No project'
+      'No project',
+      new Map()
     )
 
     expect(entries.map((entry) => entry.name)).toEqual(['Alpha', 'Beta'])
@@ -114,7 +221,8 @@ describe('groupTerminalsByProject', () => {
       [terminal('t1', 'p1'), terminal('t2', 'p1'), terminal('t3', 'p1')],
       projects,
       ['t3', 't1'],
-      'No project'
+      'No project',
+      new Map()
     )
 
     // Not the first terminal in store order — returning to a project should
@@ -127,7 +235,8 @@ describe('groupTerminalsByProject', () => {
       [terminal('t1', 'p1'), terminal('t2', 'p1')],
       projects,
       ['unrelated'],
-      'No project'
+      'No project',
+      new Map()
     )
 
     expect(entries[0].targetTerminalId).toBe('t1')
@@ -139,7 +248,8 @@ describe('groupTerminalsByProject', () => {
       [terminal('t1', 'p1'), terminal('t2', 'p2')],
       projects,
       ['t2'],
-      'No project'
+      'No project',
+      new Map()
     )
 
     expect(entries.map((entry) => entry.projectId)).toEqual(['p1', 'p2'])
@@ -150,7 +260,8 @@ describe('groupTerminalsByProject', () => {
       [terminal('t1', 'p1'), terminal('t2')],
       projects,
       [],
-      'No project'
+      'No project',
+      new Map()
     )
 
     expect(entries[1]).toMatchObject({ projectId: undefined, name: 'No project' })

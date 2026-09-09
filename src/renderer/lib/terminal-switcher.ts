@@ -1,6 +1,12 @@
 import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
 import { terminalBoardStatus } from '@/lib/terminal-board'
-import type { Project, ProjectGroup, Terminal } from '@/types/project'
+import {
+  isConversationScopedTerminal,
+  isProjectScopedTerminal,
+  type Project,
+  type ProjectGroup,
+  type Terminal
+} from '@/types/project'
 
 /**
  * Which terminals the switcher row offers. Deliberately three fixed steps
@@ -37,11 +43,15 @@ export function scopeTerminals(
     // A `projectId !== undefined` pre-check would be dead code: projectIds is
     // string[], so undefined is never a member.
     const grouped = new Set<string | undefined>(activeGroup.projectIds)
-    return terminals.filter((terminal) => grouped.has(terminal.projectId))
+    // Conversation terminals are excluded for the same reason as the project
+    // scope below: they are attributed to a project but owned by a Conversation.
+    return terminals.filter(
+      (terminal) => grouped.has(terminal.projectId) && !isConversationScopedTerminal(terminal)
+    )
   }
 
   if (!activeProjectId) return []
-  return terminals.filter((terminal) => terminal.projectId === activeProjectId)
+  return terminals.filter((terminal) => isProjectScopedTerminal(terminal, activeProjectId))
 }
 
 /**
@@ -89,11 +99,22 @@ export type TerminalBarScope = Extract<TerminalSwitcherScope, 'group' | 'all'>
 export const TERMINAL_BAR_SCOPES: readonly TerminalBarScope[] = ['group', 'all']
 
 export interface SwitcherProjectEntry {
+  /**
+   * What this chip stands for.
+   *
+   * Conversation terminals get their own chip instead of joining the chip of
+   * the project they are attributed to. They are a different kind of thing —
+   * owned by a Conversation, not by the project — and folding them into the
+   * project's count made the project claim terminals it does not own.
+   */
+  kind: 'project' | 'conversation'
   /** `undefined` for terminals belonging to no project; they still get a chip. */
   projectId: string | undefined
+  /** Set on a `conversation` chip: where clicking it navigates. */
+  conversationId?: string
   name: string
   terminals: Terminal[]
-  /** Where a click lands — the most recently visited terminal of this project. */
+  /** Where a click lands — the most recently visited terminal of this chip. */
   targetTerminalId: string
   status: TerminalBoardStatusKey
 }
@@ -123,37 +144,73 @@ function aggregateStatus(terminals: readonly Terminal[]): TerminalBoardStatusKey
  * switch is a row you have to re-read every time. Recency decides which
  * terminal a chip opens, not where the chip sits.
  */
+/** Bucket key: a project id, `undefined` for no project, or one Conversation. */
+type BucketKey = string | undefined
+type Bucket = { conversationId?: string; terminals: Terminal[] }
+
+/**
+ * One chip per Conversation, not one chip for all of them.
+ *
+ * A single shared chip could only ever open one Conversation — it showed a
+ * count of two and left the second unreachable, because a chip opens exactly
+ * one target. Conversations get the same treatment projects do: their own chip
+ * each, named after the Conversation.
+ */
 export function groupTerminalsByProject(
   terminals: readonly Terminal[],
   projects: readonly Project[],
   recentIds: readonly string[],
-  unassignedName: string
+  unassignedName: string,
+  conversationNames: ReadonlyMap<string, string>
 ): SwitcherProjectEntry[] {
   const nameById = new Map(projects.map((project) => [project.id, project.name]))
-  const order: (string | undefined)[] = []
-  const byProject = new Map<string | undefined, Terminal[]>()
+  const order: string[] = []
+  const buckets = new Map<string, Bucket>()
 
   for (const terminal of terminals) {
-    const projectId = terminal.projectId?.trim() || undefined
-    const bucket = byProject.get(projectId)
+    // Conversation terminals never join a project bucket: they are attributed
+    // to a project for labelling, but owned by their Conversation.
+    const conversationId = isConversationScopedTerminal(terminal)
+      ? terminal.conversationId
+      : undefined
+    const projectId: BucketKey = conversationId
+      ? undefined
+      : terminal.projectId?.trim() || undefined
+    const key = conversationId ? `c:${conversationId}` : `p:${projectId ?? ''}`
+    const bucket = buckets.get(key)
     if (bucket) {
-      bucket.push(terminal)
+      bucket.terminals.push(terminal)
       continue
     }
-    byProject.set(projectId, [terminal])
-    order.push(projectId)
+    buckets.set(key, { conversationId, terminals: [terminal] })
+    order.push(key)
   }
 
-  return order.map((projectId) => {
-    const owned = byProject.get(projectId) ?? []
+  return order.map((key) => {
+    const bucket = buckets.get(key) ?? { terminals: [] }
+    // Non-empty by construction — a bucket only exists because a terminal
+    // created it — so orderByRecency always yields a first entry.
+    const target = orderByRecency(bucket.terminals, recentIds)[0]
+    if (bucket.conversationId) {
+      const conversationId = bucket.conversationId
+      return {
+        kind: 'conversation' as const,
+        projectId: undefined,
+        conversationId,
+        name: conversationNames.get(conversationId) ?? conversationId.slice(0, 8),
+        terminals: bucket.terminals,
+        targetTerminalId: target.id,
+        status: aggregateStatus(bucket.terminals)
+      }
+    }
+    const projectId = key.slice(2) || undefined
     return {
+      kind: 'project' as const,
       projectId,
       name: projectId ? (nameById.get(projectId) ?? projectId) : unassignedName,
-      terminals: owned,
-      // `owned` is non-empty by construction — a bucket only exists because a
-      // terminal created it — so orderByRecency always yields a first entry.
-      targetTerminalId: orderByRecency(owned, recentIds)[0].id,
-      status: aggregateStatus(owned)
+      terminals: bucket.terminals,
+      targetTerminalId: target.id,
+      status: aggregateStatus(bucket.terminals)
     }
   })
 }

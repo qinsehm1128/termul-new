@@ -56,6 +56,8 @@ export const useOrphanDetectionTimeout = () =>
   useAppSettingsStore((state) => state.settings.orphanDetectionTimeout)
 export const useConfirmTerminalClose = () =>
   useAppSettingsStore((state) => state.settings.confirmTerminalClose)
+export const useConfirmTerminalTerminate = () =>
+  useAppSettingsStore((state) => state.settings.confirmTerminalTerminate)
 export const useTerminalUrlOpenMode = () =>
   useAppSettingsStore((state) => state.settings.terminalUrlOpenMode)
 export const useSidebarVisibilitySetting = () =>

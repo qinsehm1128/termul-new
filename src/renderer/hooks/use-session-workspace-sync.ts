@@ -341,6 +341,14 @@ export async function loadSessionWorkspace(
       if (!isCurrent() || !reconciled) return false
       if (!loadConversationWorkspace(conversationId, outcome.workspace, isCurrent)) return false
       store.setBasedRevision(conversationId, outcome.workspace.revision)
+      // A conflict means "your base revision is stale". Having just re-read the
+      // host's workspace and adopted its revision, it no longer is — and
+      // leaving the flag set is not harmless: `performSessionWorkspaceWrite`
+      // skips outright while a conflict is recorded, so every later write for
+      // this Conversation is silently dropped. Its topology then freezes
+      // forever, which makes each open find no terminal, spawn another one, and
+      // bump the revision again. The banner was the only escape.
+      store.setConflict(conversationId, null)
       store.setRecoveryItems(conversationId, [])
       return true
     }
@@ -354,6 +362,42 @@ export async function loadSessionWorkspace(
   } finally {
     if (isCurrent()) store.setRestoreInProgress(conversationId, false)
   }
+}
+
+/**
+ * Take the host's current workspace revision without touching the pane tree.
+ *
+ * The host bumps the revision itself when it registers a terminal as a
+ * Conversation resource — `mutate_terminal_ref` writes with the identity
+ * `host:terminalResource` (src-tauri/src/conversation/session_workspace.rs:484).
+ * That write is the direct consequence of a spawn the renderer just asked for,
+ * so letting the next auto-save collide with it shows the user a "workspace
+ * changed elsewhere" banner for their own click.
+ *
+ * Adopting the revision is lossless because that host write only ever edits
+ * `resources`, and {@link buildSessionWorkspace} rebuilds `resources` from the
+ * terminal store on the next write — with `terminalRecordId` filled in, which
+ * the host's own entry lacks. The tree is deliberately not reloaded: the tab
+ * for the new terminal exists only in the renderer at this point, and the
+ * host's copy of the topology is the pre-spawn one.
+ */
+export async function adoptHostWorkspaceRevision(conversationId: ConversationId): Promise<boolean> {
+  const result = await sessionWorkspaceApi.getWorkspace(conversationId)
+  if (!result.success || result.data.status !== 'loaded') return false
+  const store = useSessionWorkspaceSyncStore.getState()
+  // The user can switch Conversations during the round-trip; adopting a
+  // revision for one that is no longer active would arm the next write with a
+  // revision from the wrong workspace.
+  if (store.activeConversationId !== conversationId) return false
+  store.setBasedRevision(conversationId, result.data.workspace.revision)
+  // Clear a conflict only when the host itself made the last write. A genuine
+  // "changed elsewhere" — another window, another device — carries a
+  // `renderer-*` identity and must keep its banner, because that edit is one
+  // the user has not seen.
+  if (result.data.workspace.updateIdentity?.startsWith('host:')) {
+    store.setConflict(conversationId, null)
+  }
+  return true
 }
 
 export type SessionWorkspaceWriteResult =

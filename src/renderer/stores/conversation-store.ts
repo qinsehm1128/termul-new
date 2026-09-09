@@ -788,12 +788,22 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     // A terminal-backed Conversation has no agent session to resolve, and the
     // binding-miss fallback below would hand it an `agent-chat` tab — which
     // `PaneContent` renders as the launcher, the restart surface for an agent
-    // it never had. Its terminals were already restored by
-    // `loadSessionWorkspace` above, so the workspace layout owns the view from
-    // here. The active session is still cleared: the previously open
+    // it never had. The active session is still cleared: the previously open
     // Conversation's chat must not stay live behind this one.
+    //
+    // `loadSessionWorkspace` above restored the terminal *records* from the
+    // manifest, but a record with no tab in the restored topology is invisible,
+    // and an empty Conversation pane renders the launcher too. Opening the
+    // terminal is therefore part of activation, not a side effect the launcher
+    // is trusted to have arranged earlier.
     if (conversationBackendOf(get().summariesById[conversationId]) === 'terminal') {
       useAcpStore.getState().setActiveSession(null)
+      const terminalViewModule = await import('@/lib/conversation-terminal-view')
+      if (!isCurrent()) {
+        logStaleActivation(conversationId, activationEpoch, 'terminal-view-import')
+        return false
+      }
+      await terminalViewModule.ensureConversationTerminal(conversationId, isCurrent)
       set((state) =>
         activationIsCurrent(state, conversationId, activationEpoch)
           ? { openingById: { ...state.openingById, [conversationId]: false } }

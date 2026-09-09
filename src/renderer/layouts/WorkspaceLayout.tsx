@@ -84,6 +84,7 @@ import {
 } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { getColorClasses } from '@/lib/colors'
+import { terminalCloseIntent } from '@/lib/conversation-terminal-view'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
@@ -104,6 +105,7 @@ import {
   useAppearanceMode,
   useColorTheme,
   useConfirmTerminalClose,
+  useConfirmTerminalTerminate,
   useDefaultShell,
   useMaxTerminalsPerProject,
   useUiZoomLevel
@@ -153,11 +155,7 @@ import {
   usePaneRoot,
   useWorkspaceStore
 } from '@/stores/workspace-store'
-import {
-  isConversationScopedTerminal,
-  isHiddenRunningTerminal,
-  isOpenTerminalView
-} from '@/types/project'
+import { isHiddenRunningTerminal, isOpenTerminalView } from '@/types/project'
 import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
 
 const SSHWorkspace = lazy(() =>
@@ -319,6 +317,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [])
 
   const confirmTerminalClose = useConfirmTerminalClose()
+  const confirmTerminalTerminate = useConfirmTerminalTerminate()
   const projects = useProjects()
   const activeProject = useActiveProject()
   const activeGroupId = useProjectStore((state) => state.activeGroupId) ?? null
@@ -958,6 +957,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
       syncDebounceTimerRef.current = null
     }
 
+    // A Conversation's workspace is not this sync's tree to edit. It is loaded
+    // and written by the session-workspace sync, and the project's terminals
+    // have no business in it — materialising one here put a project shell in
+    // the Conversation's tab bar, the mirror image of the leak in the other
+    // direction. Same reasoning as the project-switch guard below: syncing the
+    // wrong tree leaks tabs into it.
+    //
+    // The ref is still advanced so returning to the project workspace does not
+    // then look like a project switch.
+    if (activeConversationId) {
+      lastEnsuredTerminalIdsRef.current = terminalIds
+      lastEnsuredProjectIdRef.current = activeProjectId
+      return
+    }
+
     // If we switched projects, we should wait for the persistence layer (useEditorPersistence)
     // to finish its job of replacing the entire workspace tree.
     // Forcing a sync on the WRONG tree (the old project's tree) causes "leaking" tabs.
@@ -999,7 +1013,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         syncDebounceTimerRef.current = null
       }
     }
-  }, [terminals, activeProjectId])
+  }, [terminals, activeProjectId, activeConversationId])
 
   // Sync legacy stores (activeTerminalId, activeFilePath) from workspace pane tree
   useEffect(() => {
@@ -2082,24 +2096,32 @@ export default function WorkspaceLayout(): React.JSX.Element {
         .terminals.find((candidate) => candidate.id === id)
       // Project shells are not conversation resources. Closing the tab must
       // stop the PTY; otherwise the process keeps consuming memory with no tab.
-      if (!terminal || !isConversationScopedTerminal(terminal)) {
-        if (confirmTerminalClose) {
+      //
+      // A terminal-backed Conversation's own terminal goes the same way. Only
+      // an agent's terminal survives its tab, because the agent still owns it;
+      // for a Conversation whose entire content is this shell, keeping the
+      // process after the user closed it leaves something running that no
+      // surface lists and no button can reach.
+      switch (terminalCloseIntent(terminal, confirmTerminalClose, confirmTerminalTerminate)) {
+        case 'terminate-confirm':
           requestTerminateTerminal(id, tabId)
           return
-        }
-        void terminateTerminalByRecordId(id)
-        return
+        case 'terminate':
+          void terminateTerminalByRecordId(id)
+          return
+        case 'close-view':
+          void closeTerminalViewByRecordId(id)
+          return
+        case 'close-view-confirm':
+          setCloseConfirmRememberChoice(false)
+          setCloseConfirmTerminal({ terminalId: id, tabId })
+          return
       }
-      if (!confirmTerminalClose) {
-        void closeTerminalViewByRecordId(id)
-        return
-      }
-      setCloseConfirmRememberChoice(false)
-      setCloseConfirmTerminal({ terminalId: id, tabId })
     },
     [
       closeTerminalViewByRecordId,
       confirmTerminalClose,
+      confirmTerminalTerminate,
       requestTerminateTerminal,
       terminateTerminalByRecordId
     ]
@@ -2337,6 +2359,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                       onSplitTerminal={handleSplitTerminal}
                       onAddBrowserTab={handleNewBrowserTab}
                       onCloseTerminal={handleCloseTerminal}
+                      onTerminateTerminal={requestTerminateTerminal}
                       onRenameTerminal={renameTerminal}
                       onCloseEditorTab={handleCloseEditorTab}
                       closingTerminalIds={closingTerminalIds}

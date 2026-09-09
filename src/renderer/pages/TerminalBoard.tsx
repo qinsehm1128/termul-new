@@ -13,6 +13,7 @@ import {
   pathBasename
 } from '@/components/lists'
 import { getColorClasses } from '@/lib/colors'
+import { buildConversationTerminalNames } from '@/lib/conversation-terminal-names'
 import {
   buildTerminalBoard,
   countBoardTerminals,
@@ -21,6 +22,7 @@ import {
 } from '@/lib/terminal-board'
 import { openBoardProject, openBoardTerminal } from '@/lib/terminal-board-navigation'
 import { cn } from '@/lib/utils'
+import { useConversationStore } from '@/stores/conversation-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useAllTerminals } from '@/stores/terminal-store'
 import type { Terminal } from '@/types/project'
@@ -40,9 +42,20 @@ export default function TerminalBoard(): React.JSX.Element {
   )
   const [query, setQuery] = useState('')
 
+  const conversationSummaries = useConversationStore((state) => state.summariesById)
+  const conversationGroupName = t('switcher.conversations')
+  const conversationNames = useMemo(
+    () =>
+      buildConversationTerminalNames(
+        terminals,
+        conversationSummaries,
+        t('switcher.untitledConversation', { defaultValue: 'Untitled conversation' })
+      ),
+    [terminals, conversationSummaries, t]
+  )
   const board = useMemo(
-    () => buildTerminalBoard(terminals, projects, groups),
-    [groups, projects, terminals]
+    () => buildTerminalBoard(terminals, projects, groups, conversationNames, conversationGroupName),
+    [groups, projects, terminals, conversationNames, conversationGroupName]
   )
   const visible = useMemo(() => filterTerminalBoard(board, query), [board, query])
   const total = countBoardTerminals(board)

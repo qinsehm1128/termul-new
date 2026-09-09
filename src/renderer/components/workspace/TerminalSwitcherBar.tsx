@@ -2,18 +2,22 @@ import { PanelRight } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
+import { buildConversationTerminalNames } from '@/lib/conversation-terminal-names'
 import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
 import { openBoardTerminal } from '@/lib/terminal-board-navigation'
 import {
   groupTerminalsByProject,
+  type SwitcherProjectEntry,
   scopeTerminals,
   TERMINAL_BAR_SCOPES,
   type TerminalBarScope,
   type TerminalSwitcherContext
 } from '@/lib/terminal-switcher'
 import { cn } from '@/lib/utils'
+import { useConversationStore } from '@/stores/conversation-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { isConversationScopedTerminal } from '@/types/project'
 
 const STATUS_DOT: Record<TerminalBoardStatusKey, string> = {
   live: 'bg-emerald-500',
@@ -52,6 +56,7 @@ export function TerminalSwitcherBar({
   const terminals = useTerminalStore((state) => state.terminals)
   const activeTerminalId = useTerminalStore((state) => state.activeTerminalId)
   const recentTerminalIds = useTerminalStore((state) => state.recentTerminalIds)
+  const conversationSummaries = useConversationStore((state) => state.summariesById)
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
   const activeGroupId = useProjectStore((state) => state.activeGroupId)
   const groups = useProjectStore((state) => state.groups)
@@ -83,6 +88,11 @@ export function TerminalSwitcherBar({
   }, [activeGroupId])
 
   const context: TerminalSwitcherContext = { terminals, activeProjectId, activeGroup }
+  const conversationNames = buildConversationTerminalNames(
+    terminals,
+    conversationSummaries,
+    t('switcher.untitledConversation', { defaultValue: 'Untitled conversation' })
+  )
   // `group` stops being selectable when no group is selected; fall back rather
   // than blank the row.
   const effectiveScope: TerminalBarScope = scope === 'group' && !activeGroup ? 'all' : scope
@@ -90,7 +100,8 @@ export function TerminalSwitcherBar({
     scopeTerminals(effectiveScope, context),
     projects,
     recentTerminalIds,
-    t('switcher.unassigned')
+    t('switcher.unassigned'),
+    conversationNames
   )
 
   // Both steps are always on screen, with `group` disabled until a group is
@@ -99,13 +110,21 @@ export function TerminalSwitcherBar({
   // terminals: one terminal still needs a visible way to reach the list.
   if (terminals.length === 0) return null
 
-  const activeProjectOfTerminal = terminals.find(
-    (terminal) => terminal.id === activeTerminalId
-  )?.projectId
+  const activeTerminal = terminals.find((terminal) => terminal.id === activeTerminalId)
+  const activeProjectOfTerminal = activeTerminal?.projectId
+  const activeTerminalIsConversationScoped = Boolean(
+    activeTerminal && isConversationScopedTerminal(activeTerminal)
+  )
 
-  const openTerminal = (terminalId: string, projectId: string | undefined): void => {
-    openBoardTerminal({ projectId: projectId ?? null, terminalId, navigate })
-    useTerminalStore.getState().selectTerminal(terminalId)
+  const openEntry = (entry: SwitcherProjectEntry): void => {
+    // No Conversation branch here: `openBoardTerminal` reads ownership off the
+    // terminal record, so every surface routes the same way.
+    openBoardTerminal({
+      projectId: entry.projectId ?? null,
+      terminalId: entry.targetTerminalId,
+      navigate
+    })
+    useTerminalStore.getState().selectTerminal(entry.targetTerminalId)
   }
 
   return (
@@ -166,20 +185,32 @@ export function TerminalSwitcherBar({
           aria-label={t('switcher.listLabel')}
         >
           {visible.map((entry) => {
-            const isActive = entry.projectId === activeProjectOfTerminal
+            const isActive =
+              entry.kind === 'conversation'
+                ? activeTerminalIsConversationScoped
+                : entry.projectId === activeProjectOfTerminal
             return (
               <button
-                key={entry.projectId ?? '__unassigned__'}
+                key={
+                  entry.kind === 'conversation'
+                    ? '__conversations__'
+                    : (entry.projectId ?? '__unassigned__')
+                }
                 type="button"
                 role="tab"
                 aria-selected={isActive}
-                onClick={() => openTerminal(entry.targetTerminalId, entry.projectId)}
+                onClick={() => openEntry(entry)}
                 // `terminals`, not `count`: i18next reads `count` as a plural
                 // selector and would look for keys we do not define.
-                title={t('switcher.projectTitle', {
-                  project: entry.name,
-                  terminals: entry.terminals.length
-                })}
+                title={t(
+                  entry.kind === 'conversation'
+                    ? 'switcher.conversationTitle'
+                    : 'switcher.projectTitle',
+                  {
+                    project: entry.name,
+                    terminals: entry.terminals.length
+                  }
+                )}
                 className={cn(
                   'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-2xs transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
                   isActive

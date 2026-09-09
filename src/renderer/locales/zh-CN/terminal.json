@@ -185,7 +185,10 @@
     "hideList": "隐藏终端列表",
     "scopeUnavailable": "先在侧栏选择一个分组",
     "unassigned": "未归属项目",
-    "projectTitle": "{{project}} —— {{terminals}} 个终端，打开最近用过的那个"
+    "projectTitle": "{{project}} —— {{terminals}} 个终端，打开最近用过的那个",
+    "conversations": "会话",
+    "conversationTitle": "{{project}} —— {{terminals}} 个会话终端，打开最近使用的那个",
+    "untitledConversation": "未命名对话"
   },
   "lastSession": {
     "label": "上次会话",

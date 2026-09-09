@@ -1,8 +1,10 @@
 import type { Project, ProjectColor, ProjectGroup, Terminal } from '@/types/project'
-import { isOpenTerminalView } from '@/types/project'
+import { isConversationScopedTerminal, isOpenTerminalView } from '@/types/project'
 
 export interface TerminalBoardProjectBlock {
   projectId: string
+  /** Set instead of a project when this block stands for a Conversation. */
+  conversationId?: string
   projectName: string
   color: ProjectColor
   archived: boolean
@@ -39,14 +41,32 @@ function projectGroupId(projectId: string, groups: readonly ProjectGroup[]): str
 export function buildTerminalBoard(
   terminals: readonly Terminal[],
   projects: readonly Project[],
-  groups: readonly ProjectGroup[]
+  groups: readonly ProjectGroup[],
+  conversationNames: ReadonlyMap<string, string> = new Map(),
+  conversationGroupName = 'Conversations'
 ): TerminalBoardGroupBlock[] {
   const projectById = new Map(projects.map((project) => [project.id, project]))
   const usedProjectIds = new Set<string>()
   const unassigned: Terminal[] = []
   const byProject = new Map<string, Terminal[]>()
+  const byConversation = new Map<string, Terminal[]>()
+  const conversationOrder: string[] = []
 
   for (const terminal of terminals) {
+    // A Conversation's terminal is listed under its Conversation, never under
+    // the project it is attributed to. Filing it by project made the board
+    // report shells the project does not own — and, with the Conversation's
+    // own directory as its cwd, the rows looked like stray sandbox terminals
+    // sitting inside the project.
+    if (isConversationScopedTerminal(terminal) && terminal.conversationId) {
+      const existing = byConversation.get(terminal.conversationId)
+      if (existing) existing.push(terminal)
+      else {
+        byConversation.set(terminal.conversationId, [terminal])
+        conversationOrder.push(terminal.conversationId)
+      }
+      continue
+    }
     const projectId = terminal.projectId?.trim()
     if (!projectId) {
       unassigned.push(terminal)
@@ -92,6 +112,21 @@ export function buildTerminalBoard(
       groupId: null,
       groupName: '',
       projects: ungroupedProjects
+    })
+  }
+
+  if (conversationOrder.length > 0) {
+    blocks.push({
+      groupId: '__conversations__',
+      groupName: conversationGroupName,
+      projects: conversationOrder.map((conversationId) => ({
+        projectId: '',
+        conversationId,
+        projectName: conversationNames.get(conversationId) ?? conversationId.slice(0, 8),
+        color: 'gray' as const,
+        archived: false,
+        terminals: byConversation.get(conversationId) ?? []
+      }))
     })
   }
 

@@ -181,6 +181,28 @@ export function isConversationScopedTerminal(terminal: Pick<Terminal, 'conversat
   return Boolean(terminal.conversationId)
 }
 
+/**
+ * A terminal that belongs to a project — the *only* definition of that.
+ *
+ * `projectId` alone is not it. A Conversation's terminal also carries a project
+ * id, for attribution: it is how the terminal is labelled and grouped, not who
+ * owns it. Treating "has this project id" as "is a project terminal" is what
+ * let the two kinds mix — Conversation terminals counted in project totals and
+ * materialised into the project's tab bar, and project shells pulled into a
+ * Conversation's workspace.
+ *
+ * They are separate things and answer to separate owners: a project terminal
+ * lives in the project layout, a Conversation terminal lives in that
+ * Conversation's SessionWorkspace. Every project-scoped surface asks this
+ * predicate so the two can never drift apart again.
+ */
+export function isProjectScopedTerminal(
+  terminal: Pick<Terminal, 'projectId' | 'conversationId'>,
+  projectId: string
+): boolean {
+  return terminal.projectId === projectId && !isConversationScopedTerminal(terminal)
+}
+
 /** Live PTY whose view is closed, scoped to the current Conversation or project shell. */
 export function isHiddenRunningTerminal(
   terminal: Pick<Terminal, 'ptyId' | 'viewState' | 'isHidden' | 'conversationId' | 'projectId'>,

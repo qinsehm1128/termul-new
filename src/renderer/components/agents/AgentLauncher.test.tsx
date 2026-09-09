@@ -2203,12 +2203,15 @@ describe('AgentLauncher — terminal-backed conversation', () => {
     // only thing carried over.
     expect(launchTerminalConversationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        paneId: 'pane1',
         executionTarget: { kind: 'project_root', projectId: 'p1', projectRoot: '/work' },
-        projectId: 'p1',
         projectAttachment: expect.objectContaining({ projectId: 'p1' })
       })
     )
+    // No pane is handed over, deliberately. The pane on screen belongs to the
+    // workspace activation is about to replace, so a terminal placed in it
+    // would end up in the previous project's tab bar instead of this
+    // Conversation.
+    expect(launchTerminalConversationMock.mock.calls[0]?.[0]).not.toHaveProperty('paneId')
     // Nothing from the agent path runs.
     expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
     // And no chat tab is stacked on top of the terminal's own tab: that tab
@@ -2239,6 +2242,24 @@ describe('AgentLauncher — terminal-backed conversation', () => {
 
     await waitFor(() =>
       expect(onLaunched).toHaveBeenCalledWith('018f7a1c-1b4d-7c8a-9f01-0123456789ab')
+    )
+  })
+
+  it('navigates itself when no caller is listening', async () => {
+    // Every in-pane rendering of the launcher omits `onLaunched`. Since the
+    // terminal is opened by activation and activation is driven by the route,
+    // skipping navigation there would create the Conversation and then never
+    // show it — a click that silently does nothing.
+    launchTerminalConversationMock.mockResolvedValue({
+      success: true,
+      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
+    })
+    renderLauncher()
+    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
+    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
+
+    await waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith('/c/018f7a1c-1b4d-7c8a-9f01-0123456789ab')
     )
   })
 

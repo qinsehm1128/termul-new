@@ -2,10 +2,12 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { AgentIcon } from '@/components/agents/AgentIcon'
+import { buildConversationTerminalNames } from '@/lib/conversation-terminal-names'
 import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
 import { buildTerminalBoard, terminalBoardStatus } from '@/lib/terminal-board'
 import { openBoardTerminal } from '@/lib/terminal-board-navigation'
 import { cn } from '@/lib/utils'
+import { useConversationStore } from '@/stores/conversation-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
@@ -38,9 +40,20 @@ export function TerminalListPanel(): React.JSX.Element {
   const projects = useProjectStore((state) => state.projects)
   const groups = useProjectStore((state) => state.groups)
 
+  const conversationSummaries = useConversationStore((state) => state.summariesById)
+  const conversationGroupName = t('switcher.conversations')
+  const conversationNames = useMemo(
+    () =>
+      buildConversationTerminalNames(
+        terminals,
+        conversationSummaries,
+        t('switcher.untitledConversation', { defaultValue: 'Untitled conversation' })
+      ),
+    [terminals, conversationSummaries, t]
+  )
   const board = useMemo(
-    () => buildTerminalBoard(terminals, projects, groups),
-    [terminals, projects, groups]
+    () => buildTerminalBoard(terminals, projects, groups, conversationNames, conversationGroupName),
+    [terminals, projects, groups, conversationNames, conversationGroupName]
   )
 
   const open = (terminalId: string, projectId: string | undefined): void => {

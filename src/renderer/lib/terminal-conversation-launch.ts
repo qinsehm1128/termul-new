@@ -8,43 +8,38 @@
  * here, and threading a `backend` flag through it would leave every one of
  * those steps guarded by the same condition.
  *
- * The order is prepare -> spawn -> provision, and it matters:
+ * This function stops at `prepare`, and that boundary is the fix for a bug that
+ * shipped: it used to spawn the terminal here too. The pane it spawned into
+ * belonged to whatever workspace was on screen at that instant, and opening the
+ * new Conversation immediately replaced that workspace with the Conversation's
+ * own — leaving a live terminal tab behind in the previous project and an empty
+ * pane (which renders the launcher) in the Conversation the user just made.
  *
- * - `prepare` allocates the Conversation and creates its workspace directory,
- *   then stops. The Conversation sits in `allocating_workspace`.
- * - the terminal is spawned through the ordinary renderer path, so it gets a
- *   tab, the per-project limit, project env and worktree symlinks. Spawning it
- *   host-side inside `prepare` would have to reproduce all of that.
- * - `provision` records which terminal backs the Conversation and carries it to
- *   `ready`.
+ * The terminal is opened by activation instead — see
+ * `ensureConversationTerminal`. That is where the Conversation's workspace is
+ * already loaded, and it makes first launch and every later reopen the same
+ * path.
  *
- * A failure between the steps leaves the Conversation in `allocating_workspace`
- * with no backend declared, which the host's interrupted-creation sweep already
- * reconciles. That is why `prepare` does not report `ready` optimistically.
+ * A Conversation left between `prepare` and its first terminal sits in
+ * `allocating_workspace` with no backend declared, which the host's
+ * interrupted-creation sweep already reconciles.
  */
 
 import type { ExecutionTarget, ProjectAttachment } from '@shared/types/conversation.types'
 import { runtimeT } from '@/i18n/runtime'
 import { conversationApi } from '@/lib/conversation-api'
-import { logFrontendError } from '@/lib/log-api'
-import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 
 /** Mirrors the host's `PREPARE_CONVERSATION_SCHEMA_VERSION`. */
 export const PREPARE_TERMINAL_CONVERSATION_SCHEMA_VERSION = 1
 
 export interface LaunchTerminalConversationInput {
-  paneId: string
   executionTarget: ExecutionTarget
   projectAttachment?: ProjectAttachment | null
-  /** Project attribution for the terminal record; never the ownership key. */
-  projectId?: string
-  envVars?: Array<{ key: string; value: string; enabled?: boolean }>
-  maxTerminalsPerProject?: number
 }
 
 export type LaunchTerminalConversationResult =
-  | { success: true; conversationId: string; terminalId: string; error?: undefined }
-  | { success: false; error: string; conversationId?: string; terminalId?: undefined }
+  | { success: true; conversationId: string; error?: undefined }
+  | { success: false; error: string; conversationId?: undefined }
 
 function message(error: unknown, fallback: string): string {
   if (typeof error === 'string' && error.trim()) return error
@@ -68,56 +63,5 @@ export async function launchTerminalConversation(
       )
     }
   }
-
-  const { conversationId, executionCwd } = prepared.data
-  const spawned = await spawnTerminalInPane(input.paneId, input.projectId ?? '', executionCwd, {
-    conversationId,
-    ...(input.envVars ? { envVars: input.envVars } : {}),
-    ...(input.maxTerminalsPerProject !== undefined
-      ? { maxTerminalsPerProject: input.maxTerminalsPerProject }
-      : {})
-  })
-  if (!spawned.success) {
-    // The Conversation stays in `allocating_workspace`. Reporting its id lets the
-    // caller name what was left behind instead of silently orphaning it.
-    void logFrontendError({
-      source: 'terminal-conversation.spawn',
-      message: `conversationId=${conversationId} spawn failed: ${spawned.error ?? 'unknown'}`
-    })
-    return {
-      success: false,
-      conversationId,
-      error:
-        spawned.error ?? runtimeT('terminal', 'errors.createFailed', 'Failed to create terminal')
-    }
-  }
-
-  const provisioned = await conversationApi.provisionTerminalConversation(
-    conversationId,
-    spawned.terminalId
-  )
-  if (!provisioned.success) {
-    // The terminal is real and already belongs to the Conversation; only the
-    // durable "this is terminal-backed, and it is ready" record is missing.
-    // Killing the terminal here would destroy work the user can see, so the
-    // Conversation is left for the sweep and the failure is surfaced.
-    void logFrontendError({
-      source: 'terminal-conversation.provision',
-      message: `conversationId=${conversationId} terminalId=${spawned.terminalId} provision failed: ${provisioned.error ?? 'unknown'}`
-    })
-    return {
-      success: false,
-      conversationId,
-      error: message(
-        provisioned.error,
-        runtimeT(
-          'chat',
-          'terminalConversation.provisionFailed',
-          'The terminal started but the conversation could not be finalized'
-        )
-      )
-    }
-  }
-
-  return { success: true, conversationId, terminalId: spawned.terminalId }
+  return { success: true, conversationId: prepared.data.conversationId }
 }

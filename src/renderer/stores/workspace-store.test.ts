@@ -407,6 +407,60 @@ describe('workspace-store split/move invariants', () => {
     expect(pane.tabs).toEqual([])
   })
 
+  it("syncTerminalTabs never materializes another Conversation's terminal", () => {
+    // Conversation terminals carry their Conversation's project id for
+    // attribution, so the active project's terminal list contains them. Adding
+    // one here drops it into whatever workspace happens to be on screen — which
+    // is how two Conversations ended up sharing a single tab bar.
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: 'conv-term',
+          conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+          projectId: 'project-1',
+          name: 'Conversation shell',
+          shell: 'zsh',
+          ptyId: 'pty-conv',
+          viewState: 'visible',
+          healthStatus: 'running'
+        }
+      ]
+    })
+    const store = useWorkspaceStore.getState()
+
+    store.syncTerminalTabs(['conv-term'])
+
+    const pane = useWorkspaceStore.getState().root as LeafNode
+    expect(pane.tabs).toEqual([])
+  })
+
+  it('syncTerminalTabs leaves an existing Conversation terminal tab alone', () => {
+    // The other half of the same rule. This sync only knows about the active
+    // project, so a Conversation terminal missing from its list is normal, not
+    // orphaned — pruning it would erase the tab the Conversation just restored.
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: 'conv-term',
+          conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+          projectId: 'project-1',
+          name: 'Conversation shell',
+          shell: 'zsh',
+          ptyId: 'pty-conv',
+          viewState: 'visible',
+          healthStatus: 'running'
+        }
+      ]
+    })
+    const store = useWorkspaceStore.getState()
+    store.addTabToPane('pane-root', createTerminalTab('conv-term'))
+
+    store.syncTerminalTabs([])
+
+    const pane = useWorkspaceStore.getState().root as LeafNode
+    expect(pane.tabs).toEqual([{ type: 'terminal', id: 'term-conv-term', terminalId: 'conv-term' }])
+  })
+
   it('syncTerminalTabs is a no-op when the terminal set is unchanged', () => {
     const store = useWorkspaceStore.getState()
     const terminalA = createTerminalTab('a')

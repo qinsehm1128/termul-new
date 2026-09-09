@@ -45,6 +45,7 @@ import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-st
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import {
+  adoptHostWorkspaceRevision,
   buildSessionWorkspace,
   getActiveConversationId,
   loadSessionWorkspace,
@@ -134,6 +135,83 @@ describe('Conversation-scoped SessionWorkspace sync', () => {
     const store = useSessionWorkspaceSyncStore.getState()
     expect(store.getBasedRevision(one)).toBe(3)
     expect(store.getBasedRevision(two)).toBe(8)
+  })
+
+  it('clears a stale conflict when it re-reads the workspace', async () => {
+    // A conflict makes `performSessionWorkspaceWrite` skip outright. Leaving it
+    // set after a successful reload freezes the Conversation's topology for
+    // good: every later open finds no terminal, spawns another, and bumps the
+    // revision again. The banner was the only way out of that loop.
+    useSessionWorkspaceSyncStore.getState().setConflict(one, {
+      conversationId: one,
+      currentRevision: 99,
+      currentUpdatedAtUtc: '2026-09-09T03:00:00.000Z',
+      currentUpdateIdentity: 'host:terminalResource'
+    })
+    getMock.mockResolvedValueOnce({
+      success: true,
+      data: { status: 'loaded', workspace: workspace(one, 100, 'leaf-one') }
+    })
+
+    await expect(loadSessionWorkspace(one)).resolves.toBe(true)
+
+    expect(useSessionWorkspaceSyncStore.getState().getConflict(one)).toBeFalsy()
+    expect(useSessionWorkspaceSyncStore.getState().getBasedRevision(one)).toBe(100)
+  })
+
+  it('adopts the revision the host bumped, and drops the conflict it caused', async () => {
+    // Registering a spawned terminal as a Conversation resource is a host-side
+    // write triggered by the renderer's own click; treating it as a foreign
+    // edit shows a "changed elsewhere" banner for something the user did.
+    useSessionWorkspaceSyncStore.getState().setActiveConversationId(one)
+    useSessionWorkspaceSyncStore.getState().setConflict(one, {
+      conversationId: one,
+      currentRevision: 41,
+      currentUpdatedAtUtc: '2026-09-09T03:00:00.000Z',
+      currentUpdateIdentity: 'host:terminalResource'
+    })
+    getMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        status: 'loaded',
+        workspace: {
+          ...workspace(one, 42, 'leaf-one'),
+          updateIdentity: 'host:terminalResource'
+        }
+      }
+    })
+
+    await expect(adoptHostWorkspaceRevision(one)).resolves.toBe(true)
+
+    expect(useSessionWorkspaceSyncStore.getState().getBasedRevision(one)).toBe(42)
+    expect(useSessionWorkspaceSyncStore.getState().getConflict(one)).toBeFalsy()
+  })
+
+  it('keeps a conflict raised by another renderer', async () => {
+    // Another window or device edited this workspace. That change is one the
+    // user has not seen, so it must stay on screen as a choice.
+    useSessionWorkspaceSyncStore.getState().setActiveConversationId(one)
+    const conflict = {
+      conversationId: one,
+      currentRevision: 41,
+      currentUpdatedAtUtc: '2026-09-09T03:00:00.000Z',
+      currentUpdateIdentity: 'renderer-somewhere-else'
+    }
+    useSessionWorkspaceSyncStore.getState().setConflict(one, conflict)
+    getMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        status: 'loaded',
+        workspace: {
+          ...workspace(one, 42, 'leaf-one'),
+          updateIdentity: 'renderer-somewhere-else'
+        }
+      }
+    })
+
+    await expect(adoptHostWorkspaceRevision(one)).resolves.toBe(true)
+
+    expect(useSessionWorkspaceSyncStore.getState().getConflict(one)).toEqual(conflict)
   })
 
   it('refuses to replace WorkspaceStore after an activation guard becomes stale', async () => {

@@ -22,13 +22,15 @@ const {
   openHistorySessionMock,
   loadSessionIndexMock,
   addAgentChatTabMock,
-  startChatMock
+  startChatMock,
+  ensureConversationTerminalMock
 } = vi.hoisted(() => ({
   loadSessionWorkspaceMock: vi.fn(),
   openHistorySessionMock: vi.fn(),
   loadSessionIndexMock: vi.fn(),
   addAgentChatTabMock: vi.fn(),
-  startChatMock: vi.fn()
+  startChatMock: vi.fn(),
+  ensureConversationTerminalMock: vi.fn()
 }))
 
 vi.mock('@/lib/conversation-api', () => ({
@@ -52,6 +54,10 @@ vi.mock('@/hooks/use-editor-persistence', () => ({
 }))
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+
+vi.mock('@/lib/conversation-terminal-view', () => ({
+  ensureConversationTerminal: ensureConversationTerminalMock
+}))
 
 const projectlessId = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
 const attachedId = '028f7a1c-1b4d-7c8a-9f01-0123456789ab'
@@ -188,6 +194,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   useConversationStore.getState().reset()
   loadSessionWorkspaceMock.mockResolvedValue(true)
+  ensureConversationTerminalMock.mockResolvedValue('spawned')
   openHistorySessionMock.mockResolvedValue(undefined)
   loadSessionIndexMock.mockResolvedValue(undefined)
   startChatMock.mockResolvedValue('opaque/live')
@@ -348,6 +355,10 @@ describe('ConversationStore canonical authority', () => {
     // The previous Conversation's chat must not stay live behind this one.
     expect(useAcpStore.getState().activeSessionId).toBeNull()
     expect(useConversationStore.getState().openingById[projectlessId]).toBe(false)
+    // And the terminal is opened here, not by whoever created the Conversation.
+    // The workspace was only just swapped in; before this call the pane is
+    // empty, and an empty Conversation pane renders the agent launcher.
+    expect(ensureConversationTerminalMock).toHaveBeenCalledWith(projectlessId, expect.any(Function))
   })
 
   it('still offers the agent tab for a conversation with no explicit backend', async () => {
@@ -368,6 +379,8 @@ describe('ConversationStore canonical authority', () => {
     ).resolves.toBe(true)
 
     expect(addAgentChatTabMock).toHaveBeenCalledWith(projectlessId, undefined, false)
+    // An agent Conversation must never have a shell spawned into it.
+    expect(ensureConversationTerminalMock).not.toHaveBeenCalled()
   })
 
   it('reopens history from the host binding when the local index is empty', async () => {

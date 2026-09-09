@@ -7,7 +7,7 @@ import {
 } from '@/lib/router-navigate'
 import { randomUUID } from '@/lib/uuid'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { isOpenTerminalView } from '@/types/project'
+import { isConversationScopedTerminal, isOpenTerminalView } from '@/types/project'
 import type {
   DropPosition,
   LeafNode,
@@ -1003,6 +1003,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           // Hidden close-view records stay in the store on purpose. Do not keep
           // or recreate their tabs — that makes the first close look like it failed.
           if (!record || !isOpenTerminalView(record)) return false
+          // A Conversation's terminal belongs to that Conversation's workspace,
+          // which is restored and written by the session-workspace sync. Being
+          // absent from the active *project's* terminal list is its normal
+          // state, not evidence of an orphan, so this sync must not remove it.
+          if (isConversationScopedTerminal(record)) return true
           // Preserve pending spawns that exist in the store but have no ptyId yet.
           return !record.ptyId
         }
@@ -1037,6 +1042,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         for (const tid of terminalIds) {
           const record = terminalStore.terminals.find((term) => term.id === tid)
           if (record && !isOpenTerminalView(record)) continue
+          // Never materialize a Conversation's terminal here. It carries the
+          // Conversation's project id for attribution, so the project-scoped
+          // list contains it — but adding it drops another Conversation's
+          // terminal into whichever workspace happens to be on screen, which is
+          // how two Conversations ended up sharing one tab bar.
+          if (record && isConversationScopedTerminal(record)) continue
           const id = terminalTabId(tid)
           if (!existingTerminalIds.has(id)) {
             didChange = true

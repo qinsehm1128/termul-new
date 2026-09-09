@@ -60,6 +60,7 @@ import {
   useAcpTurnIdleTimeout,
   useAcpTurnTimeout,
   useConfirmTerminalClose,
+  useConfirmTerminalTerminate,
   useDefaultProjectColor,
   useDefaultShell,
   useEditorAutoSave,
@@ -400,7 +401,8 @@ export default function AppPreferences(): React.JSX.Element {
   const maxTerminals = useMaxTerminalsPerProject()
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
-  const _confirmTerminalClose = useConfirmTerminalClose()
+  const confirmTerminalClose = useConfirmTerminalClose()
+  const confirmTerminalTerminate = useConfirmTerminalTerminate()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
   const acpTurnTimeoutSecs = useAcpTurnTimeout()
   const editorAutoSave = useEditorAutoSave()
@@ -516,8 +518,12 @@ export default function AppPreferences(): React.JSX.Element {
     updateSetting('terminalUrlOpenMode', value)
   }
 
-  const _handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
+  const handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
     await updateSetting('confirmTerminalClose', enabled)
+  }
+
+  const handleConfirmTerminalTerminateToggle = async (enabled: boolean) => {
+    await updateSetting('confirmTerminalTerminate', enabled)
   }
 
   const handleOrphanDetectionToggle = async (enabled: boolean) => {
@@ -993,6 +999,74 @@ export default function AppPreferences(): React.JSX.Element {
                   <p className="text-xs text-muted-foreground mt-1">
                     {tSettings('behavior.openLinksHint')}
                   </p>
+                </div>
+
+                {/* Terminal close confirmations */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    {tSettings('behavior.terminalClose')}
+                  </label>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between rounded-md bg-secondary/25 px-3 py-2.5 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.035)]">
+                      <div className="flex-1">
+                        <div className="text-sm text-foreground">
+                          {tSettings('behavior.confirmTerminalTerminate')}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {tSettings('behavior.confirmTerminalTerminateHint')}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={confirmTerminalTerminate}
+                        aria-label={tSettings('behavior.confirmTerminalTerminate')}
+                        onClick={() =>
+                          handleConfirmTerminalTerminateToggle(!confirmTerminalTerminate)
+                        }
+                        className={cn(
+                          'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                          confirmTerminalTerminate ? 'bg-primary' : 'bg-input'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                            confirmTerminalTerminate ? 'translate-x-6' : 'translate-x-1'
+                          )}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-md bg-secondary/25 px-3 py-2.5 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.035)]">
+                      <div className="flex-1">
+                        <div className="text-sm text-foreground">
+                          {tSettings('behavior.confirmTerminalClose')}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {tSettings('behavior.confirmTerminalCloseHint')}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={confirmTerminalClose}
+                        aria-label={tSettings('behavior.confirmTerminalClose')}
+                        onClick={() => handleConfirmTerminalCloseToggle(!confirmTerminalClose)}
+                        className={cn(
+                          'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                          confirmTerminalClose ? 'bg-primary' : 'bg-input'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                            confirmTerminalClose ? 'translate-x-6' : 'translate-x-1'
+                          )}
+                        />
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Orphan Detection Toggle */}

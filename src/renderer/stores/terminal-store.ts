@@ -20,7 +20,12 @@ import { formatNumber } from '@/i18n/format'
 import type { AgentTerminalState } from '@/lib/agents/agent-terminal-state'
 import { logFrontendError } from '@/lib/log-api'
 import { terminalApi } from '@/lib/terminal-api'
-import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
+import {
+  type GitStatus,
+  isProjectScopedTerminal,
+  type Terminal,
+  type TerminalHealthStatus
+} from '@/types/project'
 import { useProjectStore } from './project-store'
 
 const GLOBAL_TERMINAL_LIMIT = 30
@@ -1308,10 +1313,20 @@ export function cleanupProjectTerminals(projectId: string): void {
 // Selectors for performance (selective subscriptions)
 // These selectors use the project store's activeProjectId for filtering
 
+/**
+ * The active project's own terminals.
+ *
+ * Excludes Conversation terminals even though they carry this project's id —
+ * they belong to their Conversation's workspace. This list drives the project
+ * tab sync, so including them dropped one Conversation's terminal into
+ * whichever workspace happened to be on screen.
+ */
 export function useTerminals(): Terminal[] {
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
   return useTerminalStore(
-    useShallow((state) => state.terminals.filter((t) => t.projectId === activeProjectId))
+    useShallow((state) =>
+      state.terminals.filter((t) => isProjectScopedTerminal(t, activeProjectId))
+    )
   )
 }
 

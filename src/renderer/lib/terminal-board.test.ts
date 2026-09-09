@@ -55,6 +55,53 @@ describe('buildTerminalBoard', () => {
     expect(countBoardTerminals(board)).toBe(3)
   })
 
+  it('lists a Conversation terminal under its Conversation, not its project', () => {
+    // The board showed these inside the project they are attributed to, with
+    // the Conversation's own sandbox as their cwd — so the project appeared to
+    // own shells sitting in directories that have nothing to do with it.
+    const board = buildTerminalBoard(
+      [
+        terminal('t-cost', { projectId: 'p-cost', name: 'cost-1' }),
+        terminal('t-conv', { projectId: 'p-cost', name: 'conv-1', conversationId: 'conv-1' })
+      ],
+      projects,
+      groups,
+      new Map([['conv-1', 'Fix the parser']]),
+      'Conversations'
+    )
+
+    expect(board.map((group) => group.groupId)).toEqual(['g-ns', '__conversations__'])
+    expect(board[0].projects[0].terminals.map((item) => item.id)).toEqual(['t-cost'])
+    expect(board[1].groupName).toBe('Conversations')
+    expect(board[1].projects[0]).toMatchObject({
+      conversationId: 'conv-1',
+      projectName: 'Fix the parser'
+    })
+    expect(board[1].projects[0].terminals.map((item) => item.id)).toEqual(['t-conv'])
+  })
+
+  it('gives each Conversation its own block', () => {
+    const board = buildTerminalBoard(
+      [
+        terminal('a', { projectId: 'p-cost', conversationId: 'conv-1' }),
+        terminal('b', { projectId: 'p-other', conversationId: 'conv-2' })
+      ],
+      projects,
+      groups,
+      new Map([
+        ['conv-1', 'First'],
+        ['conv-2', 'Second']
+      ]),
+      'Conversations'
+    )
+
+    const conversationBlock = board.find((group) => group.groupId === '__conversations__')
+    expect(conversationBlock?.projects.map((entry) => entry.projectName)).toEqual([
+      'First',
+      'Second'
+    ])
+  })
+
   it('omits empty groups', () => {
     const board = buildTerminalBoard(
       [terminal('t-loose', { projectId: 'p-loose' })],

@@ -12,6 +12,7 @@ interface PaneRendererProps {
   onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
+  onTerminateTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   closingTerminalIds?: string[]
@@ -24,6 +25,7 @@ export function PaneRenderer({
   onSplitTerminal,
   onAddBrowserTab,
   onCloseTerminal,
+  onTerminateTerminal,
   onRenameTerminal,
   onCloseEditorTab,
   closingTerminalIds,
@@ -37,6 +39,7 @@ export function PaneRenderer({
         onSplitTerminal={onSplitTerminal}
         onAddBrowserTab={onAddBrowserTab}
         onCloseTerminal={onCloseTerminal}
+        onTerminateTerminal={onTerminateTerminal}
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
         closingTerminalIds={closingTerminalIds}
@@ -51,6 +54,7 @@ export function PaneRenderer({
       onSplitTerminal={onSplitTerminal}
       onAddBrowserTab={onAddBrowserTab}
       onCloseTerminal={onCloseTerminal}
+      onTerminateTerminal={onTerminateTerminal}
       onRenameTerminal={onRenameTerminal}
       onCloseEditorTab={onCloseEditorTab}
       closingTerminalIds={closingTerminalIds}
@@ -65,6 +69,7 @@ interface PaneLeafRendererProps {
   onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
+  onTerminateTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   closingTerminalIds?: string[]
@@ -78,6 +83,7 @@ const PaneLeafRenderer = memo(
     onSplitTerminal,
     onAddBrowserTab,
     onCloseTerminal,
+    onTerminateTerminal,
     onRenameTerminal,
     onCloseEditorTab,
     closingTerminalIds,
@@ -91,6 +97,7 @@ const PaneLeafRenderer = memo(
           onSplitTerminal={onSplitTerminal}
           onAddBrowserTab={onAddBrowserTab}
           onCloseTerminal={onCloseTerminal}
+          onTerminateTerminal={onTerminateTerminal}
           onRenameTerminal={onRenameTerminal}
           onCloseEditorTab={onCloseEditorTab}
           closingTerminalIds={closingTerminalIds}
@@ -107,6 +114,7 @@ interface PaneSplitRendererProps {
   onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
+  onTerminateTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   closingTerminalIds?: string[]
@@ -120,6 +128,7 @@ const PaneSplitRenderer = memo(
     onSplitTerminal,
     onAddBrowserTab,
     onCloseTerminal,
+    onTerminateTerminal,
     onRenameTerminal,
     onCloseEditorTab,
     closingTerminalIds,
@@ -181,6 +190,7 @@ const PaneSplitRenderer = memo(
             onSplitTerminal={onSplitTerminal}
             onAddBrowserTab={onAddBrowserTab}
             onCloseTerminal={onCloseTerminal}
+            onTerminateTerminal={onTerminateTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
             closingTerminalIds={closingTerminalIds}
@@ -202,6 +212,7 @@ interface PaneRendererPanelProps {
   onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
+  onTerminateTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   closingTerminalIds?: string[]
@@ -219,6 +230,7 @@ const PaneRendererPanel = memo(
     onSplitTerminal,
     onAddBrowserTab,
     onCloseTerminal,
+    onTerminateTerminal,
     onRenameTerminal,
     onCloseEditorTab,
     closingTerminalIds,
@@ -233,6 +245,7 @@ const PaneRendererPanel = memo(
             onSplitTerminal={onSplitTerminal}
             onAddBrowserTab={onAddBrowserTab}
             onCloseTerminal={onCloseTerminal}
+            onTerminateTerminal={onTerminateTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
             closingTerminalIds={closingTerminalIds}

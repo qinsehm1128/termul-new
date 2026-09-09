@@ -12,7 +12,7 @@ import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-st
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
 import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
@@ -164,6 +164,7 @@ vi.mock('@/stores/app-settings-store', () => ({
   useDefaultShell: vi.fn(() => 'bash'),
   useMaxTerminalsPerProject: vi.fn(() => 10),
   useConfirmTerminalClose: vi.fn(() => true),
+  useConfirmTerminalTerminate: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue'),
   useColorTheme: vi.fn(() => brandCanonical().themeId),
@@ -1319,6 +1320,64 @@ describe('WorkspaceLayout - Empty States', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Hidden running terminals' }))
       expect(screen.getByRole('button', { name: 'Reopen Hidden shell' })).toHaveClass('h-9')
       expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    })
+
+    it('keeps project terminals out of a Conversation workspace', async () => {
+      // A Conversation's workspace is loaded and written by the session sync.
+      // The project tab sync must not add the project's own shells to it —
+      // doing so put a project terminal in the Conversation's tab bar, the
+      // mirror of Conversation terminals leaking into the project's.
+      const projects = [createProject('a', '/workspace/a', 'blue')]
+      const terminal = {
+        id: 'project-shell',
+        projectId: 'a',
+        name: 'zsh',
+        shell: 'zsh',
+        ptyId: 'pty-project-shell',
+        viewState: 'visible',
+        healthStatus: 'running'
+      } as Terminal
+      mockUseProjects.mockReturnValue(projects)
+      mockUseActiveProject.mockReturnValue(projects[0])
+      mockUseActiveProjectId.mockReturnValue('a')
+      // Start with no terminals: the effect skips its first run for a project
+      // it has not seen, so the terminal has to arrive on a later run for the
+      // sync to be reachable at all.
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      useConversationStore.setState({
+        activeConversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
+      })
+
+      const view = renderWithRouter(['/c/018f7a1c-1b4d-7c8a-9f01-0123456789ab'])
+      // Fake timers, not real sleeps: this file is already slow enough that
+      // half a second of waiting here pushes unrelated `waitFor` assertions in
+      // it over their deadline under full-suite load.
+      vi.useFakeTimers()
+      try {
+        await act(async () => {
+          vi.advanceTimersByTime(250)
+        })
+
+        mockUseTerminals.mockReturnValue([terminal])
+        mockUseAllTerminals.mockReturnValue([terminal])
+        view.rerender(
+          <TooltipProvider>
+            <MemoryRouter initialEntries={['/c/018f7a1c-1b4d-7c8a-9f01-0123456789ab']}>
+              <WorkspaceLayout />
+            </MemoryRouter>
+          </TooltipProvider>
+        )
+        // Past the sync effect's 100ms debounce.
+        await act(async () => {
+          vi.advanceTimersByTime(250)
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+
+      const tabs = getAllLeafPanes(useWorkspaceStore.getState().root).flatMap((leaf) => leaf.tabs)
+      expect(tabs.filter((tab) => tab.type === 'terminal')).toEqual([])
     })
 
     it('surfaces hidden live project terminals so they can be reopened or stopped', () => {

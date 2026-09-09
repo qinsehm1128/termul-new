@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
-import type { Terminal } from '@/types/project'
+import { isProjectScopedTerminal, type Terminal } from '@/types/project'
 import type {
   PersistedTerminal,
   PersistedTerminalLayout
@@ -105,9 +105,7 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
  * mirrors the host, which likewise skips SessionWorkspace admission when a
  * spawn carries no conversation id (`tracks_session_workspace_ref`).
  */
-export function isProjectScopedTerminal(terminal: Terminal, projectId: string): boolean {
-  return terminal.projectId === projectId && !terminal.conversationId
-}
+export { isProjectScopedTerminal }
 
 export interface SaveTerminalLayoutOptions {
   correlationId?: string

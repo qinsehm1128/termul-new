@@ -205,6 +205,7 @@ vi.mock('@/stores/app-settings-store', () => ({
   useDefaultShell: () => 'bash',
   useMaxTerminalsPerProject: () => 10,
   useConfirmTerminalClose: () => true,
+  useConfirmTerminalTerminate: () => true,
   useColorTheme: () => brandCanonical().themeId,
   useAppearanceMode: () => 'dark'
 }))

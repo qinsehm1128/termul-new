@@ -14,6 +14,7 @@ import {
   SquareTerminal
 } from 'lucide-react'
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   emptyPendingLauncherOptions,
@@ -180,6 +181,7 @@ export function AgentLauncher({
   onLaunched
 }: AgentLauncherProps): React.JSX.Element {
   const t = useRuntimeTranslation('agents')
+  const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
@@ -1099,25 +1101,26 @@ export function AgentLauncher({
           ? null
           : (defaultProjectContext(selectedProject)?.projectAttachment ?? null))
       const result = await launchTerminalConversation({
-        paneId,
         executionTarget,
-        projectAttachment: attachment,
-        projectId: conversationProjectId ?? '',
-        maxTerminalsPerProject: useAppSettingsStore.getState().settings.maxTerminalsPerProject
+        projectAttachment: attachment
       })
       if (!result.success) {
         toast.error(result.error)
         return
       }
-      // No `addAgentChatTab` here, deliberately. `spawnTerminalInPane` already
-      // added the terminal's tab and focused it; adding a chat tab on top
-      // covers it and — because that tab renders the launcher when it has no
-      // agent session — lands the user right back on this screen. `onLaunched`
-      // navigates to the Conversation, whose activation is what decides the
-      // view, and it hides the launcher itself.
-      onLaunched?.(result.conversationId)
+      // Opening the Conversation is the whole handoff: no tab is added here,
+      // because activation loads the Conversation's own workspace and opens the
+      // terminal inside it. Anything this component put in the current pane
+      // would belong to the workspace that activation is about to replace.
+      //
+      // The fallback matters — `onLaunched` is absent wherever the launcher is
+      // rendered inside a pane, and without navigation the new Conversation
+      // would be created and then never shown.
+      if (onLaunched) onLaunched(result.conversationId)
+      else navigate(`/c/${result.conversationId}`)
+      useWorkspaceStore.getState().hideAgentLauncher()
       console.info(
-        `[agentLauncher.launchTerminal] conversationId=${result.conversationId} terminalId=${result.terminalId} target=${executionTarget.kind}`
+        `[agentLauncher.launchTerminal] conversationId=${result.conversationId} target=${executionTarget.kind}`
       )
     } finally {
       setTerminalLaunching(false)
@@ -1126,8 +1129,7 @@ export function AgentLauncher({
     executionTarget,
     projectAttachment,
     selectedProject,
-    conversationProjectId,
-    paneId,
+    navigate,
     onLaunched,
     terminalLaunching,
     t

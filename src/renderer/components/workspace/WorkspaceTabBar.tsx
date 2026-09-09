@@ -22,6 +22,7 @@ import { TabAgentMark, TabRunMark } from '@/components/workspace/tab-marks'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
+import { closingKeepsProcessAlive } from '@/lib/conversation-terminal-view'
 import { isPreferredShell } from '@/lib/shell-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
@@ -32,7 +33,7 @@ import { type GitStatusState, useGitStatusStore } from '@/stores/git-status-stor
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { AgentChatTab, WorkspaceTab } from '@/stores/workspace-store'
 import { editorTabId, useLeafCount, useWorkspaceStore } from '@/stores/workspace-store'
-import { isConversationScopedTerminal, type Terminal } from '@/types/project'
+import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab } from './EditorTab'
 import { type TabBulkCloseHandlers, TabContextMenu } from './tab-context-menu'
@@ -119,6 +120,7 @@ interface TerminalTabInlineProps extends TabBulkCloseHandlers {
   isClosing?: boolean
   onSelect: () => void
   onClose: () => void
+  onKill?: () => void
   onRename: (name: string) => void
   onDragStart: (e: React.DragEvent) => void
   onDragOver: (e: React.DragEvent) => void
@@ -135,6 +137,7 @@ function TerminalTabInline({
   isClosing = false,
   onSelect,
   onClose,
+  onKill,
   onRename,
   onCloseLeft,
   onCloseRight,
@@ -185,6 +188,7 @@ function TerminalTabInline({
     <TabContextMenu
       kind="terminal"
       onClose={onClose}
+      onKill={onKill}
       onRename={handleRenameFromMenu}
       isClosing={isClosing}
       onCloseLeft={onCloseLeft}
@@ -267,7 +271,7 @@ function TerminalTabInline({
           isActive={isActive}
           spinning={isClosing}
           ariaLabel={
-            isConversationScopedTerminal(terminal)
+            closingKeepsProcessAlive(terminal)
               ? t('tabs.closeView', { name: terminal.name })
               : t('tabs.terminateProcess', { name: terminal.name })
           }
@@ -642,6 +646,11 @@ interface WorkspaceTabBarProps {
   onAddTerminal?: (shell?: ShellInfo) => void
   onAddBrowserTab?: () => void
   onCloseTerminal?: (id: string, tabId: string) => void
+  /**
+   * Stop the process outright. Offered only where × would *not* — otherwise the
+   * menu would list two rows that do the same thing.
+   */
+  onTerminateTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -655,6 +664,7 @@ export function WorkspaceTabBar({
   onAddTerminal,
   onAddBrowserTab,
   onCloseTerminal,
+  onTerminateTerminal,
   onRenameTerminal,
   onCloseEditorTab,
   defaultShell
@@ -1011,6 +1021,11 @@ export function WorkspaceTabBar({
                           onClose={() => {
                             if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
                           }}
+                          onKill={
+                            onTerminateTerminal && closingKeepsProcessAlive(terminal)
+                              ? () => onTerminateTerminal(tab.terminalId, tab.id)
+                              : undefined
+                          }
                           onRename={(name) => {
                             if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
                           }}

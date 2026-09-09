@@ -185,7 +185,10 @@
     "hideList": "Hide terminal list",
     "scopeUnavailable": "Select a group in the sidebar first",
     "unassigned": "No project",
-    "projectTitle": "{{project}} — {{terminals}} terminal(s), opens the most recent"
+    "projectTitle": "{{project}} — {{terminals}} terminal(s), opens the most recent",
+    "conversations": "Conversations",
+    "conversationTitle": "{{project}} — {{terminals}} terminal(s) owned by conversations, opens the most recent",
+    "untitledConversation": "Untitled conversation"
   },
   "lastSession": {
     "label": "Last session",

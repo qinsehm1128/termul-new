@@ -73,6 +73,12 @@ export interface AppSettings {
   orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
   orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
   confirmTerminalClose: boolean // Show a confirmation dialog before closing a terminal
+  /**
+   * Ask before ending a terminal's process. Separate from `confirmTerminalClose`
+   * on purpose: that one guards closing a *view* and promises the process keeps
+   * running, so turning it off must not also silence the prompt for a kill.
+   */
+  confirmTerminalTerminate: boolean
   terminalUrlOpenMode: TerminalUrlOpenMode // Controls how Ctrl/Cmd+Click terminal URLs are opened
   sidebarVisible: boolean
   fileExplorerVisible: boolean
@@ -347,6 +353,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   orphanDetectionEnabled: true,
   orphanDetectionTimeout: 600000, // 10 minutes
   confirmTerminalClose: true,
+  confirmTerminalTerminate: true,
   terminalUrlOpenMode: 'system',
   sidebarVisible: true,
   fileExplorerVisible: true,

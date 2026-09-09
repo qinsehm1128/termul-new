@@ -69,6 +69,24 @@ export function openBoardTerminal(options: {
   terminalId: string
   navigate: (path: string) => void
 }): void {
+  // Ownership is read from the record rather than trusted from the caller, so
+  // no surface can forget it. A Conversation terminal lives at `/c/<id>`;
+  // selecting a project and navigating to `/` sends the user to the one
+  // workspace that terminal is not in.
+  const owner = useTerminalStore
+    .getState()
+    .terminals.find((terminal) => terminal.id === options.terminalId)?.conversationId
+  if (owner) {
+    clearPendingTerminalFocus()
+    useWorkspaceStore.getState().hideAgentLauncher()
+    void logFrontendError({
+      level: 'warn',
+      source: 'terminal-board.open',
+      message: `open conversation terminal conversationId=${owner}`
+    })
+    options.navigate(`/c/${owner}`)
+    return
+  }
   const projectId = options.projectId?.trim() || null
   void logFrontendError({
     level: 'warn',

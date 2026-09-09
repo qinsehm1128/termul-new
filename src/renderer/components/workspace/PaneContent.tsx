@@ -114,6 +114,7 @@ interface PaneContentProps {
   onSplitTerminal?: (paneId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
   onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
+  onTerminateTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   closingTerminalIds?: string[]
@@ -126,6 +127,7 @@ export function PaneContent({
   onSplitTerminal,
   onAddBrowserTab,
   onCloseTerminal,
+  onTerminateTerminal,
   onRenameTerminal,
   onCloseEditorTab,
   closingTerminalIds = [],
@@ -329,6 +331,7 @@ export function PaneContent({
           onAddTerminal={handleAddTerminalForPane}
           onAddBrowserTab={handleAddBrowserTabForPane}
           onCloseTerminal={onCloseTerminal}
+          onTerminateTerminal={onTerminateTerminal}
           onRenameTerminal={onRenameTerminal}
           onCloseEditorTab={onCloseEditorTab}
           defaultShell={defaultShell}
