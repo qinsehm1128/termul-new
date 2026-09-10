@@ -17,6 +17,12 @@
 //! is explicit that the index keeps searchable text plus a pointer rather than a
 //! copy of the corpus.
 //!
+//! The one exception is the `cjk` column, which holds a bigram expansion of the
+//! text's CJK runs and nothing else — see [`super::cjk`] for why `unicode61`
+//! alone cannot find a Chinese word inside a sentence. Latin-only records expand
+//! to the empty string, so the exception costs nothing on the majority of the
+//! corpus.
+//!
 //! ## Re-ingest
 //!
 //! Per session, delete-then-insert inside one transaction. That is what makes a
@@ -28,6 +34,7 @@ use std::path::Path;
 use rusqlite::types::ToSql;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
+use super::cjk;
 use super::paths::MemoryVendor;
 use super::types::{
     CompactionRecord, IndexedSession, LineageDepth, NormalizedMessage, NormalizedRole,
@@ -36,7 +43,20 @@ use super::types::{
 use super::{MemoryIndexError, MemoryIndexResult, ERR_STORE_FAILED};
 
 const META_SCHEMA_VERSION: &str = "schema_version";
+const META_STORE_VERSION: &str = "store_version";
 const META_PROJECT_KEY: &str = "project_key";
+
+/// Version of the **on-disk table layout**, separate from
+/// [`SCHEMA_VERSION`], which versions the normalized record shape on the wire.
+///
+/// They were one number and had to be split: adding the `cjk` column changed how
+/// the database is laid out without changing a single field of
+/// [`NormalizedMessage`], and bumping the record version for that would have
+/// told every client its contract had changed when it had not.
+///
+/// * 1 — single-column `messages_fts`.
+/// * 2 — `messages_fts(text, cjk)`.
+const STORE_VERSION: u32 = 2;
 
 /// Hard cap on rows returned by any single query, applied after the caller's
 /// own limit. An MCP client asking for everything would otherwise be able to
@@ -147,17 +167,52 @@ impl MemoryStore {
         &self.project_key
     }
 
+    /// Bring the database up to [`STORE_VERSION`], discarding its contents when
+    /// the layout changed.
+    ///
+    /// Dropping is the correct migration here and not a shortcut: this database
+    /// is a derived cache of transcripts that are still on disk, so the entire
+    /// cost of throwing it away is one rebuild, while hand-migrating an FTS5
+    /// table would mean reading and re-tokenizing every row anyway. `meta`
+    /// survives the drop so the project binding written by
+    /// [`Self::check_project_key`] is not silently re-established against a
+    /// different project.
     fn migrate(&self) -> MemoryIndexResult<()> {
+        self.connection
+            .execute_batch(META_SQL)
+            .map_err(store_error("apply meta schema"))?;
+        let stored: Option<u32> = self
+            .connection
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![META_STORE_VERSION],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(store_error("read store version"))?
+            .and_then(|raw| raw.parse().ok());
+        // `None` covers both a fresh database and a version-1 one, which never
+        // wrote this key. Dropping tables that do not exist is a no-op.
+        if stored != Some(STORE_VERSION) {
+            self.connection
+                .execute_batch(DROP_SQL)
+                .map_err(store_error("drop outdated schema"))?;
+        }
         self.connection
             .execute_batch(SCHEMA_SQL)
             .map_err(store_error("apply schema"))?;
-        self.connection
-            .execute(
-                "INSERT INTO meta(key, value) VALUES (?1, ?2)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![META_SCHEMA_VERSION, SCHEMA_VERSION.to_string()],
-            )
-            .map_err(store_error("record schema version"))?;
+        for (key, value) in [
+            (META_SCHEMA_VERSION, SCHEMA_VERSION.to_string()),
+            (META_STORE_VERSION, STORE_VERSION.to_string()),
+        ] {
+            self.connection
+                .execute(
+                    "INSERT INTO meta(key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![key, value],
+                )
+                .map_err(store_error("record schema version"))?;
+        }
         Ok(())
     }
 
@@ -522,7 +577,8 @@ fn probe_fts5(connection: &Connection) -> MemoryIndexResult<()> {
         })
 }
 
-/// Turn a user query into an FTS5 `MATCH` expression made only of quoted terms.
+/// Turn a user query into an FTS5 `MATCH` expression made only of quoted,
+/// column-qualified terms.
 ///
 /// v1 does literal term matching with implicit AND, not FTS5 query syntax. The
 /// index is full of tool output — file paths, flags, error codes — where `-`,
@@ -531,24 +587,71 @@ fn probe_fts5(connection: &Connection) -> MemoryIndexResult<()> {
 /// every term makes the whole space of user input safe and predictable, at the
 /// cost of not offering operators.
 ///
+/// Each whitespace-separated term is then split at the CJK boundary, because the
+/// two halves are searched in different columns: Latin runs against `text`,
+/// which `unicode61` tokenizes correctly, and CJK runs against the bigram
+/// expansion in `cjk`, which is the only way a two-character Chinese word can be
+/// found inside a sentence. A mixed term like `ENOENT错误` therefore produces one
+/// term of each.
+///
 /// Returns `None` for a query with no usable terms; the caller returns no hits
 /// rather than matching everything.
 #[must_use]
 pub fn to_fts_match(query: &str) -> Option<String> {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(|term| {
-            term.trim_matches(|character: char| {
-                character.is_ascii_punctuation() && character != '_'
-            })
-        })
-        .filter(|term| !term.is_empty())
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect();
+    let mut terms: Vec<String> = Vec::new();
+    for word in query.split_whitespace() {
+        for run in split_at_cjk_boundary(word) {
+            match run {
+                QueryRun::Cjk(text) => terms.extend(
+                    cjk::query_terms(&text)
+                        .into_iter()
+                        .map(|term| format!("{{cjk}}: {term}")),
+                ),
+                // A run of pure punctuation carries no token, and an FTS5 phrase
+                // with no tokens matches nothing useful — dropping it keeps a
+                // query like `foo :: bar` meaning `foo AND bar`.
+                QueryRun::Other(text) if text.chars().any(char::is_alphanumeric) => terms
+                    .push(format!("{{text}}: \"{}\"", text.replace('"', "\"\""))),
+                QueryRun::Other(_) => {}
+            }
+        }
+    }
     if terms.is_empty() {
         return None;
     }
     Some(terms.join(" "))
+}
+
+enum QueryRun {
+    Cjk(String),
+    Other(String),
+}
+
+fn split_at_cjk_boundary(word: &str) -> Vec<QueryRun> {
+    let mut runs: Vec<QueryRun> = Vec::new();
+    let mut current = String::new();
+    let mut current_is_cjk = false;
+
+    for character in word.chars() {
+        let is_cjk = cjk::is_cjk(character);
+        if !current.is_empty() && is_cjk != current_is_cjk {
+            runs.push(finish_run(std::mem::take(&mut current), current_is_cjk));
+        }
+        current_is_cjk = is_cjk;
+        current.push(character);
+    }
+    if !current.is_empty() {
+        runs.push(finish_run(current, current_is_cjk));
+    }
+    runs
+}
+
+fn finish_run(text: String, is_cjk: bool) -> QueryRun {
+    if is_cjk {
+        QueryRun::Cjk(text)
+    } else {
+        QueryRun::Other(text)
+    }
 }
 
 /// FTS5 rows can only be removed by rowid, which is why `messages.fts_rowid` is
@@ -644,8 +747,8 @@ fn write_message_row(
 ) -> MemoryIndexResult<()> {
     transaction
         .execute(
-            "INSERT INTO messages_fts(text) VALUES (?1)",
-            params![message.text],
+            "INSERT INTO messages_fts(text, cjk) VALUES (?1, ?2)",
+            params![message.text, cjk::expand(&message.text)],
         )
         .map_err(store_error("insert fts text"))?;
     let fts_rowid = transaction.last_insert_rowid();
@@ -824,12 +927,24 @@ fn parse_scope(raw: &str) -> SessionScope {
     }
 }
 
-const SCHEMA_SQL: &str = "
+/// Created before the version check, because the version lives in it.
+const META_SQL: &str = "
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+";
 
+/// Children before parents: `messages` and `compactions` reference `sessions`,
+/// and `PRAGMA foreign_keys=ON` is set at open.
+const DROP_SQL: &str = "
+DROP TABLE IF EXISTS messages_fts;
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS compactions;
+DROP TABLE IF EXISTS sessions;
+";
+
+const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS sessions (
     session_key          TEXT PRIMARY KEY,
     vendor               TEXT NOT NULL,
@@ -910,7 +1025,11 @@ CREATE TABLE IF NOT EXISTS compactions (
 );
 CREATE INDEX IF NOT EXISTS compactions_session ON compactions(session_key);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, tokenize = 'unicode61');
+-- `text` is the exact text a hit displays and the Latin search surface.
+-- `cjk` holds only the bigram expansion of the text's CJK runs; it is empty for
+-- Latin-only records. See `super::cjk` for why `unicode61` alone cannot find a
+-- Chinese word inside a sentence.
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, cjk, tokenize = 'unicode61');
 ";
 
 #[cfg(test)]
@@ -988,6 +1107,199 @@ mod tests {
 
     fn store() -> MemoryStore {
         MemoryStore::open_in_memory(PROJECT).unwrap()
+    }
+
+    /// Chinese is the language most of this project's transcripts are written
+    /// in, and before the `cjk` column none of these queries returned anything:
+    /// `unicode61` makes an unbroken CJK run exactly one token, so only a query
+    /// equal to the whole run could match.
+    ///
+    /// Delete the `cjk` column write in `write_message_row`, or drop the
+    /// `{cjk}:` branch of `to_fts_match`, and every assertion below goes to zero
+    /// rows.
+    #[test]
+    fn a_chinese_word_is_found_inside_a_chinese_sentence() {
+        let mut store = store();
+        store
+            .replace_session(
+                &session("s1", Some(100), SessionScope::Scoped),
+                &[
+                    message(
+                        "s1",
+                        0,
+                        NormalizedRole::User,
+                        "重构了内存索引的存储层",
+                        LineageDepth::ROOT,
+                    ),
+                    message(
+                        "s1",
+                        1,
+                        NormalizedRole::Assistant,
+                        "把 claude/codex/pi 的历史会话统一为标准结构",
+                        LineageDepth::ROOT,
+                    ),
+                ],
+                &[],
+            )
+            .unwrap();
+
+        for (query, expected) in [
+            ("内存", "重构了内存索引的存储层"),
+            ("内存索引", "重构了内存索引的存储层"),
+            ("存储层", "重构了内存索引的存储层"),
+            ("会话", "把 claude/codex/pi 的历史会话统一为标准结构"),
+            ("历史会话", "把 claude/codex/pi 的历史会话统一为标准结构"),
+        ] {
+            let hits = store.search(query, false, &[], 10).unwrap();
+            assert_eq!(
+                hits.len(),
+                1,
+                "query {query:?} returned {} hits, expected exactly one",
+                hits.len()
+            );
+            assert_eq!(hits[0].text, expected, "query {query:?} matched the wrong row");
+        }
+    }
+
+    #[test]
+    fn a_single_chinese_character_matches_through_a_prefix_term() {
+        let mut store = store();
+        store
+            .replace_session(
+                &session("s1", Some(100), SessionScope::Scoped),
+                &[message(
+                    "s1",
+                    0,
+                    NormalizedRole::User,
+                    "内存索引",
+                    LineageDepth::ROOT,
+                )],
+                &[],
+            )
+            .unwrap();
+        // `内` starts the bigram `内存`, so a prefix term reaches it.
+        assert_eq!(store.search("内", false, &[], 10).unwrap().len(), 1);
+        // `引` only ever appears as the *second* half of a bigram, which a
+        // prefix term cannot reach. Asserted so the limitation is recorded
+        // rather than discovered.
+        assert_eq!(store.search("引", false, &[], 10).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_mixed_query_matches_its_latin_and_chinese_halves_together() {
+        let mut store = store();
+        store
+            .replace_session(
+                &session("s1", Some(100), SessionScope::Scoped),
+                &[
+                    message(
+                        "s1",
+                        0,
+                        NormalizedRole::ToolResult,
+                        "error ENOENT 找不到文件",
+                        LineageDepth::ROOT,
+                    ),
+                    message(
+                        "s1",
+                        1,
+                        NormalizedRole::ToolResult,
+                        "error EACCES 权限不足",
+                        LineageDepth::ROOT,
+                    ),
+                ],
+                &[],
+            )
+            .unwrap();
+        // Implicit AND across the two columns: only the first row has both.
+        let hits = store.search("ENOENT 文件", false, &[], 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "error ENOENT 找不到文件");
+        // And a term glued across the boundary splits into one term per column.
+        assert_eq!(store.search("ENOENT找不到", false, &[], 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn latin_search_is_unchanged_by_the_cjk_column() {
+        let mut store = store();
+        store
+            .replace_session(
+                &session("s1", Some(100), SessionScope::Scoped),
+                &[message(
+                    "s1",
+                    0,
+                    NormalizedRole::ToolCall,
+                    "git commit --no-verify",
+                    LineageDepth::ROOT,
+                )],
+                &[],
+            )
+            .unwrap();
+        for query in ["no-verify", "--no-verify", "commit", "git commit"] {
+            assert_eq!(
+                store.search(query, false, &[], 10).unwrap().len(),
+                1,
+                "latin query {query:?} regressed"
+            );
+        }
+    }
+
+    /// A punctuation-only word must not swallow the rest of the query.
+    #[test]
+    fn punctuation_only_terms_are_dropped_rather_than_matching_nothing() {
+        assert_eq!(to_fts_match("::"), None);
+        assert_eq!(
+            to_fts_match("foo :: bar"),
+            Some("{text}: \"foo\" {text}: \"bar\"".to_string())
+        );
+    }
+
+    /// Reopening a version-1 database must not fail with "table messages_fts
+    /// has 1 columns but 2 values were supplied"; it must discard the stale
+    /// layout and come back writable.
+    #[test]
+    fn a_version_one_database_is_rebuilt_rather_than_left_unwritable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        {
+            // Exactly the v1 layout: single-column FTS, no store_version key.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(META_SQL)
+                .and_then(|()| {
+                    connection.execute_batch(
+                        "CREATE VIRTUAL TABLE messages_fts USING fts5(text, tokenize = 'unicode61');
+                         INSERT INTO messages_fts(text) VALUES ('stale row');",
+                    )
+                })
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO meta(key, value) VALUES ('schema_version', '1')",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let mut store = MemoryStore::open(&path, PROJECT).unwrap();
+        store
+            .replace_session(
+                &session("s1", Some(100), SessionScope::Scoped),
+                &[message(
+                    "s1",
+                    0,
+                    NormalizedRole::User,
+                    "内存索引",
+                    LineageDepth::ROOT,
+                )],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(store.search("内存", false, &[], 10).unwrap().len(), 1);
+        assert_eq!(
+            store.search("stale", false, &[], 10).unwrap().len(),
+            0,
+            "the v1 row survived the rebuild"
+        );
     }
 
     /// AC9. Schema creation, upsert and a `MATCH` query, end to end, on the
@@ -1257,7 +1569,10 @@ mod tests {
             );
         }
         assert_eq!(to_fts_match(""), None);
-        assert_eq!(to_fts_match("a b"), Some("\"a\" \"b\"".to_string()));
+        assert_eq!(
+            to_fts_match("a b"),
+            Some("{text}: \"a\" {text}: \"b\"".to_string())
+        );
     }
 
     #[test]

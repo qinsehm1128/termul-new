@@ -24,6 +24,7 @@
 //!    turn "unknown" into the false claim "this is a root message".
 
 pub mod adapters;
+pub mod cjk;
 pub mod commands;
 pub mod ingest;
 pub mod paths;
