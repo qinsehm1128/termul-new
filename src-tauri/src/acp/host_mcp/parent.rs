@@ -665,6 +665,7 @@ impl HostPlanServer {
                         &input.session_key,
                         input.limit,
                         input.include_stale,
+                        input.include_unscoped,
                     )
                     .map_err(|error| error.to_string())
             })

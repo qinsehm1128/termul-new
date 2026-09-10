@@ -287,6 +287,10 @@ pub struct MemorySessionGetInput {
     pub limit: Option<usize>,
     #[serde(default)]
     pub include_stale: bool,
+    /// Mirrors the same field on the list and search inputs: a session the
+    /// listing surfaced must be openable on the same terms.
+    #[serde(default)]
+    pub include_unscoped: bool,
 }
 
 /// Map the agent's todo input → ACP `PlanEntry` list, preserving order.

@@ -64,6 +64,10 @@ pub struct MemoryIndexSessionArgs {
     pub limit: Option<usize>,
     #[serde(default)]
     pub include_stale: bool,
+    /// Mirrors the same field on the list and search requests: a session the
+    /// listing surfaced must be openable on the same terms.
+    #[serde(default)]
+    pub include_unscoped: bool,
 }
 
 /// Build or refresh a project's index.
@@ -163,6 +167,7 @@ pub async fn memory_index_session_cmd(
                 &args.session_key,
                 args.limit,
                 args.include_stale,
+                args.include_unscoped,
             )
             .map_err(|error| error.to_string())
     })

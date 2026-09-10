@@ -253,6 +253,7 @@ pub async fn session_post(
             &args.session_key,
             args.limit,
             args.include_stale,
+            args.include_unscoped,
         )
     })
     .await

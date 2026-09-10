@@ -29,7 +29,7 @@ use super::adapters::{self, AdaptedTranscript, AdapterIssue};
 use super::paths::{vendor_scan_roots, vendor_store_roots, IndexLocation, MemoryVendor};
 use super::scope::ProjectFence;
 use super::store::MemoryStore;
-use super::types::{FileIdentity, LineageDepth, SessionScope};
+use super::types::{FileIdentity, SessionScope};
 use super::{MemoryIndexError, MemoryIndexResult, ERR_INGEST_FAILED};
 
 /// Deepest directory nesting followed while walking a vendor store.
@@ -386,6 +386,13 @@ fn ingest_codex(
         if !is_inside_vendor_store(MemoryVendor::Codex, path) {
             continue;
         }
+        // Recorded before the file is read, exactly as the other two vendors do
+        // it. `seen_keys` answers "is this transcript still on disk", and
+        // `read_meta` folds a transient I/O failure into the same `None` as "not
+        // a Codex record" — so reading first would let one unreadable moment
+        // delete a session from the index that is still there.
+        let key = adapters::session_key(MemoryVendor::Codex, path);
+        seen_keys.push(key.clone());
         let Some(meta) = adapters::codex::read_meta(path) else {
             continue;
         };
@@ -397,7 +404,7 @@ fn ingest_codex(
             }
         }
         entries.push(CodexEntry {
-            key: adapters::session_key(MemoryVendor::Codex, path),
+            key,
             path: path.clone(),
             meta,
             scope,
@@ -418,7 +425,6 @@ fn ingest_codex(
     let resolve_root = |thread: &str| resolve_codex_root(&threads, thread);
 
     for entry in &entries {
-        seen_keys.push(entry.key.clone());
         let Some(identity) = read_identity(&entry.path) else {
             continue;
         };
@@ -574,16 +580,10 @@ pub fn ingest_error(detail: impl Into<String>) -> MemoryIndexError {
     MemoryIndexError::new(ERR_INGEST_FAILED, detail)
 }
 
-/// Recompute a session's lineage depth without re-adapting it. Exposed for the
-/// service layer's consistency checks.
-#[must_use]
-pub fn pi_depth(project_dir: &Path, path: &Path) -> LineageDepth {
-    adapters::pi::depth_from_path(project_dir, path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory_index::types::LineageDepth;
     use std::ffi::OsString;
 
     /// Vendor roots come from process env via `cli_session::paths`, so the
@@ -978,6 +978,63 @@ mod tests {
         );
         assert_eq!(rebuilt.sessions_indexed, 1);
         assert_eq!(rebuilt.sessions_skipped_unchanged, 0);
+    }
+
+    /// A Codex transcript that is momentarily unreadable must not be treated as
+    /// deleted. `read_meta` folds a transient I/O failure into the same `None`
+    /// as "not a Codex record", and the key used to be recorded only after that
+    /// call succeeded — so one unreadable moment during a build erased a session
+    /// that was still sitting on disk. Claude and pi never had the problem
+    /// because they record the key before reading.
+    #[test]
+    fn an_unreadable_codex_transcript_is_not_treated_as_deleted() {
+        let fixture = fixture();
+        let cwd = fixture.project_root.to_string_lossy().into_owned();
+        let path = fixture.codex_sessions.join("x1.jsonl");
+        write(
+            &path,
+            &codex_lines("sess-x1", &cwd, "2026-09-01T00:00:00.000Z", "codex kept"),
+        );
+        let first = build(&fixture, IngestOptions::default());
+        assert_eq!(first.sessions_indexed, 1);
+
+        // Still present, but its first line no longer parses as session_meta —
+        // the same observable state a truncated write or a permission blip
+        // produces.
+        std::fs::write(&path, b"not json at all\n").unwrap();
+
+        let second = build(&fixture, IngestOptions::default());
+        assert_eq!(
+            second.sessions_forgotten, 0,
+            "an unreadable but present transcript was pruned"
+        );
+        let store = open_store(&fixture);
+        assert_eq!(
+            store.search("kept", true, &[], 10).unwrap().len(),
+            1,
+            "the previously indexed Codex session was erased"
+        );
+    }
+
+    /// The other half of the same rule: gone from disk still means forgotten.
+    #[test]
+    fn a_deleted_codex_transcript_is_still_forgotten() {
+        let fixture = fixture();
+        let cwd = fixture.project_root.to_string_lossy().into_owned();
+        let path = fixture.codex_sessions.join("x1.jsonl");
+        write(
+            &path,
+            &codex_lines("sess-x1", &cwd, "2026-09-01T00:00:00.000Z", "doomed"),
+        );
+        build(&fixture, IngestOptions::default());
+        std::fs::remove_file(&path).unwrap();
+
+        let report = build(&fixture, IngestOptions::default());
+        assert_eq!(report.sessions_forgotten, 1);
+        assert!(open_store(&fixture)
+            .search("doomed", true, &[], 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

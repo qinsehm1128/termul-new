@@ -83,3 +83,7 @@ pub const ERR_OUT_OF_SCOPE: &str = "MEMORY_INDEX_OUT_OF_SCOPE";
 pub const ERR_STORE_FAILED: &str = "MEMORY_INDEX_STORE_FAILED";
 pub const ERR_SOURCE_STALE: &str = "MEMORY_INDEX_SOURCE_STALE";
 pub const ERR_INGEST_FAILED: &str = "MEMORY_INDEX_INGEST_FAILED";
+/// A build is already running for this project. Refusing is deliberate: two
+/// concurrent builds over one SQLite file interleave their `prune_missing`
+/// passes, and the loser deletes rows the winner just wrote.
+pub const ERR_BUILD_IN_PROGRESS: &str = "MEMORY_INDEX_BUILD_IN_PROGRESS";

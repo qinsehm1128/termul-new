@@ -250,7 +250,7 @@ pub fn adapt(
         message_count: messages.len() as u64,
         tool_count,
         file_path,
-        source: SourcePointer::for_record(identity, &path.to_string_lossy(), 0, &[]),
+        source: SourcePointer::for_file(identity, &path.to_string_lossy()),
     });
     out.messages = messages;
     out.issues = issues;

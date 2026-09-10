@@ -190,7 +190,7 @@ pub fn adapt(
         message_count: messages.len() as u64,
         tool_count,
         file_path,
-        source: SourcePointer::for_record(identity, &path.to_string_lossy(), 0, &[]),
+        source: SourcePointer::for_file(identity, &path.to_string_lossy()),
     });
     out.messages = messages;
     out.compactions = Vec::<CompactionRecord>::new();
@@ -290,6 +290,44 @@ fn describe_tool_input(input: Option<&Value>) -> String {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(text)) => text.clone(),
         Some(value) => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod session_pointer_tests {
+    use super::*;
+
+    /// The adapter-level half of the whole-file pointer rule: whatever a session
+    /// row carries, it must not be able to answer "these bytes are still what I
+    /// indexed" when it points at no bytes at all. Restore
+    /// `SourcePointer::for_record(identity, path, 0, &[])` here and this goes
+    /// red.
+    #[test]
+    fn an_adapted_session_pointer_does_not_claim_freshness() {
+        use crate::memory_index::types::PointerFreshness;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c1.jsonl");
+        std::fs::write(
+            &path,
+            b"{\"type\":\"user\",\"sessionId\":\"s\",\"cwd\":\"/repo\",\"isSidechain\":false,\
+              \"timestamp\":\"2026-09-01T00:00:00.000Z\",\"message\":{\"role\":\"user\",\
+              \"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+        )
+        .unwrap();
+        let identity = FileIdentity::read(&path).unwrap();
+        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &|_| None);
+
+        let session = adapted.session.expect("adapter produced no session");
+        assert!(
+            session.source.content_hash.is_empty(),
+            "a session pointer must not carry a digest it did not compute"
+        );
+        assert_eq!(session.source.verify(), PointerFreshness::Stale);
+
+        // Message pointers are unaffected: they name a real range.
+        let message = adapted.messages.first().expect("no messages");
+        assert_eq!(message.source.verify(), PointerFreshness::Fresh);
     }
 }
 

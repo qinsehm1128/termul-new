@@ -218,6 +218,13 @@ export interface MemoryIndexSessionArgs {
   sessionKey: string
   limit?: number | null
   includeStale?: boolean
+  /**
+   * Mirrors the same field on {@link MemoryIndexListArgs} and
+   * {@link MemorySearchRequest}. The three have to agree: a listing that hands
+   * out a `sessionKey` the detail call then reports as absent is a dead end the
+   * UI cannot recover from.
+   */
+  includeUnscoped?: boolean
 }
 
 /**

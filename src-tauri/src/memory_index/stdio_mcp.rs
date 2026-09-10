@@ -238,6 +238,7 @@ impl MemoryMcpServer {
                 &input.session_key,
                 input.limit,
                 input.include_stale,
+                input.include_unscoped,
             )
         })
         .await
@@ -248,6 +249,13 @@ impl MemoryMcpServer {
 ///
 /// SQLite reads are blocking; running them on the current-thread runtime would
 /// stall the stdio transport for the duration of a query.
+///
+/// Every tool here returns a plain string, so a failure has to be legible *as* a
+/// failure inside that string. It previously came back as bare text, which an
+/// agent reading the result had no way to tell apart from an answer — a scope
+/// rejection or a missing index looked exactly like "here is what the project
+/// remembers". The marker below is the distinguishing token, and the shape is
+/// identical for all three failure kinds so a caller only has to recognise one.
 async fn run_blocking<T, F>(work: F) -> String
 where
     T: serde::Serialize + Send + 'static,
@@ -255,9 +263,54 @@ where
 {
     match tokio::task::spawn_blocking(work).await {
         Ok(Ok(value)) => serde_json::to_string_pretty(&value)
-            .unwrap_or_else(|error| format!("could not encode result: {error}")),
-        Ok(Err(error)) => format!("{error}"),
-        Err(error) => format!("memory index query panicked: {error}"),
+            .unwrap_or_else(|error| tool_error("MEMORY_INDEX_ENCODE_FAILED", &error.to_string())),
+        Ok(Err(error)) => tool_error(error.code, &error.detail),
+        Err(error) => tool_error("MEMORY_INDEX_QUERY_PANICKED", &error.to_string()),
+    }
+}
+
+/// Marker every failed tool result starts with.
+pub const TOOL_ERROR_MARKER: &str = "MEMORY_INDEX_ERROR";
+
+fn tool_error(code: &str, detail: &str) -> String {
+    format!("{TOOL_ERROR_MARKER} {code}: {detail}")
+}
+
+#[cfg(test)]
+mod error_shape_tests {
+    use super::*;
+    use crate::memory_index::{MemoryIndexError, MemoryIndexResult, ERR_OUT_OF_SCOPE};
+
+    /// A failed tool call has to be legible as a failure. These tools return a
+    /// plain string, so an out-of-scope rejection or a missing index used to
+    /// arrive looking exactly like an answer — an external agent would read
+    /// "MEMORY_INDEX_OUT_OF_SCOPE: ..." as what the project remembers.
+    #[tokio::test]
+    async fn a_failed_query_is_distinguishable_from_an_answer() {
+        let failed = run_blocking(|| -> MemoryIndexResult<Vec<String>> {
+            Err(MemoryIndexError::new(ERR_OUT_OF_SCOPE, "somewhere else"))
+        })
+        .await;
+        assert!(
+            failed.starts_with(TOOL_ERROR_MARKER),
+            "an error did not announce itself: {failed:?}"
+        );
+        assert!(failed.contains(ERR_OUT_OF_SCOPE));
+
+        let answered = run_blocking(|| Ok(vec!["alpha".to_string()])).await;
+        assert!(
+            !answered.starts_with(TOOL_ERROR_MARKER),
+            "a successful result was marked as an error: {answered:?}"
+        );
+        assert!(answered.contains("alpha"));
+    }
+
+    /// An empty result is an answer, not an error — "this project remembers
+    /// nothing about that" has to stay distinguishable from "the query failed".
+    #[tokio::test]
+    async fn an_empty_result_is_not_reported_as_an_error() {
+        let empty = run_blocking(|| Ok(Vec::<String>::new())).await;
+        assert!(!empty.starts_with(TOOL_ERROR_MARKER), "{empty:?}");
     }
 }
 

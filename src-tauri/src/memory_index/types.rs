@@ -208,6 +208,32 @@ impl SourcePointer {
         }
     }
 
+    /// A pointer to a whole file rather than to one record inside it.
+    ///
+    /// Sessions need a pointer to the transcript they came from, but there is no
+    /// single byte range that *is* the session, so there is nothing to digest.
+    /// The hash is left empty, which makes [`Self::verify`] report
+    /// [`PointerFreshness::Stale`] — "this pointer cannot vouch for anything" —
+    /// because no digest of real bytes is ever the empty string. That is the
+    /// whole difference from the previous shape, which called
+    /// [`Self::for_record`] with an empty slice and so stored the digest *of
+    /// nothing*: reading zero bytes always succeeds and the digest of nothing
+    /// always equals the digest of nothing, so every session pointer verified
+    /// unconditionally.
+    #[must_use]
+    pub fn for_file(identity: &FileIdentity, file_path: &str) -> Self {
+        Self {
+            file_path: file_path.to_string(),
+            device: identity.device,
+            inode: identity.inode,
+            size_bytes: identity.size_bytes,
+            modified_unix_ms: identity.modified_unix_ms,
+            content_hash: String::new(),
+            byte_offset: 0,
+            byte_len: 0,
+        }
+    }
+
     /// Re-read the pointed-to bytes and check them against the recorded digest.
     ///
     /// Any failure is [`PointerFreshness::Stale`], including "the file is gone"
@@ -430,6 +456,69 @@ pub struct IndexedSession {
     pub tool_count: u64,
     pub file_path: String,
     pub source: SourcePointer,
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+
+    fn write(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chat.jsonl");
+        fs::write(&path, bytes).unwrap();
+        (dir, path)
+    }
+
+    /// The trap this constructor exists to close, stated as an executable
+    /// contrast: an *empty range* pointer verifies unconditionally, because
+    /// reading zero bytes always succeeds and the digest of nothing always
+    /// equals the digest of nothing. A whole-file pointer stores no digest at
+    /// all and therefore never claims freshness.
+    #[test]
+    fn a_whole_file_pointer_never_claims_freshness_the_way_an_empty_range_did() {
+        let (_dir, path) = write(b"{\"a\":1}\n");
+        let identity = FileIdentity::read(&path).unwrap();
+
+        let empty_range = SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, &[]);
+        assert_eq!(
+            empty_range.verify(),
+            PointerFreshness::Fresh,
+            "the old shape is supposed to verify trivially — that was the bug"
+        );
+
+        let whole_file = SourcePointer::for_file(&identity, path.to_str().unwrap());
+        assert!(whole_file.content_hash.is_empty());
+        assert_eq!(whole_file.verify(), PointerFreshness::Stale);
+    }
+
+    /// The record pointer still does its job on both sides.
+    #[test]
+    fn a_record_pointer_verifies_until_its_bytes_change() {
+        let (_dir, path) = write(b"{\"a\":1}\n{\"b\":2}\n");
+        let identity = FileIdentity::read(&path).unwrap();
+        let pointer = SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, b"{\"a\":1}");
+        assert_eq!(pointer.verify(), PointerFreshness::Fresh);
+
+        // An append leaves the record's own bytes alone, so it still verifies.
+        fs::write(&path, b"{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n").unwrap();
+        assert_eq!(pointer.verify(), PointerFreshness::Fresh);
+
+        // A rewrite does not.
+        fs::write(&path, b"{\"z\":9}\n{\"b\":2}\n").unwrap();
+        assert_eq!(pointer.verify(), PointerFreshness::Stale);
+    }
+
+    /// And an empty digest stays closed even when the range would read cleanly,
+    /// so a truncated or hand-edited row cannot borrow another record's bytes.
+    #[test]
+    fn an_empty_digest_is_stale_even_with_a_readable_range() {
+        let (_dir, path) = write(b"{\"a\":1}\n");
+        let identity = FileIdentity::read(&path).unwrap();
+        let mut pointer =
+            SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, b"{\"a\":1}");
+        pointer.content_hash = String::new();
+        assert_eq!(pointer.verify(), PointerFreshness::Stale);
+    }
 }
 
 #[cfg(test)]

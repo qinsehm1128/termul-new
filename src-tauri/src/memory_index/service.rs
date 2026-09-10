@@ -22,14 +22,19 @@
 //! longer be what that file says; those hits are withheld unless the caller
 //! explicitly asks for them.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use super::ingest::{self, IngestOptions, IngestProgress, IngestReport};
 use super::paths::MemoryVendor;
 use super::scope::ProjectFence;
 use super::store::{MemorySearchHit, MemoryStore, MAX_QUERY_LIMIT};
 use super::types::{CompactionRecord, IndexedSession, PointerFreshness, SessionScope};
-use super::{MemoryIndexError, MemoryIndexResult, ERR_OUT_OF_SCOPE};
+use super::{
+    MemoryIndexError, MemoryIndexResult, ERR_BUILD_IN_PROGRESS, ERR_OUT_OF_SCOPE,
+    ERR_STORE_FAILED,
+};
 
 /// Default number of hits a query returns when the caller does not say.
 pub const DEFAULT_QUERY_LIMIT: usize = 20;
@@ -104,12 +109,26 @@ pub struct MemoryIndexStatus {
 #[derive(Debug, Clone)]
 pub struct MemoryIndexService {
     state_root: PathBuf,
+    /// Project keys with a build running right now.
+    ///
+    /// The desktop menu item disables itself while a build is in flight, but
+    /// that guard lives in one renderer: a second window, the browser client and
+    /// the HTTP route can all reach [`Self::build`] at the same time. Two writers
+    /// interleaving `replace_session` and `prune_missing` over one SQLite file is
+    /// not something WAL and a busy timeout resolve — they turn it into a
+    /// five-second stall and then an error, having already half-applied one of
+    /// the two prunes. Refusing the second build outright is both cheaper and
+    /// the honest answer.
+    building: Arc<Mutex<HashSet<String>>>,
 }
 
 impl MemoryIndexService {
     #[must_use]
     pub fn new(state_root: PathBuf) -> Self {
-        Self { state_root }
+        Self {
+            state_root,
+            building: Arc::new(Mutex::new(HashSet::new())),
+        }
     }
 
     #[must_use]
@@ -129,6 +148,7 @@ impl MemoryIndexService {
         progress: &mut dyn FnMut(IngestProgress),
     ) -> MemoryIndexResult<IngestReport> {
         let fence = ProjectFence::single(project_root)?;
+        let _guard = BuildGuard::acquire(&self.building, fence.namespace_key())?;
         ingest::build_index(&fence, &self.state_root, options, progress)
     }
 
@@ -149,9 +169,19 @@ impl MemoryIndexService {
         if !status.exists {
             return Ok(status);
         }
-        status.size_bytes = std::fs::metadata(&location.database_path)
-            .map(|meta| meta.len())
-            .unwrap_or_default();
+        // `exists` was true a moment ago, so a failure here is a race or a
+        // permission problem — not a zero-byte database. Reporting 0 would be an
+        // assertion about the index rather than an admission about the stat.
+        let metadata = std::fs::metadata(&location.database_path).map_err(|error| {
+            MemoryIndexError::new(
+                ERR_STORE_FAILED,
+                format!(
+                    "could not stat index {}: {error}",
+                    location.database_path.display()
+                ),
+            )
+        })?;
+        status.size_bytes = metadata.len();
         let store = MemoryStore::open(&location.database_path, &location.namespace_key)?;
         let (sessions, messages, compactions) = store.counts()?;
         status.session_count = sessions;
@@ -204,16 +234,18 @@ impl MemoryIndexService {
         };
         let limit = resolve_limit(request.limit);
         let vendors = parse_agents(&request.agents)?;
-        let compactions =
+        let raw_compactions =
             store.search_compactions(&request.query, request.include_unscoped, limit)?;
+        let (compactions, stale_compactions) =
+            finish_compactions(raw_compactions, request.include_stale);
         let raw = store.search(&request.query, request.include_unscoped, &vendors, limit)?;
-        let (hits, stale_hits_omitted) = self.finish_hits(&fence, raw, request.include_stale)?;
+        let (hits, stale_hits) = self.finish_hits(&fence, raw, request.include_stale)?;
         Ok(MemorySearchResponse {
             project_key: fence.namespace_key(),
             query: request.query.clone(),
             compactions,
             hits,
-            stale_hits_omitted,
+            stale_hits_omitted: stale_hits + stale_compactions,
         })
     }
 
@@ -224,6 +256,7 @@ impl MemoryIndexService {
         session_key: &str,
         limit: Option<usize>,
         include_stale: bool,
+        include_unscoped: bool,
     ) -> MemoryIndexResult<Option<MemorySessionDetail>> {
         let (fence, store) = match self.open(project_root)? {
             Some(open) => open,
@@ -236,7 +269,12 @@ impl MemoryIndexService {
         // A session the caller may not see must read as absent, not as denied:
         // a distinguishable rejection tells an external client that some other
         // project has a session by that key.
-        if session.scope != SessionScope::Scoped {
+        //
+        // `include_unscoped` is the same switch `list_sessions` and `search`
+        // take, and it is here because the three have to agree. Without it a
+        // caller could list an unproven session, get a key back, and then be
+        // told that key does not exist.
+        if session.scope != SessionScope::Scoped && !include_unscoped {
             return Ok(None);
         }
         let raw = store.session_messages(session_key, resolve_limit(limit))?;
@@ -248,14 +286,26 @@ impl MemoryIndexService {
         }))
     }
 
-    /// Re-authorize every row and verify its source pointer.
+    /// Verify every row's source pointer, dropping the ones that no longer
+    /// describe the bytes they were indexed from.
+    ///
+    /// Row-level *authorization* is deliberately not attempted here and this is
+    /// not an omission: a [`MemorySearchHit`] carries no project key, and the
+    /// binding it would be checked against is enforced one layer down —
+    /// `MemoryStore::open` refuses a database whose recorded `project_key` is not
+    /// the one being asked for, so every row this iterates already came from
+    /// this project's index. [`authorize_session`] is the row-level check, and it
+    /// runs where there is actually a `project_key` to compare.
+    ///
+    /// (An earlier version asserted `fence.namespace_key() == fence.namespace_key()`
+    /// here and called it re-authorization. It could not fail, and it made the
+    /// check look present when it was not.)
     fn finish_hits(
         &self,
-        fence: &ProjectFence,
+        _fence: &ProjectFence,
         raw: Vec<MemorySearchHit>,
         include_stale: bool,
     ) -> MemoryIndexResult<(Vec<MemorySearchHit>, u32)> {
-        let expected = fence.namespace_key();
         let mut kept = Vec::with_capacity(raw.len());
         let mut omitted = 0;
         for mut hit in raw {
@@ -271,11 +321,6 @@ impl MemoryIndexService {
                 omitted += 1;
                 continue;
             }
-            debug_assert_eq!(
-                expected,
-                fence.namespace_key(),
-                "the fence must not change mid-response"
-            );
             kept.push(hit);
         }
         Ok((kept, omitted))
@@ -317,8 +362,91 @@ fn parse_agents(agents: &[String]) -> MemoryIndexResult<Vec<MemoryVendor>> {
         .collect()
 }
 
+/// Holds one project's build slot for as long as the build runs.
+///
+/// A guard rather than a bare insert/remove pair so the slot is released on
+/// every exit path, including an error partway through a two-minute walk.
+struct BuildGuard {
+    building: Arc<Mutex<HashSet<String>>>,
+    project_key: String,
+}
+
+impl BuildGuard {
+    fn acquire(
+        building: &Arc<Mutex<HashSet<String>>>,
+        project_key: String,
+    ) -> MemoryIndexResult<Self> {
+        {
+            let mut in_flight = building.lock().unwrap_or_else(|poisoned| {
+                // A panic in a previous build must not make the feature
+                // permanently unavailable; the set is plain data.
+                building.clear_poison();
+                poisoned.into_inner()
+            });
+            if !in_flight.insert(project_key.clone()) {
+                return Err(MemoryIndexError::new(
+                    ERR_BUILD_IN_PROGRESS,
+                    "a memory index build is already running for this project",
+                ));
+            }
+        }
+        Ok(Self {
+            building: Arc::clone(building),
+            project_key,
+        })
+    }
+}
+
+impl Drop for BuildGuard {
+    fn drop(&mut self) {
+        let mut in_flight = self.building.lock().unwrap_or_else(|poisoned| {
+            self.building.clear_poison();
+            poisoned.into_inner()
+        });
+        in_flight.remove(&self.project_key);
+    }
+}
+
+/// Apply the same freshness gate to compaction summaries that every other row
+/// goes through.
+///
+/// They used to skip it entirely and be returned unconditionally, which made the
+/// module's own promise — "every returned hit has its source pointer verified" —
+/// false for exactly the rows where it matters most: a compaction is the agent's
+/// own summary of a whole stretch of context, so serving one from a transcript
+/// that has since been rewritten is the most confidently wrong answer this
+/// service can give.
+fn finish_compactions(
+    raw: Vec<CompactionRecord>,
+    include_stale: bool,
+) -> (Vec<CompactionRecord>, u32) {
+    if include_stale {
+        return (raw, 0);
+    }
+    let mut kept = Vec::with_capacity(raw.len());
+    let mut omitted = 0;
+    for record in raw {
+        if Path::new(&record.source.file_path).is_absolute()
+            && record.source.verify() == PointerFreshness::Fresh
+        {
+            kept.push(record);
+        } else {
+            omitted += 1;
+        }
+    }
+    (kept, omitted)
+}
+
+/// Resolve the caller's limit into the range the store will actually honor.
+///
+/// Clamped identically to `store::clamp_limit`, so `limit: 0` means one row in
+/// both places rather than zero here and one there. Zero rows is not a request
+/// this API can express, and silently turning it into "one row" at the SQL layer
+/// while reporting it as "zero" at this one is worse than being consistent.
 fn resolve_limit(limit: Option<usize>) -> usize {
-    limit.unwrap_or(DEFAULT_QUERY_LIMIT).min(MAX_QUERY_LIMIT)
+    limit
+        .unwrap_or(DEFAULT_QUERY_LIMIT)
+        .clamp(1, MAX_QUERY_LIMIT)
 }
 
 /// Re-check that a stored row really belongs to this project.
@@ -434,6 +562,165 @@ mod tests {
         key
     }
 
+    /// Seed one compaction whose source file is then rewritten underneath it.
+    fn seed_compaction(harness: &Harness, summary: &str) {
+        let fence = ProjectFence::single(&harness.project_root).unwrap();
+        let location = fence.index_location(harness.service.state_root()).unwrap();
+        location.ensure_dir().unwrap();
+        let mut store =
+            MemoryStore::open(&location.database_path, &location.namespace_key).unwrap();
+        let identity = FileIdentity::read(&harness.transcript).unwrap();
+        let bytes = std::fs::read(&harness.transcript).unwrap();
+        let pointer =
+            SourcePointer::for_record(&identity, harness.transcript.to_str().unwrap(), 0, &bytes);
+        let key = format!("claude-code:{}", harness.transcript.display());
+        let record = CompactionRecord {
+            schema_version: SCHEMA_VERSION,
+            session_key: key.clone(),
+            root_session_key: key,
+            ordinal: 0,
+            summary: summary.to_string(),
+            tokens_before: Some(120_000),
+            first_kept_entry_id: None,
+            timestamp_utc: Some("2026-09-01T00:00:00.000Z".into()),
+            timestamp_ms: Some(1_788_220_800_000),
+            source: pointer,
+        };
+        let existing = store.get_session(&record.session_key).unwrap();
+        let session = existing.expect("seed the session first");
+        store.replace_session(&session, &[], &[record]).unwrap();
+    }
+
+    fn search_for(harness: &Harness, query: &str, include_stale: bool) -> MemorySearchResponse {
+        harness
+            .service
+            .search(
+                &harness.project_root,
+                &MemorySearchRequest {
+                    query: query.into(),
+                    limit: None,
+                    agents: Vec::new(),
+                    include_unscoped: false,
+                    include_stale,
+                },
+            )
+            .unwrap()
+    }
+
+    /// A compaction is the agent's own summary of a whole stretch of context.
+    /// Serving one out of a transcript that has since been rewritten is the most
+    /// confidently wrong answer this service can produce, and compactions used
+    /// to bypass the freshness gate that every other row goes through.
+    #[test]
+    fn a_stale_compaction_is_withheld_like_any_other_row() {
+        let harness = harness();
+        seed(&harness, SessionScope::Scoped, "the login redirect loops");
+        seed_compaction(&harness, "summarised the failed migration attempt");
+
+        let fresh = search_for(&harness, "migration", false);
+        assert_eq!(fresh.compactions.len(), 1, "the seeded compaction is fresh");
+        assert_eq!(fresh.stale_hits_omitted, 0);
+
+        // Rewrite the transcript so the recorded byte range no longer hashes.
+        std::fs::write(&harness.transcript, b"{\"role\":\"user\",\"text\":\"REWRITTEN\"}\n")
+            .unwrap();
+
+        let after = search_for(&harness, "migration", false);
+        assert!(
+            after.compactions.is_empty(),
+            "a stale compaction was returned anyway: {:?}",
+            after.compactions
+        );
+        assert!(
+            after.stale_hits_omitted >= 1,
+            "the withheld compaction was not counted"
+        );
+
+        // And it is still reachable when the caller explicitly asks for stale.
+        let forced = search_for(&harness, "migration", true);
+        assert_eq!(forced.compactions.len(), 1);
+    }
+
+    /// The three read paths have to agree about unproven sessions: a listing
+    /// that hands out a key the detail call then calls absent is a dead end the
+    /// UI cannot recover from.
+    #[test]
+    fn an_unscoped_session_is_openable_on_the_same_terms_it_was_listed() {
+        let harness = harness();
+        let key = seed(&harness, SessionScope::Unscoped, "unproven ownership");
+
+        // Default: not listed, not openable.
+        assert!(harness
+            .service
+            .list_sessions(&harness.project_root, None, false, &[])
+            .unwrap()
+            .is_empty());
+        assert!(harness
+            .service
+            .get_session(&harness.project_root, &key, None, false, false)
+            .unwrap()
+            .is_none());
+
+        // Asked for: listed, and openable on the same switch.
+        assert_eq!(
+            harness
+                .service
+                .list_sessions(&harness.project_root, None, true, &[])
+                .unwrap()
+                .len(),
+            1
+        );
+        let detail = harness
+            .service
+            .get_session(&harness.project_root, &key, None, false, true)
+            .unwrap();
+        assert!(
+            detail.is_some(),
+            "listed with include_unscoped but not openable with it"
+        );
+    }
+
+    /// The renderer disables its menu item during a build, but that guard lives
+    /// in one window; the HTTP route and the browser client reach the same
+    /// service. Two builds interleaving their `prune_missing` passes is data
+    /// loss, so the second one is refused rather than queued.
+    #[test]
+    fn a_second_concurrent_build_of_one_project_is_refused() {
+        let harness = harness();
+        let fence = ProjectFence::single(&harness.project_root).unwrap();
+        let key = fence.namespace_key();
+        let guard = BuildGuard::acquire(&harness.service.building, key.clone()).unwrap();
+
+        let error = harness
+            .service
+            .build(&harness.project_root, &IngestOptions::default(), &mut |_| {})
+            .unwrap_err();
+        assert_eq!(error.code, ERR_BUILD_IN_PROGRESS, "{error}");
+
+        // Releasing the slot makes the project buildable again — including after
+        // a build that failed partway through.
+        drop(guard);
+        assert!(harness
+            .service
+            .build(&harness.project_root, &IngestOptions::default(), &mut |_| {})
+            .is_ok());
+    }
+
+    /// Two different projects are two different databases and must not block
+    /// each other.
+    #[test]
+    fn a_build_of_one_project_does_not_block_another() {
+        let harness = harness();
+        let other = harness.project_root.parent().unwrap().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let fence = ProjectFence::single(&harness.project_root).unwrap();
+        let _guard = BuildGuard::acquire(&harness.service.building, fence.namespace_key()).unwrap();
+        assert!(harness
+            .service
+            .build(&other, &IngestOptions::default(), &mut |_| {})
+            .is_ok());
+    }
+
     #[test]
     fn a_project_with_no_index_answers_empty_rather_than_creating_one() {
         let harness = harness();
@@ -494,7 +781,7 @@ mod tests {
 
         let detail = harness
             .service
-            .get_session(&harness.project_root, &key, None, false)
+            .get_session(&harness.project_root, &key, None, false, false,)
             .unwrap()
             .expect("session");
         assert_eq!(detail.session.session_key, key);
@@ -576,7 +863,7 @@ mod tests {
         assert!(
             harness
                 .service
-                .get_session(&harness.project_root, &key, None, false)
+                .get_session(&harness.project_root, &key, None, false, false,)
                 .unwrap()
                 .is_none(),
             "an unscoped session must read as absent, not as a denial that \
@@ -637,7 +924,8 @@ mod tests {
                 &harness.project_root,
                 "claude-code:/nope.jsonl",
                 None,
-                false
+                false,
+                false,
             )
             .unwrap()
             .is_none());
@@ -809,7 +1097,7 @@ mod tests {
             .is_err());
         assert!(harness
             .service
-            .get_session(relative, "k", None, false)
+            .get_session(relative, "k", None, false, false,)
             .is_err());
         assert!(harness
             .service

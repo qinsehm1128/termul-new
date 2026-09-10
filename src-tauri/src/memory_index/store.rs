@@ -1243,6 +1243,33 @@ mod tests {
         }
     }
 
+    /// Terms whose leading punctuation is part of the thing being looked for.
+    ///
+    /// `unicode61` treats punctuation as a separator either way, so `.env`
+    /// tokenizes to `env` and finds the dotfile; what matters is that the term
+    /// is not dropped and does not become a syntax error inside `MATCH`.
+    #[test]
+    fn punctuation_carrying_terms_are_still_searchable() {
+        let mut store = store();
+        store
+            .replace_session(
+                &session("s1", Some(100), SessionScope::Scoped),
+                &[
+                    message("s1", 0, NormalizedRole::ToolResult, "cat .env failed", LineageDepth::ROOT),
+                    message("s1", 1, NormalizedRole::User, "the C++ build breaks", LineageDepth::ROOT),
+                    message("s1", 2, NormalizedRole::ToolCall, "grep -rn \"foo\" src/", LineageDepth::ROOT),
+                ],
+                &[],
+            )
+            .unwrap();
+        for query in [".env", "C++", "-rn", "\"foo\""] {
+            assert!(
+                !store.search(query, false, &[], 10).unwrap().is_empty(),
+                "query {query:?} found nothing"
+            );
+        }
+    }
+
     /// A punctuation-only word must not swallow the rest of the query.
     #[test]
     fn punctuation_only_terms_are_dropped_rather_than_matching_nothing() {
