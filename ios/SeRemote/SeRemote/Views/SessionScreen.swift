@@ -38,6 +38,10 @@ struct SessionScreen: View {
         }
         .onAppear {
             session.noteWideLayout(isWide)
+            ShortcutAvailability.shared.sessionActive = true
+        }
+        .onDisappear {
+            ShortcutAvailability.shared.sessionActive = false
         }
         .onChange(of: isWide) { _, wide in
             session.noteWideLayout(wide)

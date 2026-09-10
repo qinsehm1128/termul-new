@@ -72,6 +72,9 @@ final class ChatStore {
     var tools: [ToolCard] = []
     var permissions: [PermissionCard] = []
     var questions: [QuestionCard] = []
+    /// True while the composer owns first responder. Distinguishes a chat
+    /// keyboard from a terminal keyboard in the wide split layout.
+    var composerActive = false
     /// Host-event side channels consumed by WorkspaceSession to fire local
     /// notifications while the app is backgrounded.
     var onTurnSettled: (() -> Void)?
@@ -1009,7 +1012,13 @@ final class ChatStore {
 
     private func shouldIgnoreDuplicate(type: String, sid: String?, seq: UInt64) -> Bool {
         guard let sid, seq > 0 else { return false }
-        guard ["user_prompt", "message_chunk", "tool_call", "tool_call_update"].contains(type) else {
+        // prompt_complete / permission_request / question_request are included
+        // so a reconnect replay does not re-settle the transcript or re-fire
+        // background notifications for turns the phone already saw.
+        guard [
+            "user_prompt", "message_chunk", "tool_call", "tool_call_update",
+            "prompt_complete", "permission_request", "question_request",
+        ].contains(type) else {
             return false
         }
         return seq <= (lastSeq[sid] ?? 0)

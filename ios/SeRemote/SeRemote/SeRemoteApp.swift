@@ -47,6 +47,7 @@ struct SeRemoteApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = ConnectionStore()
     @State private var settings = AppSettings()
+    @StateObject private var shortcutAvailability = ShortcutAvailability.shared
 
     var body: some Scene {
         WindowGroup {
@@ -77,43 +78,52 @@ struct SeRemoteApp: App {
                 ShortcutCenter.send(.newTerminal)
             }
             .keyboardShortcut("t", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
         }
         CommandMenu(String(localized: "View")) {
             Button(String(localized: "Chat")) {
                 ShortcutCenter.send(.focusChat)
             }
             .keyboardShortcut("1", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
             Button(String(localized: "Terminal")) {
                 ShortcutCenter.send(.focusTerminal)
             }
             .keyboardShortcut("2", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
             Button(String(localized: "Files")) {
                 ShortcutCenter.send(.toggleFiles)
             }
             .keyboardShortcut("3", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
             Divider()
             Button(String(localized: "Zoom In")) {
                 ShortcutCenter.send(.textScaleUp)
             }
             .keyboardShortcut("+", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
             Button(String(localized: "Zoom Out")) {
                 ShortcutCenter.send(.textScaleDown)
             }
             .keyboardShortcut("-", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
             Button(String(localized: "Actual Size")) {
                 ShortcutCenter.send(.textScaleReset)
             }
             .keyboardShortcut("0", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
         }
         CommandMenu(String(localized: "Terminal")) {
             Button(String(localized: "Next Terminal")) {
                 ShortcutCenter.send(.nextTerminal)
             }
             .keyboardShortcut("]", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
             Button(String(localized: "Previous Terminal")) {
                 ShortcutCenter.send(.previousTerminal)
             }
             .keyboardShortcut("[", modifiers: .command)
+            .disabled(!shortcutAvailability.sessionActive)
         }
     }
 }

@@ -108,14 +108,12 @@ struct WorkspaceView: View {
                 session.conversations.errorMessage != nil
                     || session.projects.errorMessage != nil
                     || session.files.errorMessage != nil
-                    || session.terminals.errorMessage != nil
             },
             set: { presented in
                 if !presented {
                     session.conversations.errorMessage = nil
                     session.projects.errorMessage = nil
                     session.files.errorMessage = nil
-                    session.terminals.errorMessage = nil
                 }
             }
         )

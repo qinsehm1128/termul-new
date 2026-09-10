@@ -35,6 +35,44 @@ struct HostHomeView: View {
             }
         }
         .background(SeTheme.canvas)
+        .onChange(of: section) { _, _ in
+            selectedId = nil
+        }
+        // Attached to the shared trunk so the dialogs survive the
+        // compact/regular branch swap.
+        .alert(
+            String(localized: "Rename session"),
+            isPresented: Binding(
+                get: { renaming != nil },
+                set: { if !$0 { renaming = nil } }
+            ),
+            presenting: renaming
+        ) { conversation in
+            TextField(String(localized: "Session name"), text: $renameDraft)
+            Button(String(localized: "Save")) {
+                Task { await session.conversations.rename(conversation, title: renameDraft) }
+            }
+            Button(String(localized: "Cancel"), role: .cancel) {}
+        }
+        .confirmationDialog(
+            String(localized: "Delete this session?"),
+            isPresented: Binding(
+                get: { deleting != nil },
+                set: { if !$0 { deleting = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { conversation in
+            Button(String(localized: "Delete"), role: .destructive) {
+                if session.conversations.active?.id == conversation.id {
+                    session.leaveConversation()
+                }
+                Task { await session.conversations.delete(conversation) }
+            }
+            Button(String(localized: "Cancel"), role: .cancel) {}
+        } message: { _ in
+            Text("The desktop keeps its files; the chat is removed from the list.")
+        }
     }
 
     // MARK: Wide (iPad) layout — sidebar list + detail preview
@@ -133,8 +171,8 @@ struct HostHomeView: View {
                     String(localized: "Choose from the sidebar"),
                     systemImage: section == .sessions ? "bubble.left.and.bubble.right" : "folder",
                     description: Text(section == .sessions
-                        ? "Pick a session to continue it here."
-                        : "Pick a project to watch its terminals.")
+                        ? String(localized: "Pick a session to continue it here.")
+                        : String(localized: "Pick a project to watch its terminals."))
                 )
             }
         }
@@ -156,72 +194,54 @@ struct HostHomeView: View {
     // MARK: Compact (iPhone) layout
 
     private var compactLayout: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                header
-                Picker(String(localized: "Workspace"), selection: $section) {
-                    ForEach(HostHomeSection.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
+        VStack(spacing: 0) {
+            header
+            Picker(String(localized: "Workspace"), selection: $section) {
+                ForEach(HostHomeSection.allCases) { item in
+                    Text(item.title).tag(item)
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .frame(minHeight: 44)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .frame(minHeight: 44)
+            compactSearchBar
 
-                switch section {
-                case .sessions:
-                    sessionList
-                case .projects:
-                    projectList
+            switch section {
+            case .sessions:
+                sessionList
+            case .projects:
+                projectList
+            }
+        }
+    }
+
+    /// Explicit field on compact: there is no visible navigation bar for
+    /// `.searchable` to attach to under the custom header.
+    private var compactSearchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(SeTheme.muted)
+            TextField(String(localized: "Search"), text: $searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("host-home-search")
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(SeTheme.muted)
                 }
-            }
-            .navigationBarHidden(true)
-        }
-        .onChange(of: section) { _, _ in
-            selectedId = nil
-        }
-        .alert(
-            String(localized: "Rename session"),
-            isPresented: Binding(
-                get: { renaming != nil },
-                set: { if !$0 { renaming = nil } }
-            )
-        ) {
-            TextField(String(localized: "Session name"), text: $renameDraft)
-            Button(String(localized: "Save")) {
-                if let conversation = renaming {
-                    Task { await session.conversations.rename(conversation, title: renameDraft) }
-                }
-                renaming = nil
-            }
-            Button(String(localized: "Cancel"), role: .cancel) {
-                renaming = nil
+                .accessibilityLabel(Text("Clear search"))
             }
         }
-        .confirmationDialog(
-            String(localized: "Delete this session?"),
-            isPresented: Binding(
-                get: { deleting != nil },
-                set: { if !$0 { deleting = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button(String(localized: "Delete"), role: .destructive) {
-                if let conversation = deleting {
-                    if session.conversations.active?.id == conversation.id {
-                        session.leaveConversation()
-                    }
-                    Task { await session.conversations.delete(conversation) }
-                }
-                deleting = nil
-            }
-            Button(String(localized: "Cancel"), role: .cancel) {
-                deleting = nil
-            }
-        } message: {
-            Text("The desktop keeps its files; the chat is removed from the list.")
-        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(SeTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
     }
 
     private var header: some View {
@@ -259,6 +279,9 @@ struct HostHomeView: View {
         if filteredConversations.isEmpty {
             if session.conversations.isLoading {
                 ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !searchText.isEmpty {
+                ContentUnavailableView.search(text: searchText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView(
@@ -307,7 +330,6 @@ struct HostHomeView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .searchable(text: $searchText, prompt: Text("Search"))
         }
     }
 
@@ -316,6 +338,9 @@ struct HostHomeView: View {
         if filteredProjects.isEmpty {
             if session.projects.isLoading {
                 ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !searchText.isEmpty {
+                ContentUnavailableView.search(text: searchText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView(
@@ -351,7 +376,6 @@ struct HostHomeView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .searchable(text: $searchText, prompt: Text("Search"))
         }
     }
 

@@ -26,6 +26,9 @@ struct ChatView: View {
                 composerFocused = false
             }
         }
+        .onChange(of: composerFocused) { _, focused in
+            session.chat.composerActive = focused
+        }
         .onReceive(ShortcutCenter.shortcuts) { shortcut in
             if shortcut == .focusChat {
                 composerFocused = true
@@ -61,7 +64,9 @@ struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .onScrollGeometryChange(for: Bool.self) { geometry in
-                let bottomDistance = geometry.contentSize.height + geometry.contentOffset.y - geometry.visibleRect.height
+                // visibleRect lives in content space, so its maxY is the
+                // bottom edge of what is on screen.
+                let bottomDistance = geometry.contentSize.height - geometry.visibleRect.maxY
                 return bottomDistance < 60
             } action: { _, atBottom in
                 if atBottom && !isAtBottom {
@@ -126,6 +131,8 @@ struct ChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .padding(16)
         .accessibilityLabel(Text("Jump to latest"))
+        .accessibilityValue(unreadCount > 0 ? Text("\(unreadCount) new") : Text(""))
+        .accessibilityHidden(isAtBottom)
         .opacity(isAtBottom ? 0 : 1)
         .allowsHitTesting(isAtBottom ? false : true)
         .animation(.easeOut(duration: 0.15), value: isAtBottom)
@@ -148,13 +155,24 @@ struct ChatView: View {
         case .agent(let message):
             MessageBubble(
                 message: message,
-                onRetry: {
-                    Task { await session.chat.regenerateLastTurn(in: session.conversations.active) }
-                }
+                onRetry: message.id == lastAgentMessageId
+                    ? { Task { await session.chat.regenerateLastTurn(in: session.conversations.active) } }
+                    : nil
             )
         case .activity(let activity):
             ActivityDisclosure(activity: activity)
         }
+    }
+
+    /// Regenerate re-sends the latest user turn, so only the newest agent
+    /// bubble offers it — an older bubble cannot regenerate its own turn.
+    private var lastAgentMessageId: String? {
+        for item in session.chat.timeline.reversed() {
+            if case .agent(let message) = item {
+                return message.id
+            }
+        }
+        return nil
     }
 
     @ViewBuilder

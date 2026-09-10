@@ -60,17 +60,28 @@ final class ConversationStore {
     }
 
     /// Soft-delete via the lifecycle contract; `lastSeq` doubles as the
-    /// optimistic-concurrency revision the host validates.
+    /// optimistic-concurrency revision the host validates. The list snapshot
+    /// goes stale as turns land, so the record is re-read first; a `blocked`
+    /// outcome keeps the row and surfaces why.
     func delete(_ conversation: HostConversation) async {
         guard let http else { return }
         do {
-            let _: JSONValue = try await http.post(
+            var target = conversation
+            if let fresh: HostConversation = try? await http.get("conversations/\(conversation.id)") {
+                target = fresh
+            }
+            let outcome: ConversationLifecycleOutcome = try await http.post(
                 "conversations/\(conversation.id)/lifecycle/delete",
                 body: [
-                    "expectedRevision": Int(conversation.lastSeq ?? 0),
+                    "expectedRevision": Int(target.lastSeq ?? 0),
                     "removeWorkspace": false,
                 ]
             )
+            guard outcome.isUpdated else {
+                HostLog.session.info("Conversation delete blocked by host")
+                errorMessage = String(localized: "The host kept this session: live terminals or an active agent still reference it.")
+                return
+            }
             conversations.removeAll { $0.id == conversation.id }
             if active?.id == conversation.id {
                 clearSelection()

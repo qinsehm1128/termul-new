@@ -248,7 +248,12 @@ final class WorkspaceSession {
     }
 
     func noteTerminalKeyboard(height: CGFloat) {
-        let visible = (workspaceTab == .terminal || isWideLayout) && height > 40
+        // A keyboard over the chat composer is not the terminal's keyboard:
+        // the wide layout mounts both panes, so composer ownership decides
+        // whose keyboard this is before the dock lifts or the host resize is
+        // suppressed.
+        let coversTerminal = !chat.composerActive && (workspaceTab == .terminal || isWideLayout)
+        let visible = coversTerminal && height > 40
         terminalKeyboardHeight = visible ? height : 0
         terminalKeyboardVisible = visible
         terminals.suppressHostResize = visible
@@ -277,11 +282,21 @@ final class WorkspaceSession {
     }
 
     /// Layout width crossed the compact/regular boundary. The wide layout
-    /// mounts the terminal permanently, so host geometry follows it.
+    /// mounts the terminal permanently, so host geometry follows it; going
+    /// compact un-mounts it, which must run the same park path a tab switch
+    /// would so the host restores its desktop PTY geometry.
     func noteWideLayout(_ wide: Bool) {
         guard isWideLayout != wide else { return }
         isWideLayout = wide
-        terminals.geometryActive = wide ? (workspace != .home) : (workspaceTab == .terminal)
+        if wide {
+            terminals.geometryActive = workspace != .home
+        } else {
+            terminals.geometryActive = workspaceTab == .terminal
+            if workspaceTab != .terminal {
+                let terminalId = terminals.activeId
+                Task { await terminals.releaseDisplayMode(for: terminalId) }
+            }
+        }
         HostLog.ui.info("Layout width \(wide ? "regular" : "compact", privacy: .public)")
     }
 

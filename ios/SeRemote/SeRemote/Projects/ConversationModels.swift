@@ -68,6 +68,21 @@ struct ConversationOpenOutcome: Decodable, Sendable {
     var workspace: SessionWorkspaceLoadOutcome?
 }
 
+/// Host lifecycle result. The envelope is a success either way: `blocked`
+/// means the host kept the conversation (live terminals or an active agent).
+struct ConversationLifecycleOutcome: Decodable, Sendable {
+    var status: String
+    var code: String?
+    var blockers: [ConversationDeleteBlocker]?
+
+    var isUpdated: Bool { status == "updated" }
+}
+
+struct ConversationDeleteBlocker: Decodable, Sendable {
+    var kind: String
+    var count: Int
+}
+
 struct ConversationBindingSnapshot: Decodable, Sendable {
     var conversationId: String
     var binding: AgentSessionBinding?
