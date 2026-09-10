@@ -34,7 +34,7 @@ struct TerminalTabStrip: View {
                         .padding(.vertical, 8)
                         .frame(minHeight: 44)
                         .background(
-                            session.terminals.activeId == item.id && (session.workspace == .project || !session.showChat)
+                            session.terminals.activeId == item.id
                                 ? SeTheme.accent.opacity(0.16)
                                 : SeTheme.surface
                         )
@@ -48,7 +48,7 @@ struct TerminalTabStrip: View {
                 }
 
                 Button {
-                    Task { await spawn() }
+                    Task { await session.spawnTerminal() }
                 } label: {
                     Image(systemName: "plus")
                         .frame(minWidth: 44, minHeight: 44)
@@ -59,27 +59,5 @@ struct TerminalTabStrip: View {
             .padding(.vertical, 8)
         }
         .background(.ultraThinMaterial)
-    }
-
-    private func spawn() async {
-        switch session.workspace {
-        case .conversation:
-            guard let conversation = session.conversations.active else { return }
-            await session.terminals.spawn(
-                conversationId: conversation.id,
-                projectId: conversation.projectId
-            )
-        case .project:
-            guard let project = session.projects.active else { return }
-            await session.terminals.spawn(
-                conversationId: nil,
-                projectId: project.id
-            )
-        case .home:
-            return
-        }
-        if let id = session.terminals.activeId {
-            await session.revealTerminal(id)
-        }
     }
 }

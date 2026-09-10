@@ -24,6 +24,11 @@ struct ChatView: View {
                 composerFocused = false
             }
         }
+        .onReceive(ShortcutCenter.shortcuts) { shortcut in
+            if shortcut == .focusChat {
+                composerFocused = true
+            }
+        }
         .task(id: session.chat.activeSessionId) {
             await session.chat.refreshLiveComposerSnapshot()
         }

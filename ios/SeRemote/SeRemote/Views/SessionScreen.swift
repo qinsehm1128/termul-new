@@ -4,23 +4,23 @@ import UIKit
 struct SessionScreen: View {
     @Bindable var session: WorkspaceSession
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var filesVisibility: NavigationSplitViewVisibility = .automatic
+
+    private var isWide: Bool { sizeClass == .regular }
 
     var body: some View {
         @Bindable var chat = session.chat
-        VStack(spacing: 0) {
-            header
-            if session.workspaceTab == .terminal {
-                TerminalTabStrip(session: session)
-            }
-            content
-            if !session.terminalKeyboardVisible {
-                tabBar
+        Group {
+            if isWide {
+                wideLayout
+            } else {
+                compactLayout
             }
         }
         .background(SeTheme.canvas.ignoresSafeArea())
-        .modifier(TerminalKeyboardAvoidance(enabled: session.workspaceTab == .terminal))
+        .modifier(TerminalKeyboardAvoidance(enabled: session.workspaceTab == .terminal && !isWide))
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
-            guard session.workspaceTab == .terminal else { return }
+            guard session.workspaceTab == .terminal || isWide else { return }
             let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
             withAnimation(.easeOut(duration: duration)) {
                 session.noteTerminalKeyboard(height: KeyboardGuard.overlapHeight(from: notification))
@@ -34,6 +34,90 @@ struct SessionScreen: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
                 await session.refreshActiveTerminals()
+            }
+        }
+        .onAppear {
+            session.noteWideLayout(isWide)
+        }
+        .onChange(of: isWide) { _, wide in
+            session.noteWideLayout(wide)
+        }
+        .onReceive(ShortcutCenter.shortcuts) { shortcut in
+            handleShortcut(shortcut)
+        }
+    }
+
+    // MARK: Wide (iPad) layout — Files sidebar + terminal/chat split
+
+    private var wideLayout: some View {
+        NavigationSplitView(columnVisibility: $filesVisibility) {
+            FileBrowserView(session: session, embedded: true)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
+                .navigationTitle(WorkspaceTab.files.title)
+                .navigationBarTitleDisplayMode(.inline)
+        } detail: {
+            wideDetail
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            session.leaveWorkspace()
+                        } label: {
+                            Image(systemName: "chevron.backward")
+                        }
+                        .accessibilityLabel(Text("Back"))
+                    }
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        if session.workspace == .conversation {
+                            Button {
+                                session.chat.showAgentSheet = true
+                            } label: {
+                                Image(systemName: "cpu")
+                            }
+                            .accessibilityLabel(Text("Agent"))
+                        }
+                        Button {
+                            Task { await session.spawnTerminal() }
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel(Text("New terminal"))
+                    }
+                }
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    /// Terminal and chat live side by side; neither is torn down by focus
+    /// changes, so PTY scrollback and chat streaming stay warm.
+    private var wideDetail: some View {
+        VStack(spacing: 0) {
+            TerminalTabStrip(session: session)
+            HStack(spacing: 0) {
+                TerminalWorkspaceView(session: session)
+                    .frame(minWidth: 420, maxWidth: .infinity)
+                    .layoutPriority(1)
+                if session.workspace == .conversation {
+                    Divider()
+                    ChatView(session: session, embedded: true)
+                        .frame(minWidth: 320, idealWidth: 440, maxWidth: 620)
+                }
+            }
+        }
+    }
+
+    // MARK: Compact (iPhone) layout
+
+    private var compactLayout: some View {
+        VStack(spacing: 0) {
+            header
+            if session.workspaceTab == .terminal {
+                TerminalTabStrip(session: session)
+            }
+            content
+            if !session.terminalKeyboardVisible {
+                tabBar
             }
         }
     }
@@ -100,8 +184,8 @@ struct SessionScreen: View {
 
     @ViewBuilder
     private var keepAliveWorkspace: some View {
-        if session.workspace == .project {
-            ZStack {
+        ZStack {
+            if session.workspace == .project {
                 ContentUnavailableView(
                     String(localized: "Chat"),
                     systemImage: "bubble.left.and.bubble.right",
@@ -110,32 +194,16 @@ struct SessionScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(session.workspaceTab == .chat ? 1 : 0)
                 .allowsHitTesting(session.workspaceTab == .chat)
-                TerminalWorkspaceView(session: session)
-                    .opacity(session.workspaceTab == .terminal ? 1 : 0)
-                    .allowsHitTesting(session.workspaceTab == .terminal)
-                    .accessibilityHidden(session.workspaceTab != .terminal)
-            }
-        } else if sizeClass == .regular {
-            HStack(spacing: 0) {
-                TerminalWorkspaceView(session: session)
-                Divider()
-                ChatView(session: session, embedded: true)
-                    .frame(minWidth: 320, idealWidth: 380, maxWidth: 420)
-                    .opacity(session.workspaceTab == .chat ? 1 : 0)
-                    .allowsHitTesting(session.workspaceTab == .chat)
-                    .accessibilityHidden(session.workspaceTab != .chat)
-            }
-        } else {
-            ZStack {
+            } else {
                 ChatView(session: session, embedded: true)
                     .opacity(session.workspaceTab == .chat ? 1 : 0)
                     .allowsHitTesting(session.workspaceTab == .chat)
                     .accessibilityHidden(session.workspaceTab != .chat)
-                TerminalWorkspaceView(session: session)
-                    .opacity(session.workspaceTab == .terminal ? 1 : 0)
-                    .allowsHitTesting(session.workspaceTab == .terminal)
-                    .accessibilityHidden(session.workspaceTab != .terminal)
             }
+            TerminalWorkspaceView(session: session)
+                .opacity(session.workspaceTab == .terminal ? 1 : 0)
+                .allowsHitTesting(session.workspaceTab == .terminal)
+                .accessibilityHidden(session.workspaceTab != .terminal)
         }
     }
 
@@ -165,6 +233,46 @@ struct SessionScreen: View {
             Rectangle().fill(SeTheme.stroke).frame(height: 1)
         }
     }
+
+    // MARK: Shortcuts
+
+    private func handleShortcut(_ shortcut: ShortcutCenter.Shortcut) {
+        switch shortcut {
+        case .focusChat:
+            session.setWorkspaceTab(.chat)
+        case .focusTerminal:
+            session.setWorkspaceTab(.terminal)
+        case .toggleFiles:
+            if isWide {
+                filesVisibility = filesVisibility == .detailOnly ? .all : .detailOnly
+            } else {
+                session.setWorkspaceTab(.files)
+            }
+        case .newTerminal:
+            Task { await session.spawnTerminal() }
+        case .nextTerminal:
+            cycleTerminal(forward: true)
+        case .previousTerminal:
+            cycleTerminal(forward: false)
+        case .textScaleUp, .textScaleDown, .textScaleReset:
+            break  // TerminalWorkspaceView owns text scale.
+        }
+    }
+
+    private func cycleTerminal(forward: Bool) {
+        let list = session.terminals.terminals
+        guard !list.isEmpty else { return }
+        let index: Int
+        if let activeId = session.terminals.activeId,
+           let current = list.firstIndex(where: { $0.id == activeId }) {
+            index = (current + (forward ? 1 : list.count - 1)) % list.count
+        } else {
+            index = 0
+        }
+        Task { await session.revealTerminal(list[index].id) }
+    }
+
+    // MARK: Meta
 
     private var title: String {
         switch session.workspace {

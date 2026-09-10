@@ -18,6 +18,7 @@ enum HostLog {
         ?? ProcessInfo.processInfo.processName
 
     nonisolated static let session = Logger(subsystem: subsystem, category: "session")
+    nonisolated static let ui = Logger(subsystem: subsystem, category: "ui")
 }
 
 enum HostTunnelSession {

@@ -64,5 +64,56 @@ struct SeRemoteApp: App {
                     store.consumePendingLaunchURL()
                 }
         }
+        .commands { appCommands }
+    }
+
+    /// Hardware-keyboard surface: View menu (focus + zoom) and a Terminal menu,
+    /// matching the menu-bar guidance from WWDC25 session 208 — items stay in
+    /// place and simply dim when not actionable.
+    @CommandsBuilder
+    private var appCommands: some Commands {
+        CommandGroup(after: .newItem) {
+            Button(String(localized: "New Terminal")) {
+                ShortcutCenter.send(.newTerminal)
+            }
+            .keyboardShortcut("t", modifiers: .command)
+        }
+        CommandMenu(String(localized: "View")) {
+            Button(String(localized: "Chat")) {
+                ShortcutCenter.send(.focusChat)
+            }
+            .keyboardShortcut("1", modifiers: .command)
+            Button(String(localized: "Terminal")) {
+                ShortcutCenter.send(.focusTerminal)
+            }
+            .keyboardShortcut("2", modifiers: .command)
+            Button(String(localized: "Files")) {
+                ShortcutCenter.send(.toggleFiles)
+            }
+            .keyboardShortcut("3", modifiers: .command)
+            Divider()
+            Button(String(localized: "Zoom In")) {
+                ShortcutCenter.send(.textScaleUp)
+            }
+            .keyboardShortcut("+", modifiers: .command)
+            Button(String(localized: "Zoom Out")) {
+                ShortcutCenter.send(.textScaleDown)
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            Button(String(localized: "Actual Size")) {
+                ShortcutCenter.send(.textScaleReset)
+            }
+            .keyboardShortcut("0", modifiers: .command)
+        }
+        CommandMenu(String(localized: "Terminal")) {
+            Button(String(localized: "Next Terminal")) {
+                ShortcutCenter.send(.nextTerminal)
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            Button(String(localized: "Previous Terminal")) {
+                ShortcutCenter.send(.previousTerminal)
+            }
+            .keyboardShortcut("[", modifiers: .command)
+        }
     }
 }

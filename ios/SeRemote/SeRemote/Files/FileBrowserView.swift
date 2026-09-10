@@ -94,6 +94,9 @@ struct FileBrowserView: View {
                 .padding(16)
                 .textSelection(.enabled)
         }
+        .refreshable {
+            await session.files.refresh()
+        }
     }
 
     @ViewBuilder
@@ -111,6 +114,9 @@ struct FileBrowserView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .refreshable {
+            await session.files.refresh()
+        }
         .overlay {
             if session.files.isLoading {
                 ProgressView()

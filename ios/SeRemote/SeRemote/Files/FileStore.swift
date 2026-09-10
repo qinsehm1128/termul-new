@@ -11,6 +11,7 @@ final class FileStore {
     var isLoading = false
     var errorMessage: String?
 
+    private var previewPath: String?
     private var http: HostHTTP?
 
     func attach(http: HostHTTP) {
@@ -21,6 +22,7 @@ final class FileStore {
         crumbs = [DirectoryEntry(name: rootName(path), path: path, type: "directory")]
         preview = nil
         previewName = nil
+        previewPath = nil
         await load(path)
     }
 
@@ -29,6 +31,7 @@ final class FileStore {
             crumbs.append(entry)
             preview = nil
             previewName = nil
+            previewPath = nil
             await load(entry.path)
         } else {
             await read(entry)
@@ -40,7 +43,18 @@ final class FileStore {
         crumbs = Array(crumbs.prefix(through: index))
         preview = nil
         previewName = nil
+        previewPath = nil
         await load(entry.path)
+    }
+
+    /// Pull-to-refresh entry point: reload the visible directory, or reopen
+    /// the file preview when one is showing. Failures land in `errorMessage`.
+    func refresh() async {
+        if let path = previewPath, let name = previewName {
+            await read(name: name, path: path)
+        } else if let current = crumbs.last {
+            await load(current.path)
+        }
     }
 
     private func load(_ path: String) async {
@@ -60,12 +74,17 @@ final class FileStore {
     }
 
     private func read(_ entry: DirectoryEntry) async {
+        await read(name: entry.name, path: entry.path)
+    }
+
+    private func read(name: String, path: String) async {
         guard let http else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            preview = try await http.get("fs/read", query: ["path": entry.path])
-            previewName = entry.name
+            preview = try await http.get("fs/read", query: ["path": path])
+            previewName = name
+            previewPath = path
         } catch {
             errorMessage = error.localizedDescription
             preview = nil

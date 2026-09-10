@@ -60,7 +60,7 @@ struct TerminalWorkspaceView: View {
                 )
                 if session.workspace == .conversation || session.workspace == .project {
                     Button {
-                        Task { await spawnTerminal() }
+                        Task { await session.spawnTerminal() }
                     } label: {
                         Text("New terminal")
                             .frame(minHeight: 44)
@@ -102,6 +102,27 @@ struct TerminalWorkspaceView: View {
             .offset(y: session.terminalKeyboardVisible ? -session.terminalKeyboardHeight : 0)
             .zIndex(1)
         }
+        .onAppear {
+            // The wide layout mounts the terminal without a tab switch, so
+            // geometry activation has to happen here.
+            if session.isWideLayout {
+                session.terminals.geometryActive = true
+            }
+        }
+        .onReceive(ShortcutCenter.shortcuts) { shortcut in
+            switch shortcut {
+            case .textScaleUp:
+                nudgeTextScale(1)
+            case .textScaleDown:
+                nudgeTextScale(-1)
+            case .textScaleReset:
+                applyTextScale(TerminalTextScale.defaultValue)
+            case .focusTerminal:
+                focusToken &+= 1
+            default:
+                break
+            }
+        }
     }
 
     private var activeTerminal: LiveTerminal? {
@@ -118,25 +139,14 @@ struct TerminalWorkspaceView: View {
         }
     }
 
-    private func spawnTerminal() async {
-        switch session.workspace {
-        case .conversation:
-            guard let conversation = session.conversations.active else { return }
-            await session.terminals.spawn(
-                conversationId: conversation.id,
-                projectId: conversation.projectId
-            )
-        case .project:
-            guard let project = session.projects.active else { return }
-            await session.terminals.spawn(
-                conversationId: nil,
-                projectId: project.id
-            )
-        case .home:
-            return
-        }
-        if let id = session.terminals.activeId {
-            await session.revealTerminal(id)
-        }
+    private func nudgeTextScale(_ direction: Int) {
+        applyTextScale(TerminalTextScale.nudge(textScale, by: direction))
+    }
+
+    private func applyTextScale(_ scale: CGFloat) {
+        textScale = scale
+        TerminalTextScale.current = scale
+        showScaleHud(scale)
+        HostLog.session.info("Terminal text scale \(scale, privacy: .public)")
     }
 }

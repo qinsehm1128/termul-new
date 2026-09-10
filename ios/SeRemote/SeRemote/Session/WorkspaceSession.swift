@@ -58,6 +58,9 @@ final class WorkspaceSession {
     var terminalKeyboardVisible = false
     var terminalKeyboardHeight: CGFloat = 0
     var terminalBlurToken: UInt64 = 0
+    /// Regular-width layout keeps the terminal pane mounted next to chat, so
+    /// PTY geometry must stay active instead of parking between tab switches.
+    var isWideLayout = false
     private var isStarting = false
     private var startEpoch = 0
 
@@ -211,7 +214,7 @@ final class WorkspaceSession {
     }
 
     func noteTerminalKeyboard(height: CGFloat) {
-        let visible = workspaceTab == .terminal && height > 40
+        let visible = (workspaceTab == .terminal || isWideLayout) && height > 40
         terminalKeyboardHeight = visible ? height : 0
         terminalKeyboardVisible = visible
         terminals.suppressHostResize = visible
@@ -219,18 +222,49 @@ final class WorkspaceSession {
 
     func setWorkspaceTab(_ tab: WorkspaceTab) {
         guard workspaceTab != tab else { return }
-        dismissTerminalKeyboard()
-        if tab != .terminal {
-            terminals.geometryActive = false
-            let terminalId = terminals.activeId
-            Task { await terminals.releaseDisplayMode(for: terminalId) }
+        if isWideLayout {
+            // Terminal pane stays mounted in the wide layout; nothing to park.
+            terminals.geometryActive = workspace != .home
+        } else {
+            dismissTerminalKeyboard()
+            if tab != .terminal {
+                terminals.geometryActive = false
+                let terminalId = terminals.activeId
+                Task { await terminals.releaseDisplayMode(for: terminalId) }
+            }
         }
         HostLog.session.info("Workspace tab \(tab.rawValue, privacy: .public)")
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(80))
             workspaceTab = tab
             showChat = tab == .chat
-            terminals.geometryActive = tab == .terminal
+            terminals.geometryActive = isWideLayout ? (workspace != .home) : (tab == .terminal)
+        }
+    }
+
+    /// Layout width crossed the compact/regular boundary. The wide layout
+    /// mounts the terminal permanently, so host geometry follows it.
+    func noteWideLayout(_ wide: Bool) {
+        guard isWideLayout != wide else { return }
+        isWideLayout = wide
+        terminals.geometryActive = wide ? (workspace != .home) : (workspaceTab == .terminal)
+        HostLog.ui.info("Layout width \(wide ? "regular" : "compact", privacy: .public)")
+    }
+
+    /// Spawn a conversation/project-scoped PTY on the host and reveal it.
+    func spawnTerminal() async {
+        switch workspace {
+        case .conversation:
+            guard let conversation = conversations.active else { return }
+            await terminals.spawn(conversationId: conversation.id, projectId: conversation.projectId)
+        case .project:
+            guard let project = projects.active else { return }
+            await terminals.spawn(conversationId: nil, projectId: project.id)
+        case .home:
+            return
+        }
+        if let id = terminals.activeId {
+            await revealTerminal(id)
         }
     }
 
