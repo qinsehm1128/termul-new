@@ -760,7 +760,7 @@ mod tests {
 
         let store = open_store(&fixture);
         let vendors: Vec<String> = store
-            .list_sessions(false, 10)
+            .list_sessions(false, &[], 10)
             .unwrap()
             .into_iter()
             .map(|session| session.vendor)
@@ -797,10 +797,10 @@ mod tests {
         assert_eq!(report.sessions_out_of_scope, 1);
 
         let store = open_store(&fixture);
-        assert!(store.search("belongs here", false, 10).unwrap().len() == 1);
+        assert!(store.search("belongs here", false, &[], 10).unwrap().len() == 1);
         assert!(
             store
-                .search("belongs elsewhere", true, 10)
+                .search("belongs elsewhere", true, &[], 10)
                 .unwrap()
                 .is_empty(),
             "another project's transcript must not be in this index at all"
@@ -849,7 +849,7 @@ mod tests {
         assert_eq!(report.sessions_indexed, 3, "issues: {:?}", report.issues);
 
         let store = open_store(&fixture);
-        let sessions = store.list_sessions(false, 10).unwrap();
+        let sessions = store.list_sessions(false, &[], 10).unwrap();
         let root = sessions
             .iter()
             .find(|session| session.lineage_depth.is_root())
@@ -915,7 +915,7 @@ mod tests {
 
         build(&fixture, IngestOptions::default());
         let store = open_store(&fixture);
-        let sessions = store.list_sessions(false, 10).unwrap();
+        let sessions = store.list_sessions(false, &[], 10).unwrap();
         let child = sessions
             .iter()
             .find(|session| session.vendor_session_id == "pi-child")
@@ -957,8 +957,8 @@ mod tests {
         assert_eq!(third.sessions_skipped_unchanged, 0);
 
         let store = open_store(&fixture);
-        assert!(store.search("original", false, 10).unwrap().is_empty());
-        assert_eq!(store.search("revised", false, 10).unwrap().len(), 1);
+        assert!(store.search("original", false, &[], 10).unwrap().is_empty());
+        assert_eq!(store.search("revised", false, &[], 10).unwrap().len(), 1);
     }
 
     #[test]
@@ -994,7 +994,7 @@ mod tests {
         let report = build(&fixture, IngestOptions::default());
         assert_eq!(report.sessions_forgotten, 1);
         let store = open_store(&fixture);
-        assert!(store.search("doomed", true, 10).unwrap().is_empty());
+        assert!(store.search("doomed", true, &[], 10).unwrap().is_empty());
     }
 
     /// The guard that keeps an unreachable store from reading as a mass
@@ -1028,8 +1028,11 @@ mod tests {
         );
 
         let store = open_store(&fixture);
-        assert_eq!(store.search("codex kept", false, 10).unwrap().len(), 1);
-        assert_eq!(store.search("claude kept", false, 10).unwrap().len(), 1);
+        assert_eq!(store.search("codex kept", false, &[], 10).unwrap().len(), 1);
+        assert_eq!(
+            store.search("claude kept", false, &[], 10).unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -1069,7 +1072,7 @@ mod tests {
         assert_eq!(report.files_scanned, 0);
         assert!(report.issues.is_empty());
         assert!(open_store(&fixture)
-            .list_sessions(true, 10)
+            .list_sessions(true, &[], 10)
             .unwrap()
             .is_empty());
     }
@@ -1168,7 +1171,7 @@ mod tests {
         eprintln!("duration           {:.1} s", elapsed.as_secs_f64());
 
         let store = open_store_at(temp.path(), &fence);
-        let sessions = store.list_sessions(false, 10).unwrap();
+        let sessions = store.list_sessions(false, &[], 10).unwrap();
         eprintln!("\nnewest sessions by FIRST MESSAGE time:");
         for session in sessions.iter().take(10) {
             eprintln!(
@@ -1179,7 +1182,7 @@ mod tests {
                 session.title.as_deref().unwrap_or("")
             );
         }
-        let hits = store.search("memory index", false, 5).unwrap();
+        let hits = store.search("memory index", false, &[], 5).unwrap();
         eprintln!("\nsample search hits: {}", hits.len());
 
         assert!(

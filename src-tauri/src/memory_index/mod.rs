@@ -28,6 +28,7 @@ pub mod ingest;
 pub mod paths;
 pub mod redact;
 pub mod scope;
+pub mod service;
 pub mod store;
 pub mod types;
 

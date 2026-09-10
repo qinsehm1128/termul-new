@@ -25,8 +25,10 @@
 
 use std::path::Path;
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::types::ToSql;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
+use super::paths::MemoryVendor;
 use super::types::{
     CompactionRecord, IndexedSession, LineageDepth, NormalizedMessage, NormalizedRole,
     SessionScope, SourcePointer, TimestampConfidence, SCHEMA_VERSION,
@@ -73,6 +75,11 @@ pub struct MemorySearchHit {
     pub session_first_message_at_utc: Option<String>,
     pub session_scope: SessionScope,
     pub source: SourcePointer,
+    /// Whether the recorded byte range still hashes to what was indexed.
+    /// The store never checks it (that would mean an I/O per row); the service
+    /// layer verifies before returning, which is where the authorization and
+    /// freshness re-checks belong.
+    pub source_fresh: bool,
 }
 
 /// What one build pass did.
@@ -284,20 +291,30 @@ impl MemoryStore {
     pub fn list_sessions(
         &self,
         include_unscoped: bool,
+        vendors: &[MemoryVendor],
         limit: usize,
     ) -> MemoryIndexResult<Vec<IndexedSession>> {
         let limit = clamp_limit(limit);
+        let (vendor_sql, vendor_values) = vendor_filter(vendors);
         let mut statement = self
             .connection
             .prepare(&format!(
-                "SELECT {SESSION_COLUMNS} FROM sessions
-                 WHERE (?1 OR scope = 'scoped')
-                 ORDER BY first_message_at_ms IS NULL, first_message_at_ms DESC, session_key ASC
-                 LIMIT ?2"
+                "SELECT {SESSION_COLUMNS} FROM sessions s
+                 WHERE (? OR s.scope = 'scoped'){vendor_sql}
+                 ORDER BY s.first_message_at_ms IS NULL, s.first_message_at_ms DESC,
+                          s.session_key ASC
+                 LIMIT ?"
             ))
             .map_err(store_error("prepare list sessions"))?;
+        let mut bound: Vec<Box<dyn ToSql>> = vec![Box::new(include_unscoped)];
+        bound.extend(
+            vendor_values
+                .into_iter()
+                .map(|value| Box::new(value) as Box<dyn ToSql>),
+        );
+        bound.push(Box::new(limit as i64));
         let rows = statement
-            .query_map(params![include_unscoped, limit as i64], read_session_row)
+            .query_map(params_from_iter(bound.iter()), read_session_row)
             .map_err(store_error("query sessions"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(store_error("read sessions"))
@@ -348,12 +365,14 @@ impl MemoryStore {
         &self,
         query: &str,
         include_unscoped: bool,
+        vendors: &[MemoryVendor],
         limit: usize,
     ) -> MemoryIndexResult<Vec<MemorySearchHit>> {
         let limit = clamp_limit(limit);
         let Some(match_expression) = to_fts_match(query) else {
             return Ok(Vec::new());
         };
+        let (vendor_sql, vendor_values) = vendor_filter(vendors);
         let mut statement = self
             .connection
             .prepare(&format!(
@@ -361,16 +380,21 @@ impl MemoryStore {
                  FROM messages_fts f
                  JOIN messages m ON m.fts_rowid = f.rowid
                  JOIN sessions s ON s.session_key = m.session_key
-                 WHERE messages_fts MATCH ?1 AND (?2 OR s.scope = 'scoped')
+                 WHERE messages_fts MATCH ? AND (? OR s.scope = 'scoped'){vendor_sql}
                  ORDER BY bm25(messages_fts) ASC, m.timestamp_ms DESC
-                 LIMIT ?3"
+                 LIMIT ?"
             ))
             .map_err(store_error("prepare search"))?;
+        let mut bound: Vec<Box<dyn ToSql>> =
+            vec![Box::new(match_expression), Box::new(include_unscoped)];
+        bound.extend(
+            vendor_values
+                .into_iter()
+                .map(|value| Box::new(value) as Box<dyn ToSql>),
+        );
+        bound.push(Box::new(limit as i64));
         let rows = statement
-            .query_map(
-                params![match_expression, include_unscoped, limit as i64],
-                read_hit_row,
-            )
+            .query_map(params_from_iter(bound.iter()), read_hit_row)
             .map_err(store_error("query search"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(store_error("read search"))
@@ -455,6 +479,26 @@ impl MemoryStore {
             .map_err(store_error("count compactions"))?;
         Ok((sessions as u64, messages as u64, compactions as u64))
     }
+}
+
+/// SQL fragment and bound values for an optional vendor filter.
+///
+/// An empty vendor list means **all three**, not none: memory is looked up
+/// across agents by default. Which CLI happened to be running when something
+/// was worked out is rarely what you remember about it, so narrowing to one
+/// agent is an opt-in refinement rather than the shape of the question.
+fn vendor_filter(vendors: &[MemoryVendor]) -> (String, Vec<String>) {
+    if vendors.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    let placeholders = vec!["?"; vendors.len()].join(", ");
+    (
+        format!(" AND s.vendor IN ({placeholders})"),
+        vendors
+            .iter()
+            .map(|vendor| vendor.as_str().to_string())
+            .collect(),
+    )
 }
 
 fn clamp_limit(limit: usize) -> usize {
@@ -758,6 +802,7 @@ fn read_hit_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemorySearchHit> {
         session_first_message_at_utc: row.get(14)?,
         session_scope: parse_scope(&row.get::<_, String>(15)?),
         source: read_pointer(row, 16)?,
+        source_fresh: true,
     })
 }
 
@@ -972,7 +1017,7 @@ mod tests {
                 &[],
             )
             .unwrap();
-        let hits = store.search("redirect", false, 10).unwrap();
+        let hits = store.search("redirect", false, &[], 10).unwrap();
         assert_eq!(hits.len(), 2);
         assert!(hits.iter().all(|hit| hit.text.contains("redirect")));
         assert_eq!(store.counts().unwrap(), (1, 2, 0));
@@ -999,7 +1044,10 @@ mod tests {
                 .unwrap();
         }
         let reopened = MemoryStore::open(&path, PROJECT).unwrap();
-        assert_eq!(reopened.search("persisted", false, 10).unwrap().len(), 1);
+        assert_eq!(
+            reopened.search("persisted", false, &[], 10).unwrap().len(),
+            1
+        );
     }
 
     /// A database moved into another project's namespace must stop answering
@@ -1046,10 +1094,10 @@ mod tests {
 
         assert_eq!(store.counts().unwrap(), (1, 1, 0));
         assert!(
-            store.search("original", false, 10).unwrap().is_empty(),
+            store.search("original", false, &[], 10).unwrap().is_empty(),
             "the replaced text must be gone from the full-text index, not just from the metadata"
         );
-        assert_eq!(store.search("revised", false, 10).unwrap().len(), 1);
+        assert_eq!(store.search("revised", false, &[], 10).unwrap().len(), 1);
     }
 
     /// AC4. The ordering the feature was asked for. mtime is deliberately not
@@ -1067,7 +1115,7 @@ mod tests {
                 .unwrap();
         }
         let keys: Vec<String> = store
-            .list_sessions(false, 10)
+            .list_sessions(false, &[], 10)
             .unwrap()
             .into_iter()
             .map(|entry| entry.session_key)
@@ -1087,7 +1135,7 @@ mod tests {
             .replace_session(&session("s_known", Some(1), SessionScope::Scoped), &[], &[])
             .unwrap();
         let keys: Vec<String> = store
-            .list_sessions(false, 10)
+            .list_sessions(false, &[], 10)
             .unwrap()
             .into_iter()
             .map(|entry| entry.session_key)
@@ -1114,10 +1162,10 @@ mod tests {
             )
             .unwrap();
 
-        assert!(store.list_sessions(false, 10).unwrap().is_empty());
-        assert!(store.search("borrowed", false, 10).unwrap().is_empty());
-        assert_eq!(store.list_sessions(true, 10).unwrap().len(), 1);
-        assert_eq!(store.search("borrowed", true, 10).unwrap().len(), 1);
+        assert!(store.list_sessions(false, &[], 10).unwrap().is_empty());
+        assert!(store.search("borrowed", false, &[], 10).unwrap().is_empty());
+        assert_eq!(store.list_sessions(true, &[], 10).unwrap().len(), 1);
+        assert_eq!(store.search("borrowed", true, &[], 10).unwrap().len(), 1);
     }
 
     /// AC2's storage half. A `NULL` depth column must come back as unknown, not
@@ -1144,7 +1192,7 @@ mod tests {
         let stored = store.get_session("s1").unwrap().unwrap();
         assert_eq!(stored.lineage_depth, LineageDepth::UNKNOWN);
         assert!(!stored.lineage_depth.is_root());
-        let hit = &store.search("agent_job", false, 10).unwrap()[0];
+        let hit = &store.search("agent_job", false, &[], 10).unwrap()[0];
         assert_eq!(hit.lineage_depth, LineageDepth::UNKNOWN);
     }
 
@@ -1175,12 +1223,15 @@ mod tests {
             "git OR",
         ] {
             let hits = store
-                .search(hostile, false, 10)
+                .search(hostile, false, &[], 10)
                 .unwrap_or_else(|error| panic!("{hostile} must not be a syntax error: {error}"));
             let _ = hits;
         }
-        assert_eq!(store.search("--no-verify", false, 10).unwrap().len(), 1);
-        assert_eq!(store.search("\"ENOENT\"", false, 10).unwrap().len(), 1);
+        assert_eq!(
+            store.search("--no-verify", false, &[], 10).unwrap().len(),
+            1
+        );
+        assert_eq!(store.search("\"ENOENT\"", false, &[], 10).unwrap().len(), 1);
     }
 
     #[test]
@@ -1201,7 +1252,7 @@ mod tests {
             .unwrap();
         for empty in ["", "   ", "-", "***"] {
             assert!(
-                store.search(empty, false, 10).unwrap().is_empty(),
+                store.search(empty, false, &[], 10).unwrap().is_empty(),
                 "{empty:?} must not match every message"
             );
         }
@@ -1289,7 +1340,7 @@ mod tests {
             .unwrap();
         assert_eq!(store.forget_sessions(&["s1".to_string()]).unwrap(), 1);
         assert_eq!(store.counts().unwrap(), (0, 0, 0));
-        assert!(store.search("ephemeral", true, 10).unwrap().is_empty());
+        assert!(store.search("ephemeral", true, &[], 10).unwrap().is_empty());
         assert_eq!(store.forget_sessions(&[]).unwrap(), 0);
     }
 
@@ -1338,6 +1389,82 @@ mod tests {
             .map(|hit| hit.ordinal)
             .collect();
         assert_eq!(ordinals, vec![0, 1, 2]);
+    }
+
+    /// The agent filter is optional, and empty means **every** agent — memory
+    /// is looked up across agents by default, because which CLI was running
+    /// when something was worked out is rarely what you remember about it.
+    #[test]
+    fn an_empty_agent_filter_searches_every_agent() {
+        let mut store = store();
+        for (key, vendor) in [
+            ("s_claude", "claude-code"),
+            ("s_codex", "codex"),
+            ("s_pi", "pi"),
+        ] {
+            let mut entry = session(key, Some(1), SessionScope::Scoped);
+            entry.vendor = vendor.to_string();
+            store
+                .replace_session(
+                    &entry,
+                    &[message(
+                        key,
+                        0,
+                        NormalizedRole::User,
+                        "shared phrase",
+                        LineageDepth::ROOT,
+                    )],
+                    &[],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(store.search("shared", false, &[], 10).unwrap().len(), 3);
+        assert_eq!(store.list_sessions(false, &[], 10).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn an_explicit_agent_filter_narrows_without_excluding_the_rest_by_default() {
+        let mut store = store();
+        for (key, vendor) in [("s_claude", "claude-code"), ("s_pi", "pi")] {
+            let mut entry = session(key, Some(1), SessionScope::Scoped);
+            entry.vendor = vendor.to_string();
+            store
+                .replace_session(
+                    &entry,
+                    &[message(
+                        key,
+                        0,
+                        NormalizedRole::User,
+                        "shared phrase",
+                        LineageDepth::ROOT,
+                    )],
+                    &[],
+                )
+                .unwrap();
+        }
+
+        let only_pi = store
+            .search("shared", false, &[MemoryVendor::Pi], 10)
+            .unwrap();
+        assert_eq!(only_pi.len(), 1);
+        assert_eq!(only_pi[0].vendor, "pi");
+
+        let two = store
+            .search(
+                "shared",
+                false,
+                &[MemoryVendor::Pi, MemoryVendor::ClaudeCode],
+                10,
+            )
+            .unwrap();
+        assert_eq!(two.len(), 2);
+
+        let listed = store
+            .list_sessions(false, &[MemoryVendor::ClaudeCode], 10)
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].vendor, "claude-code");
     }
 
     /// An MCP client must not be able to pull the whole corpus through one call.

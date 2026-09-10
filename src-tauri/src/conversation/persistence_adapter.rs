@@ -212,6 +212,25 @@ impl ConversationPersistenceAdapter {
         ))
     }
 
+    /// The project directory an agent session is attached to.
+    ///
+    /// Host-owned, exactly like [`Self::scheduled_task_scope_for_session`]: it
+    /// comes from the Conversation's own project attachment, so an agent asking
+    /// the memory index a question cannot name a different project than the one
+    /// its session belongs to. Returns `None` for a Conversation with no project
+    /// attached, which is the honest answer — a projectless session has no
+    /// project memory to read.
+    #[must_use]
+    pub fn project_root_for_session(&self, agent_session_id: &str) -> Option<String> {
+        let conversation_id = self.conversation_id_for_active_binding(agent_session_id)?;
+        let record = self.reader.get(conversation_id).ok()?;
+        record
+            .project_attachment
+            .as_ref()
+            .map(|attachment| attachment.project_path_snapshot.clone())
+            .filter(|path| !path.trim().is_empty())
+    }
+
     #[must_use]
     pub fn conversation_id_for_active_binding(
         &self,
