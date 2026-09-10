@@ -18,8 +18,11 @@ struct SettingsView: View {
                         Text("Dark").tag(AppAppearance.dark)
                         Text("Light").tag(AppAppearance.light)
                     }
+                    Toggle(isOn: $settings.notificationsEnabled) {
+                        Label(String(localized: "Background alerts"), systemImage: "bell")
+                    }
                 } footer: {
-                    Text("Language and appearance apply to this app. Agent replies still follow the desktop session.")
+                    Text("Language and appearance apply to this app. Background alerts notify when the agent finishes a turn, asks for approval, or a terminal exits while the app is in the background.")
                 }
 
                 Section(String(localized: "How it works")) {
@@ -38,6 +41,15 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(String(localized: "Done")) { dismiss() }
+                }
+            }
+            .onChange(of: settings.notificationsEnabled) { _, enabled in
+                guard enabled else { return }
+                Task { @MainActor in
+                    let granted = await SeNotifications.requestAuthorization()
+                    if !granted {
+                        settings.notificationsEnabled = false
+                    }
                 }
             }
         }

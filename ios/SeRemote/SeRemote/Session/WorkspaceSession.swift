@@ -61,22 +61,55 @@ final class WorkspaceSession {
     /// Regular-width layout keeps the terminal pane mounted next to chat, so
     /// PTY geometry must stay active instead of parking between tab switches.
     var isWideLayout = false
+    private(set) var isBackgrounded = false
     private var isStarting = false
     private var startEpoch = 0
+    private let notificationSettings: AppSettings?
 
-    init(accessURL: URL, bearer: String? = nil) {
+    init(accessURL: URL, bearer: String? = nil, settings: AppSettings? = nil) {
         credentials = HostCredentials(accessURL: accessURL, bearer: bearer)
         origin = credentials.origin
         http = HostHTTP(origin: origin, credentials: credentials)
+        notificationSettings = settings
         chat.attach(socket: acp)
         chat.onHostConversationsChanged = { [weak self] in
             guard let self else { return }
             Task { await self.conversations.refresh() }
         }
+        wireBackgroundNotifications()
         conversations.attach(http: http)
         projects.attach(http: http, socket: acp)
         files.attach(http: http)
         terminals.attach(socket: terminalSocket, origin: origin, credentials: credentials)
+    }
+
+    /// Fire local notifications for host events that land while backgrounded,
+    /// gated on the settings toggle. Mirrors the browser client's remote
+    /// notification behavior.
+    private func wireBackgroundNotifications() {
+        chat.onTurnSettled = { [weak self] in
+            guard let self else { return }
+            notifyIfBackgrounded(
+                title: conversations.active?.displayTitle ?? String(localized: "Agent"),
+                body: String(localized: "The agent finished its turn.")
+            )
+        }
+        chat.onAttentionNeeded = { [weak self] title, body in
+            self?.notifyIfBackgrounded(title: title, body: body)
+        }
+        terminals.onTerminalExit = { [weak self] terminalId in
+            guard let self else { return }
+            let name = terminals.terminals.first(where: { $0.id == terminalId })?.title
+                ?? String(localized: "Terminal")
+            notifyIfBackgrounded(title: name, body: String(localized: "The terminal exited."))
+        }
+    }
+
+    private func notifyIfBackgrounded(title: String, body: String) {
+        guard isBackgrounded, notificationSettings?.notificationsEnabled == true else { return }
+        Task {
+            await SeNotifications.post(title: title, body: body)
+        }
     }
 
     func start() async {
@@ -149,6 +182,7 @@ final class WorkspaceSession {
     }
 
     func handleScene(isBackground: Bool) {
+        isBackgrounded = isBackground
         acp.handleLifecycle(isBackground: isBackground)
     }
 

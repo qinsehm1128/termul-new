@@ -39,6 +39,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 final class AppSettings {
     private static let languageKey = "se.app.language"
     private static let appearanceKey = "se.app.appearance"
+    private static let notificationsKey = "se.app.notifications"
 
     /// Pre-rename keys. Read-only: the first launch after the rename falls back
     /// to them so a chosen language and appearance survive. Never written again
@@ -54,9 +55,16 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: Self.appearanceKey) }
     }
 
+    /// Local-notification opt-in. Off by default; the settings toggle asks
+    /// the system for authorization the first time it flips on.
+    var notificationsEnabled: Bool {
+        didSet { UserDefaults.standard.set(notificationsEnabled, forKey: Self.notificationsKey) }
+    }
+
     init() {
         language = AppLanguage(rawValue: Self.stored(Self.languageKey, legacy: Self.legacyLanguageKey) ?? "") ?? .system
         appearance = AppAppearance(rawValue: Self.stored(Self.appearanceKey, legacy: Self.legacyAppearanceKey) ?? "") ?? .dark
+        notificationsEnabled = UserDefaults.standard.bool(forKey: Self.notificationsKey)
     }
 
     /// The current key if it has ever been written, otherwise the pre-rename one.

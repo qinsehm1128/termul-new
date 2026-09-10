@@ -2,14 +2,16 @@ import SwiftUI
 
 struct WorkspaceView: View {
     @Bindable var store: ConnectionStore
+    @Bindable var settings: AppSettings
     let link: RemoteLink
     @State private var session: WorkspaceSession
     @Environment(\.scenePhase) private var scenePhase
 
-    init(store: ConnectionStore, link: RemoteLink) {
+    init(store: ConnectionStore, settings: AppSettings, link: RemoteLink) {
         self.store = store
+        self.settings = settings
         self.link = link
-        _session = State(initialValue: WorkspaceSession(accessURL: link.accessURL, bearer: link.pairingToken))
+        _session = State(initialValue: WorkspaceSession(accessURL: link.accessURL, bearer: link.pairingToken, settings: settings))
     }
 
     var body: some View {

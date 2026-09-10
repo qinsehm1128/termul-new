@@ -72,6 +72,10 @@ final class ChatStore {
     var tools: [ToolCard] = []
     var permissions: [PermissionCard] = []
     var questions: [QuestionCard] = []
+    /// Host-event side channels consumed by WorkspaceSession to fire local
+    /// notifications while the app is backgrounded.
+    var onTurnSettled: (() -> Void)?
+    var onAttentionNeeded: ((_ title: String, _ body: String) -> Void)?
     var isSending = false
     var isLoading = false
     var isSwitchingAgent = false
@@ -1066,6 +1070,10 @@ final class ChatStore {
                         options: event.options.map { PermissionChoice(id: $0.optionId, name: $0.name) }
                     )
                 )
+                onAttentionNeeded?(
+                    String(localized: "Approval needed"),
+                    event.toolCall.title ?? String(localized: "The agent is waiting for your approval.")
+                )
             }
         case "question_request":
             if let event = try? JSONDecoder().decode(QuestionEvent.self, from: payload) {
@@ -1077,10 +1085,15 @@ final class ChatStore {
                         options: event.options.map { QuestionChoice(id: $0.value, label: $0.label) }
                     )
                 )
+                onAttentionNeeded?(
+                    String(localized: "Agent question"),
+                    event.question
+                )
             }
         case "prompt_complete":
             settleHistoricalTranscript()
             markLatestSendingAccepted()
+            onTurnSettled?()
         case "session_info_update":
             if let event = try? JSONDecoder().decode(SessionInfoEvent.self, from: payload),
                let title = event.title,

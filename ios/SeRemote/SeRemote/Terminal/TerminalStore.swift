@@ -44,6 +44,9 @@ final class TerminalStore {
     private var lastConversationId: String?
     private var lastProjectId: String?
 
+    /// Side channel for a local notification when a watched PTY exits.
+    var onTerminalExit: ((String) -> Void)?
+
     func attach(socket: TerminalSocket, origin: URL, credentials: HostCredentials) {
         self.socket = socket
         self.origin = origin
@@ -67,6 +70,7 @@ final class TerminalStore {
         }
         socket.onExit = { [weak self] terminalId in
             guard let self else { return }
+            self.onTerminalExit?(terminalId)
             self.terminals.removeAll { $0.id == terminalId }
             self.pendingOutput.removeValue(forKey: terminalId)
             if self.watchedId == terminalId {
