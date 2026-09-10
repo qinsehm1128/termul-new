@@ -26,10 +26,12 @@
 pub mod paths;
 pub mod redact;
 pub mod scope;
+pub mod store;
 pub mod types;
 
 pub use paths::{CanonicalProjectRoot, IndexLocation, MemoryVendor};
 pub use scope::ProjectFence;
+pub use store::{MemorySearchHit, MemoryStore, StoreWriteReport};
 pub use types::{
     CompactionRecord, FileIdentity, IndexedSession, LineageDepth, NormalizedMessage,
     NormalizedRole, PointerFreshness, SessionScope, SourcePointer, TimestampConfidence,

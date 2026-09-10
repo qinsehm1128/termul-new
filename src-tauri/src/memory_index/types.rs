@@ -207,7 +207,51 @@ impl SourcePointer {
             byte_len: record_bytes.len() as u64,
         }
     }
+
+    /// Re-read the pointed-to bytes and check them against the recorded digest.
+    ///
+    /// Any failure is [`PointerFreshness::Stale`], including "the file is gone"
+    /// and "the range is past the end". The caller must not serve content from a
+    /// stale pointer: the danger is not an error, it is a plausible-looking
+    /// answer taken from a different session.
+    ///
+    /// Note what is deliberately *not* checked: the file's current size and
+    /// mtime. An appended transcript changes both while leaving this record's
+    /// own bytes untouched, and that record is still exactly the one indexed.
+    /// Size and mtime drive the ingest skip decision (see
+    /// [`FileIdentity::matches`]); the content digest drives read-back.
+    #[must_use]
+    pub fn verify(&self) -> PointerFreshness {
+        match self.read_bytes() {
+            Some(bytes) if hash_bytes(&bytes) == self.content_hash => PointerFreshness::Fresh,
+            _ => PointerFreshness::Stale,
+        }
+    }
+
+    /// The recorded byte range, or `None` if it cannot be read in full.
+    #[must_use]
+    pub fn read_bytes(&self) -> Option<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let length = usize::try_from(self.byte_len).ok()?;
+        // A record long enough to overflow this is not a record.
+        if length > MAX_RECORD_BYTES {
+            return None;
+        }
+        let mut file = fs::File::open(&self.file_path).ok()?;
+        file.seek(SeekFrom::Start(self.byte_offset)).ok()?;
+        let mut buffer = vec![0u8; length];
+        file.read_exact(&mut buffer).ok()?;
+        Some(buffer)
+    }
 }
+
+/// Upper bound on a single normalized record's byte length.
+///
+/// Individual transcripts reach 2.6 GB, but a single JSONL record does not —
+/// the cap keeps a corrupt or hostile length from turning read-back into a
+/// multi-gigabyte allocation.
+pub const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
 
 /// Whether a stored pointer still describes the bytes it was written for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,6 +528,83 @@ mod tests {
             !first.matches(&second),
             "an appended file must not read as unchanged"
         );
+    }
+
+    /// AC10. The failure this guard exists for: a rewritten transcript leaves
+    /// the offset valid and the bytes different, so `(path, offset)` alone would
+    /// return another session's content and look fine doing it.
+    #[test]
+    fn a_rewritten_file_makes_its_pointers_stale() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.jsonl");
+        let first = b"{\"role\":\"user\",\"text\":\"alpha\"}\n";
+        let second = b"{\"role\":\"user\",\"text\":\"beta\"}\n";
+        fs::write(&path, first).unwrap();
+        let identity = FileIdentity::read(&path).unwrap();
+        let pointer =
+            SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, &first[..first.len()]);
+        assert_eq!(pointer.verify(), PointerFreshness::Fresh);
+        assert_eq!(pointer.read_bytes().as_deref(), Some(&first[..]));
+
+        // Same offset, same length class, different content.
+        fs::write(&path, second).unwrap();
+        assert_eq!(
+            pointer.verify(),
+            PointerFreshness::Stale,
+            "a rewritten record must not verify"
+        );
+    }
+
+    /// The other half: appending must NOT invalidate existing pointers. Ongoing
+    /// sessions grow constantly, and re-indexing every one of them on every
+    /// append would make the index unusable.
+    #[test]
+    fn appending_leaves_earlier_pointers_fresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.jsonl");
+        let first = b"{\"role\":\"user\",\"text\":\"alpha\"}\n";
+        fs::write(&path, first).unwrap();
+        let identity = FileIdentity::read(&path).unwrap();
+        let pointer = SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, first);
+
+        let mut appended = first.to_vec();
+        appended.extend_from_slice(b"{\"role\":\"assistant\",\"text\":\"beta\"}\n");
+        fs::write(&path, &appended).unwrap();
+
+        assert_eq!(pointer.verify(), PointerFreshness::Fresh);
+    }
+
+    #[test]
+    fn a_missing_file_or_truncated_range_is_stale_not_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.jsonl");
+        fs::write(&path, b"short").unwrap();
+        let identity = FileIdentity::read(&path).unwrap();
+        let past_the_end = SourcePointer {
+            byte_offset: 4,
+            byte_len: 64,
+            ..SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, b"short")
+        };
+        assert_eq!(past_the_end.verify(), PointerFreshness::Stale);
+        assert!(past_the_end.read_bytes().is_none());
+
+        fs::remove_file(&path).unwrap();
+        let gone = SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, b"short");
+        assert_eq!(gone.verify(), PointerFreshness::Stale);
+    }
+
+    #[test]
+    fn an_absurd_record_length_is_refused_before_allocating() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.jsonl");
+        fs::write(&path, b"x").unwrap();
+        let identity = FileIdentity::read(&path).unwrap();
+        let absurd = SourcePointer {
+            byte_len: (MAX_RECORD_BYTES + 1) as u64,
+            ..SourcePointer::for_record(&identity, path.to_str().unwrap(), 0, b"x")
+        };
+        assert!(absurd.read_bytes().is_none());
+        assert_eq!(absurd.verify(), PointerFreshness::Stale);
     }
 
     #[test]
