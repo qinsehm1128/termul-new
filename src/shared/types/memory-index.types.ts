@@ -188,6 +188,12 @@ export interface MemoryIndexBuildReport {
   sessionsOutOfScope: number
   messagesIndexed: number
   compactionsIndexed: number
+  /**
+   * Bytes of transcript actually re-read. A skipped session contributes
+   * nothing; a changed one contributes all of it, because a changed file is
+   * re-read from the start rather than resumed.
+   */
+  bytesRead: number
   durationMs: number
   issues: MemoryIndexIssue[]
   /**

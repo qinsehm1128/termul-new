@@ -639,7 +639,12 @@ export function ProjectSidebar({
               : t('organizeHistoryDone', {
                   sessions: indexed,
                   messages: report.messagesIndexed,
-                  seconds: Math.round(report.durationMs / 1000)
+                  seconds: Math.round(report.durationMs / 1000),
+                  // Says what the run actually cost. A refresh that skipped
+                  // everything reads 0 MB, which is the difference between
+                  // "it re-scanned my whole history" and "it checked and had
+                  // nothing to do".
+                  megabytes: Math.round(report.bytesRead / 1048576)
                 })
         })
       } catch (err) {

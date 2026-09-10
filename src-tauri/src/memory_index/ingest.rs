@@ -121,6 +121,15 @@ pub struct IngestReport {
     pub sessions_out_of_scope: u32,
     pub messages_indexed: u32,
     pub compactions_indexed: u32,
+    /// Bytes of transcript actually re-read this build.
+    ///
+    /// The number that explains an incremental build's cost. A skipped session
+    /// contributes nothing; a session whose transcript changed contributes all
+    /// of it, because a changed file is re-read from the start rather than
+    /// resumed — so this is what grows when the session you are actively
+    /// working in gets long, and it is the figure to watch before deciding
+    /// whether resuming from an offset is worth its complexity.
+    pub bytes_read: u64,
     pub duration_ms: u64,
     /// The caller asked to stop before the walk finished.
     ///
@@ -315,6 +324,7 @@ fn ingest_claude(
         }
         // The folder name already encodes this project, so ownership is proven
         // without reading the body.
+        report.bytes_read += identity.size_bytes;
         let adapted = adapters::claude::adapt(
             path,
             &identity,
@@ -397,6 +407,7 @@ fn ingest_pi(
             let depth = adapters::pi::depth_from_path(root, path);
             let root_key = adapters::pi::root_file_for(root, path)
                 .map(|file| adapters::session_key(MemoryVendor::Pi, &file));
+            report.bytes_read += identity.size_bytes;
             let adapted = adapters::pi::adapt(
                 path,
                 &identity,
@@ -514,6 +525,7 @@ fn ingest_codex(
             report.sessions_skipped_unchanged += 1;
             continue;
         }
+        report.bytes_read += identity.size_bytes;
         let adapted = adapters::codex::adapt(
             &entry.path,
             &identity,
@@ -1070,7 +1082,64 @@ mod tests {
         assert_eq!(rebuilt.sessions_skipped_unchanged, 0);
     }
 
-    /// A cancelled build must not prune. `seen_keys` only lists what the walk
+    /// The incremental contract, stated as a measurement rather than a claim:
+    /// a rebuild with nothing changed re-reads **zero bytes**, and touching one
+    /// transcript re-reads exactly that one.
+    #[test]
+    fn a_rebuild_only_re_reads_what_changed() {
+        let fixture = fixture();
+        for index in 0..3 {
+            write(
+                &fixture.claude_project_dir.join(format!("c{index}.jsonl")),
+                &claude_lines(
+                    &format!("sess-c{index}"),
+                    false,
+                    "2026-09-01T00:00:00.000Z",
+                    &format!("claude {index}"),
+                ),
+            );
+        }
+        let cold = build(&fixture, IngestOptions::default());
+        assert_eq!(cold.sessions_indexed, 3);
+        assert!(cold.bytes_read > 0);
+
+        let warm = build(&fixture, IngestOptions::default());
+        assert_eq!(warm.sessions_skipped_unchanged, 3);
+        assert_eq!(warm.sessions_indexed, 0);
+        assert_eq!(
+            warm.bytes_read, 0,
+            "an unchanged corpus was re-read anyway ({} bytes)",
+            warm.bytes_read
+        );
+
+        // Touch one transcript; only that one is re-read.
+        let changed = fixture.claude_project_dir.join("c1.jsonl");
+        write(
+            &changed,
+            &claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", "claude 1 revised"),
+        );
+        let incremental = build(&fixture, IngestOptions::default());
+        assert_eq!(incremental.sessions_indexed, 1);
+        assert_eq!(incremental.sessions_skipped_unchanged, 2);
+        assert_eq!(
+            incremental.bytes_read,
+            std::fs::metadata(&changed).unwrap().len(),
+            "the incremental build read something other than the changed file"
+        );
+
+        // `full_rebuild` is the explicit opt-out and reads everything again.
+        let forced = build(
+            &fixture,
+            IngestOptions {
+                full_rebuild: true,
+                ..IngestOptions::default()
+            },
+        );
+        assert_eq!(forced.sessions_skipped_unchanged, 0);
+        assert!(forced.bytes_read >= incremental.bytes_read * 2);
+    }
+
+    /// A cancelled build must not prune.    /// A cancelled build must not prune. `seen_keys` only lists what the walk
     /// reached, so pruning against a partial list reads every transcript the
     /// walk never got to as deleted — turning "stop early" into "throw most of
     /// the index away".
@@ -1500,6 +1569,35 @@ mod tests {
             index_bytes as f64 / 1_048_576.0
         );
         eprintln!("duration           {:.1} s", elapsed.as_secs_f64());
+
+        // The second build is the one that actually happens in use: a corpus
+        // is walked cold once and warm every time after. Reporting only the
+        // cold number would describe the rarest case.
+        let warm_started = Instant::now();
+        let warm = build_index(
+            &fence,
+            temp.path(),
+            &IngestOptions::default(),
+            &CancelFlag::new(),
+            &mut |_: IngestProgress| {},
+        )
+        .expect("warm build");
+        let warm_elapsed = warm_started.elapsed();
+        eprintln!(
+            "\n--- warm rebuild (nothing changed) ---\n\
+             skipped unchanged  {}\n\
+             re-indexed         {}\n\
+             forgotten          {}\n\
+             bytes re-read      {:.1} MB  (cold read {:.1} MB)\n\
+             duration           {:.1} s  ({:.0}x faster than cold)",
+            warm.sessions_skipped_unchanged,
+            warm.sessions_indexed,
+            warm.sessions_forgotten,
+            warm.bytes_read as f64 / 1_048_576.0,
+            report.bytes_read as f64 / 1_048_576.0,
+            warm_elapsed.as_secs_f64(),
+            elapsed.as_secs_f64() / warm_elapsed.as_secs_f64().max(0.001)
+        );
 
         let store = open_store_at(temp.path(), &fence);
         // "The index is about as big as the corpus" is not actionable on its

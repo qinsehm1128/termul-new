@@ -288,7 +288,7 @@
   },
   "organizeHistory": "Index conversation history",
   "organizeHistoryRunning": "Indexing conversation history…",
-  "organizeHistoryDone": "Indexed {{sessions}} sessions and {{messages}} messages in {{seconds}}s",
+  "organizeHistoryDone": "Organized {{sessions}} session(s), {{messages}} message(s); read {{megabytes}} MB in {{seconds}}s",
   "organizeHistoryEmpty": "No past conversations found for this project",
   "organizeHistoryFailed": "Could not index conversation history",
   "organizeHistoryNoPath": "This project has no folder yet, so there is no history to index",
