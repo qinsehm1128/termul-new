@@ -44,8 +44,12 @@ struct TerminalScreen: UIViewRepresentable {
         context.coordinator.onResize = onResize
         context.coordinator.onTextScaleChange = onTextScaleChange
         uiView.terminalDelegate = context.coordinator
-        uiView.hostCols = max(hostCols, 20)
+        // hostCols only drives the desktop column fit; assigning it in phone
+        // mode would invalidate the fit on every host reply for no gain.
         uiView.lockToHostCols = lockToHostCols
+        if lockToHostCols {
+            uiView.hostCols = max(hostCols, 20)
+        }
         uiView.textScale = textScale
         uiView.onTextScaleChange = { scale, settled in
             context.coordinator.onTextScaleChange(scale, settled)

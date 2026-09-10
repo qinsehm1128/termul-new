@@ -41,11 +41,14 @@ final class TerminalStore {
     private var refitTask: Task<Void, Never>?
     /// Forced refits re-assert the viewport even when dims are unchanged —
     /// resume/reconnect converge when the host PTY changed behind our back.
+    /// Cleared only by a successful push, so a failed/raced attempt re-arms.
     private var forceRefit = false
-    /// True once the live view reported a fitted grid for the active
-    /// terminal. Before that, the model still carries host-side dims and
-    /// must never be pushed as a phone fit.
-    private var viewReported = false
+    /// The grid the live view last fitted for `fittedTerminalId`. This is the
+    /// ONLY source commitRefit pushes — catalog rows, host replies, and
+    /// display-mode events describe host-side truth and must never
+    /// masquerade as the phone viewport.
+    private var lastFitted: (cols: Int, rows: Int)?
+    private var fittedTerminalId: String?
     private var lastPushed: [String: (cols: Int, rows: Int)] = [:]
 
     private var coalesceBuffers: [String: Data] = [:]
@@ -81,6 +84,9 @@ final class TerminalStore {
                 terminals[index].cols = cols
                 terminals[index].rows = rows
             }
+            // While a forced phone takeover is pending, a late echo of our
+            // own tab-leave release must not cancel it.
+            guard !forceRefit else { return }
             guard terminalId == activeId,
                   mode == TerminalDisplayMode.desktop.rawValue,
                   geometryActive,
@@ -163,10 +169,11 @@ final class TerminalStore {
             _ = try await socket.watch(terminalId: terminalId, lastSeq: 0)
             watchedId = terminalId
             activeId = terminalId
-            viewReported = false
             // A fresh watch may land on a PTY the desktop resized meanwhile;
             // re-assert the phone viewport deterministically instead of
             // waiting for a view-driven sizeChanged that may never come.
+            // The fittedTerminalId gate keeps this pending until the (possibly
+            // remounted) view reports the real grid for this terminal.
             scheduleRefit(force: true)
         } catch {
             errorMessage = error.localizedDescription
@@ -218,12 +225,13 @@ final class TerminalStore {
 
     /// The view fitted itself to a new grid (layout, rotation, keyboard,
     /// text scale). Record it and converge through the debounce — the push
-    /// to the host happens in `commitRefit`, never inline here.
+    /// to the host happens in `commitRefit`, never inline here. Covered
+    /// surfaces never record: a keyboard shrinking a hidden terminal must
+    /// not become the takeover grid.
     func resize(cols: Int, rows: Int) async {
-        guard let index = terminals.firstIndex(where: { $0.id == activeId }) else { return }
-        terminals[index].cols = cols
-        terminals[index].rows = rows
-        viewReported = true
+        guard geometryActive, let activeId else { return }
+        lastFitted = (cols, rows)
+        fittedTerminalId = activeId
         scheduleRefit()
     }
 
@@ -240,19 +248,20 @@ final class TerminalStore {
     }
 
     private func commitRefit() async {
-        // viewReported gate: until the live view has fitted itself, the model
-        // dims are host-side values; the force flag survives so the first
-        // real report still performs its forced takeover push.
-        guard geometryActive, displayMode == .phone, viewReported else { return }
-        guard let socket, let activeId,
-              let index = terminals.firstIndex(where: { $0.id == activeId }) else { return }
-        let cols = max(terminals[index].cols, 20)
-        let rows = max(terminals[index].rows, 4)
+        // fittedTerminalId gate: until the live view has fitted itself FOR
+        // THIS terminal, only host-side dims exist; the force flag survives
+        // so the first real report still performs its forced takeover push.
+        guard geometryActive, displayMode == .phone,
+              let activeId, fittedTerminalId == activeId,
+              let fitted = lastFitted else { return }
+        guard let socket else { return }
+        let cols = max(fitted.cols, 20)
+        let rows = max(fitted.rows, 4)
         let forced = forceRefit
-        forceRefit = false
         if !forced, let pushed = lastPushed[activeId], pushed.cols == cols, pushed.rows == rows {
             return
         }
+        let generation = (activeId, geometryActive, displayMode)
         do {
             let state = try await socket.setDisplayMode(
                 terminalId: activeId,
@@ -260,15 +269,23 @@ final class TerminalStore {
                 cols: cols,
                 rows: rows
             )
-            if state.cols > 1, state.rows > 1,
-               let live = terminals.firstIndex(where: { $0.id == activeId }) {
-                terminals[live].cols = state.cols
-                terminals[live].rows = state.rows
+            // Re-validate: a tab switch or release racing the await must not
+            // leave the host leased at phone geometry nobody is viewing.
+            guard generation == (activeId, geometryActive, displayMode) else {
+                HostLog.session.info("Dropping stale phone fit; restoring desktop")
+                _ = try? await socket.setDisplayMode(
+                    terminalId: activeId,
+                    mode: TerminalDisplayMode.desktop.rawValue
+                )
+                return
             }
+            applyState(state, for: activeId)
             lastPushed[activeId] = (state.cols, state.rows)
+            forceRefit = false
             HostLog.ui.info("Phone fit \(state.cols)x\(state.rows)\(forced ? " (forced)" : "", privacy: .public)")
         } catch {
             errorMessage = error.localizedDescription
+            // force stays armed; the next trigger re-asserts.
         }
     }
 

@@ -303,6 +303,15 @@ final class TerminalSocket {
         }
     }
 
+    /// Event payloads come through JSONSerialization, so numbers arrive as
+    /// NSNumber; bridge both spellings.
+    private static func intValue(_ any: Any?) -> Int? {
+        if let number = any as? NSNumber {
+            return number.intValue
+        }
+        return any as? Int
+    }
+
     private func failPending(_ error: Error) {
         let pending = self.pending
         self.pending.removeAll()
