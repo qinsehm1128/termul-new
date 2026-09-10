@@ -298,5 +298,6 @@
   "copyMemoryMcpConfig": "复制记忆库 MCP 配置",
   "memoryMcpCopied": "MCP 配置已复制",
   "memoryMcpUnavailable": "浏览器端拿不到 MCP 配置：它指向宿主机的可执行文件与状态目录",
-  "memoryMcpFailed": "读取 MCP 配置失败"
+  "memoryMcpFailed": "读取 MCP 配置失败",
+  "organizeHistoryFirstPass": "首次整理，需通读全部历史，可能要几分钟（之后只读新增的部分）"
 }

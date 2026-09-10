@@ -626,7 +626,22 @@ export function ProjectSidebar({
       }
       setOrganizingProjectId(project.id)
       setOrganizeProgress(null)
-      toast({ title: t('organizeHistoryRunning'), description: project.name })
+      // Ask first, so the "this will take a while" case is announced before the
+      // wait rather than explained after it. A read-only probe: it deliberately
+      // does not open the index, because opening an outdated one migrates it,
+      // and migrating an outdated one discards it.
+      let fullPassAhead = false
+      try {
+        const status = await memoryIndexApi.status({ projectRoot: project.path })
+        fullPassAhead = !status.exists || status.needsRebuild
+      } catch {
+        // A status we could not read tells us nothing about the build ahead;
+        // fall through to the ordinary message rather than guessing.
+      }
+      toast({
+        title: fullPassAhead ? t('organizeHistoryFirstPass') : t('organizeHistoryRunning'),
+        description: project.name
+      })
       try {
         const report = await memoryIndexApi.build({ projectRoot: project.path })
         const indexed =

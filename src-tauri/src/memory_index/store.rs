@@ -166,6 +166,42 @@ impl MemoryStore {
         Ok(store)
     }
 
+    /// The on-disk layout version of an existing index, read **without opening
+    /// it for use**.
+    ///
+    /// The distinction matters: [`Self::open`] migrates, and migrating an
+    /// outdated layout means dropping it. So the question "does this index need
+    /// rebuilding?" cannot be answered by opening the index — asking would
+    /// destroy the very thing being asked about, before the user has been told
+    /// anything. This reads the one row it needs through a read-only connection
+    /// and leaves the file alone.
+    ///
+    /// `None` means there is no readable version marker: a missing file, an
+    /// unreadable one, or a version-1 index, which never wrote the key.
+    pub fn stored_version(database_path: &Path) -> Option<u32> {
+        use rusqlite::OpenFlags;
+        let connection = Connection::open_with_flags(
+            database_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+        )
+        .ok()?;
+        connection
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![META_STORE_VERSION],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()?
+            .parse()
+            .ok()
+    }
+
+    /// Is an index on disk built by a layout this build can still read?
+    #[must_use]
+    pub fn is_current_version(database_path: &Path) -> bool {
+        Self::stored_version(database_path) == Some(STORE_VERSION)
+    }
+
     /// An in-memory index. Used by tests, and by the read-only MCP surface when
     /// a project has no index yet — an empty result is a better answer than a
     /// spuriously created database file.

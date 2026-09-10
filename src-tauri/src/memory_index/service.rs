@@ -98,6 +98,13 @@ pub struct MemoryIndexStatus {
     pub message_count: u64,
     pub compaction_count: u64,
     pub newest_first_message_at_utc: Option<String>,
+    /// An index exists but was written by an older on-disk layout, so the next
+    /// build discards it and reads the whole corpus again.
+    ///
+    /// Reported without opening the index: opening it would migrate it, and
+    /// migrating an outdated layout means dropping it — the user would be told
+    /// after the fact about something they could no longer choose to postpone.
+    pub needs_rebuild: bool,
 }
 
 /// Shared, host-agnostic memory index service.
@@ -200,8 +207,14 @@ impl MemoryIndexService {
             message_count: 0,
             compaction_count: 0,
             newest_first_message_at_utc: None,
+            needs_rebuild: false,
         };
         if !status.exists {
+            return Ok(status);
+        }
+        if !MemoryStore::is_current_version(&location.database_path) {
+            // Deliberately return before opening. See `MemoryStore::open`.
+            status.needs_rebuild = true;
             return Ok(status);
         }
         // `exists` was true a moment ago, so a failure here is a race or a
@@ -764,6 +777,52 @@ mod tests {
             .service
             .build(&other, &IngestOptions::default(), &mut |_| {})
             .is_ok());
+    }
+
+    /// Asking whether an index needs rebuilding must not be the thing that
+    /// destroys it. `MemoryStore::open` migrates, and migrating an outdated
+    /// layout drops it — so `status` has to answer without opening.
+    #[test]
+    fn asking_about_a_stale_index_does_not_discard_it() {
+        let harness = harness();
+        seed(&harness, SessionScope::Scoped, "the login redirect loops");
+        let fence = ProjectFence::single(&harness.project_root).unwrap();
+        let location = fence.index_location(harness.service.state_root()).unwrap();
+
+        // Fresh index: current, nothing to rebuild.
+        let status = harness.service.status(&harness.project_root).unwrap();
+        assert!(status.exists);
+        assert!(!status.needs_rebuild);
+        assert_eq!(status.session_count, 1);
+
+        // Now make it look like it came from an older layout.
+        {
+            let connection = rusqlite::Connection::open(&location.database_path).unwrap();
+            connection
+                .execute(
+                    "UPDATE meta SET value = '1' WHERE key = 'store_version'",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let status = harness.service.status(&harness.project_root).unwrap();
+        assert!(status.needs_rebuild, "a stale layout was not reported");
+        assert!(status.exists);
+
+        // And the rows are still there — the question did not answer itself by
+        // deleting the subject.
+        let store = MemoryStore::open_in_memory("probe").unwrap();
+        drop(store);
+        let connection = rusqlite::Connection::open_with_flags(
+            &location.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let sessions: i64 = connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 1, "the stale index was dropped just by asking");
     }
 
     #[test]

@@ -170,6 +170,14 @@ export interface MemoryIndexStatus {
   messageCount: number
   compactionCount: number
   newestFirstMessageAtUtc: string | null
+  /**
+   * An index exists but was written by an older on-disk layout, so the next
+   * build discards it and reads the whole corpus again.
+   *
+   * Reported without opening the index — opening it would migrate it, and
+   * migrating an outdated layout means dropping it.
+   */
+  needsRebuild: boolean
 }
 
 export interface MemoryIndexIssue {
