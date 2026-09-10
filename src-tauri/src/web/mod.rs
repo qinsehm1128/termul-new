@@ -829,6 +829,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Arc::clone(&authority),
         )
         .await
@@ -885,6 +886,7 @@ mod tests {
             async move {
                 let _ = shutdown_rx.await;
             },
+            None,
             None,
             None,
             None,

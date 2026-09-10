@@ -1169,6 +1169,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("settings-backed host starts");
@@ -1224,6 +1225,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("start on localhost binds an OS-assigned port");
@@ -1266,6 +1268,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("restart after stop succeeds");
@@ -1300,6 +1303,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("first start succeeds");
@@ -1311,6 +1315,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1344,6 +1349,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap_err();
@@ -1358,6 +1364,7 @@ mod tests {
                 maximum,
                 registry,
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1381,6 +1388,7 @@ mod tests {
                 relay,
                 registry,
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1426,6 +1434,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("start succeeds");
@@ -1450,6 +1459,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1494,6 +1504,7 @@ mod tests {
                 relay,
                 registry,
                 RemoteBindMode::All,
+                None,
                 None,
                 None,
                 None,
@@ -1761,6 +1772,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
