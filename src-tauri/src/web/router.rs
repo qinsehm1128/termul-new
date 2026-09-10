@@ -164,6 +164,7 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             // explicit user action in the desktop UI. Nothing on a startup,
             // mount or list path reaches it.
             .route("/memory-index/build", post(memory_index_api::build_post))
+            .route("/memory-index/cancel", post(memory_index_api::cancel_post))
             .route("/memory-index/status", post(memory_index_api::status_post))
             .route("/memory-index/search", post(memory_index_api::search_post))
             .route(

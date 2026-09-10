@@ -44,8 +44,16 @@ export const memoryIndexApi: MemoryIndexApi = {
   getSession(args: MemoryIndexSessionArgs): Promise<MemorySessionDetail | null> {
     if (!isTauriContext()) return webMemoryIndexApi.getSession(args)
     return tauriMemoryIndexApi.getSession(args)
+  },
+  cancel(args: MemoryIndexScopeArgs): Promise<boolean> {
+    if (!isTauriContext()) return webMemoryIndexApi.cancel(args)
+    return tauriMemoryIndexApi.cancel(args)
+  },
+  mcpInvocation(args: MemoryIndexScopeArgs): Promise<string[] | null> {
+    if (!isTauriContext()) return webMemoryIndexApi.mcpInvocation(args)
+    return tauriMemoryIndexApi.mcpInvocation(args)
   }
 }
 
-export { createTauriMemoryIndexApi, memoryIndexMcpInvocation } from './tauri-memory-index-api'
+export { createTauriMemoryIndexApi } from './tauri-memory-index-api'
 export { webMemoryIndexApi } from './web-memory-index-api'

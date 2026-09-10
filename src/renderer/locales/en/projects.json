@@ -291,5 +291,12 @@
   "organizeHistoryDone": "Indexed {{sessions}} sessions and {{messages}} messages in {{seconds}}s",
   "organizeHistoryEmpty": "No past conversations found for this project",
   "organizeHistoryFailed": "Could not index conversation history",
-  "organizeHistoryNoPath": "This project has no folder yet, so there is no history to index"
+  "organizeHistoryNoPath": "This project has no folder yet, so there is no history to index",
+  "organizeHistoryProgress": "Organizing history… {{seen}}/{{total}} ({{sessions}} indexed)",
+  "organizeHistoryCancel": "Stop organizing",
+  "organizeHistoryCancelled": "Stopped after indexing {{sessions}} session(s); the index is partial",
+  "copyMemoryMcpConfig": "Copy memory MCP config",
+  "memoryMcpCopied": "MCP config copied",
+  "memoryMcpUnavailable": "The MCP config is not available in the browser: it names the host's executable and state directory",
+  "memoryMcpFailed": "Could not read the MCP config"
 }

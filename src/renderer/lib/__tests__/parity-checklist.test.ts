@@ -43,6 +43,7 @@ interface DomainCheck {
  * Get the absolute path to the lib directory
  */
 const LIB_DIR = join(__dirname, '..')
+const ROOT_DIR = join(__dirname, '..', '..', '..', '..')
 const TESTS_DIR = __dirname
 let semanticRepositoryFindingsCache: GuardFinding[] | undefined
 
@@ -1197,9 +1198,58 @@ describe('Parity Checklist Automation', () => {
       const web = readFileSync(WebAdapter, 'utf-8')
       const server = readFileSync(join(LIB_DIR, 'web-server-api.ts'), 'utf-8')
       expect(web).toMatch(/webServerMemoryIndex/)
-      for (const route of ['build', 'status', 'search', 'sessions', 'session']) {
+      for (const route of ['build', 'cancel', 'status', 'search', 'sessions', 'session']) {
         expect(server).toMatch(new RegExp(`/memory-index/${route}`))
       }
+    })
+
+    /**
+     * Every member of the capability has to exist on both adapters, including
+     * the ones only one surface can really answer. `mcpInvocation` returns
+     * `null` on the web rather than being absent: a method the browser build
+     * simply does not have is a runtime TypeError at the call site, while
+     * `null` is a value the caller can render.
+     */
+    it('both adapters implement every member of MemoryIndexApi', () => {
+      const contract = readFileSync(
+        join(ROOT_DIR, 'src/shared/types/memory-index.types.ts'),
+        'utf-8'
+      )
+      const block = contract.split('export interface MemoryIndexApi {')[1]?.split('\n}')[0] ?? ''
+      const members = [...block.matchAll(/^\s{2}(\w+)\(/gm)].map((match) => match[1])
+      expect(members).toContain('cancel')
+      expect(members).toContain('mcpInvocation')
+
+      const tauri = readFileSync(TauriAdapter, 'utf-8')
+      const web = readFileSync(WebAdapter, 'utf-8')
+      const facade = readFileSync(join(LIB_DIR, 'memory-index-api.ts'), 'utf-8')
+      for (const member of members) {
+        expect(tauri, `tauri adapter is missing ${member}`).toMatch(
+          new RegExp(`\\b${member}\\s*\\(`)
+        )
+        expect(web, `web adapter is missing ${member}`).toMatch(new RegExp(`\\b${member}\\s*\\(`))
+        expect(facade, `facade is missing ${member}`).toMatch(new RegExp(`\\b${member}\\s*\\(`))
+      }
+    })
+
+    /**
+     * Progress has to reach both surfaces through the one event bus that works
+     * on both. A second bus would mean the browser client silently shows no
+     * progress at all for an operation that takes minutes.
+     */
+    it('build progress rides the shared event bus on both surfaces', () => {
+      const contract = readFileSync(
+        join(ROOT_DIR, 'src/shared/types/memory-index.types.ts'),
+        'utf-8'
+      )
+      expect(contract).toMatch(/MEMORY_INDEX_PROGRESS_EVENT\s*=\s*'acp:memory_index_progress'/)
+
+      const rust = readFileSync(join(ROOT_DIR, 'src-tauri/src/memory_index/commands.rs'), 'utf-8')
+      expect(rust).toMatch(/MEMORY_INDEX_PROGRESS_EVENT: &str = "acp:memory_index_progress"/)
+      // Desktop emits it, and the HTTP route fans the same constant out.
+      expect(rust).toMatch(/app\.emit\(MEMORY_INDEX_PROGRESS_EVENT/)
+      const webApi = readFileSync(join(ROOT_DIR, 'src-tauri/src/web/memory_index_api.rs'), 'utf-8')
+      expect(webApi).toMatch(/fan_out\(&sinks, None, MEMORY_INDEX_PROGRESS_EVENT/)
     })
 
     it('facade branches Tauri vs web by isTauriContext()', () => {

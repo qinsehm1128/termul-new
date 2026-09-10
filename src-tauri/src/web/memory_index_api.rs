@@ -25,6 +25,7 @@ use crate::memory_index::commands::{
     MemoryIndexBuildArgs, MemoryIndexListArgs, MemoryIndexScopeArgs, MemoryIndexSearchArgs,
     MemoryIndexSessionArgs,
 };
+use crate::memory_index::commands::{throttled, MEMORY_INDEX_PROGRESS_EVENT};
 use crate::memory_index::ingest::{IngestOptions, IngestReport};
 use crate::memory_index::service::{MemoryIndexStatus, MemorySearchResponse, MemorySessionDetail};
 use crate::memory_index::types::IndexedSession;
@@ -139,7 +140,13 @@ pub async fn build_post(
         "operation=memory_index_build full_rebuild={}",
         args.full_rebuild
     );
+    let relay = std::sync::Arc::clone(&state.relay);
     let body = match spawn_blocking(move || {
+        // Same throttle the desktop uses, so the two surfaces show motion at the
+        // same rate rather than one of them flooding its transport.
+        let mut emit = throttled(move |progress: &crate::memory_index::ingest::IngestProgress| {
+            broadcast_progress(&relay, progress);
+        });
         service.build(
             &project_root,
             &IngestOptions {
@@ -147,7 +154,7 @@ pub async fn build_post(
                 index_unscoped: args.index_unscoped,
                 ..IngestOptions::default()
             },
-            &mut |_| {},
+            &mut emit,
         )
     })
     .await
@@ -162,6 +169,44 @@ pub async fn build_post(
             IpcBody::<IngestReport>::err(error.detail, error.code)
         }
         Err(error) => IpcBody::<IngestReport>::err(error.to_string(), "MEMORY_INDEX_BUILD_FAILED"),
+    };
+    (StatusCode::OK, Json(body))
+}
+
+/// Fan one progress tick out to subscribed WebSocket clients.
+///
+/// Delivery is best-effort by design: a browser that missed a tick gets the next
+/// one, and the build must not slow down or fail because a client went away.
+fn broadcast_progress(
+    relay: &std::sync::Arc<crate::web::sink::WsRelaySink>,
+    progress: &crate::memory_index::ingest::IngestProgress,
+) {
+    let Ok(payload) = serde_json::to_value(progress) else {
+        return;
+    };
+    let relay_arc: std::sync::Arc<crate::web::sink::WsRelaySink> = std::sync::Arc::clone(relay);
+    let sinks: Vec<std::sync::Arc<dyn crate::web::sink::EventSink>> = vec![relay_arc];
+    if let Err(error) =
+        crate::web::sink::fan_out(&sinks, None, MEMORY_INDEX_PROGRESS_EVENT, &payload)
+    {
+        tracing::debug!(
+            target: "se_manager::web::memory_index_api",
+            "operation=memory_index_progress_degraded code={}",
+            error.code
+        );
+    }
+}
+
+/// Ask a running build to stop. `false` means nothing was running.
+pub async fn cancel_post(
+    State(state): State<AppState>,
+    Json(args): Json<MemoryIndexScopeArgs>,
+) -> impl IntoResponse {
+    let project_root = root_or_reject!(state, args.project_root, bool);
+    let service = service_or_unavailable!(state, bool);
+    let body = match service.cancel_build(&project_root) {
+        Ok(cancelled) => IpcBody::ok(cancelled),
+        Err(error) => IpcBody::<bool>::err(error.detail, error.code),
     };
     (StatusCode::OK, Json(body))
 }

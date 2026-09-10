@@ -55,17 +55,14 @@ export function createTauriMemoryIndexApi(): MemoryIndexApi {
     async getSession(args: MemoryIndexSessionArgs): Promise<MemorySessionDetail | null> {
       const raw = await invoke<unknown>('memory_index_session_cmd', { args })
       return parseMemorySessionDetail(raw)
+    },
+    async cancel(args: MemoryIndexScopeArgs): Promise<boolean> {
+      return (await invoke<unknown>('memory_index_cancel_cmd', { args })) === true
+    },
+    async mcpInvocation(args: MemoryIndexScopeArgs): Promise<string[] | null> {
+      const raw = await invoke<unknown>('memory_index_mcp_invocation_cmd', { args })
+      if (!Array.isArray(raw) || raw.length === 0) return null
+      return raw.every((part) => typeof part === 'string') ? (raw as string[]) : null
     }
   }
-}
-
-/**
- * The command line an external MCP client should be configured with.
- *
- * Desktop-only by nature: it names this machine's executable and this host's
- * state root, neither of which a browser client can act on.
- */
-export async function memoryIndexMcpInvocation(args: MemoryIndexScopeArgs): Promise<string[]> {
-  const raw = await invoke<unknown>('memory_index_mcp_invocation_cmd', { args })
-  return Array.isArray(raw) ? (raw as string[]) : []
 }

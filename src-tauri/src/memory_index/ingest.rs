@@ -23,6 +23,8 @@
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::adapters::{self, AdaptedTranscript, AdapterIssue};
@@ -31,6 +33,31 @@ use super::scope::ProjectFence;
 use super::store::MemoryStore;
 use super::types::{FileIdentity, SessionScope};
 use super::{MemoryIndexError, MemoryIndexResult, ERR_INGEST_FAILED};
+
+/// Cooperative stop signal for one build.
+///
+/// A build walks tens of thousands of files and took 154 s on the measured
+/// corpus, so "start it and wait" is not an acceptable only option. The flag is
+/// checked once per file: fine-grained enough that a cancel lands within one
+/// transcript, coarse enough to cost nothing.
+#[derive(Debug, Default, Clone)]
+pub struct CancelFlag(Arc<AtomicBool>);
+
+impl CancelFlag {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
 
 /// Deepest directory nesting followed while walking a vendor store.
 ///
@@ -72,6 +99,9 @@ impl Default for IngestOptions {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestProgress {
+    /// Which project this build belongs to. Carried in the event so a UI with
+    /// several projects open can route it without tracking a request id.
+    pub project_key: String,
     pub vendor: String,
     pub files_seen: u32,
     pub files_total: u32,
@@ -92,6 +122,12 @@ pub struct IngestReport {
     pub messages_indexed: u32,
     pub compactions_indexed: u32,
     pub duration_ms: u64,
+    /// The caller asked to stop before the walk finished.
+    ///
+    /// Everything already written is complete and usable — each session is its
+    /// own transaction — but the index is *partial*, which is why a cancelled
+    /// build never prunes (see [`build_index`]).
+    pub cancelled: bool,
     pub issues: Vec<AdapterIssue>,
 }
 
@@ -104,6 +140,7 @@ pub fn build_index(
     fence: &ProjectFence,
     state_root: &Path,
     options: &IngestOptions,
+    cancel: &CancelFlag,
     progress: &mut dyn FnMut(IngestProgress),
 ) -> MemoryIndexResult<IngestReport> {
     let started = Instant::now();
@@ -123,6 +160,7 @@ pub fn build_index(
         fence,
         &location,
         options,
+        cancel,
         &mut store,
         &mut report,
         &mut seen_keys,
@@ -133,6 +171,7 @@ pub fn build_index(
         fence,
         &location,
         options,
+        cancel,
         &mut store,
         &mut report,
         &mut seen_keys,
@@ -143,6 +182,7 @@ pub fn build_index(
         fence,
         &location,
         options,
+        cancel,
         &mut store,
         &mut report,
         &mut seen_keys,
@@ -150,7 +190,14 @@ pub fn build_index(
         progress,
     )?;
 
-    report.sessions_forgotten = prune_missing(&mut store, &seen_keys, &scanned_vendors)?;
+    // A cancelled build must not prune. `seen_keys` only lists what the walk
+    // reached, so pruning against it would read every transcript the walk never
+    // got to as deleted and erase it from the index — turning "stop early" into
+    // "throw most of it away".
+    report.cancelled = cancel.is_cancelled();
+    if !report.cancelled {
+        report.sessions_forgotten = prune_missing(&mut store, &seen_keys, &scanned_vendors)?;
+    }
     report.duration_ms = started.elapsed().as_millis() as u64;
     Ok(report)
 }
@@ -187,6 +234,7 @@ fn ingest_claude(
     fence: &ProjectFence,
     location: &IndexLocation,
     options: &IngestOptions,
+    cancel: &CancelFlag,
     store: &mut MemoryStore,
     report: &mut IngestReport,
     seen_keys: &mut Vec<String>,
@@ -219,8 +267,12 @@ fn ingest_claude(
     let mut roots_by_vendor_id: HashMap<String, String> = HashMap::new();
 
     for (index, path) in files.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         report.files_scanned += 1;
         progress(IngestProgress {
+            project_key: location.namespace_key.clone(),
             vendor: MemoryVendor::ClaudeCode.as_str().to_string(),
             files_seen: index as u32 + 1,
             files_total: total,
@@ -278,6 +330,7 @@ fn ingest_pi(
     fence: &ProjectFence,
     location: &IndexLocation,
     options: &IngestOptions,
+    cancel: &CancelFlag,
     store: &mut MemoryStore,
     report: &mut IngestReport,
     seen_keys: &mut Vec<String>,
@@ -309,8 +362,12 @@ fn ingest_pi(
         });
         let total = files.len() as u32;
         for (index, path) in files.iter().enumerate() {
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
             report.files_scanned += 1;
             progress(IngestProgress {
+                project_key: location.namespace_key.clone(),
                 vendor: MemoryVendor::Pi.as_str().to_string(),
                 files_seen: index as u32 + 1,
                 files_total: total,
@@ -350,6 +407,7 @@ fn ingest_codex(
     fence: &ProjectFence,
     location: &IndexLocation,
     options: &IngestOptions,
+    cancel: &CancelFlag,
     store: &mut MemoryStore,
     report: &mut IngestReport,
     seen_keys: &mut Vec<String>,
@@ -384,8 +442,12 @@ fn ingest_codex(
     }
     let mut entries: Vec<CodexEntry> = Vec::new();
     for (index, path) in files.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         report.files_scanned += 1;
         progress(IngestProgress {
+            project_key: location.namespace_key.clone(),
             vendor: MemoryVendor::Codex.as_str().to_string(),
             files_seen: index as u32 + 1,
             files_total: total,
@@ -433,6 +495,9 @@ fn ingest_codex(
     let resolve_root = |thread: &str| resolve_codex_root(&threads, thread);
 
     for entry in &entries {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         let Some(identity) = read_identity(&entry.path) else {
             continue;
         };
@@ -710,8 +775,16 @@ mod tests {
     }
 
     fn build(fixture: &Fixture, options: IngestOptions) -> IngestReport {
+        build_with_cancel(fixture, options, &CancelFlag::new())
+    }
+
+    fn build_with_cancel(
+        fixture: &Fixture,
+        options: IngestOptions,
+        cancel: &CancelFlag,
+    ) -> IngestReport {
         let fence = ProjectFence::single(&fixture.project_root).unwrap();
-        build_index(&fence, &fixture.state_root, &options, &mut |_| {}).unwrap()
+        build_index(&fence, &fixture.state_root, &options, cancel, &mut |_| {}).unwrap()
     }
 
     fn open_store(fixture: &Fixture) -> MemoryStore {
@@ -988,6 +1061,121 @@ mod tests {
         assert_eq!(rebuilt.sessions_skipped_unchanged, 0);
     }
 
+    /// A cancelled build must not prune. `seen_keys` only lists what the walk
+    /// reached, so pruning against a partial list reads every transcript the
+    /// walk never got to as deleted — turning "stop early" into "throw most of
+    /// the index away".
+    #[test]
+    fn a_cancelled_build_keeps_everything_it_has_not_reached_yet() {
+        let fixture = fixture();
+        let cwd = fixture.project_root.to_string_lossy().into_owned();
+        for index in 0..4 {
+            write(
+                &fixture.claude_project_dir.join(format!("c{index}.jsonl")),
+                &claude_lines(
+                    &format!("sess-c{index}"),
+                    false,
+                    "2026-09-01T00:00:00.000Z",
+                    &format!("claude {index}"),
+                ),
+            );
+        }
+        write(
+            &fixture.codex_sessions.join("x1.jsonl"),
+            &codex_lines("sess-x1", &cwd, "2026-09-01T00:00:00.000Z", "codex kept"),
+        );
+        let full = build(&fixture, IngestOptions::default());
+        assert_eq!(full.sessions_indexed, 5);
+        assert!(!full.cancelled);
+
+        // Cancel before the walk starts: nothing is reached, so nothing may be
+        // pruned even though `seen_keys` is empty.
+        let cancel = CancelFlag::new();
+        cancel.cancel();
+        let stopped = build_with_cancel(&fixture, IngestOptions::default(), &cancel);
+        assert!(stopped.cancelled, "the report did not say it was cancelled");
+        assert_eq!(stopped.files_scanned, 0);
+        assert_eq!(
+            stopped.sessions_forgotten, 0,
+            "a cancelled build pruned {} sessions",
+            stopped.sessions_forgotten
+        );
+
+        let store = open_store(&fixture);
+        assert_eq!(
+            store.counts().unwrap().0,
+            5,
+            "the cancelled build erased sessions it never looked at"
+        );
+    }
+
+    /// Cancelling partway leaves what was already written and stops the rest.
+    #[test]
+    fn cancelling_partway_stops_the_walk_and_keeps_what_was_written() {
+        let fixture = fixture();
+        for index in 0..6 {
+            write(
+                &fixture.claude_project_dir.join(format!("c{index}.jsonl")),
+                &claude_lines(
+                    &format!("sess-c{index}"),
+                    false,
+                    "2026-09-01T00:00:00.000Z",
+                    &format!("claude {index}"),
+                ),
+            );
+        }
+        let fence = ProjectFence::single(&fixture.project_root).unwrap();
+        let cancel = CancelFlag::new();
+        let mut seen = 0_u32;
+        let report = build_index(
+            &fence,
+            &fixture.state_root,
+            &IngestOptions::default(),
+            &cancel,
+            &mut |progress: IngestProgress| {
+                seen += 1;
+                // Pull the plug after the second file.
+                if progress.files_seen == 2 {
+                    cancel.cancel();
+                }
+            },
+        )
+        .unwrap();
+
+        assert!(report.cancelled);
+        assert_eq!(seen, 2, "the walk kept going after the cancel");
+        assert_eq!(report.files_scanned, 2);
+        assert_eq!(report.sessions_forgotten, 0);
+        // Whatever was committed is complete and readable.
+        assert_eq!(open_store(&fixture).counts().unwrap().0, 2);
+    }
+
+    /// Progress carries the project key, so a UI with several projects open can
+    /// route the event without inventing a request id.
+    #[test]
+    fn progress_names_the_project_it_belongs_to() {
+        let fixture = fixture();
+        write(
+            &fixture.claude_project_dir.join("c1.jsonl"),
+            &claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", "text"),
+        );
+        let fence = ProjectFence::single(&fixture.project_root).unwrap();
+        let expected = fence.namespace_key();
+        let mut seen: Vec<IngestProgress> = Vec::new();
+        build_index(
+            &fence,
+            &fixture.state_root,
+            &IngestOptions::default(),
+            &CancelFlag::new(),
+            &mut |progress: IngestProgress| seen.push(progress),
+        )
+        .unwrap();
+        assert!(!seen.is_empty());
+        for progress in &seen {
+            assert_eq!(progress.project_key, expected);
+        }
+    }
+
     /// A skipped-unchanged **sidechain** must not register itself under its
     /// parent's id.
     ///
@@ -1187,6 +1375,7 @@ mod tests {
             &fence,
             &fixture.state_root,
             &IngestOptions::default(),
+            &CancelFlag::new(),
             &mut |progress| seen.push(progress),
         )
         .unwrap();
@@ -1271,7 +1460,8 @@ mod tests {
             &fence,
             temp.path(),
             &IngestOptions::default(),
-            &mut |progress| {
+            &CancelFlag::new(),
+            &mut |progress: IngestProgress| {
                 if progress.files_seen % 50 == 0 {
                     eprintln!(
                         "  {} {}/{}",

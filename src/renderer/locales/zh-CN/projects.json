@@ -291,5 +291,12 @@
   "organizeHistoryDone": "已整理 {{sessions}} 个会话、{{messages}} 条消息，用时 {{seconds}} 秒",
   "organizeHistoryEmpty": "没有找到这个项目的历史会话",
   "organizeHistoryFailed": "整理历史会话失败",
-  "organizeHistoryNoPath": "该项目还没有指定文件夹，无法整理历史会话"
+  "organizeHistoryNoPath": "该项目还没有指定文件夹，无法整理历史会话",
+  "organizeHistoryProgress": "整理历史会话… {{seen}}/{{total}}（已入库 {{sessions}}）",
+  "organizeHistoryCancel": "停止整理",
+  "organizeHistoryCancelled": "已停止，已入库 {{sessions}} 个会话（索引不完整）",
+  "copyMemoryMcpConfig": "复制记忆库 MCP 配置",
+  "memoryMcpCopied": "MCP 配置已复制",
+  "memoryMcpUnavailable": "浏览器端拿不到 MCP 配置：它指向宿主机的可执行文件与状态目录",
+  "memoryMcpFailed": "读取 MCP 配置失败"
 }

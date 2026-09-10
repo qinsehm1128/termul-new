@@ -22,11 +22,11 @@
 //! longer be what that file says; those hits are withheld unless the caller
 //! explicitly asks for them.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use super::ingest::{self, IngestOptions, IngestProgress, IngestReport};
+use super::ingest::{self, CancelFlag, IngestOptions, IngestProgress, IngestReport};
 use super::paths::MemoryVendor;
 use super::scope::ProjectFence;
 use super::store::{MemorySearchHit, MemoryStore, MAX_QUERY_LIMIT};
@@ -119,7 +119,11 @@ pub struct MemoryIndexService {
     /// five-second stall and then an error, having already half-applied one of
     /// the two prunes. Refusing the second build outright is both cheaper and
     /// the honest answer.
-    building: Arc<Mutex<HashSet<String>>>,
+    ///
+    /// The map doubles as the cancel registry: the value is the running build's
+    /// stop flag, so [`Self::cancel_build`] is a lookup rather than a second
+    /// structure that has to be kept in step with this one.
+    building: Arc<Mutex<HashMap<String, CancelFlag>>>,
 }
 
 impl MemoryIndexService {
@@ -127,7 +131,7 @@ impl MemoryIndexService {
     pub fn new(state_root: PathBuf) -> Self {
         Self {
             state_root,
-            building: Arc::new(Mutex::new(HashSet::new())),
+            building: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -148,8 +152,39 @@ impl MemoryIndexService {
         progress: &mut dyn FnMut(IngestProgress),
     ) -> MemoryIndexResult<IngestReport> {
         let fence = ProjectFence::single(project_root)?;
-        let _guard = BuildGuard::acquire(&self.building, fence.namespace_key())?;
-        ingest::build_index(&fence, &self.state_root, options, progress)
+        let guard = BuildGuard::acquire(&self.building, fence.namespace_key())?;
+        ingest::build_index(&fence, &self.state_root, options, guard.cancel(), progress)
+    }
+
+    /// Ask a running build for this project to stop.
+    ///
+    /// Returns `false` when nothing was running — not an error, because the
+    /// build may simply have finished between the user clicking and this call
+    /// arriving, and a UI should not have to explain that race.
+    ///
+    /// Cooperative: the flag is read once per file, so the build stops within
+    /// one transcript rather than instantly. Everything already written stays —
+    /// each session is its own transaction — and a cancelled build never prunes.
+    pub fn cancel_build(&self, project_root: &Path) -> MemoryIndexResult<bool> {
+        let fence = ProjectFence::single(project_root)?;
+        let key = fence.namespace_key();
+        let in_flight = lock(&self.building);
+        match in_flight.get(&key) {
+            Some(flag) => {
+                flag.cancel();
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Is a build running for this project right now?
+    #[must_use]
+    pub fn is_building(&self, project_root: &Path) -> bool {
+        let Ok(fence) = ProjectFence::single(project_root) else {
+            return false;
+        };
+        lock(&self.building).contains_key(&fence.namespace_key())
     }
 
     pub fn status(&self, project_root: &Path) -> MemoryIndexResult<MemoryIndexStatus> {
@@ -367,44 +402,54 @@ fn parse_agents(agents: &[String]) -> MemoryIndexResult<Vec<MemoryVendor>> {
 /// A guard rather than a bare insert/remove pair so the slot is released on
 /// every exit path, including an error partway through a two-minute walk.
 struct BuildGuard {
-    building: Arc<Mutex<HashSet<String>>>,
+    building: Arc<Mutex<HashMap<String, CancelFlag>>>,
     project_key: String,
+    cancel: CancelFlag,
 }
 
 impl BuildGuard {
     fn acquire(
-        building: &Arc<Mutex<HashSet<String>>>,
+        building: &Arc<Mutex<HashMap<String, CancelFlag>>>,
         project_key: String,
     ) -> MemoryIndexResult<Self> {
+        let cancel = CancelFlag::new();
         {
-            let mut in_flight = building.lock().unwrap_or_else(|poisoned| {
-                // A panic in a previous build must not make the feature
-                // permanently unavailable; the set is plain data.
-                building.clear_poison();
-                poisoned.into_inner()
-            });
-            if !in_flight.insert(project_key.clone()) {
+            let mut in_flight = lock(building);
+            if in_flight.contains_key(&project_key) {
                 return Err(MemoryIndexError::new(
                     ERR_BUILD_IN_PROGRESS,
                     "a memory index build is already running for this project",
                 ));
             }
+            in_flight.insert(project_key.clone(), cancel.clone());
         }
         Ok(Self {
             building: Arc::clone(building),
             project_key,
+            cancel,
         })
+    }
+
+    fn cancel(&self) -> &CancelFlag {
+        &self.cancel
     }
 }
 
 impl Drop for BuildGuard {
     fn drop(&mut self) {
-        let mut in_flight = self.building.lock().unwrap_or_else(|poisoned| {
-            self.building.clear_poison();
-            poisoned.into_inner()
-        });
-        in_flight.remove(&self.project_key);
+        lock(&self.building).remove(&self.project_key);
     }
+}
+
+/// A panic in a previous build must not make the feature permanently
+/// unavailable; the map is plain data with no invariant a panic could break.
+fn lock(
+    building: &Arc<Mutex<HashMap<String, CancelFlag>>>,
+) -> std::sync::MutexGuard<'_, HashMap<String, CancelFlag>> {
+    building.lock().unwrap_or_else(|poisoned| {
+        building.clear_poison();
+        poisoned.into_inner()
+    })
 }
 
 /// Apply the same freshness gate to compaction summaries that every other row

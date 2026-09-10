@@ -6,15 +6,55 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
-use super::ingest::{IngestOptions, IngestReport};
+use super::ingest::{IngestOptions, IngestProgress, IngestReport};
 use super::service::{
     MemoryIndexService, MemoryIndexStatus, MemorySearchRequest, MemorySearchResponse,
     MemorySessionDetail,
 };
 use super::types::IndexedSession;
+
+/// Progress event name.
+///
+/// The `acp:` prefix is the app's existing event-bus convention, not a claim
+/// that this is an ACP event: `AcpTransport::onEvent` is the one subscription
+/// path the renderer has that works on both surfaces, and it maps `acp:x` to the
+/// WebSocket type `x`. Inventing a second bus for one event would mean the
+/// browser client silently gets no progress at all.
+pub const MEMORY_INDEX_PROGRESS_EVENT: &str = "acp:memory_index_progress";
+
+/// Shortest gap between two progress events.
+///
+/// The walk reports once per file — 3139 of them on the measured corpus, and an
+/// incremental pass skips through unchanged files far faster than a human eye
+/// or a React render can follow. Throttling here rather than in `ingest` keeps
+/// the walk's own reporting exact for tests while bounding what crosses the IPC
+/// boundary. The last event of a build is always sent (see `throttled`).
+const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(150);
+
+/// Wrap a progress sink so it fires at most once per [`PROGRESS_MIN_INTERVAL`],
+/// plus always on the first and last file of each vendor.
+///
+/// "Last file" is knowable without lookahead because [`IngestProgress`] carries
+/// `files_seen` and `files_total`: the final event of a vendor is the one where
+/// they are equal, and that is the event a progress bar must not miss or it
+/// sticks at 97%.
+pub(crate) fn throttled(
+    mut sink: impl FnMut(&IngestProgress),
+) -> impl FnMut(IngestProgress) {
+    let mut last_sent: Option<Instant> = None;
+    move |progress: IngestProgress| {
+        let boundary = progress.files_seen <= 1 || progress.files_seen >= progress.files_total;
+        let due = last_sent.is_none_or(|at| at.elapsed() >= PROGRESS_MIN_INTERVAL);
+        if boundary || due {
+            last_sent = Some(Instant::now());
+            sink(&progress);
+        }
+    }
+}
 
 /// Arguments shared by every command. `projectRoot` is a single path on
 /// purpose: the memory index is per-project, and a list here would be the first
@@ -77,6 +117,7 @@ pub struct MemoryIndexSessionArgs {
 /// of files and took 154 s over this project's real corpus.
 #[tauri::command]
 pub async fn memory_index_build_cmd(
+    app: AppHandle,
     service: State<'_, Arc<MemoryIndexService>>,
     args: MemoryIndexBuildArgs,
 ) -> Result<IngestReport, String> {
@@ -88,6 +129,9 @@ pub async fn memory_index_build_cmd(
         args.index_unscoped
     );
     tokio::task::spawn_blocking(move || {
+        let mut emit = throttled(move |progress: &IngestProgress| {
+            let _ = app.emit(MEMORY_INDEX_PROGRESS_EVENT, progress);
+        });
         service
             .build(
                 &PathBuf::from(args.project_root),
@@ -96,12 +140,23 @@ pub async fn memory_index_build_cmd(
                     index_unscoped: args.index_unscoped,
                     ..IngestOptions::default()
                 },
-                &mut |_| {},
+                &mut emit,
             )
             .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| format!("memory index build join failed: {error}"))?
+}
+
+/// Ask a running build to stop. `false` means nothing was running.
+#[tauri::command]
+pub async fn memory_index_cancel_cmd(
+    service: State<'_, Arc<MemoryIndexService>>,
+    args: MemoryIndexScopeArgs,
+) -> Result<bool, String> {
+    service
+        .cancel_build(&PathBuf::from(args.project_root))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

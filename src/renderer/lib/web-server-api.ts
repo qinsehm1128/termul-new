@@ -434,6 +434,11 @@ export const webServerMemoryIndex = {
     const res = await postJson<unknown>('/memory-index/session', args)
     if (!res.success) throw new Error(res.error)
     return parseMemorySessionDetail(res.data)
+  },
+  async cancel(args: MemoryIndexScopeArgs): Promise<boolean> {
+    const res = await postJson<unknown>('/memory-index/cancel', args)
+    if (!res.success) throw new Error(res.error)
+    return res.data === true
   }
 }
 

@@ -190,6 +190,12 @@ export interface MemoryIndexBuildReport {
   compactionsIndexed: number
   durationMs: number
   issues: MemoryIndexIssue[]
+  /**
+   * The caller stopped the build early. Everything written is complete and
+   * usable, but the index is partial — which is also why a cancelled build
+   * never prunes.
+   */
+  cancelled: boolean
 }
 
 export interface MemoryIndexBuildArgs {
@@ -211,6 +217,38 @@ export interface MemoryIndexListArgs {
   limit?: number | null
   includeUnscoped?: boolean
   agents?: MemoryIndexAgentId[]
+}
+
+/**
+ * One progress tick from a running build.
+ *
+ * Rides the app's existing event bus (`AcpTransport.onEvent`), which is the one
+ * subscription path that works on both desktop and browser. The `acp:` prefix is
+ * that bus's naming convention, not a claim that this is an ACP event.
+ */
+export const MEMORY_INDEX_PROGRESS_EVENT = 'acp:memory_index_progress' as const
+
+export interface MemoryIndexProgress {
+  /** Which project this build belongs to, so several open projects can be told apart. */
+  projectKey: string
+  vendor: MemoryIndexAgentId | string
+  filesSeen: number
+  filesTotal: number
+  sessionsIndexed: number
+}
+
+export function parseMemoryIndexProgress(raw: unknown): MemoryIndexProgress | null {
+  if (!isRecord(raw)) return null
+  const { projectKey, vendor, filesSeen, filesTotal, sessionsIndexed } = raw
+  if (typeof projectKey !== 'string' || typeof vendor !== 'string') return null
+  if (
+    typeof filesSeen !== 'number' ||
+    typeof filesTotal !== 'number' ||
+    typeof sessionsIndexed !== 'number'
+  ) {
+    return null
+  }
+  return { projectKey, vendor, filesSeen, filesTotal, sessionsIndexed }
 }
 
 export interface MemoryIndexSessionArgs {
@@ -235,10 +273,27 @@ export interface MemoryIndexSessionArgs {
  */
 export interface MemoryIndexApi {
   build(args: MemoryIndexBuildArgs): Promise<MemoryIndexBuildReport>
+  /**
+   * Ask a running build to stop. Resolves `false` when nothing was running —
+   * the build may have finished between the click and the call, and that race
+   * is not something a UI should have to explain.
+   */
+  cancel(args: MemoryIndexScopeArgs): Promise<boolean>
   status(args: MemoryIndexScopeArgs): Promise<MemoryIndexStatus>
   search(args: MemoryIndexSearchArgs): Promise<MemorySearchResponse>
   listSessions(args: MemoryIndexListArgs): Promise<MemoryIndexedSession[]>
   getSession(args: MemoryIndexSessionArgs): Promise<MemorySessionDetail | null>
+  /**
+   * The exact command line an external MCP client should be configured with,
+   * or `null` where it cannot be produced.
+   *
+   * Desktop-only by nature, and `null` is the honest answer on the web rather
+   * than a guess: the invocation names *this machine's* executable and *this
+   * host's* state root. A browser client cannot run either, and handing it a
+   * plausible-looking path that does not exist on the machine it is displayed
+   * on is worse than saying the surface has no answer.
+   */
+  mcpInvocation(args: MemoryIndexScopeArgs): Promise<string[] | null>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
