@@ -76,6 +76,13 @@ fn main() -> ExitCode {
         return ExitCode::from(se_manager_lib::host_mcp::child::run() as u8);
     }
 
+    // `--memory-mcp-server`: standalone read-only memory MCP server for
+    // external clients. Branch before any server stack init, exactly like the
+    // plan child above — it serves stdio and nothing else.
+    if se_manager_lib::memory_index::stdio_mcp::is_invocation() {
+        return ExitCode::from(se_manager_lib::memory_index::stdio_mcp::run() as u8);
+    }
+
     let (server_args, maintenance) = match parse_conversation_maintenance_args(&raw_args) {
         Ok(parsed) => parsed,
         Err(message) => {
