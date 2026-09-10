@@ -603,7 +603,7 @@ mod tests {
             tool_call_id: None,
             source: pointer,
         };
-        store.replace_session(&session, &[message], &[]).unwrap();
+        store.replace_session(&session, &[message], &[], 0,).unwrap();
         key
     }
 
@@ -633,7 +633,7 @@ mod tests {
         };
         let existing = store.get_session(&record.session_key).unwrap();
         let session = existing.expect("seed the session first");
-        store.replace_session(&session, &[], &[record]).unwrap();
+        store.replace_session(&session, &[], &[record], 0,).unwrap();
     }
 
     fn search_for(harness: &Harness, query: &str, include_stale: bool) -> MemorySearchResponse {

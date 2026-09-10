@@ -38,13 +38,34 @@ pub const MAX_INDEXED_TEXT_BYTES: usize = 32 * 1024;
 /// Longest title derived from a first message.
 const MAX_TITLE_CHARS: usize = 80;
 
+/// Where a resumed adapt run should pick up.
+///
+/// Present only when the previous pass over this exact file can be trusted:
+/// the file grew, its device/inode are unchanged, and the last record it
+/// indexed still hashes to what was stored. Ingest decides that; an adapter
+/// just honours it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResumeFrom {
+    /// A boundary previously reported through [`RecordScan::resume_offset`].
+    pub byte_offset: u64,
+    /// The ordinal to give the first newly-read message.
+    pub next_ordinal: u32,
+}
+
 /// What an adapter produced for one file.
+///
+/// On a resumed run this describes only the **newly read tail**: `session`
+/// carries whatever the tail could determine and `None` for anything that lives
+/// in the file's header, and `messages` starts at [`ResumeFrom::next_ordinal`].
+/// Merging it onto the stored row is ingest's job — see `merge_resumed`.
 #[derive(Debug, Clone, Default)]
 pub struct AdaptedTranscript {
     pub session: Option<IndexedSession>,
     pub messages: Vec<NormalizedMessage>,
     pub compactions: Vec<CompactionRecord>,
     pub issues: Vec<AdapterIssue>,
+    /// Where the next pass over this file may start.
+    pub resume_offset: u64,
 }
 
 /// Something worth reporting that did not stop the adapter.
@@ -89,7 +110,26 @@ pub struct RawRecord {
     pub value: Value,
 }
 
-/// Stream a JSONL file with a hard per-record memory bound.
+/// What one pass over a transcript found, and where the next pass may start.
+#[derive(Debug, Clone, Default)]
+pub struct RecordScan {
+    pub issues: Vec<AdapterIssue>,
+    /// Byte offset just past the last **newline-terminated** line.
+    ///
+    /// Deliberately not "end of file". A transcript that is being written to
+    /// right now can end in a half-written line, and a JSON parse of half a
+    /// record either fails or — worse — succeeds on a prefix that happens to be
+    /// valid. Resuming from the last complete line means the partial one is read
+    /// again when the rest of it lands, which is the only way an append-resume
+    /// can be correct on a live file.
+    ///
+    /// A complete line that failed to parse still advances this: it was whole,
+    /// re-reading it would fail again, and refusing to move past it would stall
+    /// the session forever.
+    pub resume_offset: u64,
+}
+
+/// Stream a JSONL file from `start_offset` with a hard per-record memory bound.
 ///
 /// `BufRead::read_until` grows its buffer without limit, so one pathological
 /// line in a 2.6 GB transcript could allocate gigabytes. This reader
@@ -97,26 +137,44 @@ pub struct RawRecord {
 /// without keeping it, reporting the record as oversized. Bounded memory is not
 /// a nicety here: single transcripts on the measured machine reach 2.6 GB, and
 /// several nested pi files reach 1.8 GB.
-pub fn for_each_record<F>(path: &Path, mut visit: F) -> Vec<AdapterIssue>
+///
+/// `start_offset` must be a boundary a previous scan reported through
+/// [`RecordScan::resume_offset`]; starting anywhere else lands mid-record.
+pub fn for_each_record<F>(path: &Path, start_offset: u64, mut visit: F) -> RecordScan
 where
     F: FnMut(RawRecord),
 {
-    let mut issues = Vec::new();
-    let file = match File::open(path) {
+    let mut scan = RecordScan {
+        issues: Vec::new(),
+        resume_offset: start_offset,
+    };
+    let mut file = match File::open(path) {
         Ok(file) => file,
         Err(error) => {
-            issues.push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
-            return issues;
+            scan
+                .issues
+                .push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
+            return scan;
         }
     };
+    if start_offset > 0 {
+        use std::io::{Seek, SeekFrom};
+        if let Err(error) = file.seek(SeekFrom::Start(start_offset)) {
+            scan
+                .issues
+                .push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
+            return scan;
+        }
+    }
     let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let mut offset: u64 = 0;
+    let mut offset: u64 = start_offset;
 
     loop {
         let mut line = Vec::new();
         let mut consumed: u64 = 0;
         let mut overflowed = false;
         let mut hit_eof = false;
+        let mut newline_terminated = false;
 
         loop {
             let available = match reader.fill_buf() {
@@ -127,8 +185,10 @@ where
                 Ok(buffer) => buffer,
                 Err(ref error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) => {
-                    issues.push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
-                    return issues;
+                    scan
+                        .issues
+                        .push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
+                    return scan;
                 }
             };
             match available.iter().position(|byte| *byte == b'\n') {
@@ -142,6 +202,7 @@ where
                     let step = index + 1;
                     reader.consume(step);
                     consumed += step as u64;
+                    newline_terminated = true;
                     break;
                 }
                 None => {
@@ -158,7 +219,7 @@ where
         }
 
         if overflowed {
-            issues.push(AdapterIssue::new(
+            scan.issues.push(AdapterIssue::new(
                 ISSUE_OVERSIZED_RECORD,
                 path,
                 format!("record at byte {offset} exceeds {MAX_RECORD_BYTES} bytes"),
@@ -174,11 +235,14 @@ where
         }
 
         offset += consumed;
+        if newline_terminated {
+            scan.resume_offset = offset;
+        }
         if hit_eof {
             break;
         }
     }
-    issues
+    scan
 }
 
 /// `<vendor>:<absolute path>`.
@@ -527,7 +591,7 @@ mod flattening_invariants {
         );
         let identity = FileIdentity::read(&claude).unwrap();
         assert_uniform(
-            &super::claude::adapt(&claude, &identity, "p", SessionScope::Scoped, &|_| None),
+            &super::claude::adapt(&claude, &identity, "p", SessionScope::Scoped, &|_| None, None),
             "claude",
         );
 
@@ -550,6 +614,7 @@ mod flattening_invariants {
                 SessionScope::Scoped,
                 super::super::types::LineageDepth::nested(1),
                 Some("pi:/root.jsonl".to_string()),
+                None,
             ),
             "pi",
         );
@@ -569,7 +634,15 @@ mod flattening_invariants {
         let identity = FileIdentity::read(&codex).unwrap();
         let meta = super::codex::read_meta(&codex).expect("meta");
         assert_uniform(
-            &super::codex::adapt(&codex, &identity, "p", SessionScope::Scoped, &meta, &|_| None),
+            &super::codex::adapt(
+                &codex,
+                &identity,
+                "p",
+                SessionScope::Scoped,
+                &meta,
+                &|_| None,
+                None,
+            ),
             "codex",
         );
     }
@@ -591,10 +664,10 @@ mod tests {
         drop(file);
 
         let mut seen = Vec::new();
-        let issues = for_each_record(&path, |record| {
+        let issues = for_each_record(&path, 0, |record| {
             seen.push((record.byte_offset, record.value["n"].as_u64().unwrap()));
         });
-        assert!(issues.is_empty());
+        assert!(issues.issues.is_empty());
         // `{"n":1}` is 7 bytes plus its newline.
         assert_eq!(seen, vec![(0, 1), (8, 2), (16, 3)]);
     }
@@ -608,7 +681,7 @@ mod tests {
         std::fs::write(&path, "{\"n\":1}\n{\"n\":22}\n{\"n\":333}\n").unwrap();
         let identity = crate::memory_index::types::FileIdentity::read(&path).unwrap();
         let mut pointers = Vec::new();
-        for_each_record(&path, |record| {
+        for_each_record(&path, 0, |record| {
             pointers.push(crate::memory_index::types::SourcePointer::for_record(
                 &identity,
                 path.to_str().unwrap(),
@@ -635,9 +708,9 @@ mod tests {
         let path = temp.path().join("t.jsonl");
         std::fs::write(&path, "{\"n\":1}\n\nnot json\n{\"n\":2}\n").unwrap();
         let mut count = 0;
-        let issues = for_each_record(&path, |_| count += 1);
+        let issues = for_each_record(&path, 0, |_| count += 1);
         assert_eq!(count, 2);
-        assert!(issues.is_empty());
+        assert!(issues.issues.is_empty());
     }
 
     #[test]
@@ -646,7 +719,7 @@ mod tests {
         let path = temp.path().join("t.jsonl");
         std::fs::write(&path, "{\"n\":1}\n{\"n\":2}").unwrap();
         let mut seen = Vec::new();
-        for_each_record(&path, |record| {
+        for_each_record(&path, 0, |record| {
             seen.push(record.value["n"].as_u64().unwrap())
         });
         assert_eq!(seen, vec![1, 2]);
@@ -663,21 +736,21 @@ mod tests {
         std::fs::write(&path, format!("{{\"n\":1}}\n{huge}\n{{\"n\":2}}\n")).unwrap();
 
         let mut seen = Vec::new();
-        let issues = for_each_record(&path, |record| {
+        let issues = for_each_record(&path, 0, |record| {
             seen.push(record.value["n"].as_u64().unwrap_or(0));
         });
         assert_eq!(seen, vec![1, 2], "records after the oversized one are lost");
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].code, ISSUE_OVERSIZED_RECORD);
+        assert_eq!(issues.issues.len(), 1);
+        assert_eq!(issues.issues[0].code, ISSUE_OVERSIZED_RECORD);
     }
 
     #[test]
     fn a_missing_file_is_one_issue_and_no_records() {
-        let issues = for_each_record(Path::new("/nonexistent/x.jsonl"), |_| {
+        let scan = for_each_record(Path::new("/nonexistent/x.jsonl"), 0, |_| {
             panic!("must not visit any record")
         });
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].code, ISSUE_UNREADABLE);
+        assert_eq!(scan.issues.len(), 1);
+        assert_eq!(scan.issues[0].code, ISSUE_UNREADABLE);
     }
 
     #[test]

@@ -184,6 +184,11 @@ export interface MemoryIndexBuildReport {
   filesScanned: number
   sessionsIndexed: number
   sessionsSkippedUnchanged: number
+  /**
+   * Sessions whose transcript had only grown, so only the new tail was read
+   * instead of the whole file.
+   */
+  sessionsResumed: number
   sessionsForgotten: number
   sessionsOutOfScope: number
   messagesIndexed: number

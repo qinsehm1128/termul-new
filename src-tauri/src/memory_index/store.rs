@@ -58,7 +58,9 @@ const META_PROJECT_KEY: &str = "project_key";
 /// * 2 — `messages_fts(text, cjk)`.
 /// * 3 — `messages` keyed by `(session_id, ordinal)` instead of repeating the
 ///   transcript path in four columns of every row.
-const STORE_VERSION: u32 = 3;
+/// * 4 — `sessions.resume_offset`, so an appended transcript is read from where
+///   the last build stopped rather than from the beginning.
+const STORE_VERSION: u32 = 4;
 
 /// Hard cap on rows returned by any single query, applied after the caller's
 /// own limit. An MCP client asking for everything would otherwise be able to
@@ -102,6 +104,21 @@ pub struct MemorySearchHit {
     /// layer verifies before returning, which is where the authorization and
     /// freshness re-checks belong.
     pub source_fresh: bool,
+}
+
+/// Where a previous build stopped reading one transcript.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeState {
+    /// The file identity as it was when this session was last indexed.
+    pub identity: super::types::FileIdentity,
+    /// Byte offset just past the last newline-terminated line that was read.
+    pub resume_offset: u64,
+    /// The ordinal the next newly read message should get.
+    pub next_ordinal: u32,
+    /// The last indexed record's pointer, or `None` for a session with no
+    /// messages — in which case there is nothing to verify a prefix against and
+    /// the transcript must be read again from the start.
+    pub last_record: Option<SourcePointer>,
 }
 
 /// What one build pass did.
@@ -280,19 +297,138 @@ impl MemoryStore {
             .map_err(store_error("read indexed identity"))
     }
 
+    /// What a previous build left behind for one session, and whether the file
+    /// it was read from can still be trusted to have only grown.
+    ///
+    /// The verification anchor is the **last indexed record**: if its recorded
+    /// byte range still hashes to what was stored, the prefix was appended to
+    /// rather than rewritten. That is the check that catches the realistic
+    /// failure — a compaction or a rotation rewriting the transcript — and it
+    /// costs one small read instead of re-hashing the whole prefix.
+    pub fn resume_state(&self, session_key: &str) -> MemoryIndexResult<Option<ResumeState>> {
+        let state = self
+            .connection
+            .query_row(
+                "SELECT s.id, s.resume_offset, s.src_path,
+                        s.src_device, s.src_inode, s.src_size, s.src_mtime_ms,
+                        (SELECT COALESCE(MAX(m.ordinal) + 1, 0) FROM messages m
+                          WHERE m.session_id = s.id),
+                        (SELECT m.src_hash FROM messages m WHERE m.session_id = s.id
+                          ORDER BY m.ordinal DESC LIMIT 1),
+                        (SELECT m.src_offset FROM messages m WHERE m.session_id = s.id
+                          ORDER BY m.ordinal DESC LIMIT 1),
+                        (SELECT m.src_len FROM messages m WHERE m.session_id = s.id
+                          ORDER BY m.ordinal DESC LIMIT 1)
+                 FROM sessions s WHERE s.session_key = ?1",
+                params![session_key],
+                |row| {
+                    let identity = super::types::FileIdentity {
+                        device: row.get::<_, i64>(3)? as u64,
+                        inode: row.get::<_, i64>(4)? as u64,
+                        size_bytes: row.get::<_, i64>(5)? as u64,
+                        modified_unix_ms: row.get(6)?,
+                    };
+                    let last_record = match (
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<i64>>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
+                    ) {
+                        (Some(content_hash), Some(offset), Some(len)) => Some(SourcePointer {
+                            file_path: row.get(2)?,
+                            device: identity.device,
+                            inode: identity.inode,
+                            size_bytes: identity.size_bytes,
+                            modified_unix_ms: identity.modified_unix_ms,
+                            content_hash,
+                            byte_offset: offset as u64,
+                            byte_len: len as u64,
+                        }),
+                        _ => None,
+                    };
+                    Ok(ResumeState {
+                        identity,
+                        resume_offset: row.get::<_, i64>(1)? as u64,
+                        next_ordinal: row.get::<_, i64>(7)? as u32,
+                        last_record,
+                    })
+                },
+            )
+            .optional()
+            .map_err(store_error("read resume state"))?;
+        Ok(state)
+    }
+
+    /// Append a newly read tail onto a session that is already indexed.
+    ///
+    /// The counterpart to [`Self::replace_session`], and deliberately a separate
+    /// method rather than a flag: this one must **not** delete, and a boolean
+    /// parameter guarding a destructive branch is the kind of thing that gets
+    /// passed wrong once and silently wipes an index.
+    pub fn append_session(
+        &mut self,
+        session: &IndexedSession,
+        messages: &[NormalizedMessage],
+        compactions: &[CompactionRecord],
+        resume_offset: u64,
+    ) -> MemoryIndexResult<StoreWriteReport> {
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(store_error("begin append"))?;
+        let session_id: i64 = transaction
+            .query_row(
+                "SELECT id FROM sessions WHERE session_key = ?1",
+                params![session.session_key],
+                |row| row.get(0),
+            )
+            .map_err(store_error("locate session for append"))?;
+        for message in messages {
+            write_message_row(&transaction, session_id, message)?;
+        }
+        for compaction in compactions {
+            write_compaction_row(&transaction, session_id, compaction)?;
+        }
+        transaction
+            .execute(
+                "UPDATE sessions SET
+                     last_activity_at_utc = ?2, last_activity_at_ms = ?3,
+                     message_count = ?4, tool_count = ?5,
+                     src_size = ?6, src_mtime_ms = ?7, resume_offset = ?8
+                 WHERE id = ?1",
+                params![
+                    session_id,
+                    session.last_activity_at_utc,
+                    session.last_activity_at_ms,
+                    session.message_count as i64,
+                    session.tool_count as i64,
+                    session.source.size_bytes as i64,
+                    session.source.modified_unix_ms,
+                    resume_offset as i64,
+                ],
+            )
+            .map_err(store_error("update appended session"))?;
+        transaction.commit().map_err(store_error("commit append"))?;
+        Ok(StoreWriteReport {
+            sessions_written: 1,
+            messages_written: messages.len() as u32,
+            compactions_written: compactions.len() as u32,
+        })
+    }
+
     /// Replace everything stored for one session, in a single transaction.
     pub fn replace_session(
         &mut self,
         session: &IndexedSession,
         messages: &[NormalizedMessage],
         compactions: &[CompactionRecord],
+        resume_offset: u64,
     ) -> MemoryIndexResult<StoreWriteReport> {
         let transaction = self
             .connection
             .transaction()
             .map_err(store_error("begin transaction"))?;
         delete_session_rows(&transaction, &session.session_key)?;
-        let session_id = write_session_row(&transaction, session)?;
+        let session_id = write_session_row(&transaction, session, resume_offset)?;
         for message in messages {
             write_message_row(&transaction, session_id, message)?;
         }
@@ -752,6 +888,7 @@ fn delete_session_rows(transaction: &Transaction<'_>, session_key: &str) -> Memo
 fn write_session_row(
     transaction: &Transaction<'_>,
     session: &IndexedSession,
+    resume_offset: u64,
 ) -> MemoryIndexResult<i64> {
     transaction
         .execute(
@@ -762,7 +899,7 @@ fn write_session_row(
                 last_activity_at_utc, last_activity_at_ms,
                 timestamp_confidence, message_count, tool_count, file_path,
                 src_path, src_device, src_inode, src_size, src_mtime_ms,
-                src_hash, src_offset, src_len
+                src_hash, src_offset, src_len, resume_offset
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9,
@@ -770,7 +907,7 @@ fn write_session_row(
                 ?12, ?13,
                 ?14, ?15, ?16, ?17,
                 ?18, ?19, ?20, ?21, ?22,
-                ?23, ?24, ?25
+                ?23, ?24, ?25, ?26
              )",
             params![
                 session.session_key,
@@ -798,6 +935,7 @@ fn write_session_row(
                 session.source.content_hash,
                 session.source.byte_offset as i64,
                 session.source.byte_len as i64,
+                resume_offset as i64,
             ],
         )
         .map_err(store_error("insert session"))?;
@@ -1030,7 +1168,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     src_mtime_ms         INTEGER NOT NULL,
     src_hash             TEXT NOT NULL,
     src_offset           INTEGER NOT NULL,
-    src_len              INTEGER NOT NULL
+    src_len              INTEGER NOT NULL,
+    -- Byte offset just past the last newline-terminated line this session was
+    -- indexed from. An appended transcript resumes here instead of being read
+    -- again from zero; see `adapters::RecordScan::resume_offset` for why it is
+    -- not simply the file size.
+    resume_offset        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS sessions_first_message ON sessions(first_message_at_ms);
 CREATE INDEX IF NOT EXISTS sessions_scope ON sessions(scope);
@@ -1203,8 +1346,7 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
 
         for (query, expected) in [
@@ -1238,8 +1380,7 @@ mod tests {
                     "内存索引",
                     LineageDepth::ROOT,
                 )],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         // `内` starts the bigram `内存`, so a prefix term reaches it.
         assert_eq!(store.search("内", false, &[], 10).unwrap().len(), 1);
@@ -1271,8 +1412,7 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         // Implicit AND across the two columns: only the first row has both.
         let hits = store.search("ENOENT 文件", false, &[], 10).unwrap();
@@ -1295,8 +1435,7 @@ mod tests {
                     "git commit --no-verify",
                     LineageDepth::ROOT,
                 )],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         for query in ["no-verify", "--no-verify", "commit", "git commit"] {
             assert_eq!(
@@ -1323,8 +1462,7 @@ mod tests {
                     message("s1", 1, NormalizedRole::User, "the C++ build breaks", LineageDepth::ROOT),
                     message("s1", 2, NormalizedRole::ToolCall, "grep -rn \"foo\" src/", LineageDepth::ROOT),
                 ],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         for query in [".env", "C++", "-rn", "\"foo\""] {
             assert!(
@@ -1384,8 +1522,7 @@ mod tests {
                         "内存索引",
                         LineageDepth::ROOT,
                     )],
-                    &[],
-                )
+                    &[], 0,)
                 .unwrap();
             assert_eq!(
                 store.search("内存", false, &[], 10).unwrap().len(),
@@ -1438,8 +1575,7 @@ mod tests {
                     "内存索引",
                     LineageDepth::ROOT,
                 )],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         assert_eq!(store.search("内存", false, &[], 10).unwrap().len(), 1);
         assert_eq!(
@@ -1473,8 +1609,7 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         let hits = store.search("redirect", false, &[], 10).unwrap();
         assert_eq!(hits.len(), 2);
@@ -1498,8 +1633,7 @@ mod tests {
                         "persisted text",
                         LineageDepth::ROOT,
                     )],
-                    &[],
-                )
+                    &[], 0,)
                 .unwrap();
         }
         let reopened = MemoryStore::open(&path, PROJECT).unwrap();
@@ -1545,10 +1679,10 @@ mod tests {
             LineageDepth::ROOT,
         )];
         store
-            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &first, &[])
+            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &first, &[], 0)
             .unwrap();
         store
-            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &second, &[])
+            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &second, &[], 0)
             .unwrap();
 
         assert_eq!(store.counts().unwrap(), (1, 1, 0));
@@ -1570,7 +1704,7 @@ mod tests {
             ("s_old", Some(100)),
         ] {
             store
-                .replace_session(&session(key, first_ms, SessionScope::Scoped), &[], &[])
+                .replace_session(&session(key, first_ms, SessionScope::Scoped), &[], &[], 0)
                 .unwrap();
         }
         let keys: Vec<String> = store
@@ -1588,10 +1722,10 @@ mod tests {
     fn sessions_with_no_known_first_message_time_sort_last() {
         let mut store = store();
         store
-            .replace_session(&session("s_unknown", None, SessionScope::Scoped), &[], &[])
+            .replace_session(&session("s_unknown", None, SessionScope::Scoped), &[], &[], 0)
             .unwrap();
         store
-            .replace_session(&session("s_known", Some(1), SessionScope::Scoped), &[], &[])
+            .replace_session(&session("s_known", Some(1), SessionScope::Scoped), &[], &[], 0)
             .unwrap();
         let keys: Vec<String> = store
             .list_sessions(false, &[], 10)
@@ -1617,8 +1751,7 @@ mod tests {
                     "borrowed context",
                     LineageDepth::ROOT,
                 )],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
 
         assert!(store.list_sessions(false, &[], 10).unwrap().is_empty());
@@ -1645,6 +1778,7 @@ mod tests {
                     LineageDepth::UNKNOWN,
                 )],
                 &[],
+                0,
             )
             .unwrap();
 
@@ -1670,8 +1804,7 @@ mod tests {
                     "ran git commit --no-verify and it failed with ENOENT",
                     LineageDepth::ROOT,
                 )],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
 
         for hostile in [
@@ -1706,8 +1839,7 @@ mod tests {
                     "anything",
                     LineageDepth::ROOT,
                 )],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         for empty in ["", "   ", "-", "***"] {
             assert!(
@@ -1741,8 +1873,7 @@ mod tests {
             .replace_session(
                 &session("s1", Some(1), SessionScope::Scoped),
                 &[],
-                &[record.clone()],
-            )
+                &[record.clone()], 0,)
             .unwrap();
 
         let found = store.search_compactions("migration", false, 10).unwrap();
@@ -1775,8 +1906,7 @@ mod tests {
                     timestamp_utc: None,
                     timestamp_ms: None,
                     source: pointer("/repo/s1.jsonl", 0, b"{}"),
-                }],
-            )
+                }], 0,)
             .unwrap();
         assert!(
             store.search_compactions("%", false, 10).unwrap().is_empty(),
@@ -1797,8 +1927,7 @@ mod tests {
                     "ephemeral",
                     LineageDepth::ROOT,
                 )],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         assert_eq!(store.forget_sessions(&["s1".to_string()]).unwrap(), 1);
         assert_eq!(store.counts().unwrap(), (0, 0, 0));
@@ -1811,7 +1940,7 @@ mod tests {
         let mut store = store();
         assert!(store.indexed_file_identity("s1").unwrap().is_none());
         store
-            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &[], &[])
+            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &[], &[], 0)
             .unwrap();
         let stored = store.indexed_file_identity("s1").unwrap().unwrap();
         assert!(stored.matches(&identity()));
@@ -1841,8 +1970,7 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[],
-            )
+                &[], 0,)
             .unwrap();
         let ordinals: Vec<u32> = store
             .session_messages("s1", 10)
@@ -1877,6 +2005,7 @@ mod tests {
                         LineageDepth::ROOT,
                     )],
                     &[],
+                    0,
                 )
                 .unwrap();
         }
@@ -1902,6 +2031,7 @@ mod tests {
                         LineageDepth::ROOT,
                     )],
                     &[],
+                    0,
                 )
                 .unwrap();
         }

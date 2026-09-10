@@ -27,11 +27,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::adapters::{self, AdaptedTranscript, AdapterIssue, ISSUE_COMPACT_FAILED};
+use super::adapters::{
+    self, AdaptedTranscript, AdapterIssue, ResumeFrom, ISSUE_COMPACT_FAILED,
+};
 use super::paths::{vendor_scan_roots, vendor_store_roots, IndexLocation, MemoryVendor};
 use super::scope::ProjectFence;
 use super::store::MemoryStore;
-use super::types::{FileIdentity, SessionScope};
+use super::types::{
+    FileIdentity, IndexedSession, NormalizedRole, PointerFreshness, SessionScope, SourcePointer,
+};
 use super::{MemoryIndexError, MemoryIndexResult, ERR_INGEST_FAILED};
 
 /// Cooperative stop signal for one build.
@@ -117,6 +121,8 @@ pub struct IngestReport {
     pub files_scanned: u32,
     pub sessions_indexed: u32,
     pub sessions_skipped_unchanged: u32,
+    /// Sessions whose transcript had only grown, so only the new tail was read.
+    pub sessions_resumed: u32,
     pub sessions_forgotten: u32,
     pub sessions_out_of_scope: u32,
     pub messages_indexed: u32,
@@ -304,7 +310,8 @@ fn ingest_claude(
         let Some(identity) = read_identity(path) else {
             continue;
         };
-        if skip_unchanged(store, &key, &identity, options)? {
+        let plan = plan_scan(store, &key, &identity, options)?;
+        if plan == ScanPlan::Skip {
             report.sessions_skipped_unchanged += 1;
             // A skipped root must still be resolvable as a parent — but only a
             // root. A sidechain's `vendor_session_id` is its *parent's* id, so
@@ -324,13 +331,15 @@ fn ingest_claude(
         }
         // The folder name already encodes this project, so ownership is proven
         // without reading the body.
-        report.bytes_read += identity.size_bytes;
+        let resume = resume_of(plan);
+        report.bytes_read += bytes_to_read(&identity, resume);
         let adapted = adapters::claude::adapt(
             path,
             &identity,
             &location.namespace_key,
             SessionScope::Scoped,
             &|parent: &str| roots_by_vendor_id.get(parent).cloned(),
+            resume,
         );
         if let Some(session) = adapted.session.as_ref() {
             if session.lineage_depth.is_root() {
@@ -339,7 +348,7 @@ fn ingest_claude(
                     .or_insert_with(|| key.clone());
             }
         }
-        commit(store, adapted, report)?;
+        commit_planned(store, plan, &key, &identity, adapted, report)?;
     }
     Ok(())
 }
@@ -400,14 +409,16 @@ fn ingest_pi(
             let Some(identity) = read_identity(path) else {
                 continue;
             };
-            if skip_unchanged(store, &key, &identity, options)? {
+            let plan = plan_scan(store, &key, &identity, options)?;
+            if plan == ScanPlan::Skip {
                 report.sessions_skipped_unchanged += 1;
                 continue;
             }
             let depth = adapters::pi::depth_from_path(root, path);
             let root_key = adapters::pi::root_file_for(root, path)
                 .map(|file| adapters::session_key(MemoryVendor::Pi, &file));
-            report.bytes_read += identity.size_bytes;
+            let resume = resume_of(plan);
+            report.bytes_read += bytes_to_read(&identity, resume);
             let adapted = adapters::pi::adapt(
                 path,
                 &identity,
@@ -415,8 +426,9 @@ fn ingest_pi(
                 SessionScope::Scoped,
                 depth,
                 root_key,
+                resume,
             );
-            commit(store, adapted, report)?;
+            commit_planned(store, plan, &key, &identity, adapted, report)?;
         }
     }
     Ok(())
@@ -521,11 +533,13 @@ fn ingest_codex(
         let Some(identity) = read_identity(&entry.path) else {
             continue;
         };
-        if skip_unchanged(store, &entry.key, &identity, options)? {
+        let plan = plan_scan(store, &entry.key, &identity, options)?;
+        if plan == ScanPlan::Skip {
             report.sessions_skipped_unchanged += 1;
             continue;
         }
-        report.bytes_read += identity.size_bytes;
+        let resume = resume_of(plan);
+        report.bytes_read += bytes_to_read(&identity, resume);
         let adapted = adapters::codex::adapt(
             &entry.path,
             &identity,
@@ -533,8 +547,9 @@ fn ingest_codex(
             entry.scope,
             &entry.meta,
             &resolve_root,
+            resume,
         );
-        commit(store, adapted, report)?;
+        commit_planned(store, plan, &entry.key, &identity, adapted, report)?;
     }
     Ok(())
 }
@@ -561,38 +576,166 @@ fn resolve_codex_root(
     key
 }
 
-fn commit(
-    store: &mut MemoryStore,
-    adapted: AdaptedTranscript,
-    report: &mut IngestReport,
-) -> MemoryIndexResult<()> {
-    report.issues.extend(adapted.issues);
-    let Some(session) = adapted.session else {
-        return Ok(());
-    };
-    let written = store.replace_session(&session, &adapted.messages, &adapted.compactions)?;
-    report.sessions_indexed += written.sessions_written;
-    report.messages_indexed += written.messages_written;
-    report.compactions_indexed += written.compactions_written;
-    Ok(())
+const fn resume_of(plan: ScanPlan) -> Option<ResumeFrom> {
+    match plan {
+        ScanPlan::Resume(from) => Some(from),
+        _ => None,
+    }
+}
+
+/// How much of this transcript the plan will actually read.
+fn bytes_to_read(identity: &FileIdentity, resume: Option<ResumeFrom>) -> u64 {
+    match resume {
+        Some(from) => identity.size_bytes.saturating_sub(from.byte_offset),
+        None => identity.size_bytes,
+    }
 }
 
 fn read_identity(path: &Path) -> Option<FileIdentity> {
     FileIdentity::read(path).ok()
 }
 
-fn skip_unchanged(
+/// What this build should do with one transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanPlan {
+    /// Byte-for-byte the file that was already indexed.
+    Skip,
+    /// The same file, grown. Read only the part that is new.
+    Resume(ResumeFrom),
+    /// Never seen, or changed in a way that is not an append.
+    Full,
+}
+
+/// Decide between skipping, resuming and re-reading.
+///
+/// Resuming requires **all** of:
+///
+/// * the same `(device, inode)` — a different file at the same path is a
+///   different transcript, whatever its name says;
+/// * a strictly larger size — an equal size with a new mtime is an in-place
+///   edit, which an append-resume would read straight past;
+/// * a resume offset that is still inside the file;
+/// * at least one indexed record, and its recorded byte range still hashing to
+///   what was stored.
+///
+/// That last check is the one doing the real work: it is what tells an append
+/// apart from a rewrite. A compaction or a log rotation replaces the bytes the
+/// last record occupied, so its digest stops matching and the transcript is read
+/// again in full. It is not an adversarial guarantee — someone who can write
+/// arbitrary bytes into a vendor store can construct a collision-free prefix
+/// that still hashes — but it is sound against every accidental shape, and
+/// `full_rebuild` is the escape hatch.
+fn plan_scan(
     store: &MemoryStore,
     key: &str,
     identity: &FileIdentity,
     options: &IngestOptions,
-) -> MemoryIndexResult<bool> {
+) -> MemoryIndexResult<ScanPlan> {
     if options.full_rebuild {
-        return Ok(false);
+        return Ok(ScanPlan::Full);
     }
-    Ok(store
-        .indexed_file_identity(key)?
-        .is_some_and(|stored| stored.matches(identity)))
+    let Some(state) = store.resume_state(key)? else {
+        return Ok(ScanPlan::Full);
+    };
+    if state.identity.matches(identity) {
+        return Ok(ScanPlan::Skip);
+    }
+    if state.identity.device != identity.device || state.identity.inode != identity.inode {
+        return Ok(ScanPlan::Full);
+    }
+    if identity.size_bytes <= state.identity.size_bytes
+        || state.resume_offset > identity.size_bytes
+        || state.resume_offset == 0
+    {
+        return Ok(ScanPlan::Full);
+    }
+    let Some(last_record) = state.last_record else {
+        return Ok(ScanPlan::Full);
+    };
+    if last_record.verify() != PointerFreshness::Fresh {
+        return Ok(ScanPlan::Full);
+    }
+    Ok(ScanPlan::Resume(ResumeFrom {
+        byte_offset: state.resume_offset,
+        next_ordinal: state.next_ordinal,
+    }))
+}
+
+/// Fold a newly read tail onto the session row it belongs to.
+///
+/// Everything here is derived from the tail's own messages rather than from a
+/// session the adapter built, because on a resumed run the adapter deliberately
+/// builds none: the header those fields come from is behind the resume offset.
+/// What the tail *can* say is how many messages and tool calls it added and when
+/// the latest of them happened, and that is exactly what changes.
+fn merge_resumed(
+    mut stored: IndexedSession,
+    tail: &AdaptedTranscript,
+    identity: &FileIdentity,
+) -> IndexedSession {
+    stored.message_count += tail.messages.len() as u64;
+    stored.tool_count += tail
+        .messages
+        .iter()
+        .filter(|message| message.role == NormalizedRole::ToolCall)
+        .count() as u64;
+    if let Some(latest) = tail
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.timestamp_ms.is_some())
+    {
+        stored.last_activity_at_utc = latest.timestamp_utc.clone();
+        stored.last_activity_at_ms = latest.timestamp_ms;
+    }
+    // The pointer now describes the grown file, so the next build compares
+    // against what it actually read.
+    stored.source = SourcePointer::for_file(identity, &stored.file_path);
+    stored
+}
+
+/// Write whatever one plan produced, and report what it cost.
+fn commit_planned(
+    store: &mut MemoryStore,
+    plan: ScanPlan,
+    key: &str,
+    identity: &FileIdentity,
+    adapted: AdaptedTranscript,
+    report: &mut IngestReport,
+) -> MemoryIndexResult<()> {
+    report.issues.extend(adapted.issues.iter().cloned());
+    match plan {
+        ScanPlan::Resume(_) => {
+            let Some(stored) = store.get_session(key)? else {
+                return Ok(());
+            };
+            let merged = merge_resumed(stored, &adapted, identity);
+            let written = store.append_session(
+                &merged,
+                &adapted.messages,
+                &adapted.compactions,
+                adapted.resume_offset,
+            )?;
+            report.sessions_resumed += 1;
+            report.messages_indexed += written.messages_written;
+            report.compactions_indexed += written.compactions_written;
+        }
+        _ => {
+            let Some(session) = adapted.session else {
+                return Ok(());
+            };
+            let written = store.replace_session(
+                &session,
+                &adapted.messages,
+                &adapted.compactions,
+                adapted.resume_offset,
+            )?;
+            report.sessions_indexed += written.sessions_written;
+            report.messages_indexed += written.messages_written;
+            report.compactions_indexed += written.compactions_written;
+        }
+    }
+    Ok(())
 }
 
 /// The same four checks `cli_session` applies before touching a transcript:
@@ -1139,7 +1282,194 @@ mod tests {
         assert!(forced.bytes_read >= incremental.bytes_read * 2);
     }
 
-    /// A cancelled build must not prune.    /// A cancelled build must not prune. `seen_keys` only lists what the walk
+    /// Appending to a transcript re-reads only the appended bytes.
+    ///
+    /// This is the difference between a warm rebuild costing the size of the
+    /// session you are actively working in and costing almost nothing.
+    #[test]
+    fn an_appended_transcript_is_resumed_rather_than_re_read() {
+        let fixture = fixture();
+        let path = fixture.claude_project_dir.join("c1.jsonl");
+        write(
+            &path,
+            &claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", "first turn"),
+        );
+        let cold = build(&fixture, IngestOptions::default());
+        assert_eq!(cold.sessions_indexed, 1);
+        let head_bytes = std::fs::metadata(&path).unwrap().len();
+
+        let tail = format!(
+            "{}\n",
+            claude_lines("sess-c1", false, "2026-09-01T00:05:00.000Z", "second turn").join("\n")
+        );
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(tail.as_bytes()).unwrap();
+        }
+
+        let warm = build(&fixture, IngestOptions::default());
+        assert_eq!(warm.sessions_resumed, 1, "the append was not resumed");
+        assert_eq!(warm.sessions_indexed, 0);
+        assert_eq!(
+            warm.bytes_read,
+            tail.len() as u64,
+            "resumed build read {} bytes, expected just the {} appended",
+            warm.bytes_read,
+            tail.len()
+        );
+        // The claim that matters: less than a full re-read of the grown file.
+        // (Against the *head* it would not hold — the appended record here is
+        // about the same size as the first one.)
+        assert!(
+            warm.bytes_read < std::fs::metadata(&path).unwrap().len(),
+            "resumed read {} of a {} byte file",
+            warm.bytes_read,
+            std::fs::metadata(&path).unwrap().len()
+        );
+        let _ = head_bytes;
+
+        let store = open_store(&fixture);
+        let key = adapters::session_key(MemoryVendor::ClaudeCode, &path);
+        let messages = store.session_messages(&key, 50).unwrap();
+        assert_eq!(messages.len(), 2, "{messages:#?}");
+        assert_eq!(messages[0].text, "first turn");
+        assert_eq!(messages[1].text, "second turn");
+        assert_eq!(messages[0].ordinal, 0);
+        assert_eq!(messages[1].ordinal, 1);
+
+        let session = store.get_session(&key).unwrap().unwrap();
+        assert_eq!(session.message_count, 2);
+        // Head-derived fields survive the merge untouched.
+        assert_eq!(session.title.as_deref(), Some("first turn"));
+        assert_eq!(
+            session.first_message_at_utc.as_deref(),
+            Some("2026-09-01T00:00:00.000Z")
+        );
+        // The tail-derived one moved.
+        assert_eq!(
+            session.last_activity_at_utc.as_deref(),
+            Some("2026-09-01T00:05:00.000Z")
+        );
+        assert_eq!(store.search("first", false, &[], 10).unwrap().len(), 1);
+        assert_eq!(store.search("second", false, &[], 10).unwrap().len(), 1);
+    }
+
+    /// A transcript that was **rewritten** rather than appended to must fall
+    /// back to a full read. This is the check that makes resuming safe: a
+    /// compaction or rotation replaces the bytes the last indexed record
+    /// occupied, so its digest stops matching.
+    #[test]
+    fn a_rewritten_transcript_falls_back_to_a_full_read() {
+        let fixture = fixture();
+        let path = fixture.claude_project_dir.join("c1.jsonl");
+        write(
+            &path,
+            &claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", "original turn"),
+        );
+        build(&fixture, IngestOptions::default());
+
+        // Same path, rewritten longer — the shape a compaction leaves behind.
+        write(
+            &path,
+            &[
+                claude_lines("sess-c1", false, "2026-09-02T00:00:00.000Z", "rewritten one"),
+                claude_lines("sess-c1", false, "2026-09-02T00:01:00.000Z", "rewritten two"),
+            ]
+            .concat(),
+        );
+        let rebuilt = build(&fixture, IngestOptions::default());
+        assert_eq!(
+            rebuilt.sessions_resumed, 0,
+            "a rewritten transcript was resumed, so the stale prefix is still indexed"
+        );
+        assert_eq!(rebuilt.sessions_indexed, 1);
+        assert_eq!(
+            rebuilt.bytes_read,
+            std::fs::metadata(&path).unwrap().len(),
+            "the fallback did not read the whole file"
+        );
+
+        let store = open_store(&fixture);
+        assert!(
+            store.search("original", false, &[], 10).unwrap().is_empty(),
+            "the replaced content survived"
+        );
+        assert_eq!(store.search("rewritten", false, &[], 10).unwrap().len(), 2);
+    }
+
+    /// A change that does not **grow** the file is not an append, even when the
+    /// last record still verifies.
+    ///
+    /// The last-record check alone would pass here: only an earlier record was
+    /// edited, and it was edited to the same length, so the tail is byte-for-byte
+    /// what was indexed. Resuming would read nothing and the edit would be lost.
+    /// Requiring a strictly larger file is what catches it.
+    #[test]
+    fn an_in_place_edit_that_keeps_the_size_is_not_treated_as_an_append() {
+        let fixture = fixture();
+        let path = fixture.claude_project_dir.join("c1.jsonl");
+        let head = |text: &str| claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", text);
+        let tail = claude_lines("sess-c1", false, "2026-09-01T00:05:00.000Z", "beta");
+
+        write(&path, &[head("alpha"), tail.clone()].concat());
+        build(&fixture, IngestOptions::default());
+        let size_before = std::fs::metadata(&path).unwrap().len();
+
+        // `gamma` is the same length as `alpha`, so the file size is unchanged
+        // and the final record is untouched.
+        write(&path, &[head("gamma"), tail].concat());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            size_before,
+            "the fixture was supposed to keep the size identical"
+        );
+
+        let rebuilt = build(&fixture, IngestOptions::default());
+        assert_eq!(
+            rebuilt.sessions_resumed, 0,
+            "an in-place edit was resumed, so the edit was skipped"
+        );
+        let store = open_store(&fixture);
+        assert_eq!(store.search("gamma", false, &[], 10).unwrap().len(), 1);
+        assert!(store.search("alpha", false, &[], 10).unwrap().is_empty());
+    }
+
+    /// A half-written trailing line must be read again once it completes, not
+    /// skipped because the previous pass moved past it.
+    #[test]
+    fn a_partially_written_last_line_is_picked_up_when_it_completes() {
+        let fixture = fixture();
+        let path = fixture.claude_project_dir.join("c1.jsonl");
+        let complete = format!(
+            "{}\n",
+            claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", "first turn").join("\n")
+        );
+        let second = format!(
+            "{}\n",
+            claude_lines("sess-c1", false, "2026-09-01T00:05:00.000Z", "second turn").join("\n")
+        );
+        let split = second.len() / 2;
+        std::fs::write(&path, format!("{complete}{}", &second[..split])).unwrap();
+        assert_eq!(build(&fixture, IngestOptions::default()).sessions_indexed, 1);
+
+        std::fs::write(&path, format!("{complete}{second}")).unwrap();
+        let warm = build(&fixture, IngestOptions::default());
+
+        let store = open_store(&fixture);
+        let key = adapters::session_key(MemoryVendor::ClaudeCode, &path);
+        let messages = store.session_messages(&key, 50).unwrap();
+        assert_eq!(
+            messages.len(),
+            2,
+            "the completed line was lost (resumed={}, indexed={})",
+            warm.sessions_resumed,
+            warm.sessions_indexed
+        );
+        assert_eq!(messages[1].text, "second turn");
+    }
+
+    /// A cancelled build must not prune. `seen_keys` only lists what the walk
     /// reached, so pruning against a partial list reads every transcript the
     /// walk never got to as deleted — turning "stop early" into "throw most of
     /// the index away".
@@ -1586,11 +1916,13 @@ mod tests {
         eprintln!(
             "\n--- warm rebuild (nothing changed) ---\n\
              skipped unchanged  {}\n\
+             resumed (appended) {}\n\
              re-indexed         {}\n\
              forgotten          {}\n\
              bytes re-read      {:.1} MB  (cold read {:.1} MB)\n\
              duration           {:.1} s  ({:.0}x faster than cold)",
             warm.sessions_skipped_unchanged,
+            warm.sessions_resumed,
             warm.sessions_indexed,
             warm.sessions_forgotten,
             warm.bytes_read as f64 / 1_048_576.0,

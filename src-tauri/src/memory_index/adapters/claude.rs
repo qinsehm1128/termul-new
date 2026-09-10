@@ -30,7 +30,8 @@ use super::super::types::{
 };
 use super::{
     flatten_text, for_each_record, parse_timestamp, prepare_indexed_text, session_key,
-    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ISSUE_NO_SESSION_HEADER,
+    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ResumeFrom,
+    ISSUE_NO_SESSION_HEADER,
 };
 
 /// Adapt one Claude transcript.
@@ -45,6 +46,7 @@ pub fn adapt(
     project_key: &str,
     scope: SessionScope,
     resolve_root: &dyn Fn(&str) -> Option<String>,
+    resume: Option<ResumeFrom>,
 ) -> AdaptedTranscript {
     let own_key = session_key(MemoryVendor::ClaudeCode, path);
     let file_path = path.to_string_lossy().into_owned();
@@ -61,9 +63,9 @@ pub fn adapt(
     let mut last: Option<(String, i64)> = None;
     let mut messages: Vec<NormalizedMessage> = Vec::new();
     let mut tool_count: u64 = 0;
-    let mut ordinal: u32 = 0;
+    let mut ordinal: u32 = resume.map_or(0, |from| from.next_ordinal);
 
-    let mut issues = for_each_record(path, |record| {
+    let scan = for_each_record(path, resume.map_or(0, |from| from.byte_offset), |record| {
         let value = &record.value;
         // Metadata that every record carries; the first sighting wins so a
         // mid-transcript `cd` cannot retroactively move the session.
@@ -138,6 +140,18 @@ pub fn adapt(
         }
     });
 
+    let mut issues = scan.issues;
+    // A resumed run describes only the newly read tail. It deliberately returns
+    // no session: everything a session row needs that the tail could compute —
+    // the count deltas and the latest activity time — ingest derives from these
+    // messages, and everything else belongs to the stored row it is merging on
+    // to. Returning a half-built session here would invite a caller to write it.
+    if resume.is_some() {
+        out.messages = messages;
+        out.issues = issues;
+        out.resume_offset = scan.resume_offset;
+        return out;
+    }
     let Some(vendor_session_id) = vendor_session_id else {
         issues.push(AdapterIssue::new(
             ISSUE_NO_SESSION_HEADER,
@@ -195,6 +209,7 @@ pub fn adapt(
     out.messages = messages;
     out.compactions = Vec::<CompactionRecord>::new();
     out.issues = issues;
+    out.resume_offset = scan.resume_offset;
     out
 }
 
@@ -316,7 +331,7 @@ mod session_pointer_tests {
         )
         .unwrap();
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &|_| None);
+        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &|_| None, None);
 
         let session = adapted.session.expect("adapter produced no session");
         assert!(
@@ -349,7 +364,7 @@ mod tests {
         let path = temp.path().join("chat.jsonl");
         write(&path, lines);
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root);
+        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root, None);
         (adapted, path, temp)
     }
 
@@ -429,7 +444,7 @@ mod tests {
         let resolve = |parent: &str| {
             (parent == "sess-root").then(|| "claude-code:/store/root.jsonl".to_string())
         };
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &resolve);
+        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &resolve, None);
         let session = adapted.session.unwrap();
         assert_eq!(session.lineage_depth, LineageDepth::nested(1));
         assert!(!session.lineage_depth.is_root());
@@ -460,7 +475,7 @@ mod tests {
             ],
         );
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root);
+        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root, None);
         assert_eq!(
             adapted.session.unwrap().lineage_depth,
             LineageDepth::nested(1),
@@ -480,7 +495,7 @@ mod tests {
             ],
         );
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root);
+        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root, None);
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, session.session_key);
         assert_eq!(session.lineage_depth, LineageDepth::nested(1));

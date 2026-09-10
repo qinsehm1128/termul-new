@@ -43,7 +43,8 @@ use super::super::types::{
 };
 use super::{
     flatten_text, for_each_record, parse_timestamp, prepare_indexed_text, session_key,
-    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ISSUE_NO_SESSION_HEADER,
+    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ResumeFrom,
+    ISSUE_NO_SESSION_HEADER,
 };
 
 /// What `session_meta` says about a transcript, without reading its body.
@@ -129,6 +130,7 @@ pub fn adapt(
     scope: SessionScope,
     meta: &CodexMeta,
     resolve_root: &dyn Fn(&str) -> Option<String>,
+    resume: Option<ResumeFrom>,
 ) -> AdaptedTranscript {
     let own_key = session_key(MemoryVendor::Codex, path);
     let file_path = path.to_string_lossy().into_owned();
@@ -147,9 +149,11 @@ pub fn adapt(
     let mut first: Option<(String, i64)> = None;
     let mut last: Option<(String, i64)> = None;
     let mut tool_count: u64 = 0;
-    let mut ordinal: u32 = 0;
+    let mut ordinal: u32 = resume.map_or(0, |from| from.next_ordinal);
 
-    let issues = for_each_record(path, |record| {
+    // `meta` comes from `read_meta`, which reads the first line independently
+    // of this walk — so Codex resumes with nothing missing from its header.
+    let scan = for_each_record(path, resume.map_or(0, |from| from.byte_offset), |record| {
         let value = &record.value;
         if value.get("type").and_then(Value::as_str) != Some("response_item") {
             return;
@@ -208,6 +212,14 @@ pub fn adapt(
         ordinal += 1;
     });
 
+    let issues = scan.issues;
+    // See `claude::adapt` — a resumed run returns the tail only.
+    if resume.is_some() {
+        out.messages = messages;
+        out.issues = issues;
+        out.resume_offset = scan.resume_offset;
+        return out;
+    }
     if meta.session_id.is_empty() {
         let mut issues = issues;
         issues.push(AdapterIssue::new(
@@ -254,6 +266,7 @@ pub fn adapt(
     });
     out.messages = messages;
     out.issues = issues;
+    out.resume_offset = scan.resume_offset;
     out
 }
 
@@ -417,8 +430,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root,
-        );
+            &no_root, None,);
 
         let roles: Vec<NormalizedRole> = adapted.messages.iter().map(|m| m.role).collect();
         assert_eq!(
@@ -470,8 +482,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root,
-        );
+            &no_root, None,);
         assert_eq!(adapted.messages[0].role, NormalizedRole::System);
         assert!(
             adapted.session.unwrap().title.is_none(),
@@ -493,8 +504,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &resolve,
-        );
+            &resolve, None,);
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, "codex:/store/root.jsonl");
         assert_eq!(session.lineage_depth, LineageDepth::nested(2));
@@ -518,8 +528,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root,
-        );
+            &no_root, None,);
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, session.session_key);
         assert_eq!(session.lineage_depth, LineageDepth::UNKNOWN);
@@ -539,8 +548,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root,
-        );
+            &no_root, None,);
         let text = &adapted.messages[0].text;
         assert!(!text.contains("xai-ziyhFXhJ9KTrUDl8Fv8CNNzx4t"), "{text}");
         assert!(text.contains("[redacted:"), "{text}");

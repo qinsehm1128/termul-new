@@ -41,8 +41,8 @@ use super::super::types::{
 };
 use super::{
     flatten_text, for_each_record, parse_timestamp, prepare_indexed_text, session_key,
-    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ISSUE_LINEAGE_FORK,
-    ISSUE_NO_SESSION_HEADER,
+    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ResumeFrom,
+    ISSUE_LINEAGE_FORK, ISSUE_NO_SESSION_HEADER,
 };
 
 /// Is this filename a pi transcript?
@@ -119,6 +119,7 @@ pub fn adapt(
     scope: SessionScope,
     depth: LineageDepth,
     root_session_key: Option<String>,
+    resume: Option<ResumeFrom>,
 ) -> AdaptedTranscript {
     let own_key = session_key(MemoryVendor::Pi, path);
     let root_session_key = root_session_key.unwrap_or_else(|| own_key.clone());
@@ -136,7 +137,7 @@ pub fn adapt(
     let mut messages: Vec<NormalizedMessage> = Vec::new();
     let mut compactions: Vec<CompactionRecord> = Vec::new();
     let mut tool_count: u64 = 0;
-    let mut ordinal: u32 = 0;
+    let mut ordinal: u32 = resume.map_or(0, |from| from.next_ordinal);
     // parentId -> how many records claim it. More than one is a fork.
     let mut children: HashMap<String, u32> = HashMap::new();
 
@@ -186,7 +187,7 @@ pub fn adapt(
         *ordinal += 1;
     };
 
-    let mut issues = for_each_record(path, |record| {
+    let scan = for_each_record(path, resume.map_or(0, |from| from.byte_offset), |record| {
         let value = &record.value;
         let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
         if let Some(parent) = value.get("parentId").and_then(Value::as_str) {
@@ -271,6 +272,7 @@ pub fn adapt(
         }
     });
 
+    let mut issues = scan.issues;
     let forks: Vec<&String> = children
         .iter()
         .filter(|(_, count)| **count > 1)
@@ -290,6 +292,17 @@ pub fn adapt(
         ));
     }
 
+    // See `claude::adapt` — a resumed run returns the tail only. For pi this is
+    // also the only workable shape: `type:"session"` is the first record and
+    // nothing else carries the id or the cwd, so a tail could not build a
+    // session row even if it wanted to.
+    if resume.is_some() {
+        out.messages = messages;
+        out.compactions = compactions;
+        out.issues = issues;
+        out.resume_offset = scan.resume_offset;
+        return out;
+    }
     let Some(vendor_session_id) = vendor_session_id else {
         issues.push(AdapterIssue::new(
             ISSUE_NO_SESSION_HEADER,
@@ -328,6 +341,7 @@ pub fn adapt(
     out.messages = messages;
     out.compactions = compactions;
     out.issues = issues;
+    out.resume_offset = scan.resume_offset;
     out
 }
 
@@ -539,6 +553,7 @@ mod tests {
             SessionScope::Scoped,
             LineageDepth::ROOT,
             None,
+            None,
         );
         let session = adapted.session.expect("session");
         assert_eq!(
@@ -592,6 +607,7 @@ mod tests {
             SessionScope::Scoped,
             LineageDepth::ROOT,
             None,
+            None,
         );
         let fork = adapted
             .issues
@@ -625,6 +641,7 @@ mod tests {
             SessionScope::Scoped,
             LineageDepth::ROOT,
             None,
+            None,
         );
         assert!(adapted
             .issues
@@ -652,6 +669,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             LineageDepth::ROOT,
+            None,
             None,
         );
         assert_eq!(adapted.compactions.len(), 1);
@@ -687,6 +705,7 @@ mod tests {
             SessionScope::Scoped,
             LineageDepth::ROOT,
             None,
+            None,
         );
         let texts: Vec<&str> = adapted.messages.iter().map(|m| m.text.as_str()).collect();
         assert!(texts
@@ -711,8 +730,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             LineageDepth::nested(2),
-            Some("pi:/pi/proj/root.jsonl".to_string()),
-        );
+            Some("pi:/pi/proj/root.jsonl".to_string()), None,);
         let session = adapted.session.unwrap();
         assert_eq!(session.lineage_depth, LineageDepth::nested(2));
         assert_eq!(session.root_session_key, "pi:/pi/proj/root.jsonl");
@@ -738,6 +756,7 @@ mod tests {
             SessionScope::Scoped,
             LineageDepth::ROOT,
             None,
+            None,
         );
         assert!(adapted.session.is_none());
         assert_eq!(adapted.issues[0].code, ISSUE_NO_SESSION_HEADER);
@@ -761,6 +780,7 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             LineageDepth::ROOT,
+            None,
             None,
         );
         let result = adapted

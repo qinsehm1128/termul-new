@@ -629,7 +629,8 @@ export function ProjectSidebar({
       toast({ title: t('organizeHistoryRunning'), description: project.name })
       try {
         const report = await memoryIndexApi.build({ projectRoot: project.path })
-        const indexed = report.sessionsIndexed + report.sessionsSkippedUnchanged
+        const indexed =
+          report.sessionsIndexed + report.sessionsSkippedUnchanged + report.sessionsResumed
         toast({
           title: project.name,
           description: report.cancelled
