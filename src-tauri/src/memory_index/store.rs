@@ -391,7 +391,13 @@ impl MemoryStore {
         let limit = clamp_limit(limit);
         let like = match query.trim() {
             "" => "%".to_string(),
-            trimmed => format!("%{}%", trimmed.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")),
+            trimmed => format!(
+                "%{}%",
+                trimmed
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            ),
         };
         let mut statement = self
             .connection
@@ -487,7 +493,11 @@ fn probe_fts5(connection: &Connection) -> MemoryIndexResult<()> {
 pub fn to_fts_match(query: &str) -> Option<String> {
     let terms: Vec<String> = query
         .split_whitespace()
-        .map(|term| term.trim_matches(|character: char| character.is_ascii_punctuation() && character != '_'))
+        .map(|term| {
+            term.trim_matches(|character: char| {
+                character.is_ascii_punctuation() && character != '_'
+            })
+        })
         .filter(|term| !term.is_empty())
         .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
         .collect();
@@ -737,8 +747,7 @@ fn read_hit_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemorySearchHit> {
         vendor: row.get(3)?,
         lineage_depth: read_lineage(row, 4)?,
         ordinal: row.get::<_, i64>(5)? as u32,
-        role: NormalizedRole::parse(&row.get::<_, String>(6)?)
-            .unwrap_or(NormalizedRole::System),
+        role: NormalizedRole::parse(&row.get::<_, String>(6)?).unwrap_or(NormalizedRole::System),
         timestamp_utc: row.get(7)?,
         timestamp_ms: row.get(8)?,
         timestamp_confidence: TimestampConfidence::parse(&row.get::<_, String>(9)?),
@@ -924,7 +933,11 @@ mod tests {
             text: text.to_string(),
             tool_name: None,
             tool_call_id: None,
-            source: pointer(&format!("/repo/{session_key}.jsonl"), ordinal as u64, text.as_bytes()),
+            source: pointer(
+                &format!("/repo/{session_key}.jsonl"),
+                ordinal as u64,
+                text.as_bytes(),
+            ),
         }
     }
 
@@ -941,8 +954,20 @@ mod tests {
             .replace_session(
                 &session("s1", Some(100), SessionScope::Scoped),
                 &[
-                    message("s1", 0, NormalizedRole::User, "fix the login redirect", LineageDepth::ROOT),
-                    message("s1", 1, NormalizedRole::Assistant, "the redirect loops on refresh", LineageDepth::ROOT),
+                    message(
+                        "s1",
+                        0,
+                        NormalizedRole::User,
+                        "fix the login redirect",
+                        LineageDepth::ROOT,
+                    ),
+                    message(
+                        "s1",
+                        1,
+                        NormalizedRole::Assistant,
+                        "the redirect loops on refresh",
+                        LineageDepth::ROOT,
+                    ),
                 ],
                 &[],
             )
@@ -962,7 +987,13 @@ mod tests {
             store
                 .replace_session(
                     &session("s1", Some(1), SessionScope::Scoped),
-                    &[message("s1", 0, NormalizedRole::User, "persisted text", LineageDepth::ROOT)],
+                    &[message(
+                        "s1",
+                        0,
+                        NormalizedRole::User,
+                        "persisted text",
+                        LineageDepth::ROOT,
+                    )],
                     &[],
                 )
                 .unwrap();
@@ -980,7 +1011,11 @@ mod tests {
         MemoryStore::open(&path, PROJECT).unwrap();
         let error = MemoryStore::open(&path, "other-99887766554433221").unwrap_err();
         assert_eq!(error.code, ERR_STORE_FAILED);
-        assert!(error.detail.contains("belongs to project"), "{}", error.detail);
+        assert!(
+            error.detail.contains("belongs to project"),
+            "{}",
+            error.detail
+        );
     }
 
     /// Re-ingest is delete-then-insert per session, so a second build of the
@@ -988,8 +1023,20 @@ mod tests {
     #[test]
     fn re_ingesting_a_session_replaces_it_rather_than_duplicating_it() {
         let mut store = store();
-        let first = [message("s1", 0, NormalizedRole::User, "original wording", LineageDepth::ROOT)];
-        let second = [message("s1", 0, NormalizedRole::User, "revised wording", LineageDepth::ROOT)];
+        let first = [message(
+            "s1",
+            0,
+            NormalizedRole::User,
+            "original wording",
+            LineageDepth::ROOT,
+        )];
+        let second = [message(
+            "s1",
+            0,
+            NormalizedRole::User,
+            "revised wording",
+            LineageDepth::ROOT,
+        )];
         store
             .replace_session(&session("s1", Some(1), SessionScope::Scoped), &first, &[])
             .unwrap();
@@ -1010,7 +1057,11 @@ mod tests {
     #[test]
     fn sessions_are_ordered_by_first_message_time_not_insertion_order() {
         let mut store = store();
-        for (key, first_ms) in [("s_mid", Some(200)), ("s_new", Some(300)), ("s_old", Some(100))] {
+        for (key, first_ms) in [
+            ("s_mid", Some(200)),
+            ("s_new", Some(300)),
+            ("s_old", Some(100)),
+        ] {
             store
                 .replace_session(&session(key, first_ms, SessionScope::Scoped), &[], &[])
                 .unwrap();
@@ -1052,7 +1103,13 @@ mod tests {
         store
             .replace_session(
                 &session("s_unscoped", Some(1), SessionScope::Unscoped),
-                &[message("s_unscoped", 0, NormalizedRole::User, "borrowed context", LineageDepth::ROOT)],
+                &[message(
+                    "s_unscoped",
+                    0,
+                    NormalizedRole::User,
+                    "borrowed context",
+                    LineageDepth::ROOT,
+                )],
                 &[],
             )
             .unwrap();
@@ -1073,7 +1130,13 @@ mod tests {
         store
             .replace_session(
                 &only,
-                &[message("s1", 0, NormalizedRole::ToolResult, "agent_job output", LineageDepth::UNKNOWN)],
+                &[message(
+                    "s1",
+                    0,
+                    NormalizedRole::ToolResult,
+                    "agent_job output",
+                    LineageDepth::UNKNOWN,
+                )],
                 &[],
             )
             .unwrap();
@@ -1104,7 +1167,13 @@ mod tests {
             )
             .unwrap();
 
-        for hostile in ["--no-verify", "\"ENOENT\"", "ENOENT*", "NEAR(a b)", "git OR"] {
+        for hostile in [
+            "--no-verify",
+            "\"ENOENT\"",
+            "ENOENT*",
+            "NEAR(a b)",
+            "git OR",
+        ] {
             let hits = store
                 .search(hostile, false, 10)
                 .unwrap_or_else(|error| panic!("{hostile} must not be a syntax error: {error}"));
@@ -1120,7 +1189,13 @@ mod tests {
         store
             .replace_session(
                 &session("s1", Some(1), SessionScope::Scoped),
-                &[message("s1", 0, NormalizedRole::User, "anything", LineageDepth::ROOT)],
+                &[message(
+                    "s1",
+                    0,
+                    NormalizedRole::User,
+                    "anything",
+                    LineageDepth::ROOT,
+                )],
                 &[],
             )
             .unwrap();
@@ -1150,7 +1225,11 @@ mod tests {
             source: pointer("/repo/s1.jsonl", 900, b"{\"type\":\"compaction\"}"),
         };
         store
-            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &[], &[record.clone()])
+            .replace_session(
+                &session("s1", Some(1), SessionScope::Scoped),
+                &[],
+                &[record.clone()],
+            )
             .unwrap();
 
         let found = store.search_compactions("migration", false, 10).unwrap();
@@ -1198,7 +1277,13 @@ mod tests {
         store
             .replace_session(
                 &session("s1", Some(1), SessionScope::Scoped),
-                &[message("s1", 0, NormalizedRole::User, "ephemeral", LineageDepth::ROOT)],
+                &[message(
+                    "s1",
+                    0,
+                    NormalizedRole::User,
+                    "ephemeral",
+                    LineageDepth::ROOT,
+                )],
                 &[],
             )
             .unwrap();
@@ -1227,9 +1312,21 @@ mod tests {
             .replace_session(
                 &session("s1", Some(1), SessionScope::Scoped),
                 &[
-                    message("s1", 2, NormalizedRole::ToolResult, "third", LineageDepth::ROOT),
+                    message(
+                        "s1",
+                        2,
+                        NormalizedRole::ToolResult,
+                        "third",
+                        LineageDepth::ROOT,
+                    ),
                     message("s1", 0, NormalizedRole::User, "first", LineageDepth::ROOT),
-                    message("s1", 1, NormalizedRole::ToolCall, "second", LineageDepth::ROOT),
+                    message(
+                        "s1",
+                        1,
+                        NormalizedRole::ToolCall,
+                        "second",
+                        LineageDepth::ROOT,
+                    ),
                 ],
                 &[],
             )

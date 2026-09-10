@@ -417,7 +417,8 @@ mod tests {
     #[test]
     fn trailing_separator_does_not_change_identity() {
         let plain = CanonicalProjectRoot::resolve(Path::new("/nonexistent-project-root")).unwrap();
-        let slashed = CanonicalProjectRoot::resolve(Path::new("/nonexistent-project-root/")).unwrap();
+        let slashed =
+            CanonicalProjectRoot::resolve(Path::new("/nonexistent-project-root/")).unwrap();
         assert_eq!(plain.namespace_key(), slashed.namespace_key());
     }
 

@@ -139,9 +139,8 @@ static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^\s/@:]+):([^\s/@]+)@").expect("URL_USERINFO")
 });
 
-static BLOB: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"[A-Za-z0-9+/=_\-]{{{BLOB_MIN_LEN},}}")).expect("BLOB")
-});
+static BLOB: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"[A-Za-z0-9+/=_\-]{{{BLOB_MIN_LEN},}}")).expect("BLOB"));
 
 /// Short options that take a password glued to the flag.
 ///
@@ -225,7 +224,10 @@ pub fn is_sensitive_name(raw: &str) -> bool {
     if SENSITIVE_NAMES.contains(normalized.as_str()) {
         return true;
     }
-    let parts: Vec<&str> = normalized.split('_').filter(|part| !part.is_empty()).collect();
+    let parts: Vec<&str> = normalized
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect();
     let Some(last) = parts.last() else {
         return false;
     };
@@ -280,12 +282,7 @@ pub fn redact(text: &str) -> Redacted {
         }
         bump();
         match header.get(2) {
-            Some(scheme) => format!(
-                "{}: {} {}",
-                &header[1],
-                scheme.as_str(),
-                mask("credential")
-            ),
+            Some(scheme) => format!("{}: {} {}", &header[1], scheme.as_str(), mask("credential")),
             None => format!("{}: {}", &header[1], mask("credential")),
         }
     });
@@ -383,25 +380,16 @@ mod tests {
             "remote uses ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         );
         assert_gone("AKIAIOSFODNN7EXAMPLE", "aws id AKIAIOSFODNN7EXAMPLE");
-        assert_gone(
-            "hunter2",
-            "GITHUB_TOKEN=hunter2",
-        );
+        assert_gone("hunter2", "GITHUB_TOKEN=hunter2");
         assert_gone("hunter2", r#"{"api_key": "hunter2"}"#);
         assert_gone("hunter2", "export AWS_SECRET_ACCESS_KEY='hunter2'");
         assert_gone("hunter2", "PASSWORD: hunter2");
-        assert_gone(
-            "hunter2",
-            "postgres://appuser:hunter2@db.internal:5432/app",
-        );
+        assert_gone("hunter2", "postgres://appuser:hunter2@db.internal:5432/app");
         assert_gone(
             "MIIEvQIBADANBgkq",
             "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkq\naaaa\n-----END RSA PRIVATE KEY-----",
         );
-        assert_gone(
-            "hunter2",
-            "mysql -uroot -phunter2 mydb",
-        );
+        assert_gone("hunter2", "mysql -uroot -phunter2 mydb");
     }
 
     /// The other half of the contract. Over-masking is not a safe default: it

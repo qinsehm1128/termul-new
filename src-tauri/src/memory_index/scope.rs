@@ -190,7 +190,12 @@ mod tests {
     #[test]
     fn an_ancestor_of_the_project_is_outside() {
         let fence = fence();
-        for ancestor in ["/Users/qs", "/Users/qs/project", "/Users/qs/project/me", "/"] {
+        for ancestor in [
+            "/Users/qs",
+            "/Users/qs/project",
+            "/Users/qs/project/me",
+            "/",
+        ] {
             assert!(
                 !fence.contains(Path::new(ancestor)),
                 "{ancestor} must not count as inside the project"
@@ -222,7 +227,13 @@ mod tests {
             fence.classify_cwd(Some("/Users/qs/project/me/termul/src")),
             SessionScope::Scoped
         );
-        for unproven in [None, Some(""), Some("   "), Some("/Users/qs"), Some("/tmp/x")] {
+        for unproven in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("/Users/qs"),
+            Some("/tmp/x"),
+        ] {
             assert_eq!(
                 fence.classify_cwd(unproven),
                 SessionScope::Unscoped,

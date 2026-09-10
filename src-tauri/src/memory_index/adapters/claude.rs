@@ -30,7 +30,7 @@ use super::super::types::{
 };
 use super::{
     flatten_text, for_each_record, parse_timestamp, prepare_indexed_text, session_key,
-    string_field, title_from_text, AdaptedTranscript, AdapterIssue, ISSUE_NO_SESSION_HEADER,
+    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ISSUE_NO_SESSION_HEADER,
 };
 
 /// Adapt one Claude transcript.
@@ -54,6 +54,9 @@ pub fn adapt(
     let mut is_sidechain: Option<bool> = None;
     let mut cwd: Option<String> = None;
     let mut title: Option<String> = None;
+    // Fallback when every user record is harness scaffolding, mirroring
+    // `cli_session::parse`, which also falls back to the first assistant line.
+    let mut assistant_title: Option<String> = None;
     let mut first: Option<(String, i64)> = None;
     let mut last: Option<(String, i64)> = None;
     let mut messages: Vec<NormalizedMessage> = Vec::new();
@@ -84,10 +87,7 @@ pub fn adapt(
         let Some(message) = value.get("message") else {
             return;
         };
-        let role = message
-            .get("role")
-            .and_then(Value::as_str)
-            .unwrap_or(kind);
+        let role = message.get("role").and_then(Value::as_str).unwrap_or(kind);
         let stamp = string_field(value, &["timestamp"]).and_then(|raw| parse_timestamp(&raw));
         if let Some(ref stamp) = stamp {
             if first.is_none() {
@@ -96,9 +96,8 @@ pub fn adapt(
             last = Some(stamp.clone());
         }
 
-        let pointer = || {
-            SourcePointer::for_record(identity, &file_path, record.byte_offset, &record.bytes)
-        };
+        let pointer =
+            || SourcePointer::for_record(identity, &file_path, record.byte_offset, &record.bytes);
         let depth = LineageDepth::UNKNOWN; // replaced below, once isSidechain is known
 
         for emitted in split_blocks(message, role) {
@@ -110,7 +109,10 @@ pub fn adapt(
                 tool_count += 1;
             }
             if title.is_none() && matches!(emitted.role, NormalizedRole::User) {
-                title = title_from_text(&text);
+                title = title_candidate(&text);
+            }
+            if assistant_title.is_none() && matches!(emitted.role, NormalizedRole::Assistant) {
+                assistant_title = title_candidate(&text);
             }
             messages.push(NormalizedMessage {
                 schema_version: SCHEMA_VERSION,
@@ -175,7 +177,7 @@ pub fn adapt(
         project_key: project_key.to_string(),
         scope,
         cwd,
-        title,
+        title: title.or(assistant_title),
         first_message_at_utc: first.as_ref().map(|(utc, _)| utc.clone()),
         first_message_at_ms: first.as_ref().map(|(_, ms)| *ms),
         last_activity_at_utc: last.as_ref().map(|(utc, _)| utc.clone()),
@@ -381,7 +383,9 @@ mod tests {
         let path = temp.path().join("agent-x.jsonl");
         write(
             &path,
-            &[r#"{"type":"user","sessionId":"sess-root","agentId":"aw5-ts","isSidechain":true,"timestamp":"2026-09-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"explore the store"}]}}"#],
+            &[
+                r#"{"type":"user","sessionId":"sess-root","agentId":"aw5-ts","isSidechain":true,"timestamp":"2026-09-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"explore the store"}]}}"#,
+            ],
         );
         let identity = FileIdentity::read(&path).unwrap();
         let resolve = |parent: &str| {
@@ -413,7 +417,9 @@ mod tests {
         let path = nested.join("agent-y.jsonl");
         write(
             &path,
-            &[r#"{"type":"user","sessionId":"sess-root","isSidechain":true,"timestamp":"2026-09-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"grouped agent"}]}}"#],
+            &[
+                r#"{"type":"user","sessionId":"sess-root","isSidechain":true,"timestamp":"2026-09-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"grouped agent"}]}}"#,
+            ],
         );
         let identity = FileIdentity::read(&path).unwrap();
         let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root);
@@ -431,7 +437,9 @@ mod tests {
         let path = temp.path().join("orphan.jsonl");
         write(
             &path,
-            &[r#"{"type":"user","sessionId":"sess-missing","isSidechain":true,"timestamp":"2026-09-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"orphan"}]}}"#],
+            &[
+                r#"{"type":"user","sessionId":"sess-missing","isSidechain":true,"timestamp":"2026-09-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"orphan"}]}}"#,
+            ],
         );
         let identity = FileIdentity::read(&path).unwrap();
         let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root);

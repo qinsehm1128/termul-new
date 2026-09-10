@@ -41,7 +41,7 @@ use super::super::types::{
 };
 use super::{
     flatten_text, for_each_record, parse_timestamp, prepare_indexed_text, session_key,
-    string_field, title_from_text, AdaptedTranscript, AdapterIssue, ISSUE_LINEAGE_FORK,
+    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ISSUE_LINEAGE_FORK,
     ISSUE_NO_SESSION_HEADER,
 };
 
@@ -68,7 +68,10 @@ pub fn is_transcript_name(name: &str) -> bool {
         matches!(
             (index, characters.next()),
             (0..=3, Some(c)) | (5..=6, Some(c)) | (8..=9, Some(c)) if c.is_ascii_digit()
-        ) || matches!((index, timestamp.as_bytes().get(index)), (4 | 7, Some(b'-')))
+        ) || matches!(
+            (index, timestamp.as_bytes().get(index)),
+            (4 | 7, Some(b'-'))
+        )
     });
     date_ok && timestamp.len() > 11 && timestamp.as_bytes().get(10) == Some(&b'T')
 }
@@ -125,6 +128,9 @@ pub fn adapt(
     let mut vendor_session_id: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut title: Option<String> = None;
+    // Fallback when every user record is harness scaffolding, mirroring
+    // `cli_session::parse`, which also falls back to the first assistant line.
+    let mut assistant_title: Option<String> = None;
     let mut first: Option<(String, i64)> = None;
     let mut last: Option<(String, i64)> = None;
     let mut messages: Vec<NormalizedMessage> = Vec::new();
@@ -147,7 +153,10 @@ pub fn adapt(
             tool_count += 1;
         }
         if title.is_none() && matches!(emitted.role, NormalizedRole::User) {
-            title = title_from_text(&text);
+            title = title_candidate(&text);
+        }
+        if assistant_title.is_none() && matches!(emitted.role, NormalizedRole::Assistant) {
+            assistant_title = title_candidate(&text);
         }
         messages.push(NormalizedMessage {
             schema_version: SCHEMA_VERSION,
@@ -301,7 +310,7 @@ pub fn adapt(
         project_key: project_key.to_string(),
         scope,
         cwd,
-        title,
+        title: title.or(assistant_title),
         first_message_at_utc: first.as_ref().map(|(utc, _)| utc.clone()),
         first_message_at_ms: first.as_ref().map(|(_, ms)| *ms),
         last_activity_at_utc: last.as_ref().map(|(utc, _)| utc.clone()),
@@ -339,10 +348,7 @@ fn split_message(message: &Value) -> Vec<Emitted> {
     if role == "toolResult" {
         return vec![Emitted {
             role: NormalizedRole::ToolResult,
-            text: message
-                .get("content")
-                .map(flatten_text)
-                .unwrap_or_default(),
+            text: message.get("content").map(flatten_text).unwrap_or_default(),
             tool_name: string_field(message, &["toolName"]),
             tool_call_id: string_field(message, &["toolCallId"]),
         }];
@@ -354,10 +360,7 @@ fn split_message(message: &Value) -> Vec<Emitted> {
         _ => NormalizedRole::System,
     };
     let Some(blocks) = message.get("content").and_then(Value::as_array) else {
-        let text = message
-            .get("content")
-            .map(flatten_text)
-            .unwrap_or_default();
+        let text = message.get("content").map(flatten_text).unwrap_or_default();
         return if text.is_empty() {
             Vec::new()
         } else {
@@ -455,7 +458,10 @@ mod tests {
     fn depth_comes_from_two_path_segments_per_level() {
         let project = Path::new("/pi/--Users-qs-project-me-termul--");
         assert_eq!(
-            depth_from_path(project, &project.join("2026-08-14T02-12-05-826Z_aaaaaaaa.jsonl")),
+            depth_from_path(
+                project,
+                &project.join("2026-08-14T02-12-05-826Z_aaaaaaaa.jsonl")
+            ),
             LineageDepth::ROOT
         );
         assert_eq!(
@@ -501,7 +507,11 @@ mod tests {
     fn a_nested_transcript_resolves_its_root_file() {
         let project = Path::new("/pi/proj");
         let root = project.join("2026-08-14T02-12-05-826Z_aaaaaaaa.jsonl");
-        assert_eq!(root_file_for(project, &root), None, "a root has no root file");
+        assert_eq!(
+            root_file_for(project, &root),
+            None,
+            "a root has no root file"
+        );
         let child = project
             .join("2026-08-14T02-12-05-826Z_aaaaaaaa")
             .join("01e3a87e")
@@ -679,7 +689,9 @@ mod tests {
             None,
         );
         let texts: Vec<&str> = adapted.messages.iter().map(|m| m.text.as_str()).collect();
-        assert!(texts.iter().any(|text| text.contains("spawned @explore-terminal")));
+        assert!(texts
+            .iter()
+            .any(|text| text.contains("spawned @explore-terminal")));
         assert!(!texts.iter().any(|text| text.contains("not for humans")));
         assert!(!texts.iter().any(|text| text.contains("do the thing")));
     }
@@ -713,7 +725,11 @@ mod tests {
     #[test]
     fn a_transcript_without_a_session_record_reports_an_issue() {
         let temp = tempfile::tempdir().unwrap();
-        let path = write(temp.path(), "2026-08-14T02-12-05-826Z_019ffe0a.jsonl", &[USER]);
+        let path = write(
+            temp.path(),
+            "2026-08-14T02-12-05-826Z_019ffe0a.jsonl",
+            &[USER],
+        );
         let identity = FileIdentity::read(&path).unwrap();
         let adapted = adapt(
             &path,

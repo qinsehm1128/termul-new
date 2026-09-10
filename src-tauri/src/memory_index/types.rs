@@ -626,10 +626,7 @@ mod tests {
             TimestampConfidence::FileMtime,
             TimestampConfidence::Unknown,
         ] {
-            assert_eq!(
-                TimestampConfidence::parse(confidence.as_str()),
-                confidence
-            );
+            assert_eq!(TimestampConfidence::parse(confidence.as_str()), confidence);
         }
     }
 

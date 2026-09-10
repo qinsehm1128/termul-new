@@ -43,7 +43,7 @@ use super::super::types::{
 };
 use super::{
     flatten_text, for_each_record, parse_timestamp, prepare_indexed_text, session_key,
-    string_field, title_from_text, AdaptedTranscript, AdapterIssue, ISSUE_NO_SESSION_HEADER,
+    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ISSUE_NO_SESSION_HEADER,
 };
 
 /// What `session_meta` says about a transcript, without reading its body.
@@ -141,6 +141,9 @@ pub fn adapt(
     let mut out = AdaptedTranscript::default();
     let mut messages: Vec<NormalizedMessage> = Vec::new();
     let mut title: Option<String> = None;
+    // Fallback when every user record is harness scaffolding, mirroring
+    // `cli_session::parse`, which also falls back to the first assistant line.
+    let mut assistant_title: Option<String> = None;
     let mut first: Option<(String, i64)> = None;
     let mut last: Option<(String, i64)> = None;
     let mut tool_count: u64 = 0;
@@ -172,7 +175,10 @@ pub fn adapt(
             tool_count += 1;
         }
         if title.is_none() && matches!(emitted.role, NormalizedRole::User) {
-            title = title_from_text(&text);
+            title = title_candidate(&text);
+        }
+        if assistant_title.is_none() && matches!(emitted.role, NormalizedRole::Assistant) {
+            assistant_title = title_candidate(&text);
         }
         messages.push(NormalizedMessage {
             schema_version: SCHEMA_VERSION,
@@ -215,10 +221,7 @@ pub fn adapt(
 
     // The session's own start time is authoritative for ordering when the
     // transcript holds no timestamped conversation record yet.
-    let started = meta
-        .started_at_utc
-        .as_deref()
-        .and_then(parse_timestamp);
+    let started = meta.started_at_utc.as_deref().and_then(parse_timestamp);
     let first = first.or(started);
 
     out.session = Some(IndexedSession {
@@ -232,7 +235,9 @@ pub fn adapt(
         scope,
         cwd: meta.cwd.clone(),
         // An `agent_role` is worth showing: it says what the subagent was for.
-        title: title.or_else(|| meta.agent_role.as_ref().map(|role| format!("[{role}]"))),
+        title: title
+            .or(assistant_title)
+            .or_else(|| meta.agent_role.as_ref().map(|role| format!("[{role}]"))),
         first_message_at_utc: first.as_ref().map(|(utc, _)| utc.clone()),
         first_message_at_ms: first.as_ref().map(|(_, ms)| *ms),
         last_activity_at_utc: last.as_ref().map(|(utc, _)| utc.clone()),
@@ -288,10 +293,7 @@ fn normalize_item(payload: &Value) -> Option<Emitted> {
         }),
         "function_call_output" | "custom_tool_call_output" => Some(Emitted {
             role: NormalizedRole::ToolResult,
-            text: payload
-                .get("output")
-                .map(flatten_text)
-                .unwrap_or_default(),
+            text: payload.get("output").map(flatten_text).unwrap_or_default(),
             tool_name: None,
             tool_call_id: string_field(payload, &["call_id"]),
         }),
@@ -409,7 +411,14 @@ mod tests {
         ]);
         let identity = FileIdentity::read(&path).unwrap();
         let meta = read_meta(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &meta, &no_root);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &meta,
+            &no_root,
+        );
 
         let roles: Vec<NormalizedRole> = adapted.messages.iter().map(|m| m.role).collect();
         assert_eq!(
@@ -455,7 +464,14 @@ mod tests {
         ]);
         let identity = FileIdentity::read(&path).unwrap();
         let meta = read_meta(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &meta, &no_root);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &meta,
+            &no_root,
+        );
         assert_eq!(adapted.messages[0].role, NormalizedRole::System);
         assert!(
             adapted.session.unwrap().title.is_none(),
@@ -469,10 +485,16 @@ mod tests {
         let (_t, path) = write(&[META_SPAWN]);
         let identity = FileIdentity::read(&path).unwrap();
         let meta = read_meta(&path).unwrap();
-        let resolve = |thread: &str| {
-            (thread == "parent-1").then(|| "codex:/store/root.jsonl".to_string())
-        };
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &meta, &resolve);
+        let resolve =
+            |thread: &str| (thread == "parent-1").then(|| "codex:/store/root.jsonl".to_string());
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &meta,
+            &resolve,
+        );
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, "codex:/store/root.jsonl");
         assert_eq!(session.lineage_depth, LineageDepth::nested(2));
@@ -490,7 +512,14 @@ mod tests {
         let (_t, path) = write(&[META_JOB]);
         let identity = FileIdentity::read(&path).unwrap();
         let meta = read_meta(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &meta, &no_root);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &meta,
+            &no_root,
+        );
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, session.session_key);
         assert_eq!(session.lineage_depth, LineageDepth::UNKNOWN);
@@ -504,7 +533,14 @@ mod tests {
         ]);
         let identity = FileIdentity::read(&path).unwrap();
         let meta = read_meta(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &meta, &no_root);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &meta,
+            &no_root,
+        );
         let text = &adapted.messages[0].text;
         assert!(!text.contains("xai-ziyhFXhJ9KTrUDl8Fv8CNNzx4t"), "{text}");
         assert!(text.contains("[redacted:"), "{text}");
