@@ -21,6 +21,14 @@ struct TerminalAttachResult: Decodable, Sendable {
     var gap: Bool?
 }
 
+/// Host reply for `set_display_mode`: the authoritative live grid after the
+/// adopt/park/restore decision (e.g. the parked desktop size on restore).
+struct TerminalDisplayModeState: Decodable, Sendable {
+    var mode: String
+    var cols: Int
+    var rows: Int
+}
+
 struct LiveTerminalList: Decodable, Sendable {
     var terminals: [LiveTerminalSummary]
 }
@@ -46,7 +54,7 @@ final class TerminalSocket {
     var onBytes: (@MainActor (String, Data) -> Void)?
     var onExit: (@MainActor (String) -> Void)?
     var onCatalogChanged: (@MainActor () -> Void)?
-    var onDisplayModeChanged: (@MainActor (String, String) -> Void)?
+    var onDisplayModeChanged: (@MainActor (String, String, Int, Int) -> Void)?
 
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
@@ -172,7 +180,12 @@ final class TerminalSocket {
         )
     }
 
-    func setDisplayMode(terminalId: String, mode: String, cols: Int? = nil, rows: Int? = nil) async throws {
+    func setDisplayMode(
+        terminalId: String,
+        mode: String,
+        cols: Int? = nil,
+        rows: Int? = nil
+    ) async throws -> TerminalDisplayModeState {
         var payload: [String: Any] = [
             "terminalId": terminalId,
             "mode": mode
@@ -183,7 +196,7 @@ final class TerminalSocket {
         if let rows {
             payload["rows"] = rows
         }
-        _ = try await request("set_display_mode", payload: payload, as: EmptyPayload.self)
+        return try await request("set_display_mode", payload: payload, as: TerminalDisplayModeState.self)
     }
 
     func stop() {
@@ -276,7 +289,9 @@ final class TerminalSocket {
                 if eventType == "display_mode_changed",
                    let terminalId = payload["terminal_id"] as? String,
                    let mode = payload["mode"] as? String {
-                    onDisplayModeChanged?(terminalId, mode)
+                    let cols = payload["cols"] as? Int ?? 0
+                    let rows = payload["rows"] as? Int ?? 0
+                    onDisplayModeChanged?(terminalId, mode, cols, rows)
                 }
                 if eventType == "spawned" || eventType == "exit" {
                     HostLog.session.info("Host terminal catalog changed")

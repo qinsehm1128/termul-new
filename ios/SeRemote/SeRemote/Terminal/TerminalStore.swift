@@ -28,12 +28,25 @@ final class TerminalStore {
     var errorMessage: String?
     var isConnecting = false
     var onFeed: (@MainActor (String, Data) -> Void)?
-    /// Keyboard is covering the grid. Keep local geometry; do not reflow the host PTY.
-    var suppressHostResize = false
     /// Phone-fit takeover when viewing; desktop restores the parked host size.
     var displayMode: TerminalDisplayMode = .phone
     /// True only while the terminal tab is the visible workspace surface.
+    /// Covered surfaces must never leak phone dims into the host PTY.
     var geometryActive = false
+
+    /// All viewport changes funnel through one 150 ms debounce (keyboard,
+    /// rotation, text scale, tab return, resume, reconnect). The commit reads
+    /// the latest grid, so an oscillation inside the window collapses to the
+    /// final size and the host never sees a mid-keystroke reflow.
+    private var refitTask: Task<Void, Never>?
+    /// Forced refits re-assert the viewport even when dims are unchanged —
+    /// resume/reconnect converge when the host PTY changed behind our back.
+    private var forceRefit = false
+    /// True once the live view reported a fitted grid for the active
+    /// terminal. Before that, the model still carries host-side dims and
+    /// must never be pushed as a phone fit.
+    private var viewReported = false
+    private var lastPushed: [String: (cols: Int, rows: Int)] = [:]
 
     private var coalesceBuffers: [String: Data] = [:]
     private var coalesceTask: Task<Void, Never>?
@@ -58,14 +71,22 @@ final class TerminalStore {
             guard let self else { return }
             Task { await self.refresh(conversationId: self.lastConversationId, projectId: self.lastProjectId) }
         }
-        socket.onDisplayModeChanged = { [weak self] terminalId, mode in
+        socket.onDisplayModeChanged = { [weak self] terminalId, mode, cols, rows in
             guard let self else { return }
-            guard terminalId == self.activeId,
+            // The event carries the authoritative grid (the parked desktop
+            // size on restore), so the model — and the desktop-mode column
+            // fit derived from it — stays truthful.
+            if cols > 1, rows > 1,
+               let index = terminals.firstIndex(where: { $0.id == terminalId }) {
+                terminals[index].cols = cols
+                terminals[index].rows = rows
+            }
+            guard terminalId == activeId,
                   mode == TerminalDisplayMode.desktop.rawValue,
-                  self.geometryActive,
-                  self.displayMode == .phone
+                  geometryActive,
+                  displayMode == .phone
             else { return }
-            self.displayMode = .desktop
+            displayMode = .desktop
             HostLog.session.info("Host restored desktop display mode")
         }
         socket.onExit = { [weak self] terminalId in
@@ -142,6 +163,11 @@ final class TerminalStore {
             _ = try await socket.watch(terminalId: terminalId, lastSeq: 0)
             watchedId = terminalId
             activeId = terminalId
+            viewReported = false
+            // A fresh watch may land on a PTY the desktop resized meanwhile;
+            // re-assert the phone viewport deterministically instead of
+            // waiting for a view-driven sizeChanged that may never come.
+            scheduleRefit(force: true)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -190,48 +216,104 @@ final class TerminalStore {
         }
     }
 
+    /// The view fitted itself to a new grid (layout, rotation, keyboard,
+    /// text scale). Record it and converge through the debounce — the push
+    /// to the host happens in `commitRefit`, never inline here.
     func resize(cols: Int, rows: Int) async {
-        guard let socket, let activeId else { return }
         guard let index = terminals.firstIndex(where: { $0.id == activeId }) else { return }
         terminals[index].cols = cols
         terminals[index].rows = rows
-        guard displayMode == .phone, geometryActive, !suppressHostResize else { return }
-        _ = try? await socket.setDisplayMode(
-            terminalId: activeId,
-            mode: TerminalDisplayMode.phone.rawValue,
-            cols: cols,
-            rows: rows
-        )
+        viewReported = true
+        scheduleRefit()
+    }
+
+    func scheduleRefit(force: Bool = false) {
+        if force {
+            forceRefit = true
+        }
+        refitTask?.cancel()
+        refitTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, !Task.isCancelled else { return }
+            await self.commitRefit()
+        }
+    }
+
+    private func commitRefit() async {
+        // viewReported gate: until the live view has fitted itself, the model
+        // dims are host-side values; the force flag survives so the first
+        // real report still performs its forced takeover push.
+        guard geometryActive, displayMode == .phone, viewReported else { return }
+        guard let socket, let activeId,
+              let index = terminals.firstIndex(where: { $0.id == activeId }) else { return }
+        let cols = max(terminals[index].cols, 20)
+        let rows = max(terminals[index].rows, 4)
+        let forced = forceRefit
+        forceRefit = false
+        if !forced, let pushed = lastPushed[activeId], pushed.cols == cols, pushed.rows == rows {
+            return
+        }
+        do {
+            let state = try await socket.setDisplayMode(
+                terminalId: activeId,
+                mode: TerminalDisplayMode.phone.rawValue,
+                cols: cols,
+                rows: rows
+            )
+            if state.cols > 1, state.rows > 1,
+               let live = terminals.firstIndex(where: { $0.id == activeId }) {
+                terminals[live].cols = state.cols
+                terminals[live].rows = state.rows
+            }
+            lastPushed[activeId] = (state.cols, state.rows)
+            HostLog.ui.info("Phone fit \(state.cols)x\(state.rows)\(forced ? " (forced)" : "", privacy: .public)")
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func setDisplayMode(_ mode: TerminalDisplayMode) async {
         displayMode = mode
         guard let socket, let activeId else { return }
         if mode == .desktop {
-            _ = try? await socket.setDisplayMode(
-                terminalId: activeId,
-                mode: TerminalDisplayMode.desktop.rawValue
-            )
+            do {
+                let state = try await socket.setDisplayMode(
+                    terminalId: activeId,
+                    mode: TerminalDisplayMode.desktop.rawValue
+                )
+                applyState(state, for: activeId)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
             HostLog.session.info("Terminal display mode desktop")
             return
         }
-        guard geometryActive, !suppressHostResize else { return }
-        guard let index = terminals.firstIndex(where: { $0.id == activeId }) else { return }
-        _ = try? await socket.setDisplayMode(
-            terminalId: activeId,
-            mode: TerminalDisplayMode.phone.rawValue,
-            cols: terminals[index].cols,
-            rows: terminals[index].rows
-        )
+        // Phone takeover is deterministic: the debounced refit adopts the
+        // current fitted grid even if it equals the last push.
+        scheduleRefit(force: true)
         HostLog.session.info("Terminal display mode phone")
     }
 
     func releaseDisplayMode(for terminalId: String?) async {
         guard let socket, let terminalId else { return }
-        _ = try? await socket.setDisplayMode(
-            terminalId: terminalId,
-            mode: TerminalDisplayMode.desktop.rawValue
-        )
+        do {
+            let state = try await socket.setDisplayMode(
+                terminalId: terminalId,
+                mode: TerminalDisplayMode.desktop.rawValue
+            )
+            applyState(state, for: terminalId)
+        } catch {
+            // Release is best-effort: the host sweeps stale phone fits on
+            // disconnect; the parked desktop size is what it restores to.
+            HostLog.session.info("Display-mode release failed")
+        }
+    }
+
+    private func applyState(_ state: TerminalDisplayModeState, for terminalId: String) {
+        guard state.cols > 1, state.rows > 1,
+              let index = terminals.firstIndex(where: { $0.id == terminalId }) else { return }
+        terminals[index].cols = state.cols
+        terminals[index].rows = state.rows
     }
 
     private func enqueueOutput(terminalId: String, data: Data) {

@@ -54,9 +54,8 @@ final class WorkspaceSession {
     var workspaceTab: WorkspaceTab = .chat
     var workspace: WorkspaceKind = .home
     var phase: SessionPhase = .idle
-    /// Software keyboard is covering the terminal tab. Chrome hides; host PTY stays put.
+    /// Software keyboard is covering the terminal tab. Chrome hides while typing.
     var terminalKeyboardVisible = false
-    var terminalKeyboardHeight: CGFloat = 0
     var terminalBlurToken: UInt64 = 0
     /// Regular-width layout keeps the terminal pane mounted next to chat, so
     /// PTY geometry must stay active instead of parking between tab switches.
@@ -184,6 +183,11 @@ final class WorkspaceSession {
     func handleScene(isBackground: Bool) {
         isBackgrounded = isBackground
         acp.handleLifecycle(isBackground: isBackground)
+        if !isBackground {
+            // Cached grid can match while the host PTY changed in background;
+            // re-assert equal dims to converge after resume.
+            terminals.scheduleRefit(force: true)
+        }
     }
 
     func selectConversation(_ conversation: HostConversation) async {
@@ -250,13 +254,10 @@ final class WorkspaceSession {
     func noteTerminalKeyboard(height: CGFloat) {
         // A keyboard over the chat composer is not the terminal's keyboard:
         // the wide layout mounts both panes, so composer ownership decides
-        // whose keyboard this is before the dock lifts or the host resize is
-        // suppressed.
+        // whose keyboard this is before the chrome reacts.
         let coversTerminal = !chat.composerActive && (workspaceTab == .terminal || isWideLayout)
         let visible = coversTerminal && height > 40
-        terminalKeyboardHeight = visible ? height : 0
         terminalKeyboardVisible = visible
-        terminals.suppressHostResize = visible
     }
 
     func setWorkspaceTab(_ tab: WorkspaceTab) {
@@ -278,6 +279,12 @@ final class WorkspaceSession {
             workspaceTab = tab
             showChat = tab == .chat
             terminals.geometryActive = isWideLayout ? (workspace != .home) : (tab == .terminal)
+            if tab == .terminal {
+                // Returning to the terminal surface re-asserts the phone fit:
+                // the release on the way out restored the desktop grid, and no
+                // sizeChanged will fire because the view never unmounted.
+                terminals.scheduleRefit(force: true)
+            }
         }
     }
 

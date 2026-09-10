@@ -102,15 +102,15 @@ struct TerminalWorkspaceView: View {
                     HostLog.session.info("Terminal text scale \(next, privacy: .public)")
                 }
             )
-            .offset(y: session.terminalKeyboardVisible ? -session.terminalKeyboardHeight : 0)
             .zIndex(1)
         }
         .onAppear {
             // The wide layout mounts the terminal without a tab switch, so
-            // geometry activation has to happen here.
+            // geometry activation and takeover re-assertion happen here.
             if session.isWideLayout {
                 session.terminals.geometryActive = true
             }
+            session.terminals.scheduleRefit(force: true)
         }
         .onReceive(ShortcutCenter.shortcuts) { shortcut in
             switch shortcut {

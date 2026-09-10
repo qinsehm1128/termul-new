@@ -18,7 +18,6 @@ struct SessionScreen: View {
             }
         }
         .background(SeTheme.canvas.ignoresSafeArea())
-        .modifier(TerminalKeyboardAvoidance(enabled: session.workspaceTab == .terminal && !isWide))
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             guard session.workspaceTab == .terminal || isWide else { return }
             let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
@@ -308,18 +307,6 @@ struct SessionScreen: View {
             "project:\(session.projects.active?.id ?? "")"
         case .home:
             "home"
-        }
-    }
-}
-
-private struct TerminalKeyboardAvoidance: ViewModifier {
-    var enabled: Bool
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content.ignoresSafeArea(.keyboard, edges: .bottom)
-        } else {
-            content
         }
     }
 }
