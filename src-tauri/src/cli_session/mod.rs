@@ -6,7 +6,10 @@
 
 pub mod commands;
 mod parse;
-mod paths;
+/// Vendor store roots and the per-project folder encoders. `pub(crate)` so the
+/// memory index reuses the exact same encoders instead of growing a second copy
+/// that could drift from what the vendors actually write on disk.
+pub(crate) mod paths;
 mod scan;
 mod scope;
 mod types;

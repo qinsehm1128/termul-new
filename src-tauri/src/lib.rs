@@ -17,6 +17,11 @@ mod host_admission;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
+/// Cross-agent conversation memory index: normalizes Claude Code / Codex / pi
+/// transcripts into one shape, stores a searchable projection host-private per
+/// project, and serves it over MCP. Public because the standalone binary's
+/// read-only MCP subcommand links this crate.
+pub mod memory_index;
 /// Read-only probe for pre-rename brand data (T-MIG-DETECT). Public because the
 /// brand-migration integration tests link this crate as an external dependency.
 pub mod migration_detect;
