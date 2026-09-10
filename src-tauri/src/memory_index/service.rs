@@ -699,6 +699,68 @@ mod tests {
         );
     }
 
+    /// AC12's host-side half.
+    ///
+    /// A build walks every transcript this project has — 3139 files and 154
+    /// seconds on the corpus it was measured against — so it must stay
+    /// reachable only from the two explicit user-triggered entry points. The
+    /// renderer half of this rule is enforced in
+    /// `parity-checklist.test.ts`; this is the half that covers callers with no
+    /// renderer at all, like a startup path or a route added later.
+    #[test]
+    fn building_the_index_is_reachable_only_from_the_explicit_entry_points() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let allowed = [
+            // The Tauri command behind the project menu item.
+            "memory_index/commands.rs",
+            // Its HTTP twin, which the browser client's same menu item calls.
+            "web/memory_index_api.rs",
+            // The implementation and its own tests.
+            "memory_index/service.rs",
+            "memory_index/ingest.rs",
+        ];
+        let mut callers = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|value| value.to_str()) != Some("rs") {
+                    continue;
+                }
+                let Ok(source) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+                if !production.contains("build_index(") && !production.contains(".build(\n") {
+                    continue;
+                }
+                if !production.contains("memory_index") && !production.contains("MemoryIndex") {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                if !allowed.contains(&relative.as_str()) {
+                    callers.push(relative);
+                }
+            }
+        }
+        assert!(
+            callers.is_empty(),
+            "the memory index build must stay behind the explicit project action; \
+             unexpected callers: {callers:?}"
+        );
+    }
+
     #[test]
     fn limits_default_and_clamp() {
         assert_eq!(resolve_limit(None), DEFAULT_QUERY_LIMIT);
