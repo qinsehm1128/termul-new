@@ -515,6 +515,27 @@ final class ChatStore {
         isSending = false
     }
 
+    /// Re-send a failed user prompt. The dead bubble is removed so the retry
+    /// replaces it instead of stacking a duplicate.
+    func retry(_ message: ChatMessage, in conversation: HostConversation? = nil) async {
+        guard message.role == .user, !isSending else { return }
+        if message.delivery == .failed,
+           let index = messages.firstIndex(where: { $0.id == message.id }) {
+            messages.remove(at: index)
+            schedulePersist()
+            HostLog.session.info("Retrying failed prompt")
+        }
+        await send(message.text, in: conversation)
+    }
+
+    /// Regenerate semantics mirror the browser client: ACP has no
+    /// un-generate, so the last user turn is sent again as a new turn.
+    func regenerateLastTurn(in conversation: HostConversation? = nil) async {
+        guard !isSending, let last = messages.last(where: { $0.role == .user }) else { return }
+        HostLog.session.info("Regenerating from the last user turn")
+        await send(last.text, in: conversation)
+    }
+
     func respond(permission: PermissionCard, optionId: String?) async {
         permissions.removeAll { $0.id == permission.id }
         guard let socket else { return }

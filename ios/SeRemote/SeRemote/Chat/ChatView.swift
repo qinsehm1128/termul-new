@@ -4,6 +4,8 @@ struct ChatView: View {
     @Bindable var session: WorkspaceSession
     var embedded = false
     @State private var draft = ""
+    @State private var isAtBottom = true
+    @State private var unreadCount = 0
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -58,13 +60,28 @@ struct ChatView: View {
                 .padding(16)
             }
             .scrollDismissesKeyboard(.interactively)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                let bottomDistance = geometry.contentSize.height + geometry.contentOffset.y - geometry.visibleRect.height
+                return bottomDistance < 60
+            } action: { _, atBottom in
+                if atBottom && !isAtBottom {
+                    unreadCount = 0
+                }
+                isAtBottom = atBottom
+            }
             .onChange(of: session.chat.timeline.last?.id) { _, id in
                 guard !session.chat.isLoading, let id else { return }
-                proxy.scrollTo(id, anchor: .bottom)
+                if isAtBottom {
+                    proxy.scrollTo(id, anchor: .bottom)
+                } else {
+                    unreadCount += 1
+                }
             }
             .onChange(of: session.chat.isLoading) { _, loading in
                 guard !loading, let id = session.chat.timeline.last?.id else { return }
-                proxy.scrollTo(id, anchor: .bottom)
+                if isAtBottom {
+                    proxy.scrollTo(id, anchor: .bottom)
+                }
             }
             .refreshable {
                 if let conversation = session.conversations.active {
@@ -72,14 +89,69 @@ struct ChatView: View {
                     await session.chat.bindConversation(conversation, binding: binding)
                 }
             }
+            .overlay {
+                jumpToLatest(proxy: proxy)
+            }
         }
+    }
+
+    /// Appears once the reader scrolls away from the newest message; the badge
+    /// counts timeline items appended while away.
+    private func jumpToLatest(proxy: ScrollViewProxy) -> some View {
+        Button {
+            if let id = session.chat.timeline.last?.id {
+                withAnimation {
+                    proxy.scrollTo(id, anchor: .bottom)
+                }
+            }
+            unreadCount = 0
+        } label: {
+            HStack(spacing: 6) {
+                if unreadCount > 0 {
+                    Text("\(unreadCount)")
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                }
+                Image(systemName: "arrow.down")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .foregroundStyle(SeTheme.ink)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().stroke(SeTheme.stroke, lineWidth: 1)
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .padding(16)
+        .accessibilityLabel(Text("Jump to latest"))
+        .opacity(isAtBottom ? 0 : 1)
+        .allowsHitTesting(isAtBottom ? false : true)
+        .animation(.easeOut(duration: 0.15), value: isAtBottom)
     }
 
     @ViewBuilder
     private func timelineRow(_ item: ChatTimelineItem) -> some View {
         switch item {
-        case .user(let message), .agent(let message):
-            MessageBubble(message: message)
+        case .user(let message):
+            MessageBubble(
+                message: message,
+                onEdit: {
+                    draft = message.text
+                    composerFocused = true
+                },
+                onRetry: {
+                    Task { await session.chat.retry(message, in: session.conversations.active) }
+                }
+            )
+        case .agent(let message):
+            MessageBubble(
+                message: message,
+                onRetry: {
+                    Task { await session.chat.regenerateLastTurn(in: session.conversations.active) }
+                }
+            )
         case .activity(let activity):
             ActivityDisclosure(activity: activity)
         }
@@ -325,6 +397,8 @@ private struct ThoughtBlock: View {
 
 private struct MessageBubble: View {
     let message: ChatMessage
+    var onEdit: (() -> Void)?
+    var onRetry: (() -> Void)?
 
     var body: some View {
         HStack {
@@ -344,23 +418,64 @@ private struct MessageBubble: View {
                 .foregroundStyle(.primary)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 if let receipt {
-                    HStack(spacing: 4) {
-                        if receipt.showsProgress {
-                            ProgressView()
-                                .controlSize(.mini)
-                        } else {
-                            Image(systemName: receipt.symbol)
+                    if message.delivery == .failed, let onRetry {
+                        Button(action: onRetry) {
+                            receiptView(receipt)
                         }
-                        Text(receipt.label)
+                        .buttonStyle(.plain)
+                        .accessibilityHint(Text("Tap to resend"))
+                    } else {
+                        receiptView(receipt)
                     }
-                    .font(.caption2)
-                    .foregroundStyle(receipt.tint)
-                    .padding(.horizontal, 4)
-                    .accessibilityLabel(Text(receipt.label))
                 }
             }
             if message.role != .user { Spacer(minLength: 48) }
         }
+        .contextMenu { messageActions }
+    }
+
+    @ViewBuilder
+    private var messageActions: some View {
+        Button {
+            UIPasteboard.general.string = message.text
+        } label: {
+            Label(String(localized: "Copy"), systemImage: "doc.on.doc")
+        }
+        if message.role == .user {
+            if let onEdit {
+                Button(action: onEdit) {
+                    Label(String(localized: "Edit & Resend"), systemImage: "square.and.pencil")
+                }
+            }
+            if message.delivery == .failed, let onRetry {
+                Button(action: onRetry) {
+                    Label(String(localized: "Resend"), systemImage: "arrow.up.circle")
+                }
+            }
+        } else if let onRetry {
+            Button(action: onRetry) {
+                Label(String(localized: "Regenerate"), systemImage: "arrow.clockwise")
+            }
+        }
+        ShareLink(item: message.text) {
+            Label(String(localized: "Share"), systemImage: "square.and.arrow.up")
+        }
+    }
+
+    private func receiptView(_ receipt: Receipt) -> some View {
+        HStack(spacing: 4) {
+            if receipt.showsProgress {
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                Image(systemName: receipt.symbol)
+            }
+            Text(receipt.label)
+        }
+        .font(.caption2)
+        .foregroundStyle(receipt.tint)
+        .padding(.horizontal, 4)
+        .accessibilityLabel(Text(receipt.label))
     }
 
     private var background: Color {
