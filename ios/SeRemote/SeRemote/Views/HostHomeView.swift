@@ -82,6 +82,12 @@ struct HostHomeView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .searchable(text: $searchText, prompt: Text("Search"))
+            .overlay {
+                if filteredRows.isEmpty && listIsLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         }
     }
 
@@ -251,12 +257,17 @@ struct HostHomeView: View {
     @ViewBuilder
     private var sessionList: some View {
         if filteredConversations.isEmpty {
-            ContentUnavailableView(
-                "No sessions yet",
-                systemImage: "bubble.left.and.bubble.right",
-                description: Text("Open a chat on the desktop. These sessions are not projects.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if session.conversations.isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView(
+                    "No sessions yet",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("Open a chat on the desktop. These sessions are not projects.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
             List(filteredConversations) { conversation in
                 Button {
@@ -303,12 +314,17 @@ struct HostHomeView: View {
     @ViewBuilder
     private var projectList: some View {
         if filteredProjects.isEmpty {
-            ContentUnavailableView(
-                "No projects",
-                systemImage: "square.stack",
-                description: Text("Open a project on the desktop to watch its terminals here.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if session.projects.isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView(
+                    "No projects",
+                    systemImage: "square.stack",
+                    description: Text("Open a project on the desktop to watch its terminals here.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
             List(filteredProjects) { project in
                 Button {
@@ -411,6 +427,10 @@ struct HostHomeView: View {
     private var deskTitle: String {
         link.title.split(separator: "·").first.map { String($0).trimmingCharacters(in: .whitespaces) }
             ?? link.title
+    }
+
+    private var listIsLoading: Bool {
+        section == .sessions ? session.conversations.isLoading : session.projects.isLoading
     }
 }
 

@@ -6,6 +6,7 @@ import Observation
 final class ProjectStore {
     var projects: [HostProject] = []
     var active: HostProject?
+    var isLoading = false
     var errorMessage: String?
 
     private var http: HostHTTP?
@@ -18,6 +19,8 @@ final class ProjectStore {
 
     func refresh() async {
         guard let http else { return }
+        isLoading = true
+        defer { isLoading = false }
         do {
             let payload: ProjectListPayload = try await http.get("projects")
             projects = payload.projects

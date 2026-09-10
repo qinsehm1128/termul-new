@@ -10,12 +10,14 @@ struct HostListRow: View {
     var glyph: String = "bubble.left.and.bubble.right"
     var showsChevron = false
 
+    @ScaledMetric(relativeTo: .footnote) private var glyphSize: CGFloat = 22
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: glyph)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(SeTheme.muted)
-                .frame(width: 22, height: 22)
+                .frame(width: glyphSize, height: glyphSize)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 4) {

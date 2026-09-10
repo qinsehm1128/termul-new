@@ -6,6 +6,7 @@ import Observation
 final class ConversationStore {
     var conversations: [HostConversation] = []
     var active: HostConversation?
+    var isLoading = false
     var errorMessage: String?
 
     private var http: HostHTTP?
@@ -16,6 +17,8 @@ final class ConversationStore {
 
     func refresh() async {
         guard let http else { return }
+        isLoading = true
+        defer { isLoading = false }
         do {
             let listed: [HostConversation] = try await http.get("conversations")
             conversations = listed.filter { !$0.isDeleted }
