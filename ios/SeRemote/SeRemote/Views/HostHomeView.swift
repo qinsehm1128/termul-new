@@ -21,6 +21,9 @@ struct HostHomeView: View {
     @State private var section: HostHomeSection = .sessions
     @State private var selectedId: String?
     @State private var searchText = ""
+    @State private var renaming: HostConversation?
+    @State private var renameDraft = ""
+    @State private var deleting: HostConversation?
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
@@ -74,6 +77,7 @@ struct HostHomeView: View {
                 }
                 .listRowBackground(SeTheme.canvas)
                 .listRowSeparatorTint(SeTheme.stroke)
+                .contextMenu { rowActions(for: row) }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -146,27 +150,71 @@ struct HostHomeView: View {
     // MARK: Compact (iPhone) layout
 
     private var compactLayout: some View {
-        VStack(spacing: 0) {
-            header
-            Picker(String(localized: "Workspace"), selection: $section) {
-                ForEach(HostHomeSection.allCases) { item in
-                    Text(item.title).tag(item)
+        NavigationStack {
+            VStack(spacing: 0) {
+                header
+                Picker(String(localized: "Workspace"), selection: $section) {
+                    ForEach(HostHomeSection.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(minHeight: 44)
+
+                switch section {
+                case .sessions:
+                    sessionList
+                case .projects:
+                    projectList
                 }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .frame(minHeight: 44)
-
-            switch section {
-            case .sessions:
-                sessionList
-            case .projects:
-                projectList
-            }
+            .navigationBarHidden(true)
         }
         .onChange(of: section) { _, _ in
             selectedId = nil
+        }
+        .alert(
+            String(localized: "Rename session"),
+            isPresented: Binding(
+                get: { renaming != nil },
+                set: { if !$0 { renaming = nil } }
+            )
+        ) {
+            TextField(String(localized: "Session name"), text: $renameDraft)
+            Button(String(localized: "Save")) {
+                if let conversation = renaming {
+                    Task { await session.conversations.rename(conversation, title: renameDraft) }
+                }
+                renaming = nil
+            }
+            Button(String(localized: "Cancel"), role: .cancel) {
+                renaming = nil
+            }
+        }
+        .confirmationDialog(
+            String(localized: "Delete this session?"),
+            isPresented: Binding(
+                get: { deleting != nil },
+                set: { if !$0 { deleting = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "Delete"), role: .destructive) {
+                if let conversation = deleting {
+                    if session.conversations.active?.id == conversation.id {
+                        session.leaveConversation()
+                    }
+                    Task { await session.conversations.delete(conversation) }
+                }
+                deleting = nil
+            }
+            Button(String(localized: "Cancel"), role: .cancel) {
+                deleting = nil
+            }
+        } message: {
+            Text("The desktop keeps its files; the chat is removed from the list.")
         }
     }
 
@@ -226,9 +274,29 @@ struct HostHomeView: View {
                 }
                 .listRowBackground(SeTheme.canvas)
                 .listRowSeparatorTint(SeTheme.stroke)
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        deleting = conversation
+                    } label: {
+                        Label(String(localized: "Delete"), systemImage: "trash")
+                    }
+                    Button {
+                        renameDraft = conversation.displayTitle
+                        renaming = conversation
+                    } label: {
+                        Label(String(localized: "Rename"), systemImage: "pencil")
+                    }
+                    .tint(SeTheme.lamp)
+                }
+                .contextMenu {
+                    conversationActions(for: conversation, openAction: {
+                        Task { await session.selectConversation(conversation) }
+                    })
+                }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .searchable(text: $searchText, prompt: Text("Search"))
         }
     }
 
@@ -257,13 +325,19 @@ struct HostHomeView: View {
                 }
                 .listRowBackground(SeTheme.canvas)
                 .listRowSeparatorTint(SeTheme.stroke)
+                .contextMenu {
+                    Button {
+                        Task { await session.selectProject(project) }
+                    } label: {
+                        Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
+                    }
+                }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .searchable(text: $searchText, prompt: Text("Search"))
         }
     }
-
-    // MARK: Data shaping
 
     private var filteredConversations: [HostConversation] {
         let conversations = session.conversations.conversations
@@ -298,6 +372,39 @@ struct HostHomeView: View {
             Task { await session.selectConversation(conversation) }
         } else if let project = filteredProjects.first(where: { $0.id == row.id }) {
             Task { await session.selectProject(project) }
+        }
+    }
+
+    /// Sidebar rows route through the id back to the concrete record so the
+    /// actions operate on the live model, not the projection.
+    @ViewBuilder
+    private func rowActions(for row: HostHomeRow) -> some View {
+        if let conversation = filteredConversations.first(where: { $0.id == row.id }) {
+            conversationActions(for: conversation, openAction: { open(row) })
+        } else {
+            Button {
+                open(row)
+            } label: {
+                Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func conversationActions(for conversation: HostConversation, openAction: @escaping () -> Void) -> some View {
+        Button(action: openAction) {
+            Label(String(localized: "Open session"), systemImage: "arrow.up.forward.app")
+        }
+        Button {
+            renameDraft = conversation.displayTitle
+            renaming = conversation
+        } label: {
+            Label(String(localized: "Rename"), systemImage: "pencil")
+        }
+        Button(role: .destructive) {
+            deleting = conversation
+        } label: {
+            Label(String(localized: "Delete"), systemImage: "trash")
         }
     }
 

@@ -32,6 +32,53 @@ final class ConversationStore {
         active = conversation
     }
 
+    /// Rename over the shared web contract. The host returns the updated
+    /// record, which replaces the row in place.
+    func rename(_ conversation: HostConversation, title: String) async {
+        guard let http else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            let updated: HostConversation = try await http.post(
+                "conversations/\(conversation.id)/rename",
+                body: ["title": trimmed]
+            )
+            if let index = conversations.firstIndex(where: { $0.id == updated.id }) {
+                conversations[index] = updated
+            }
+            if active?.id == updated.id {
+                active = updated
+            }
+            HostLog.session.info("Conversation renamed")
+        } catch {
+            HostLog.session.error("Conversation rename failed")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Soft-delete via the lifecycle contract; `lastSeq` doubles as the
+    /// optimistic-concurrency revision the host validates.
+    func delete(_ conversation: HostConversation) async {
+        guard let http else { return }
+        do {
+            let _: JSONValue = try await http.post(
+                "conversations/\(conversation.id)/lifecycle/delete",
+                body: [
+                    "expectedRevision": Int(conversation.lastSeq ?? 0),
+                    "removeWorkspace": false,
+                ]
+            )
+            conversations.removeAll { $0.id == conversation.id }
+            if active?.id == conversation.id {
+                clearSelection()
+            }
+            HostLog.session.info("Conversation deleted")
+        } catch {
+            HostLog.session.error("Conversation delete failed")
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func clearSelection() {
         active = nil
     }
