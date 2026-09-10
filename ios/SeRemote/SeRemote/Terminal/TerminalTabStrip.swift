@@ -45,6 +45,13 @@ struct TerminalTabStrip: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            UIPasteboard.general.string = item.cwd
+                        } label: {
+                            Label(String(localized: "Copy Path"), systemImage: "doc.on.doc")
+                        }
+                    }
                 }
 
                 Button {

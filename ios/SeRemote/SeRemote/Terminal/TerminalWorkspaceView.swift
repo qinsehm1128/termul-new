@@ -8,6 +8,9 @@ struct TerminalWorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let error = session.terminals.errorMessage {
+                terminalErrorBanner(error)
+            }
             if let id = session.terminals.activeId {
                 ZStack {
                     TerminalScreen(
@@ -127,6 +130,34 @@ struct TerminalWorkspaceView: View {
 
     private var activeTerminal: LiveTerminal? {
         session.terminals.terminals.first(where: { $0.id == session.terminals.activeId })
+    }
+
+    /// Terminal failures used to surface only in a distant workspace alert;
+    /// keep them inline where the terminal lives, dismissible once read.
+    private func terminalErrorBanner(_ error: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            Text(error)
+                .font(.footnote)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button {
+                session.terminals.errorMessage = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.footnote.weight(.semibold))
+                    .frame(minWidth: 32, minHeight: 32)
+            }
+            .accessibilityLabel(Text("Dismiss"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(SeTheme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
+        }
+        .accessibilityIdentifier("terminal-error")
     }
 
     private func showScaleHud(_ scale: CGFloat) {
