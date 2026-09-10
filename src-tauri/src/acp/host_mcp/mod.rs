@@ -120,6 +120,14 @@ pub enum FrameKind {
     ScheduledTaskDraftCreate,
     ScheduledTaskDraftUpdate,
     ScheduledTaskPause,
+    /// Read-only queries against this project's cross-agent memory index.
+    ///
+    /// The project is **not** a parameter of any of these: the parent resolves
+    /// it from the calling session's own Conversation attachment. An agent can
+    /// ask what this project remembers, and cannot ask about another one.
+    MemorySearch,
+    MemorySessionList,
+    MemorySessionGet,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -223,6 +231,66 @@ pub struct ScheduledTaskDraftUpdateInput {
 pub struct ScheduledTaskPauseInput {
     pub task_id: String,
     pub expected_revision: u64,
+}
+
+/// Full-text search over this project's indexed agent conversations.
+///
+/// No project field on purpose — see [`FrameKind::MemorySearch`].
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemorySearchInput {
+    /// Words to look for. Treated as literal terms with implicit AND, so
+    /// `--no-verify` and `ENOENT` search for themselves rather than being read
+    /// as query operators.
+    pub query: String,
+    /// Maximum hits to return. Defaults to 20, capped at 200.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Restrict to particular agents (`claude-code`, `codex`, `pi`).
+    /// **Optional — omit it to search every agent**, which is the normal case:
+    /// which CLI was running when something was worked out is rarely what you
+    /// remember about it.
+    #[serde(default)]
+    pub agents: Vec<String>,
+    /// Include sessions whose project ownership could not be proven. Off by
+    /// default.
+    #[serde(default)]
+    pub include_unscoped: bool,
+    /// Include hits whose source transcript has changed since it was indexed.
+    /// Off by default: a changed transcript means the stored text may no longer
+    /// be what that file says.
+    #[serde(default)]
+    pub include_stale: bool,
+}
+
+/// List this project's indexed sessions, newest first by first-message time.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemorySessionListInput {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub include_unscoped: bool,
+    /// Restrict to particular agents. Optional — omit it to list every agent's
+    /// sessions interleaved in one first-message-time order.
+    #[serde(default)]
+    pub agents: Vec<String>,
+}
+
+/// Read one indexed session's messages in transcript order.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemorySessionGetInput {
+    /// The `sessionKey` from a search hit or a session listing.
+    pub session_key: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub include_stale: bool,
+    /// Mirrors the same field on the list and search inputs: a session the
+    /// listing surfaced must be openable on the same terms.
+    #[serde(default)]
+    pub include_unscoped: bool,
 }
 
 /// Map the agent's todo input → ACP `PlanEntry` list, preserving order.

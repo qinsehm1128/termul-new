@@ -65,14 +65,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use sha2::{Digest, Sha256};
-use syn::visit::{self, Visit};
-use syn::{Expr, ExprField, Ident, Lit, Member};
 use se_manager_lib::brand::{self, BrandCanonical};
 use se_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
 use se_manager_lib::known_hosts_migration::{
     self, migrate_app_known_hosts, KnownHostsMigration, KnownHostsMigrationError,
 };
+use sha2::{Digest, Sha256};
+use syn::visit::{self, Visit};
+use syn::{Expr, ExprField, Ident, Lit, Member};
 
 /// The production site under test.
 const PRODUCTION_FILE: &str = "src/ssh/connection.rs";
@@ -93,7 +93,9 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_lock() -> MutexGuard<'static, ()> {
     // A `should_panic` test poisons the mutex on the way out by design.
-    ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Restores every env var it touched when dropped, including on unwind.
@@ -193,7 +195,10 @@ fn host_lines(text: &str) -> Vec<&str> {
 /// migration test would panic on `/var` rather than on its own assertion.
 fn plant_ssh_dir() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let temp = tempfile::tempdir().expect("tempdir");
-    let base = temp.path().canonicalize().expect("canonicalize the temp root");
+    let base = temp
+        .path()
+        .canonicalize()
+        .expect("canonicalize the temp root");
     let home = base.join("home");
     let ssh_dir = home.join(".ssh");
     fs::create_dir_all(&ssh_dir).expect("create .ssh");
@@ -300,7 +305,8 @@ fn frozen_store_is_named_by_the_brand_seam() {
     );
     // The whole point of the root: it is *not* the user's own known_hosts.
     assert_ne!(
-        brand::LEGACY.ssh_known_hosts_file, "known_hosts",
+        brand::LEGACY.ssh_known_hosts_file,
+        "known_hosts",
         "collapsing the app-managed store onto the user's shared known_hosts \
          hands libssh2's writer a file it will strip markers from"
     );
@@ -326,7 +332,9 @@ fn frozen_store_carries_the_line_shapes_this_root_exists_for() {
 
     let markers = marker_lines(&text);
     assert!(
-        markers.iter().any(|line| line.starts_with("@cert-authority")),
+        markers
+            .iter()
+            .any(|line| line.starts_with("@cert-authority")),
         "the frozen store must carry a @cert-authority line — libssh2's write_file \
          drops it, which is why this root is separate from ~/.ssh/known_hosts; got {markers:?}"
     );
@@ -356,8 +364,8 @@ fn markers_survive_a_byte_preserving_copy() {
 /// `migrated` must be the same bytes as `source`, and `source` must be
 /// untouched (FORBID-05: migration copies, it never moves or rewrites).
 fn assert_byte_identical_store(source: &Path, migrated: &Path) {
-    let source_bytes = fs::read(source)
-        .unwrap_or_else(|e| panic!("read source {} failed: {e}", source.display()));
+    let source_bytes =
+        fs::read(source).unwrap_or_else(|e| panic!("read source {} failed: {e}", source.display()));
     let migrated_bytes = fs::read(migrated)
         .unwrap_or_else(|e| panic!("read migrated {} failed: {e}", migrated.display()));
 

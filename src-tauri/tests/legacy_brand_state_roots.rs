@@ -78,7 +78,9 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_lock() -> MutexGuard<'static, ()> {
     // A `should_panic` test poisons the mutex on the way out by design.
-    ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Restores every env var it touched when dropped, including on unwind.
@@ -149,7 +151,9 @@ fn platform_state_dir(values: BrandCanonical) -> &'static str {
 }
 
 fn fixture(relative: &str) -> PathBuf {
-    manifest_dir().join("tests/fixtures/legacy-brand").join(relative)
+    manifest_dir()
+        .join("tests/fixtures/legacy-brand")
+        .join(relative)
 }
 
 /// Recursive copy. The fixture root is frozen, so nothing is ever written back.
@@ -257,11 +261,14 @@ fn standalone_sessions_dir_resolves_under_the_canonical_state_dir_and_still_sees
         .unset("SE_SESSIONS_DIR");
     let _brand = brand::override_canonical(post_rename());
 
-    let resolved = default_sessions_dir().expect("a sessions dir is resolvable under XDG_STATE_HOME");
+    let resolved =
+        default_sessions_dir().expect("a sessions dir is resolvable under XDG_STATE_HOME");
 
     assert_eq!(
         resolved,
-        state_home.join(brand::canonical().state_dir).join("sessions"),
+        state_home
+            .join(brand::canonical().state_dir)
+            .join("sessions"),
         "default_sessions_dir must resolve under crate::brand::canonical().state_dir, \
          not a hardcoded {:?}; got {}",
         brand::LEGACY.state_dir,
@@ -353,7 +360,9 @@ fn candidate_xdg_state_home_resolves_and_carries_the_legacy_root_forward() {
     let resolved = default_sessions_dir().expect("XDG_STATE_HOME is a resolvable candidate");
     assert_eq!(
         resolved,
-        state_home.join(brand::canonical().state_dir).join("sessions"),
+        state_home
+            .join(brand::canonical().state_dir)
+            .join("sessions"),
         "XDG_STATE_HOME must name the state root directly beneath itself"
     );
     assert!(
@@ -386,7 +395,9 @@ fn candidate_home_local_state_resolves_and_carries_the_legacy_root_forward() {
     let resolved = default_sessions_dir().expect("HOME is a resolvable candidate");
     assert_eq!(
         resolved,
-        state_home.join(brand::canonical().state_dir).join("sessions"),
+        state_home
+            .join(brand::canonical().state_dir)
+            .join("sessions"),
         "with XDG_STATE_HOME unset the root must sit under ~/.local/state"
     );
     assert!(
@@ -520,7 +531,9 @@ fn standalone_conversation_workspace_root_uses_the_canonical_display_name_and_st
         "the frozen documents-Termul fixture must carry at least one workspace"
     );
     // `--project-root` is canonicalized by `resolve_and_validate_project_root`.
-    let canonical_project_root = project_root.canonicalize().expect("canonicalize project root");
+    let canonical_project_root = project_root
+        .canonicalize()
+        .expect("canonicalize project root");
 
     let sessions_dir = temp.path().join("sessions");
     fs::create_dir_all(&sessions_dir).expect("create sessions dir");
@@ -534,11 +547,9 @@ fn standalone_conversation_workspace_root_uses_the_canonical_display_name_and_st
     // The real CLI parser. `from_maintenance_args` is the auth-free public
     // entry into the same `from_args_with_auth_policy` body that resolves
     // `conversation_workspace_root` at src/web/config.rs:668.
-    let config = ServerConfig::from_maintenance_args([
-        "--project-root",
-        &project_root.to_string_lossy(),
-    ])
-    .expect("maintenance args parse");
+    let config =
+        ServerConfig::from_maintenance_args(["--project-root", &project_root.to_string_lossy()])
+            .expect("maintenance args parse");
 
     let resolved = config.conversation_workspace_root();
 

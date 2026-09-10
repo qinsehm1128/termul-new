@@ -436,6 +436,7 @@ impl RemoteServerState {
         workspace_manifest: Option<Arc<WorkspaceManifestService>>,
         acp_catalog: Option<Arc<AcpCatalogService>>,
         acp_install: Option<Arc<AcpInstallService>>,
+        memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
     ) -> Result<RemoteStatus, String> {
         self.start_on_port(
             acp,
@@ -448,6 +449,7 @@ impl RemoteServerState {
             workspace_manifest,
             acp_catalog,
             acp_install,
+            memory_index,
             0,
         )
         .await
@@ -471,6 +473,7 @@ impl RemoteServerState {
         workspace_manifest: Option<Arc<WorkspaceManifestService>>,
         acp_catalog: Option<Arc<AcpCatalogService>>,
         acp_install: Option<Arc<AcpInstallService>>,
+        memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
         bind_port: u16,
     ) -> Result<RemoteStatus, String> {
         let _lifecycle = self.lifecycle.lock().await;
@@ -615,6 +618,7 @@ impl RemoteServerState {
             workspace_manifest,
             acp_catalog,
             acp_install,
+            memory_index,
             Arc::clone(&self.authority),
         )
         .await
@@ -1165,6 +1169,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("settings-backed host starts");
@@ -1220,6 +1225,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("start on localhost binds an OS-assigned port");
@@ -1262,6 +1268,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("restart after stop succeeds");
@@ -1296,6 +1303,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("first start succeeds");
@@ -1307,6 +1315,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1340,6 +1349,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap_err();
@@ -1354,6 +1364,7 @@ mod tests {
                 maximum,
                 registry,
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1377,6 +1388,7 @@ mod tests {
                 relay,
                 registry,
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1422,6 +1434,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("start succeeds");
@@ -1446,6 +1459,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1490,6 +1504,7 @@ mod tests {
                 relay,
                 registry,
                 RemoteBindMode::All,
+                None,
                 None,
                 None,
                 None,
@@ -1757,6 +1772,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,

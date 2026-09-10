@@ -1864,6 +1864,7 @@ mod tests {
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,
+            memory_index: None,
             store: None,
             project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
         }

@@ -43,11 +43,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use se_manager_lib::brand::{self, BrandCanonical};
+use se_manager_lib::conversation::ConversationCreator;
 use serde_json::Value;
 use syn::visit::{self, Visit};
 use syn::{Attribute, ItemEnum, ItemMod, Lit};
-use se_manager_lib::brand::{self, BrandCanonical};
-use se_manager_lib::conversation::ConversationCreator;
 
 /// Where the enum lives.
 const CONTRACTS_FILE: &str = "src/conversation/contracts.rs";
@@ -90,7 +90,8 @@ fn manifest_dir() -> &'static Path {
 /// The TypeScript-side frozen root, reached from `src-tauri/`. Both language
 /// halves of this contract read the same bytes.
 fn frozen_record() -> Value {
-    let path = manifest_dir().join("../src/__fixtures__/legacy-brand/conversation-createdBy-termul.json");
+    let path =
+        manifest_dir().join("../src/__fixtures__/legacy-brand/conversation-createdBy-termul.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("frozen fixture {} is unreadable: {e}", path.display()));
     serde_json::from_str(&text)
@@ -497,7 +498,9 @@ fn every_production_write_point_stamps_the_canonical_creator() {
         })
         .filter_map(|(relative, variant)| {
             let emitted = wire_values.get(&variant).cloned().unwrap_or_else(|| {
-                panic!("{CREATOR_ENUM}::{variant} is constructed in {relative} but is not a variant")
+                panic!(
+                    "{CREATOR_ENUM}::{variant} is constructed in {relative} but is not a variant"
+                )
             });
             (emitted != canonical).then(|| format!("{relative} writes {emitted:?}"))
         })
@@ -571,7 +574,8 @@ fn a_variant_carries_the_post_rename_wire_value() {
     );
 
     let canonical = brand::canonical().created_by;
-    let parsed = serde_json::from_value::<ConversationCreator>(Value::String(canonical.to_string()));
+    let parsed =
+        serde_json::from_value::<ConversationCreator>(Value::String(canonical.to_string()));
     assert!(
         parsed.is_ok(),
         "no variant accepts the post-rename createdBy wire value ({canonical:?}), so a record \

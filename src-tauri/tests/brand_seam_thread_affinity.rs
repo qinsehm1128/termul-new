@@ -77,9 +77,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use se_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, Ident};
-use se_manager_lib::brand::{self, BrandCanonical, DEFAULT_CANONICAL};
 
 /// The one file exempt from the scan, and why.
 ///
@@ -447,7 +447,8 @@ impl SpawnVisitor<'_> {
             // `adopt_canonical(canonical())` repairs the boundary with a value
             // it fetched from the wrong side of it.
             if reads_the_seam(&argument) {
-                self.offences.push(format!("{} (reads {SEAM_FN}() directly)", self.site()));
+                self.offences
+                    .push(format!("{} (reads {SEAM_FN}() directly)", self.site()));
                 break;
             }
             // A closure that installs the origin thread's values first has

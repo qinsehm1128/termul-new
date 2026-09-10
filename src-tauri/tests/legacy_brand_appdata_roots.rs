@@ -55,10 +55,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 use se_manager_lib::brand::{self, BrandCanonical};
 use se_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
 use se_manager_lib::conversation::HostConversationRoots;
+use sha2::{Digest, Sha256};
 
 /// The six subdirectories that live under the appdata root and are absent from
 /// `LegacyRootConfiguration::known_roots()`. Named here only so the failure
@@ -91,7 +91,9 @@ fn manifest_dir() -> &'static Path {
 }
 
 fn fixture(relative: &str) -> PathBuf {
-    manifest_dir().join("tests/fixtures/legacy-brand").join(relative)
+    manifest_dir()
+        .join("tests/fixtures/legacy-brand")
+        .join(relative)
 }
 
 fn copy_tree(source: &Path, destination: &Path) {
@@ -130,8 +132,8 @@ fn digest_tree(root: &Path) -> BTreeMap<String, String> {
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
-            let bytes = fs::read(&path)
-                .unwrap_or_else(|e| panic!("read {} failed: {e}", path.display()));
+            let bytes =
+                fs::read(&path).unwrap_or_else(|e| panic!("read {} failed: {e}", path.display()));
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
             found.insert(relative, format!("{:x}", hasher.finalize()));
@@ -291,8 +293,11 @@ fn desktop_roots_detect_both_legacy_identifier_trees() {
 #[test]
 fn merge_copies_legacy_trees_and_leaves_the_source_bytes_untouched() {
     let roots = plant_appdata_roots();
-    let before: Vec<BTreeMap<String, String>> =
-        roots.legacy_trees().iter().map(|t| digest_tree(t)).collect();
+    let before: Vec<BTreeMap<String, String>> = roots
+        .legacy_trees()
+        .iter()
+        .map(|t| digest_tree(t))
+        .collect();
     let dev_only: BTreeSet<String> = {
         let prod = digest_tree(&roots.legacy_prod);
         digest_tree(&roots.legacy_dev)
@@ -442,14 +447,19 @@ fn every_appdata_subdirectory_is_carried_even_though_the_pipeline_ignores_it() {
         .flat_map(|root| {
             let base = PathBuf::from(&root.canonical_path);
             root.files.iter().map(move |file| {
-                base.join(file.relative_path.replace('/', std::path::MAIN_SEPARATOR_STR))
+                base.join(
+                    file.relative_path
+                        .replace('/', std::path::MAIN_SEPARATOR_STR),
+                )
             })
         })
         .collect();
     for subdir in UNCOVERED_SUBDIRS {
         let source = roots.legacy_prod.join(subdir);
         assert!(
-            !carried_by_pipeline.iter().any(|path| path.starts_with(&source)),
+            !carried_by_pipeline
+                .iter()
+                .any(|path| path.starts_with(&source)),
             "the conversation pipeline now enumerates {subdir}; the carry-forward's reason for \
              existing has changed and this file's premise needs revisiting. known roots: {known:?}"
         );
@@ -471,7 +481,11 @@ fn remote_tunnel_secrets_keeps_mode_0600_after_the_merge() {
     // before asserting the merge preserves it.
     fs::set_permissions(&source, fs::Permissions::from_mode(0o600))
         .expect("tighten the temp copy to 0600");
-    let source_mode = fs::metadata(&source).expect("stat source").permissions().mode() & 0o777;
+    let source_mode = fs::metadata(&source)
+        .expect("stat source")
+        .permissions()
+        .mode()
+        & 0o777;
     assert_eq!(source_mode, 0o600, "the temp copy starts at 0600");
     let source_bytes = fs::read(&source).expect("read source secrets");
 
@@ -500,7 +514,11 @@ fn remote_tunnel_secrets_keeps_mode_0600_after_the_merge() {
     );
     // And the source keeps both its bytes and its mode.
     assert_eq!(
-        fs::metadata(&source).expect("stat source").permissions().mode() & 0o777,
+        fs::metadata(&source)
+            .expect("stat source")
+            .permissions()
+            .mode()
+            & 0o777,
         0o600,
         "the migration must not relax the legacy secrets file"
     );

@@ -55,9 +55,7 @@ use se_manager_lib::web::auth::IngressProvenance;
 use se_manager_lib::web::mcp_servers_api;
 use se_manager_lib::web::project_registry::ProjectRegistry;
 use se_manager_lib::web::sink::WsRelaySink;
-use se_manager_lib::web::worktree_api::{
-    self, WorktreeCreateRequest, WorktreeProjectPathRequest,
-};
+use se_manager_lib::web::worktree_api::{self, WorktreeCreateRequest, WorktreeProjectPathRequest};
 use se_manager_lib::web::ws::{AppState, HistoryMode};
 use se_manager_lib::{
     AcpManager, CwdTracker, ExitCodeTracker, GitTracker, PtyManager, TerminalEventHub,
@@ -427,7 +425,10 @@ async fn creating_a_worktree_adds_the_canonical_ignore_line_and_keeps_the_legacy
         .await
         .unwrap();
         let created: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(created["success"], true, "worktree create {name}: {created}");
+        assert_eq!(
+            created["success"], true,
+            "worktree create {name}: {created}"
+        );
     }
 
     let after = std::fs::read_to_string(&gitignore).expect("read .gitignore back");

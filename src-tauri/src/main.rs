@@ -12,6 +12,15 @@ fn main() {
         std::process::exit(se_manager_lib::host_mcp::child::run());
     }
 
+    // `--memory-mcp-server`: the standalone read-only MCP server over this
+    // project's cross-agent conversation memory. Launched by an EXTERNAL MCP
+    // client (not by Termul), so it must branch here for the same reason the
+    // plan child does — it needs no window, no plugins and no app state, only
+    // stdio and the two paths it was given.
+    if se_manager_lib::memory_index::stdio_mcp::is_invocation() {
+        std::process::exit(se_manager_lib::memory_index::stdio_mcp::run());
+    }
+
     // Seed a default RUST_LOG so module-level overrides keep working, e.g.:
     //   RUST_LOG=trace npm run dev
     //   RUST_LOG=se_manager_lib=debug npm run dev

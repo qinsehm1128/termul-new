@@ -372,6 +372,12 @@ pub struct AppState {
     /// `install_acp_agent`; the desktop renderer uses the `acp_install_agent`
     /// Tauri command (same `IpcResult<T>` shape byte-for-byte).
     pub acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
+    /// Host-owned cross-agent memory index. `None` when the host could not
+    /// resolve a state root at startup — the `/memory-index/*` routes then
+    /// return `MEMORY_INDEX_UNAVAILABLE`, matching how `acp_catalog` and
+    /// `acp_install` report their degraded modes. Desktop and standalone each
+    /// construct their own; the two must never share a state root.
+    pub memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
     /// Issue #613: server-side generic key-value store for web-client state
     /// (terminal layout, settings, editor state, command history, snapshots,
     /// SSH profiles). `None` when a server does not attach a store — the

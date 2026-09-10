@@ -3982,6 +3982,7 @@ pub async fn remote_server_start(
     workspace_manifest_store: State<'_, HostWorkspaceManifestStore>,
     acp_catalog_store: State<'_, HostAcpCatalogStore>,
     acp_install_store: State<'_, HostAcpInstallStore>,
+    memory_index: State<'_, Arc<crate::memory_index::service::MemoryIndexService>>,
     tunnel_store: State<'_, Arc<remote::TunnelConfigStore>>,
     intent_store: State<'_, Arc<remote::RemoteAccessIntentStore>>,
     bind_mode: Option<String>,
@@ -4032,6 +4033,10 @@ pub async fn remote_server_start(
     // `POST /acp/install` + WS `install_acp_agent`. `None` degrades to
     // `ACP_INSTALL_UNAVAILABLE`.
     let acp_install = acp_install_store.store().map(Arc::clone);
+    // The desktop's cross-agent memory index, threaded through so the shared-live
+    // browser client reads the same index the desktop does rather than a second
+    // one. `None` degrades to `MEMORY_INDEX_UNAVAILABLE`.
+    let memory_index = Some(Arc::clone(&memory_index));
     let tunnel_store = tunnel_store.inner();
     let tunnel_config = match tunnel_store.load() {
         Ok(config) => config,
@@ -4053,6 +4058,7 @@ pub async fn remote_server_start(
                 workspace_manifest,
                 acp_catalog,
                 acp_install,
+                memory_index,
                 bind_port,
             )
             .await
@@ -4069,6 +4075,7 @@ pub async fn remote_server_start(
                 workspace_manifest,
                 acp_catalog,
                 acp_install,
+                memory_index,
             )
             .await
     };

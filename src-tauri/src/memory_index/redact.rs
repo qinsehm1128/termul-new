@@ -1,0 +1,691 @@
+//! Credential redaction, applied before any transcript text reaches the index.
+//!
+//! This is the highest-stakes filter in the module. On the measured corpus tool
+//! results are 60.6% of pi's records and user text is 1.5%, so nearly all
+//! indexed bytes are program output — `.env` dumps, `curl -v` traces,
+//! `Authorization` headers, SSH keys. The repository already extends its
+//! never-log-secrets rule to anything persisted to the user's disk; an index
+//! built for full-text search over that output is the same rule at higher
+//! stakes, because it makes the bytes *findable*.
+//!
+//! Two deliberate choices:
+//!
+//! * **Redact, don't drop.** A masked value keeps the fact that a credential
+//!   appeared, which is itself something worth being able to search for, while
+//!   removing the value.
+//! * **Name-component matching, not substring matching.** `TOKEN=`,
+//!   `GITHUB_TOKEN=` and `api_key:` are credentials; `authentication: failed`
+//!   and `sort_key: name` are not. A substring rule for `AUTH` or `KEY` masks
+//!   the second pair too, which quietly destroys the usefulness of the index for
+//!   a credential that was never there — the same failure mode the existing
+//!   `-p<value>` spec was written about.
+
+use std::cell::Cell;
+use std::collections::HashSet;
+use std::sync::LazyLock;
+
+use regex::{Captures, Regex};
+
+/// Text with credentials masked, plus how many masks were applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redacted {
+    pub text: String,
+    pub redactions: u32,
+}
+
+impl Redacted {
+    #[must_use]
+    pub fn was_redacted(&self) -> bool {
+        self.redactions > 0
+    }
+}
+
+/// A run of unbroken token characters at least this long is treated as an
+/// encoded blob rather than prose, and omitted.
+///
+/// Images alone are 42.1% of the measured payload. Adapters already keep binary
+/// content out of the text, but a base64 body can still arrive inside a tool
+/// result, where it is simultaneously useless to search and a place a key can
+/// hide.
+const BLOB_MIN_LEN: usize = 512;
+
+/// Sentinel wrapper for a mask that has already been applied.
+///
+/// A mask written as literal `[redacted:credential]` is matchable by the later
+/// passes: `ASSIGNMENT`'s bare-value class stops at `]`, so a second run
+/// rewrites the mask into `[redacted:credential]]` and keeps growing. Wrapping
+/// every mask in control characters gives all passes one cheap, uniform way to
+/// recognize their own output and leave it alone. The sentinels are unwrapped
+/// into readable text at the very end, so they never reach the index.
+const MASK_OPEN: char = '\u{1}';
+const MASK_CLOSE: char = '\u{2}';
+
+fn mask(kind: &str) -> String {
+    format!("{MASK_OPEN}redacted:{kind}{MASK_CLOSE}")
+}
+
+/// Has this span already been masked?
+///
+/// Checks both forms: the sentinel written by an earlier pass in this same call,
+/// and the readable marker left by a previous call. The second check is what
+/// makes [`redact`] idempotent — ingest may re-normalize text that was already
+/// stored, and a mask that gets re-masked grows a bracket every time.
+fn already_masked(span: &str) -> bool {
+    span.contains(MASK_OPEN) || span.contains("[redacted:") || span.contains("[omitted:")
+}
+
+/// Turn sentinels into the readable markers that get indexed.
+fn unwrap_masks(text: &str) -> String {
+    text.replace(MASK_OPEN, "[").replace(MASK_CLOSE, "]")
+}
+
+/// Remove the sentinel code points from *input*, so the sentinel can only ever
+/// mean "a pass in this call wrote it".
+///
+/// Without this the sentinel is forgeable by ordinary data. [`already_masked`]
+/// recognizes a mask by looking for `MASK_OPEN`, and 60.6% of indexed bytes are
+/// terminal output where a stray `U+0001` is unremarkable — so a record carrying
+/// one would make every pass skip the span it appears in, credential included.
+/// The second symptom was cosmetic and equally wrong: [`unwrap_masks`] rewrote
+/// every raw sentinel into a bracket on the way out.
+///
+/// Borrowed unchanged in the overwhelmingly common case where neither code point
+/// is present.
+fn strip_sentinels(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(MASK_OPEN) || text.contains(MASK_CLOSE) {
+        std::borrow::Cow::Owned(
+            text.chars()
+                .filter(|character| *character != MASK_OPEN && *character != MASK_CLOSE)
+                .collect(),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
+static PEM_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
+        .expect("PEM_BLOCK")
+});
+
+/// Both the header form (`Authorization: Bearer x`) and the JSON body form
+/// (`"authorization": "x"`).
+///
+/// This pass owns `authorization` entirely — the name is deliberately absent
+/// from [`SENSITIVE_NAMES`]. Handling it in both places makes the two passes
+/// overlap on one input, and the second one mangles what the first produced.
+static AUTH_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)\b(authorization|proxy-authorization)"?\s*:\s*"?(bearer|basic|token|digest)?\s*[^\r\n,;"]+"#,
+    )
+    .expect("AUTH_HEADER")
+});
+
+static BEARER_VALUE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bbearer\s+[A-Za-z0-9._\-+/=]{8,}").expect("BEARER_VALUE"));
+
+/// Provider key shapes. Each alternative is a vendor-documented prefix, so a
+/// match is a credential by construction rather than by heuristic.
+static PROVIDER_KEY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?x)",
+        r"sk-ant-[A-Za-z0-9_\-]{16,}",
+        r"|sk-[A-Za-z0-9_\-]{20,}",
+        r"|gh[pousr]_[A-Za-z0-9]{20,}",
+        r"|github_pat_[A-Za-z0-9_]{20,}",
+        r"|glpat-[A-Za-z0-9_\-]{16,}",
+        r"|AKIA[0-9A-Z]{16}",
+        r"|ASIA[0-9A-Z]{16}",
+        r"|xai-[A-Za-z0-9]{20,}",
+        r"|hf_[A-Za-z0-9]{20,}",
+        r"|pplx-[A-Za-z0-9]{20,}",
+        r"|dop_v1_[A-Za-z0-9]{32,}",
+        r"|nvapi-[A-Za-z0-9_\-]{20,}",
+        r"|xox[baprse]-[A-Za-z0-9\-]{10,}",
+        r"|AIza[0-9A-Za-z_\-]{35}",
+        r"|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}",
+    ))
+    .expect("PROVIDER_KEY")
+});
+
+/// `NAME = value` / `NAME: value`, with the name captured for component
+/// matching and the value captured in quoted or bare form.
+/// `NAME = value`, `NAME: value`, and the quoted JSON/YAML forms of both. The
+/// optional quote after the name is what lets `{"api_key": "x"}` match.
+static ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)([A-Za-z][A-Za-z0-9]*(?:[_\-][A-Za-z0-9]+)*)("?\s*[:=]\s*)(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;}\]\)"']+))"#,
+    )
+    .expect("ASSIGNMENT")
+});
+
+static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^\s/@:]+):([^\s/@]+)@").expect("URL_USERINFO")
+});
+
+static BLOB: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"[A-Za-z0-9+/=_\-]{{{BLOB_MIN_LEN},}}")).expect("BLOB"));
+
+/// Short options that take a password glued to the flag.
+///
+/// Command-family limited on purpose. `-p` means `--parents` to `mkdir`,
+/// `--publish` to `docker` and `--preserve` to `cp`; masking it everywhere
+/// destroys legitimate history for a password that does not exist.
+///
+/// Matched at a **word boundary anywhere on the line**, not anchored to the
+/// start of it. The anchored form was measured against realistic transcript
+/// lines and let the password through in 7 of 10 shapes — a shell prompt
+/// (`$ mysql -pX`), a wrapper (`docker exec -it c1 mysql -pX`,
+/// `ssh host mysql -pX`, `bash -c "mysql -pX"`), a log timestamp, a YAML `run:`
+/// key. Tool output is 60.6% of indexed bytes and almost none of it is a bare
+/// command at column zero.
+///
+/// The scan still starts *at* the command token and runs to end of line, so a
+/// `-p`-glued option appearing **before** the command (`find . -print | mysql
+/// -pX`) is outside the span and untouched. What remains is a `-p<value>`
+/// written after one of these clients on the same line — for every one of them
+/// `-p` is the password flag, so that is a credential far more often than not.
+/// Between masking a stray token and writing a password into a full-text index,
+/// this fails toward masking.
+static PASSWORD_OPTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)\b(?:mysql|mysqldump|mysqladmin|psql|redis-cli|smbclient|mongosh|mongodump)\b[^\r\n]*",
+    )
+    .expect("PASSWORD_OPTION")
+});
+
+/// `-pSECRET` / `--password=SECRET`, anchored to an argument boundary.
+///
+/// The leading `(^|\s)` is load-bearing and was added after the unanchored form
+/// was measured against ordinary commands: `-p` also occurs *inside* `--port=`
+/// and `--protocol=`, so `psql --port=5432` became
+/// `psql --p[redacted:password]` and took the rest of the argument with it.
+/// That is the same over-matching the command-family restriction on
+/// [`PASSWORD_OPTION`] exists to prevent, one level down.
+///
+/// The boundary is captured rather than looked behind because the `regex` crate
+/// has no lookbehind; the replacement puts it back.
+static GLUED_PASSWORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(^|\s)(-p|--password=)([^\s]+)").expect("GLUED_PASSWORD"));
+
+/// Whole names that are credentials regardless of context.
+static SENSITIVE_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "api_key",
+        "apikey",
+        "api_secret",
+        "access_key",
+        "access_key_id",
+        "access_token",
+        "auth",
+        "auth_token",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "bearer",
+        "client_secret",
+        "credential",
+        "credentials",
+        "id_token",
+        "passwd",
+        "password",
+        "private_key",
+        "pwd",
+        "refresh_token",
+        "secret",
+        "secret_key",
+        "session_token",
+        "signing_key",
+        "token",
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// Trailing components that make any name a credential.
+///
+/// `key` is absent on purpose: `sort_key`, `map_key` and `cache_key` are
+/// ordinary field names. A `*_key` credential is caught by the pair rule below.
+static SENSITIVE_TAILS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "credential",
+        "credentials",
+        "passwd",
+        "password",
+        "pwd",
+        "secret",
+        "token",
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// Two-component tails that are credentials even though neither half is.
+const SENSITIVE_PAIRS: &[(&str, &str)] = &[
+    ("access", "key"),
+    ("api", "key"),
+    ("client", "key"),
+    ("encryption", "key"),
+    ("private", "key"),
+    ("secret", "key"),
+    ("signing", "key"),
+];
+
+/// Does this identifier name a credential?
+#[must_use]
+pub fn is_sensitive_name(raw: &str) -> bool {
+    let normalized = raw.to_ascii_lowercase().replace('-', "_");
+    if SENSITIVE_NAMES.contains(normalized.as_str()) {
+        return true;
+    }
+    let parts: Vec<&str> = normalized
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let Some(last) = parts.last() else {
+        return false;
+    };
+    if SENSITIVE_TAILS.contains(*last) {
+        return true;
+    }
+    if parts.len() >= 2 {
+        let penultimate = parts[parts.len() - 2];
+        if SENSITIVE_PAIRS
+            .iter()
+            .any(|(first, second)| *first == penultimate && *second == *last)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Mask every credential shape in `text`.
+///
+/// Ordering is load-bearing: multi-line PEM blocks collapse first so their
+/// base64 body is never seen by the blob or provider-key passes, and the blob
+/// pass runs last so it only sees what survived.
+#[must_use]
+pub fn redact(text: &str) -> Redacted {
+    let count = Cell::new(0_u32);
+    let bump = || count.set(count.get() + 1);
+
+    // Before anything else, so no pass can be talked out of running by data.
+    let text = strip_sentinels(text);
+
+    let out = PEM_BLOCK.replace_all(&text, |block: &Captures<'_>| {
+        if already_masked(&block[0]) {
+            return block[0].to_string();
+        }
+        bump();
+        mask("private-key")
+    });
+
+    let out = PASSWORD_OPTION.replace_all(&out, |command: &Captures<'_>| {
+        GLUED_PASSWORD
+            .replace_all(&command[0], |option: &Captures<'_>| {
+                if already_masked(&option[0]) {
+                    return option[0].to_string();
+                }
+                bump();
+                format!("{}{}{}", &option[1], &option[2], mask("password"))
+            })
+            .into_owned()
+    });
+
+    let out = AUTH_HEADER.replace_all(&out, |header: &Captures<'_>| {
+        if already_masked(&header[0]) {
+            return header[0].to_string();
+        }
+        bump();
+        match header.get(2) {
+            Some(scheme) => format!("{}: {} {}", &header[1], scheme.as_str(), mask("credential")),
+            None => format!("{}: {}", &header[1], mask("credential")),
+        }
+    });
+
+    let out = BEARER_VALUE.replace_all(&out, |bearer: &Captures<'_>| {
+        if already_masked(&bearer[0]) {
+            return bearer[0].to_string();
+        }
+        bump();
+        format!("Bearer {}", mask("credential"))
+    });
+
+    let out = ASSIGNMENT.replace_all(&out, |assignment: &Captures<'_>| {
+        let name = &assignment[1];
+        if already_masked(&assignment[0]) || !is_sensitive_name(name) {
+            return assignment[0].to_string();
+        }
+        bump();
+        let separator = &assignment[2];
+        let masked = mask("credential");
+        if assignment.get(3).is_some() {
+            format!("{name}{separator}\"{masked}\"")
+        } else if assignment.get(4).is_some() {
+            format!("{name}{separator}'{masked}'")
+        } else {
+            format!("{name}{separator}{masked}")
+        }
+    });
+
+    let out = PROVIDER_KEY.replace_all(&out, |key: &Captures<'_>| {
+        if already_masked(&key[0]) {
+            return key[0].to_string();
+        }
+        bump();
+        mask("api-key")
+    });
+
+    let out = URL_USERINFO.replace_all(&out, |url: &Captures<'_>| {
+        if already_masked(&url[0]) {
+            return url[0].to_string();
+        }
+        bump();
+        format!("{}{}:{}@", &url[1], &url[2], mask("credential"))
+    });
+
+    let out = BLOB.replace_all(&out, |blob: &Captures<'_>| {
+        if already_masked(&blob[0]) {
+            return blob[0].to_string();
+        }
+        bump();
+        format!("{MASK_OPEN}omitted:blob:{}b{MASK_CLOSE}", blob[0].len())
+    });
+
+    Redacted {
+        text: unwrap_masks(&out),
+        redactions: count.get(),
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+
+    /// Measured before the fix: `psql --port=5432 -U user` came back as
+    /// `psql --p[redacted:password] -U user`. `-p` occurs inside `--port=` and
+    /// `--protocol=`, and the unanchored alternative matched it there.
+    #[test]
+    fn a_long_option_containing_dash_p_is_not_mistaken_for_a_password() {
+        for line in [
+            "psql --port=5432 -U user",
+            "mysql --protocol=TCP mydb",
+            "mysqldump --print-defaults",
+            "redis-cli --pipe < dump.txt",
+        ] {
+            let out = redact(line);
+            assert_eq!(out.text, line, "{line:?} was rewritten");
+            assert_eq!(out.redactions, 0, "{line:?} counted a redaction");
+        }
+    }
+
+    /// The gap that the line-start anchor left open. Tool output is 60.6% of
+    /// indexed bytes, and almost none of it is a bare command at column zero:
+    /// there is a shell prompt in front of it, or it is wrapped in `docker
+    /// exec` / `ssh host` / `bash -c`, or the line carries a log timestamp.
+    /// Each of these used to put the password straight into the full-text index.
+    #[test]
+    fn a_password_survives_no_matter_where_the_command_sits_on_the_line() {
+        for line in [
+            "mysql -pSECRET db",
+            "/usr/local/bin/mysql -pSECRET db",
+            "$ mysql -pSECRET db",
+            "> mysql -pSECRET db",
+            "  mysql -pSECRET db",
+            "docker exec -it c1 mysql -pSECRET db",
+            "bash -c \"mysql -pSECRET db\"",
+            "ssh host mysql -pSECRET db",
+            "run: mysql -pSECRET db",
+            "2026-09-10T07:00:00Z psql -pSECRET db",
+        ] {
+            let out = redact(line);
+            assert!(
+                !out.text.contains("SECRET"),
+                "password leaked into the index from {line:?}: {:?}",
+                out.text
+            );
+        }
+    }
+
+    /// The command-family restriction is what keeps `-p` from being masked
+    /// everywhere, and it still holds now that the anchor is gone.
+    #[test]
+    fn other_commands_keep_their_dash_p_options() {
+        for line in [
+            "mkdir -p build/out",
+            "docker run -p8080:80 nginx",
+            "cp -pr src dst",
+            "find . -print0 | xargs rm",
+        ] {
+            let out = redact(line);
+            assert_eq!(out.text, line, "{line:?} was rewritten");
+        }
+    }
+
+    /// The scan starts at the command token, so a `-p` option written *before*
+    /// it on the same line is outside the span.
+    #[test]
+    fn a_dash_p_option_before_the_command_is_left_alone() {
+        let line = "find . -print | mysql -pSECRET db";
+        let out = redact(line);
+        assert!(out.text.contains("-print"), "{}", out.text);
+        assert!(!out.text.contains("SECRET"), "{}", out.text);
+    }
+
+    /// The boundary must not cost the real case.
+    #[test]
+    fn a_glued_password_is_still_masked() {
+        let out = redact("mysql -pSECRET mydb");
+        assert_eq!(out.text, "mysql -p[redacted:credential-omitted] mydb".replace(
+            "[redacted:credential-omitted]", "[redacted:password]"
+        ));
+        assert_eq!(out.redactions, 1);
+
+        let out = redact("psql --password=hunter2 -U user");
+        assert!(out.text.contains("--password=[redacted:password]"), "{}", out.text);
+        assert!(!out.text.contains("hunter2"));
+    }
+
+    #[test]
+    fn several_glued_passwords_on_one_line_are_all_masked() {
+        let out = redact("mysql -pONE --password=TWO db");
+        assert!(!out.text.contains("ONE"), "{}", out.text);
+        assert!(!out.text.contains("TWO"), "{}", out.text);
+        assert_eq!(out.redactions, 2);
+    }
+
+    #[test]
+    fn a_bare_dash_p_prompting_for_a_password_has_nothing_to_mask() {
+        let line = "mysql -p -h localhost";
+        assert_eq!(redact(line).text, line);
+    }
+
+    /// A stray control byte in tool output must not be able to turn redaction
+    /// off for the span it lands in. Terminal output is 60.6% of indexed bytes.
+    #[test]
+    fn a_raw_sentinel_in_the_source_cannot_suppress_redaction() {
+        // The sentinel has to land *inside* the span a pass matches, which is
+        // where `already_masked` looks. `ASSIGNMENT`'s bare-value class accepts
+        // any non-whitespace character, so one control byte in the middle of a
+        // secret used to be enough to turn that pass off for the whole
+        // assignment.
+        let poisoned = format!("api_key = hun{MASK_OPEN}ter2");
+        let out = redact(&poisoned);
+        assert!(
+            !out.text.contains("hunter2") && !out.text.contains("ter2"),
+            "a bare U+0001 inside the value suppressed redaction: {:?}",
+            out.text
+        );
+        assert_eq!(out.redactions, 1, "the assignment pass did not fire");
+
+        // Same shape one pass down: a control byte inside a bearer token.
+        let poisoned = format!("Authorization: Bearer abcd{MASK_CLOSE}efghijkl");
+        let out = redact(&poisoned);
+        assert!(
+            !out.text.contains("efghijkl"),
+            "a bare U+0002 inside the header value suppressed redaction: {:?}",
+            out.text
+        );
+        assert!(
+            !out.text.contains(MASK_OPEN) && !out.text.contains(MASK_CLOSE),
+            "a raw sentinel survived into indexed text: {:?}",
+            out.text
+        );
+    }
+
+    #[test]
+    fn a_raw_sentinel_does_not_become_a_bracket_in_indexed_text() {
+        // Before the fix `unwrap_masks` rewrote every raw U+0001 into `[`.
+        let out = redact(&format!("plain{MASK_OPEN}text{MASK_CLOSE}here"));
+        assert_eq!(out.text, "plaintexthere");
+        assert_eq!(out.redactions, 0);
+    }
+
+    /// Idempotence still holds: a second pass over already-masked output must
+    /// not grow a bracket.
+    #[test]
+    fn redaction_remains_a_fixed_point() {
+        let once = redact("Authorization: Bearer abcdefghijklmnop").text;
+        let twice = redact(&once).text;
+        assert_eq!(once, twice);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_gone(secret: &str, input: &str) {
+        let result = redact(input);
+        assert!(
+            !result.text.contains(secret),
+            "secret survived redaction\n  input: {input}\n  output: {}",
+            result.text
+        );
+        assert!(
+            result.was_redacted(),
+            "redaction was not counted for: {input}"
+        );
+    }
+
+    /// AC7, the whole point. Each of these is a shape actually present in the
+    /// measured corpus.
+    #[test]
+    fn every_credential_shape_is_masked() {
+        assert_gone(
+            "abc123SECRETVALUE456xyz",
+            "Authorization: Bearer abc123SECRETVALUE456xyz",
+        );
+        assert_gone(
+            "abc123SECRETVALUE456xyz",
+            "curl -H 'authorization: token abc123SECRETVALUE456xyz' https://api",
+        );
+        assert_gone(
+            "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA",
+            "key is sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA today",
+        );
+        assert_gone(
+            "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "remote uses ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        assert_gone("AKIAIOSFODNN7EXAMPLE", "aws id AKIAIOSFODNN7EXAMPLE");
+        assert_gone("hunter2", "GITHUB_TOKEN=hunter2");
+        assert_gone("hunter2", r#"{"api_key": "hunter2"}"#);
+        assert_gone("hunter2", "export AWS_SECRET_ACCESS_KEY='hunter2'");
+        assert_gone("hunter2", "PASSWORD: hunter2");
+        assert_gone("hunter2", "postgres://appuser:hunter2@db.internal:5432/app");
+        assert_gone(
+            "MIIEvQIBADANBgkq",
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkq\naaaa\n-----END RSA PRIVATE KEY-----",
+        );
+        assert_gone("hunter2", "mysql -uroot -phunter2 mydb");
+    }
+
+    /// The other half of the contract. Over-masking is not a safe default: it
+    /// destroys the index's usefulness for content that never held a secret.
+    #[test]
+    fn ordinary_text_that_merely_looks_credential_ish_is_left_alone() {
+        for benign in [
+            "authentication: failed",
+            "sort_key: name",
+            "map_key = user_id",
+            "cache_key: v2:users:7",
+            "the token bucket refills every 5s",
+            "PASSWORD_MIN_LENGTH = 12",
+        ] {
+            let result = redact(benign);
+            assert_eq!(
+                result.text, benign,
+                "benign text was modified: {benign} -> {}",
+                result.text
+            );
+            assert_eq!(result.redactions, 0, "spurious redaction on: {benign}");
+        }
+    }
+
+    /// `PASSWORD_MIN_LENGTH` ends in `length`, not a credential tail — the case
+    /// a substring rule for `PASSWORD` would get wrong.
+    #[test]
+    fn name_matching_uses_components_not_substrings() {
+        assert!(is_sensitive_name("TOKEN"));
+        assert!(is_sensitive_name("GITHUB_TOKEN"));
+        assert!(is_sensitive_name("api-key"));
+        assert!(is_sensitive_name("aws_secret_access_key"));
+        assert!(is_sensitive_name("client_secret"));
+        assert!(!is_sensitive_name("authentication"));
+        assert!(!is_sensitive_name("sort_key"));
+        assert!(!is_sensitive_name("password_min_length"));
+        assert!(!is_sensitive_name("tokenizer"));
+    }
+
+    /// `-p` is `--parents` to `mkdir` and `--publish` to `docker`. Masking it
+    /// there would corrupt real history to hide a password that is not present.
+    #[test]
+    fn glued_password_masking_is_limited_to_password_taking_commands() {
+        for other_family in [
+            "mkdir -p /tmp/nested/dirs",
+            "docker run -p8080:80 nginx",
+            "cp -pr src dst",
+        ] {
+            let result = redact(other_family);
+            assert_eq!(
+                result.text, other_family,
+                "{other_family} must be untouched"
+            );
+        }
+        let masked = redact("psql -phunter2 -h db");
+        assert!(!masked.text.contains("hunter2"), "{}", masked.text);
+    }
+
+    #[test]
+    fn long_encoded_blobs_are_omitted_rather_than_indexed() {
+        let blob = "A".repeat(BLOB_MIN_LEN + 40);
+        let result = redact(&format!("data:image/png;base64,{blob}"));
+        assert!(!result.text.contains(&blob));
+        assert!(result.text.contains("[omitted:blob:"), "{}", result.text);
+    }
+
+    #[test]
+    fn a_blob_just_under_the_threshold_is_kept() {
+        let almost = "A".repeat(BLOB_MIN_LEN - 1);
+        let result = redact(&almost);
+        assert_eq!(result.text, almost);
+        assert_eq!(result.redactions, 0);
+    }
+
+    /// Redaction has to be a fixed point: running it twice must not mangle the
+    /// markers it just wrote, because ingest may re-normalize stored text.
+    #[test]
+    fn redaction_is_idempotent() {
+        let once = redact("Authorization: Bearer abc123SECRETVALUE456xyz\nTOKEN=hunter2");
+        let twice = redact(&once.text);
+        assert_eq!(twice.text, once.text);
+        assert_eq!(twice.redactions, 0, "second pass found: {}", twice.text);
+    }
+
+    #[test]
+    fn empty_and_plain_text_are_cheap_and_unchanged() {
+        assert_eq!(redact("").text, "");
+        assert_eq!(redact("fix the login bug").redactions, 0);
+    }
+}

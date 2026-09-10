@@ -17,7 +17,7 @@
  * - Keyboard: Global shortcuts, hotkeys
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, globSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ts } from '@ts-morph/common'
 import { describe, expect, it } from 'vitest'
@@ -43,6 +43,7 @@ interface DomainCheck {
  * Get the absolute path to the lib directory
  */
 const LIB_DIR = join(__dirname, '..')
+const ROOT_DIR = join(__dirname, '..', '..', '..', '..')
 const TESTS_DIR = __dirname
 let semanticRepositoryFindingsCache: GuardFinding[] | undefined
 
@@ -401,6 +402,15 @@ const P1_DOMAINS: DomainCheck[] = [
     methods: ['listSessions'],
     apiBridgeExport: 'cliSessionApi',
     testFile: 'cli-session-api.web.test.ts'
+  },
+  {
+    domain: 'MemoryIndex',
+    priority: 'P1',
+    tauriAdapterFile: 'tauri-memory-index-api.ts',
+    adapterExportName: 'createTauriMemoryIndexApi',
+    methods: ['build', 'status', 'search', 'listSessions', 'getSession'],
+    apiBridgeExport: 'memoryIndexApi',
+    testFile: 'memory-index-api.web.test.ts'
   }
 ]
 
@@ -1166,6 +1176,130 @@ describe('Parity Checklist Automation', () => {
       expect(router).toMatch(/\/cli-sessions\/resolve/)
       expect(ws).toMatch(/"list_cli_sessions"/)
       expect(ws).toMatch(/"resolve_cli_sessions"/)
+    })
+  })
+
+  describe('Memory index parity', () => {
+    const TauriAdapter = join(LIB_DIR, 'tauri-memory-index-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-memory-index-api.ts')
+
+    it('tauri-memory-index-api.ts exists and exports the factory', () => {
+      expect(existsSync(TauriAdapter)).toBe(true)
+      expect(
+        fileContains(
+          'tauri-memory-index-api.ts',
+          /export\s+(const|function)\s+\bcreateTauriMemoryIndexApi\b/
+        )
+      ).toBe(true)
+    })
+
+    it('web adapter and HTTP helper hit POST /memory-index/*', () => {
+      expect(existsSync(WebAdapter)).toBe(true)
+      const web = readFileSync(WebAdapter, 'utf-8')
+      const server = readFileSync(join(LIB_DIR, 'web-server-api.ts'), 'utf-8')
+      expect(web).toMatch(/webServerMemoryIndex/)
+      for (const route of ['build', 'cancel', 'status', 'search', 'sessions', 'session']) {
+        expect(server).toMatch(new RegExp(`/memory-index/${route}`))
+      }
+    })
+
+    /**
+     * Every member of the capability has to exist on both adapters, including
+     * the ones only one surface can really answer. `mcpInvocation` returns
+     * `null` on the web rather than being absent: a method the browser build
+     * simply does not have is a runtime TypeError at the call site, while
+     * `null` is a value the caller can render.
+     */
+    it('both adapters implement every member of MemoryIndexApi', () => {
+      const contract = readFileSync(
+        join(ROOT_DIR, 'src/shared/types/memory-index.types.ts'),
+        'utf-8'
+      )
+      const block = contract.split('export interface MemoryIndexApi {')[1]?.split('\n}')[0] ?? ''
+      const members = [...block.matchAll(/^\s{2}(\w+)\(/gm)].map((match) => match[1])
+      expect(members).toContain('cancel')
+      expect(members).toContain('mcpInvocation')
+
+      const tauri = readFileSync(TauriAdapter, 'utf-8')
+      const web = readFileSync(WebAdapter, 'utf-8')
+      const facade = readFileSync(join(LIB_DIR, 'memory-index-api.ts'), 'utf-8')
+      for (const member of members) {
+        expect(tauri, `tauri adapter is missing ${member}`).toMatch(
+          new RegExp(`\\b${member}\\s*\\(`)
+        )
+        expect(web, `web adapter is missing ${member}`).toMatch(new RegExp(`\\b${member}\\s*\\(`))
+        expect(facade, `facade is missing ${member}`).toMatch(new RegExp(`\\b${member}\\s*\\(`))
+      }
+    })
+
+    /**
+     * Progress has to reach both surfaces through the one event bus that works
+     * on both. A second bus would mean the browser client silently shows no
+     * progress at all for an operation that takes minutes.
+     */
+    it('build progress rides the shared event bus on both surfaces', () => {
+      const contract = readFileSync(
+        join(ROOT_DIR, 'src/shared/types/memory-index.types.ts'),
+        'utf-8'
+      )
+      expect(contract).toMatch(/MEMORY_INDEX_PROGRESS_EVENT\s*=\s*'acp:memory_index_progress'/)
+
+      const rust = readFileSync(join(ROOT_DIR, 'src-tauri/src/memory_index/commands.rs'), 'utf-8')
+      expect(rust).toMatch(/MEMORY_INDEX_PROGRESS_EVENT: &str = "acp:memory_index_progress"/)
+      // Desktop emits it, and the HTTP route fans the same constant out.
+      expect(rust).toMatch(/app\.emit\(MEMORY_INDEX_PROGRESS_EVENT/)
+      const webApi = readFileSync(join(ROOT_DIR, 'src-tauri/src/web/memory_index_api.rs'), 'utf-8')
+      expect(webApi).toMatch(/fan_out\(&sinks, None, MEMORY_INDEX_PROGRESS_EVENT/)
+    })
+
+    it('facade branches Tauri vs web by isTauriContext()', () => {
+      const facade = readFileSync(join(LIB_DIR, 'memory-index-api.ts'), 'utf-8')
+      expect(facade).toMatch(/isTauriContext\(\)/)
+      expect(facade).toMatch(/createTauriMemoryIndexApi/)
+      expect(facade).toMatch(/webMemoryIndexApi/)
+    })
+
+    it('api.ts exports the memoryIndexApi singleton', () => {
+      const content = readFileSync(join(LIB_DIR, 'api.ts'), 'utf-8')
+      expect(content).toMatch(/export\s*\{[^}]*\bmemoryIndexApi\b[^}]*\}/)
+    })
+
+    it('host registers every route and every Tauri command', () => {
+      const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+      const router = readFileSync(join(root, 'web', 'router.rs'), 'utf-8')
+      const lib = readFileSync(join(root, 'lib.rs'), 'utf-8')
+      for (const route of ['build', 'status', 'search', 'sessions', 'session']) {
+        expect(router).toMatch(new RegExp(`/memory-index/${route}`))
+      }
+      for (const command of [
+        'memory_index_build_cmd',
+        'memory_index_status_cmd',
+        'memory_index_search_cmd',
+        'memory_index_sessions_cmd',
+        'memory_index_session_cmd'
+      ]) {
+        expect(lib).toContain(command)
+      }
+    })
+
+    /**
+     * The index is expensive to build — 154 s over a real corpus — so it must
+     * only ever run from the explicit project menu action, never from a mount
+     * effect, a startup path or a list request.
+     */
+    it('build is reachable only from the explicit project menu action', () => {
+      const rendererRoot = join(LIB_DIR, '..')
+      const rendererFiles = globSync('**/*.{ts,tsx}', { cwd: rendererRoot }).map((relative) =>
+        join(rendererRoot, relative)
+      )
+      const callers = rendererFiles.filter((file) => {
+        if (file.includes('__tests__') || file.endsWith('.test.ts')) return false
+        if (file.endsWith('memory-index-api.ts')) return false
+        if (file.endsWith('tauri-memory-index-api.ts')) return false
+        if (file.endsWith('web-memory-index-api.ts')) return false
+        return /memoryIndexApi\s*\.\s*build\s*\(/.test(readFileSync(file, 'utf-8'))
+      })
+      expect(callers.map((file) => file.split('/').pop())).toEqual(['ProjectSidebar.tsx'])
     })
   })
 

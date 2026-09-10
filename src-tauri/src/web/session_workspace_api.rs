@@ -381,6 +381,7 @@ mod tests {
                 workspace_manifest: Some(legacy),
                 acp_catalog: None,
                 acp_install: None,
+                memory_index: None,
                 store: None,
             },
         )

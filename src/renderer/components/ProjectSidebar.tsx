@@ -1,10 +1,16 @@
 import { brandCanonical } from '@shared/brand'
 import type { DetectedShells } from '@shared/types/ipc.types'
+import {
+  MEMORY_INDEX_PROGRESS_EVENT,
+  type MemoryIndexProgress,
+  parseMemoryIndexProgress
+} from '@shared/types/memory-index.types'
 import { LayoutGroup, motion, Reorder } from 'framer-motion'
 import {
   AlertTriangle,
   Archive,
   ArrowDownAZ,
+  BrainCircuit,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -46,7 +52,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
-import { clipboardApi, dialogApi, shellApi } from '@/lib/api'
+import { getAcpTransport } from '@/lib/acp-transport'
+import { clipboardApi, dialogApi, memoryIndexApi, shellApi } from '@/lib/api'
+
 import { brandedStorageKey, readBrandedStorage } from '@/lib/brand-storage-key'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
@@ -106,6 +114,19 @@ interface ProjectSidebarProps {
   onSSHConnect?: (profileId: string) => void
   onSelectSSHProfile?: (profileId: string) => void
   activeSSHProfileId?: string | null
+}
+
+/**
+ * Render an argv array as a pasteable single line.
+ *
+ * The invocation carries absolute paths, and on this platform an app bundle
+ * path routinely contains spaces — pasting the array joined by spaces would
+ * produce a command that silently refers to the wrong file.
+ */
+function shellQuoteInvocation(argv: string[]): string {
+  return argv
+    .map((part) => (/^[A-Za-z0-9_./:=-]+$/.test(part) ? part : `'${part.replace(/'/g, "'\\''")}'`))
+    .join(' ')
 }
 
 export function ProjectSidebar({
@@ -570,6 +591,133 @@ export function ProjectSidebar({
     }
   }, [])
 
+  /**
+   * Build this project's cross-agent conversation memory index.
+   *
+   * Deliberately reachable from nowhere else. A build walks every Claude Code,
+   * Codex and pi transcript this project has — 3139 files and 154 seconds on
+   * the corpus it was measured against — so it happens when a person asks for
+   * it and at no other time. Nothing on a startup, mount or list path calls it.
+   */
+  const [organizingProjectId, setOrganizingProjectId] = useState<string | null>(null)
+  const [organizeProgress, setOrganizeProgress] = useState<MemoryIndexProgress | null>(null)
+
+  /**
+   * Live progress for the running build.
+   *
+   * Subscribed through the ACP transport because that is the app's one event
+   * path that works on desktop and in the browser alike; a build started from
+   * either surface reports the same way. The listener stays mounted rather than
+   * being attached per build: a build survives navigating away from the menu,
+   * and re-subscribing on every click would drop the ticks in between.
+   */
+  useEffect(() => {
+    return getAcpTransport().onEvent<unknown>(MEMORY_INDEX_PROGRESS_EVENT, (payload) => {
+      const parsed = parseMemoryIndexProgress(payload)
+      if (parsed) setOrganizeProgress(parsed)
+    })
+  }, [])
+
+  const handleOrganizeHistory = useCallback(
+    async (project: Project) => {
+      if (!project.path) {
+        toast({ title: t('organizeHistoryNoPath'), variant: 'destructive' })
+        return
+      }
+      setOrganizingProjectId(project.id)
+      setOrganizeProgress(null)
+      // Ask first, so the "this will take a while" case is announced before the
+      // wait rather than explained after it. A read-only probe: it deliberately
+      // does not open the index, because opening an outdated one migrates it,
+      // and migrating an outdated one discards it.
+      let fullPassAhead = false
+      try {
+        const status = await memoryIndexApi.status({ projectRoot: project.path })
+        fullPassAhead = !status.exists || status.needsRebuild
+      } catch {
+        // A status we could not read tells us nothing about the build ahead;
+        // fall through to the ordinary message rather than guessing.
+      }
+      toast({
+        title: fullPassAhead ? t('organizeHistoryFirstPass') : t('organizeHistoryRunning'),
+        description: project.name
+      })
+      try {
+        const report = await memoryIndexApi.build({ projectRoot: project.path })
+        const indexed =
+          report.sessionsIndexed + report.sessionsSkippedUnchanged + report.sessionsResumed
+        toast({
+          title: project.name,
+          description: report.cancelled
+            ? t('organizeHistoryCancelled', { sessions: indexed })
+            : indexed === 0
+              ? t('organizeHistoryEmpty')
+              : t('organizeHistoryDone', {
+                  sessions: indexed,
+                  messages: report.messagesIndexed,
+                  seconds: Math.round(report.durationMs / 1000),
+                  // Says what the run actually cost. A refresh that skipped
+                  // everything reads 0 MB, which is the difference between
+                  // "it re-scanned my whole history" and "it checked and had
+                  // nothing to do".
+                  megabytes: Math.round(report.bytesRead / 1048576)
+                })
+        })
+      } catch (err) {
+        console.error('Failed to index conversation history:', err)
+        toast({
+          title: t('organizeHistoryFailed'),
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'destructive'
+        })
+      } finally {
+        setOrganizingProjectId(null)
+        setOrganizeProgress(null)
+      }
+    },
+    [t]
+  )
+
+  const handleCancelOrganize = useCallback(async (project: Project) => {
+    if (!project.path) return
+    try {
+      await memoryIndexApi.cancel({ projectRoot: project.path })
+    } catch (err) {
+      console.error('Failed to cancel conversation indexing:', err)
+    }
+  }, [])
+
+  /**
+   * Copy the command line an external MCP client should be configured with.
+   *
+   * This is the only way to get it: the server is a subcommand of this
+   * executable and needs the host's own state root, neither of which a user can
+   * be expected to type. `null` means the surface cannot produce one — the
+   * browser client, where the paths would name a machine it is not running on.
+   */
+  const handleCopyMcpInvocation = useCallback(
+    async (project: Project) => {
+      if (!project.path) return
+      try {
+        const invocation = await memoryIndexApi.mcpInvocation({ projectRoot: project.path })
+        if (!invocation) {
+          toast({ title: t('memoryMcpUnavailable'), variant: 'destructive' })
+          return
+        }
+        await clipboardApi.writeText(shellQuoteInvocation(invocation))
+        toast({ title: t('memoryMcpCopied'), description: project.name })
+      } catch (err) {
+        console.error('Failed to read the memory MCP invocation:', err)
+        toast({
+          title: t('memoryMcpFailed'),
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'destructive'
+        })
+      }
+    },
+    [t]
+  )
+
   const renderProjectContextMenu = useCallback(
     (project: Project): React.ReactNode => {
       const isGitRepo = project.isGitRepo ?? false
@@ -608,6 +756,45 @@ export function ProjectSidebar({
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleOpenSettings(project.id)}>
             <Settings className="mr-2 h-4 w-4" /> {t('projectSettings')}
+          </ContextMenuItem>
+          {/* Indexing is expensive and explicit: it only ever runs from here. */}
+          <ContextMenuItem
+            disabled={!project.path || organizingProjectId === project.id}
+            onSelect={() => {
+              void handleOrganizeHistory(project)
+            }}
+          >
+            <BrainCircuit className="mr-2 h-4 w-4" />{' '}
+            {organizingProjectId === project.id
+              ? organizeProgress
+                ? t('organizeHistoryProgress', {
+                    seen: organizeProgress.filesSeen,
+                    total: organizeProgress.filesTotal,
+                    sessions: organizeProgress.sessionsIndexed
+                  })
+                : t('organizeHistoryRunning')
+              : t('organizeHistory')}
+          </ContextMenuItem>
+          {organizingProjectId === project.id && (
+            <ContextMenuItem
+              onSelect={(event) => {
+                // Keep the menu open: cancelling is cooperative and takes a
+                // moment, and closing here would hide the progress line that
+                // tells the user it worked.
+                event.preventDefault()
+                void handleCancelOrganize(project)
+              }}
+            >
+              <X className="mr-2 h-4 w-4" /> {t('organizeHistoryCancel')}
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem
+            disabled={!project.path}
+            onSelect={() => {
+              void handleCopyMcpInvocation(project)
+            }}
+          >
+            <Copy className="mr-2 h-4 w-4" /> {t('copyMemoryMcpConfig')}
           </ContextMenuItem>
           <ContextMenuItem
             onSelect={() =>
@@ -706,6 +893,11 @@ export function ProjectSidebar({
       navigate,
       groups,
       moveProjectToGroup,
+      handleOrganizeHistory,
+      handleCancelOrganize,
+      handleCopyMcpInvocation,
+      organizingProjectId,
+      organizeProgress,
       t
     ]
   )

@@ -20,10 +20,11 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::acp::host_mcp::{
-    FrameKind, FrameReply, FrameRequest, ScheduledTaskDraftCreateInput,
-    ScheduledTaskDraftUpdateInput, ScheduledTaskGetInput, ScheduledTaskListInput,
-    ScheduledTaskPauseInput, ScheduledTaskPreviewInput, SePlanInput, SeSetTitleInput, ENV_AGENT_ID,
-    ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
+    FrameKind, FrameReply, FrameRequest, MemorySearchInput, MemorySessionGetInput,
+    MemorySessionListInput, ScheduledTaskDraftCreateInput, ScheduledTaskDraftUpdateInput,
+    ScheduledTaskGetInput, ScheduledTaskListInput, ScheduledTaskPauseInput,
+    ScheduledTaskPreviewInput, SePlanInput, SeSetTitleInput, ENV_AGENT_ID, ENV_PORT,
+    ENV_SESSION_ID, ENV_TOKEN,
 };
 
 /// Env-derived configuration for the child. Extracted so the arg parser is
@@ -160,7 +161,7 @@ impl SePlanServer {
         &self,
         Parameters(input): Parameters<ScheduledTaskListInput>,
     ) -> String {
-        self.forward_scheduled(FrameKind::ScheduledTaskList, input, "tasks listed")
+        self.forward_payload(FrameKind::ScheduledTaskList, input, "tasks listed")
             .await
     }
 
@@ -172,7 +173,7 @@ impl SePlanServer {
         &self,
         Parameters(input): Parameters<ScheduledTaskGetInput>,
     ) -> String {
-        self.forward_scheduled(FrameKind::ScheduledTaskGet, input, "task loaded")
+        self.forward_payload(FrameKind::ScheduledTaskGet, input, "task loaded")
             .await
     }
 
@@ -184,7 +185,7 @@ impl SePlanServer {
         &self,
         Parameters(input): Parameters<ScheduledTaskPreviewInput>,
     ) -> String {
-        self.forward_scheduled(FrameKind::ScheduledTaskPreview, input, "schedule previewed")
+        self.forward_payload(FrameKind::ScheduledTaskPreview, input, "schedule previewed")
             .await
     }
 
@@ -196,7 +197,7 @@ impl SePlanServer {
         &self,
         Parameters(input): Parameters<ScheduledTaskDraftCreateInput>,
     ) -> String {
-        self.forward_scheduled(
+        self.forward_payload(
             FrameKind::ScheduledTaskDraftCreate,
             input,
             "task draft created",
@@ -212,7 +213,7 @@ impl SePlanServer {
         &self,
         Parameters(input): Parameters<ScheduledTaskDraftUpdateInput>,
     ) -> String {
-        self.forward_scheduled(
+        self.forward_payload(
             FrameKind::ScheduledTaskDraftUpdate,
             input,
             "task draft updated",
@@ -228,11 +229,44 @@ impl SePlanServer {
         &self,
         Parameters(input): Parameters<ScheduledTaskPauseInput>,
     ) -> String {
-        self.forward_scheduled(FrameKind::ScheduledTaskPause, input, "task paused")
+        self.forward_payload(FrameKind::ScheduledTaskPause, input, "task paused")
             .await
     }
 
-    async fn forward_scheduled<T: serde::Serialize>(
+    #[tool(
+        name = "memory_search",
+        description = "Search this project's cross-agent conversation memory — every past Claude Code, Codex and pi session for this project, normalized into one shape. Use it before re-deriving something the project has already worked through: past decisions, why an approach was rejected, what an error meant last time. Read-only. The project is fixed to the current session's; it cannot be chosen."
+    )]
+    async fn memory_search(&self, Parameters(input): Parameters<MemorySearchInput>) -> String {
+        self.forward_payload(FrameKind::MemorySearch, input, "no matches")
+            .await
+    }
+
+    #[tool(
+        name = "memory_session_list",
+        description = "List this project's indexed agent sessions, newest first by the time of their FIRST message (not file modification time). Read-only."
+    )]
+    async fn memory_session_list(
+        &self,
+        Parameters(input): Parameters<MemorySessionListInput>,
+    ) -> String {
+        self.forward_payload(FrameKind::MemorySessionList, input, "no sessions indexed")
+            .await
+    }
+
+    #[tool(
+        name = "memory_session_get",
+        description = "Read one indexed session's messages in transcript order, given a sessionKey from memory_search or memory_session_list. Read-only."
+    )]
+    async fn memory_session_get(
+        &self,
+        Parameters(input): Parameters<MemorySessionGetInput>,
+    ) -> String {
+        self.forward_payload(FrameKind::MemorySessionGet, input, "session not found")
+            .await
+    }
+
+    async fn forward_payload<T: serde::Serialize>(
         &self,
         kind: FrameKind,
         input: T,

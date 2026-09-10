@@ -17,6 +17,11 @@ mod host_admission;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
+/// Cross-agent conversation memory index: normalizes Claude Code / Codex / pi
+/// transcripts into one shape, stores a searchable projection host-private per
+/// project, and serves it over MCP. Public because the standalone binary's
+/// read-only MCP subcommand links this crate.
+pub mod memory_index;
 /// Read-only probe for pre-rename brand data (T-MIG-DETECT). Public because the
 /// brand-migration integration tests link this crate as an external dependency.
 pub mod migration_detect;
@@ -1916,6 +1921,16 @@ pub fn run() {
                 scheduled_task_executor,
             );
             acp_manager.set_scheduled_tasks(&scheduled_tasks);
+            // Cross-agent memory index. Host-private by construction: the state
+            // root is Tauri's `app_data_dir()`, the same tree Termul's own
+            // conversations live in, and never the user's project directory.
+            let memory_index = Arc::new(crate::memory_index::service::MemoryIndexService::new(app_data_dir.clone()));
+            acp_manager.set_memory_index(&memory_index);
+            log::info!(
+                "[memory-index] boundary=service_ready host=desktop state_root={}",
+                memory_index.state_root().display()
+            );
+            app.manage(Arc::clone(&memory_index));
             scheduled_tasks.start_on(tauri::async_runtime::handle().inner());
             log::info!(
                 "[scheduled-task] boundary=service_started host=desktop root={}",
@@ -2265,6 +2280,12 @@ pub fn run() {
             scheduled_tasks::commands::scheduled_task_list_audit,
             cli_session::commands::list_cli_sessions_cmd,
             cli_session::commands::resolve_cli_sessions_cmd,
+            memory_index::commands::memory_index_build_cmd,
+            memory_index::commands::memory_index_status_cmd,
+            memory_index::commands::memory_index_search_cmd,
+            memory_index::commands::memory_index_sessions_cmd,
+            memory_index::commands::memory_index_session_cmd,
+            memory_index::commands::memory_index_mcp_invocation_cmd,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,

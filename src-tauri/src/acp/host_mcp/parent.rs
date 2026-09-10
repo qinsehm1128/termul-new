@@ -77,6 +77,9 @@ pub struct HostPlanServer {
     /// Installed after host bootstrap constructs the scheduled-task service.
     /// Weak avoids a cycle through AcpScheduledTaskExecutor -> AcpManager.
     scheduled_tasks: Mutex<Option<Weak<crate::scheduled_tasks::ScheduledTaskService>>>,
+    /// Installed after host bootstrap resolves the host-private state root.
+    /// Weak for the same reason as `scheduled_tasks`: the host owns the service.
+    memory_index: Mutex<Option<Weak<crate::memory_index::service::MemoryIndexService>>>,
 }
 
 impl HostPlanServer {
@@ -118,6 +121,7 @@ impl HostPlanServer {
             persistence,
             conversation_persistence,
             scheduled_tasks: Mutex::new(None),
+            memory_index: Mutex::new(None),
         });
         let server_for_thread = Arc::clone(&server);
         let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
@@ -220,6 +224,18 @@ impl HostPlanServer {
     #[must_use]
     pub fn scheduled_tasks(&self) -> Option<Arc<crate::scheduled_tasks::ScheduledTaskService>> {
         self.scheduled_tasks.lock().as_ref().and_then(Weak::upgrade)
+    }
+
+    pub fn set_memory_index(
+        &self,
+        service: &Arc<crate::memory_index::service::MemoryIndexService>,
+    ) {
+        *self.memory_index.lock() = Some(Arc::downgrade(service));
+    }
+
+    #[must_use]
+    pub fn memory_index(&self) -> Option<Arc<crate::memory_index::service::MemoryIndexService>> {
+        self.memory_index.lock().as_ref().and_then(Weak::upgrade)
     }
 
     /// Bind the real ACP session_id (returned by `session/new`) to a token.
@@ -562,6 +578,116 @@ impl HostPlanServer {
                     &real_session_id,
                 )
             }
+            kind @ (FrameKind::MemorySearch
+            | FrameKind::MemorySessionList
+            | FrameKind::MemorySessionGet) => {
+                if !req.todos.is_empty() || req.title.is_some() {
+                    return FrameReply::err("memory index frame has incompatible fields");
+                }
+                self.process_memory_index_request(kind, req.payload, &real_session_id)
+            }
+        }
+    }
+
+    /// Answer a read-only memory-index query for the calling session.
+    ///
+    /// The project is resolved from the session's own Conversation attachment,
+    /// never from the request. That is the whole authorization model for this
+    /// surface: an agent may ask what *its* project remembers, and has no way to
+    /// name another one.
+    fn process_memory_index_request(
+        &self,
+        kind: FrameKind,
+        payload: Option<serde_json::Value>,
+        real_session_id: &str,
+    ) -> FrameReply {
+        let started = Instant::now();
+        log::info!(
+            "[host-mcp] boundary=memory_index_request_started kind={kind:?} session_id={real_session_id}"
+        );
+        let Some(service) = self.memory_index() else {
+            return FrameReply::err("memory index service unavailable");
+        };
+        let Some(persistence) = self.conversation_persistence.as_ref() else {
+            return FrameReply::err("memory index project scope unavailable");
+        };
+        let Some(project_root) = persistence.project_root_for_session(real_session_id) else {
+            return FrameReply::err(
+                "this session has no project attached, so it has no project memory to read",
+            );
+        };
+        let project_root = std::path::PathBuf::from(project_root);
+        let payload = payload.unwrap_or_else(|| serde_json::json!({}));
+
+        let result = match kind {
+            FrameKind::MemorySearch => serde_json::from_value::<
+                crate::acp::host_mcp::MemorySearchInput,
+            >(payload)
+            .map_err(|error| error.to_string())
+            .and_then(|input| {
+                service
+                    .search(
+                        &project_root,
+                        &crate::memory_index::service::MemorySearchRequest {
+                            query: input.query,
+                            limit: input.limit,
+                            agents: input.agents,
+                            include_unscoped: input.include_unscoped,
+                            include_stale: input.include_stale,
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+            })
+            .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string())),
+            FrameKind::MemorySessionList => serde_json::from_value::<
+                crate::acp::host_mcp::MemorySessionListInput,
+            >(payload)
+            .map_err(|error| error.to_string())
+            .and_then(|input| {
+                service
+                    .list_sessions(
+                        &project_root,
+                        input.limit,
+                        input.include_unscoped,
+                        &input.agents,
+                    )
+                    .map_err(|error| error.to_string())
+            })
+            .and_then(|sessions| serde_json::to_value(sessions).map_err(|error| error.to_string())),
+            FrameKind::MemorySessionGet => serde_json::from_value::<
+                crate::acp::host_mcp::MemorySessionGetInput,
+            >(payload)
+            .map_err(|error| error.to_string())
+            .and_then(|input| {
+                service
+                    .get_session(
+                        &project_root,
+                        &input.session_key,
+                        input.limit,
+                        input.include_stale,
+                        input.include_unscoped,
+                    )
+                    .map_err(|error| error.to_string())
+            })
+            .and_then(|detail| serde_json::to_value(detail).map_err(|error| error.to_string())),
+            other => Err(format!("unsupported memory index frame {other:?}")),
+        };
+
+        match result {
+            Ok(value) => {
+                log::info!(
+                    "[host-mcp] boundary=memory_index_request_completed kind={kind:?} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                FrameReply::with_result(value)
+            }
+            Err(error) => {
+                log::warn!(
+                    "[host-mcp] boundary=memory_index_request_failed kind={kind:?} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                FrameReply::err(error)
+            }
         }
     }
 
@@ -699,7 +825,12 @@ impl HostPlanServer {
                     })
                     .and_then(|task| serde_json::to_value(task).map_err(|error| error.to_string()))
             }
-            FrameKind::Plan | FrameKind::SetTitle | FrameKind::TokenAlive => {
+            FrameKind::Plan
+            | FrameKind::SetTitle
+            | FrameKind::TokenAlive
+            | FrameKind::MemorySearch
+            | FrameKind::MemorySessionList
+            | FrameKind::MemorySessionGet => {
                 unreachable!("scheduled match only")
             }
         };
