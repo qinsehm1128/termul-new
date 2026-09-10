@@ -23,6 +23,7 @@
 //!    `None` when the vendor does not record one. Guessing `0` there would
 //!    turn "unknown" into the false claim "this is a root message".
 
+pub mod adapters;
 pub mod paths;
 pub mod redact;
 pub mod scope;
