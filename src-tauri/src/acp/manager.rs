@@ -1295,6 +1295,15 @@ impl AcpManager {
         self.host_plan_server.scheduled_tasks()
     }
 
+    /// Publish the cross-agent memory index to the host-injected MCP surface,
+    /// so an agent's `memory_search` call has something to answer from.
+    pub fn set_memory_index(
+        &self,
+        service: &Arc<crate::memory_index::service::MemoryIndexService>,
+    ) {
+        self.host_plan_server.set_memory_index(service);
+    }
+
     #[must_use]
     pub fn conversation_id_for_current_session(
         &self,

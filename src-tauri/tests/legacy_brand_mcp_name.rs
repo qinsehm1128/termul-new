@@ -60,9 +60,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use se_manager_lib::brand::{self, BrandCanonical};
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprField, Ident, ItemFn, Lit, Member};
-use se_manager_lib::brand::{self, BrandCanonical};
 
 /// The production site under test.
 const PRODUCTION_FILE: &str = "src/acp/manager.rs";
@@ -90,7 +90,9 @@ fn manifest_dir() -> &'static Path {
 }
 
 fn fixture(relative: &str) -> PathBuf {
-    manifest_dir().join("tests/fixtures/legacy-brand").join(relative)
+    manifest_dir()
+        .join("tests/fixtures/legacy-brand")
+        .join(relative)
 }
 
 /// What a pre-rename install left in the *agent's* MCP configuration.
@@ -201,7 +203,9 @@ fn production_body_facts() -> BodyFacts {
     let mut finder = FnFinder::default();
     finder.visit_file(&ast);
     let function = finder.found.unwrap_or_else(|| {
-        panic!("{PRODUCTION_FN} no longer exists in {PRODUCTION_FILE}; this test must be retargeted")
+        panic!(
+            "{PRODUCTION_FN} no longer exists in {PRODUCTION_FILE}; this test must be retargeted"
+        )
     });
 
     let mut facts = BodyFacts::default();

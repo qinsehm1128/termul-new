@@ -23,6 +23,7 @@ pub mod conversation_api;
 pub mod conversation_lifecycle_api;
 pub mod editor_workspaces_api;
 pub mod fs_api;
+pub mod memory_index_api;
 // Rust 1.95 diagnoses three legacy callback adapters inside this pre-existing
 // module. TASK-004 cannot rewrite that non-owned file, so keep the allowance
 // scoped to `git_api` rather than weakening the crate-wide lint gate.
@@ -314,6 +315,7 @@ pub async fn serve(
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
+    memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
@@ -334,6 +336,7 @@ pub async fn serve(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        memory_index,
         authority,
     )
     .await?;
@@ -387,6 +390,7 @@ pub async fn serve_router(
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
+    memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     // The owning host computes ingress provenance before this shared composition is entered.
@@ -468,6 +472,7 @@ pub async fn serve_router(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        memory_index,
         store,
         authority,
     );

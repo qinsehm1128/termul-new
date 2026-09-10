@@ -65,11 +65,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use se_manager_lib::brand::{self, BrandCanonical};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, ExprStruct, ItemStruct, Lit};
-use se_manager_lib::brand::{self, BrandCanonical};
 
 /// The production site under test.
 const PRODUCTION_FILE: &str = "src/skills/provisioner.rs";
@@ -589,7 +589,9 @@ fn mirror_key_set_matches_the_production_struct() {
 fn downgrading_to_an_older_binary_is_a_known_and_accepted_loss() {
     let _guard = brand::override_canonical(post_rename());
     let mut value = frozen_manifest_value();
-    let object = value.as_object_mut().expect("the frozen manifest is an object");
+    let object = value
+        .as_object_mut()
+        .expect("the frozen manifest is an object");
 
     let legacy_flag = object
         .remove(brand::LEGACY.skill_manifest_key)

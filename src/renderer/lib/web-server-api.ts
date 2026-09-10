@@ -40,6 +40,25 @@ import type {
   IpcResult,
   WorktreeInfo
 } from '@shared/types/ipc.types'
+import type {
+  MemoryIndexBuildArgs,
+  MemoryIndexBuildReport,
+  MemoryIndexedSession,
+  MemoryIndexListArgs,
+  MemoryIndexScopeArgs,
+  MemoryIndexSearchArgs,
+  MemoryIndexSessionArgs,
+  MemoryIndexStatus,
+  MemorySearchResponse,
+  MemorySessionDetail
+} from '@shared/types/memory-index.types'
+import {
+  parseMemoryIndexBuildReport,
+  parseMemoryIndexedSessions,
+  parseMemoryIndexStatus,
+  parseMemorySearchResponse,
+  parseMemorySessionDetail
+} from '@shared/types/memory-index.types'
 import type { ProjectListPayload } from '@shared/types/web-projects.types'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
@@ -376,6 +395,48 @@ export const webServerMcpServers = {
  * data, throwing on `!res.success` so the renderer facade (`skills-api.ts`)
  * can branch `isTauriContext()` between `invoke(...)` and these HTTP impls.
  */
+/**
+ * Cross-agent memory index over HTTP.
+ *
+ * Mirrors the `memory_index_*` Tauri commands one-for-one so
+ * `memory-index-api.ts` can branch `isTauriContext()` between them.
+ */
+export const webServerMemoryIndex = {
+  async build(args: MemoryIndexBuildArgs): Promise<MemoryIndexBuildReport> {
+    const res = await postJson<unknown>('/memory-index/build', args)
+    if (!res.success) throw new Error(res.error)
+    const parsed = parseMemoryIndexBuildReport(res.data)
+    if (!parsed) throw new Error('memory index build returned an invalid payload')
+    return parsed
+  },
+  async status(args: MemoryIndexScopeArgs): Promise<MemoryIndexStatus> {
+    const res = await postJson<unknown>('/memory-index/status', args)
+    if (!res.success) throw new Error(res.error)
+    const parsed = parseMemoryIndexStatus(res.data)
+    if (!parsed) throw new Error('memory index status returned an invalid payload')
+    return parsed
+  },
+  async search(args: MemoryIndexSearchArgs): Promise<MemorySearchResponse> {
+    const res = await postJson<unknown>('/memory-index/search', args)
+    if (!res.success) throw new Error(res.error)
+    const parsed = parseMemorySearchResponse(res.data)
+    if (!parsed) throw new Error('memory index search returned an invalid payload')
+    return parsed
+  },
+  async listSessions(args: MemoryIndexListArgs): Promise<MemoryIndexedSession[]> {
+    const res = await postJson<unknown>('/memory-index/sessions', args)
+    if (!res.success) throw new Error(res.error)
+    const parsed = parseMemoryIndexedSessions(res.data)
+    if (!parsed) throw new Error('memory index session list returned an invalid payload')
+    return parsed
+  },
+  async getSession(args: MemoryIndexSessionArgs): Promise<MemorySessionDetail | null> {
+    const res = await postJson<unknown>('/memory-index/session', args)
+    if (!res.success) throw new Error(res.error)
+    return parseMemorySessionDetail(res.data)
+  }
+}
+
 export const webServerCliSessions = {
   async list(args?: CliSessionListArgs): Promise<CliSessionListResult> {
     const res = await postJson<unknown>('/cli-sessions', args ?? {})

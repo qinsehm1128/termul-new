@@ -269,6 +269,19 @@ fn main() -> ExitCode {
             ),
         );
         acp.set_scheduled_tasks(&scheduled_tasks);
+        // Cross-agent memory index. Its state root is the standalone host's own
+        // service-account state dir — deliberately NOT the desktop's
+        // `app_data_dir`, because the two hosts must not share a mutable store.
+        let memory_index = Arc::new(
+            se_manager_lib::memory_index::service::MemoryIndexService::new(
+                cfg.service_account_state_dir(),
+            ),
+        );
+        acp.set_memory_index(&memory_index);
+        info!(
+            state_root = %memory_index.state_root().display(),
+            "memory index service ready"
+        );
         scheduled_tasks.start();
         info!(
             root = %scheduled_tasks.store().root().display(),
@@ -390,6 +403,7 @@ fn main() -> ExitCode {
             workspace_manifest,
             acp_catalog,
             acp_install,
+            Some(Arc::clone(&memory_index)),
             authority,
         )
         .await

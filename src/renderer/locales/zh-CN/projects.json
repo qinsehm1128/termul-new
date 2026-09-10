@@ -285,5 +285,11 @@
   "sortMode": {
     "name": "按名称排序 — 点击切换为手动排序",
     "manual": "手动排序 — 点击切换为按名称排序"
-  }
+  },
+  "organizeHistory": "整理历史会话",
+  "organizeHistoryRunning": "正在整理历史会话…",
+  "organizeHistoryDone": "已整理 {{sessions}} 个会话、{{messages}} 条消息，用时 {{seconds}} 秒",
+  "organizeHistoryEmpty": "没有找到这个项目的历史会话",
+  "organizeHistoryFailed": "整理历史会话失败",
+  "organizeHistoryNoPath": "该项目还没有指定文件夹，无法整理历史会话"
 }

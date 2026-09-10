@@ -72,7 +72,8 @@ fn read_manifest(root: &Path) -> BTreeMap<String, String> {
 }
 
 fn sha256_of(path: &Path) -> String {
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {} failed: {e}", path.display()));
+    let bytes =
+        std::fs::read(path).unwrap_or_else(|e| panic!("read {} failed: {e}", path.display()));
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     format!("{:x}", hasher.finalize())
@@ -122,11 +123,16 @@ fn fixtures_still_contain_the_legacy_brand_strings_the_harness_depends_on() {
     assert!(mcp.contains("\"termul\""));
     assert!(mcp.contains("termul-manager"));
 
-    let skill = std::fs::read_to_string(root.join("user-skills/termul-scheduled-tasks.md")).unwrap();
+    let skill =
+        std::fs::read_to_string(root.join("user-skills/termul-scheduled-tasks.md")).unwrap();
     assert!(skill.contains("<!-- managed-by-termul:termul-scheduled-tasks -->"));
 
-    assert!(root.join("fake-user-repo/.termul/mcp-servers.json").is_file());
-    assert!(root.join("fake-user-repo/.termul/worktrees/feat-billing").is_dir());
+    assert!(root
+        .join("fake-user-repo/.termul/mcp-servers.json")
+        .is_file());
+    assert!(root
+        .join("fake-user-repo/.termul/worktrees/feat-billing")
+        .is_dir());
     // Stored without the leading dot: a tracked `.gitignore` inside the fixture
     // would shadow the repo's own ignore rules for everything beneath it.
     // Tests materialize it as `.gitignore` in a temp copy.
@@ -134,6 +140,9 @@ fn fixtures_still_contain_the_legacy_brand_strings_the_harness_depends_on() {
     assert!(gitignore.lines().any(|line| line.trim() == ".termul/"));
 
     let env_names = std::fs::read_to_string(root.join("env-names.txt")).unwrap();
-    assert_eq!(env_names.lines().filter(|l| !l.trim().is_empty()).count(), 65);
+    assert_eq!(
+        env_names.lines().filter(|l| !l.trim().is_empty()).count(),
+        65
+    );
     assert!(env_names.lines().all(|line| line.starts_with("TERMUL_")));
 }

@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Archive,
   ArrowDownAZ,
+  BrainCircuit,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -46,7 +47,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
-import { clipboardApi, dialogApi, shellApi } from '@/lib/api'
+import { clipboardApi, dialogApi, memoryIndexApi, shellApi } from '@/lib/api'
 import { brandedStorageKey, readBrandedStorage } from '@/lib/brand-storage-key'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
@@ -570,6 +571,52 @@ export function ProjectSidebar({
     }
   }, [])
 
+  /**
+   * Build this project's cross-agent conversation memory index.
+   *
+   * Deliberately reachable from nowhere else. A build walks every Claude Code,
+   * Codex and pi transcript this project has — 3139 files and 154 seconds on
+   * the corpus it was measured against — so it happens when a person asks for
+   * it and at no other time. Nothing on a startup, mount or list path calls it.
+   */
+  const [organizingProjectId, setOrganizingProjectId] = useState<string | null>(null)
+
+  const handleOrganizeHistory = useCallback(
+    async (project: Project) => {
+      if (!project.path) {
+        toast({ title: t('organizeHistoryNoPath'), variant: 'destructive' })
+        return
+      }
+      setOrganizingProjectId(project.id)
+      toast({ title: t('organizeHistoryRunning'), description: project.name })
+      try {
+        const report = await memoryIndexApi.build({ projectRoot: project.path })
+        const indexed = report.sessionsIndexed + report.sessionsSkippedUnchanged
+        toast({
+          title: project.name,
+          description:
+            indexed === 0
+              ? t('organizeHistoryEmpty')
+              : t('organizeHistoryDone', {
+                  sessions: indexed,
+                  messages: report.messagesIndexed,
+                  seconds: Math.round(report.durationMs / 1000)
+                })
+        })
+      } catch (err) {
+        console.error('Failed to index conversation history:', err)
+        toast({
+          title: t('organizeHistoryFailed'),
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'destructive'
+        })
+      } finally {
+        setOrganizingProjectId(null)
+      }
+    },
+    [t]
+  )
+
   const renderProjectContextMenu = useCallback(
     (project: Project): React.ReactNode => {
       const isGitRepo = project.isGitRepo ?? false
@@ -608,6 +655,18 @@ export function ProjectSidebar({
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleOpenSettings(project.id)}>
             <Settings className="mr-2 h-4 w-4" /> {t('projectSettings')}
+          </ContextMenuItem>
+          {/* Indexing is expensive and explicit: it only ever runs from here. */}
+          <ContextMenuItem
+            disabled={!project.path || organizingProjectId === project.id}
+            onSelect={() => {
+              void handleOrganizeHistory(project)
+            }}
+          >
+            <BrainCircuit className="mr-2 h-4 w-4" />{' '}
+            {organizingProjectId === project.id
+              ? t('organizeHistoryRunning')
+              : t('organizeHistory')}
           </ContextMenuItem>
           <ContextMenuItem
             onSelect={() =>
@@ -706,6 +765,8 @@ export function ProjectSidebar({
       navigate,
       groups,
       moveProjectToGroup,
+      handleOrganizeHistory,
+      organizingProjectId,
       t
     ]
   )

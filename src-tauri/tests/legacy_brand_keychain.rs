@@ -278,9 +278,9 @@ fn frozen_keychain_record_matches_the_recorded_legacy_brand() {
             .as_array()
             .expect("desktop entries")
             .iter()
-            .all(|entry| entry["key"].as_str().is_some_and(|key| {
-                key.starts_with("project:") && key.contains(":env:")
-            })),
+            .all(|entry| entry["key"]
+                .as_str()
+                .is_some_and(|key| { key.starts_with("project:") && key.contains(":env:") })),
         "desktop keychain keys are project environment ciphertext: {desktop}"
     );
 
@@ -338,7 +338,9 @@ fn fake_keychain_backend_holds_the_legacy_entries_the_canonical_service_cannot_s
     let legacy = Entry::new(brand::LEGACY.keychain_ssh_service, &password_key)
         .expect("build a legacy-service entry");
     assert_eq!(
-        legacy.get_password().expect("legacy SSH password is present"),
+        legacy
+            .get_password()
+            .expect("legacy SSH password is present"),
         expected,
         "the injectable backend must round-trip the frozen legacy entries"
     );
@@ -413,7 +415,8 @@ fn production_reads_a_credential_seeded_under_the_legacy_service() {
     let post = post_rename();
     let _brand = brand::override_canonical(post);
     assert_ne!(
-        post.keychain_service, brand::LEGACY.keychain_service,
+        post.keychain_service,
+        brand::LEGACY.keychain_service,
         "the post-rename injection must be a different spelling or this proves nothing"
     );
 
@@ -440,7 +443,8 @@ fn production_reads_a_credential_seeded_under_the_legacy_service() {
          be readable after it"
     );
     assert_eq!(
-        ssh_credential_store::get_password(INJECTED_PROFILE_ID).expect("the SSH password read succeeds"),
+        ssh_credential_store::get_password(INJECTED_PROFILE_ID)
+            .expect("the SSH password read succeeds"),
         Some(INJECTED_SSH_PASSWORD.to_string()),
         "M-10: an SSH password written before the rename must still be readable"
     );

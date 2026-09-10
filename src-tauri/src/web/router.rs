@@ -37,6 +37,7 @@ use crate::web::install_api;
 use crate::web::log_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
+use crate::web::memory_index_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::scheduled_tasks_api;
@@ -156,6 +157,24 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             )
             .route("/cli-sessions/resolve", post(cli_session_api::resolve_post)),
         RemoteRouteClass::CliSession,
+    ))
+    .merge(classified_routes(
+        Router::<AppState>::new()
+            // Build is the one mutating route, and it mirrors the single
+            // explicit user action in the desktop UI. Nothing on a startup,
+            // mount or list path reaches it.
+            .route("/memory-index/build", post(memory_index_api::build_post))
+            .route("/memory-index/status", post(memory_index_api::status_post))
+            .route("/memory-index/search", post(memory_index_api::search_post))
+            .route(
+                "/memory-index/sessions",
+                post(memory_index_api::sessions_post),
+            )
+            .route(
+                "/memory-index/session",
+                post(memory_index_api::session_post),
+            ),
+        RemoteRouteClass::MemoryIndex,
     ))
     .merge(classified_routes(
         Router::<AppState>::new().route("/log/frontend-error", post(log_api::frontend_error)),
@@ -366,6 +385,7 @@ pub fn router(
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
     acp_install: Option<Arc<AcpInstallService>>,
+    memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
     store: Option<Arc<WebStore>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Router {
@@ -405,6 +425,7 @@ pub fn router(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        memory_index,
         store,
         project_root: project_root_handle,
     })
@@ -441,6 +462,10 @@ pub fn router_with_static(
             registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
             AppState {
                 acp,
+                // Same degrade rationale as the manifest/catalog services above:
+                // this variant exists for fixtures that do not exercise the
+                // memory routes, which then report MEMORY_INDEX_UNAVAILABLE.
+                memory_index: None,
                 terminal_events: pty.terminal_events(),
                 cwd_tracker: pty.cwd_tracker(),
                 git_tracker: pty.git_tracker(),

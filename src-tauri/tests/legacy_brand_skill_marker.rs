@@ -130,9 +130,10 @@ fn open_conversation_under(
 
     let creation: Arc<ConversationCreationService> = Arc::clone(&outcome.creation);
     let prepared = runtime
-        .block_on(creation.prepare_conversation(PrepareConversationRequest::new(
-            ExecutionTarget::Workspace,
-        )))
+        .block_on(
+            creation
+                .prepare_conversation(PrepareConversationRequest::new(ExecutionTarget::Workspace)),
+        )
         .expect("prepare a conversation");
     let workspace_cwd = PathBuf::from(&prepared.workspace_cwd);
     let conversation_id: ConversationId = prepared.conversation_id;
@@ -376,7 +377,12 @@ fn managed_skill_manifest_stops_claiming_the_legacy_skill() {
         .as_array()
         .expect("manifest carries a paths array")
         .iter()
-        .map(|entry| entry.as_str().expect("manifest path is a string").to_string())
+        .map(|entry| {
+            entry
+                .as_str()
+                .expect("manifest path is a string")
+                .to_string()
+        })
         .collect();
     assert!(
         !claimed.iter().any(|path| path.contains(&legacy_segment)),
