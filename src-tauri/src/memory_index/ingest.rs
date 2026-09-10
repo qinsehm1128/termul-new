@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::adapters::{self, AdaptedTranscript, AdapterIssue};
+use super::adapters::{self, AdaptedTranscript, AdapterIssue, ISSUE_COMPACT_FAILED};
 use super::paths::{vendor_scan_roots, vendor_store_roots, IndexLocation, MemoryVendor};
 use super::scope::ProjectFence;
 use super::store::MemoryStore;
@@ -197,6 +197,15 @@ pub fn build_index(
     report.cancelled = cancel.is_cancelled();
     if !report.cancelled {
         report.sessions_forgotten = prune_missing(&mut store, &seen_keys, &scanned_vendors)?;
+        // Only on a complete build: compaction costs real time, and paying it
+        // for a partial index that the next build will rewrite anyway is waste.
+        if let Err(error) = store.compact() {
+            report.issues.push(AdapterIssue::new(
+                ISSUE_COMPACT_FAILED,
+                &location.database_path,
+                error.detail,
+            ));
+        }
     }
     report.duration_ms = started.elapsed().as_millis() as u64;
     Ok(report)
@@ -1493,6 +1502,29 @@ mod tests {
         eprintln!("duration           {:.1} s", elapsed.as_secs_f64());
 
         let store = open_store_at(temp.path(), &fence);
+        // "The index is about as big as the corpus" is not actionable on its
+        // own; what matters is whether the bytes are stored text, the inverted
+        // index, or churn. Each of those has a different lever.
+        if let Ok((text_bytes, cjk_bytes)) = store.text_vs_cjk_bytes() {
+            eprintln!(
+                "\ntext column        {:.2} MB\ncjk expansion      {:.2} MB  (+{:.1}% over text)",
+                text_bytes as f64 / 1_048_576.0,
+                cjk_bytes as f64 / 1_048_576.0,
+                cjk_bytes as f64 * 100.0 / text_bytes.max(1) as f64
+            );
+        }
+        let breakdown = store.size_breakdown().unwrap_or_default();
+        if !breakdown.is_empty() {
+            eprintln!("\nwhere the bytes are:");
+            for (name, bytes) in breakdown.iter().take(12) {
+                eprintln!(
+                    "  {:<28} {:>8.2} MB  {:>5.1}%",
+                    name,
+                    *bytes as f64 / 1_048_576.0,
+                    *bytes as f64 * 100.0 / index_bytes.max(1) as f64
+                );
+            }
+        }
         let sessions = store.list_sessions(false, &[], 10).unwrap();
         eprintln!("\nnewest sessions by FIRST MESSAGE time:");
         for session in sessions.iter().take(10) {

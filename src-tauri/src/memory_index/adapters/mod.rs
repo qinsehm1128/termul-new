@@ -76,6 +76,10 @@ pub const ISSUE_UNREADABLE: &str = "MEMORY_INDEX_TRANSCRIPT_UNREADABLE";
 pub const ISSUE_OVERSIZED_RECORD: &str = "MEMORY_INDEX_RECORD_OVERSIZED";
 pub const ISSUE_NO_SESSION_HEADER: &str = "MEMORY_INDEX_NO_SESSION_HEADER";
 pub const ISSUE_LINEAGE_FORK: &str = "MEMORY_INDEX_LINEAGE_FORK";
+/// Post-build compaction failed. The index is correct, just larger than it
+/// needs to be — which is why this is an issue on the report rather than an
+/// error that discards a finished build.
+pub const ISSUE_COMPACT_FAILED: &str = "MEMORY_INDEX_COMPACT_FAILED";
 
 /// One raw JSONL record with the byte range it occupies.
 #[derive(Debug, Clone)]
@@ -456,6 +460,119 @@ pub fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod flattening_invariants {
+    use super::super::types::{FileIdentity, SessionScope};
+    use std::path::Path;
+
+    /// The store stopped keeping `root_session_key` and `lineage_depth` on every
+    /// message and reads them from the session row instead — 146,755 rows'
+    /// worth of duplication on the measured corpus. That is only sound because
+    /// the adapters flatten **per file**: one transcript is one session, and
+    /// every message in it carries that session's lineage verbatim.
+    ///
+    /// This pins the property down rather than trusting it. An adapter that
+    /// ever emits mixed lineage inside one file has to change the schema back,
+    /// and this is what will say so.
+    fn assert_uniform(adapted: &super::AdaptedTranscript, label: &str) {
+        let session = adapted.session.as_ref().expect(label);
+        for message in &adapted.messages {
+            assert_eq!(
+                message.lineage_depth, session.lineage_depth,
+                "{label}: message {} has a different depth from its session",
+                message.ordinal
+            );
+            assert_eq!(
+                message.root_session_key, session.root_session_key,
+                "{label}: message {} has a different root from its session",
+                message.ordinal
+            );
+            assert_eq!(
+                message.session_key, session.session_key,
+                "{label}: message {} belongs to another session",
+                message.ordinal
+            );
+            // And the pointer's file identity is the session's, which is why
+            // `messages` no longer stores a path at all.
+            assert_eq!(message.source.file_path, session.source.file_path, "{label}");
+            assert_eq!(message.source.device, session.source.device, "{label}");
+            assert_eq!(message.source.inode, session.source.inode, "{label}");
+            assert_eq!(message.source.size_bytes, session.source.size_bytes, "{label}");
+            assert_eq!(
+                message.source.modified_unix_ms, session.source.modified_unix_ms,
+                "{label}"
+            );
+        }
+    }
+
+    fn write(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn adapters_assign_one_lineage_per_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let claude = write(
+            dir.path(),
+            "c.jsonl",
+            "{\"type\":\"user\",\"sessionId\":\"s\",\"cwd\":\"/r\",\"isSidechain\":true,\
+             \"timestamp\":\"2026-09-01T00:00:00.000Z\",\"message\":{\"role\":\"user\",\
+             \"content\":[{\"type\":\"text\",\"text\":\"one\"},\
+             {\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"c\":\"ls\"}}]}}\n",
+        );
+        let identity = FileIdentity::read(&claude).unwrap();
+        assert_uniform(
+            &super::claude::adapt(&claude, &identity, "p", SessionScope::Scoped, &|_| None),
+            "claude",
+        );
+
+        let pi = write(
+            dir.path(),
+            "2026-09-01T00-00-00-000Z_abcdef12.jsonl",
+            "{\"type\":\"session\",\"id\":\"s\",\"timestamp\":\"2026-09-01T00:00:00.000Z\",\"cwd\":\"/r\"}\n\
+             {\"type\":\"message\",\"id\":\"m1\",\"timestamp\":\"2026-09-01T00:00:01.000Z\",\
+             \"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"one\"}]}}\n\
+             {\"type\":\"message\",\"id\":\"m2\",\"timestamp\":\"2026-09-01T00:00:02.000Z\",\
+             \"message\":{\"role\":\"toolResult\",\"toolName\":\"Bash\",\"toolCallId\":\"t1\",\
+             \"content\":\"done\"}}\n",
+        );
+        let identity = FileIdentity::read(&pi).unwrap();
+        assert_uniform(
+            &super::pi::adapt(
+                &pi,
+                &identity,
+                "p",
+                SessionScope::Scoped,
+                super::super::types::LineageDepth::nested(1),
+                Some("pi:/root.jsonl".to_string()),
+            ),
+            "pi",
+        );
+
+        let codex = write(
+            dir.path(),
+            "x.jsonl",
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-09-01T00:00:00.000Z\",\
+             \"payload\":{\"id\":\"s\",\"cwd\":\"/r\",\"source\":\"exec\"}}\n\
+             {\"type\":\"response_item\",\"timestamp\":\"2026-09-01T00:00:01.000Z\",\
+             \"payload\":{\"type\":\"message\",\"role\":\"user\",\
+             \"content\":[{\"type\":\"input_text\",\"text\":\"one\"}]}}\n\
+             {\"type\":\"response_item\",\"timestamp\":\"2026-09-01T00:00:02.000Z\",\
+             \"payload\":{\"type\":\"function_call\",\"name\":\"bash\",\"call_id\":\"c1\",\
+             \"arguments\":\"{}\"}}\n",
+        );
+        let identity = FileIdentity::read(&codex).unwrap();
+        let meta = super::codex::read_meta(&codex).expect("meta");
+        assert_uniform(
+            &super::codex::adapt(&codex, &identity, "p", SessionScope::Scoped, &meta, &|_| None),
+            "codex",
+        );
+    }
 }
 
 #[cfg(test)]

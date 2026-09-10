@@ -56,7 +56,9 @@ const META_PROJECT_KEY: &str = "project_key";
 ///
 /// * 1 — single-column `messages_fts`.
 /// * 2 — `messages_fts(text, cjk)`.
-const STORE_VERSION: u32 = 2;
+/// * 3 — `messages` keyed by `(session_id, ordinal)` instead of repeating the
+///   transcript path in four columns of every row.
+const STORE_VERSION: u32 = 3;
 
 /// Hard cap on rows returned by any single query, applied after the caller's
 /// own limit. An MCP client asking for everything would otherwise be able to
@@ -290,12 +292,12 @@ impl MemoryStore {
             .transaction()
             .map_err(store_error("begin transaction"))?;
         delete_session_rows(&transaction, &session.session_key)?;
-        write_session_row(&transaction, session)?;
+        let session_id = write_session_row(&transaction, session)?;
         for message in messages {
-            write_message_row(&transaction, message)?;
+            write_message_row(&transaction, session_id, message)?;
         }
         for compaction in compactions {
-            write_compaction_row(&transaction, compaction)?;
+            write_compaction_row(&transaction, session_id, compaction)?;
         }
         transaction
             .commit()
@@ -397,10 +399,8 @@ impl MemoryStore {
             .connection
             .prepare(&format!(
                 "SELECT {HIT_COLUMNS}
-                 FROM messages m
-                 JOIN sessions s ON s.session_key = m.session_key
-                 JOIN messages_fts f ON f.rowid = m.fts_rowid
-                 WHERE m.session_key = ?1
+                 FROM {HIT_FROM}
+                 WHERE s.session_key = ?1
                  ORDER BY m.ordinal ASC
                  LIMIT ?2"
             ))
@@ -432,9 +432,7 @@ impl MemoryStore {
             .connection
             .prepare(&format!(
                 "SELECT {HIT_COLUMNS}
-                 FROM messages_fts f
-                 JOIN messages m ON m.fts_rowid = f.rowid
-                 JOIN sessions s ON s.session_key = m.session_key
+                 FROM {HIT_FROM}
                  WHERE messages_fts MATCH ? AND (? OR s.scope = 'scoped'){vendor_sql}
                  ORDER BY bm25(messages_fts) ASC, m.timestamp_ms DESC
                  LIMIT ?"
@@ -481,12 +479,12 @@ impl MemoryStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT c.session_key, c.root_session_key, c.ordinal, c.summary, c.tokens_before,
+                "SELECT s.session_key, s.root_session_key, c.ordinal, c.summary, c.tokens_before,
                         c.first_kept_entry_id, c.timestamp_utc, c.timestamp_ms,
-                        c.src_path, c.src_device, c.src_inode, c.src_size, c.src_mtime_ms,
+                        s.src_path, s.src_device, s.src_inode, s.src_size, s.src_mtime_ms,
                         c.src_hash, c.src_offset, c.src_len
                  FROM compactions c
-                 JOIN sessions s ON s.session_key = c.session_key
+                 JOIN sessions s ON s.id = c.session_id
                  WHERE c.summary LIKE ?1 ESCAPE '\\' AND (?2 OR s.scope = 'scoped')
                  ORDER BY c.timestamp_ms IS NULL, c.timestamp_ms DESC
                  LIMIT ?3",
@@ -510,6 +508,78 @@ impl MemoryStore {
             .map_err(store_error("query compaction search"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(store_error("read compaction search"))
+    }
+
+    /// Compact the index after a bulk write.
+    ///
+    /// Two separate reclaims, neither of which changes a query's answer:
+    ///
+    /// * FTS5 `'optimize'` merges the b-tree segments a bulk load leaves behind.
+    ///   An incremental `INSERT` per row builds many small segments; every query
+    ///   then has to visit all of them, and each stores its own copy of the
+    ///   per-term overhead. This is the documented post-bulk-load step.
+    /// * `wal_checkpoint(TRUNCATE)` folds the write-ahead log back into the
+    ///   database and truncates it. A build of this size leaves a `-wal` file
+    ///   that can rival the database, and it is on the user's disk whether or
+    ///   not [`Self::counts`] mentions it.
+    ///
+    /// Deliberately **not** `VACUUM`: it rewrites the entire file, needs room
+    /// for a second copy of a multi-hundred-megabyte database, and only
+    /// reclaims pages freed by deletion — which a first build has none of. It
+    /// belongs behind an explicit "compact" action, not on every build.
+    ///
+    /// Failures are reported but not fatal: an index that is merely larger than
+    /// it needs to be is still a correct index, and losing a 154-second build to
+    /// a housekeeping error would be the worse outcome.
+    pub fn compact(&self) -> MemoryIndexResult<()> {
+        self.connection
+            .execute(
+                "INSERT INTO messages_fts(messages_fts) VALUES ('optimize')",
+                [],
+            )
+            .map_err(store_error("optimize fts index"))?;
+        self.connection
+            .pragma_update(None, "wal_checkpoint", "TRUNCATE")
+            .map_err(store_error("checkpoint wal"))?;
+        Ok(())
+    }
+
+    /// On-disk bytes, broken down by what is holding them.
+    ///
+    /// Exists because "the index is about the same size as the corpus" is not
+    /// an actionable statement: the answer to whether that is acceptable
+    /// depends entirely on whether the bytes are the stored text, the inverted
+    /// index, or churn. `dbstat` is a compile-time-optional module, so a
+    /// missing one yields an empty map rather than an error.
+    pub fn size_breakdown(&self) -> MemoryIndexResult<Vec<(String, u64)>> {
+        let mut statement = match self.connection.prepare(
+            "SELECT name, SUM(pgsize) AS bytes FROM dbstat
+             GROUP BY name ORDER BY bytes DESC",
+        ) {
+            Ok(statement) => statement,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })
+            .map_err(store_error("query dbstat"))?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Total stored bytes of the display text versus its CJK expansion.
+    ///
+    /// The expansion is the one place this index deliberately stores something
+    /// twice, so its cost should be a measurement rather than an estimate.
+    pub fn text_vs_cjk_bytes(&self) -> MemoryIndexResult<(u64, u64)> {
+        self.connection
+            .query_row(
+                "SELECT COALESCE(SUM(LENGTH(text)), 0), COALESCE(SUM(LENGTH(cjk)), 0)
+                 FROM messages_fts",
+                [],
+                |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+            )
+            .map_err(store_error("measure fts columns"))
     }
 
     /// Row counts, for the build report and for tests.
@@ -661,22 +731,14 @@ fn delete_session_rows(transaction: &Transaction<'_>, session_key: &str) -> Memo
     transaction
         .execute(
             "DELETE FROM messages_fts WHERE rowid IN
-                 (SELECT fts_rowid FROM messages WHERE session_key = ?1)",
+                 (SELECT m.fts_rowid FROM messages m
+                  JOIN sessions s ON s.id = m.session_id
+                  WHERE s.session_key = ?1)",
             params![session_key],
         )
         .map_err(store_error("delete fts rows"))?;
-    transaction
-        .execute(
-            "DELETE FROM messages WHERE session_key = ?1",
-            params![session_key],
-        )
-        .map_err(store_error("delete messages"))?;
-    transaction
-        .execute(
-            "DELETE FROM compactions WHERE session_key = ?1",
-            params![session_key],
-        )
-        .map_err(store_error("delete compactions"))?;
+    // `ON DELETE CASCADE` plus `PRAGMA foreign_keys=ON` takes the messages and
+    // compactions with it, which is why the FTS rows have to go first.
     transaction
         .execute(
             "DELETE FROM sessions WHERE session_key = ?1",
@@ -686,10 +748,11 @@ fn delete_session_rows(transaction: &Transaction<'_>, session_key: &str) -> Memo
     Ok(())
 }
 
+/// Insert a session row and return the id its messages will reference.
 fn write_session_row(
     transaction: &Transaction<'_>,
     session: &IndexedSession,
-) -> MemoryIndexResult<()> {
+) -> MemoryIndexResult<i64> {
     transaction
         .execute(
             "INSERT INTO sessions(
@@ -738,11 +801,12 @@ fn write_session_row(
             ],
         )
         .map_err(store_error("insert session"))?;
-    Ok(())
+    Ok(transaction.last_insert_rowid())
 }
 
 fn write_message_row(
     transaction: &Transaction<'_>,
+    session_id: i64,
     message: &NormalizedMessage,
 ) -> MemoryIndexResult<()> {
     transaction
@@ -755,23 +819,13 @@ fn write_message_row(
     transaction
         .execute(
             "INSERT INTO messages(
-                message_key, session_key, root_session_key, lineage_depth, ordinal, role,
+                session_id, ordinal, role,
                 timestamp_utc, timestamp_ms, timestamp_confidence,
                 tool_name, tool_call_id, fts_rowid,
-                src_path, src_device, src_inode, src_size, src_mtime_ms,
                 src_hash, src_offset, src_len
-             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6,
-                ?7, ?8, ?9,
-                ?10, ?11, ?12,
-                ?13, ?14, ?15, ?16, ?17,
-                ?18, ?19, ?20
-             )",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
-                message.message_key,
-                message.session_key,
-                message.root_session_key,
-                message.lineage_depth.value().map(i64::from),
+                session_id,
                 message.ordinal as i64,
                 message.role.as_str(),
                 message.timestamp_utc,
@@ -780,11 +834,6 @@ fn write_message_row(
                 message.tool_name,
                 message.tool_call_id,
                 fts_rowid,
-                message.source.file_path,
-                message.source.device as i64,
-                message.source.inode as i64,
-                message.source.size_bytes as i64,
-                message.source.modified_unix_ms,
                 message.source.content_hash,
                 message.source.byte_offset as i64,
                 message.source.byte_len as i64,
@@ -796,30 +845,24 @@ fn write_message_row(
 
 fn write_compaction_row(
     transaction: &Transaction<'_>,
+    session_id: i64,
     record: &CompactionRecord,
 ) -> MemoryIndexResult<()> {
     transaction
         .execute(
             "INSERT INTO compactions(
-                session_key, root_session_key, ordinal, summary, tokens_before,
+                session_id, ordinal, summary, tokens_before,
                 first_kept_entry_id, timestamp_utc, timestamp_ms,
-                src_path, src_device, src_inode, src_size, src_mtime_ms,
                 src_hash, src_offset, src_len
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
-                record.session_key,
-                record.root_session_key,
+                session_id,
                 record.ordinal as i64,
                 record.summary,
                 record.tokens_before.map(|value| value as i64),
                 record.first_kept_entry_id,
                 record.timestamp_utc,
                 record.timestamp_ms,
-                record.source.file_path,
-                record.source.device as i64,
-                record.source.inode as i64,
-                record.source.size_bytes as i64,
-                record.source.modified_unix_ms,
                 record.source.content_hash,
                 record.source.byte_offset as i64,
                 record.source.byte_len as i64,
@@ -835,12 +878,23 @@ const SESSION_COLUMNS: &str = "session_key, vendor, vendor_session_id, root_sess
      timestamp_confidence, message_count, tool_count, file_path,
      src_path, src_device, src_inode, src_size, src_mtime_ms, src_hash, src_offset, src_len";
 
-const HIT_COLUMNS: &str = "m.message_key, m.session_key, m.root_session_key, s.vendor,
-     m.lineage_depth, m.ordinal, m.role, m.timestamp_utc, m.timestamp_ms,
+/// A hit's columns, assembled from the message row and its session.
+///
+/// Four of the values a caller sees are read from `sessions` rather than stored
+/// per message — `rootSessionKey`, `lineageDepth`, and the pointer's path and
+/// file identity — and `messageKey` is rebuilt from `session_key` and `ordinal`.
+/// The wire shape is unchanged; only where the bytes live is.
+const HIT_COLUMNS: &str = "s.session_key, m.ordinal, s.root_session_key, s.vendor,
+     s.lineage_depth, m.role, m.timestamp_utc, m.timestamp_ms,
      m.timestamp_confidence, m.tool_name, m.tool_call_id, f.text,
      s.title, s.first_message_at_utc, s.scope,
-     m.src_path, m.src_device, m.src_inode, m.src_size, m.src_mtime_ms,
+     s.src_path, s.src_device, s.src_inode, s.src_size, s.src_mtime_ms,
      m.src_hash, m.src_offset, m.src_len";
+
+/// `messages` joined to the session that owns it and to its text.
+const HIT_FROM: &str = "messages m
+     JOIN sessions s ON s.id = m.session_id
+     JOIN messages_fts f ON f.rowid = m.fts_rowid";
 
 fn read_pointer(row: &rusqlite::Row<'_>, base: usize) -> rusqlite::Result<SourcePointer> {
     Ok(SourcePointer {
@@ -887,24 +941,28 @@ fn read_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IndexedSession>
 }
 
 fn read_hit_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemorySearchHit> {
+    let session_key: String = row.get(0)?;
+    let ordinal = row.get::<_, i64>(1)? as u32;
     Ok(MemorySearchHit {
-        message_key: row.get(0)?,
-        session_key: row.get(1)?,
+        // `{session_key}#{ordinal}` is how the adapters mint it, so rebuilding
+        // it here is the same value rather than a lookalike.
+        message_key: format!("{session_key}#{ordinal}"),
+        session_key,
         root_session_key: row.get(2)?,
         vendor: row.get(3)?,
         lineage_depth: read_lineage(row, 4)?,
-        ordinal: row.get::<_, i64>(5)? as u32,
-        role: NormalizedRole::parse(&row.get::<_, String>(6)?).unwrap_or(NormalizedRole::System),
-        timestamp_utc: row.get(7)?,
-        timestamp_ms: row.get(8)?,
-        timestamp_confidence: TimestampConfidence::parse(&row.get::<_, String>(9)?),
-        tool_name: row.get(10)?,
-        tool_call_id: row.get(11)?,
-        text: row.get(12)?,
-        session_title: row.get(13)?,
-        session_first_message_at_utc: row.get(14)?,
-        session_scope: parse_scope(&row.get::<_, String>(15)?),
-        source: read_pointer(row, 16)?,
+        ordinal,
+        role: NormalizedRole::parse(&row.get::<_, String>(5)?).unwrap_or(NormalizedRole::System),
+        timestamp_utc: row.get(6)?,
+        timestamp_ms: row.get(7)?,
+        timestamp_confidence: TimestampConfidence::parse(&row.get::<_, String>(8)?),
+        tool_name: row.get(9)?,
+        tool_call_id: row.get(10)?,
+        text: row.get(11)?,
+        session_title: row.get(12)?,
+        session_first_message_at_utc: row.get(13)?,
+        session_scope: parse_scope(&row.get::<_, String>(14)?),
+        source: read_pointer(row, 15)?,
         source_fresh: true,
     })
 }
@@ -946,7 +1004,8 @@ DROP TABLE IF EXISTS sessions;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS sessions (
-    session_key          TEXT PRIMARY KEY,
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key          TEXT NOT NULL UNIQUE,
     vendor               TEXT NOT NULL,
     vendor_session_id    TEXT NOT NULL,
     root_session_key     TEXT NOT NULL,
@@ -974,14 +1033,31 @@ CREATE TABLE IF NOT EXISTS sessions (
     src_len              INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_first_message ON sessions(first_message_at_ms);
-CREATE INDEX IF NOT EXISTS sessions_root ON sessions(root_session_key);
 CREATE INDEX IF NOT EXISTS sessions_scope ON sessions(scope);
 
+-- Everything a message could repeat from its session, it now reads from there.
+--
+-- Measured on the real corpus at schema 2: `messages` was 198 MB of a 790 MB
+-- index, plus 83 MB of indexes on top, because every one of 146,755 rows
+-- carried `message_key`, `session_key`, `root_session_key` and `src_path` —
+-- four copies of the same absolute transcript path. The inverted index the
+-- whole feature exists for was 12%.
+--
+-- Three of those are derivable rather than merely repeated:
+--   * `src_path` and the file identity — a message's bytes are always in its
+--     own session's transcript; the adapters build both pointers from one
+--     `FileIdentity`.
+--   * `root_session_key` and `lineage_depth` — the adapters flatten per file,
+--     so every message of a session carries the session's values verbatim.
+--     `adapters_assign_one_lineage_per_file` pins that down.
+--   * `message_key` — it is `{session_key}#{ordinal}` by construction, so it is
+--     rebuilt on read rather than stored.
+--
+-- `WITHOUT ROWID` with `(session_id, ordinal)` as the primary key makes the
+-- table its own ordered index: it removes the separate rowid B-tree *and* the
+-- `(session_key, ordinal)` index that used to shadow it.
 CREATE TABLE IF NOT EXISTS messages (
-    message_key          TEXT PRIMARY KEY,
-    session_key          TEXT NOT NULL REFERENCES sessions(session_key) ON DELETE CASCADE,
-    root_session_key     TEXT NOT NULL,
-    lineage_depth        INTEGER,
+    session_id           INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     ordinal              INTEGER NOT NULL,
     role                 TEXT NOT NULL,
     timestamp_utc        TEXT,
@@ -991,39 +1067,27 @@ CREATE TABLE IF NOT EXISTS messages (
     tool_call_id         TEXT,
     -- The only handle to this message's text, which lives in messages_fts.
     fts_rowid            INTEGER NOT NULL,
-    src_path             TEXT NOT NULL,
-    src_device           INTEGER NOT NULL,
-    src_inode            INTEGER NOT NULL,
-    src_size             INTEGER NOT NULL,
-    src_mtime_ms         INTEGER NOT NULL,
     src_hash             TEXT NOT NULL,
     src_offset           INTEGER NOT NULL,
-    src_len              INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS messages_session ON messages(session_key, ordinal);
+    src_len              INTEGER NOT NULL,
+    PRIMARY KEY (session_id, ordinal)
+) WITHOUT ROWID;
 CREATE UNIQUE INDEX IF NOT EXISTS messages_fts_rowid ON messages(fts_rowid);
-CREATE INDEX IF NOT EXISTS messages_tool_call ON messages(tool_call_id);
 
 CREATE TABLE IF NOT EXISTS compactions (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_key          TEXT NOT NULL REFERENCES sessions(session_key) ON DELETE CASCADE,
-    root_session_key     TEXT NOT NULL,
+    session_id           INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     ordinal              INTEGER NOT NULL,
     summary              TEXT NOT NULL,
     tokens_before        INTEGER,
     first_kept_entry_id  TEXT,
     timestamp_utc        TEXT,
     timestamp_ms         INTEGER,
-    src_path             TEXT NOT NULL,
-    src_device           INTEGER NOT NULL,
-    src_inode            INTEGER NOT NULL,
-    src_size             INTEGER NOT NULL,
-    src_mtime_ms         INTEGER NOT NULL,
     src_hash             TEXT NOT NULL,
     src_offset           INTEGER NOT NULL,
     src_len              INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS compactions_session ON compactions(session_key);
+CREATE INDEX IF NOT EXISTS compactions_session ON compactions(session_id);
 
 -- `text` is the exact text a hit displays and the Latin search surface.
 -- `cjk` holds only the bigram expansion of the text's CJK runs; it is empty for
@@ -1278,6 +1342,62 @@ mod tests {
             to_fts_match("foo :: bar"),
             Some("{text}: \"foo\" {text}: \"bar\"".to_string())
         );
+    }
+
+    /// Any older on-disk layout is discarded and rebuilt, not migrated.
+    ///
+    /// Parameterised over both historical versions so a third one cannot be
+    /// added while quietly leaving one of them broken: version 1 had a
+    /// single-column FTS table, version 2 keyed `messages` by `session_key`.
+    #[test]
+    fn every_older_store_layout_is_rebuilt_rather_than_left_unusable() {
+        for (label, setup) in [
+            (
+                "v1: single-column fts",
+                "CREATE VIRTUAL TABLE messages_fts USING fts5(text, tokenize = 'unicode61');
+                 INSERT INTO messages_fts(text) VALUES ('stale row');",
+            ),
+            (
+                "v2: messages keyed by session_key",
+                "CREATE VIRTUAL TABLE messages_fts USING fts5(text, cjk, tokenize = 'unicode61');
+                 INSERT INTO messages_fts(text, cjk) VALUES ('stale row', '');
+                 CREATE TABLE messages (message_key TEXT PRIMARY KEY, session_key TEXT NOT NULL,
+                                        fts_rowid INTEGER NOT NULL);",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("index.sqlite3");
+            {
+                let connection = Connection::open(&path).unwrap();
+                connection.execute_batch(META_SQL).unwrap();
+                connection.execute_batch(setup).unwrap();
+            }
+
+            let mut store = MemoryStore::open(&path, PROJECT).unwrap();
+            store
+                .replace_session(
+                    &session("s1", Some(100), SessionScope::Scoped),
+                    &[message(
+                        "s1",
+                        0,
+                        NormalizedRole::User,
+                        "内存索引",
+                        LineageDepth::ROOT,
+                    )],
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(
+                store.search("内存", false, &[], 10).unwrap().len(),
+                1,
+                "{label}: the rebuilt store is not writable/searchable"
+            );
+            assert_eq!(
+                store.search("stale", false, &[], 10).unwrap().len(),
+                0,
+                "{label}: a row from the old layout survived"
+            );
+        }
     }
 
     /// Reopening a version-1 database must not fail with "table messages_fts
