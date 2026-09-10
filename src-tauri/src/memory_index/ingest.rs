@@ -236,8 +236,16 @@ fn ingest_claude(
         };
         if skip_unchanged(store, &key, &identity, options)? {
             report.sessions_skipped_unchanged += 1;
-            // A skipped root must still be resolvable as a parent.
-            if let Some(session) = store.get_session(&key)? {
+            // A skipped root must still be resolvable as a parent — but only a
+            // root. A sidechain's `vendor_session_id` is its *parent's* id, so
+            // registering one here would file the child under the parent's key
+            // and make every later sidechain of that conversation resolve its
+            // root to a sibling. The non-skip path below checks `is_root()` for
+            // exactly this reason; the two have to agree.
+            if let Some(session) = store
+                .get_session(&key)?
+                .filter(|session| session.lineage_depth.is_root())
+            {
                 roots_by_vendor_id
                     .entry(session.vendor_session_id)
                     .or_insert(key);
@@ -978,6 +986,73 @@ mod tests {
         );
         assert_eq!(rebuilt.sessions_indexed, 1);
         assert_eq!(rebuilt.sessions_skipped_unchanged, 0);
+    }
+
+    /// A skipped-unchanged **sidechain** must not register itself under its
+    /// parent's id.
+    ///
+    /// A sidechain's `vendor_session_id` *is* the parent's id, so the skip
+    /// branch filing it into the root map means the next sidechain of that same
+    /// conversation resolves its root to a **sibling** instead of falling back
+    /// to itself. The `or_insert` and the roots-first sort hide this whenever
+    /// the real parent is present — the failure needs a conversation whose root
+    /// transcript is no longer in the scanned set, which is what a deleted or
+    /// relocated parent looks like on an incremental build.
+    ///
+    /// The fixture pins the processing order deliberately: `files.sort_by_key`
+    /// puts everything outside `subagents/` first, so the top-level sidechain is
+    /// always adapted before the nested one.
+    #[test]
+    fn a_skipped_sidechain_does_not_become_another_sidechains_root() {
+        let fixture = fixture();
+        // Two sidechains of the same (absent) parent conversation.
+        let first_path = fixture.claude_project_dir.join("orphan-a.jsonl");
+        let second_path = fixture
+            .claude_project_dir
+            .join("subagents")
+            .join("orphan-b.jsonl");
+        write(
+            &first_path,
+            &claude_lines("sess-parent", true, "2026-09-01T00:00:00.000Z", "branch a"),
+        );
+        write(
+            &second_path,
+            &claude_lines("sess-parent", true, "2026-09-01T00:01:00.000Z", "branch b"),
+        );
+
+        let first_key = adapters::session_key(MemoryVendor::ClaudeCode, &first_path);
+        let second_key = adapters::session_key(MemoryVendor::ClaudeCode, &second_path);
+
+        build(&fixture, IngestOptions::default());
+        // With no parent in the scanned set, each is its own root — the honest
+        // fallback the adapter documents.
+        let store = open_store(&fixture);
+        assert_eq!(
+            store.get_session(&second_key).unwrap().unwrap().root_session_key,
+            second_key
+        );
+        drop(store);
+
+        // Leave the first untouched (skip branch) and change the second, so the
+        // second is re-adapted against whatever the skip branch put in the map.
+        write(
+            &second_path,
+            &claude_lines("sess-parent", true, "2026-09-01T00:02:00.000Z", "branch b revised"),
+        );
+        let report = build(&fixture, IngestOptions::default());
+        assert_eq!(report.sessions_skipped_unchanged, 1);
+        assert_eq!(report.sessions_indexed, 1);
+
+        let store = open_store(&fixture);
+        let second = store.get_session(&second_key).unwrap().unwrap();
+        assert_ne!(
+            second.root_session_key, first_key,
+            "a sidechain was filed under a sibling sidechain as its root"
+        );
+        assert_eq!(
+            second.root_session_key, second_key,
+            "expected the self-root fallback"
+        );
     }
 
     /// A Codex transcript that is momentarily unreadable must not be treated as

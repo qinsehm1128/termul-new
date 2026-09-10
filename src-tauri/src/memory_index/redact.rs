@@ -171,9 +171,27 @@ static BLOB: LazyLock<Regex> =
 /// Command-family limited on purpose. `-p` means `--parents` to `mkdir`,
 /// `--publish` to `docker` and `--preserve` to `cp`; masking it everywhere
 /// destroys legitimate history for a password that does not exist.
+///
+/// Matched at a **word boundary anywhere on the line**, not anchored to the
+/// start of it. The anchored form was measured against realistic transcript
+/// lines and let the password through in 7 of 10 shapes — a shell prompt
+/// (`$ mysql -pX`), a wrapper (`docker exec -it c1 mysql -pX`,
+/// `ssh host mysql -pX`, `bash -c "mysql -pX"`), a log timestamp, a YAML `run:`
+/// key. Tool output is 60.6% of indexed bytes and almost none of it is a bare
+/// command at column zero.
+///
+/// The scan still starts *at* the command token and runs to end of line, so a
+/// `-p`-glued option appearing **before** the command (`find . -print | mysql
+/// -pX`) is outside the span and untouched. What remains is a `-p<value>`
+/// written after one of these clients on the same line — for every one of them
+/// `-p` is the password flag, so that is a credential far more often than not.
+/// Between masking a stray token and writing a password into a full-text index,
+/// this fails toward masking.
 static PASSWORD_OPTION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*(?:\S*/)?(mysql|mysqldump|mysqladmin|psql|redis-cli|smbclient|mongosh|mongodump)\b[^\r\n]*")
-        .expect("PASSWORD_OPTION")
+    Regex::new(
+        r"(?m)\b(?:mysql|mysqldump|mysqladmin|psql|redis-cli|smbclient|mongosh|mongodump)\b[^\r\n]*",
+    )
+    .expect("PASSWORD_OPTION")
 });
 
 /// `-pSECRET` / `--password=SECRET`, anchored to an argument boundary.
@@ -399,6 +417,59 @@ mod boundary_tests {
             assert_eq!(out.text, line, "{line:?} was rewritten");
             assert_eq!(out.redactions, 0, "{line:?} counted a redaction");
         }
+    }
+
+    /// The gap that the line-start anchor left open. Tool output is 60.6% of
+    /// indexed bytes, and almost none of it is a bare command at column zero:
+    /// there is a shell prompt in front of it, or it is wrapped in `docker
+    /// exec` / `ssh host` / `bash -c`, or the line carries a log timestamp.
+    /// Each of these used to put the password straight into the full-text index.
+    #[test]
+    fn a_password_survives_no_matter_where_the_command_sits_on_the_line() {
+        for line in [
+            "mysql -pSECRET db",
+            "/usr/local/bin/mysql -pSECRET db",
+            "$ mysql -pSECRET db",
+            "> mysql -pSECRET db",
+            "  mysql -pSECRET db",
+            "docker exec -it c1 mysql -pSECRET db",
+            "bash -c \"mysql -pSECRET db\"",
+            "ssh host mysql -pSECRET db",
+            "run: mysql -pSECRET db",
+            "2026-09-10T07:00:00Z psql -pSECRET db",
+        ] {
+            let out = redact(line);
+            assert!(
+                !out.text.contains("SECRET"),
+                "password leaked into the index from {line:?}: {:?}",
+                out.text
+            );
+        }
+    }
+
+    /// The command-family restriction is what keeps `-p` from being masked
+    /// everywhere, and it still holds now that the anchor is gone.
+    #[test]
+    fn other_commands_keep_their_dash_p_options() {
+        for line in [
+            "mkdir -p build/out",
+            "docker run -p8080:80 nginx",
+            "cp -pr src dst",
+            "find . -print0 | xargs rm",
+        ] {
+            let out = redact(line);
+            assert_eq!(out.text, line, "{line:?} was rewritten");
+        }
+    }
+
+    /// The scan starts at the command token, so a `-p` option written *before*
+    /// it on the same line is outside the span.
+    #[test]
+    fn a_dash_p_option_before_the_command_is_left_alone() {
+        let line = "find . -print | mysql -pSECRET db";
+        let out = redact(line);
+        assert!(out.text.contains("-print"), "{}", out.text);
+        assert!(!out.text.contains("SECRET"), "{}", out.text);
     }
 
     /// The boundary must not cost the real case.
