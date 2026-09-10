@@ -79,6 +79,30 @@ fn unwrap_masks(text: &str) -> String {
     text.replace(MASK_OPEN, "[").replace(MASK_CLOSE, "]")
 }
 
+/// Remove the sentinel code points from *input*, so the sentinel can only ever
+/// mean "a pass in this call wrote it".
+///
+/// Without this the sentinel is forgeable by ordinary data. [`already_masked`]
+/// recognizes a mask by looking for `MASK_OPEN`, and 60.6% of indexed bytes are
+/// terminal output where a stray `U+0001` is unremarkable — so a record carrying
+/// one would make every pass skip the span it appears in, credential included.
+/// The second symptom was cosmetic and equally wrong: [`unwrap_masks`] rewrote
+/// every raw sentinel into a bracket on the way out.
+///
+/// Borrowed unchanged in the overwhelmingly common case where neither code point
+/// is present.
+fn strip_sentinels(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(MASK_OPEN) || text.contains(MASK_CLOSE) {
+        std::borrow::Cow::Owned(
+            text.chars()
+                .filter(|character| *character != MASK_OPEN && *character != MASK_CLOSE)
+                .collect(),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 static PEM_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
         .expect("PEM_BLOCK")
@@ -152,8 +176,19 @@ static PASSWORD_OPTION: LazyLock<Regex> = LazyLock::new(|| {
         .expect("PASSWORD_OPTION")
 });
 
+/// `-pSECRET` / `--password=SECRET`, anchored to an argument boundary.
+///
+/// The leading `(^|\s)` is load-bearing and was added after the unanchored form
+/// was measured against ordinary commands: `-p` also occurs *inside* `--port=`
+/// and `--protocol=`, so `psql --port=5432` became
+/// `psql --p[redacted:password]` and took the rest of the argument with it.
+/// That is the same over-matching the command-family restriction on
+/// [`PASSWORD_OPTION`] exists to prevent, one level down.
+///
+/// The boundary is captured rather than looked behind because the `regex` crate
+/// has no lookbehind; the replacement puts it back.
 static GLUED_PASSWORD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(-p|--password=)([^\s]+)").expect("GLUED_PASSWORD"));
+    LazyLock::new(|| Regex::new(r"(^|\s)(-p|--password=)([^\s]+)").expect("GLUED_PASSWORD"));
 
 /// Whole names that are credentials regardless of context.
 static SENSITIVE_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -256,7 +291,10 @@ pub fn redact(text: &str) -> Redacted {
     let count = Cell::new(0_u32);
     let bump = || count.set(count.get() + 1);
 
-    let out = PEM_BLOCK.replace_all(text, |block: &Captures<'_>| {
+    // Before anything else, so no pass can be talked out of running by data.
+    let text = strip_sentinels(text);
+
+    let out = PEM_BLOCK.replace_all(&text, |block: &Captures<'_>| {
         if already_masked(&block[0]) {
             return block[0].to_string();
         }
@@ -271,7 +309,7 @@ pub fn redact(text: &str) -> Redacted {
                     return option[0].to_string();
                 }
                 bump();
-                format!("{}{}", &option[1], mask("password"))
+                format!("{}{}{}", &option[1], &option[2], mask("password"))
             })
             .into_owned()
     });
@@ -339,6 +377,106 @@ pub fn redact(text: &str) -> Redacted {
     Redacted {
         text: unwrap_masks(&out),
         redactions: count.get(),
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+
+    /// Measured before the fix: `psql --port=5432 -U user` came back as
+    /// `psql --p[redacted:password] -U user`. `-p` occurs inside `--port=` and
+    /// `--protocol=`, and the unanchored alternative matched it there.
+    #[test]
+    fn a_long_option_containing_dash_p_is_not_mistaken_for_a_password() {
+        for line in [
+            "psql --port=5432 -U user",
+            "mysql --protocol=TCP mydb",
+            "mysqldump --print-defaults",
+            "redis-cli --pipe < dump.txt",
+        ] {
+            let out = redact(line);
+            assert_eq!(out.text, line, "{line:?} was rewritten");
+            assert_eq!(out.redactions, 0, "{line:?} counted a redaction");
+        }
+    }
+
+    /// The boundary must not cost the real case.
+    #[test]
+    fn a_glued_password_is_still_masked() {
+        let out = redact("mysql -pSECRET mydb");
+        assert_eq!(out.text, "mysql -p[redacted:credential-omitted] mydb".replace(
+            "[redacted:credential-omitted]", "[redacted:password]"
+        ));
+        assert_eq!(out.redactions, 1);
+
+        let out = redact("psql --password=hunter2 -U user");
+        assert!(out.text.contains("--password=[redacted:password]"), "{}", out.text);
+        assert!(!out.text.contains("hunter2"));
+    }
+
+    #[test]
+    fn several_glued_passwords_on_one_line_are_all_masked() {
+        let out = redact("mysql -pONE --password=TWO db");
+        assert!(!out.text.contains("ONE"), "{}", out.text);
+        assert!(!out.text.contains("TWO"), "{}", out.text);
+        assert_eq!(out.redactions, 2);
+    }
+
+    #[test]
+    fn a_bare_dash_p_prompting_for_a_password_has_nothing_to_mask() {
+        let line = "mysql -p -h localhost";
+        assert_eq!(redact(line).text, line);
+    }
+
+    /// A stray control byte in tool output must not be able to turn redaction
+    /// off for the span it lands in. Terminal output is 60.6% of indexed bytes.
+    #[test]
+    fn a_raw_sentinel_in_the_source_cannot_suppress_redaction() {
+        // The sentinel has to land *inside* the span a pass matches, which is
+        // where `already_masked` looks. `ASSIGNMENT`'s bare-value class accepts
+        // any non-whitespace character, so one control byte in the middle of a
+        // secret used to be enough to turn that pass off for the whole
+        // assignment.
+        let poisoned = format!("api_key = hun{MASK_OPEN}ter2");
+        let out = redact(&poisoned);
+        assert!(
+            !out.text.contains("hunter2") && !out.text.contains("ter2"),
+            "a bare U+0001 inside the value suppressed redaction: {:?}",
+            out.text
+        );
+        assert_eq!(out.redactions, 1, "the assignment pass did not fire");
+
+        // Same shape one pass down: a control byte inside a bearer token.
+        let poisoned = format!("Authorization: Bearer abcd{MASK_CLOSE}efghijkl");
+        let out = redact(&poisoned);
+        assert!(
+            !out.text.contains("efghijkl"),
+            "a bare U+0002 inside the header value suppressed redaction: {:?}",
+            out.text
+        );
+        assert!(
+            !out.text.contains(MASK_OPEN) && !out.text.contains(MASK_CLOSE),
+            "a raw sentinel survived into indexed text: {:?}",
+            out.text
+        );
+    }
+
+    #[test]
+    fn a_raw_sentinel_does_not_become_a_bracket_in_indexed_text() {
+        // Before the fix `unwrap_masks` rewrote every raw U+0001 into `[`.
+        let out = redact(&format!("plain{MASK_OPEN}text{MASK_CLOSE}here"));
+        assert_eq!(out.text, "plaintexthere");
+        assert_eq!(out.redactions, 0);
+    }
+
+    /// Idempotence still holds: a second pass over already-masked output must
+    /// not grow a bracket.
+    #[test]
+    fn redaction_remains_a_fixed_point() {
+        let once = redact("Authorization: Bearer abcdefghijklmnop").text;
+        let twice = redact(&once).text;
+        assert_eq!(once, twice);
     }
 }
 
