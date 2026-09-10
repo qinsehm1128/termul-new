@@ -41,6 +41,7 @@ struct FileBrowserView: View {
                 previewPane(preview)
             } else {
                 fileList
+                desktopOnlyFooter
             }
         }
         .background(SeTheme.canvas)
@@ -87,16 +88,60 @@ struct FileBrowserView: View {
     }
 
     private func previewPane(_ preview: FileContent) -> some View {
-        ScrollView {
-            Text(preview.content)
-                .font(.body.monospaced())
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .textSelection(.enabled)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(session.files.previewName ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button {
+                    UIPasteboard.general.string = preview.content
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .frame(minWidth: 36, minHeight: 36)
+                }
+                .accessibilityLabel(Text("Copy"))
+                ShareLink(item: preview.content)
+                    .frame(minWidth: 36, minHeight: 36)
+                    .accessibilityLabel(Text("Share"))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 2)
+            .background(SeTheme.surface)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(SeTheme.stroke).frame(height: 1)
+            }
+            ScrollView {
+                Text(preview.content)
+                    .font(.body.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .textSelection(.enabled)
+            }
+            .refreshable {
+                await session.files.refresh()
+            }
         }
-        .refreshable {
-            await session.files.refresh()
+    }
+
+    /// The host's fs mutation routes are loopback-only by policy, so a paired
+    /// phone can never create/rename/delete. State that explicitly instead of
+    /// leaving the read-only tree to be discovered by trial.
+    private var desktopOnlyFooter: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.shield")
+                .font(.caption2)
+            Text("File editing is desktop-only. Changes need the host's local web client.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
+        }
+        .accessibilityIdentifier("files-desktop-only")
     }
 
     @ViewBuilder
@@ -111,6 +156,15 @@ struct FileBrowserView: View {
             }
             .listRowBackground(SeTheme.canvas)
             .listRowSeparatorTint(SeTheme.stroke)
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = entry.path
+                } label: {
+                    Label(String(localized: "Copy Path"), systemImage: "doc.on.doc")
+                }
+            }
+            .accessibilityLabel(Text(entry.name))
+            .accessibilityHint(Text(entry.isDirectory ? "Folder" : "File"))
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
