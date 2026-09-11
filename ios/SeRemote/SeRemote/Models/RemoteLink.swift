@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum WorkspaceSurface: String, Hashable, CaseIterable, Identifiable {
@@ -146,7 +147,12 @@ struct RemoteLink: Identifiable, Hashable, Codable {
             throw RemoteLinkError.invalidURL
         }
         if scheme == "http" {
-            guard isPrivateNetworkHost(host) else {
+            // The desktop publishes whatever usable IPv4 its own interface has —
+            // which may be CGNAT or a campus-public LAN, not RFC1918 — so the
+            // honest test is "same link as this phone", plus the named
+            // private ranges for good measure.
+            guard isPrivateNetworkHost(host) || isOnLinkIPv4Host(host) else {
+                HostLog.session.error("Rejected http pairing to a non-LAN host")
                 throw RemoteLinkError.httpsRequired
             }
         } else if scheme != "https" {
@@ -210,6 +216,46 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         }
     }
 
+    /// True when the host IPv4 sits inside one of this device's own on-link
+    /// subnets. "Same Wi-Fi" is the real invariant behind a LAN pair, and it
+    /// also admits CGNAT/carrier and campus-public LANs that RFC1918 never
+    /// covered but the desktop happily publishes from its interface.
+    static func isOnLinkIPv4Host(_ host: String) -> Bool {
+        guard let target = Self.ipv4(host) else { return false }
+        let targetAddress = target.s_addr
+        var interfaceList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaceList) == 0, let first = interfaceList else { return false }
+        defer { freeifaddrs(interfaceList) }
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = cursor {
+            defer { cursor = current.pointee.ifa_next }
+            guard let name = current.pointee.ifa_name,
+                  String(cString: name).hasPrefix("en"),
+                  let addressSockaddr = current.pointee.ifa_addr,
+                  addressSockaddr.pointee.sa_family == UInt8(AF_INET),
+                  let maskSockaddr = current.pointee.ifa_netmask,
+                  maskSockaddr.pointee.sa_family == UInt8(AF_INET)
+            else { continue }
+            let address = addressSockaddr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                $0.pointee.sin_addr.s_addr
+            }
+            let mask = maskSockaddr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                $0.pointee.sin_addr.s_addr
+            }
+            guard address != 0, mask != 0 else { continue }
+            if address & mask == targetAddress & mask {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func ipv4(_ string: String) -> in_addr? {
+        var address = in_addr()
+        let result = string.withCString { inet_pton(AF_INET, $0, &address) }
+        return result == 1 ? address : nil
+    }
+
     private static func displayTitle(for url: URL) -> String {
         url.host() ?? String(localized: "Saved connection")
     }
@@ -225,7 +271,7 @@ enum RemoteLinkError: LocalizedError {
         case .invalidURL:
             String(localized: "That does not look like a Se access link.")
         case .httpsRequired:
-            String(localized: "Public hosts need HTTPS. A LAN address such as 192.168.x.x is allowed over HTTP.")
+            String(localized: "Public hosts need HTTPS. A LAN address such as 192.168.x.x — or any address on this phone's Wi-Fi — is allowed over HTTP.")
         case .missingToken:
             String(localized: "This link is missing the access secret. Copy or scan the full QR from the desktop.")
         }
