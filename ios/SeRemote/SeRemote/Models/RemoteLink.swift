@@ -296,7 +296,7 @@ enum RemoteLinkError: LocalizedError {
         case .invalidURL:
             String(localized: "That does not look like a Se access link.")
         case .httpsRequired:
-            String(localized: "Public hosts need HTTPS. A LAN address such as 192.168.x.x — or any address on this phone's Wi-Fi — is allowed over HTTP.")
+            String(localized: "Public hosts need HTTPS. Private LAN ranges such as 192.168.x.x are allowed over HTTP.")
         case .missingToken:
             String(localized: "This link is missing the access secret. Copy or scan the full QR from the desktop.")
         }

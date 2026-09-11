@@ -20,24 +20,26 @@ pub fn discover_lan_ipv4() -> Option<Ipv4Addr> {
 }
 
 /// Pure selection over (interface name, address) candidates so the policy is
-/// unit-testable without any real interfaces: physical adapters only, usable
-/// ranges only, RFC1918 preferred.
+/// unit-testable without any real interfaces: physical adapters only,
+/// cleartext-safe ranges only (RFC1918 or CGNAT — mirroring the phone-side
+/// accept policy in ios/SeRemote/Models/RemoteLink.swift; keep the two in
+/// step). A globally routable physical address is never published as an
+/// http origin: the phone would be right to refuse it, so the desktop must
+/// not offer it.
 fn select_lan_ipv4<I>(candidates: I) -> Option<Ipv4Addr>
 where
     I: Iterator<Item = (String, IpAddr)>,
 {
-    let mut best: Option<(u8, Ipv4Addr)> = None;
     for (name, ip) in candidates {
         let IpAddr::V4(v4) = ip else { continue };
         if !is_physical_adapter(&name) || !is_usable_lan_v4(v4) {
             continue;
         }
-        let rank = if v4.is_private() { 1 } else { 2 };
-        if best.is_none_or(|(best_rank, _)| best_rank > rank) {
-            best = Some((rank, v4));
+        if v4.is_private() || is_cgnat(v4) {
+            return Some(v4);
         }
     }
-    best.map(|(_, ip)| ip)
+    None
 }
 
 /// Physical adapters by name allow-list (mirrors the phone-side accept
@@ -84,6 +86,14 @@ pub fn is_usable_lan_v4(ip: Ipv4Addr) -> bool {
 fn is_benchmark_range(ip: Ipv4Addr) -> bool {
     let octets = ip.octets();
     octets[0] == 198 && (octets[1] & 0xFE) == 18
+}
+
+/// RFC 6598 carrier-grade NAT 100.64.0.0/10 — a shared, non-routable range
+/// some ISPs hand to physical interfaces; safe for the same cleartext policy
+/// as RFC1918.
+fn is_cgnat(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
 fn is_documentation_range(ip: Ipv4Addr) -> bool {
@@ -162,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_falls_back_to_non_private_physical_adapter() {
+    fn selection_falls_back_to_cgnat_physical_adapter() {
         let candidates = vec![
             ("utun3".to_string(), IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1))),
             ("en0".to_string(), IpAddr::V4(Ipv4Addr::new(100, 64, 11, 22))),
@@ -171,6 +181,17 @@ mod tests {
             select_lan_ipv4(candidates.into_iter()),
             Some(Ipv4Addr::new(100, 64, 11, 22))
         );
+    }
+
+    #[test]
+    fn selection_never_publishes_public_physical_addresses() {
+        // A campus-public eth0 is a real NIC but an http origin the phone
+        // must refuse; publishing it would only produce a broken QR.
+        let candidates = vec![
+            ("en0".to_string(), IpAddr::V4(Ipv4Addr::new(128, 30, 4, 77))),
+            ("eth0".to_string(), IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9))),
+        ];
+        assert_eq!(select_lan_ipv4(candidates.into_iter()), None);
     }
 
     #[test]

@@ -299,14 +299,23 @@ final class TerminalStore {
                   geometryActive,
                   displayMode == .phone
             else {
-                HostLog.session.info("Dropping stale phone fit; restoring desktop")
-                do {
-                    _ = try await socket.setDisplayMode(
-                        terminalId: terminalId,
-                        mode: TerminalDisplayMode.desktop.rawValue
-                    )
-                } catch {
-                    HostLog.session.error("Stale-fit desktop restore failed")
+                if activeId != terminalId || !geometryActive || displayMode != .phone {
+                    // This terminal is no longer the live phone viewer —
+                    // restore the desktop grid it should never have kept.
+                    HostLog.session.info("Dropping stale phone fit; restoring desktop")
+                    do {
+                        _ = try await socket.setDisplayMode(
+                            terminalId: terminalId,
+                            mode: TerminalDisplayMode.desktop.rawValue
+                        )
+                    } catch {
+                        HostLog.session.error("Stale-fit desktop restore failed")
+                    }
+                } else {
+                    // Pure epoch mismatch (e.g. leave+return): a newer refit
+                    // already owns the live lease — restoring desktop here
+                    // would undo it. Drop only.
+                    HostLog.session.info("Dropping stale phone fit; newer refit owns the lease")
                 }
                 return
             }
