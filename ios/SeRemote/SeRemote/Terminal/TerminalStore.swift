@@ -159,6 +159,7 @@ final class TerminalStore {
                 await open(activeId)
             }
         } catch {
+            HostLog.session.error("Terminal catalog refresh failed")
             errorMessage = error.localizedDescription
         }
     }
@@ -182,6 +183,7 @@ final class TerminalStore {
             // remounted) view reports the real grid for this terminal.
             scheduleRefit(force: true)
         } catch {
+            HostLog.session.error("Terminal watch failed")
             errorMessage = error.localizedDescription
         }
     }
@@ -225,6 +227,7 @@ final class TerminalStore {
         do {
             try await socket.write(terminalId: activeId, data: data)
         } catch {
+            HostLog.session.error("Terminal write failed")
             errorMessage = error.localizedDescription
         }
     }

@@ -67,8 +67,16 @@ final class ConversationStore {
         guard let http else { return }
         do {
             var target = conversation
-            if let fresh: HostConversation = try? await http.get("conversations/\(conversation.id)") {
-                target = fresh
+            do {
+                if let fresh: HostConversation = try await http.get("conversations/\(conversation.id)") {
+                    target = fresh
+                }
+            } catch {
+                // A failed revision refresh must abort: POSTing the stale
+                // snapshot is a guaranteed 409 against a live session.
+                HostLog.session.error("Delete revision refresh failed")
+                errorMessage = error.localizedDescription
+                return
             }
             let outcome: ConversationLifecycleOutcome = try await http.post(
                 "conversations/\(conversation.id)/lifecycle/delete",
@@ -89,7 +97,11 @@ final class ConversationStore {
             HostLog.session.info("Conversation deleted")
         } catch {
             HostLog.session.error("Conversation delete failed")
-            errorMessage = error.localizedDescription
+            if error.localizedDescription.contains("HTTP 409") {
+                errorMessage = String(localized: "The session changed on the desktop. Try deleting again.")
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -111,6 +123,7 @@ final class ConversationStore {
             }
             return opened
         } catch {
+            HostLog.session.error("Conversation open failed")
             errorMessage = error.localizedDescription
             select(conversation)
             return nil

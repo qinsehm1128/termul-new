@@ -289,8 +289,8 @@ final class TerminalSocket {
                 if eventType == "display_mode_changed",
                    let terminalId = payload["terminal_id"] as? String,
                    let mode = payload["mode"] as? String {
-                    let cols = payload["cols"] as? Int ?? 0
-                    let rows = payload["rows"] as? Int ?? 0
+                    let cols = Self.intValue(payload["cols"]) ?? 0
+                    let rows = Self.intValue(payload["rows"]) ?? 0
                     onDisplayModeChanged?(terminalId, mode, cols, rows)
                 }
                 if eventType == "spawned" || eventType == "exit" {

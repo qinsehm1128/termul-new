@@ -68,6 +68,7 @@ final class FileStore {
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
         } catch {
+            HostLog.session.error("File list load failed")
             errorMessage = error.localizedDescription
             entries = []
         }
@@ -86,6 +87,7 @@ final class FileStore {
             previewName = name
             previewPath = path
         } catch {
+            HostLog.session.error("File preview load failed")
             errorMessage = error.localizedDescription
             preview = nil
         }
