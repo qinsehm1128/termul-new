@@ -9,7 +9,10 @@ struct ScannerView: View {
         NavigationStack {
             Group {
                 if DataScannerViewController.isSupported, DataScannerViewController.isAvailable {
-                    DataScannerRepresentable(onScan: onScan)
+                    ZStack {
+                        DataScannerRepresentable(onScan: onScan)
+                        ScannerFrameOverlay()
+                    }
                 } else {
                     ContentUnavailableView(
                         String(localized: "Camera unavailable"),
@@ -28,6 +31,108 @@ struct ScannerView: View {
                 }
             }
         }
+    }
+}
+
+/// Camera viewfinder chrome: dimmed mask with a rounded-rect cutout, corner
+/// brackets, and a sweeping scan line. Purely decorative — hit-testing is off
+/// so taps still reach the scanner's own barcode-tap recognition.
+struct ScannerFrameOverlay: View {
+    @State private var sweep: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width * 0.72, geo.size.height * 0.46)
+            let rect = CGRect(
+                x: (geo.size.width - side) / 2,
+                y: geo.size.height * 0.5 - side / 2 - geo.size.height * 0.04,
+                width: side,
+                height: side
+            )
+            ZStack {
+                maskWithCutout(size: geo.size, cutout: rect)
+                CornerBrackets(rect: rect)
+                    .stroke(.white.opacity(0.95), lineWidth: 4)
+                scanLine(rect: rect)
+                Text(String(localized: "Align the QR code inside the frame"))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.6), radius: 3)
+                    .position(x: rect.midX, y: rect.maxY + 34)
+            }
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) {
+                sweep = 1
+            }
+        }
+    }
+
+    /// Even-odd fill: full-screen dim with a transparent rounded-rect hole.
+    private func maskWithCutout(size: CGSize, cutout: CGRect) -> some View {
+        Path { path in
+            path.addRect(CGRect(origin: .zero, size: size))
+            path.addRoundedRect(
+                in: cutout.insetBy(dx: 8, dy: 8),
+                cornerSize: CGSize(width: 18, height: 18)
+            )
+        }
+        .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
+    }
+
+    @ViewBuilder
+    private func scanLine(rect: CGRect) -> some View {
+        let barHeight: CGFloat = 3
+        let travel = max(rect.height - barHeight - 12, 0)
+        Capsule()
+            .fill(
+                LinearGradient(
+                    colors: [.clear, .white.opacity(0.9), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: rect.width - 28, height: barHeight)
+            .position(
+                x: rect.midX,
+                y: rect.minY + 6 + sweep * travel + barHeight / 2
+            )
+            .opacity(0.9)
+    }
+}
+
+/// Four L-shaped corner brackets around the cutout.
+private struct CornerBrackets: Shape {
+    let rect: CGRect
+    let length: CGFloat = 26
+
+    nonisolated func path(in _: CGRect) -> Path {
+        var path = Path()
+        let corners: [(CGPoint, CGPoint, CGPoint)] = [
+            // top-leading
+            (CGPoint(x: rect.minX, y: rect.minY + length),
+             CGPoint(x: rect.minX, y: rect.minY),
+             CGPoint(x: rect.minX + length, y: rect.minY)),
+            // top-trailing
+            (CGPoint(x: rect.maxX - length, y: rect.minY),
+             CGPoint(x: rect.maxX, y: rect.minY),
+             CGPoint(x: rect.maxX, y: rect.minY + length)),
+            // bottom-trailing
+            (CGPoint(x: rect.maxX, y: rect.maxY - length),
+             CGPoint(x: rect.maxX, y: rect.maxY),
+             CGPoint(x: rect.maxX - length, y: rect.maxY)),
+            // bottom-leading
+            (CGPoint(x: rect.minX + length, y: rect.maxY),
+             CGPoint(x: rect.minX, y: rect.maxY),
+             CGPoint(x: rect.minX, y: rect.maxY - length)),
+        ]
+        for (a, corner, b) in corners {
+            path.move(to: a)
+            path.addLine(to: corner)
+            path.addLine(to: b)
+        }
+        return path
     }
 }
 

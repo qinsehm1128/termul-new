@@ -31,6 +31,12 @@ struct WorkspaceView: View {
             }
         }
         .background(SeTheme.canvas.ignoresSafeArea())
+        .onDisappear {
+            // Leaving the workspace view (cancel, back, disconnect) closes
+            // the sockets; retry keeps the view mounted so this only fires
+            // on real teardown.
+            session.stop()
+        }
         .task(id: link.id) {
             await session.start()
         }
@@ -58,6 +64,15 @@ struct WorkspaceView: View {
             Text(link.title)
                 .font(.body)
                 .foregroundStyle(.secondary)
+            Button {
+                store.disconnect()
+            } label: {
+                Text("Cancel")
+                    .frame(minWidth: 120, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            .padding(.top, 12)
+            .accessibilityIdentifier("connecting-cancel")
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -562,6 +562,9 @@
     "Open project" : {
 
     },
+    "Open Se to answer." : {
+
+    },
     "Open session" : {
       "localizations" : {
         "zh-Hans" : {
@@ -675,7 +678,7 @@
         }
       }
     },
-    "Public hosts need HTTPS. A LAN address such as 192.168.x.x — or any address on this phone's Wi-Fi — is allowed over HTTP." : {
+    "Public hosts need HTTPS. Private LAN ranges such as 192.168.x.x are allowed over HTTP." : {
 
     },
     "Ready" : {
@@ -996,6 +999,9 @@
           }
         }
       }
+    },
+    "The session changed on the desktop. Try deleting again." : {
+
     },
     "The session page crashed. Retry to reload." : {
       "extractionState" : "stale",
