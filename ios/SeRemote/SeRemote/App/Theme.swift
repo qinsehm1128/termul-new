@@ -76,10 +76,16 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 
 extension Color {
     init(light: Color, dark: Color) {
-        self.init(uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(dark)
-                : UIColor(light)
+        // UIKit resolves dynamic providers on arbitrary threads (SwiftUI's
+        // AsyncRenderer among them). Convert here, on the constructing thread,
+        // and let the provider capture plain UIColors only — converting a
+        // SwiftUI Color inside the provider trips Swift 6's executor
+        // isolation assert when resolution lands off-main
+        // (dispatch_assert_queue_fail crash).
+        let lightUI = UIColor(light)
+        let darkUI = UIColor(dark)
+        self.init(uiColor: UIColor { @Sendable traits in
+            traits.userInterfaceStyle == .dark ? darkUI : lightUI
         })
     }
 }
