@@ -217,11 +217,14 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     }
 
     /// True when the host IPv4 sits inside one of this device's own on-link
-    /// subnets. "Same Wi-Fi" is the real invariant behind a LAN pair, and it
-    /// also admits CGNAT/carrier and campus-public LANs that RFC1918 never
-    /// covered but the desktop happily publishes from its interface.
+    /// subnets AND the range itself is safe for cleartext (RFC1918, CGNAT
+    /// RFC 6598, loopback, link-local). "Same Wi-Fi" establishes
+    /// reachability, but only non-routable numbering keeps a sniffed bearer
+    /// from being useful off-segment — campus-public L2 must pair over HTTPS.
     static func isOnLinkIPv4Host(_ host: String) -> Bool {
-        guard let target = Self.ipv4(host) else { return false }
+        let octets = host.split(separator: ".").compactMap { UInt8($0) }
+        guard octets.count == 4, isCleartextSafeOctets(octets),
+              let target = Self.ipv4(host) else { return false }
         let targetAddress = target.s_addr
         var interfaceList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&interfaceList) == 0, let first = interfaceList else { return false }
@@ -254,6 +257,28 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         var address = in_addr()
         let result = string.withCString { inet_pton(AF_INET, $0, &address) }
         return result == 1 ? address : nil
+    }
+
+    /// Cleartext HTTP pairing is confined to ranges that are not globally
+    /// routable: RFC1918, CGNAT (100.64.0.0/10), loopback, link-local.
+    /// Mirrors the host-side publish allow-list (src-tauri lan.rs) — keep the
+    /// two policies in step.
+    private static func isCleartextSafeOctets(_ octets: [UInt8]) -> Bool {
+        guard octets.count == 4 else { return false }
+        switch octets[0] {
+        case 10, 127:
+            return true
+        case 169:
+            return octets[1] == 254
+        case 172:
+            return (16 ... 31).contains(octets[1])
+        case 192:
+            return octets[1] == 168
+        case 100:
+            return (64 ... 127).contains(octets[1])
+        default:
+            return false
+        }
     }
 
     private static func displayTitle(for url: URL) -> String {

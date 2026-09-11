@@ -1,27 +1,22 @@
 //! LAN address helpers for desktop shared-live publish URLs.
 
-use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr};
 
 /// Best-effort IPv4 the phone can reach on the same Wi-Fi.
 ///
-/// A UDP connect follows the default route — which, with a proxy TUN adapter
-/// (Clash/Surge/sing-box fake-ip), is the virtual interface, so the probe
-/// returns something like `198.18.0.1` that no physical network carries.
-/// Interface enumeration is therefore primary: pick the best usable address
-/// from a physical adapter, preferring RFC1918 ranges the phone can route
-/// to. The route-based probe stays as a fallback for odd interface setups.
+/// Interface enumeration with a name allow-list is the single source of
+/// truth. A route probe follows the default route — which a proxy TUN
+/// (Clash/Surge fake-ip) or a full-tunnel VPN (WireGuard 10/8, Tailscale
+/// CGNAT) owns — so it can never be trusted to name a phone-reachable LAN
+/// address; there is deliberately no route fallback. When no physical
+/// adapter has a usable address, LAN mode publishes nothing.
 #[must_use]
 pub fn discover_lan_ipv4() -> Option<Ipv4Addr> {
-    if let Ok(addrs) = if_addrs::get_if_addrs() {
-        let candidates = addrs.into_iter().map(|addr| {
-            let ip = addr.ip();
-            (addr.name, ip)
-        });
-        if let Some(best) = select_lan_ipv4(candidates) {
-            return Some(best);
-        }
-    }
-    discover_lan_ipv4_via_route()
+    let addrs = if_addrs::get_if_addrs().ok()?;
+    select_lan_ipv4(addrs.into_iter().map(|addr| {
+        let ip = addr.ip();
+        (addr.name, ip)
+    }))
 }
 
 /// Pure selection over (interface name, address) candidates so the policy is
@@ -45,35 +40,31 @@ where
     best.map(|(_, ip)| ip)
 }
 
-/// TUN/TAP adapters belong to VPNs and proxies; awdl/llw are Apple
-/// peer-to-peer links; ap/anpi/bridge are software bridges; vnic/vmnet/
-/// virbr host VM NATs; gif/stf are tunnels. None of them carry the LAN the
-/// phone is on.
+/// Physical adapters by name allow-list (mirrors the phone-side accept
+/// policy in ios/SeRemote/Models/RemoteLink.swift — keep the two in step):
+/// `en*` covers macOS en0… and Linux predictable names (eno/enp/ens/enx),
+/// `eth*`/`em*` classic ethernet, `wlan*`/`wl*`/`wifi`/`wi-fi` wireless,
+/// plus Windows friendly names. vEthernet (Hyper-V) is explicitly excluded.
+/// Docker (docker0, veth, cni, br-), WireGuard (wg), Tailscale, ZeroTier,
+/// utun/tap, awdl, and VM bridges never match an allow-list entry.
 fn is_physical_adapter(name: &str) -> bool {
     let lowered = name.to_ascii_lowercase();
-    !lowered.starts_with("utun")
-        && !lowered.starts_with("tun")
-        && !lowered.starts_with("tap")
-        && !lowered.starts_with("awdl")
-        && !lowered.starts_with("llw")
-        && !lowered.starts_with("ap")
-        && !lowered.starts_with("anpi")
-        && !lowered.starts_with("bridge")
-        && !lowered.starts_with("vnic")
-        && !lowered.starts_with("vmnet")
-        && !lowered.starts_with("virbr")
-        && !lowered.starts_with("gif")
-        && !lowered.starts_with("stf")
+    if lowered.starts_with("vethernet") {
+        return false;
+    }
+    lowered.starts_with("en")
+        || lowered.starts_with("eth")
+        || lowered.starts_with("em")
+        || lowered.starts_with("wlan")
+        || lowered.starts_with("wl")
+        || lowered.starts_with("wifi")
+        || lowered.starts_with("wi-fi")
+        || lowered.starts_with("ethernet")
 }
 
-fn discover_lan_ipv4_via_route() -> Option<Ipv4Addr> {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("1.1.1.1:80").ok()?;
-    match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(ip) if is_usable_lan_v4(ip) => Some(ip),
-        _ => None,
-    }
-}
+// No route-based fallback: see discover_lan_ipv4 — the default route belongs
+// to whatever tunnel owns it, and a UDP probe cannot tell a physical LAN
+// source from a VPN overlay source.
 
 #[must_use]
 pub fn is_usable_lan_v4(ip: Ipv4Addr) -> bool {
@@ -179,6 +170,37 @@ mod tests {
         assert_eq!(
             select_lan_ipv4(candidates.into_iter()),
             Some(Ipv4Addr::new(100, 64, 11, 22))
+        );
+    }
+
+    #[test]
+    fn selection_never_picks_container_or_vpn_overlays() {
+        let candidates = vec![
+            ("docker0".to_string(), IpAddr::V4(Ipv4Addr::new(172, 17, 0, 1))),
+            ("veth2a4f".to_string(), IpAddr::V4(Ipv4Addr::new(172, 17, 0, 2))),
+            ("cni0".to_string(), IpAddr::V4(Ipv4Addr::new(10, 244, 0, 1))),
+            ("wg0".to_string(), IpAddr::V4(Ipv4Addr::new(10, 13, 37, 2))),
+            ("tailscale0".to_string(), IpAddr::V4(Ipv4Addr::new(100, 101, 1, 1))),
+            (
+                "vEthernet (Default Switch)".to_string(),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 200, 1)),
+            ),
+            ("lo0".to_string(), IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ];
+        // Only virtual overlays present → publish nothing rather than hand a
+        // bearer URL to containers or VPN peers.
+        assert_eq!(select_lan_ipv4(candidates.into_iter()), None);
+    }
+
+    #[test]
+    fn selection_accepts_windows_and_linux_physical_names() {
+        let candidates = vec![
+            ("Wi-Fi".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 9))),
+            ("enp3s0".to_string(), IpAddr::V4(Ipv4Addr::new(10, 0, 0, 4))),
+        ];
+        assert_eq!(
+            select_lan_ipv4(candidates.into_iter()),
+            Some(Ipv4Addr::new(192, 168, 1, 9))
         );
     }
 

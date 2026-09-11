@@ -43,6 +43,10 @@ final class TerminalStore {
     /// resume/reconnect converge when the host PTY changed behind our back.
     /// Cleared only by a successful push, so a failed/raced attempt re-arms.
     private var forceRefit = false
+    /// Monotonic token bumped by every schedule/release/open/mode switch.
+    /// A commit that crosses an await validates against it afterwards: a
+    /// leave+return ABA or a terminal switch cannot resurrect a stale lease.
+    private var refitEpoch = 0
     /// The grid the live view last fitted for `fittedTerminalId`. This is the
     /// ONLY source commitRefit pushes — catalog rows, host replies, and
     /// display-mode events describe host-side truth and must never
@@ -92,6 +96,7 @@ final class TerminalStore {
                   geometryActive,
                   displayMode == .phone
             else { return }
+            refitEpoch &+= 1
             displayMode = .desktop
             HostLog.session.info("Host restored desktop display mode")
         }
@@ -169,6 +174,7 @@ final class TerminalStore {
             _ = try await socket.watch(terminalId: terminalId, lastSeq: 0)
             watchedId = terminalId
             activeId = terminalId
+            refitEpoch &+= 1
             // A fresh watch may land on a PTY the desktop resized meanwhile;
             // re-assert the phone viewport deterministically instead of
             // waiting for a view-driven sizeChanged that may never come.
@@ -227,9 +233,14 @@ final class TerminalStore {
     /// text scale). Record it and converge through the debounce — the push
     /// to the host happens in `commitRefit`, never inline here. Covered
     /// surfaces never record: a keyboard shrinking a hidden terminal must
-    /// not become the takeover grid.
-    func resize(cols: Int, rows: Int) async {
+    /// not become the takeover grid. Synchronous: the Coordinator calls this
+    /// straight from sizeChanged, so identical grids return without any
+    /// Task churn.
+    func resize(cols: Int, rows: Int) {
         guard geometryActive, let activeId else { return }
+        if fittedTerminalId == activeId, lastFitted?.cols == cols, lastFitted?.rows == rows {
+            return
+        }
         lastFitted = (cols, rows)
         fittedTerminalId = activeId
         scheduleRefit()
@@ -239,15 +250,23 @@ final class TerminalStore {
         if force {
             forceRefit = true
         }
+        refitEpoch &+= 1
+        let epoch = refitEpoch
         refitTask?.cancel()
         refitTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard let self, !Task.isCancelled else { return }
-            await self.commitRefit()
+            await self.commitRefit(epoch: epoch)
         }
     }
 
-    private func commitRefit() async {
+    /// Invalidation hook for layout-level transitions (compact/regular swap):
+    /// a pending commit issued under the old layout must never land.
+    func refitEpochBump() {
+        refitEpoch &+= 1
+    }
+
+    private func commitRefit(epoch: Int) async {
         // fittedTerminalId gate: until the live view has fitted itself FOR
         // THIS terminal, only host-side dims exist; the force flag survives
         // so the first real report still performs its forced takeover push.
@@ -255,35 +274,45 @@ final class TerminalStore {
               let activeId, fittedTerminalId == activeId,
               let fitted = lastFitted else { return }
         guard let socket else { return }
+        let terminalId = activeId
         let cols = max(fitted.cols, 20)
         let rows = max(fitted.rows, 4)
         let forced = forceRefit
-        if !forced, let pushed = lastPushed[activeId], pushed.cols == cols, pushed.rows == rows {
+        if !forced, let pushed = lastPushed[terminalId], pushed.cols == cols, pushed.rows == rows {
             return
         }
-        let generation = (activeId, geometryActive, displayMode)
         do {
             let state = try await socket.setDisplayMode(
-                terminalId: activeId,
+                terminalId: terminalId,
                 mode: TerminalDisplayMode.phone.rawValue,
                 cols: cols,
                 rows: rows
             )
-            // Re-validate: a tab switch or release racing the await must not
-            // leave the host leased at phone geometry nobody is viewing.
-            guard generation == (activeId, geometryActive, displayMode) else {
+            // Epoch+identity re-validation: a schedule, release, terminal
+            // switch, or host-side restore that happened while this request
+            // was in flight must not let a stale phone lease land.
+            guard epoch == refitEpoch,
+                  activeId == terminalId,
+                  geometryActive,
+                  displayMode == .phone
+            else {
                 HostLog.session.info("Dropping stale phone fit; restoring desktop")
-                _ = try? await socket.setDisplayMode(
-                    terminalId: activeId,
-                    mode: TerminalDisplayMode.desktop.rawValue
-                )
+                do {
+                    _ = try await socket.setDisplayMode(
+                        terminalId: terminalId,
+                        mode: TerminalDisplayMode.desktop.rawValue
+                    )
+                } catch {
+                    HostLog.session.error("Stale-fit desktop restore failed")
+                }
                 return
             }
-            applyState(state, for: activeId)
-            lastPushed[activeId] = (state.cols, state.rows)
+            applyState(state, for: terminalId)
+            lastPushed[terminalId] = (state.cols, state.rows)
             forceRefit = false
             HostLog.ui.info("Phone fit \(state.cols)x\(state.rows)\(forced ? " (forced)" : "", privacy: .public)")
         } catch {
+            HostLog.session.error("Phone fit push failed")
             errorMessage = error.localizedDescription
             // force stays armed; the next trigger re-asserts.
         }
@@ -291,8 +320,10 @@ final class TerminalStore {
 
     func setDisplayMode(_ mode: TerminalDisplayMode) async {
         displayMode = mode
+        refitEpoch &+= 1
         guard let socket, let activeId else { return }
         if mode == .desktop {
+            lastPushed.removeValue(forKey: activeId)
             do {
                 let state = try await socket.setDisplayMode(
                     terminalId: activeId,
@@ -300,6 +331,7 @@ final class TerminalStore {
                 )
                 applyState(state, for: activeId)
             } catch {
+                HostLog.session.error("Desktop display mode switch failed")
                 errorMessage = error.localizedDescription
             }
             HostLog.session.info("Terminal display mode desktop")
@@ -313,6 +345,8 @@ final class TerminalStore {
 
     func releaseDisplayMode(for terminalId: String?) async {
         guard let socket, let terminalId else { return }
+        refitEpoch &+= 1
+        lastPushed.removeValue(forKey: terminalId)
         do {
             let state = try await socket.setDisplayMode(
                 terminalId: terminalId,

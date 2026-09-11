@@ -253,6 +253,9 @@ final class ChatStore {
         currentBinding = nil
         showAgentSheet = false
         errorMessage = nil
+        // The composer is gone with the view; a sticky focus claim would
+        // mis-own the next terminal keyboard.
+        composerActive = false
         switchingStatus = nil
         isSwitchingAgent = false
     }
@@ -1081,7 +1084,7 @@ final class ChatStore {
                 )
                 onAttentionNeeded?(
                     String(localized: "Approval needed"),
-                    event.toolCall.title ?? String(localized: "The agent is waiting for your approval.")
+                    String(localized: "The agent is waiting for your approval.")
                 )
             }
         case "question_request":
@@ -1096,7 +1099,7 @@ final class ChatStore {
                 )
                 onAttentionNeeded?(
                     String(localized: "Agent question"),
-                    event.question
+                    String(localized: "Open Se to answer.")
                 )
             }
         case "prompt_complete":

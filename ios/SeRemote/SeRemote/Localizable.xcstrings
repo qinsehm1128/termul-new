@@ -675,7 +675,7 @@
         }
       }
     },
-    "Public hosts need HTTPS. A LAN address such as 192.168.x.x is allowed over HTTP." : {
+    "Public hosts need HTTPS. A LAN address such as 192.168.x.x — or any address on this phone's Wi-Fi — is allowed over HTTP." : {
 
     },
     "Ready" : {

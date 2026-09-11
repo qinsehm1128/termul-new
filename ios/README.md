@@ -20,7 +20,7 @@ Requires Xcode 26 and iOS 26.
 
 Deep link: `se://open?url=<percent-encoded-access-url>`. Encode the `#access_token` fragment inside `url`, or pass `access_token` as a query item. A raw `#` on the `se://` URL is recovered as the bearer. The pre-rename `termul` scheme is no longer registered or accepted, so a link saved outside the app before the rename has to be re-copied; pairing itself is unaffected, since the QR and the copy button both hand out an `https://…` access URL.
 
-Quick Tunnel (`*.trycloudflare.com`) still goes through Cloudflare even on the same Wi-Fi. After an iPhone restart the first open waits for the network and retries. HTTP origins are allowed when the host is RFC1918/`.local` or sits on this phone's own Wi-Fi subnet, so a true LAN pair works even on CGNAT or campus-public LANs.
+Quick Tunnel (`*.trycloudflare.com`) still goes through Cloudflare even on the same Wi-Fi. After an iPhone restart the first open waits for the network and retries. HTTP origins are allowed when the host is RFC1918/`.local`/CGNAT and sits on this phone's own Wi-Fi subnet; globally routable addresses must pair over HTTPS.
 
 ACP agents that are already running on the Mac, or whose CLI is on the Mac PATH (`cursor-agent`, Codex via npx), can be selected from the phone. Switching reuses the live host process instead of starting a second one. Agents that advertise sign-in open that flow on the computer.
 

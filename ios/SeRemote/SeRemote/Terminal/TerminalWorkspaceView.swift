@@ -23,7 +23,7 @@ struct TerminalWorkspaceView: View {
                             Task { await session.terminals.write(text) }
                         },
                         onResize: { cols, rows in
-                            Task { await session.terminals.resize(cols: cols, rows: rows) }
+                            session.terminals.resize(cols: cols, rows: rows)
                         },
                         onReady: { feed in
                             session.terminals.onFeed = { incomingId, data in
@@ -105,12 +105,7 @@ struct TerminalWorkspaceView: View {
             .zIndex(1)
         }
         .onAppear {
-            // The wide layout mounts the terminal without a tab switch, so
-            // geometry activation and takeover re-assertion happen here.
-            if session.isWideLayout {
-                session.terminals.geometryActive = true
-            }
-            session.terminals.scheduleRefit(force: true)
+            session.activateTerminalGeometry()
         }
         .onReceive(ShortcutCenter.shortcuts) { shortcut in
             switch shortcut {

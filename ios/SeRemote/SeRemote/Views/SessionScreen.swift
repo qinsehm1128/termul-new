@@ -6,7 +6,9 @@ struct SessionScreen: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var filesVisibility: NavigationSplitViewVisibility = .automatic
 
-    private var isWide: Bool { sizeClass == .regular }
+    /// Plus/Max iPhones report .regular in landscape; only actual iPads get
+    /// the split tree, so the phone chrome survives rotation.
+    private var isWide: Bool { sizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad }
 
     var body: some View {
         @Bindable var chat = session.chat

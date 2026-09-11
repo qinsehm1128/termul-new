@@ -29,6 +29,15 @@ struct ChatView: View {
         .onChange(of: composerFocused) { _, focused in
             session.chat.composerActive = focused
         }
+        .onDisappear {
+            // Focus-state changes do not always fire on unmount; the session
+            // must not keep a sticky composer claim on the keyboard.
+            session.chat.composerActive = false
+        }
+        .onChange(of: session.chat.activeSessionId) { _, _ in
+            isAtBottom = true
+            unreadCount = 0
+        }
         .onReceive(ShortcutCenter.shortcuts) { shortcut in
             if shortcut == .focusChat {
                 composerFocused = true
@@ -41,6 +50,10 @@ struct ChatView: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
+            // Single timeline materialization per body: rows must not each
+            // re-walk (and the store's timeline getter re-build) the array.
+            let items = session.chat.timeline
+            let lastAgentId = latestAgentId(in: items)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if !session.chat.hasVisibleTranscript && !session.chat.isLoading {
@@ -51,8 +64,8 @@ struct ChatView: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 180)
                     }
-                    ForEach(session.chat.timeline) { item in
-                        timelineRow(item)
+                    ForEach(items) { item in
+                        timelineRow(item, lastAgentId: lastAgentId)
                             .id(item.id)
                     }
                     if session.chat.isLoading {
@@ -62,6 +75,9 @@ struct ChatView: View {
                 }
                 .padding(16)
             }
+            // History sessions open pinned to the newest message instead of
+            // relying on scroll-to-bottom racing the first layout pass.
+            .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 // visibleRect lives in content space, so its maxY is the
@@ -76,6 +92,10 @@ struct ChatView: View {
             }
             .onChange(of: session.chat.timeline.last?.id) { _, id in
                 guard !session.chat.isLoading, let id else { return }
+                // Activity/tool tail churn is not a user-visible message.
+                if case .activity = session.chat.timeline.last {
+                    return
+                }
                 if isAtBottom {
                     proxy.scrollTo(id, anchor: .bottom)
                 } else {
@@ -139,7 +159,7 @@ struct ChatView: View {
     }
 
     @ViewBuilder
-    private func timelineRow(_ item: ChatTimelineItem) -> some View {
+    private func timelineRow(_ item: ChatTimelineItem, lastAgentId: String?) -> some View {
         switch item {
         case .user(let message):
             MessageBubble(
@@ -155,7 +175,7 @@ struct ChatView: View {
         case .agent(let message):
             MessageBubble(
                 message: message,
-                onRetry: message.id == lastAgentMessageId
+                onRetry: message.id == lastAgentId
                     ? { Task { await session.chat.regenerateLastTurn(in: session.conversations.active) } }
                     : nil
             )
@@ -166,8 +186,8 @@ struct ChatView: View {
 
     /// Regenerate re-sends the latest user turn, so only the newest agent
     /// bubble offers it — an older bubble cannot regenerate its own turn.
-    private var lastAgentMessageId: String? {
-        for item in session.chat.timeline.reversed() {
+    private func latestAgentId(in items: [ChatTimelineItem]) -> String? {
+        for item in items.reversed() {
             if case .agent(let message) = item {
                 return message.id
             }
@@ -422,19 +442,11 @@ private struct MessageBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 48) }
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-                VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
-                    Text(attributed)
-                        .font(.body)
-                        .textSelection(.enabled)
-                    if message.streaming {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
-                }
-                .padding(12)
-                .background(background)
-                .foregroundStyle(.primary)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                // Equatable content: streaming token updates re-render only
+                // the changed bubble, so unchanged rows skip the markdown
+                // reparse instead of every visible bubble reparsing per token.
+                MessageBubbleContent(message: message)
+                    .equatable()
                 if let receipt {
                     if message.delivery == .failed, let onRetry {
                         Button(action: onRetry) {
@@ -496,10 +508,6 @@ private struct MessageBubble: View {
         .accessibilityLabel(Text(receipt.label))
     }
 
-    private var background: Color {
-        message.role == .user ? SeTheme.accent.opacity(0.16) : SeTheme.surface
-    }
-
     private var receipt: Receipt? {
         guard message.role == .user, let delivery = message.delivery else { return nil }
         switch delivery {
@@ -525,6 +533,44 @@ private struct MessageBubble: View {
                 showsProgress: false
             )
         }
+    }
+
+    private var attributed: AttributedString {
+        var options = AttributedString.MarkdownParsingOptions()
+        options.interpretedSyntax = .full
+        options.failurePolicy = .returnPartiallyParsedIfPossible
+        return (try? AttributedString(markdown: message.text, options: options))
+            ?? AttributedString(message.text)
+    }
+}
+
+/// Equatable bubble payload — equality over the render-affecting fields so
+/// `.equatable()` can skip unchanged rows (actions stay on the wrapper).
+private struct MessageBubbleContent: View, Equatable {
+    let message: ChatMessage
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message.id == rhs.message.id
+            && lhs.message.role == rhs.message.role
+            && lhs.message.text == rhs.message.text
+            && lhs.message.streaming == rhs.message.streaming
+            && lhs.message.delivery == rhs.message.delivery
+    }
+
+    var body: some View {
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+            Text(attributed)
+                .font(.body)
+                .textSelection(.enabled)
+            if message.streaming {
+                ProgressView()
+                    .controlSize(.mini)
+            }
+        }
+        .padding(12)
+        .background(message.role == .user ? SeTheme.accent.opacity(0.16) : SeTheme.surface)
+        .foregroundStyle(.primary)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var attributed: AttributedString {

@@ -26,9 +26,12 @@ struct HostHomeView: View {
     @State private var deleting: HostConversation?
     @Environment(\.horizontalSizeClass) private var sizeClass
 
+    /// iPad-only split, matching SessionScreen: landscape iPhones stay phone-laid-out.
+    private var isWide: Bool { sizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad }
+
     var body: some View {
         Group {
-            if sizeClass == .regular {
+            if isWide {
                 wideLayout
             } else {
                 compactLayout

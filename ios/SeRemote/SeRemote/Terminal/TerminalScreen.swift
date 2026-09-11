@@ -88,11 +88,13 @@ struct TerminalScreen: UIViewRepresentable {
         }
 
         func attach(_ view: TerminalView) {
-            // Seed only — do NOT push this grid. A freshly created view still
-            // reports its default 80x24 before the first layout fit; pushing
-            // it would take the host PTY over at the wrong size.
-            lastCols = view.getTerminal().cols
-            lastRows = view.getTerminal().rows
+            // Seed sentinels, not the view's current grid: a freshly created
+            // view still reports SwiftTerm's default 80x24 before its first
+            // layout fit. Seeding the real values would swallow the first
+            // sizeChanged when the fitted grid happens to equal 80x24 — and
+            // that report is the only thing that arms the takeover push.
+            lastCols = 0
+            lastRows = 0
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {

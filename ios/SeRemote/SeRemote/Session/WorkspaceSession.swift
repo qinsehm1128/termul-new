@@ -295,6 +295,7 @@ final class WorkspaceSession {
     func noteWideLayout(_ wide: Bool) {
         guard isWideLayout != wide else { return }
         isWideLayout = wide
+        terminals.refitEpochBump()
         if wide {
             terminals.geometryActive = workspace != .home
         } else {
@@ -305,6 +306,18 @@ final class WorkspaceSession {
             }
         }
         HostLog.ui.info("Layout width \(wide ? "regular" : "compact", privacy: .public)")
+    }
+
+    /// View-mounted geometry activation. Only the wide layout mounts the
+    /// terminal without a tab switch; compact activation stays tab-driven so
+    /// a terminal hidden under the chat tab never claims the PTY lease.
+    /// TerminalStore.geometryActive has exactly this one view-side writer
+    /// (plus tab/leave transitions above), keeping lease ownership
+    /// centralized in the session.
+    func activateTerminalGeometry() {
+        guard isWideLayout else { return }
+        terminals.geometryActive = true
+        terminals.scheduleRefit(force: true)
     }
 
     /// Spawn a conversation/project-scoped PTY on the host and reveal it.
