@@ -233,7 +233,7 @@ extension TerminalView: UITextInput {
                 return
             }
             _markedTextRange = coerceTextRange(newValue)
-            uitiLog("markedTextRange -> \(_markedTextRange)")
+            uitiLog("markedTextRange -> \(_markedTextRange.map { String(describing: $0) } ?? "nil")")
         }
     }
     

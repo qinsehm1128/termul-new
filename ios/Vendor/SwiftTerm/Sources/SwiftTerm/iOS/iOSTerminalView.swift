@@ -841,7 +841,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     ///  - pos: the location where this was triggered in the buffer, it used at a later point
     ///  to auto-select a word
     func showContextMenu (forRegion: CGRect, pos: Position) {
-        var items: [UIMenuItem] = []
+        let items: [UIMenuItem] = []
         
         lastLongSelect = pos
         lastLongSelectRegion = forRegion
@@ -959,7 +959,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             release: release,
             shift: false,
             meta: false,
-            control: terminalAccessory?.controlModifier ?? controlModifier ?? false)
+            control: terminalAccessory?.controlModifier ?? controlModifier)
         terminalAccessory?.controlModifier = false
         controlModifier = false
         return encodedFlags
@@ -2184,7 +2184,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
         if !terminal.keyboardEnhancementFlags.isEmpty {
             sendKittyTextInput(textToInsert, applyModifiers: applyModifiers)
-        } else if applyModifiers && (terminalAccessory?.controlModifier ?? controlModifier ?? false) {
+        } else if applyModifiers && (terminalAccessory?.controlModifier ?? controlModifier) {
             self.send(applyControlToEventCharacters(textToInsert))
             terminalAccessory?.controlModifier = false
             controlModifier = false
@@ -2528,7 +2528,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     private func sendKittyTextInput(_ text: String, applyModifiers: Bool) {
         let flags = terminal.keyboardEnhancementFlags
-        let controlActive = applyModifiers && (terminalAccessory?.controlModifier ?? controlModifier ?? false)
+        let controlActive = applyModifiers && (terminalAccessory?.controlModifier ?? controlModifier)
         let metaActive = applyModifiers && metaModifier
         if controlActive {
             terminalAccessory?.controlModifier = false
@@ -3574,7 +3574,6 @@ extension TerminalView: UIAccessibilityReadingContent {
     }
     
     func startingLine(forLineNumber lineNumber: Int) -> Int {
-        let lineWidth = terminal.buffer.lines[lineNumber].count
         var startingLine = lineNumber
         while startingLine >= 1 {
             startingLine -= 1
@@ -3594,7 +3593,6 @@ extension TerminalView: UIAccessibilityReadingContent {
     }
 
     func endingLine(forLineNumber lineNumber: Int) -> Int {
-        let lineWidth = terminal.buffer.lines[lineNumber].count
         var endingLine = lineNumber
         while (endingLine < terminal.buffer.lines.count - 1) {
             let start = Position(col: 0, row: endingLine)
@@ -3611,25 +3609,24 @@ extension TerminalView: UIAccessibilityReadingContent {
     }
 
     public func accessibilityContent(forLineNumber lineNumber: Int) -> String? {
-        var startingLine = startingLine(forLineNumber: lineNumber)
-        var endingLine = endingLine(forLineNumber: lineNumber)
+        let startingLine = startingLine(forLineNumber: lineNumber)
+        let endingLine = endingLine(forLineNumber: lineNumber)
         let start = Position(col: 0, row: startingLine)
         let end = Position(col: terminal.buffer.lines[endingLine].count,
                            row: endingLine)
-        var text =  terminal.getDisplayText(start: start, end: end)
         return terminal.getDisplayText(start: start, end: end)
     }
 
     public func accessibilityFrame(forLineNumber lineNumber: Int) -> CGRect {
         let topVisibleLine = Int(contentOffset.y/cellDimension.height)
         let offset = contentOffset.y - CGFloat(topVisibleLine) * cellDimension.height
-        var startingLine = startingLine(forLineNumber: lineNumber)
-        var endingLine = endingLine(forLineNumber: lineNumber)
-        var verticalWidth = CGFloat(endingLine - startingLine + 1)
+        let startingLine = startingLine(forLineNumber: lineNumber)
+        let endingLine = endingLine(forLineNumber: lineNumber)
+        let verticalWidth = CGFloat(endingLine - startingLine + 1)
         let lineOffset =  cellDimension.height * CGFloat (startingLine - topVisibleLine + 1)
         let lineOrigin = CGPoint(x: 0, y: lineOffset)
         let columnCount = terminal.buffer.lines[lineNumber].count
-        var rect = CGRect(
+        let rect = CGRect(
             x: lineOrigin.x,
             y: lineOrigin.y + 3 - offset,
             width: CGFloat(columnCount) * cellDimension.width,
@@ -3648,10 +3645,10 @@ extension TerminalView: UIAccessibilityReadingContent {
     }
 
     public func accessibilityAttributedContent(forLineNumber lineNumber: Int) -> NSAttributedString? {
-        var startingLine = startingLine(forLineNumber: lineNumber)
-        var endingLine = endingLine(forLineNumber: lineNumber)
-        var start = Position(col: 0, row: startingLine)
-        var end = Position(col: terminal.buffer.lines[endingLine].count,
+        let startingLine = startingLine(forLineNumber: lineNumber)
+        let endingLine = endingLine(forLineNumber: lineNumber)
+        let start = Position(col: 0, row: startingLine)
+        let end = Position(col: terminal.buffer.lines[endingLine].count,
                            row: endingLine)
         return accessibilityAttributedDisplayText(start: start, end: end)
     }

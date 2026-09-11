@@ -1905,7 +1905,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             guard let buffer = dequeue(length: length) else {
                 return nil
             }
-            vertices.withUnsafeBytes { raw in
+            _ = vertices.withUnsafeBytes { raw in
                 memcpy(buffer.contents(), raw.baseAddress!, byteCount)
             }
             frameBuffers.append(buffer)
@@ -2129,7 +2129,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         guard let buffer = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
             return (nil, 0)
         }
-        vertices.withUnsafeBytes { raw in
+        _ = vertices.withUnsafeBytes { raw in
             memcpy(buffer.contents(), raw.baseAddress!, byteCount)
         }
         return (buffer, count)

@@ -83,14 +83,8 @@ final class ConnectionStore {
     }
 
     func openIncomingURL(_ url: URL) {
-        _ = AppLaunchURL.take()
         HostLog.session.info("Opening pairing link")
         connect(to: url.absoluteString)
-    }
-
-    func consumePendingLaunchURL() {
-        guard let url = AppLaunchURL.take() else { return }
-        openIncomingURL(url)
     }
 
     func dismissError() {

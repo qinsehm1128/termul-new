@@ -1,7 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
+
+    },
     "/" : {
+
+    },
+    "%lld" : {
+
+    },
+    "%lld new" : {
 
     },
     "%lld percent" : {
@@ -36,7 +45,13 @@
     "Active" : {
 
     },
+    "Actual Size" : {
+
+    },
     "Agent" : {
+
+    },
+    "Agent question" : {
 
     },
     "Appearance" : {
@@ -48,6 +63,9 @@
           }
         }
       }
+    },
+    "Approval needed" : {
+
     },
     "Back" : {
 
@@ -61,6 +79,9 @@
           }
         }
       }
+    },
+    "Background alerts" : {
+
     },
     "Camera unavailable" : {
       "localizations" : {
@@ -96,6 +117,12 @@
         }
       }
     },
+    "Choose from the sidebar" : {
+
+    },
+    "Clear search" : {
+
+    },
     "Close" : {
       "localizations" : {
         "zh-Hans" : {
@@ -128,6 +155,12 @@
           }
         }
       }
+    },
+    "Copy" : {
+
+    },
+    "Copy Path" : {
+
     },
     "Could not confirm the computer session. Pull to refresh, then try again." : {
 
@@ -176,6 +209,12 @@
         }
       }
     },
+    "Delete" : {
+
+    },
+    "Delete this session?" : {
+
+    },
     "Deleted" : {
 
     },
@@ -215,6 +254,9 @@
         }
       }
     },
+    "Dismiss" : {
+
+    },
     "Done" : {
       "localizations" : {
         "zh-Hans" : {
@@ -224,6 +266,9 @@
           }
         }
       }
+    },
+    "Edit & Resend" : {
+
     },
     "Empty folder" : {
 
@@ -241,6 +286,12 @@
     "Expand" : {
 
     },
+    "File" : {
+
+    },
+    "File editing is desktop-only. Changes need the host's local web client." : {
+
+    },
     "Files" : {
       "localizations" : {
         "zh-Hans" : {
@@ -252,6 +303,9 @@
       }
     },
     "Fit the phone" : {
+
+    },
+    "Folder" : {
 
     },
     "Hide keyboard" : {
@@ -307,6 +361,9 @@
         }
       }
     },
+    "Jump to latest" : {
+
+    },
     "Language" : {
       "localizations" : {
         "zh-Hans" : {
@@ -318,6 +375,7 @@
       }
     },
     "Language and appearance apply to this app. Agent replies still follow the desktop session." : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -326,6 +384,9 @@
           }
         }
       }
+    },
+    "Language and appearance apply to this app. Background alerts notify when the agent finishes a turn, asks for approval, or a terminal exits while the app is in the background." : {
+
     },
     "Larger terminal text" : {
 
@@ -405,6 +466,12 @@
         }
       }
     },
+    "New Terminal" : {
+
+    },
+    "Next Terminal" : {
+
+    },
     "No agent is running on the host. Start one on the desktop, then try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -422,9 +489,6 @@
 
     },
     "No projects" : {
-
-    },
-    "No running sessions" : {
 
     },
     "No saved desks" : {
@@ -458,13 +522,7 @@
     "Open a chat on the desktop. These sessions are not projects." : {
 
     },
-    "Open a chat or terminal on the desktop, then pull to refresh." : {
-
-    },
     "Open a project on the desktop to watch its terminals here." : {
-
-    },
-    "Open a project on the desktop, then reconnect." : {
 
     },
     "Open a session before switching agents." : {
@@ -500,6 +558,9 @@
           }
         }
       }
+    },
+    "Open project" : {
+
     },
     "Open session" : {
       "localizations" : {
@@ -572,6 +633,15 @@
     "Phone" : {
 
     },
+    "Pick a project to watch its terminals." : {
+
+    },
+    "Pick a session to continue it here." : {
+
+    },
+    "Previous Terminal" : {
+
+    },
     "Project" : {
 
     },
@@ -635,6 +705,9 @@
         }
       }
     },
+    "Regenerate" : {
+
+    },
     "Remove" : {
       "localizations" : {
         "zh-Hans" : {
@@ -645,6 +718,9 @@
         }
       }
     },
+    "Rename" : {
+
+    },
     "Rename desk" : {
       "localizations" : {
         "zh-Hans" : {
@@ -654,6 +730,12 @@
           }
         }
       }
+    },
+    "Rename session" : {
+
+    },
+    "Resend" : {
+
     },
     "Retry" : {
       "localizations" : {
@@ -729,6 +811,19 @@
         }
       }
     },
+    "Se Remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se Remote"
+          }
+        }
+      }
+    },
+    "Search" : {
+
+    },
     "Send" : {
 
     },
@@ -739,6 +834,9 @@
 
     },
     "Session" : {
+
+    },
+    "Session name" : {
 
     },
     "Sessions" : {
@@ -753,6 +851,9 @@
           }
         }
       }
+    },
+    "Share" : {
+
     },
     "Show keyboard for live terminal input" : {
 
@@ -795,6 +896,9 @@
     "Tap to hide keyboard" : {
 
     },
+    "Tap to resend" : {
+
+    },
     "Tap to show keyboard" : {
 
     },
@@ -804,16 +908,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "终端"
-          }
-        }
-      }
-    },
-    "Se Remote" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se Remote"
           }
         }
       }
@@ -842,7 +936,19 @@
     "The access token was rejected. Scan the desktop QR again." : {
 
     },
+    "The agent finished its turn." : {
+
+    },
+    "The agent is waiting for your approval." : {
+
+    },
+    "The desktop keeps its files; the chat is removed from the list." : {
+
+    },
     "The host did not finish the agent request. Try again, or start the agent on the desktop." : {
+
+    },
+    "The host kept this session: live terminals or an active agent still reference it." : {
 
     },
     "The host rejected the request." : {
@@ -901,6 +1007,9 @@
           }
         }
       }
+    },
+    "The terminal exited." : {
+
     },
     "The tunnel returned an unexpected response." : {
 
@@ -965,6 +1074,9 @@
     "Used 1 tool" : {
 
     },
+    "View" : {
+
+    },
     "Watches a live host PTY in a native terminal." : {
       "localizations" : {
         "zh-Hans" : {
@@ -1011,6 +1123,12 @@
           }
         }
       }
+    },
+    "Zoom In" : {
+
+    },
+    "Zoom Out" : {
+
     }
   },
   "version" : "1.0"

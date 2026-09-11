@@ -59,7 +59,6 @@ enum HostURLSession {
         configuration.waitsForConnectivity = false
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 45
-        configuration.httpShouldUsePipelining = false
         return URLSession(configuration: configuration)
     }()
 }

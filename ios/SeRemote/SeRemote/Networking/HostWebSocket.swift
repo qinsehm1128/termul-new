@@ -29,7 +29,6 @@ enum HostTunnelSession {
         // Health already proved the path. Waiting again lets a Cloudflare
         // WebSocket sit idle until URLSession reports -1001.
         configuration.waitsForConnectivity = false
-        configuration.httpShouldUsePipelining = false
         configuration.timeoutIntervalForRequest = handshakeSeconds
         configuration.timeoutIntervalForResource = handshakeSeconds + 30
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
