@@ -30,16 +30,23 @@ fn select_lan_ipv4<I>(candidates: I) -> Option<Ipv4Addr>
 where
     I: Iterator<Item = (String, IpAddr)>,
 {
+    // Two passes: RFC1918 wins over CGNAT regardless of interface order —
+    // dual-homed gateways often list the WAN CGNAT NIC first, and the phone
+    // on the 192.168 side would refuse a 100.64 publish.
+    let mut cgnat = None;
     for (name, ip) in candidates {
         let IpAddr::V4(v4) = ip else { continue };
         if !is_physical_adapter(&name) || !is_usable_lan_v4(v4) {
             continue;
         }
-        if v4.is_private() || is_cgnat(v4) {
+        if v4.is_private() {
             return Some(v4);
         }
+        if is_cgnat(v4) && cgnat.is_none() {
+            cgnat = Some(v4);
+        }
     }
-    None
+    cgnat
 }
 
 /// Physical adapters by name allow-list (mirrors the phone-side accept
@@ -180,6 +187,18 @@ mod tests {
         assert_eq!(
             select_lan_ipv4(candidates.into_iter()),
             Some(Ipv4Addr::new(100, 64, 11, 22))
+        );
+    }
+
+    #[test]
+    fn selection_prefers_rfc1918_over_cgnat_regardless_of_order() {
+        let candidates = vec![
+            ("eth0".to_string(), IpAddr::V4(Ipv4Addr::new(100, 64, 1, 1))),
+            ("eth1".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 8))),
+        ];
+        assert_eq!(
+            select_lan_ipv4(candidates.into_iter()),
+            Some(Ipv4Addr::new(192, 168, 1, 8))
         );
     }
 
