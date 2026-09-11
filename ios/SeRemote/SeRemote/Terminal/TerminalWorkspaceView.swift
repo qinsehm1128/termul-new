@@ -107,6 +107,12 @@ struct TerminalWorkspaceView: View {
         .onAppear {
             session.activateTerminalGeometry()
         }
+        .onDisappear {
+            // The feed closure points at this mount's SwiftTerm view; clear it
+            // so output buffers (deliverOutput's pending path) instead of
+            // feeding a dead view between remounts (size-class swap).
+            session.terminals.onFeed = nil
+        }
         .onReceive(ShortcutCenter.shortcuts) { shortcut in
             switch shortcut {
             case .textScaleUp:
