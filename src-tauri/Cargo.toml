@@ -123,6 +123,11 @@ regex = "1"
 lazy_static = "1.4"
 url = "2.5"
 
+# Interface enumeration for LAN publish URLs: the route-based probe returns
+# proxy-TUN fake-ip addresses (198.18.0.0/15) when a VPN/proxy owns the
+# default route.
+if-addrs = "0.13"
+
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
 
