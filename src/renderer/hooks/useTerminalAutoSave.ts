@@ -175,6 +175,55 @@ export function serializeTerminalsForProject(
 }
 
 /**
+ * Whether two terminal lists differ in anything the persisted layout records
+ * about the terminals themselves (membership or persisted fields).
+ *
+ * Deliberately excludes `activeTerminalId` and the per-terminal `isActive`
+ * flag: those describe which tab is focused, not what any terminal contains.
+ */
+export function hasStructuralTerminalChange(next: Terminal[], prev: Terminal[]): boolean {
+  if (next === prev) return false
+  if (next.length !== prev.length) return true
+
+  const prevIds = new Set(prev.map((t) => t.id))
+  const nextIds = new Set(next.map((t) => t.id))
+  if (next.some((t) => !prevIds.has(t.id))) return true
+  if (prev.some((t) => !nextIds.has(t.id))) return true
+
+  return next.some((t) => {
+    const previous = prev.find((p) => p.id === t.id)
+    if (!previous) return false
+    return (
+      t.name !== previous.name ||
+      t.shell !== previous.shell ||
+      t.cwd !== previous.cwd ||
+      t.projectId !== previous.projectId ||
+      t.isAppHidden !== previous.isAppHidden ||
+      t.appHiddenSince !== previous.appHiddenSince ||
+      t.kind !== previous.kind ||
+      t.agentId !== previous.agentId ||
+      t.agentName !== previous.agentName ||
+      t.agentProgram !== previous.agentProgram ||
+      JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(previous.agentArgs ?? [])
+    )
+  })
+}
+
+/**
+ * How long a focus-only change waits before it serialises.
+ *
+ * Matched to `persistenceApi.writeDebounced`'s own window: extracting
+ * scrollback more often than the write can flush it is pure waste.
+ * `selectTerminal` rebuilds the entire `terminals` array on every tab switch,
+ * so a burst of switches previously re-extracted every terminal in the project
+ * once per switch.
+ *
+ * Structural changes are NOT coalesced — deferring an add/remove would leave a
+ * window where the persisted layout describes a set that never existed.
+ */
+const FOCUS_ONLY_COALESCE_MS = 500
+
+/**
  * Hook to auto-save terminal layout for the active project
  * Subscribes to terminal store changes and triggers debounced writes
  */
@@ -187,6 +236,41 @@ export function useTerminalAutoSave(): void {
   activeProjectIdRef.current = activeProjectId
 
   useEffect(() => {
+    let coalesceTimer: ReturnType<typeof setTimeout> | null = null
+    const pendingProjectIds = new Set<string>()
+
+    /**
+     * Serialise and write the given projects from the CURRENT store state.
+     *
+     * Reads the store at call time rather than closing over the change event,
+     * so a coalesced flush persists the latest layout rather than whichever
+     * intermediate state happened to schedule it.
+     */
+    const flushProjects = (projectIds: Set<string>): void => {
+      if (projectIds.size === 0) return
+      if (isTerminalRestoreInProgress()) return
+
+      const current = useTerminalStore.getState()
+      for (const projectId of projectIds) {
+        const layout = serializeTerminalsForProject(
+          current.terminals,
+          projectId,
+          current.activeTerminalId
+        )
+        // NOTE: syncScrollbackToStore is already called in saveTerminalLayout
+        // before writing to disk, so we skip it here to avoid double writes.
+        persistenceApi
+          .writeDebounced(PersistenceKeys.terminals(projectId), layout)
+          .catch((err: unknown) => {
+            void logFrontendError({
+              level: 'error',
+              source: 'terminal-autosave.multi-root',
+              message: `projectId=${projectId} error=${err instanceof Error ? err.message : String(err)}`
+            })
+          })
+      }
+    }
+
     // Subscribe to terminal store changes
     const unsubscribe = useTerminalStore.subscribe((state, prevState) => {
       // Skip the first state change (from restore)
@@ -203,37 +287,13 @@ export function useTerminalAutoSave(): void {
         return
       }
 
-      // Skip activity-only changes (hasActivity/lastActivityTimestamp) and reorderings
-      // These create new array refs but don't affect persisted layout
-      if (state.activeTerminalId === prevState.activeTerminalId) {
-        if (state.terminals.length === prevState.terminals.length) {
-          // Build ID sets to detect true structural changes (add/remove/reorder)
-          const prevIds = new Set(prevState.terminals.map((t) => t.id))
-          const nextIds = new Set(state.terminals.map((t) => t.id))
-          const added = state.terminals.filter((t) => !prevIds.has(t.id))
-          const removed = prevState.terminals.filter((t) => !nextIds.has(t.id))
-          // Check if any existing terminal changed its persisted-relevant fields
-          const changedFields = state.terminals.some((t) => {
-            const prev = prevState.terminals.find((p) => p.id === t.id)
-            if (!prev) return false
-            return (
-              t.name !== prev.name ||
-              t.shell !== prev.shell ||
-              t.cwd !== prev.cwd ||
-              t.projectId !== prev.projectId ||
-              t.isAppHidden !== prev.isAppHidden ||
-              t.appHiddenSince !== prev.appHiddenSince ||
-              t.kind !== prev.kind ||
-              t.agentId !== prev.agentId ||
-              t.agentName !== prev.agentName ||
-              t.agentProgram !== prev.agentProgram ||
-              JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(prev.agentArgs ?? [])
-            )
-          })
-          if (added.length === 0 && removed.length === 0 && !changedFields) {
-            return
-          }
-        }
+      const structural = hasStructuralTerminalChange(state.terminals, prevState.terminals)
+      const focusChanged = state.activeTerminalId !== prevState.activeTerminalId
+
+      // Activity-only changes (hasActivity/lastActivityTimestamp) and
+      // reorderings rebuild the array without touching anything persisted.
+      if (!structural && !focusChanged) {
+        return
       }
 
       if (isTerminalRestoreInProgress()) {
@@ -249,28 +309,44 @@ export function useTerminalAutoSave(): void {
         if (terminal.projectId) projectIds.add(terminal.projectId)
       }
 
-      for (const projectId of projectIds) {
-        const layout = serializeTerminalsForProject(
-          state.terminals,
-          projectId,
-          state.activeTerminalId
-        )
-        // NOTE: syncScrollbackToStore is already called in saveTerminalLayout
-        // before writing to disk, so we skip it here to avoid double writes.
-        persistenceApi
-          .writeDebounced(PersistenceKeys.terminals(projectId), layout)
-          .catch((err: unknown) => {
-            void logFrontendError({
-              level: 'error',
-              source: 'terminal-autosave.multi-root',
-              message: `projectId=${projectId} error=${err instanceof Error ? err.message : String(err)}`
-            })
-          })
+      if (structural) {
+        // Membership or persisted fields changed — write now, and let this
+        // write subsume anything a focus change had queued.
+        if (coalesceTimer) {
+          clearTimeout(coalesceTimer)
+          coalesceTimer = null
+        }
+        for (const id of pendingProjectIds) projectIds.add(id)
+        pendingProjectIds.clear()
+        flushProjects(projectIds)
+        return
+      }
+
+      // Focus-only: `selectTerminal` rebuilds the whole terminals array, so a
+      // burst of tab switches would otherwise re-extract every terminal's
+      // scrollback once per switch. Coalesce onto the write debounce window —
+      // the final persisted layout is identical, only the wasted intermediate
+      // extractions are gone.
+      for (const id of projectIds) pendingProjectIds.add(id)
+      if (!coalesceTimer) {
+        coalesceTimer = setTimeout(() => {
+          coalesceTimer = null
+          const due = new Set(pendingProjectIds)
+          pendingProjectIds.clear()
+          flushProjects(due)
+        }, FOCUS_ONLY_COALESCE_MS)
       }
     })
 
     return () => {
       unsubscribe()
+      if (coalesceTimer) {
+        clearTimeout(coalesceTimer)
+        coalesceTimer = null
+      }
+      // Do not flush here: unmount races app close, and the close path already
+      // runs its own bounded flush.
+      pendingProjectIds.clear()
     }
   }, [])
 }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  hasStructuralTerminalChange,
   isTerminalRestoreInProgress,
   saveTerminalLayout,
   serializeTerminalsForProject,
@@ -435,6 +436,59 @@ describe('useTerminalAutoSave', () => {
           persistedScrollbackLineCount: 2
         }
       })
+    })
+  })
+
+  describe('hasStructuralTerminalChange (tab-switch guard, AC9)', () => {
+    const base: Terminal[] = [
+      { id: '1', name: 'Terminal 1', projectId: 'proj-1', shell: 'bash', cwd: '/a' },
+      { id: '2', name: 'Terminal 2', projectId: 'proj-1', shell: 'bash', cwd: '/b' }
+    ]
+
+    it('treats a focus change as non-structural', () => {
+      // `selectTerminal` rebuilds the whole array and flips `isActive`. That is
+      // which tab is focused, not what any terminal contains — the old guard
+      // keyed its cheap exit on `activeTerminalId` being UNCHANGED, so it
+      // switched itself off at exactly the moment a tab switch needed it.
+      const before = base.map((t) => ({ ...t, isActive: t.id === '1' }))
+      const after = base.map((t) => ({ ...t, isActive: t.id === '2' }))
+
+      expect(hasStructuralTerminalChange(after, before)).toBe(false)
+    })
+
+    it('treats activity-only churn as non-structural', () => {
+      const before = base.map((t) => ({ ...t, hasActivity: false }))
+      const after = base.map((t) => ({ ...t, hasActivity: true }))
+
+      expect(hasStructuralTerminalChange(after, before)).toBe(false)
+    })
+
+    it('detects an added terminal', () => {
+      const after = [...base, { id: '3', name: 'Terminal 3', projectId: 'proj-1', shell: 'bash' }]
+      expect(hasStructuralTerminalChange(after, base)).toBe(true)
+    })
+
+    it('detects a removed terminal', () => {
+      expect(hasStructuralTerminalChange([base[0]], base)).toBe(true)
+    })
+
+    it('detects a swap that keeps the length', () => {
+      const after = [base[0], { id: '9', name: 'Terminal 9', projectId: 'proj-1', shell: 'bash' }]
+      expect(hasStructuralTerminalChange(after, base)).toBe(true)
+    })
+
+    it.each([
+      ['name', { name: 'Renamed' }],
+      ['cwd', { cwd: '/elsewhere' }],
+      ['shell', { shell: 'zsh' as const }],
+      ['projectId', { projectId: 'proj-2' }]
+    ])('detects a changed persisted field: %s', (_label, patch) => {
+      const after = base.map((t) => (t.id === '1' ? { ...t, ...patch } : t))
+      expect(hasStructuralTerminalChange(after, base)).toBe(true)
+    })
+
+    it('is identity-cheap when the array reference is unchanged', () => {
+      expect(hasStructuralTerminalChange(base, base)).toBe(false)
     })
   })
 })
