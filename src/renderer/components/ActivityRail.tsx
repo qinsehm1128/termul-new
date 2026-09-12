@@ -17,6 +17,7 @@ import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { isMac } from '@/lib/platform'
+import { isConversationAreaPath } from '@/lib/router-navigate'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
@@ -97,8 +98,9 @@ export function ActivityRail({
   const updatePanelVisibility = useUpdatePanelVisibility()
   const navigate = useNavigate()
   const location = useLocation()
-  const isConversationsActive =
-    location.pathname === '/conversations' || location.pathname.startsWith('/c/')
+  // The shared predicate, not a copy of its body. The file-tree scope rule
+  // drifted from exactly this kind of local re-derivation.
+  const isConversationsActive = isConversationAreaPath(location.pathname)
   const isTerminalsActive = location.pathname === '/terminals'
   const liveTerminalCount = useTerminalStore(
     (state) => state.terminals.filter((terminal) => Boolean(terminal.ptyId)).length
