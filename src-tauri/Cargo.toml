@@ -47,6 +47,9 @@ standalone-server = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Recursive fs watching for `fs_watcher`. Pinned to the same major the fs plugin
+# already resolves, so this adds no new resolution to the lockfile.
+notify = "8"
 # unstable is required for child/multi-webview support used by BrowserTabManager
 tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"

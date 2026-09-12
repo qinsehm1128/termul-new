@@ -13,6 +13,7 @@ pub mod conversation;
 /// external dependency and has to be able to substitute the backend.
 pub mod credentials;
 mod editor_workspaces;
+mod fs_watcher;
 mod host_admission;
 pub mod legacy_appdata;
 mod logging;
@@ -1924,6 +1925,7 @@ pub fn run() {
             // Cross-agent memory index. Host-private by construction: the state
             // root is Tauri's `app_data_dir()`, the same tree Termul's own
             // conversations live in, and never the user's project directory.
+            app.manage(crate::fs_watcher::FsWatcherService::new());
             let memory_index = Arc::new(crate::memory_index::service::MemoryIndexService::new(app_data_dir.clone()));
             acp_manager.set_memory_index(&memory_index);
             log::info!(
@@ -2303,6 +2305,8 @@ pub fn run() {
             commands::remote_sync_chat_history,
             commands::remote_sync_mcp_registry,
             commands::release_fs_watcher,
+            fs_watcher::fs_watcher_subscribe,
+            fs_watcher::fs_watcher_set_roots,
             // Desktop ACP renderer-history storage
             commands::acp_history_list,
             commands::acp_history_get,
