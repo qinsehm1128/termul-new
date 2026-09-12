@@ -34,11 +34,46 @@ function repairGroup(group: ProjectGroup, projects: Project[]): ProjectGroup {
   }
 }
 
+/**
+ * Stamp `isActive` without rebuilding the projects whose flag already matches.
+ *
+ * At most two projects actually change on a switch: the one losing focus and
+ * the one gaining it. Spreading all of them allocated a fresh object per
+ * project per click and broke identity for every downstream memo and selector.
+ * It also defeated `useProjectsAutoSave`'s guard, which compares `projects` by
+ * reference and so could no longer tell a focus change from a real edit.
+ */
 function markActiveProject(projects: Project[], activeProjectId: string): Project[] {
-  return projects.map((project) => ({
-    ...project,
-    isActive: project.id === activeProjectId
-  }))
+  let changed = false
+  const next = projects.map((project) => {
+    const isActive = project.id === activeProjectId
+    if (project.isActive === isActive) return project
+    changed = true
+    return { ...project, isActive }
+  })
+  return changed ? next : projects
+}
+
+/**
+ * Point every group containing `projectId` at it, preserving identity where the
+ * group already does. `map` alone returns a new array even when nothing
+ * changed, which is enough to make the autosave guard read a focus change as a
+ * groups edit.
+ */
+function withPreferredProject(
+  groups: ProjectGroup[],
+  projectId: string,
+  selectable: boolean
+): ProjectGroup[] {
+  if (!selectable) return groups
+  let changed = false
+  const next = groups.map((group) => {
+    if (!group.projectIds.includes(projectId)) return group
+    if (group.preferredProjectId === projectId) return group
+    changed = true
+    return { ...group, preferredProjectId: projectId }
+  })
+  return changed ? next : groups
 }
 
 export interface ProjectState {
@@ -128,11 +163,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         activeProjectId: id,
         activeGroupId: null,
         projects: markActiveProject(state.projects, id),
-        groups: state.groups.map((group) =>
-          group.projectIds.includes(id) && isSelectableProject(selectedProject)
-            ? { ...group, preferredProjectId: id }
-            : group
-        )
+        groups: withPreferredProject(state.groups, id, isSelectableProject(selectedProject))
       }
     })
   },
@@ -147,11 +178,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         activeGroupId: id,
         activeProjectId,
         projects: markActiveProject(state.projects, activeProjectId),
-        groups: state.groups.map((candidate) =>
-          candidate.id === id
-            ? { ...candidate, preferredProjectId: activeProjectId || undefined }
-            : candidate
+        groups: state.groups.every(
+          (candidate) =>
+            candidate.id !== id || candidate.preferredProjectId === (activeProjectId || undefined)
         )
+          ? state.groups
+          : state.groups.map((candidate) =>
+              candidate.id === id
+                ? { ...candidate, preferredProjectId: activeProjectId || undefined }
+                : candidate
+            )
       }
     })
   },

@@ -85,6 +85,60 @@ describe('project-store', () => {
       expect(state.activeGroupId).toBeNull()
       expect(state.groups[0].preferredProjectId).toBe('2')
     })
+
+    // Rebuilding every project on a switch allocated one object per project per
+    // click and broke identity for every downstream memo — and it left
+    // `useProjectsAutoSave` unable to tell a focus change from a real edit.
+    it('keeps the identity of projects whose isActive flag did not move', () => {
+      useProjectStore.setState({
+        projects: [
+          { id: '1', name: 'A', color: 'blue', isActive: true },
+          { id: '2', name: 'B', color: 'purple', isActive: false },
+          { id: '3', name: 'C', color: 'green', isActive: false }
+        ],
+        activeProjectId: '1'
+      })
+      const before = useProjectStore.getState().projects
+
+      useProjectStore.getState().selectProject('2')
+
+      const after = useProjectStore.getState().projects
+      // Only the two projects whose flag actually moved may be rebuilt.
+      expect(after[0]).not.toBe(before[0])
+      expect(after[1]).not.toBe(before[1])
+      expect(after[2]).toBe(before[2])
+    })
+
+    it('keeps the whole projects array when the selection is already active', () => {
+      useProjectStore.setState({
+        projects: [
+          { id: '1', name: 'A', color: 'blue', isActive: true },
+          { id: '2', name: 'B', color: 'purple', isActive: false }
+        ],
+        activeProjectId: '1'
+      })
+      const before = useProjectStore.getState().projects
+
+      useProjectStore.getState().selectProject('1')
+
+      expect(useProjectStore.getState().projects).toBe(before)
+    })
+
+    it('keeps the groups array when the group already prefers the selection', () => {
+      useProjectStore.setState({
+        projects: [
+          { id: '1', name: 'A', color: 'blue', isActive: false },
+          { id: '2', name: 'B', color: 'purple', isActive: true }
+        ],
+        groups: [{ id: 'group-1', name: 'Group', projectIds: ['1', '2'], preferredProjectId: '1' }],
+        activeProjectId: '2'
+      })
+      const before = useProjectStore.getState().groups
+
+      useProjectStore.getState().selectProject('1')
+
+      expect(useProjectStore.getState().groups).toBe(before)
+    })
   })
 
   describe('selectGroup', () => {
