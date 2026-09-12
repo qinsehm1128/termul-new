@@ -72,6 +72,26 @@ fn store_error(operation: &'static str) -> impl Fn(rusqlite::Error) -> MemoryInd
     move |error| MemoryIndexError::new(ERR_STORE_FAILED, format!("{operation}: {error}"))
 }
 
+/// One page of a session's transcript, as returned by
+/// [`MemoryStore::session_window`]. The ordinals are the paging cursors: pass
+/// `first_ordinal` to read further back, `last_ordinal` to read further ahead.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWindow {
+    pub session_key: String,
+    /// The page, in conversation order.
+    pub messages: Vec<MemorySearchHit>,
+    pub first_ordinal: Option<u32>,
+    pub last_ordinal: Option<u32>,
+    /// Messages with smaller ordinals exist before this page.
+    pub has_older: bool,
+    /// Messages with larger ordinals exist after this page.
+    pub has_newer: bool,
+    /// Rough token count of the returned text: CJK chars count ~1 token each,
+    /// other scripts ~1 token per 4 chars. Exact counts are tokenizer-specific.
+    pub approx_tokens: usize,
+}
+
 /// One project's index database.
 #[derive(Debug)]
 pub struct MemoryStore {
@@ -615,6 +635,120 @@ impl MemoryStore {
             .map_err(store_error("read session messages"))
     }
 
+    /// One page of a session's messages, read around an anchor ordinal.
+    ///
+    /// With `anchor_ordinal` the page spans `before` messages above it and
+    /// `after` below (the anchor itself included) — exactly the context a
+    /// search hit points at. Without one the page runs chronologically from
+    /// the session's first message, sized by `after`, so plain forward paging
+    /// is a repeated call with `anchor_ordinal = last_ordinal`.
+    ///
+    /// `max_chars` is a hard budget on the concatenated text of the page.
+    /// Counting stops before the message that would overflow it, but the page
+    /// always keeps at least one message so a single huge message still
+    /// arrives. `has_older`/`has_newer` report whether the session continues
+    /// past the page in either direction.
+    pub fn session_window(
+        &self,
+        session_key: &str,
+        anchor_ordinal: Option<u32>,
+        before: usize,
+        after: usize,
+        max_chars: usize,
+    ) -> MemoryIndexResult<SessionWindow> {
+        let before = before.clamp(1, 500);
+        let after = after.clamp(1, 500);
+        let max_chars = max_chars.clamp(200, 400_000);
+
+        // Read one ordered slice: `ordinal > cursor` ascending, or
+        // `ordinal < cursor` descending (for the before-side of an anchor).
+        let read_slice = |cursor: Option<u32>, ascending: bool, limit: usize| {
+            let cursor_value = match cursor {
+                Some(value) => value as i64,
+                // Descending-with-no-cursor never happens (before requires an
+                // anchor); ascending-with-no-cursor starts at the first row.
+                None if ascending => -1,
+                None => i64::MAX,
+            };
+            let (comparison, order) = if ascending {
+                ("m.ordinal > ?2", "ASC")
+            } else {
+                ("m.ordinal < ?2", "DESC")
+            };
+            let sql = format!(
+                "SELECT {HIT_COLUMNS}
+                 FROM {HIT_FROM}
+                 WHERE s.session_key = ?1
+                   AND {comparison}
+                 ORDER BY m.ordinal {order}
+                 LIMIT ?3"
+            );
+            let mut statement = self
+                .connection
+                .prepare(&sql)
+                .map_err(store_error("prepare session window"))?;
+            let rows = statement
+                .query_map(params![session_key, cursor_value, limit as i64], read_hit_row)
+                .map_err(store_error("read session window"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(store_error("read session window"))
+        };
+
+        let anchor = anchor_ordinal;
+        // Before-side: strictly below the anchor, read descending then
+        // reversed so the page stays in conversation order.
+        let mut older = if let Some(value) = anchor {
+            if before > 0 {
+                let mut slice = read_slice(Some(value), false, before)?;
+                slice.reverse();
+                slice
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        // From the anchor (or the session start when there is none) forward.
+        // The cursor is `anchor - 1` because the slice is `ordinal > cursor`,
+        // which includes the anchor row itself in the page.
+        let newer_cursor: Option<u32> = anchor.map(|value| value.wrapping_sub(1));
+        let mut newer = read_slice(newer_cursor, true, after.max(1))?;
+
+        older.append(&mut newer);
+        let messages = older;
+
+        let first_ordinal = messages.first().map(|hit| hit.ordinal);
+        let last_ordinal = messages.last().map(|hit| hit.ordinal);
+        // One-row existence probes either side of the kept page. These are
+        // what the client uses to know whether another page exists in that
+        // direction, independent of the budget truncation below.
+        let has_older = match first_ordinal {
+            // first == 0 means the session's very first message is on the page.
+            Some(first) if first > 0 => !read_slice(Some(first - 1), false, 1)?.is_empty(),
+            _ => false,
+        };
+        let has_newer = match last_ordinal {
+            Some(last) => !read_slice(Some(last), true, 1)?.is_empty(),
+            None => false,
+        };
+
+        let approx_tokens: usize = messages
+            .iter()
+            .map(|hit| approximate_tokens(&hit.text))
+            .sum();
+
+        Ok(SessionWindow {
+            session_key: session_key.to_string(),
+            messages,
+            first_ordinal,
+            last_ordinal,
+            has_older,
+            has_newer,
+            approx_tokens,
+        })
+    }
+
+    /// Full-text search over normalized message text.
     /// Full-text search over normalized message text.
     ///
     /// The caller's query is treated as literal terms, not FTS5 syntax — see
@@ -831,6 +965,16 @@ fn vendor_filter(vendors: &[MemoryVendor]) -> (String, Vec<String>) {
 
 fn clamp_limit(limit: usize) -> usize {
     limit.clamp(1, MAX_QUERY_LIMIT)
+}
+
+/// Rough token estimate for a page budget report: CJK scripts cost ~1 token
+/// per character, other scripts ~1 token per 4 characters. Exact counts are
+/// tokenizer-specific; this is the shared, dependency-free approximation.
+#[must_use]
+pub fn approximate_tokens(text: &str) -> usize {
+    let chars = text.chars().count();
+    let cjk = text.chars().filter(|c| super::cjk::is_cjk(*c)).count();
+    cjk + (chars - cjk) / 4
 }
 
 fn probe_fts5(connection: &Connection) -> MemoryIndexResult<()> {

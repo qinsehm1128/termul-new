@@ -334,6 +334,38 @@ impl MemoryIndexService {
         }))
     }
 
+    /// One page of a session's messages around an anchor ordinal — the paged
+    /// read that keyword search feeds into (search hits carry the session key
+    /// and the hit's ordinal). Returns the whole window: staleness filtering
+    /// is deliberately NOT applied to a context read, where holes mid-
+    /// conversation would be more misleading than stale rows.
+    pub fn session_window(
+        &self,
+        project_root: &Path,
+        session_key: &str,
+        anchor_ordinal: Option<u32>,
+        before: usize,
+        after: usize,
+        max_chars: usize,
+    ) -> MemoryIndexResult<super::store::SessionWindow> {
+        let (fence, store) = match self.open(project_root)? {
+            Some(open) => open,
+            None => {
+                return Ok(super::store::SessionWindow {
+                    session_key: session_key.to_string(),
+                    messages: Vec::new(),
+                    first_ordinal: None,
+                    last_ordinal: None,
+                    has_older: false,
+                    has_newer: false,
+                    approx_tokens: 0,
+                })
+            }
+        };
+        let _ = &fence; // binding enforced by the store's project_key check
+        store.session_window(session_key, anchor_ordinal, before, after, max_chars)
+    }
+
     /// Verify every row's source pointer, dropping the ones that no longer
     /// describe the bytes they were indexed from.
     ///

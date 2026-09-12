@@ -224,6 +224,31 @@ async fn serve(config: StdioConfig) -> Result<(), String> {
 /// Refreshing the index walks tens of thousands of files and can take minutes;
 /// it belongs to the explicit right-click action in the app, not to whatever
 /// happens to be connected over stdio.
+/// Page-shape defaults for `memory_session_messages` (legacy server tool).
+pub const DEFAULT_WINDOW_BEFORE: usize = 10;
+pub const DEFAULT_WINDOW_AFTER: usize = 10;
+pub const DEFAULT_WINDOW_MAX_CHARS: usize = 20_000;
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionMessagesInput {
+    /// Session key from `memory_search` or `memory_session_list`.
+    pub session_key: String,
+    /// The ordinal to read around — a search hit's `ordinal`. Absent = start
+    /// of the session.
+    pub anchor_ordinal: Option<u32>,
+    /// Context messages above the anchor. Defaults to 10.
+    #[serde(default)]
+    pub before: Option<usize>,
+    /// Context messages below the anchor (or page size without an anchor).
+    /// Defaults to 10.
+    #[serde(default)]
+    pub after: Option<usize>,
+    /// Hard budget on the page's text. Defaults to 20,000 characters.
+    #[serde(default)]
+    pub max_chars: Option<usize>,
+}
+
 struct MemoryMcpServer {
     service: MemoryIndexService,
     project_root: PathBuf,
@@ -291,6 +316,29 @@ impl MemoryMcpServer {
                 input.limit,
                 input.include_stale,
                 input.include_unscoped,
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_session_messages",
+        description = "Read one page of this project's session messages around an anchor ordinal (a search hit's `ordinal`), with `before`/`after` context and a character budget. Returns cursors (`first_ordinal`/`last_ordinal`/`has_older`/`has_newer`) for paging. Read-only."
+    )]
+    async fn memory_session_messages(
+        &self,
+        Parameters(input): Parameters<SessionMessagesInput>,
+    ) -> String {
+        let service = self.service.clone();
+        let project_root = self.project_root.clone();
+        run_blocking(move || {
+            service.session_window(
+                &project_root,
+                &input.session_key,
+                input.anchor_ordinal,
+                input.before.unwrap_or(DEFAULT_WINDOW_BEFORE),
+                input.after.unwrap_or(DEFAULT_WINDOW_AFTER),
+                input.max_chars.unwrap_or(DEFAULT_WINDOW_MAX_CHARS),
             )
         })
         .await
@@ -471,6 +519,32 @@ impl UniversalMemoryMcpServer {
         .await
     }
 
+    #[tool(
+        name = "memory_session_messages",
+        description = "Read one page of one project's session messages around an anchor ordinal (a search hit's `ordinal`), with `before`/`after` context and a character budget. Returns cursors (`first_ordinal`/`last_ordinal`/`has_older`/`has_newer`) for paging. Read-only. `project` is a key from `memory_projects`."
+    )]
+    async fn memory_session_messages(
+        &self,
+        Parameters(input): Parameters<UniversalSessionMessagesInput>,
+    ) -> String {
+        let project_root = match self.resolve_project(&input.project) {
+            Ok(root) => root,
+            Err(message) => return message,
+        };
+        let service = self.service.clone();
+        run_blocking(move || {
+            service.session_window(
+                &project_root,
+                &input.session_key,
+                input.anchor_ordinal,
+                input.before.unwrap_or(DEFAULT_WINDOW_BEFORE),
+                input.after.unwrap_or(DEFAULT_WINDOW_AFTER),
+                input.max_chars.unwrap_or(DEFAULT_WINDOW_MAX_CHARS),
+            )
+        })
+        .await
+    }
+
     fn resolve_error(&self, key: &str) -> String {
         tool_error(
             "MEMORY_INDEX_UNKNOWN_PROJECT",
@@ -499,6 +573,28 @@ pub struct UniversalSearchInput {
     pub include_unscoped: bool,
     #[serde(default)]
     pub include_stale: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UniversalSessionMessagesInput {
+    /// Namespace key from `memory_projects`.
+    pub project: String,
+    /// Session key from `memory_search` or `memory_session_list`.
+    pub session_key: String,
+    /// The ordinal to read around — a search hit's `ordinal`. Absent = start
+    /// of the session.
+    pub anchor_ordinal: Option<u32>,
+    /// Context messages above the anchor. Defaults to 10.
+    #[serde(default)]
+    pub before: Option<usize>,
+    /// Context messages below the anchor (or page size without an anchor).
+    /// Defaults to 10.
+    #[serde(default)]
+    pub after: Option<usize>,
+    /// Hard budget on the page's text. Defaults to 20,000 characters.
+    #[serde(default)]
+    pub max_chars: Option<usize>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -707,14 +803,14 @@ mod tests {
 
     /// The one thing this surface must never grow. A refresh walks tens of
     /// thousands of files; it belongs to the explicit action in the app.
-    /// Three read tools per server shape (legacy + universal) plus the
-    /// universal `memory_projects` listing = seven, all read-only.
+    /// Legacy server: 3 read tools + paged-messages = 4. Universal server:
+    /// `memory_projects` + those 4 = 5. Nine total, all read-only.
     #[test]
     fn this_server_exposes_no_write_or_build_tool() {
         let source = include_str!("stdio_mcp.rs");
         let code = source.split("#[cfg(test)]").next().unwrap();
         let tool_count = code.matches("#[tool(").count();
-        assert_eq!(tool_count, 7, "expected seven read-only tools");
+        assert_eq!(tool_count, 9, "expected nine read-only tools");
         for forbidden in ["service.build(", "build_index", "IngestOptions"] {
             assert!(
                 !code.contains(forbidden),
