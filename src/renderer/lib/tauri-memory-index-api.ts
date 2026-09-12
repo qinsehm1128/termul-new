@@ -63,6 +63,11 @@ export function createTauriMemoryIndexApi(): MemoryIndexApi {
       const raw = await invoke<unknown>('memory_index_mcp_invocation_cmd', { args })
       if (!Array.isArray(raw) || raw.length === 0) return null
       return raw.every((part) => typeof part === 'string') ? (raw as string[]) : null
+    },
+    async universalMcpInvocation(): Promise<string[] | null> {
+      const raw = await invoke<unknown>('memory_index_universal_mcp_invocation_cmd', {})
+      if (!Array.isArray(raw) || raw.length === 0) return null
+      return raw.every((part) => typeof part === 'string') ? (raw as string[]) : null
     }
   }
 }

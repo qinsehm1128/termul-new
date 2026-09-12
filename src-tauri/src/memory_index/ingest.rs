@@ -162,6 +162,9 @@ pub fn build_index(
     let location = fence.index_location(state_root)?;
     location.ensure_dir()?;
     let mut store = MemoryStore::open(&location.database_path, &location.namespace_key)?;
+    // Record the canonical root so the universal MCP server can map a
+    // namespace key back to the fence it must enforce.
+    store.write_project_root(fence.project().canonical())?;
 
     let mut report = IngestReport {
         project_key: location.namespace_key.clone(),

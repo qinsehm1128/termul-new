@@ -33,5 +33,8 @@ export const webMemoryIndexApi: MemoryIndexApi = {
    */
   async mcpInvocation() {
     return null
+  },
+  async universalMcpInvocation() {
+    return null
   }
 }

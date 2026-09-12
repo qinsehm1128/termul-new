@@ -44,6 +44,7 @@ use super::{MemoryIndexError, MemoryIndexResult, ERR_STORE_FAILED};
 
 const META_SCHEMA_VERSION: &str = "schema_version";
 const META_STORE_VERSION: &str = "store_version";
+const META_PROJECT_ROOT: &str = "project_root";
 const META_PROJECT_KEY: &str = "project_key";
 
 /// Version of the **on-disk table layout**, separate from
@@ -179,6 +180,14 @@ impl MemoryStore {
     /// `None` means there is no readable version marker: a missing file, an
     /// unreadable one, or a version-1 index, which never wrote the key.
     pub fn stored_version(database_path: &Path) -> Option<u32> {
+        Self::read_meta(database_path, META_STORE_VERSION)
+            .and_then(|value| value.parse().ok())
+    }
+
+    /// Read one meta row read-only. `None` on any failure (missing file,
+    /// missing row) — callers decide what a silent absence means.
+    #[must_use]
+    pub fn read_meta(database_path: &Path, key: &str) -> Option<String> {
         use rusqlite::OpenFlags;
         let connection = Connection::open_with_flags(
             database_path,
@@ -188,12 +197,34 @@ impl MemoryStore {
         connection
             .query_row(
                 "SELECT value FROM meta WHERE key = ?1",
-                params![META_STORE_VERSION],
+                params![key],
                 |row| row.get::<_, String>(0),
             )
-            .ok()?
-            .parse()
             .ok()
+    }
+
+    /// Record the canonical project root an index was built from. Written at
+    /// ingest so the universal MCP server can rebuild each project's fence
+    /// from the database itself, without trusting anything the client sent.
+    pub fn write_project_root(&self, project_root: &Path) -> MemoryIndexResult<()> {
+        self.connection
+            .execute(
+                "INSERT INTO meta(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![
+                    META_PROJECT_ROOT,
+                    project_root.to_string_lossy().into_owned()
+                ],
+            )
+            .map_err(store_error("write project root"))?;
+        Ok(())
+    }
+
+    /// The canonical project root recorded at build time, if this index has
+    /// been rebuilt since the universal server learned to look for it.
+    #[must_use]
+    pub fn stored_project_root(database_path: &Path) -> Option<String> {
+        Self::read_meta(database_path, META_PROJECT_ROOT)
     }
 
     /// Is an index on disk built by a layout this build can still read?

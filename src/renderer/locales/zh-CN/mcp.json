@@ -102,8 +102,7 @@
   },
   "memory": {
     "title": "记忆库 MCP 服务器",
-    "description": "导出内置的记忆库 MCP 服务器，让外部客户端（Claude Desktop、Codex、Claude Code）读取本项目的记忆。",
-    "project": "项目",
+    "description": "一个通用的记忆库 MCP 服务器，覆盖所有已建索引的项目。粘贴到外部客户端（Claude Desktop、Codex、Claude Code）后，客户端会自行列出项目并选择查询。",
     "format": "配置格式",
     "formatJson": "Claude JSON",
     "formatToml": "Codex TOML",
@@ -111,7 +110,6 @@
     "copy": "复制配置",
     "copied": "MCP 配置已复制",
     "copyFailed": "读取 MCP 配置失败",
-    "unavailable": "浏览器端拿不到 MCP 配置：它指向宿主机的可执行文件与状态目录",
-    "noProjects": "没有带文件夹路径的项目"
+    "unavailable": "浏览器端拿不到 MCP 配置：它指向宿主机的可执行文件与状态目录"
   }
 }

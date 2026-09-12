@@ -102,8 +102,7 @@
   },
   "memory": {
     "title": "Memory MCP server",
-    "description": "Export the built-in memory-index MCP server so external clients (Claude Desktop, Codex, Claude Code) can read this project's memory.",
-    "project": "Project",
+    "description": "One universal server for every indexed project. Paste it into an external client (Claude Desktop, Codex, Claude Code); the client lists your projects and picks what to query.",
     "format": "Config format",
     "formatJson": "Claude JSON",
     "formatToml": "Codex TOML",
@@ -111,7 +110,6 @@
     "copy": "Copy config",
     "copied": "MCP config copied",
     "copyFailed": "Could not read the MCP config",
-    "unavailable": "The MCP config is not available in the browser: it names the host's executable and state directory",
-    "noProjects": "No project with a folder path"
+    "unavailable": "The MCP config is not available in the browser: it names the host's executable and state directory"
   }
 }

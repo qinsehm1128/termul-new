@@ -52,6 +52,10 @@ export const memoryIndexApi: MemoryIndexApi = {
   mcpInvocation(args: MemoryIndexScopeArgs): Promise<string[] | null> {
     if (!isTauriContext()) return webMemoryIndexApi.mcpInvocation(args)
     return tauriMemoryIndexApi.mcpInvocation(args)
+  },
+  universalMcpInvocation(): Promise<string[] | null> {
+    if (!isTauriContext()) return webMemoryIndexApi.universalMcpInvocation()
+    return tauriMemoryIndexApi.universalMcpInvocation()
   }
 }
 

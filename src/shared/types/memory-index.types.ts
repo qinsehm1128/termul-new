@@ -313,6 +313,12 @@ export interface MemoryIndexApi {
    * on is worse than saying the surface has no answer.
    */
   mcpInvocation(args: MemoryIndexScopeArgs): Promise<string[] | null>
+  /**
+   * The universal memory MCP invocation: one server, every indexed project.
+   * `null` on the browser client, whose paths would name a machine it does
+   * not run on.
+   */
+  universalMcpInvocation(): Promise<string[] | null>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

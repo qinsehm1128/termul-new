@@ -9,13 +9,25 @@
 //! therefore not an optimization; it is the only route by which the memory index
 //! is usable outside the app.
 //!
+//! ## Modes
+//!
+//! **Universal (no `--project`)** — the intended shape. The server enumerates
+//! every project with an index under the state root (`memory_projects`) and
+//! each read tool takes a `project` selector (the namespace key returned by
+//! that listing). The client decides which project to ask about.
+//!
+//! **Legacy (`--project <path>`)** — the v0.9.0 shape, kept so client configs
+//! exported by the previous release keep working: the three read tools are
+//! pinned to that one project and cannot see any other.
+//!
 //! ## Authorization
 //!
-//! The project is fixed at spawn time from `--project` and is not a parameter of
-//! any tool. A client cannot ask this process about a different project, and a
-//! second project needs a second process. Beyond that the boundary is the
-//! process itself: the server runs as whoever launched it, over their own files,
-//! which is the same model every stdio MCP server uses.
+//! The process boundary is the outer fence in both modes: the server runs as
+//! whoever launched it, over their own files, which is the same model every
+//! stdio MCP server uses. In universal mode the per-tool fence is rebuilt from
+//! the project root recorded in the index database itself (written at build
+//! time), never from client input, and an index that predates that recording
+//! is reported as needing a rebuild rather than being served blind.
 //!
 //! `--state-root` is required rather than inferred. The desktop names its state
 //! root through Tauri's `app_data_dir()`; re-deriving that platform path here
@@ -27,10 +39,12 @@
 use std::path::{Path, PathBuf};
 
 use rmcp::handler::server::wrapper::Parameters;
+use rmcp::schemars;
 use rmcp::service::serve_server;
 use rmcp::{tool, tool_router};
 
 use super::service::{MemoryIndexService, MemorySearchRequest};
+use super::store::MemoryStore;
 use crate::acp::host_mcp::{MemorySearchInput, MemorySessionGetInput, MemorySessionListInput};
 
 /// The subcommand flag. Named for what it serves, and public so the desktop can
@@ -51,11 +65,13 @@ pub fn is_invocation() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StdioConfig {
-    pub project_root: PathBuf,
+    /// `None` = universal mode (project chosen per tool call);
+    /// `Some` = legacy single-project mode kept for v0.9.0 client configs.
+    pub project_root: Option<PathBuf>,
     pub state_root: PathBuf,
 }
 
-/// Parse `--memory-mcp-server --project <path> --state-root <path>`.
+/// Parse `--memory-mcp-server [--project <path>] --state-root <path>`.
 ///
 /// Returns an error string rather than an enum so `run()` can print it verbatim
 /// and exit non-zero, matching how the plan child reports a bad environment.
@@ -67,10 +83,10 @@ pub fn parse_args(args: &[String]) -> Result<StdioConfig, String> {
         match args[index].as_str() {
             MEMORY_MCP_ARG => {}
             PROJECT_ARG => {
-                project_root = Some(take_value(args, &mut index, PROJECT_ARG)?);
+                project_root = Some(PathBuf::from(take_value(args, &mut index, PROJECT_ARG)?));
             }
             STATE_ROOT_ARG => {
-                state_root = Some(take_value(args, &mut index, STATE_ROOT_ARG)?);
+                state_root = Some(PathBuf::from(take_value(args, &mut index, STATE_ROOT_ARG)?));
             }
             other if other.starts_with("--") => {
                 return Err(format!("unknown option {other}"));
@@ -79,11 +95,10 @@ pub fn parse_args(args: &[String]) -> Result<StdioConfig, String> {
         }
         index += 1;
     }
-    let project_root = project_root.ok_or_else(|| format!("missing {PROJECT_ARG} <path>"))?;
     let state_root = state_root.ok_or_else(|| format!("missing {STATE_ROOT_ARG} <path>"))?;
     Ok(StdioConfig {
-        project_root: PathBuf::from(project_root),
-        state_root: PathBuf::from(state_root),
+        project_root,
+        state_root,
     })
 }
 
@@ -95,19 +110,32 @@ fn take_value(args: &[String], index: &mut usize, flag: &str) -> Result<String, 
         .ok_or_else(|| format!("{flag} needs a value"))
 }
 
-/// The exact command line an external MCP client should be configured with.
-///
-/// Produced by the host, which knows its own state root, so the user never has
-/// to guess it.
+/// The exact command line a legacy single-project client should be configured
+/// with. Kept for compatibility with v0.9.0-exported configs.
 #[must_use]
 pub fn invocation_for(executable: &Path, config: &StdioConfig) -> Vec<String> {
+    let mut invocation = vec![
+        executable.to_string_lossy().into_owned(),
+        MEMORY_MCP_ARG.to_string(),
+    ];
+    if let Some(project_root) = &config.project_root {
+        invocation.push(PROJECT_ARG.to_string());
+        invocation.push(project_root.to_string_lossy().into_owned());
+    }
+    invocation.push(STATE_ROOT_ARG.to_string());
+    invocation.push(config.state_root.to_string_lossy().into_owned());
+    invocation
+}
+
+/// The universal invocation: one server, every indexed project, chosen by the
+/// client per query. This is what the Settings export card copies.
+#[must_use]
+pub fn universal_invocation_for(executable: &Path, state_root: &Path) -> Vec<String> {
     vec![
         executable.to_string_lossy().into_owned(),
         MEMORY_MCP_ARG.to_string(),
-        PROJECT_ARG.to_string(),
-        config.project_root.to_string_lossy().into_owned(),
         STATE_ROOT_ARG.to_string(),
-        config.state_root.to_string_lossy().into_owned(),
+        state_root.to_string_lossy().into_owned(),
     ]
 }
 
@@ -119,17 +147,21 @@ pub fn run() -> i32 {
         Err(message) => {
             eprintln!("[memory-mcp] {message}");
             eprintln!(
-                "[memory-mcp] usage: {MEMORY_MCP_ARG} {PROJECT_ARG} <project dir> \
+                "[memory-mcp] usage: {MEMORY_MCP_ARG} [--project <project dir>] \
                  {STATE_ROOT_ARG} <host state dir>"
             );
             return 1;
         }
     };
     // Fail at startup, not on the first query: a client that was configured with
-    // a bad path should find out when it starts the server.
-    if let Err(error) = super::scope::ProjectFence::single(&config.project_root) {
-        eprintln!("[memory-mcp] {error}");
-        return 1;
+    // a bad path should find out when it starts the server. Only the legacy
+    // single-project mode has a spawn-time fence to verify; universal mode
+    // validates each requested project against its index on every call.
+    if let Some(project_root) = &config.project_root {
+        if let Err(error) = super::scope::ProjectFence::single(project_root) {
+            eprintln!("[memory-mcp] {error}");
+            return 1;
+        }
     }
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -153,17 +185,37 @@ pub fn run() -> i32 {
 
 async fn serve(config: StdioConfig) -> Result<(), String> {
     let (stdin, stdout) = rmcp::transport::io::stdio();
-    let service = MemoryMcpServer {
-        service: MemoryIndexService::new(config.state_root),
-        project_root: config.project_root,
-    };
-    let running = serve_server(service, (stdin, stdout))
-        .await
-        .map_err(|error| format!("mcp server initialize failed: {error}"))?;
-    running
-        .waiting()
-        .await
-        .map_err(|error| format!("mcp server ended with error: {error}"))?;
+    let service = MemoryIndexService::new(config.state_root.clone());
+    // Each branch runs to completion inside its own scope: the two server
+    // types are distinct concrete types and must not be unified.
+    match &config.project_root {
+        Some(project_root) => {
+            let server = MemoryMcpServer {
+                service,
+                project_root: project_root.clone(),
+            };
+            let running = serve_server(server, (stdin, stdout))
+                .await
+                .map_err(|error| format!("mcp server initialize failed: {error}"))?;
+            running
+                .waiting()
+                .await
+                .map_err(|error| format!("mcp server ended with error: {error}"))?;
+        }
+        None => {
+            let server = UniversalMemoryMcpServer {
+                service,
+                state_root: config.state_root.clone(),
+            };
+            let running = serve_server(server, (stdin, stdout))
+                .await
+                .map_err(|error| format!("mcp server initialize failed: {error}"))?;
+            running
+                .waiting()
+                .await
+                .map_err(|error| format!("mcp server ended with error: {error}"))?;
+        }
+    }
     Ok(())
 }
 
@@ -245,8 +297,238 @@ impl MemoryMcpServer {
     }
 }
 
-/// Run a blocking store query off the reactor and render the answer as JSON.
-///
+/// Universal-mode server: one process serves every indexed project, and each
+/// read tool names its project by the namespace key returned from
+/// `memory_projects`. The fence is rebuilt per call from the project root
+/// recorded in that project's index database — never from client input.
+struct UniversalMemoryMcpServer {
+    service: MemoryIndexService,
+    state_root: PathBuf,
+}
+
+/// One entry of the `memory_projects` listing.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryProjectListing {
+    /// Namespace key the read tools take as their `project` selector.
+    key: String,
+    /// Human-readable project label (folder name embedded in the key).
+    label: String,
+    /// Canonical project root, when the index has recorded one. `null` means
+    /// the index predates universal mode — rebuild it in the app to serve it.
+    project_root: Option<String>,
+}
+
+const KEY_ALLOWED: &str = "abcdefghijklmnopqrstuvwxyz0123456789-";
+
+/// A namespace key is machine-generated (`label-digest`); requiring this
+/// alphabet makes it impossible for a caller to traverse out of the
+/// memory-index directory through the `project` selector.
+fn is_namespace_key(key: &str) -> bool {
+    !key.is_empty() && key.chars().all(|c| KEY_ALLOWED.contains(c))
+}
+
+fn index_database_path(state_root: &Path, key: &str) -> PathBuf {
+    state_root.join("memory-index").join(key).join("index.sqlite3")
+}
+
+#[tool_router(server_handler)]
+impl UniversalMemoryMcpServer {
+    /// Every project with a readable index under this state root, newest
+    /// information first not guaranteed — the listing is alphabetical by key.
+    fn list_projects(&self) -> Vec<MemoryProjectListing> {
+        let dir = self.state_root.join("memory-index");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut listings: Vec<MemoryProjectListing> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .filter_map(|path| {
+                let key = path.file_name()?.to_string_lossy().into_owned();
+                if !is_namespace_key(&key) {
+                    return None;
+                }
+                let database = index_database_path(&self.state_root, &key);
+                if !database.is_file() {
+                    return None;
+                }
+                let label = key
+                    .rsplit_once('-')
+                    .map(|(label, _)| label.to_string())
+                    .unwrap_or_else(|| key.clone());
+                Some(MemoryProjectListing {
+                    project_root: MemoryStore::stored_project_root(&database),
+                    key,
+                    label,
+                })
+            })
+            .collect();
+        listings.sort_by(|a, b| a.key.cmp(&b.key));
+        listings
+    }
+
+    /// Resolve a client-supplied project selector to the canonical project
+    /// root recorded in that index. Legacy indexes without the record cannot
+    /// be served — the caller is told to rebuild rather than being served
+    /// without a verifiable fence.
+    fn resolve_project(&self, key: &str) -> Result<PathBuf, String> {
+        if !is_namespace_key(key) {
+            return Err(format!("{TOOL_ERROR_MARKER} VALIDATION_ERROR: unknown project {key}"));
+        }
+        let database = index_database_path(&self.state_root, key);
+        let root = MemoryStore::stored_project_root(&database).ok_or_else(|| {
+            format!(
+                "{TOOL_ERROR_MARKER} MEMORY_INDEX_REBUILD_REQUIRED: \
+                 this index predates universal mode; rebuild it in the Se app"
+            )
+        })?;
+        Ok(PathBuf::from(root))
+    }
+
+    #[tool(
+        name = "memory_projects",
+        description = "List every project whose cross-agent conversation memory this server can query. Each entry's `key` is the `project` selector the other memory tools take; `projectRoot` is the folder it covers. Call this first."
+    )]
+    async fn memory_projects(&self) -> String {
+        let listings = self.list_projects();
+        serde_json::to_string_pretty(&listings)
+            .unwrap_or_else(|error| tool_error("MEMORY_INDEX_ENCODE_FAILED", &error.to_string()))
+    }
+
+    #[tool(
+        name = "memory_search",
+        description = "Search one project's cross-agent conversation memory — every past Claude Code, Codex and pi session for it, normalized into one shape. Use it before re-deriving something the project has already worked through. Read-only. `project` is a key from `memory_projects`."
+    )]
+    async fn memory_search(
+        &self,
+        Parameters(input): Parameters<UniversalSearchInput>,
+    ) -> String {
+        let Ok(project_root) = self.resolve_project(&input.project) else {
+            return self.resolve_error(&input.project);
+        };
+        let service = self.service.clone();
+        run_blocking(move || {
+            service.search(
+                &project_root,
+                &MemorySearchRequest {
+                    query: input.query,
+                    limit: input.limit,
+                    agents: input.agents,
+                    include_unscoped: input.include_unscoped,
+                    include_stale: input.include_stale,
+                },
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_session_list",
+        description = "List one project's indexed agent sessions, newest first by the time of their FIRST message (not file modification time). Read-only. `project` is a key from `memory_projects`."
+    )]
+    async fn memory_session_list(
+        &self,
+        Parameters(input): Parameters<UniversalSessionListInput>,
+    ) -> String {
+        let Ok(project_root) = self.resolve_project(&input.project) else {
+            return self.resolve_error(&input.project);
+        };
+        let service = self.service.clone();
+        run_blocking(move || {
+            service.list_sessions(
+                &project_root,
+                input.limit,
+                input.include_unscoped,
+                &input.agents,
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_session_get",
+        description = "Read one indexed session's messages in transcript order, given a sessionKey from memory_search or memory_session_list. Read-only. `project` is a key from `memory_projects`."
+    )]
+    async fn memory_session_get(
+        &self,
+        Parameters(input): Parameters<UniversalSessionGetInput>,
+    ) -> String {
+        let Ok(project_root) = self.resolve_project(&input.project) else {
+            return self.resolve_error(&input.project);
+        };
+        let service = self.service.clone();
+        run_blocking(move || {
+            service.get_session(
+                &project_root,
+                &input.session_key,
+                input.limit,
+                input.include_stale,
+                input.include_unscoped,
+            )
+        })
+        .await
+    }
+
+    fn resolve_error(&self, key: &str) -> String {
+        tool_error(
+            "MEMORY_INDEX_UNKNOWN_PROJECT",
+            &format!("unknown project {key}; call memory_projects first"),
+        )
+    }
+}
+
+/// Tool inputs for the universal server. These are stdio_mcp-local on purpose:
+/// they carry a `project` selector the single-project inputs never had, and
+/// the shared host_mcp inputs must not grow one (its frame has no project).
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UniversalSearchInput {
+    /// Namespace key from `memory_projects`.
+    pub project: String,
+    /// Words to look for. Treated as literal terms with implicit AND.
+    pub query: String,
+    /// Maximum hits to return. Defaults to 20, capped at 200.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Restrict to particular agents (`claude-code`, `codex`, `pi`).
+    #[serde(default)]
+    pub agents: Vec<String>,
+    #[serde(default)]
+    pub include_unscoped: bool,
+    #[serde(default)]
+    pub include_stale: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UniversalSessionListInput {
+    /// Namespace key from `memory_projects`.
+    pub project: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub agents: Vec<String>,
+    #[serde(default)]
+    pub include_unscoped: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UniversalSessionGetInput {
+    /// Namespace key from `memory_projects`.
+    pub project: String,
+    /// Session key from `memory_search` or `memory_session_list`.
+    pub session_key: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub include_stale: bool,
+    #[serde(default)]
+    pub include_unscoped: bool,
+}
+
 /// SQLite reads are blocking; running them on the current-thread runtime would
 /// stall the stdio transport for the duration of a query.
 ///
@@ -332,19 +614,19 @@ mod tests {
             "/state",
         ]))
         .unwrap();
-        assert_eq!(config.project_root, PathBuf::from("/repo"));
+        assert_eq!(config.project_root, Some(PathBuf::from("/repo")));
         assert_eq!(config.state_root, PathBuf::from("/state"));
     }
 
-    /// Both paths are required. Inferring either one is what would let this
-    /// server read a different directory than the app writes.
+    /// `--project` is now optional (universal mode); `--state-root` never is.
     #[test]
-    fn both_paths_are_required() {
+    fn state_root_is_required_project_is_not() {
         let missing_state = parse_args(&args(&[MEMORY_MCP_ARG, PROJECT_ARG, "/repo"])).unwrap_err();
         assert!(missing_state.contains(STATE_ROOT_ARG), "{missing_state}");
-        let missing_project =
-            parse_args(&args(&[MEMORY_MCP_ARG, STATE_ROOT_ARG, "/state"])).unwrap_err();
-        assert!(missing_project.contains(PROJECT_ARG), "{missing_project}");
+
+        let universal =
+            parse_args(&args(&[MEMORY_MCP_ARG, STATE_ROOT_ARG, "/state"])).unwrap();
+        assert_eq!(universal.project_root, None);
     }
 
     #[test]
@@ -377,8 +659,10 @@ mod tests {
     #[test]
     fn the_printed_invocation_round_trips_through_the_parser() {
         let config = StdioConfig {
-            project_root: PathBuf::from("/Users/qs/project/me/termul"),
-            state_root: PathBuf::from("/Users/qs/Library/Application Support/com.se-manager.app"),
+            project_root: Some(PathBuf::from("/Users/qs/project/me/termul")),
+            state_root: PathBuf::from(
+                "/Users/qs/Library/Application Support/com.se-manager.app",
+            ),
         };
         let invocation = invocation_for(Path::new("/Applications/Se.app/se-manager"), &config);
         assert_eq!(invocation[0], "/Applications/Se.app/se-manager");
@@ -423,12 +707,14 @@ mod tests {
 
     /// The one thing this surface must never grow. A refresh walks tens of
     /// thousands of files; it belongs to the explicit action in the app.
+    /// Three read tools per server shape (legacy + universal) plus the
+    /// universal `memory_projects` listing = seven, all read-only.
     #[test]
     fn this_server_exposes_no_write_or_build_tool() {
         let source = include_str!("stdio_mcp.rs");
         let code = source.split("#[cfg(test)]").next().unwrap();
         let tool_count = code.matches("#[tool(").count();
-        assert_eq!(tool_count, 3, "expected exactly three read-only tools");
+        assert_eq!(tool_count, 7, "expected seven read-only tools");
         for forbidden in ["service.build(", "build_index", "IngestOptions"] {
             assert!(
                 !code.contains(forbidden),

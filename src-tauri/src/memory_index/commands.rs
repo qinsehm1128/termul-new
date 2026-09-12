@@ -246,8 +246,23 @@ pub async fn memory_index_mcp_invocation_cmd(
     Ok(super::stdio_mcp::invocation_for(
         &executable,
         &super::stdio_mcp::StdioConfig {
-            project_root: PathBuf::from(args.project_root),
+            project_root: Some(PathBuf::from(args.project_root)),
             state_root: service.state_root().to_path_buf(),
         },
+    ))
+}
+
+/// The universal memory MCP invocation: one server that lists every indexed
+/// project and lets the client pick per query. No project argument — the
+/// project selection happens inside the server, not in the client config.
+#[tauri::command]
+pub async fn memory_index_universal_mcp_invocation_cmd(
+    service: State<'_, Arc<MemoryIndexService>>,
+) -> Result<Vec<String>, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("could not resolve executable: {error}"))?;
+    Ok(super::stdio_mcp::universal_invocation_for(
+        &executable,
+        service.state_root(),
     ))
 }
