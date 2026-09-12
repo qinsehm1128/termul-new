@@ -43,7 +43,7 @@ use rmcp::schemars;
 use rmcp::service::serve_server;
 use rmcp::{tool, tool_router};
 
-use super::service::{MemoryIndexService, MemorySearchRequest};
+use super::service::{MemoryIndexService, MemorySearchRequest, MemorySearchResponse};
 use super::store::MemoryStore;
 use crate::acp::host_mcp::{MemorySearchInput, MemorySessionGetInput, MemorySessionListInput};
 
@@ -229,6 +229,58 @@ pub const DEFAULT_WINDOW_BEFORE: usize = 10;
 pub const DEFAULT_WINDOW_AFTER: usize = 10;
 pub const DEFAULT_WINDOW_MAX_CHARS: usize = 20_000;
 
+const SNIPPET_CHARS: usize = 300;
+
+/// Search results are progressive disclosure: return a small window centered
+/// on the first query-word match, not the full document. The AI judges
+/// relevance from the snippet and drills down via `memory_session_messages`.
+fn snippet_around(text: &str, query: &str, window: usize) -> String {
+    let lowered = text.to_lowercase();
+    let lowered_query = query.to_lowercase();
+    let first_word = lowered_query
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+
+    let match_char = if first_word.is_empty() {
+        0
+    } else {
+        match lowered.find(&first_word) {
+            Some(byte_pos) => lowered[..byte_pos].chars().count(),
+            None => 0,
+        }
+    };
+
+    let total = text.chars().count();
+    let half = window / 2;
+    let start = match_char.saturating_sub(half);
+    let end = (start + window).min(total);
+
+    let mut result = String::new();
+    if start > 0 {
+        result.push('…');
+    }
+    result.extend(text.chars().skip(start).take(end - start));
+    if end < total {
+        result.push('…');
+    }
+    result
+}
+
+/// Post-process a search response for progressive disclosure: shrink
+/// compaction summaries and hit texts to query-centered snippets. The full
+/// content remains available via `memory_session_messages` / `memory_session_get`.
+fn truncate_search_results(response: &mut MemorySearchResponse) {
+    let query = response.query.clone();
+    for compaction in &mut response.compactions {
+        compaction.summary = snippet_around(&compaction.summary, &query, SNIPPET_CHARS);
+    }
+    for hit in &mut response.hits {
+        hit.text = snippet_around(&hit.text, &query, SNIPPET_CHARS);
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionMessagesInput {
@@ -263,11 +315,12 @@ impl MemoryMcpServer {
     async fn memory_search(&self, Parameters(input): Parameters<MemorySearchInput>) -> String {
         let service = self.service.clone();
         let project_root = self.project_root.clone();
-        run_blocking(move || {
+        let query = input.query.clone();
+        let inner = tokio::task::spawn_blocking(move || {
             service.search(
                 &project_root,
                 &MemorySearchRequest {
-                    query: input.query,
+                    query,
                     limit: input.limit,
                     agents: input.agents,
                     include_unscoped: input.include_unscoped,
@@ -276,6 +329,16 @@ impl MemoryMcpServer {
             )
         })
         .await
+        .map_err(|error| format!("spawn_blocking join error: {error}"));
+        let mut response = match inner {
+            Ok(Ok(r)) => r,
+            Ok(Err(error)) => return tool_error(error.code, &error.detail),
+            Err(e) => return tool_error("MEMORY_INDEX_QUERY_PANICKED", &e),
+        };
+
+        truncate_search_results(&mut response);
+        serde_json::to_string_pretty(&response)
+            .unwrap_or_else(|error| tool_error("MEMORY_INDEX_ENCODE_FAILED", &error.to_string()))
     }
 
     #[tool(
@@ -457,11 +520,12 @@ impl UniversalMemoryMcpServer {
             return self.resolve_error(&input.project);
         };
         let service = self.service.clone();
-        run_blocking(move || {
+        let query = input.query.clone();
+        let inner = tokio::task::spawn_blocking(move || {
             service.search(
                 &project_root,
                 &MemorySearchRequest {
-                    query: input.query,
+                    query,
                     limit: input.limit,
                     agents: input.agents,
                     include_unscoped: input.include_unscoped,
@@ -470,6 +534,16 @@ impl UniversalMemoryMcpServer {
             )
         })
         .await
+        .map_err(|error| format!("spawn_blocking join error: {error}"));
+        let mut response = match inner {
+            Ok(Ok(r)) => r,
+            Ok(Err(error)) => return tool_error(error.code, &error.detail),
+            Err(e) => return tool_error("MEMORY_INDEX_QUERY_PANICKED", &e),
+        };
+
+        truncate_search_results(&mut response);
+        serde_json::to_string_pretty(&response)
+            .unwrap_or_else(|error| tool_error("MEMORY_INDEX_ENCODE_FAILED", &error.to_string()))
     }
 
     #[tool(
