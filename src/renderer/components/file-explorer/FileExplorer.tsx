@@ -899,7 +899,6 @@ export function FileExplorer({
           if (key === normalizedDeletePath || key.startsWith(`${normalizedDeletePath}/`)) {
             newExpanded.delete(key)
             newContents.delete(key)
-            void filesystemApi.unwatchDirectory(key)
           }
         }
       } else if (editorState.openFiles.has(target.path)) {
