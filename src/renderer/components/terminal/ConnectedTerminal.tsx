@@ -50,6 +50,7 @@ import {
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
+import { claimWebglSlot, dropWebglSlot, releaseWebglVisibility } from '@/lib/webgl-renderer-budget'
 import {
   useTerminalBufferSize,
   useTerminalFontFamily,
@@ -2249,9 +2250,13 @@ function ConnectedTerminalComponent({
     }
   }, [disposeWebglAddon, rendererPreference])
 
-  // Hidden tabs keep their xterm buffer and PTY attachment, but release the
-  // scarce WebGL context. The DOM renderer continues maintaining terminal
-  // state while hidden; WebGL is restored when the tab becomes visible.
+  // Hidden tabs keep their xterm buffer, PTY attachment AND their WebGL
+  // context. Releasing the context on every hide meant an ordinary tab switch
+  // destroyed one context and built another, and left the hidden terminal on
+  // xterm's DOM renderer — its slowest path — still rendering every chunk its
+  // PTY produced. Contexts are now reclaimed only under budget pressure, and
+  // the victim is the least recently used HIDDEN terminal
+  // (see `lib/webgl-renderer-budget.ts`).
   useEffect(() => {
     if (!isVisible) {
       // Snapshot where the user was reading BEFORE the renderer churn below.
@@ -2267,23 +2272,36 @@ function ConnectedTerminalComponent({
       // clamp, so we re-assert the position once the show sequence settles.
       const scrollKey = ptyIdRef.current || externalTerminalIdRef.current
       if (scrollKey) captureScrollPosition(scrollKey)
+      // Still needed even though the context survives: the show path re-fits,
+      // and xterm's Viewport clamps the scroll position against the stale
+      // dimensions that re-fit briefly reports.
       needsSurfaceRestoreRef.current = true
-      disposeWebglAddon()
+      releaseWebglVisibility(instanceId)
       pixelScrollRef.current?.setEnabled(false)
       return
     }
 
     pixelScrollRef.current?.setEnabled(true)
-    if (
-      shouldUseWebglRenderer(rendererPreferenceRef.current) &&
-      terminalRef.current &&
-      loadWebglAddonRef.current &&
-      !webglAddonRef.current
-    ) {
-      webglRecoveryAttemptsRef.current = 0
-      loadWebglAddonRef.current(terminalRef.current)
+    if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+      // Claim before loading so any eviction needed to fit under the budget
+      // has already happened by the time this context is created.
+      claimWebglSlot(instanceId, disposeWebglAddon)
+      if (terminalRef.current && loadWebglAddonRef.current && !webglAddonRef.current) {
+        webglRecoveryAttemptsRef.current = 0
+        loadWebglAddonRef.current(terminalRef.current)
+      }
     }
-  }, [disposeWebglAddon, isVisible])
+  }, [disposeWebglAddon, isVisible, instanceId])
+
+  // Forget this instance's budget slot on unmount. The addon itself is
+  // disposed through the mount effect's own cleanup; dropping the slot here
+  // stops the registry from holding a released terminal as a future eviction
+  // candidate (and from counting against the budget forever).
+  useEffect(() => {
+    return () => {
+      dropWebglSlot(instanceId)
+    }
+  }, [instanceId])
 
   // Trigger fit + PTY resize when terminal becomes visible
   // Uses the two-stage resize pipeline via forceResizeFit,

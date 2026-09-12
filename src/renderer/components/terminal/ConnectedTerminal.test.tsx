@@ -207,6 +207,7 @@ Object.defineProperty(window, 'api', {
 import { clipboardApi, systemApi, terminalApi } from '@/lib/api'
 import { openFilePathFromTerminal } from '@/lib/file-path-links'
 import { addRendererRef, registerPrimaryTerminalData, removeRendererRef } from '@/lib/terminal-api'
+import { _resetWebglBudgetForTesting } from '@/lib/webgl-renderer-budget'
 import { ConnectedTerminal } from './ConnectedTerminal'
 import { clearTerminalCache, disposeCachedTerminal, hasCachedTerminal } from './terminal-cache'
 
@@ -378,6 +379,7 @@ describe('ConnectedTerminal', () => {
       .mockReturnValue('auto')
     vi.mocked(useTerminalScreenReaderMode).mockReturnValue(false)
     webglAddonCreateCount = 0
+    _resetWebglBudgetForTesting()
     capturedContextLossCallback = null
     xtermHandles.scrollCallback = null
     xtermHandles.dataCallback = null
@@ -2794,9 +2796,12 @@ describe('ConnectedTerminal', () => {
 
       rerender(<ConnectedTerminal isVisible={true} />)
       await vi.waitFor(() => {
-        expect(webglAddonCreateCount).toBe(2)
+        expect(mockPixelScrollSetEnabled).toHaveBeenLastCalledWith(true)
       })
-      expect(mockPixelScrollSetEnabled).toHaveBeenCalledWith(true)
+      // The surface repair below must still happen even though the context was
+      // never torn down — the show path re-fits, and that is what leaves the
+      // renderer reporting stale dimensions.
+      expect(webglAddonCreateCount).toBe(1)
 
       await vi.advanceTimersByTimeAsync(20)
       await vi.advanceTimersByTimeAsync(20)
@@ -2807,7 +2812,7 @@ describe('ConnectedTerminal', () => {
       vi.useRealTimers()
     })
 
-    it('should release WebGL while hidden and restore it when visible again', async () => {
+    it('keeps the WebGL context across a hide/show cycle instead of rebuilding it', async () => {
       const { rerender } = render(<ConnectedTerminal isVisible={true} />)
 
       await vi.waitFor(() => {
@@ -2815,17 +2820,24 @@ describe('ConnectedTerminal', () => {
       })
       const visibleWebgl = lastCreatedWebglInstance
       expect(visibleWebgl).toBeTruthy()
+      expect(webglAddonCreateCount).toBe(1)
 
       rerender(<ConnectedTerminal isVisible={false} />)
       await vi.waitFor(() => {
-        expect(visibleWebgl?.dispose).toHaveBeenCalledTimes(1)
+        expect(mockPixelScrollSetEnabled).toHaveBeenCalledWith(false)
       })
+
+      // The point of the budget: hiding a tab no longer destroys its context,
+      // so it also no longer drops the terminal onto xterm's DOM renderer
+      // while it keeps consuming PTY output in the background.
+      expect(visibleWebgl?.dispose).not.toHaveBeenCalled()
       expect(webglAddonCreateCount).toBe(1)
 
       rerender(<ConnectedTerminal isVisible={true} />)
       await vi.waitFor(() => {
-        expect(webglAddonCreateCount).toBe(2)
+        expect(mockPixelScrollSetEnabled).toHaveBeenLastCalledWith(true)
       })
+      expect(webglAddonCreateCount).toBe(1)
     })
 
     it('should defer WebGL allocation until a hidden terminal becomes visible', async () => {
