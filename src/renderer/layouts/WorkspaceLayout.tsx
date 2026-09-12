@@ -63,6 +63,7 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePersistedPanelSize } from '@/hooks/use-persisted-panel-size'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
+import { flushPendingProjectsSnapshot } from '@/hooks/use-projects-persistence'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import { useSessionWorkspaceSync } from '@/hooks/use-session-workspace-sync'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
@@ -1023,11 +1024,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
         runCloseFlush('app-settings', waitForPendingAppSettingsPersistence()),
         runCloseFlush(
           'pending-writes',
-          persistenceApi.flushPendingWrites().then((result) => {
-            if (!result.success) {
-              throw new Error(result.error)
-            }
-          })
+          // The projects snapshot must be BUILT before the writes are flushed.
+          // A focus-only change waits out a coalesce window before
+          // `persistProjectsSnapshot` runs, so at this moment it has queued
+          // nothing for `flushPendingWrites` to find — quitting right after
+          // clicking a project lost that selection.
+          flushPendingProjectsSnapshot()
+            .then(() => persistenceApi.flushPendingWrites())
+            .then((result) => {
+              if (!result.success) {
+                throw new Error(result.error)
+              }
+            })
         ),
         // Note: waitForPendingSessionIndexWrite swallows rejections internally
         // (trackPendingIndexWrite catches and logs them), so its failure branch

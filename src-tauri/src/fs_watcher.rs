@@ -183,18 +183,57 @@ fn classify(kind: &EventKind) -> FileChangeKind {
     }
 }
 
+/// The kind for one path of an event, resolving a rename into the unlink/add
+/// pair the renderer contract is built around.
+///
+/// A rename used to arrive as `change` on both ends. The renderer only closes an
+/// editor tab on `unlink` (`use-file-watcher.ts`), so renaming an open file left
+/// a tab pointing at a path that no longer exists, and the new name never
+/// registered as an addition.
+///
+/// `From`/`To`/`Both` say which end a path is. macOS reports each side
+/// separately as `Any`, with nothing in the event to tell them apart — so ask
+/// the filesystem: the side that is gone is the one that went away. That stat
+/// only runs on rename events, which are rare next to writes.
+fn kind_for_path(event_kind: &EventKind, path: &Path, index: usize, total: usize) -> FileChangeKind {
+    use notify::event::{ModifyKind, RenameMode};
+    let EventKind::Modify(ModifyKind::Name(mode)) = event_kind else {
+        return classify(event_kind);
+    };
+    match mode {
+        RenameMode::From => FileChangeKind::Unlink,
+        RenameMode::To => FileChangeKind::Add,
+        RenameMode::Both if total == 2 => {
+            if index == 0 {
+                FileChangeKind::Unlink
+            } else {
+                FileChangeKind::Add
+            }
+        }
+        _ => {
+            if path.symlink_metadata().is_ok() {
+                FileChangeKind::Add
+            } else {
+                FileChangeKind::Unlink
+            }
+        }
+    }
+}
+
 /// Turn one raw notify event into the changes worth delivering.
 ///
 /// One output per surviving path, not one per event. A rename arrives as a
 /// single event carrying both the old and the new path; taking only the first
 /// silently lost the other end of it.
 fn expand_event(event: notify::Event, roots: &[PathBuf]) -> Vec<FileChangeEvent> {
-    let kind = classify(&event.kind);
+    let total = event.paths.len();
     event
         .paths
         .into_iter()
-        .filter(|path| !is_excluded_within(path, roots))
-        .filter_map(|path| {
+        .enumerate()
+        .filter(|(_, path)| !is_excluded_within(path, roots))
+        .filter_map(|(index, path)| {
+            let kind = kind_for_path(&event.kind, &path, index, total);
             path.to_str().map(|path| FileChangeEvent {
                 kind,
                 path: path.replace('\\', "/"),
@@ -339,6 +378,19 @@ impl FsWatcherService {
                         continue;
                     }
 
+                    let Some(service) = weak.upgrade() else { break };
+                    let sink = service.lock_inner().sink.clone();
+                    let Some(sink) = sink else {
+                        // Nobody is listening yet. Hold the batch rather than
+                        // draining it into the void: roots can be set before the
+                        // renderer subscribes, and a webview reload leaves a
+                        // window with no sink — changes made in either window
+                        // used to vanish with no trace. `MAX_BUFFERED` still
+                        // bounds how long this can go on.
+                        deadline = Some(Instant::now() + COALESCE_WINDOW);
+                        continue;
+                    };
+
                     let batch = coalescer.drain_batch();
                     deadline = if coalescer.is_empty() {
                         None
@@ -349,16 +401,8 @@ impl FsWatcherService {
                         Some(Instant::now())
                     };
 
-                    let Some(service) = weak.upgrade() else { break };
-                    let sink = service
-                        .inner
-                        .lock()
-                        .ok()
-                        .and_then(|inner| inner.sink.clone());
-                    if let Some(sink) = sink {
-                        if let Err(err) = sink.send(batch) {
-                            log::warn!("[fs-watcher] failed to deliver batch: {err}");
-                        }
+                    if let Err(err) = sink.send(batch) {
+                        log::warn!("[fs-watcher] failed to deliver batch: {err}");
                     }
                 }
             })
@@ -367,10 +411,22 @@ impl FsWatcherService {
         service
     }
 
+    /// Take the state lock, recovering from a poisoned mutex.
+    ///
+    /// `Inner` is a watcher handle, a root list and a channel — a panic while
+    /// holding this lock cannot leave any of them half-written. The three call
+    /// sites used to disagree about poisoning (one returned an error, one
+    /// silently dropped every batch, one silently failed to install the sink),
+    /// so an unrelated panic anywhere turned into file watching that was dead
+    /// for the rest of the session with nothing to point at.
+    fn lock_inner(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn set_sink(&self, channel: Channel<Batch>) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.sink = Some(channel);
-        }
+        self.lock_inner().sink = Some(channel);
     }
 
     /// Point the watcher at exactly `roots` (recursively), replacing whatever it
@@ -383,10 +439,7 @@ impl FsWatcherService {
     pub fn set_roots(&self, roots: Vec<PathBuf>) -> Result<(), String> {
         let desired = dedupe_roots(&roots);
 
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "fs watcher state poisoned".to_string())?;
+        let mut inner = self.lock_inner();
 
         if inner.roots == desired {
             return Ok(());
@@ -416,10 +469,31 @@ impl FsWatcherService {
         )
         .map_err(|err| format!("failed to create fs watcher: {err}"))?;
 
+        // A root that cannot be watched must not take the others down with it.
+        // One stale path in a group of twenty projects used to fail the whole
+        // call, leaving nothing watched — and the failure path dropped this
+        // half-registered watcher inline, joining its backend thread while
+        // still holding the state lock.
+        let mut failures: Vec<String> = Vec::new();
+        let mut watched = 0usize;
         for root in &desired {
-            watcher
-                .watch(root, RecursiveMode::Recursive)
-                .map_err(|err| format!("failed to watch {}: {err}", root.display()))?;
+            match watcher.watch(root, RecursiveMode::Recursive) {
+                Ok(()) => watched += 1,
+                Err(err) => failures.push(format!("{}: {err}", root.display())),
+            }
+        }
+
+        if watched == 0 {
+            drop(inner);
+            release_watcher(Some(watcher));
+            return Err(format!("failed to watch any root ({})", failures.join("; ")));
+        }
+        if !failures.is_empty() {
+            log::warn!(
+                "[fs-watcher] watching {watched}/{} roots; skipped {}",
+                desired.len(),
+                failures.join("; ")
+            );
         }
 
         let previous = inner.watcher.replace(watcher);
@@ -781,6 +855,98 @@ mod tests {
             watched < unfiltered,
             "exclusion removed nothing; the gate is not doing its job"
         );
+    }
+
+    #[test]
+    fn a_rename_becomes_an_unlink_and_an_add_not_two_changes() {
+        use notify::event::{ModifyKind, RenameMode};
+        let roots = vec![PathBuf::from("/p")];
+        let changes = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+                &["/p/old.ts", "/p/new.ts"],
+            ),
+            &roots,
+        );
+        // Both ends used to arrive as `change`, and the renderer only closes an
+        // editor tab on `unlink` — so the old name kept a tab pointing at a path
+        // that no longer existed.
+        assert_eq!(changes[0].kind, FileChangeKind::Unlink);
+        assert_eq!(changes[1].kind, FileChangeKind::Add);
+    }
+
+    #[test]
+    fn one_sided_rename_modes_pick_their_own_side() {
+        use notify::event::{ModifyKind, RenameMode};
+        let roots = vec![PathBuf::from("/p")];
+        let from = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+                &["/p/old.ts"],
+            ),
+            &roots,
+        );
+        assert_eq!(from[0].kind, FileChangeKind::Unlink);
+        let to = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+                &["/p/new.ts"],
+            ),
+            &roots,
+        );
+        assert_eq!(to[0].kind, FileChangeKind::Add);
+    }
+
+    #[test]
+    fn an_ambiguous_rename_asks_the_filesystem_which_side_it_is() {
+        use notify::event::{ModifyKind, RenameMode};
+        // macOS reports each side as `Any` with nothing to tell them apart.
+        let existing = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let roots = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))];
+
+        let present = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+                &[existing.to_str().expect("utf-8 path")],
+            ),
+            &roots,
+        );
+        assert_eq!(present[0].kind, FileChangeKind::Add);
+
+        let gone_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("definitely-not-here-xyz");
+        let gone = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+                &[gone_path.to_str().expect("utf-8 path")],
+            ),
+            &roots,
+        );
+        assert_eq!(gone[0].kind, FileChangeKind::Unlink);
+    }
+
+    #[test]
+    fn an_unwatchable_root_does_not_take_the_others_down_with_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = FsWatcherService::new();
+
+        // One live project plus one whose directory is gone — the shape a group
+        // takes as soon as a member is moved or deleted. (A sibling path, not a
+        // child: `dedupe_roots` would fold a child into its parent and the test
+        // would prove nothing.) Failing the whole call left every remaining
+        // project unwatched.
+        let missing = PathBuf::from("/se-manager-missing-root-xyz");
+        let result = service.set_roots(vec![dir.path().to_path_buf(), missing.clone()]);
+        assert!(
+            result.is_ok(),
+            "one bad root must not fail the set: {result:?}"
+        );
+        // The requested set is what gets cached, so a root that reappears is
+        // picked up by the next genuine change rather than churning the watcher.
+        assert_eq!(service.lock_inner().roots.len(), 2);
+
+        // Nothing watchable at all is still an error — that one the caller needs.
+        let all_bad = service.set_roots(vec![PathBuf::from("/se-manager-missing-root-2-xyz")]);
+        assert!(all_bad.is_err());
     }
 
     #[test]

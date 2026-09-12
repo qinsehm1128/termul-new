@@ -7597,40 +7597,6 @@ mod tests {
     }
 }
 
-/// Release an fs watcher resource without holding the UI thread.
-///
-/// `plugin:resources|close` is a plain (non-async) command, so Tauri runs it
-/// inline on whichever thread dispatched the IPC — and on macOS the custom
-/// protocol path lands on the AppKit main thread. Dropping a
-/// `notify::FsEventWatcher` there calls `stop()`, which joins the FSEvents
-/// thread with no timeout. A spindump caught exactly that: `Slow response to
-/// HID event`, 2.31s, with 158 of 231 samples parked in
-/// `FsEventWatcher::stop -> thread::join` on the main thread during an ordinary
-/// project switch. The whole window freezes for as long as the join runs.
-///
-/// Declaring this `async` puts it on the async runtime instead of the UI
-/// thread, and the resource is taken out of the table here but dropped on the
-/// blocking pool — so the join never runs on a thread the UI needs. The lookup
-/// order mirrors the plugin's own, because a resource registered against one
-/// table is invisible to the others.
-#[tauri::command]
-pub async fn release_fs_watcher(webview: Webview, rid: tauri::ResourceId) -> Result<(), String> {
-    use tauri::Manager;
-
-    let taken = webview
-        .resources_table()
-        .take_any(rid)
-        .or_else(|_| webview.window().resources_table().take_any(rid))
-        .or_else(|_| webview.app_handle().resources_table().take_any(rid))
-        .map_err(|err| err.to_string())?;
-
-    // Deliberately not awaited: the caller only needs the resource out of the
-    // table, and waiting on the join here would just move the stall onto the
-    // renderer's await instead of removing it.
-    tauri::async_runtime::spawn_blocking(move || drop(taken));
-    Ok(())
-}
-
 #[cfg(test)]
 mod remote_sync_projects_tests {
     use super::SyncProjectsPayload;

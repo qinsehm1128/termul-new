@@ -19,12 +19,13 @@ vi.mock('../tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
 }))
 
-// The watcher lifecycle no longer goes through the plugin's `watchImmediate`
-// wrapper. That wrapper hides the resource id behind a closure whose only
+// The watcher lifecycle no longer goes through the plugin at all. The plugin's
+// `watchImmediate` wrapper hides the resource id behind a closure whose only
 // release path is the synchronous `plugin:resources|close`, which drops the
 // `FsEventWatcher` — and joins its FSEvents thread — on the macOS UI thread.
-// Creation calls `plugin:fs|watch` for the id; release goes through the app's
-// own async `release_fs_watcher`.
+// The host owns one watcher now: `fs_watcher_subscribe` installs the sink and
+// `fs_watcher_set_roots` replaces the watched set, both async, so no release
+// ever runs on a thread the UI needs.
 const { mockInvoke, watchChannels } = vi.hoisted(() => ({
   mockInvoke: vi.fn(),
   watchChannels: [] as Array<{ onmessage: ((batch: unknown) => void) | null }>

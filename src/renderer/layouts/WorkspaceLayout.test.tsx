@@ -1560,15 +1560,21 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter(['/conversations'])
 
-      await waitFor(() => {
-        expect(mockApi.filesystem.setWatchRoots).toHaveBeenCalled()
-      })
+      // The generous budget matches its neighbours in this block: the whole
+      // layout mounts here, and the default 1s waitFor flakes under a loaded
+      // full-suite run.
+      await waitFor(
+        () => {
+          expect(mockApi.filesystem.setWatchRoots).toHaveBeenCalled()
+        },
+        { timeout: 10000 }
+      )
       // Every root set this route asks for is the project's — never the empty
       // set a conversation-scoped reading produces with no conversation open.
       for (const [roots] of mockApi.filesystem.setWatchRoots.mock.calls) {
         expect(roots).toEqual(['/workspace/a'])
       }
-    })
+    }, 15_000)
   })
 })
 

@@ -652,6 +652,28 @@ export function hasStructuralGroupChange(next: ProjectGroup[], prev: ProjectGrou
 const FOCUS_ONLY_COALESCE_MS = 500
 
 /**
+ * Flushes a focus-only change that is still inside its coalesce window.
+ *
+ * Registered by `useProjectsAutoSave` while it is mounted, null otherwise.
+ */
+let pendingFocusSnapshotFlush: (() => Promise<void>) | null = null
+
+/**
+ * Persist a coalesced focus-only change before the app closes.
+ *
+ * The close path flushes *queued* writes, and a change still inside its
+ * coalesce window has not produced one — `persistProjectsSnapshot` has not run
+ * yet. Without this the last project you selected within
+ * `FOCUS_ONLY_COALESCE_MS` of quitting was simply gone. Await this before
+ * `flushPendingWrites`, or the write it queues misses that flush too.
+ *
+ * No-op when nothing is pending, so the close path can always call it.
+ */
+export async function flushPendingProjectsSnapshot(): Promise<void> {
+  await pendingFocusSnapshotFlush?.()
+}
+
+/**
  * Hook to auto-save projects when the store changes
  * Subscribes to project store changes and triggers debounced writes
  */
@@ -676,9 +698,9 @@ export function useProjectsAutoSave(): void {
      * from the start of the window — that is what secret cleanup must diff
      * against.
      */
-    const flushSnapshot = (previousProjects: ProjectSnapshot[]): void => {
+    const flushSnapshot = (previousProjects: ProjectSnapshot[]): Promise<void> => {
       const current = useProjectStore.getState()
-      persistProjectsSnapshot(
+      return persistProjectsSnapshot(
         current.projects,
         current.activeProjectId,
         persistenceApi.writeDebounced,
@@ -689,6 +711,17 @@ export function useProjectsAutoSave(): void {
         console.error('Failed to auto-save projects:', err)
       })
     }
+
+    /** Run a queued focus-only flush now, if one is waiting. */
+    const flushCoalescedNow = async (): Promise<void> => {
+      if (!coalesceTimer) return
+      clearTimeout(coalesceTimer)
+      coalesceTimer = null
+      const previous = pendingPreviousProjects ?? []
+      pendingPreviousProjects = null
+      await flushSnapshot(previous)
+    }
+    pendingFocusSnapshotFlush = flushCoalescedNow
 
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
@@ -737,7 +770,7 @@ export function useProjectsAutoSave(): void {
         }
         const previous = pendingPreviousProjects ?? prevState.projects
         pendingPreviousProjects = null
-        flushSnapshot(previous)
+        void flushSnapshot(previous)
       } else {
         pendingPreviousProjects ??= prevState.projects
         if (!coalesceTimer) {
@@ -745,7 +778,7 @@ export function useProjectsAutoSave(): void {
             coalesceTimer = null
             const previous = pendingPreviousProjects ?? []
             pendingPreviousProjects = null
-            flushSnapshot(previous)
+            void flushSnapshot(previous)
           }, FOCUS_ONLY_COALESCE_MS)
         }
       }
@@ -789,12 +822,16 @@ export function useProjectsAutoSave(): void {
 
     return () => {
       unsubscribe()
+      pendingFocusSnapshotFlush = null
       if (coalesceTimer) {
         clearTimeout(coalesceTimer)
         coalesceTimer = null
       }
-      // Do not flush here: unmount races app close, and the close path already
-      // runs its own bounded flush.
+      // Not flushed here: unmount races app close, and this component's unmount
+      // is not a reliable moment to write. The close path calls
+      // `flushPendingProjectsSnapshot` before its write flush instead — it used
+      // to say the close path "already" covered this, which was not true: that
+      // path flushes queued writes, and a coalesced change has queued none.
       pendingPreviousProjects = null
     }
   }, [])

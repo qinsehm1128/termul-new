@@ -64,7 +64,7 @@ vi.mock('@/lib/web-server-api', () => ({
   webServerProjects: { list: vi.fn() }
 }))
 
-import { useProjectsAutoSave } from '../use-projects-persistence'
+import { flushPendingProjectsSnapshot, useProjectsAutoSave } from '../use-projects-persistence'
 
 function project(id: string, overrides: Partial<Project> = {}): Project {
   return { id, name: id.toUpperCase(), color: 'blue', path: `/${id}`, ...overrides } as Project
@@ -175,6 +175,49 @@ describe('useProjectsAutoSave write coalescing', () => {
     expect(writeDebouncedMock).toHaveBeenCalledTimes(1)
 
     unmount()
+  })
+
+  // The close path flushes QUEUED writes. A focus-only change inside its
+  // coalesce window has queued none — `persistProjectsSnapshot` has not run —
+  // so quitting right after clicking a project used to lose that selection,
+  // while a comment claimed the close path already covered it.
+  it('flushes a queued focus-only write for the close path', async () => {
+    const { unmount } = mountArmed()
+
+    act(() => {
+      useProjectStore.getState().selectProject('p2')
+    })
+    expect(writeDebouncedMock).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await flushPendingProjectsSnapshot()
+    })
+
+    // Queued before the close path's own write flush runs, not 500ms later.
+    expect(writeDebouncedMock).toHaveBeenCalledTimes(1)
+    const [, payload] = writeDebouncedMock.mock.calls[0] as [string, { activeProjectId?: string }]
+    expect(payload.activeProjectId).toBe('p2')
+
+    // The timer it replaced must not fire a second write.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FOCUS_ONLY_COALESCE_MS * 2)
+    })
+    expect(writeDebouncedMock).toHaveBeenCalledTimes(1)
+
+    unmount()
+  })
+
+  it('has nothing to flush once the hook is unmounted', async () => {
+    const { unmount } = mountArmed()
+    act(() => {
+      useProjectStore.getState().selectProject('p2')
+    })
+    unmount()
+
+    await act(async () => {
+      await flushPendingProjectsSnapshot()
+    })
+    expect(writeDebouncedMock).not.toHaveBeenCalled()
   })
 
   it('drops a queued focus-only write on unmount', async () => {
