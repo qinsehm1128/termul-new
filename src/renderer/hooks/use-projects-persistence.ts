@@ -576,6 +576,82 @@ export function useProjectsLoader(): void {
 }
 
 /**
+ * Whether two project lists differ in anything the persisted snapshot records.
+ *
+ * Deliberately excludes `isActive`: that flag is the per-client focus stamp
+ * `markActiveProject` writes, and `PersistedProject` does not carry it. Compared
+ * index-wise rather than by id so a reorder — which the persisted order records
+ * — still counts as structural.
+ */
+export function hasStructuralProjectChange(next: Project[], prev: Project[]): boolean {
+  if (next === prev) return false
+  if (next.length !== prev.length) return true
+
+  return next.some((project, index) => {
+    const previous = prev[index]
+    if (previous === undefined) return true
+    // `markActiveProject` preserves identity for every project whose flag did
+    // not move, so an unchanged reference settles it without field compares.
+    if (previous === project) return false
+    return (
+      project.id !== previous.id ||
+      project.name !== previous.name ||
+      project.color !== previous.color ||
+      project.path !== previous.path ||
+      project.isArchived !== previous.isArchived ||
+      project.isDefault !== previous.isDefault ||
+      project.gitBranch !== previous.gitBranch ||
+      project.defaultShell !== previous.defaultShell ||
+      project.isGitRepo !== previous.isGitRepo ||
+      project.activeWorktreeId !== previous.activeWorktreeId ||
+      JSON.stringify(project.envVars ?? []) !== JSON.stringify(previous.envVars ?? []) ||
+      JSON.stringify(project.worktrees ?? []) !== JSON.stringify(previous.worktrees ?? [])
+    )
+  })
+}
+
+/**
+ * Whether two group lists differ in anything but focus.
+ *
+ * Excludes `preferredProjectId` for the same reason `hasStructuralProjectChange`
+ * excludes `isActive`: selecting a project retargets its group's preference, so
+ * treating that as structural would classify every switch as an edit.
+ */
+export function hasStructuralGroupChange(next: ProjectGroup[], prev: ProjectGroup[]): boolean {
+  if (next === prev) return false
+  if (next.length !== prev.length) return true
+
+  return next.some((group, index) => {
+    const previous = prev[index]
+    if (previous === undefined) return true
+    if (previous === group) return false
+    return (
+      group.id !== previous.id ||
+      group.name !== previous.name ||
+      group.color !== previous.color ||
+      group.isCollapsed !== previous.isCollapsed ||
+      group.projectIds.length !== previous.projectIds.length ||
+      group.projectIds.some((id, position) => id !== previous.projectIds[position])
+    )
+  })
+}
+
+/**
+ * How long a focus-only change waits before it serialises.
+ *
+ * `persistProjectsSnapshot` rebuilds a persisted record for every project —
+ * reconciling secure-storage entries for any that carry secret env vars — so
+ * running it once per click was the dominant cost of switching tabs. The
+ * persisted bytes are identical either way; only the discarded intermediate
+ * snapshots are gone.
+ *
+ * Structural changes are NOT coalesced: deferring an add or remove would leave
+ * a window where the persisted snapshot describes a project set that never
+ * existed.
+ */
+const FOCUS_ONLY_COALESCE_MS = 500
+
+/**
  * Hook to auto-save projects when the store changes
  * Subscribes to project store changes and triggers debounced writes
  */
@@ -587,6 +663,32 @@ export function useProjectsAutoSave(): void {
     // store; never persist from the browser (the stubbed plugin-store would
     // silently drop writes, and edits belong on the desktop anyway).
     if (!isTauriContext()) return
+
+    let coalesceTimer: ReturnType<typeof setTimeout> | null = null
+    let pendingPreviousProjects: ProjectSnapshot[] | null = null
+
+    /**
+     * Serialise and write the snapshot from the CURRENT store state.
+     *
+     * Reads the store at call time rather than closing over the change event,
+     * so a coalesced flush persists the latest selection rather than whichever
+     * intermediate one happened to schedule it. `previousProjects` still comes
+     * from the start of the window — that is what secret cleanup must diff
+     * against.
+     */
+    const flushSnapshot = (previousProjects: ProjectSnapshot[]): void => {
+      const current = useProjectStore.getState()
+      persistProjectsSnapshot(
+        current.projects,
+        current.activeProjectId,
+        persistenceApi.writeDebounced,
+        previousProjects,
+        current.groups,
+        current.activeGroupId
+      ).catch((err: unknown) => {
+        console.error('Failed to auto-save projects:', err)
+      })
+    }
 
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
@@ -617,17 +719,36 @@ export function useProjectsAutoSave(): void {
         return
       }
 
-      // Convert projects to persisted format (async)
-      persistProjectsSnapshot(
-        state.projects,
-        state.activeProjectId,
-        persistenceApi.writeDebounced,
-        prevState.projects,
-        state.groups,
-        state.activeGroupId
-      ).catch((err: unknown) => {
-        console.error('Failed to auto-save projects:', err)
-      })
+      // `selectProject` restamps `isActive` and retargets the group preference,
+      // so the store reference always moves on a switch. Ask what actually
+      // changed rather than trusting the reference: a focus-only change still
+      // belongs in the snapshot, but not at the price of rebuilding a persisted
+      // record for every project on every click.
+      const structural =
+        hasStructuralProjectChange(state.projects, prevState.projects) ||
+        hasStructuralGroupChange(state.groups, prevState.groups)
+
+      if (structural) {
+        // An edit to the set itself — write now, and let this write subsume
+        // whatever a focus change had queued.
+        if (coalesceTimer) {
+          clearTimeout(coalesceTimer)
+          coalesceTimer = null
+        }
+        const previous = pendingPreviousProjects ?? prevState.projects
+        pendingPreviousProjects = null
+        flushSnapshot(previous)
+      } else {
+        pendingPreviousProjects ??= prevState.projects
+        if (!coalesceTimer) {
+          coalesceTimer = setTimeout(() => {
+            coalesceTimer = null
+            const previous = pendingPreviousProjects ?? []
+            pendingPreviousProjects = null
+            flushSnapshot(previous)
+          }, FOCUS_ONLY_COALESCE_MS)
+        }
+      }
 
       // Epic-4 bridge live push: if the shared-live server is running, mirror
       // the new project list into the in-memory registry + broadcast
@@ -668,6 +789,13 @@ export function useProjectsAutoSave(): void {
 
     return () => {
       unsubscribe()
+      if (coalesceTimer) {
+        clearTimeout(coalesceTimer)
+        coalesceTimer = null
+      }
+      // Do not flush here: unmount races app close, and the close path already
+      // runs its own bounded flush.
+      pendingPreviousProjects = null
     }
   }, [])
 }
