@@ -18,6 +18,7 @@ const {
   mockFlushPendingWrites,
   mockWatchDirectory,
   mockUnwatchDirectory,
+  mockUnwatchAllDirectories,
   mockKeyboardOnShortcut,
   mockUpdatePanelVisibility,
   mockWaitForPendingAppSettingsPersistence,
@@ -83,6 +84,7 @@ const {
   mockFlushPendingWrites: vi.fn(async () => ({ success: true, data: undefined })),
   mockWatchDirectory: vi.fn(async () => ({ success: true })),
   mockUnwatchDirectory: vi.fn(async () => ({ success: true })),
+  mockUnwatchAllDirectories: vi.fn(async () => ({ success: true, data: undefined })),
   mockKeyboardOnShortcut: vi.fn(() => vi.fn()),
   mockUpdatePanelVisibility: vi.fn(async () => undefined),
   mockWaitForPendingAppSettingsPersistence: vi.fn(async () => undefined),
@@ -346,7 +348,8 @@ vi.mock('@/components/ConfirmDialog', () => ({
 vi.mock('@/lib/api', () => ({
   filesystemApi: {
     watchDirectory: mockWatchDirectory,
-    unwatchDirectory: mockUnwatchDirectory
+    unwatchDirectory: mockUnwatchDirectory,
+    unwatchAllDirectories: mockUnwatchAllDirectories
   },
   windowApi: {
     onCloseRequested: mockCloseRequested,
@@ -409,6 +412,51 @@ describe('WorkspaceLayout close persistence', () => {
     mockFlushSessionHistory.mockResolvedValue(undefined)
     mockCloseRequested.mockImplementation(() => vi.fn())
     mockListen.mockResolvedValue(vi.fn())
+    mockUnwatchAllDirectories.mockResolvedValue({ success: true, data: undefined })
+  })
+
+  describe('bounded close path (quit-hang regression cover)', () => {
+    async function triggerTrayQuit(): Promise<void> {
+      renderLayout()
+      await waitFor(() => {
+        expect(mockListen).toHaveBeenCalledWith('tray:quit-requested', expect.any(Function))
+      })
+      const trayQuitHandler = mockListen.mock.calls.find(
+        ([event]) => event === 'tray:quit-requested'
+      )?.[1] as (() => void) | undefined
+      await act(async () => {
+        trayQuitHandler?.()
+      })
+    }
+
+    it('releases every fs watcher before responding to the close', async () => {
+      // Tauri otherwise drops the watcher inside `cleanup_before_exit`, which
+      // joins the FSEvents thread on the main thread with no timeout.
+      await triggerTrayQuit()
+
+      await waitFor(() => {
+        expect(mockUnwatchAllDirectories).toHaveBeenCalledTimes(1)
+        expect(mockRespondToClose).toHaveBeenCalledWith('close')
+      })
+
+      const unwatchOrder = mockUnwatchAllDirectories.mock.invocationCallOrder[0]
+      const respondOrder = mockRespondToClose.mock.invocationCallOrder[0]
+      expect(unwatchOrder).toBeLessThan(respondOrder)
+    })
+
+    it('still closes when releasing the fs watchers fails', async () => {
+      mockUnwatchAllDirectories.mockResolvedValue({
+        success: false,
+        error: 'unwatch exploded',
+        code: 'UNWATCH_ERROR'
+      })
+
+      await triggerTrayQuit()
+
+      await waitFor(() => {
+        expect(mockRespondToClose).toHaveBeenCalledWith('close')
+      })
+    })
   })
 
   it('routes tray quit through the same persistence flush as a window quit', async () => {

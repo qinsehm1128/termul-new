@@ -83,6 +83,7 @@ import {
   windowApi
 } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
+import { runCloseFlush } from '@/lib/close-flush'
 import { getColorClasses } from '@/lib/colors'
 import { terminalCloseIntent } from '@/lib/conversation-terminal-view'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
@@ -1038,52 +1039,42 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const closeAppWithPersistenceFlush = useCallback(async () => {
     try {
-      const [
-        pendingAppSettingsResult,
-        pendingPersistenceResult,
-        pendingSessionIndexResult,
-        historyFlushResult
-      ] = await Promise.allSettled([
-        waitForPendingAppSettingsPersistence(),
-        persistenceApi.flushPendingWrites(),
-        waitForPendingSessionIndexWrite(),
-        flushSessionHistory()
+      // Each stage is individually bounded and never rejects — see
+      // `runCloseFlush`. Previously these were unbounded, so any one hung
+      // writer held the window open indefinitely.
+      await Promise.all([
+        runCloseFlush('app-settings', waitForPendingAppSettingsPersistence()),
+        runCloseFlush(
+          'pending-writes',
+          persistenceApi.flushPendingWrites().then((result) => {
+            if (!result.success) {
+              throw new Error(result.error)
+            }
+          })
+        ),
+        // Note: waitForPendingSessionIndexWrite swallows rejections internally
+        // (trackPendingIndexWrite catches and logs them), so its failure branch
+        // is effectively unreachable — kept bounded anyway in case the
+        // swallowing behavior changes.
+        runCloseFlush('session-index', waitForPendingSessionIndexWrite()),
+        runCloseFlush('acp-history', flushSessionHistory())
       ])
 
-      if (pendingAppSettingsResult.status === 'rejected') {
-        console.error(
-          'Failed to wait for app settings persistence before close:',
-          pendingAppSettingsResult.reason
-        )
-      }
-
-      // Note: waitForPendingSessionIndexWrite swallows rejections internally
-      // (trackPendingIndexWrite catches and logs them), so this branch is
-      // effectively dead code — kept as a defensive guard in case the
-      // swallowing behavior changes.
-      if (pendingSessionIndexResult.status === 'rejected') {
-        console.error(
-          'Failed to wait for session index persistence before close:',
-          pendingSessionIndexResult.reason
-        )
-      }
-
-      if (historyFlushResult.status === 'rejected') {
-        console.error('Failed to flush ACP history before close:', historyFlushResult.reason)
-      }
-
-      if (pendingPersistenceResult.status === 'fulfilled') {
-        if (!pendingPersistenceResult.value.success) {
-          console.error(
-            'Failed to flush pending persistence writes before close:',
-            pendingPersistenceResult.value.error
-          )
-        }
-      } else {
-        console.error(
-          'Failed to flush pending persistence writes before close:',
-          pendingPersistenceResult.reason
-        )
+      // Release the consolidated fs watcher while the app can still respond.
+      // Tauri otherwise drops it inside `cleanup_before_exit`, which joins the
+      // watcher thread ON THE MAIN THREAD with no timeout.
+      //
+      // This is belt-and-braces, not the fix: macOS Dock/menu quit arrives as
+      // an Apple Event and terminates via `applicationWillTerminate` without
+      // ever reaching the renderer, so that path still relies on there being
+      // exactly one watcher to join (see `tauri-filesystem-api.ts`).
+      const unwatched = await filesystemApi.unwatchAllDirectories()
+      if (!unwatched.success) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'workspace-close.unwatch',
+          message: `stable_code=CLOSE_UNWATCH_FAILED result=DEGRADED error=${unwatched.error}`
+        })
       }
     } finally {
       windowApi.respondToClose('close')
