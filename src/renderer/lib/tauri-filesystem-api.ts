@@ -19,7 +19,6 @@ import {
   remove,
   rename,
   stat,
-  type WatchEvent,
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { runtimeT } from '../i18n/runtime'
@@ -156,168 +155,94 @@ function dispatchTypedEvent(
   })
 }
 
+/** Wire shape of one host-side change. `kind` matches `FileWatchEventType`. */
+interface HostFileChangeEvent {
+  kind: FileWatchEventType
+  path: string
+}
+
 /**
- * Directories currently watched, mapped normalised path -> original OS-native
- * path (the watcher is handed the native form, every lookup uses the
- * normalised one).
+ * Callbacks subscribed through `onFileChanged` / `onFileCreated` / `onFileDeleted`.
  *
- * All of them are covered by ONE watcher. `watchImmediate` accepts a path
- * array, so N directories need exactly one `FsEventWatcher` — not N.
- *
- * This is load-bearing at quit, not a micro-optimisation. Tauri's
- * `cleanup_before_exit` drops the fs plugin's watcher resources serially ON
- * THE MAIN THREAD, and `notify`'s `FsEventWatcher::stop()` joins its FSEvents
- * thread with no timeout. One watcher per expanded directory therefore turned
- * quit into a main-thread stall long enough for macOS to report the app as
- * unresponsive — measured at 9.40s with 24 watchers and 8.27s with 46, with
- * both hang reports pinned to the same `drop_in_place<FsEventWatcher> → stop →
- * thread::join → __ulock_wait` stack.
- *
- * Recursive watching would also collapse the count, but it buys the fix with
- * an event flood from `node_modules`/`.git`; consolidating the path list keeps
- * the existing non-recursive event semantics exactly as they were.
+ * There is exactly one registry. The facade used to keep a second, per-directory
+ * one keyed off the watched set, but nothing ever wrote to it — `FilesystemApi`
+ * exposes no per-directory subscription — so every event was attributed to a
+ * watched directory purely to hand it to an empty map.
  */
-const watchedDirs = new Map<string, string>()
-const activeCallbacks = new Map<string, TypedCallbackRegistry>()
 const globalCallbacks: TypedCallbackRegistry = new Map()
 
-/** Resource id of the single live watcher, or null when nothing is watched. */
-let consolidatedWatcherRid: number | null = null
-/** Path-set signature the live watcher was created for; skips redundant rebuilds. */
-let syncedWatchKey = ''
-/** Serialises re-syncs so two concurrent callers cannot each create a watcher. */
-let watcherSyncChain: Promise<void> = Promise.resolve()
-
 /**
- * Map a changed path back to the watched directory that owns it.
+ * Roots the host watches, normalised.
  *
- * Watching is non-recursive, so an event is either on the directory itself or
- * on one of its immediate children. Returns null when the path cannot be
- * attributed — global subscribers still see the event (it did come from a
- * watched directory), only the per-directory registry is skipped.
+ * Roots, NOT directories. The host watches each one recursively, so a folder the
+ * file explorer expands is already covered and needs no registration of its own.
+ * That is the entire point of the model: expanding a folder is a UI operation,
+ * not an OS-resource operation. Previously the watched set was the expanded-directory
+ * set, which made every expand/collapse rebuild the underlying watcher — and on
+ * macOS releasing one joins its FSEvents thread on whichever thread dispatched
+ * the IPC, i.e. the UI thread.
  */
-function resolveWatchedDir(changedPath: string): string | null {
-  if (watchedDirs.has(changedPath)) return changedPath
-  const lastSlash = changedPath.lastIndexOf('/')
-  if (lastSlash <= 0) return null
-  const parent = changedPath.slice(0, lastSlash)
-  return watchedDirs.has(parent) ? parent : null
-}
+let watchRoots: string[] = []
+/** Signature of the root set the host was last told about; skips redundant syncs. */
+let syncedRootKey = ''
+/** Serialises syncs so two concurrent callers cannot race each other to the host. */
+let rootSyncChain: Promise<void> = Promise.resolve()
+/** Memoised host-channel registration; null until the first successful subscribe. */
+let hostSubscription: Promise<void> | null = null
 
-function handleWatchEvent(event: WatchEvent): void {
-  // WatchEventKind is a complex type - check the type property
-  // The kind object has a 'type' property: 'create' | 'modify' | 'remove' | 'access' | 'other' | 'any'
-  const kindType = (event.type as { type?: string })?.type ?? 'other'
-
-  let changeType: FileWatchEventType = 'change'
-  if (kindType === 'create') changeType = 'add'
-  else if (kindType === 'remove') changeType = 'unlink'
-
-  // paths is an array - use first element
-  const rawPath = event.paths?.[0]
-  if (!rawPath) return
-  const changedPath = rawPath.replace(/\\/g, '/')
-  const changeEvent: FileChangeEvent = { type: changeType, path: changedPath }
-
-  // Dispatch by event type: notify fires every kind (a save's modify
-  // events included) and fanning all of them to every subscriber let
-  // delete-handlers run on change events (#539). Route each event
-  // only to callbacks subscribed for its type.
-  const owner = resolveWatchedDir(changedPath)
-  if (owner) {
-    const callbacks = activeCallbacks.get(owner)
-    if (callbacks) dispatchTypedEvent(callbacks, changeType, changeEvent)
-  }
-  dispatchTypedEvent(globalCallbacks, changeType, changeEvent)
-}
-
-/**
- * Create the consolidated watcher and return its resource id.
- *
- * Calls `plugin:fs|watch` directly instead of the `watchImmediate` wrapper:
- * that wrapper hides the resource id inside a closure whose only release path
- * is `plugin:resources|close`, which is precisely the call that has to be
- * avoided (see `releaseWatcher`). The arguments match what `watchImmediate`
- * sends — non-recursive, no delay — so event semantics are unchanged.
- */
-async function createConsolidatedWatcher(paths: string[]): Promise<number> {
-  const onEvent = new Channel<WatchEvent>()
-  onEvent.onmessage = handleWatchEvent
-  return await invoke<number>('plugin:fs|watch', {
-    paths,
-    options: { baseDir: null, recursive: false, delayMs: null },
-    onEvent
-  })
-}
-
-/**
- * Hand a superseded watcher back to the host.
- *
- * Deliberately NOT `plugin:resources|close`. That command is synchronous, so
- * Tauri drops the resource inline on whichever thread dispatched the IPC — on
- * macOS the custom-protocol path lands on the AppKit main thread — and
- * dropping a `notify::FsEventWatcher` joins its FSEvents thread with no
- * timeout. A spindump caught that join freezing the whole window for 2.31s
- * (`Slow response to HID event`, 158 of 231 samples parked in
- * `FsEventWatcher::stop -> thread::join`) during an ordinary project switch.
- *
- * `release_fs_watcher` is declared async, so it runs on the async runtime and
- * drops the resource on the blocking pool — the join never reaches a thread
- * the UI needs.
- */
-async function releaseWatcher(rid: number): Promise<void> {
-  await invoke('release_fs_watcher', { rid })
-}
-
-/**
- * Rebuild the single watcher so it covers exactly `watchedDirs`.
- *
- * Creates the replacement BEFORE releasing the previous handle: the overlap
- * costs a few duplicate events (subscribers re-read the directory, so they are
- * idempotent) whereas releasing first would drop every event in the gap.
- */
-async function syncConsolidatedWatcher(): Promise<void> {
-  const desired = Array.from(watchedDirs.keys()).sort()
-  const key = desired.join(' ')
-  if (key === syncedWatchKey) return
-
-  if (desired.length === 0) {
-    const previous = consolidatedWatcherRid
-    consolidatedWatcherRid = null
-    syncedWatchKey = ''
-    // Not guarded: with nothing left to watch there is no new watcher to
-    // report success for, so a failing release is the caller's result.
-    if (previous !== null) await releaseWatcher(previous)
-    return
-  }
-
-  const nextRid = await createConsolidatedWatcher(desired.map((dir) => watchedDirs.get(dir) ?? dir))
-  const previous = consolidatedWatcherRid
-  consolidatedWatcherRid = nextRid
-  syncedWatchKey = key
-  try {
-    if (previous !== null) await releaseWatcher(previous)
-  } catch (err) {
-    // The replacement is already live, so the caller's watch/unwatch did
-    // succeed. A stale handle that refuses to release is a leak worth
-    // reporting, not a failure to propagate.
-    void logFrontendError({
-      level: 'warn',
-      source: 'tauri-filesystem-api.watcher-sync',
-      message: `failed to release superseded fs watcher: ${err instanceof Error ? err.message : String(err)}`
-    })
+function dispatchHostBatch(batch: readonly HostFileChangeEvent[]): void {
+  for (const change of batch) {
+    dispatchTypedEvent(globalCallbacks, change.kind, { type: change.kind, path: change.path })
   }
 }
 
 /**
- * Queue a re-sync. Each link re-reads `watchedDirs`, so a queued sync absorbs
- * every pending change and `syncedWatchKey` turns the redundant links into
- * no-ops.
+ * Register the single channel the host pushes coalesced batches down.
+ *
+ * Memoised for the app's lifetime: the host keeps one sink, so re-subscribing
+ * would only swap it for an identical channel. A failure clears the memo so the
+ * next caller retries rather than inheriting a permanently rejected promise.
  */
-function scheduleWatcherSync(): Promise<void> {
-  const run = watcherSyncChain.then(syncConsolidatedWatcher, syncConsolidatedWatcher)
+function ensureHostSubscription(): Promise<void> {
+  if (!hostSubscription) {
+    const channel = new Channel<HostFileChangeEvent[]>()
+    channel.onmessage = dispatchHostBatch
+    hostSubscription = invoke<void>('fs_watcher_subscribe', { onEvent: channel }).catch(
+      (err: unknown) => {
+        hostSubscription = null
+        throw err
+      }
+    )
+  }
+  return hostSubscription
+}
+
+/**
+ * Tell the host exactly which roots to watch.
+ *
+ * Reads `watchRoots` at call time rather than closing over it, so a queued sync
+ * carries the latest set instead of whichever intermediate one scheduled it.
+ * Child paths are not filtered here — the host drops roots already covered by a
+ * parent, which is what lets a stray `watchDirectory` for an expanded subfolder
+ * cost nothing.
+ */
+async function syncWatchRoots(): Promise<void> {
+  const desired = [...watchRoots].sort()
+  const key = desired.join('\u0000')
+  if (key === syncedRootKey) return
+  await ensureHostSubscription()
+  await invoke('fs_watcher_set_roots', { roots: desired })
+  syncedRootKey = key
+}
+
+/**
+ * Queue a root sync. Each link re-reads `watchRoots`, so a burst of
+ * register/unregister calls collapses into one host round-trip.
+ */
+function scheduleRootSync(): Promise<void> {
+  const run = rootSyncChain.then(syncWatchRoots, syncWatchRoots)
   // Keep the chain alive after a rejection; the caller still awaits `run`.
-  watcherSyncChain = run.catch(() => {})
+  rootSyncChain = run.catch(() => {})
   return run
 }
 
@@ -988,12 +913,22 @@ export function createTauriFilesystemApi(): FilesystemApi {
       }
     },
 
-    async watchDirectory(dirPath: string): Promise<IpcResult<void>> {
-      // Web/remote mode: server-side directory watching (notify + WS/SSE event
-      // channel) is not yet implemented. Return an explicit unsupported result
-      // instead of false success — callers can branch on `code` and the
-      // mobile file explorer re-fetches on action/refresh instead of
-      // subscribing to fs events.
+    /**
+     * Replace the watched root set in one call — the primitive this model rests on.
+     *
+     * Callers declare which roots matter (project roots, a conversation's
+     * workspace cwd) and the host watches each one recursively. Directories
+     * below a root are already covered and need no registration, which is what
+     * makes expanding a folder free.
+     *
+     * Authoritative: this replaces the set rather than adding to it, so exactly
+     * one owner may call it. Two owners writing a shared watch key is what made
+     * an unwatch from either of them silently release the other's watch.
+     */
+    async setWatchRoots(roots: string[]): Promise<IpcResult<void>> {
+      // Web/remote mode: server-side watching (notify + WS/SSE event channel) is
+      // not implemented. An explicit unsupported result lets callers branch on
+      // `code`; the mobile explorer re-fetches on action instead of subscribing.
       if (!isTauriContext()) {
         return {
           success: false,
@@ -1001,73 +936,70 @@ export function createTauriFilesystemApi(): FilesystemApi {
           error: 'Directory watching is not available in the web client'
         }
       }
+      const previous = watchRoots
+      watchRoots = roots
+        .map((root) => root.replace(/\\/g, '/'))
+        .filter((root) => root.trim().length > 0)
       try {
-        const normalizedDirPath = dirPath.replace(/\\/g, '/')
-
-        if (watchedDirs.has(normalizedDirPath)) {
-          return { success: true, data: undefined } // Already watching
-        }
-
-        // Register first, then rebuild: the sync derives the watcher's path
-        // list from `watchedDirs`, and a queued sync must be able to see this
-        // directory.
-        watchedDirs.set(normalizedDirPath, dirPath)
-        if (!activeCallbacks.has(normalizedDirPath)) {
-          activeCallbacks.set(normalizedDirPath, new Map())
-        }
-
-        try {
-          await scheduleWatcherSync()
-        } catch (err) {
-          // Roll back, or the phantom entry would make every later
-          // watchDirectory for this path early-return as "already watching"
-          // while nothing is actually watched.
-          watchedDirs.delete(normalizedDirPath)
-          activeCallbacks.delete(normalizedDirPath)
-          return { success: false, error: String(err), code: 'WATCH_ERROR' }
-        }
-
+        await scheduleRootSync()
         return { success: true, data: undefined }
       } catch (err) {
+        // Restore, or the cached set would claim roots the host never took and
+        // the next sync would short-circuit as "already in sync".
+        watchRoots = previous
         return { success: false, error: String(err), code: 'WATCH_ERROR' }
       }
     },
 
-    async unwatchDirectory(dirPath: string): Promise<IpcResult<void>> {
-      // Web/remote mode: nothing to unwatch (watchers are desktop-only).
+    /**
+     * @deprecated Roots are owned by `setWatchRoots`; this is a no-op on desktop.
+     *
+     * Kept so the shared `FilesystemApi` contract (and the web client's
+     * `WEB_UNSUPPORTED` branch) stay intact. Under recursive root watching every
+     * directory inside a root already delivers events, so registering one
+     * individually has nothing to do — and making it a no-op is what guarantees
+     * a stray call can never resurrect the per-directory watcher churn.
+     */
+    async watchDirectory(_dirPath: string): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
-        return { success: true, data: undefined }
-      }
-      try {
-        const normalizedDirPath = dirPath.replace(/\\/g, '/')
-        if (!watchedDirs.has(normalizedDirPath)) {
-          return { success: true, data: undefined }
+        return {
+          success: false,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Directory watching is not available in the web client'
         }
-        watchedDirs.delete(normalizedDirPath)
-        activeCallbacks.delete(normalizedDirPath)
-        await scheduleWatcherSync()
-        return { success: true, data: undefined }
-      } catch (err) {
-        return { success: false, error: String(err), code: 'UNWATCH_ERROR' }
       }
+      return { success: true, data: undefined }
+    },
+
+    /**
+     * @deprecated Roots are owned by `setWatchRoots`; this is a no-op on desktop.
+     *
+     * Releasing a single directory is meaningless under recursive root watching,
+     * and it was the mechanism behind two separate defects: a second owner could
+     * release a root the first still believed it held, and a collapse whose exit
+     * animation never ran left the directory watched forever.
+     */
+    async unwatchDirectory(_dirPath: string): Promise<IpcResult<void>> {
+      return { success: true, data: undefined }
     },
 
     async unwatchAllDirectories(): Promise<IpcResult<void>> {
       // Called on the close path so the watcher is released while the app can
-      // still respond. It does NOT make the consolidated watcher optional:
-      // macOS Dock/menu quit arrives as an Apple Event and terminates through
+      // still respond. It does NOT make the host-side release optional: macOS
+      // Dock/menu quit arrives as an Apple Event and terminates through
       // `applicationWillTerminate` without ever reaching the renderer, so on
-      // that path the single watcher is still dropped by Tauri's
-      // `cleanup_before_exit`. One join is survivable; dozens were not.
+      // that path the watcher is still dropped by Tauri's `cleanup_before_exit`.
+      // One watcher is survivable there; the per-directory fleet was not.
       if (!isTauriContext()) {
         return { success: true, data: undefined }
       }
+      const previous = watchRoots
+      watchRoots = []
       try {
-        watchedDirs.clear()
-        activeCallbacks.clear()
-        await scheduleWatcherSync()
+        await scheduleRootSync()
         return { success: true, data: undefined }
       } catch (err) {
+        watchRoots = previous
         return { success: false, error: String(err), code: 'UNWATCH_ERROR' }
       }
     },
@@ -1080,9 +1012,6 @@ export function createTauriFilesystemApi(): FilesystemApi {
       // (e.g. onFileChanged + onFileCreated + onFileDeleted) keep the others.
       return () => {
         unregisterTypedCallback(globalCallbacks, callback, 'change')
-        for (const callbacks of activeCallbacks.values()) {
-          unregisterTypedCallback(callbacks, callback, 'change')
-        }
       }
     },
 
@@ -1091,9 +1020,6 @@ export function createTauriFilesystemApi(): FilesystemApi {
 
       return () => {
         unregisterTypedCallback(globalCallbacks, callback, 'add')
-        for (const callbacks of activeCallbacks.values()) {
-          unregisterTypedCallback(callbacks, callback, 'add')
-        }
       }
     },
 
@@ -1102,9 +1028,6 @@ export function createTauriFilesystemApi(): FilesystemApi {
 
       return () => {
         unregisterTypedCallback(globalCallbacks, callback, 'unlink')
-        for (const callbacks of activeCallbacks.values()) {
-          unregisterTypedCallback(callbacks, callback, 'unlink')
-        }
       }
     }
   }
@@ -1119,19 +1042,24 @@ export const tauriFilesystemApi = createTauriFilesystemApi()
  * @internal Testing only - reset module state
  */
 export function _resetFilesystemStateForTesting() {
-  watchedDirs.clear()
-  activeCallbacks.clear()
   globalCallbacks.clear()
-  consolidatedWatcherRid = null
-  syncedWatchKey = ''
-  watcherSyncChain = Promise.resolve()
+  watchRoots = []
+  syncedRootKey = ''
+  rootSyncChain = Promise.resolve()
+  hostSubscription = null
 }
 
 /**
- * @internal Testing only — how many live `FsEventWatcher` handles this module
- * holds. The whole point of consolidation is that this stays at 1 no matter
- * how many directories are watched.
+ * @internal Testing only — how many host watchers this module keeps alive.
+ *
+ * Stays at 1 no matter how many roots are registered (the host watches them all
+ * through one recursive watcher) and at 0 when nothing is watched.
  */
 export function _liveWatcherCountForTesting(): number {
-  return consolidatedWatcherRid === null ? 0 : 1
+  return watchRoots.length === 0 ? 0 : 1
+}
+
+/** @internal Testing only — the roots last handed to the host, sorted. */
+export function _watchRootsForTesting(): string[] {
+  return [...watchRoots].sort()
 }

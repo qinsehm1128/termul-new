@@ -18,6 +18,7 @@ const {
   mockFlushPendingWrites,
   mockWatchDirectory,
   mockUnwatchDirectory,
+  mockSetWatchRoots,
   mockUnwatchAllDirectories,
   mockKeyboardOnShortcut,
   mockUpdatePanelVisibility,
@@ -84,6 +85,7 @@ const {
   mockFlushPendingWrites: vi.fn(async () => ({ success: true, data: undefined })),
   mockWatchDirectory: vi.fn(async () => ({ success: true })),
   mockUnwatchDirectory: vi.fn(async () => ({ success: true })),
+  mockSetWatchRoots: vi.fn(async () => ({ success: true })),
   mockUnwatchAllDirectories: vi.fn(async () => ({ success: true, data: undefined })),
   mockKeyboardOnShortcut: vi.fn(() => vi.fn()),
   mockUpdatePanelVisibility: vi.fn(async () => undefined),
@@ -347,6 +349,7 @@ vi.mock('@/components/ConfirmDialog', () => ({
 
 vi.mock('@/lib/api', () => ({
   filesystemApi: {
+    setWatchRoots: mockSetWatchRoots,
     watchDirectory: mockWatchDirectory,
     unwatchDirectory: mockUnwatchDirectory,
     unwatchAllDirectories: mockUnwatchAllDirectories

@@ -26,6 +26,7 @@ const {
 
 vi.mock('@/lib/api', () => ({
   filesystemApi: {
+    setWatchRoots: vi.fn(async () => ({ success: true, data: undefined })),
     watchDirectory: vi.fn(async () => ({ success: true, data: undefined })),
     unwatchDirectory: vi.fn(),
     onFileChanged: vi.fn(() => vi.fn()),

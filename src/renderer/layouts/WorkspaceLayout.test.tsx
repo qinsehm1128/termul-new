@@ -48,6 +48,17 @@ function createProject(id: string, path: string, color: ProjectColor): Project {
 }
 
 // Mock the store hooks
+// Group scope is driven per-test: the mock factory reads this ref, so a test
+// can put the layout into group mode without re-mocking the whole store.
+const { projectStoreRef } = vi.hoisted(() => ({
+  projectStoreRef: {
+    current: {
+      groups: [] as Array<{ id: string; name: string; projectIds: string[] }>,
+      activeGroupId: null as string | null
+    }
+  }
+}))
+
 const mockUseProjectsLoaded = vi.fn(() => true)
 const mockUseProjects = vi.fn((): Project[] => [])
 const mockUseActiveProject = vi.fn((): Project | null => null)
@@ -88,8 +99,8 @@ vi.mock('@/stores/project-store', () => ({
       const state = {
         projects: [],
         activeProjectId: '',
-        groups: [],
-        activeGroupId: null,
+        groups: projectStoreRef.current.groups,
+        activeGroupId: projectStoreRef.current.activeGroupId,
         isLoaded: true,
         isWorktreeOperationLocked: false
       }
@@ -359,6 +370,7 @@ const { mockApi } = vi.hoisted(() => ({
       onFileDeleted: vi.fn(() => vi.fn()),
       onSearchFileNamesBatch: vi.fn(() => vi.fn()),
       onSearchFileNamesDone: vi.fn(() => vi.fn()),
+      setWatchRoots: vi.fn().mockResolvedValue({ success: true }),
       watchDirectory: vi.fn().mockResolvedValue({ success: true }),
       unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
       readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
@@ -1452,11 +1464,11 @@ describe('WorkspaceLayout - Empty States', () => {
       consoleLogSpy.mockRestore()
     })
 
-    it('treats watchDirectory WEB_UNSUPPORTED as a soft no-op on web (no rootLoadError)', async () => {
+    it('treats setWatchRoots WEB_UNSUPPORTED as a soft no-op on web (no rootLoadError)', async () => {
       const prev = tauriRef.current
       tauriRef.current = false
       useFileExplorerStore.setState({ rootLoadError: null })
-      mockApi.filesystem.watchDirectory.mockResolvedValue({
+      mockApi.filesystem.setWatchRoots.mockResolvedValue({
         success: false,
         code: 'WEB_UNSUPPORTED',
         error: 'Directory watching is not available in the web client'
@@ -1475,7 +1487,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
         await waitFor(
           () => {
-            expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
+            expect(mockApi.filesystem.setWatchRoots).toHaveBeenCalledWith(['/workspace/a'])
           },
           { timeout: 10000 }
         )
@@ -1488,9 +1500,45 @@ describe('WorkspaceLayout - Empty States', () => {
         expect(useFileExplorerStore.getState().rootLoadError).toBeNull()
       } finally {
         tauriRef.current = prev
-        mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
+        mockApi.filesystem.setWatchRoots.mockResolvedValue({ success: true })
       }
     }, 15_000)
+
+    // The group branch used to register no root at all: it released the tracked
+    // one and returned, leaving the explorer's own per-directory registrations
+    // as the only thing watching. Every project in the group is a root now.
+    it('registers every project in an active group as a watch root', async () => {
+      const projects = [
+        createProject('a', '/workspace/a', 'blue'),
+        createProject('b', '/workspace/b', 'green')
+      ]
+      mockUseProjects.mockReturnValue(projects)
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+      mockUseActiveProject.mockReturnValue(projects[0])
+      mockUseActiveProjectId.mockReturnValue('a')
+      projectStoreRef.current = {
+        groups: [{ id: 'group-1', name: 'G', projectIds: ['a', 'b'] }],
+        activeGroupId: 'group-1'
+      }
+
+      try {
+        // Explicitly the project route: the default entry is a conversation
+        // route, where the watched root is the conversation's workspace cwd.
+        renderWithRouter(['/'])
+
+        await waitFor(() => {
+          expect(mockApi.filesystem.setWatchRoots).toHaveBeenCalledWith([
+            '/workspace/a',
+            '/workspace/b'
+          ])
+        })
+      } finally {
+        projectStoreRef.current = { groups: [], activeGroupId: null }
+      }
+    })
   })
 })
 

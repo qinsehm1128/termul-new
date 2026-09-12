@@ -25,10 +25,9 @@ vi.mock('../tauri-runtime', () => ({
 // `FsEventWatcher` — and joins its FSEvents thread — on the macOS UI thread.
 // Creation calls `plugin:fs|watch` for the id; release goes through the app's
 // own async `release_fs_watcher`.
-const { mockInvoke, watchChannels, ridSeq } = vi.hoisted(() => ({
+const { mockInvoke, watchChannels } = vi.hoisted(() => ({
   mockInvoke: vi.fn(),
-  watchChannels: [] as Array<{ onmessage: ((event: unknown) => void) | null }>,
-  ridSeq: { next: 1 }
+  watchChannels: [] as Array<{ onmessage: ((batch: unknown) => void) | null }>
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -41,21 +40,16 @@ vi.mock('@tauri-apps/api/core', () => ({
   }
 }))
 
-function watchCalls(): Array<{ paths: string[] }> {
+/** Root lists handed to the host, in call order. */
+function setRootsCalls(): string[][] {
   return mockInvoke.mock.calls
-    .filter((call) => call[0] === 'plugin:fs|watch')
-    .map((call) => call[1] as { paths: string[] })
+    .filter((call) => call[0] === 'fs_watcher_set_roots')
+    .map((call) => (call[1] as { roots: string[] }).roots)
 }
 
-function releasedRids(): number[] {
-  return mockInvoke.mock.calls
-    .filter((call) => call[0] === 'release_fs_watcher')
-    .map((call) => (call[1] as { rid: number }).rid)
-}
-
-/** Feed an event through the live watcher's channel. */
-function emitWatchEvent(event: unknown): void {
-  watchChannels.at(-1)?.onmessage?.(event)
+/** Push a coalesced batch down the host channel, the way the service does. */
+function emitHostBatch(batch: Array<{ kind: string; path: string }>): void {
+  watchChannels.at(-1)?.onmessage?.(batch)
 }
 
 const defaultStat: FileInfo = {
@@ -113,6 +107,7 @@ import { i18n } from '../../i18n'
 import {
   _liveWatcherCountForTesting,
   _resetFilesystemStateForTesting,
+  _watchRootsForTesting,
   MAX_FILE_SIZE,
   tauriFilesystemApi
 } from '../tauri-filesystem-api'
@@ -145,10 +140,7 @@ describe('tauriFilesystemApi', () => {
     vi.mocked(copyFile).mockResolvedValue(undefined)
     vi.mocked(stat).mockResolvedValue(defaultStat)
     watchChannels.length = 0
-    ridSeq.next = 1
-    mockInvoke.mockImplementation(async (command: string) =>
-      command === 'plugin:fs|watch' ? ridSeq.next++ : undefined
-    )
+    mockInvoke.mockImplementation(async () => undefined)
   })
 
   afterEach(() => {
@@ -612,201 +604,132 @@ describe('tauriFilesystemApi', () => {
     })
   })
 
-  describe('watchDirectory', () => {
-    it('should successfully watch directory', async () => {
-      const result = await tauriFilesystemApi.watchDirectory('/test')
+  describe('setWatchRoots (the watched set is roots, not directories)', () => {
+    it('hands the host exactly the roots it was given', async () => {
+      const result = await tauriFilesystemApi.setWatchRoots(['/proj/a', '/proj/b'])
 
       expect(result.success).toBe(true)
-      expect(watchCalls()).toHaveLength(1)
+      expect(setRootsCalls()).toEqual([['/proj/a', '/proj/b']])
     })
 
-    it('should handle errors', async () => {
-      mockInvoke.mockRejectedValueOnce(new Error('Watch failed'))
-
-      const result = await tauriFilesystemApi.watchDirectory('/test')
-
-      expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.code).toBe('WATCH_ERROR')
-      }
-    })
-
-    it('should return success if already watching', async () => {
-      await tauriFilesystemApi.watchDirectory('/test')
-      const result = await tauriFilesystemApi.watchDirectory('/test')
-
-      expect(result.success).toBe(true)
-      expect(watchCalls()).toHaveLength(1)
-    })
-  })
-
-  describe('consolidated watcher (one FsEventWatcher for every directory)', () => {
-    // Regression cover for the quit hang: Tauri's `cleanup_before_exit` drops
-    // the fs plugin's watchers serially on the main thread and notify's
-    // `stop()` joins its FSEvents thread with no timeout, so watcher COUNT is
-    // what decides whether macOS reports the app as unresponsive.
-    it('holds exactly one live watcher no matter how many directories are watched', async () => {
-      await tauriFilesystemApi.watchDirectory('/proj/a')
-      expect(_liveWatcherCountForTesting()).toBe(1)
-
-      await tauriFilesystemApi.watchDirectory('/proj/b')
-      await tauriFilesystemApi.watchDirectory('/proj/c')
-      await tauriFilesystemApi.watchDirectory('/proj/d')
-
-      expect(_liveWatcherCountForTesting()).toBe(1)
-    })
-
-    it('releases the superseded handle on every rebuild so handles cannot pile up', async () => {
-      await tauriFilesystemApi.watchDirectory('/proj/a')
-      await tauriFilesystemApi.watchDirectory('/proj/b')
-      await tauriFilesystemApi.watchDirectory('/proj/c')
-
-      // Three rebuilds happened, two predecessors must already be gone.
-      expect(watchCalls()).toHaveLength(3)
-      expect(releasedRids()).toEqual([1, 2])
-      expect(_liveWatcherCountForTesting()).toBe(1)
-    })
-
-    // Recursive watching would also collapse the watcher count to one, but it
-    // buys that with an event flood out of node_modules/.git — trading a quit
-    // stall for a runtime one. Consolidation keeps the original semantics.
-    it('watches non-recursively', async () => {
-      await tauriFilesystemApi.watchDirectory('/proj/a')
-
-      const args = watchCalls().at(-1) as unknown as {
-        options: { recursive: boolean }
-      }
-      expect(args.options.recursive).toBe(false)
-    })
-
-    // The release must never be the plugin's own `resources|close`: that command
-    // is synchronous, so Tauri drops the FsEventWatcher — and joins its
-    // FSEvents thread — on the macOS UI thread. A spindump caught that join
-    // freezing the window for 2.31s on an ordinary project switch.
-    it('releases through the off-main-thread command, never resources|close', async () => {
-      await tauriFilesystemApi.watchDirectory('/proj/a')
-      await tauriFilesystemApi.watchDirectory('/proj/b')
-      await tauriFilesystemApi.unwatchAllDirectories()
+    it('subscribes to the host event channel before setting roots', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/a'])
 
       const commands = mockInvoke.mock.calls.map((call) => call[0])
-      expect(commands).toContain('release_fs_watcher')
-      expect(commands).not.toContain('plugin:resources|close')
+      expect(commands.indexOf('fs_watcher_subscribe')).toBeLessThan(
+        commands.indexOf('fs_watcher_set_roots')
+      )
     })
 
-    it('hands the watcher every watched path, using the original OS-native form', async () => {
-      await tauriFilesystemApi.watchDirectory('C:\\proj\\a')
-      await tauriFilesystemApi.watchDirectory('/proj/b')
+    it('subscribes once across many root changes', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/a'])
+      await tauriFilesystemApi.setWatchRoots(['/proj/b'])
+      await tauriFilesystemApi.setWatchRoots(['/proj/c'])
 
-      const lastPaths = watchCalls().at(-1)?.paths ?? []
-      expect([...lastPaths].sort()).toEqual(['C:\\proj\\a', '/proj/b'].sort())
+      const subscribes = mockInvoke.mock.calls.filter((call) => call[0] === 'fs_watcher_subscribe')
+      expect(subscribes).toHaveLength(1)
     })
 
-    it('drops the last watcher entirely when the final directory is unwatched', async () => {
-      await tauriFilesystemApi.watchDirectory('/proj/a')
-      await tauriFilesystemApi.watchDirectory('/proj/b')
-      await tauriFilesystemApi.unwatchDirectory('/proj/a')
+    it('skips the round-trip when the root set is unchanged', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/b', '/proj/a'])
+      // Same set, different order: the host is already watching exactly this.
+      await tauriFilesystemApi.setWatchRoots(['/proj/a', '/proj/b'])
+
+      expect(setRootsCalls()).toHaveLength(1)
+    })
+
+    it('normalises separators and drops blank roots', async () => {
+      await tauriFilesystemApi.setWatchRoots(['C:\\proj\\a', '   ', ''])
+
+      expect(setRootsCalls()).toEqual([['C:/proj/a']])
+    })
+
+    it('holds exactly one host watcher no matter how many roots are registered', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/a', '/proj/b', '/proj/c', '/proj/d'])
+
       expect(_liveWatcherCountForTesting()).toBe(1)
-
-      await tauriFilesystemApi.unwatchDirectory('/proj/b')
-      expect(_liveWatcherCountForTesting()).toBe(0)
     })
 
-    it('stops delivering events for an unwatched directory', async () => {
-      await tauriFilesystemApi.watchDirectory('/proj/a')
-      await tauriFilesystemApi.watchDirectory('/proj/b')
-
-      const onChanged = vi.fn()
-      const cleanup = tauriFilesystemApi.onFileChanged(onChanged)
-
-      emitWatchEvent({ type: { type: 'modify' }, paths: ['/proj/a/x.txt'] })
-      expect(onChanged).toHaveBeenCalledTimes(1)
-
-      await tauriFilesystemApi.unwatchDirectory('/proj/a')
-      onChanged.mockClear()
-
-      // After unwatching, the rebuilt watcher no longer covers /proj/a. The
-      // stale callback is what the OS would stop feeding; assert the registry
-      // no longer attributes it either.
-      emitWatchEvent({ type: { type: 'modify' }, paths: ['/proj/b/y.txt'] })
-      expect(onChanged).toHaveBeenCalledWith({ type: 'change', path: '/proj/b/y.txt' })
-
-      cleanup()
-    })
-
-    it('rolls back the registry when the watcher rebuild fails', async () => {
+    it('restores the cached set when the host rejects, so a retry is not skipped', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/a'])
       mockInvoke.mockRejectedValueOnce(new Error('boom'))
 
-      const failed = await tauriFilesystemApi.watchDirectory('/proj/a')
+      const failed = await tauriFilesystemApi.setWatchRoots(['/proj/b'])
       expect(failed.success).toBe(false)
-      expect(_liveWatcherCountForTesting()).toBe(0)
+      // A cached set claiming roots the host never took would make the retry
+      // short-circuit as "already in sync" and leave nothing watched.
+      expect(_watchRootsForTesting()).toEqual(['/proj/a'])
 
-      // A phantom registry entry would make this early-return as "already
-      // watching" and leave the directory silently unwatched forever.
-      const retried = await tauriFilesystemApi.watchDirectory('/proj/a')
+      const retried = await tauriFilesystemApi.setWatchRoots(['/proj/b'])
       expect(retried.success).toBe(true)
-      expect(_liveWatcherCountForTesting()).toBe(1)
+      expect(setRootsCalls().at(-1)).toEqual(['/proj/b'])
     })
 
-    it('unwatchAllDirectories releases the watcher in one call', async () => {
-      await tauriFilesystemApi.watchDirectory('/proj/a')
-      await tauriFilesystemApi.watchDirectory('/proj/b')
-      await tauriFilesystemApi.watchDirectory('/proj/c')
+    it('reports WEB_UNSUPPORTED on the web client instead of a false success', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+      const result = await tauriFilesystemApi.setWatchRoots(['/proj/a'])
+      mockIsTauriContext.mockReturnValue(true)
+
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.code).toBe('WEB_UNSUPPORTED')
+    })
+
+    it('unwatchAllDirectories clears the root set in one call', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/a', '/proj/b'])
 
       const result = await tauriFilesystemApi.unwatchAllDirectories()
 
       expect(result.success).toBe(true)
       expect(_liveWatcherCountForTesting()).toBe(0)
-      // Every watcher ever created is accounted for, the live one included.
-      expect(releasedRids()).toEqual([1, 2, 3])
+      expect(setRootsCalls().at(-1)).toEqual([])
     })
 
-    it('concurrent watch calls still converge on a single watcher', async () => {
-      mockInvoke.mockImplementation(async (command: string) => {
-        if (command !== 'plugin:fs|watch') return undefined
-        // Resolve on a later tick so the calls genuinely overlap.
-        await new Promise((resolve) => setTimeout(resolve, 0))
-        return ridSeq.next++
-      })
-
+    it('serialises concurrent callers into a converged final set', async () => {
       await Promise.all([
-        tauriFilesystemApi.watchDirectory('/proj/a'),
-        tauriFilesystemApi.watchDirectory('/proj/b'),
-        tauriFilesystemApi.watchDirectory('/proj/c')
+        tauriFilesystemApi.setWatchRoots(['/proj/a']),
+        tauriFilesystemApi.setWatchRoots(['/proj/a', '/proj/b']),
+        tauriFilesystemApi.setWatchRoots(['/proj/a', '/proj/b', '/proj/c'])
       ])
 
-      expect(_liveWatcherCountForTesting()).toBe(1)
-      // Serialised through one chain — never a watcher per concurrent caller.
-      expect(watchCalls().length).toBeLessThanOrEqual(3)
+      expect(_watchRootsForTesting()).toEqual(['/proj/a', '/proj/b', '/proj/c'])
+      expect(setRootsCalls().at(-1)).toEqual(['/proj/a', '/proj/b', '/proj/c'])
     })
   })
 
-  describe('unwatchDirectory', () => {
-    it('should successfully unwatch directory', async () => {
-      await tauriFilesystemApi.watchDirectory('/test')
-      const result = await tauriFilesystemApi.unwatchDirectory('/test')
+  describe('watchDirectory / unwatchDirectory are no longer OS operations', () => {
+    // Expanding a folder in the tree used to register an OS watcher, which made
+    // the watched set a function of UI state and rebuilt the underlying watcher
+    // on every expand and collapse. Recursive root watching already covers every
+    // directory inside a root, so these do nothing on desktop — and a no-op is
+    // what guarantees a stray caller cannot resurrect the churn.
+    it('watchDirectory registers nothing with the host', async () => {
+      const result = await tauriFilesystemApi.watchDirectory('/proj/a/src')
 
       expect(result.success).toBe(true)
-      expect(releasedRids()).toEqual([1])
+      expect(setRootsCalls()).toHaveLength(0)
+      expect(_watchRootsForTesting()).toEqual([])
     })
 
-    it('should handle unwatching non-watched directory gracefully', async () => {
-      const result = await tauriFilesystemApi.unwatchDirectory('/non-existent')
+    it('unwatchDirectory releases nothing', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/a'])
+      mockInvoke.mockClear()
+
+      const result = await tauriFilesystemApi.unwatchDirectory('/proj/a')
 
       expect(result.success).toBe(true)
+      expect(setRootsCalls()).toHaveLength(0)
+      // Crucially the root survives: a second owner calling unwatch used to
+      // release a root the first still believed it held.
+      expect(_watchRootsForTesting()).toEqual(['/proj/a'])
     })
 
-    it('should handle errors', async () => {
-      await tauriFilesystemApi.watchDirectory('/test')
-      mockInvoke.mockImplementation(async (command: string) => {
-        if (command === 'release_fs_watcher') throw new Error('Unlisten failed')
-        return undefined
-      })
-      const result = await tauriFilesystemApi.unwatchDirectory('/test')
+    it('watchDirectory still reports WEB_UNSUPPORTED on the web client', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+      const result = await tauriFilesystemApi.watchDirectory('/proj/a')
+      mockIsTauriContext.mockReturnValue(true)
 
       expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.code).toBe('UNWATCH_ERROR')
-      }
+      if (!result.success) expect(result.code).toBe('WEB_UNSUPPORTED')
     })
   })
 
@@ -829,19 +752,43 @@ describe('tauriFilesystemApi', () => {
   })
 
   describe('watch event dispatch (typed subscriptions, GH-539)', () => {
-    // Emits through the live watcher's channel so tests deliver raw
-    // notify-style events exactly as the Tauri plugin would.
-    async function watchAndCapture(): Promise<(event: unknown) => void> {
-      const result = await tauriFilesystemApi.watchDirectory('/test')
+    // Emits through the host channel so tests deliver batches exactly as the
+    // Rust service does.
+    async function watchAndCapture(): Promise<(batch: unknown) => void> {
+      const result = await tauriFilesystemApi.setWatchRoots(['/test'])
       expect(result.success).toBe(true)
       expect(watchChannels.at(-1)?.onmessage).toBeTypeOf('function')
 
-      return emitWatchEvent
+      return (batch) => emitHostBatch(batch as Array<{ kind: string; path: string }>)
     }
 
     function emitEvent(kindType: string, path: string): unknown {
-      return { type: { type: kindType }, paths: [path] }
+      const kind = kindType === 'create' ? 'add' : kindType === 'remove' ? 'unlink' : 'change'
+      return [{ kind, path }]
     }
+
+    // A rename arrives from notify as one event carrying both the old and the
+    // new path, and the host expands it into one entry per path. Dispatching
+    // only the first entry of a batch would lose the other end of it — the
+    // renderer used to read `event.paths[0]` and drop the rest.
+    it('dispatches every entry in a batch, not just the first', async () => {
+      const emit = await watchAndCapture()
+      const onDeleted = vi.fn()
+      const onCreated = vi.fn()
+      const cleanupDeleted = tauriFilesystemApi.onFileDeleted(onDeleted)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(onCreated)
+
+      emit([
+        { kind: 'unlink', path: '/test/old-name.ts' },
+        { kind: 'add', path: '/test/new-name.ts' }
+      ])
+
+      expect(onDeleted).toHaveBeenCalledWith({ type: 'unlink', path: '/test/old-name.ts' })
+      expect(onCreated).toHaveBeenCalledWith({ type: 'add', path: '/test/new-name.ts' })
+
+      cleanupDeleted()
+      cleanupCreated()
+    })
 
     it('routes create events only to onFileCreated subscribers', async () => {
       const emit = await watchAndCapture()

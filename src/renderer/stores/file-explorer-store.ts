@@ -78,7 +78,6 @@ export interface FileClipboard {
 
 interface PendingDirectoryCollapse {
   contentPathsToRemove: string[]
-  dirsToUnwatch: string[]
 }
 
 /** Worktree root override - when set, explorer roots at worktree path instead of project root */
@@ -325,12 +324,9 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   refreshingTree: false,
 
   setRootPath: (path: string | null): void => {
-    // Unwatch all previously expanded directories
-    const { expandedDirs } = get()
+    // No unwatch loop: the host watches roots recursively, and the root set is
+    // owned by WorkspaceLayout. Expanded directories are pure UI state here.
     cancelActiveSearchStreams()
-    expandedDirs.forEach((dir) => {
-      filesystemApi.unwatchDirectory(dir)
-    })
     const normalized = path ? normalizePath(path) : null
     set({
       roots: normalized ? [{ projectId: '', name: '', path: normalized }] : [],
@@ -363,9 +359,6 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   setRoots: (roots: FileExplorerRoot[], focusedRootPath?: string | null): void => {
     const state = get()
     cancelActiveSearchStreams()
-    state.expandedDirs.forEach((dir) => {
-      filesystemApi.unwatchDirectory(dir)
-    })
 
     const seenPaths = new Set<string>()
     const normalizedRoots = roots.flatMap((root) => {
@@ -455,7 +448,6 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       newExpanded.delete(normalized)
 
       const contentPathsToRemove: string[] = [normalized]
-      const dirsToUnwatch: string[] = [normalized]
 
       const newExpandedFiltered = new Set<string>()
       newExpanded.forEach((dir) => {
@@ -463,12 +455,11 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
           newExpandedFiltered.add(dir)
         } else {
           contentPathsToRemove.push(dir)
-          dirsToUnwatch.push(dir)
         }
       })
 
       const newPending = new Map(get().pendingCollapses)
-      newPending.set(normalized, { contentPathsToRemove, dirsToUnwatch })
+      newPending.set(normalized, { contentPathsToRemove })
 
       set({ expandedDirs: newExpandedFiltered, pendingCollapses: newPending })
     } else {
@@ -509,9 +500,6 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
             rootLoadErrors: nextRootErrors,
             rootLoadError: rootPath === normalized ? null : get().rootLoadError
           })
-
-          // Watch this directory for changes (fire-and-forget)
-          filesystemApi.watchDirectory(normalized)
         } else if (isRootLoad) {
           const rootError = {
             message: result.error,
@@ -845,10 +833,10 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       directoryContents: newContents,
       pendingCollapses: newPending
     })
-
-    for (const dir of pending.dirsToUnwatch) {
-      filesystemApi.unwatchDirectory(dir)
-    }
+    // Deliberately releases nothing. This runs off the tree's exit-animation
+    // callback, which never fires when animations are suppressed or the panel
+    // unmounts mid-collapse — so anything released here leaked. Under recursive
+    // root watching there is nothing to release in the first place.
   },
 
   collapseAll: (): void => {
@@ -856,12 +844,6 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     const activeRoots =
       roots.length > 0 ? roots.map((root) => root.path) : rootPath ? [rootPath] : []
     const rootSet = new Set(activeRoots)
-    // Unwatch all expanded dirs except root
-    expandedDirs.forEach((dir) => {
-      if (!rootSet.has(dir)) {
-        filesystemApi.unwatchDirectory(dir)
-      }
-    })
     // Keep only root contents
     const newContents = new Map<string, DirectoryEntry[]>()
     for (const root of activeRoots) {

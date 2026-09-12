@@ -111,6 +111,7 @@ vi.mock('@/lib/api', () => ({
     createDirectory: (...args: unknown[]) => mockCreateDirectory(...args),
     renameFile: (...args: unknown[]) => mockRenameFile(...args),
     deletePath: (...args: unknown[]) => mockDeletePath(...args),
+    setWatchRoots: async () => ({ success: true, data: undefined }),
     unwatchDirectory: (...args: unknown[]) => mockUnwatchDirectory(...args)
   }
 }))

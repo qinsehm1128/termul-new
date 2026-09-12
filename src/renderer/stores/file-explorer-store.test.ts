@@ -25,6 +25,7 @@ const { mockApi } = vi.hoisted(() => ({
     filesystem: {
       readDirectory: vi.fn(),
       renameFile: vi.fn(),
+      setWatchRoots: vi.fn(async () => ({ success: true })),
       watchDirectory: vi.fn(),
       unwatchDirectory: vi.fn(),
       searchContentStreamCancel: vi.fn(),
@@ -97,15 +98,17 @@ describe('file-explorer-store', () => {
       expect(useFileExplorerStore.getState().rootPath).toBeNull()
     })
 
-    it('should unwatch previously expanded directories', () => {
+    // The watched set is roots, owned by WorkspaceLayout; expanded directories
+    // are pure UI state here. Releasing per directory is what let one owner
+    // silently drop a root another still believed it held.
+    it('releases no watcher when the root changes', () => {
       useFileExplorerStore.setState({
         expandedDirs: new Set(['/project', '/project/src'])
       })
 
       useFileExplorerStore.getState().setRootPath('/other')
 
-      expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project')
-      expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project/src')
+      expect(mockApi.filesystem.unwatchDirectory).not.toHaveBeenCalled()
     })
   })
 
@@ -170,11 +173,13 @@ describe('file-explorer-store', () => {
       expect(state.directoryContents.get('/project')).toEqual(mockEntries)
     })
 
-    it('should call readDirectory and watchDirectory on expand', async () => {
+    // Expanding reads the directory; it registers nothing. The host watches the
+    // enclosing root recursively, so an expand is a UI operation with no OS cost.
+    it('reads the directory on expand without registering a watcher', async () => {
       await useFileExplorerStore.getState().toggleDirectory('/project')
 
       expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project')
-      expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/project')
+      expect(mockApi.filesystem.watchDirectory).not.toHaveBeenCalled()
     })
 
     it('should normalize backslash paths on expand', async () => {
@@ -334,14 +339,18 @@ describe('file-explorer-store', () => {
       expect(useFileExplorerStore.getState().directoryContents.has('/project/src')).toBe(false)
     })
 
-    it('should unwatch collapsed directory and its children after finalize', async () => {
+    // Regression cover for the leak: this runs off the tree's exit-animation
+    // callback, which never fires when animations are suppressed or the panel
+    // unmounts mid-collapse. Anything released here leaked without any path
+    // left to reclaim it — the directories were already out of expandedDirs, so
+    // the bulk unwatch loops could not see them either.
+    it('releases no watcher when a collapse finalizes', async () => {
       await useFileExplorerStore.getState().toggleDirectory('/project')
       vi.clearAllMocks()
 
       useFileExplorerStore.getState().finalizeDirectoryCollapse('/project')
 
-      expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project')
-      expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project/src')
+      expect(mockApi.filesystem.unwatchDirectory).not.toHaveBeenCalled()
     })
 
     it('should match child directories with normalized paths on Windows', async () => {
@@ -579,7 +588,7 @@ describe('file-explorer-store', () => {
       expect(state.directoryContents.has('/project')).toBe(true)
     })
 
-    it('should unwatch non-root directories', () => {
+    it('releases no watcher when collapsing everything', () => {
       useFileExplorerStore.setState({
         rootPath: '/project',
         expandedDirs: new Set(['/project', '/project/src'])
@@ -587,8 +596,7 @@ describe('file-explorer-store', () => {
 
       useFileExplorerStore.getState().collapseAll()
 
-      expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project/src')
-      expect(mockApi.filesystem.unwatchDirectory).not.toHaveBeenCalledWith('/project')
+      expect(mockApi.filesystem.unwatchDirectory).not.toHaveBeenCalled()
     })
   })
 

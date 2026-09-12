@@ -889,6 +889,15 @@ export interface FilesystemApi {
   deletePath: (path: string, options?: { recursive?: boolean }) => Promise<IpcResult<void>>
   renameFile: (oldPath: string, newPath: string) => Promise<IpcResult<void>>
   copyFile: (srcPath: string, destPath: string) => Promise<IpcResult<void>>
+  /**
+   * Replace the watched root set. Each root is watched recursively by the host,
+   * so directories below one need no registration of their own — expanding a
+   * folder in the tree is a UI operation, not an OS-resource operation.
+   *
+   * Authoritative: replaces rather than adds, so exactly one owner may call it.
+   */
+  setWatchRoots: (roots: string[]) => Promise<IpcResult<void>>
+  /** @deprecated Roots are owned by `setWatchRoots`; a no-op on desktop. */
   watchDirectory: (dirPath: string) => Promise<IpcResult<void>>
   unwatchDirectory: (dirPath: string) => Promise<IpcResult<void>>
   /**

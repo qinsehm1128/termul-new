@@ -656,7 +656,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     return pane?.type === 'leaf' ? pane : null
   }, [fullscreenPaneId, paneRoot])
   const prevProjectIdRef = useRef<string>('')
-  const watchedRootPathRef = useRef<string | null>(null)
+  /** Root path the file explorer is currently showing (display only, not watching). */
+  const displayedRootPathRef = useRef<string | null>(null)
   const projectSwitchRequestIdRef = useRef(0)
   const projectTerminalDismissedRef = useRef(false)
   const closingTerminalIdsRef = useRef<string[]>([])
@@ -752,10 +753,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
         .map((project) => `${project.id}:${project.path}`)
         .join('|')}`
       if (groupScopeKey === prevProjectIdRef.current) return
-      if (watchedRootPathRef.current) {
-        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
-        watchedRootPathRef.current = null
-      }
       useFileExplorerStore.getState().setRoots(
         activeGroupProjects.map((project) => ({
           projectId: project.id,
@@ -774,12 +771,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       typeof nextRootPathCandidate !== 'string' ||
       nextRootPathCandidate === ''
     ) {
-      // Project removed or has no path — clear explorer root and unwatch
+      // Project removed or has no path — clear the explorer root. The watched
+      // root set is owned by the effect below and follows the same scope.
       useFileExplorerStore.getState().setRootPath('')
-      if (watchedRootPathRef.current) {
-        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
-        watchedRootPathRef.current = null
-      }
       prevProjectIdRef.current = activeProjectId
       return
     }
@@ -790,67 +784,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const nextRootPath = nextRootPathCandidate
 
     const switchRequestId = ++projectSwitchRequestIdRef.current
-    const previousWatchedRoot = watchedRootPathRef.current
 
     let cancelled = false
 
+    // Only the explorer's displayed root moves here. Watching follows the same
+    // scope but is owned by the effect below, so a switch no longer has to
+    // sequence "watch the new root, then release the old one" by hand.
     async function applyProjectSwitch(): Promise<void> {
-      try {
-        const watchResult = await filesystemApi.watchDirectory(nextRootPath)
-
-        if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
-          filesystemApi.unwatchDirectory(nextRootPath)
-          return
-        }
-
-        if (!watchResult.success) {
-          useFileExplorerStore.getState().setRootPath(nextRootPath)
-          if (watchResult.code === 'WEB_UNSUPPORTED') {
-            // Web client: directory watching is unavailable. Treat as a soft
-            // no-op — the project switch still completes (file explorer
-            // works, just no live change events) without surfacing a load
-            // error to the user.
-            if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
-              filesystemApi.unwatchDirectory(previousWatchedRoot)
-            }
-            watchedRootPathRef.current = nextRootPath
-            prevProjectIdRef.current = activeProjectId
-            return
-          }
-          useFileExplorerStore.getState().setRootLoadError({
-            message: watchResult.error,
-            code: watchResult.code
-          })
-          return
-        }
-
-        useFileExplorerStore.getState().setRootPath(nextRootPath)
-
-        if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
-          filesystemApi.unwatchDirectory(previousWatchedRoot)
-        }
-
-        watchedRootPathRef.current = nextRootPath
-        prevProjectIdRef.current = activeProjectId
-      } catch (error) {
-        if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
-          return
-        }
-
-        const message =
-          error instanceof Error
-            ? error.message
-            : runtimeT(
-                'projects',
-                'filesystemErrors.watchProjectDirectory',
-                'Failed to watch project directory'
-              )
-        useFileExplorerStore.getState().setRootPath(nextRootPath)
-        useFileExplorerStore.getState().setRootLoadError({
-          message,
-          code: 'WATCH_FAILED'
-        })
-      }
+      if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) return
+      useFileExplorerStore.getState().setRootPath(nextRootPath)
+      prevProjectIdRef.current = activeProjectId
     }
 
     void applyProjectSwitch()
@@ -874,30 +817,60 @@ export default function WorkspaceLayout(): React.JSX.Element {
         })),
         activeProject?.path
       )
-      watchedRootPathRef.current = null
+      displayedRootPathRef.current = null
       return
     }
     const desiredRoot = inConversationScope
       ? (activeConversation?.workspaceCwd ?? '')
       : (activeProject?.path ?? '')
-    if (!desiredRoot || desiredRoot === watchedRootPathRef.current) return
-    const previousWatchedRoot = watchedRootPathRef.current
+    if (!desiredRoot || desiredRoot === displayedRootPathRef.current) return
+    useFileExplorerStore.getState().setRootPath(desiredRoot)
+    displayedRootPathRef.current = desiredRoot
+    return
+  }, [
+    location.pathname,
+    activeConversation?.workspaceCwd,
+    activeGroupId,
+    activeGroupProjects,
+    activeProject?.path
+  ])
+
+  // Single owner of the watched root set.
+  //
+  // Roots, not directories: the host watches each one recursively, so the file
+  // explorer expanding a folder registers nothing. This used to be split across
+  // two effects with different rules — one released the previous root before
+  // clearing its ref, the other cleared the ref without releasing — while the
+  // explorer registered roots of its own on top. With no refcount behind the
+  // shared key, an unwatch from either side silently released a root the other
+  // still believed it held, and the group branch never registered a root at all.
+  useEffect(() => {
+    const inConversationScope = isConversationAreaPath(location.pathname)
+    const candidates = inConversationScope
+      ? [activeConversation?.workspaceCwd]
+      : activeGroupId
+        ? activeGroupProjects.map((project) => project.path)
+        : [activeProject?.path]
+    const roots = candidates.filter((root): root is string => Boolean(root))
+
     let cancelled = false
-    void filesystemApi.watchDirectory(desiredRoot).then((watchResult) => {
-      if (cancelled) return
-      if (!watchResult.success && watchResult.code !== 'WEB_UNSUPPORTED') {
-        useFileExplorerStore.getState().setRootLoadError({
-          message: watchResult.error ?? 'Failed to watch directory',
-          code: watchResult.code ?? 'WATCH_FAILED'
-        })
-        return
-      }
-      useFileExplorerStore.getState().setRootPath(desiredRoot)
-      if (previousWatchedRoot && previousWatchedRoot !== desiredRoot) {
-        filesystemApi.unwatchDirectory(previousWatchedRoot)
-      }
-      watchedRootPathRef.current = desiredRoot
+    void filesystemApi.setWatchRoots(roots).then((result) => {
+      if (cancelled || result.success) return
+      // Web client: watching is unavailable there. The explorer still works, it
+      // just gets no live events — not a load error to put in the user's face.
+      if (result.code === 'WEB_UNSUPPORTED') return
+      useFileExplorerStore.getState().setRootLoadError({
+        message:
+          result.error ??
+          runtimeT(
+            'projects',
+            'filesystemErrors.watchProjectDirectory',
+            'Failed to watch project directory'
+          ),
+        code: result.code ?? 'WATCH_FAILED'
+      })
     })
+
     return () => {
       cancelled = true
     }
@@ -930,14 +903,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // SessionWorkspace is keyed only by canonical ConversationId. The legacy
   // project manifest remains a read-only migration input and receives no live writes.
   useSessionWorkspaceSync(activeConversationId)
-
-  useEffect(() => {
-    return () => {
-      if (watchedRootPathRef.current) {
-        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
-      }
-    }
-  }, [])
 
   // Ensure tabs exist for currently visible project terminals.
   // Project workspace loading/removal is owned by persistence + restore flows.
