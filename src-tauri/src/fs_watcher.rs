@@ -799,7 +799,7 @@ mod tests {
 
         // The caller asks for the link. Both forms have to be filter roots:
         // FSEvents will report the resolved path, inotify the link path.
-        let filter_roots = resolve_filter_roots(&[link.clone()]);
+        let filter_roots = resolve_filter_roots(std::slice::from_ref(&link));
         let canonical = real.canonicalize().expect("canonicalize");
         assert!(filter_roots.contains(&link));
         assert!(filter_roots.contains(&canonical));
