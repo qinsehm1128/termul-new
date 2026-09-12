@@ -936,16 +936,23 @@ export function createTauriFilesystemApi(): FilesystemApi {
         }
       }
       const previous = watchRoots
-      watchRoots = roots
+      const next = roots
         .map((root) => root.replace(/\\/g, '/'))
         .filter((root) => root.trim().length > 0)
+      watchRoots = next
       try {
         await scheduleRootSync()
         return { success: true, data: undefined }
       } catch (err) {
         // Restore, or the cached set would claim roots the host never took and
         // the next sync would short-circuit as "already in sync".
-        watchRoots = previous
+        //
+        // Only this call's own value may be restored. A later `setWatchRoots`
+        // can install a newer set while this one is still in flight, and
+        // overwriting it here stranded the host on the pre-failure set while the
+        // newer call short-circuited as already-synced — and still reported
+        // success. Nothing watched, nobody told.
+        if (watchRoots === next) watchRoots = previous
         return { success: false, error: String(err), code: 'WATCH_ERROR' }
       }
     },
@@ -993,12 +1000,14 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return { success: true, data: undefined }
       }
       const previous = watchRoots
-      watchRoots = []
+      const next: string[] = []
+      watchRoots = next
       try {
         await scheduleRootSync()
         return { success: true, data: undefined }
       } catch (err) {
-        watchRoots = previous
+        // Same rule as `setWatchRoots`: never restore over a newer set.
+        if (watchRoots === next) watchRoots = previous
         return { success: false, error: String(err), code: 'UNWATCH_ERROR' }
       }
     },

@@ -94,6 +94,14 @@ pub struct FileChangeEvent {
 
 /// Whether a path is inside something we never want events from.
 ///
+/// **Takes a path relative to a watched root**, never an absolute one. The
+/// segment names below are ordinary directory names, so matching them against a
+/// full path lets a directory *above* the root decide: a project living in
+/// `~/build/app` would have every one of its events dropped because an ancestor
+/// happens to be called `build`. Silently, with the watcher reporting success.
+/// `files.watcherExclude` in VSCode is relative to the workspace folder for the
+/// same reason. Use [`is_excluded_within`] unless the path is already relative.
+///
 /// Note the `.git` special case: `.git/objects/**` and friends are excluded, but
 /// `.git/HEAD` and `.git/index` are not — those are how a branch switch becomes
 /// visible.
@@ -122,6 +130,21 @@ pub fn is_excluded(path: &Path) -> bool {
         }
     }
     false
+}
+
+/// Whether an absolute event path is excluded, judged inside its own root.
+///
+/// `dedupe_roots` guarantees no root contains another, so at most one root can
+/// match. A path under none of them cannot be judged relatively; falling back to
+/// the whole path is the conservative choice, and it is unreachable in practice
+/// because every event comes from a registered root.
+fn is_excluded_within(path: &Path, roots: &[PathBuf]) -> bool {
+    for root in roots {
+        if let Ok(relative) = path.strip_prefix(root) {
+            return is_excluded(relative);
+        }
+    }
+    is_excluded(path)
 }
 
 /// Drop roots already covered by another root.
@@ -165,12 +188,12 @@ fn classify(kind: &EventKind) -> FileChangeKind {
 /// One output per surviving path, not one per event. A rename arrives as a
 /// single event carrying both the old and the new path; taking only the first
 /// silently lost the other end of it.
-fn expand_event(event: notify::Event) -> Vec<FileChangeEvent> {
+fn expand_event(event: notify::Event, roots: &[PathBuf]) -> Vec<FileChangeEvent> {
     let kind = classify(&event.kind);
     event
         .paths
         .into_iter()
-        .filter(|path| !is_excluded(path))
+        .filter(|path| !is_excluded_within(path, roots))
         .filter_map(|path| {
             path.to_str().map(|path| FileChangeEvent {
                 kind,
@@ -184,9 +207,17 @@ fn expand_event(event: notify::Event) -> Vec<FileChangeEvent> {
 type Batch = Vec<FileChangeEvent>;
 
 struct Coalescer {
-    /// Insertion-ordered by `order`, so a burst arrives in the order it happened
-    /// rather than in hash order.
+    /// Kind and queue position per path.
     pending: HashMap<String, (FileChangeKind, u64)>,
+    /// Queue position -> path, so taking the oldest `MAX_BATCH` is a walk from
+    /// the front rather than a sort of everything still waiting.
+    ///
+    /// The pair used to be a single `HashMap` sorted on every flush. At the
+    /// 30 000-event cap that meant cloning and sorting ~30 000 strings per
+    /// 500-event batch, 60 batches deep — and the coalescer does not read its
+    /// input channel while it drains, so the slower it drained the more the
+    /// upstream queue grew.
+    queue: std::collections::BTreeMap<u64, String>,
     order: u64,
     overflow_reported: bool,
 }
@@ -195,13 +226,22 @@ impl Coalescer {
     fn new() -> Self {
         Self {
             pending: HashMap::new(),
+            queue: std::collections::BTreeMap::new(),
             order: 0,
             overflow_reported: false,
         }
     }
 
     fn push(&mut self, event: FileChangeEvent) {
-        if self.pending.len() >= MAX_BUFFERED && !self.pending.contains_key(&event.path) {
+        // A later event supersedes an earlier one for the same path but keeps
+        // its original position, so "created then modified" still reads as one
+        // change at the point the file first appeared.
+        if let Some(slot) = self.pending.get_mut(&event.path) {
+            slot.0 = event.kind;
+            return;
+        }
+
+        if self.pending.len() >= MAX_BUFFERED {
             if !self.overflow_reported {
                 self.overflow_reported = true;
                 log::warn!(
@@ -215,13 +255,8 @@ impl Coalescer {
 
         let order = self.order;
         self.order += 1;
-        // A later event supersedes an earlier one for the same path but keeps
-        // its original position, so "created then modified" still reads as one
-        // change at the point the file first appeared.
-        self.pending
-            .entry(event.path)
-            .and_modify(|slot| slot.0 = event.kind)
-            .or_insert((event.kind, order));
+        self.queue.insert(order, event.path.clone());
+        self.pending.insert(event.path, (event.kind, order));
     }
 
     fn is_empty(&self) -> bool {
@@ -231,18 +266,14 @@ impl Coalescer {
     /// Take up to `MAX_BATCH` events, oldest first. Anything beyond the cap
     /// stays pending for the next flush rather than being dropped.
     fn drain_batch(&mut self) -> Batch {
-        let mut entries: Vec<(String, FileChangeKind, u64)> = self
-            .pending
-            .iter()
-            .map(|(path, (kind, order))| (path.clone(), *kind, *order))
-            .collect();
-        entries.sort_by_key(|(_, _, order)| *order);
-        entries.truncate(MAX_BATCH);
-
-        let mut batch = Batch::with_capacity(entries.len());
-        for (path, kind, _) in entries {
-            self.pending.remove(&path);
-            batch.push(FileChangeEvent { kind, path });
+        let mut batch = Batch::with_capacity(MAX_BATCH.min(self.pending.len()));
+        while batch.len() < MAX_BATCH {
+            let Some((_, path)) = self.queue.pop_first() else {
+                break;
+            };
+            if let Some((kind, _)) = self.pending.remove(&path) {
+                batch.push(FileChangeEvent { kind, path });
+            }
         }
         if self.pending.is_empty() {
             self.overflow_reported = false;
@@ -370,10 +401,14 @@ impl FsWatcherService {
         }
 
         let tx = self.tx.clone();
+        // The filter needs the roots so it can judge each path *inside* its own
+        // root. A fresh watcher is built for every root change, so the set the
+        // closure captures is always the one it is watching.
+        let filter_roots = desired.clone();
         let mut watcher = RecommendedWatcher::new(
             move |result: notify::Result<notify::Event>| {
                 let Ok(event) = result else { return };
-                for change in expand_event(event) {
+                for change in expand_event(event, &filter_roots) {
                     let _ = tx.send(change);
                 }
             },
@@ -588,10 +623,14 @@ mod tests {
     #[test]
     fn expands_one_change_per_path_so_a_rename_keeps_both_ends() {
         use notify::event::{ModifyKind, RenameMode};
-        let changes = expand_event(event(
-            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
-            &["/p/old.ts", "/p/new.ts"],
-        ));
+        let roots = vec![PathBuf::from("/p")];
+        let changes = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+                &["/p/old.ts", "/p/new.ts"],
+            ),
+            &roots,
+        );
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].path, "/p/old.ts");
         assert_eq!(changes[1].path, "/p/new.ts");
@@ -600,12 +639,86 @@ mod tests {
     #[test]
     fn expansion_drops_excluded_paths_but_keeps_their_siblings() {
         use notify::event::ModifyKind;
-        let changes = expand_event(event(
-            EventKind::Modify(ModifyKind::Any),
-            &["/p/node_modules/x.js", "/p/src/main.rs"],
-        ));
+        let roots = vec![PathBuf::from("/p")];
+        let changes = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Any),
+                &["/p/node_modules/x.js", "/p/src/main.rs"],
+            ),
+            &roots,
+        );
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, "/p/src/main.rs");
+    }
+
+    #[test]
+    fn exclusion_is_judged_inside_the_root_not_above_it() {
+        use notify::event::ModifyKind;
+        // The root itself is called `build`. Judged against the whole path that
+        // name alone silenced every event the project could ever produce — the
+        // watcher registering fine and then never firing.
+        let roots = vec![PathBuf::from("/Users/me/build/app")];
+        let changes = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Any),
+                &["/Users/me/build/app/src/main.rs"],
+            ),
+            &roots,
+        );
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "/Users/me/build/app/src/main.rs");
+
+        // A segment of the same name *below* the root is still excluded.
+        let inside = expand_event(
+            event(
+                EventKind::Modify(ModifyKind::Any),
+                &["/Users/me/build/app/build/out.js"],
+            ),
+            &roots,
+        );
+        assert!(inside.is_empty());
+    }
+
+    #[test]
+    fn exclusion_uses_the_root_the_path_belongs_to() {
+        use notify::event::ModifyKind;
+        let roots = vec![PathBuf::from("/a/dist"), PathBuf::from("/b")];
+        // `/a/dist` is a root: its own name must not exclude its contents.
+        let from_a = expand_event(
+            event(EventKind::Modify(ModifyKind::Any), &["/a/dist/src/x.ts"]),
+            &roots,
+        );
+        assert_eq!(from_a.len(), 1);
+        // `/b/dist` is not a root, just a build directory inside one.
+        let from_b = expand_event(
+            event(EventKind::Modify(ModifyKind::Any), &["/b/dist/bundle.js"]),
+            &roots,
+        );
+        assert!(from_b.is_empty());
+    }
+
+    #[test]
+    fn drain_keeps_first_seen_order_across_batch_boundaries() {
+        let mut c = Coalescer::new();
+        for i in 0..(MAX_BATCH + 3) {
+            c.push(FileChangeEvent {
+                kind: FileChangeKind::Change,
+                path: format!("/p/{i}.ts"),
+            });
+        }
+        let first = c.drain_batch();
+        assert_eq!(first[0].path, "/p/0.ts");
+        assert_eq!(first[MAX_BATCH - 1].path, format!("/p/{}.ts", MAX_BATCH - 1));
+        let second = c.drain_batch();
+        let tail: Vec<String> = second.iter().map(|e| e.path.clone()).collect();
+        assert_eq!(
+            tail,
+            vec![
+                format!("/p/{}.ts", MAX_BATCH),
+                format!("/p/{}.ts", MAX_BATCH + 1),
+                format!("/p/{}.ts", MAX_BATCH + 2),
+            ]
+        );
     }
 
     /// Measures the real watch surface of this repository.
@@ -621,7 +734,7 @@ mod tests {
     fn measure_exclusion_ratio_on_this_repository() {
         /// Counts entries. `prune` mirrors the watcher: an excluded directory
         /// is counted once and never descended into.
-        fn walk(dir: &Path, prune: bool, seen: &mut u64, depth: usize) {
+        fn walk(dir: &Path, root: &Path, prune: bool, seen: &mut u64, depth: usize) {
             if depth > 12 {
                 return;
             }
@@ -631,13 +744,16 @@ mod tests {
             for entry in entries.flatten() {
                 let path = entry.path();
                 *seen += 1;
-                if prune && is_excluded(&path) {
+                // Judged relative to the root, exactly as the watcher does — so
+                // the number stays honest even when the repo lives under a
+                // directory whose name is on the exclude list.
+                if prune && is_excluded_within(&path, std::slice::from_ref(&root.to_path_buf())) {
                     // Not descending is where the saving comes from — the
                     // directory costs one entry instead of its whole subtree.
                     continue;
                 }
                 if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    walk(&path, prune, seen, depth + 1);
+                    walk(&path, root, prune, seen, depth + 1);
                 }
             }
         }
@@ -648,9 +764,9 @@ mod tests {
             .to_path_buf();
 
         let mut watched = 0u64;
-        walk(&root, true, &mut watched, 0);
+        walk(&root, &root, true, &mut watched, 0);
         let mut unfiltered = 0u64;
-        walk(&root, false, &mut unfiltered, 0);
+        walk(&root, &root, false, &mut unfiltered, 0);
 
         println!("root={}", root.display());
         println!("entries without exclude = {unfiltered}");

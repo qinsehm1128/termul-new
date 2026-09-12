@@ -108,6 +108,26 @@ describe('scheduleGitStatusRefreshForPath', () => {
     expect(refreshStatus).toHaveBeenCalledWith(REPO)
   })
 
+  // Recursive root watching delivers up to 500 changes in one synchronous
+  // dispatch loop. Collecting the open Git tabs walks the whole pane tree, so
+  // doing it per event meant walking that tree hundreds of times for a set that
+  // cannot change between two events of the same batch.
+  it('walks the pane tree once per synchronous batch, then again on the next', async () => {
+    const getState = vi.spyOn(useWorkspaceStore, 'getState')
+
+    scheduleGitStatusRefreshForPath(`${REPO}/a.ts`)
+    scheduleGitStatusRefreshForPath(`${REPO}/b.ts`)
+    scheduleGitStatusRefreshForPath(`${REPO}/c.ts`)
+    expect(getState).toHaveBeenCalledTimes(1)
+
+    // A new batch is a new microtask, and a Git tab may have opened since.
+    await Promise.resolve()
+    scheduleGitStatusRefreshForPath(`${REPO}/d.ts`)
+    expect(getState).toHaveBeenCalledTimes(2)
+
+    getState.mockRestore()
+  })
+
   it('no-ops when no git tab is open', async () => {
     useWorkspaceStore.setState({
       root: {

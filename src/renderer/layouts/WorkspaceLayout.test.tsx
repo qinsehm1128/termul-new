@@ -1539,6 +1539,36 @@ describe('WorkspaceLayout - Empty States', () => {
         projectStoreRef.current = { groups: [], activeGroupId: null }
       }
     })
+
+    // The tree and the watched set decide scope separately, and they disagreed:
+    // the tree asks `startsWith('/c/')`, the watcher asked
+    // `isConversationAreaPath`, which also matches `/conversations`. On the
+    // conversation LIST route the tree therefore showed the active project while
+    // the host was told to watch the conversation cwd — nothing, with no
+    // conversation open. Live refresh, git status and external-edit reloads all
+    // went quiet there.
+    it('watches the active project on the conversation list route, where the tree shows it', async () => {
+      const projects = [createProject('a', '/workspace/a', 'blue')]
+      mockUseProjects.mockReturnValue(projects)
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+      mockUseActiveProject.mockReturnValue(projects[0])
+      mockUseActiveProjectId.mockReturnValue('a')
+      mockApi.filesystem.setWatchRoots.mockClear()
+
+      renderWithRouter(['/conversations'])
+
+      await waitFor(() => {
+        expect(mockApi.filesystem.setWatchRoots).toHaveBeenCalled()
+      })
+      // Every root set this route asks for is the project's — never the empty
+      // set a conversation-scoped reading produces with no conversation open.
+      for (const [roots] of mockApi.filesystem.setWatchRoots.mock.calls) {
+        expect(roots).toEqual(['/workspace/a'])
+      }
+    })
   })
 })
 

@@ -803,11 +803,24 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [activeGroupId, activeGroupProjects, activeProject?.path, activeProjectId])
 
+  // One predicate for "the file tree is showing a Conversation's workspace".
+  //
+  // The displayed root, the watched root set and the explorer's visibility gate
+  // must agree, and they did not: the tree used `/c/` while the watched set used
+  // `isConversationAreaPath`, which also matches `/conversations`. On that route
+  // the tree showed the active project while the host watched the Conversation's
+  // cwd — or nothing at all — so file changes, git status and external-edit
+  // reloads all went quiet with no way to tell.
+  //
+  // `/conversations` is the list, not an open Conversation; only `/c/<id>` has a
+  // workspace to follow.
+  const fileTreeFollowsConversation = location.pathname.startsWith('/c/')
+
   // The file tree follows the open Conversation's workspace directory while in
   // the Conversation area, and the active project elsewhere. Project switches
   // keep their dedicated effect above; this one only owns scope transitions.
   useEffect(() => {
-    const inConversationScope = location.pathname.startsWith('/c/')
+    const inConversationScope = fileTreeFollowsConversation
     if (!inConversationScope && activeGroupId) {
       useFileExplorerStore.getState().setRoots(
         activeGroupProjects.map((project) => ({
@@ -828,7 +841,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     displayedRootPathRef.current = desiredRoot
     return
   }, [
-    location.pathname,
+    fileTreeFollowsConversation,
     activeConversation?.workspaceCwd,
     activeGroupId,
     activeGroupProjects,
@@ -845,8 +858,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // shared key, an unwatch from either side silently released a root the other
   // still believed it held, and the group branch never registered a root at all.
   useEffect(() => {
-    const inConversationScope = isConversationAreaPath(location.pathname)
-    const candidates = inConversationScope
+    const candidates = fileTreeFollowsConversation
       ? [activeConversation?.workspaceCwd]
       : activeGroupId
         ? activeGroupProjects.map((project) => project.path)
@@ -875,7 +887,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       cancelled = true
     }
   }, [
-    location.pathname,
+    fileTreeFollowsConversation,
     activeConversation?.workspaceCwd,
     activeGroupId,
     activeGroupProjects,
@@ -1297,8 +1309,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isConversationListRoute = location.pathname === '/conversations'
   const isOpenConversationRoute = location.pathname.startsWith('/c/')
   // File explorer visibility follows the Conversation workspace in the
-  // Conversation area and the active project elsewhere.
-  const explorerRootVisible = location.pathname.startsWith('/c/')
+  // Conversation area and the active project elsewhere — the same scope the
+  // displayed root and the watched root set use.
+  const explorerRootVisible = fileTreeFollowsConversation
     ? Boolean(activeConversation?.workspaceCwd)
     : Boolean(activeProject?.path)
   const isConversationRoute =

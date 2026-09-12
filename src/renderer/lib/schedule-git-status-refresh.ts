@@ -43,13 +43,41 @@ export function collectOpenGitTabCwds(): string[] {
 const pendingCwds = new Set<string>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 
+/** Open Git tab cwds for the current synchronous run, computed at most once. */
+let cwdsThisTick: string[] | null = null
+
+/**
+ * The open Git tab cwds, memoised for one synchronous run.
+ *
+ * `collectOpenGitTabCwds` walks the whole pane tree and every tab on it. The fs
+ * watcher delivers up to 500 changes per batch and dispatches them in a single
+ * synchronous loop, so calling it per event meant walking that tree hundreds of
+ * times for a set that cannot change between two events of the same batch —
+ * and recursive root watching made those batches far more common than the old
+ * per-expanded-directory model ever produced.
+ *
+ * A microtask clears it, so anything that opens or closes a Git tab is picked up
+ * by the next batch. Deliberately a resolved promise rather than
+ * `queueMicrotask`: fake timers in tests may replace the latter, and a memo that
+ * never expires would be a far worse bug than the one this avoids.
+ */
+function openGitTabCwdsThisTick(): string[] {
+  if (cwdsThisTick === null) {
+    cwdsThisTick = collectOpenGitTabCwds()
+    void Promise.resolve().then(() => {
+      cwdsThisTick = null
+    })
+  }
+  return cwdsThisTick
+}
+
 /**
  * Debounced refresh of git status for every open Git Changes tab whose repo
  * contains `filePath`. No-op when no matching git tab is open.
  */
 export function scheduleGitStatusRefreshForPath(filePath: string): void {
   let matched = false
-  for (const cwd of collectOpenGitTabCwds()) {
+  for (const cwd of openGitTabCwdsThisTick()) {
     if (isPathWithinRepo(filePath, cwd)) {
       pendingCwds.add(cwd)
       matched = true
@@ -76,4 +104,5 @@ export function resetGitStatusRefreshSchedulerForTests(): void {
   pendingCwds.clear()
   if (flushTimer) clearTimeout(flushTimer)
   flushTimer = null
+  cwdsThisTick = null
 }

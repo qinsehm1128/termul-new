@@ -14,6 +14,7 @@ const {
   mockSetSelectedAgentConfigId,
   mockRetargetWarmPool,
   mockPersistRead,
+  mockResolveSupported,
   stateRef,
   projectRef
 } = vi.hoisted(() => ({
@@ -23,6 +24,10 @@ const {
   mockSetSelectedAgentConfigId: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
   mockPersistRead: vi.fn(),
+  // Counts the host catalog round-trip so tests can tell "memoised the expensive
+  // lookup" apart from "memoised the user's choice" — the second is what made a
+  // project switch republish a stale agent.
+  mockResolveSupported: vi.fn(),
   stateRef: { current: { agentConfigs: [] as StoredAgentConfig[] } },
   projectRef: { current: { activeProjectId: 'proj-1' as string } }
 }))
@@ -56,11 +61,13 @@ vi.mock('@/lib/agents/supported-acp-agents', async () => {
     // catalog via `resolveSupportedAcpAgents`. Component tests delegate to the
     // synchronous offline-first derivation so the prewarm selection assertions
     // match the previous `buildSupportedAcpAgents(...)` behavior exactly.
-    resolveSupportedAcpAgents: async (configs: readonly StoredAgentConfig[]) =>
-      actual.buildSupportedAcpAgents(configs, 'windows-x86_64', undefined, {
+    resolveSupportedAcpAgents: async (configs: readonly StoredAgentConfig[]) => {
+      mockResolveSupported(configs)
+      return actual.buildSupportedAcpAgents(configs, 'windows-x86_64', undefined, {
         npx: true,
         uvx: true
       })
+    }
   }
 })
 
@@ -222,18 +229,21 @@ describe('useAcpAgents', () => {
     mockLoadAgentConfigs.mockImplementation(async () => {
       stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
     })
-    // Block the agent resolution at persistenceApi.read so a project switch can
-    // land while it is still in flight. The resolution is shared across
-    // switches now (it is project-independent), so BOTH the cancelled run and
-    // the live one continue off this single promise — each generation's own
-    // `cancelled` flag is what has to keep the stale cwd out.
+    // Block the FIRST agent resolution at persistenceApi.read so a project switch
+    // can land while it is still in flight. Each generation runs its own
+    // resolution — the user's choice has to be re-read, or changing agents would
+    // be undone by the next switch — so only generation 1 is held here.
     let resolvePersistRead!: () => void
-    mockPersistRead.mockImplementation(
-      () =>
-        new Promise<{ success: boolean; data: unknown }>((resolve) => {
+    let reads = 0
+    mockPersistRead.mockImplementation(() => {
+      reads += 1
+      if (reads === 1) {
+        return new Promise<{ success: boolean; data: unknown }>((resolve) => {
           resolvePersistRead = () => resolve({ success: true, data: undefined })
         })
-    )
+      }
+      return Promise.resolve({ success: true, data: undefined })
+    })
 
     const { rerender } = renderHook(() => useAcpAgents())
 
@@ -244,15 +254,52 @@ describe('useAcpAgents', () => {
     projectRef.current.activeProjectId = 'proj-2'
     rerender()
 
-    // Resume the shared resolution. Only the live (proj-2) generation may warm.
+    // Resume the held generation. Only the live (proj-2) one may warm.
     resolvePersistRead()
 
     await waitFor(() => {
       expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-2')
     })
     expect(mockPrewarmAgent).not.toHaveBeenCalledWith(expect.any(String), '/work/proj-1')
-    // The catalog round-trip is not repeated per switch.
-    expect(mockPersistRead).toHaveBeenCalledTimes(1)
+    // The expensive half — the host catalog round-trip — is still resolved once.
+    expect(mockResolveSupported).toHaveBeenCalledTimes(1)
+  })
+
+  // Caching the whole resolution for the app's lifetime made this switch
+  // republish the agent chosen at startup and warm a process for it, silently
+  // undoing the user's pick.
+  it('follows a new agent selection instead of republishing the startup one', async () => {
+    mockLoadAgentConfigs.mockImplementation(async () => {
+      stateRef.current.agentConfigs = [
+        config('acp-registry:claude-acp'),
+        config('acp-registry:gemini')
+      ]
+    })
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:gemini', mode: 'acp' }
+    })
+
+    const { rerender } = renderHook(() => useAcpAgents())
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith('acp-registry:gemini', '/work/proj-1')
+    })
+
+    // The launcher persists the new choice, then the user switches project.
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    projectRef.current.activeProjectId = 'proj-2'
+    rerender()
+
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith('acp-registry:claude-acp', '/work/proj-2')
+    })
+    expect(mockSetSelectedAgentConfigId).toHaveBeenLastCalledWith('acp-registry:claude-acp')
+    expect(mockPrewarmAgent).not.toHaveBeenCalledWith('acp-registry:gemini', '/work/proj-2')
+    // Re-reading the choice must not cost another catalog round-trip.
+    expect(mockResolveSupported).toHaveBeenCalledTimes(1)
   })
 
   // Every switch used to spawn or retarget an agent process for the project it

@@ -694,6 +694,27 @@ describe('tauriFilesystemApi', () => {
       expect(_watchRootsForTesting()).toEqual(['/proj/a', '/proj/b', '/proj/c'])
       expect(setRootsCalls().at(-1)).toEqual(['/proj/a', '/proj/b', '/proj/c'])
     })
+
+    // A failed call restores the set it replaced. It must restore only over its
+    // OWN value: a newer caller can install a set while the failing one is still
+    // in flight, and overwriting that stranded the host on the older set while
+    // the newer call short-circuited as already-synced — and returned success.
+    it('a failed call does not roll back over a newer set', async () => {
+      await tauriFilesystemApi.setWatchRoots(['/proj/a'])
+      mockInvoke.mockRejectedValueOnce(new Error('boom'))
+
+      const [failed, latest] = await Promise.all([
+        tauriFilesystemApi.setWatchRoots(['/proj/b']),
+        tauriFilesystemApi.setWatchRoots(['/proj/c'])
+      ])
+
+      expect(failed.success).toBe(false)
+      expect(latest.success).toBe(true)
+      // `/proj/c` is what the caller last asked for, so it is what must be
+      // cached and what the host must have been told.
+      expect(_watchRootsForTesting()).toEqual(['/proj/c'])
+      expect(setRootsCalls().at(-1)).toEqual(['/proj/c'])
+    })
   })
 
   describe('watchDirectory / unwatchDirectory are no longer OS operations', () => {
