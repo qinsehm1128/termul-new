@@ -652,11 +652,14 @@ export function hasStructuralGroupChange(next: ProjectGroup[], prev: ProjectGrou
 const FOCUS_ONLY_COALESCE_MS = 500
 
 /**
- * Flushes a focus-only change that is still inside its coalesce window.
+ * Flushers for focus-only changes still inside their coalesce window.
  *
- * Registered by `useProjectsAutoSave` while it is mounted, null otherwise.
+ * A set, not a single slot: with one slot, whichever instance unmounted last
+ * decided whether the close path had a handler at all — mount A, mount B,
+ * unmount B, and A's pending snapshot had nobody left to flush it. Membership
+ * has no ordering, so no unmount can speak for an instance that is still there.
  */
-let pendingFocusSnapshotFlush: (() => Promise<void>) | null = null
+const pendingFocusSnapshotFlushes = new Set<() => Promise<void>>()
 
 /**
  * Persist a coalesced focus-only change before the app closes.
@@ -670,7 +673,7 @@ let pendingFocusSnapshotFlush: (() => Promise<void>) | null = null
  * No-op when nothing is pending, so the close path can always call it.
  */
 export async function flushPendingProjectsSnapshot(): Promise<void> {
-  await pendingFocusSnapshotFlush?.()
+  await Promise.all([...pendingFocusSnapshotFlushes].map((flush) => flush()))
 }
 
 /**
@@ -721,7 +724,7 @@ export function useProjectsAutoSave(): void {
       pendingPreviousProjects = null
       await flushSnapshot(previous)
     }
-    pendingFocusSnapshotFlush = flushCoalescedNow
+    pendingFocusSnapshotFlushes.add(flushCoalescedNow)
 
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
@@ -822,13 +825,8 @@ export function useProjectsAutoSave(): void {
 
     return () => {
       unsubscribe()
-      // Only clear our own registration. Another instance mounting before this
-      // one unmounts would otherwise have its handler cleared by this cleanup,
-      // leaving the close path with nothing to flush — the same lost-update
-      // shape as restoring a stale value over a newer one.
-      if (pendingFocusSnapshotFlush === flushCoalescedNow) {
-        pendingFocusSnapshotFlush = null
-      }
+      // Withdraw only this instance's flusher; the others stay registered.
+      pendingFocusSnapshotFlushes.delete(flushCoalescedNow)
       if (coalesceTimer) {
         clearTimeout(coalesceTimer)
         coalesceTimer = null

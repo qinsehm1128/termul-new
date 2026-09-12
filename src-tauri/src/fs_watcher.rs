@@ -132,20 +132,29 @@ pub fn is_excluded(path: &Path) -> bool {
     false
 }
 
-/// Roots in the form events actually arrive in.
+/// Every form a root's events can arrive in.
 ///
-/// FSEvents reports real paths, and on macOS even `/tmp` is a symlink — so a
-/// symlinked project root would never prefix-match its own events. The filter
-/// would then fall back to judging the whole absolute path, bringing back the
-/// exact ancestor-name bug it exists to prevent, for precisely that root.
+/// Backends disagree about symlinks, and the disagreement is not academic:
+/// FSEvents reports real paths (on macOS even `/tmp` is a symlink), while
+/// inotify reports paths built from the path it was handed. A filter root in
+/// only one of those forms fails to prefix-match its own events on the other
+/// platform, the filter falls back to judging the whole absolute path, and the
+/// ancestor-name bug it exists to prevent is back for exactly that root.
 ///
-/// A root that cannot be resolved (it does not exist yet) is kept as given;
-/// nothing is watching it either way.
+/// So keep both, and let `is_excluded_within` take whichever matches. A root
+/// that cannot be resolved (it does not exist yet) contributes only the form it
+/// was given; nothing is watching it either way.
 fn resolve_filter_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
-    roots
-        .iter()
-        .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
-        .collect()
+    let mut resolved = Vec::with_capacity(roots.len());
+    for root in roots {
+        resolved.push(root.clone());
+        if let Ok(canonical) = root.canonicalize() {
+            if canonical != *root {
+                resolved.push(canonical);
+            }
+        }
+    }
+    resolved
 }
 
 /// Whether an absolute event path is excluded, judged inside its own root.
@@ -781,24 +790,38 @@ mod tests {
     #[cfg(unix)]
     fn filter_roots_are_resolved_so_a_symlinked_root_matches_its_own_events() {
         let dir = tempfile::tempdir().expect("temp dir");
-        // Deliberately named after an excluded segment: that is what makes the
-        // difference between the two forms visible rather than theoretical.
+        // BOTH names are excluded segments, so whichever form is missing from
+        // the filter roots produces a visible failure rather than a coincidence.
         let real = dir.path().join("build");
         std::fs::create_dir(&real).expect("create dir");
-        let link = dir.path().join("link-to-build");
+        let link = dir.path().join("dist");
         std::os::unix::fs::symlink(&real, &link).expect("symlink");
 
-        // The caller asks for the link; events arrive under the resolved path.
-        let resolved = resolve_filter_roots(&[link.clone()]);
-        assert_eq!(resolved, vec![real.canonicalize().expect("canonicalize")]);
+        // The caller asks for the link. Both forms have to be filter roots:
+        // FSEvents will report the resolved path, inotify the link path.
+        let filter_roots = resolve_filter_roots(&[link.clone()]);
+        let canonical = real.canonicalize().expect("canonicalize");
+        assert!(filter_roots.contains(&link));
+        assert!(filter_roots.contains(&canonical));
 
-        let event_path = real.canonicalize().expect("canonicalize").join("src/main.rs");
-        // Resolved: judged inside the root, so the root's own name is not a
-        // segment that can exclude it.
-        assert!(!is_excluded_within(&event_path, &resolved));
-        // Unresolved: the prefix never matches, the whole absolute path gets
-        // judged, and the root's own `build` segment silences the project.
-        assert!(is_excluded_within(&event_path, &[link]));
+        for form in [canonical.join("src/main.rs"), link.join("src/main.rs")] {
+            // Judged inside the root either way, so the root's own name is not a
+            // segment that can exclude it.
+            assert!(
+                !is_excluded_within(&form, &filter_roots),
+                "{} must be judged inside its root",
+                form.display()
+            );
+            // With only the other form registered the prefix never matches, the
+            // whole absolute path gets judged, and the root's own `build`
+            // segment silences the project.
+            let other = if form.starts_with(&canonical) {
+                link.clone()
+            } else {
+                canonical.clone()
+            };
+            assert!(is_excluded_within(&form, &[other]));
+        }
     }
 
     #[test]
