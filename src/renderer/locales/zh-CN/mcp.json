@@ -99,5 +99,19 @@
     "envShape": "{{name}}：env 必须是对象映射或名称/值对",
     "invalidServer": "{{name}}：服务器配置无效",
     "validation": "{{name}}：{{errors}}"
+  },
+  "memory": {
+    "title": "记忆库 MCP 服务器",
+    "description": "导出内置的记忆库 MCP 服务器，让外部客户端（Claude Desktop、Codex、Claude Code）读取本项目的记忆。",
+    "project": "项目",
+    "format": "配置格式",
+    "formatJson": "Claude JSON",
+    "formatToml": "Codex TOML",
+    "preview": "预览",
+    "copy": "复制配置",
+    "copied": "MCP 配置已复制",
+    "copyFailed": "读取 MCP 配置失败",
+    "unavailable": "浏览器端拿不到 MCP 配置：它指向宿主机的可执行文件与状态目录",
+    "noProjects": "没有带文件夹路径的项目"
   }
 }

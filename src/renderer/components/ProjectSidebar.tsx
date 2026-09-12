@@ -116,19 +116,6 @@ interface ProjectSidebarProps {
   activeSSHProfileId?: string | null
 }
 
-/**
- * Render an argv array as a pasteable single line.
- *
- * The invocation carries absolute paths, and on this platform an app bundle
- * path routinely contains spaces — pasting the array joined by spaces would
- * produce a command that silently refers to the wrong file.
- */
-function shellQuoteInvocation(argv: string[]): string {
-  return argv
-    .map((part) => (/^[A-Za-z0-9_./:=-]+$/.test(part) ? part : `'${part.replace(/'/g, "'\\''")}'`))
-    .join(' ')
-}
-
 export function ProjectSidebar({
   projects,
   activeProjectId,
@@ -687,37 +674,6 @@ export function ProjectSidebar({
     }
   }, [])
 
-  /**
-   * Copy the command line an external MCP client should be configured with.
-   *
-   * This is the only way to get it: the server is a subcommand of this
-   * executable and needs the host's own state root, neither of which a user can
-   * be expected to type. `null` means the surface cannot produce one — the
-   * browser client, where the paths would name a machine it is not running on.
-   */
-  const handleCopyMcpInvocation = useCallback(
-    async (project: Project) => {
-      if (!project.path) return
-      try {
-        const invocation = await memoryIndexApi.mcpInvocation({ projectRoot: project.path })
-        if (!invocation) {
-          toast({ title: t('memoryMcpUnavailable'), variant: 'destructive' })
-          return
-        }
-        await clipboardApi.writeText(shellQuoteInvocation(invocation))
-        toast({ title: t('memoryMcpCopied'), description: project.name })
-      } catch (err) {
-        console.error('Failed to read the memory MCP invocation:', err)
-        toast({
-          title: t('memoryMcpFailed'),
-          description: err instanceof Error ? err.message : undefined,
-          variant: 'destructive'
-        })
-      }
-    },
-    [t]
-  )
-
   const renderProjectContextMenu = useCallback(
     (project: Project): React.ReactNode => {
       const isGitRepo = project.isGitRepo ?? false
@@ -788,14 +744,6 @@ export function ProjectSidebar({
               <X className="mr-2 h-4 w-4" /> {t('organizeHistoryCancel')}
             </ContextMenuItem>
           )}
-          <ContextMenuItem
-            disabled={!project.path}
-            onSelect={() => {
-              void handleCopyMcpInvocation(project)
-            }}
-          >
-            <Copy className="mr-2 h-4 w-4" /> {t('copyMemoryMcpConfig')}
-          </ContextMenuItem>
           <ContextMenuItem
             onSelect={() =>
               handleOpenColorPicker(
@@ -895,7 +843,6 @@ export function ProjectSidebar({
       moveProjectToGroup,
       handleOrganizeHistory,
       handleCancelOrganize,
-      handleCopyMcpInvocation,
       organizingProjectId,
       organizeProgress,
       t

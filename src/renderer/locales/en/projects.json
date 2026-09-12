@@ -295,9 +295,5 @@
   "organizeHistoryProgress": "Organizing history… {{seen}}/{{total}} ({{sessions}} indexed)",
   "organizeHistoryCancel": "Stop organizing",
   "organizeHistoryCancelled": "Stopped after indexing {{sessions}} session(s); the index is partial",
-  "copyMemoryMcpConfig": "Copy memory MCP config",
-  "memoryMcpCopied": "MCP config copied",
-  "memoryMcpUnavailable": "The MCP config is not available in the browser: it names the host's executable and state directory",
-  "memoryMcpFailed": "Could not read the MCP config",
   "organizeHistoryFirstPass": "First pass: the whole history has to be read, which can take minutes (later runs read only what is new)"
 }

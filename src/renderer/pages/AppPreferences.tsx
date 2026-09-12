@@ -30,6 +30,7 @@ import { CliResumeDefaultsSettings } from '@/components/settings/CliResumeDefaul
 import { DataMigrationSettings } from '@/components/settings/DataMigrationSettings'
 import { MacosPermissionsSettings } from '@/components/settings/MacosPermissionsSettings'
 import { McpServersSettings } from '@/components/settings/McpServersSettings'
+import { MemoryMcpConfigSection } from '@/components/settings/MemoryMcpConfigSection'
 import { RemoteAccessSettings } from '@/components/settings/RemoteAccessSettings'
 import {
   type SettingsCategory,
@@ -1481,8 +1482,9 @@ export default function AppPreferences(): React.JSX.Element {
                   {tSettings('mcpServers.description')}
                 </p>
               </div>
-              <div className="w-full lg:w-2/3">
+              <div className="w-full lg:w-2/3 space-y-4">
                 <McpServersSettings />
+                <MemoryMcpConfigSection />
               </div>
             </div>
           </SettingsSection>

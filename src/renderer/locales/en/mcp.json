@@ -99,5 +99,19 @@
     "envShape": "{{name}}: env must be an object map or name/value pairs",
     "invalidServer": "{{name}}: invalid server configuration",
     "validation": "{{name}}: {{errors}}"
+  },
+  "memory": {
+    "title": "Memory MCP server",
+    "description": "Export the built-in memory-index MCP server so external clients (Claude Desktop, Codex, Claude Code) can read this project's memory.",
+    "project": "Project",
+    "format": "Config format",
+    "formatJson": "Claude JSON",
+    "formatToml": "Codex TOML",
+    "preview": "Preview",
+    "copy": "Copy config",
+    "copied": "MCP config copied",
+    "copyFailed": "Could not read the MCP config",
+    "unavailable": "The MCP config is not available in the browser: it names the host's executable and state directory",
+    "noProjects": "No project with a folder path"
   }
 }
