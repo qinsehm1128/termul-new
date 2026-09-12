@@ -1,5 +1,5 @@
 import { conversationBackendOf } from '@shared/types/conversation.types'
-import type { ShellInfo } from '@shared/types/ipc.types'
+import type { ShellInfo, TerminalSpawnOptions } from '@shared/types/ipc.types'
 import { RefreshCcw, Unplug, X } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -172,6 +172,82 @@ export function PaneContent({
   const activeTerminalIdInPane = activeTab?.type === 'terminal' ? activeTab.terminalId : null
   const panePreviewPosition =
     previewTarget?.paneId === pane.id && !isFullscreenPane ? previewTarget.position : null
+
+  /**
+   * Identity of everything the per-terminal props below close over.
+   *
+   * `terminalsInPane` gets a new reference whenever ANY terminal in the pane
+   * reports activity (a busy terminal does so every couple of seconds), but
+   * none of those updates touch the fields these props are built from.
+   * Deriving the props from this key instead keeps their identity stable
+   * across activity churn, and changes it exactly when a captured value does.
+   */
+  const terminalPropsKey = useMemo(
+    () =>
+      terminalsInPane
+        .map((terminal) =>
+          [
+            terminal.id,
+            terminal.ptyId ?? '',
+            terminal.conversationId ?? '',
+            terminal.projectId ?? '',
+            terminal.shell ?? '',
+            terminal.cwd ?? '',
+            terminal.name
+          ].join('')
+        )
+        .join(''),
+    [terminalsInPane]
+  )
+
+  /**
+   * Stable per-terminal props for `ConnectedTerminal`.
+   *
+   * `ConnectedTerminal` is `memo()`'d (ConnectedTerminal.tsx), but a fresh
+   * `spawnOptions` object literal and three inline arrows per render defeated
+   * that entirely — every terminal in the pane re-rendered whenever any one of
+   * them saw output, and again on every tab switch.
+   *
+   * Identity must track the captured values rather than being frozen outright:
+   * the component stores these callbacks in refs during render, so skipping a
+   * re-render also skips the ref update and would leave a stale closure (e.g.
+   * command history filed under a terminal's previous name).
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: terminalPropsKey is the value-identity of terminalsInPane; depending on the array itself would rebuild on activity churn
+  const stableTerminalProps = useMemo(() => {
+    const byTerminalId = new Map<
+      string,
+      {
+        spawnOptions: TerminalSpawnOptions
+        onBoundToStoreTerminal: (ptyId: string) => void
+        onCommand: (command: string) => void
+      }
+    >()
+
+    for (const terminal of terminalsInPane) {
+      byTerminalId.set(terminal.id, {
+        spawnOptions: {
+          conversationId: terminal.conversationId,
+          projectId: terminal.projectId,
+          shell: terminal.shell,
+          cwd: terminal.cwd
+        },
+        onBoundToStoreTerminal: (ptyId: string) => {
+          if (terminal.ptyId !== ptyId) {
+            setTerminalPtyId(terminal.id, ptyId)
+          }
+        },
+        onCommand: (command: string) => {
+          // History is keyed by project; a terminal without one
+          // has nowhere to be filed.
+          if (!terminal.projectId) return
+          void addCommandToHistory(command, terminal.name, terminal.id, terminal.projectId)
+        }
+      })
+    }
+
+    return byTerminalId
+  }, [terminalPropsKey, setTerminalPtyId, addCommandToHistory])
 
   // Agent loading: show pulsing icon for a minimum duration after the terminal
   // is first seen. The xterm renderer attaches almost instantly (same frame),
@@ -491,12 +567,7 @@ export function PaneContent({
                   terminal.kind === 'agent' &&
                   !!terminal.agentId &&
                   agentLoadingIds.has(terminal.id)
-                const connectedTerminalSpawnOptions = {
-                  conversationId: terminal.conversationId,
-                  projectId: terminal.projectId,
-                  shell: terminal.shell,
-                  cwd: terminal.cwd
-                }
+                const stableProps = stableTerminalProps.get(terminal.id)
                 return (
                   <div
                     key={tab.id}
@@ -512,23 +583,9 @@ export function PaneContent({
                         terminalId={terminal.ptyId}
                         storeTerminalId={terminal.id}
                         autoSpawn={false}
-                        spawnOptions={connectedTerminalSpawnOptions}
-                        onBoundToStoreTerminal={(ptyId) => {
-                          if (terminal.ptyId !== ptyId) {
-                            setTerminalPtyId(terminal.id, ptyId)
-                          }
-                        }}
-                        onCommand={(command) => {
-                          // History is keyed by project; a terminal without one
-                          // has nowhere to be filed.
-                          if (!terminal.projectId) return
-                          void addCommandToHistory(
-                            command,
-                            terminal.name,
-                            terminal.id,
-                            terminal.projectId
-                          )
-                        }}
+                        spawnOptions={stableProps?.spawnOptions}
+                        onBoundToStoreTerminal={stableProps?.onBoundToStoreTerminal}
+                        onCommand={stableProps?.onCommand}
                         initialScrollback={terminal.pendingScrollback}
                         initialModes={terminal.pendingModes}
                         className="w-full h-full"

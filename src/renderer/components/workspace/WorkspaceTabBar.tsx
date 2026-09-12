@@ -9,7 +9,7 @@ import {
   Terminal as TerminalIcon,
   X as XIcon
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
@@ -961,6 +961,17 @@ export function WorkspaceTabBar({
   })
 
   const terminalStoreTerminals = useTerminalStore(useShallow((state) => state.terminals))
+  /**
+   * Index once per render instead of scanning per tab.
+   *
+   * The render below runs for every tab, and terminal output is a high-frequency
+   * state source, so the previous `.find()` per terminal tab made each wake-up
+   * O(tabs x terminals).
+   */
+  const terminalsById = useMemo(
+    () => new Map(terminalStoreTerminals.map((terminal) => [terminal.id, terminal])),
+    [terminalStoreTerminals]
+  )
   const isFullscreenPane = fullscreenPaneId === paneId
 
   // Check if this tab is being dragged
@@ -1004,7 +1015,7 @@ export function WorkspaceTabBar({
                 <div key={tab.id} className="list-none h-full">
                   {tab.type === 'terminal' ? (
                     (() => {
-                      const terminal = terminalStoreTerminals.find((t) => t.id === tab.terminalId)
+                      const terminal = terminalsById.get(tab.terminalId)
                       if (!terminal) return null
                       return (
                         <TerminalTabInline
