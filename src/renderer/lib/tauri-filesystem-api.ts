@@ -23,7 +23,6 @@ import {
 } from '@tauri-apps/plugin-fs'
 import { runtimeT } from '../i18n/runtime'
 import { sortDirectoryEntries } from './filesystem-sort'
-import { logFrontendError } from './log-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 import { webServerFilesystem } from './web-server-api'
 

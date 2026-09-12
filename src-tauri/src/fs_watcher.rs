@@ -160,6 +160,26 @@ fn classify(kind: &EventKind) -> FileChangeKind {
     }
 }
 
+/// Turn one raw notify event into the changes worth delivering.
+///
+/// One output per surviving path, not one per event. A rename arrives as a
+/// single event carrying both the old and the new path; taking only the first
+/// silently lost the other end of it.
+fn expand_event(event: notify::Event) -> Vec<FileChangeEvent> {
+    let kind = classify(&event.kind);
+    event
+        .paths
+        .into_iter()
+        .filter(|path| !is_excluded(path))
+        .filter_map(|path| {
+            path.to_str().map(|path| FileChangeEvent {
+                kind,
+                path: path.replace('\\', "/"),
+            })
+        })
+        .collect()
+}
+
 /// One merged batch ready for the renderer.
 type Batch = Vec<FileChangeEvent>;
 
@@ -353,19 +373,8 @@ impl FsWatcherService {
         let mut watcher = RecommendedWatcher::new(
             move |result: notify::Result<notify::Event>| {
                 let Ok(event) = result else { return };
-                let kind = classify(&event.kind);
-                // Every path, not just the first. A rename arrives as one event
-                // carrying both the old and the new path; reading only `paths[0]`
-                // silently lost the other end of it.
-                for path in event.paths {
-                    if is_excluded(&path) {
-                        continue;
-                    }
-                    let Some(path) = path.to_str() else { continue };
-                    let _ = tx.send(FileChangeEvent {
-                        kind,
-                        path: path.replace('\\', "/"),
-                    });
+                for change in expand_event(event) {
+                    let _ = tx.send(change);
                 }
             },
             Config::default(),
@@ -566,6 +575,96 @@ mod tests {
             path: "/p/0.ts".into(),
         });
         assert_eq!(c.pending.get("/p/0.ts").map(|slot| slot.0), Some(FileChangeKind::Unlink));
+    }
+
+    fn event(kind: EventKind, paths: &[&str]) -> notify::Event {
+        notify::Event {
+            kind,
+            paths: paths.iter().map(PathBuf::from).collect(),
+            attrs: Default::default(),
+        }
+    }
+
+    #[test]
+    fn expands_one_change_per_path_so_a_rename_keeps_both_ends() {
+        use notify::event::{ModifyKind, RenameMode};
+        let changes = expand_event(event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            &["/p/old.ts", "/p/new.ts"],
+        ));
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].path, "/p/old.ts");
+        assert_eq!(changes[1].path, "/p/new.ts");
+    }
+
+    #[test]
+    fn expansion_drops_excluded_paths_but_keeps_their_siblings() {
+        use notify::event::ModifyKind;
+        let changes = expand_event(event(
+            EventKind::Modify(ModifyKind::Any),
+            &["/p/node_modules/x.js", "/p/src/main.rs"],
+        ));
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "/p/src/main.rs");
+    }
+
+    /// Measures the real watch surface of this repository.
+    ///
+    /// `#[ignore]` because it walks the whole working tree and its numbers
+    /// depend on local build state; run it explicitly with
+    /// `cargo test --lib fs_watcher::tests::measure -- --ignored --nocapture`.
+    /// It exists because the alignment decision rested on an untested premise —
+    /// that recursive watching is affordable once excludes are applied — and a
+    /// premise like that deserves a number rather than an argument.
+    #[test]
+    #[ignore]
+    fn measure_exclusion_ratio_on_this_repository() {
+        /// Counts entries. `prune` mirrors the watcher: an excluded directory
+        /// is counted once and never descended into.
+        fn walk(dir: &Path, prune: bool, seen: &mut u64, depth: usize) {
+            if depth > 12 {
+                return;
+            }
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                *seen += 1;
+                if prune && is_excluded(&path) {
+                    // Not descending is where the saving comes from — the
+                    // directory costs one entry instead of its whole subtree.
+                    continue;
+                }
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    walk(&path, prune, seen, depth + 1);
+                }
+            }
+        }
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repo root")
+            .to_path_buf();
+
+        let mut watched = 0u64;
+        walk(&root, true, &mut watched, 0);
+        let mut unfiltered = 0u64;
+        walk(&root, false, &mut unfiltered, 0);
+
+        println!("root={}", root.display());
+        println!("entries without exclude = {unfiltered}");
+        println!("entries with exclude    = {watched}");
+        println!(
+            "watch surface removed   = {:.1}%  ({} entries)",
+            ((unfiltered - watched) as f64 / unfiltered.max(1) as f64) * 100.0,
+            unfiltered - watched
+        );
+        assert!(unfiltered > 0, "walk found nothing — wrong root?");
+        assert!(
+            watched < unfiltered,
+            "exclusion removed nothing; the gate is not doing its job"
+        );
     }
 
     #[test]

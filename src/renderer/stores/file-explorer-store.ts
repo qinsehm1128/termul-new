@@ -357,7 +357,6 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   },
 
   setRoots: (roots: FileExplorerRoot[], focusedRootPath?: string | null): void => {
-    const state = get()
     cancelActiveSearchStreams()
 
     const seenPaths = new Set<string>()
@@ -840,10 +839,9 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   },
 
   collapseAll: (): void => {
-    const { rootPath, roots, expandedDirs } = get()
+    const { rootPath, roots } = get()
     const activeRoots =
       roots.length > 0 ? roots.map((root) => root.path) : rootPath ? [rootPath] : []
-    const rootSet = new Set(activeRoots)
     // Keep only root contents
     const newContents = new Map<string, DirectoryEntry[]>()
     for (const root of activeRoots) {
