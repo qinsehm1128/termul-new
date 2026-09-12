@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
@@ -222,35 +222,72 @@ describe('useAcpAgents', () => {
     mockLoadAgentConfigs.mockImplementation(async () => {
       stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
     })
-    // Block each in-flight run at persistenceApi.read (which runs AFTER the cwd
-    // snapshot) so a project switch can happen while run #1 is still in flight.
-    const persistResolvers: Array<() => void> = []
+    // Block the agent resolution at persistenceApi.read so a project switch can
+    // land while it is still in flight. The resolution is shared across
+    // switches now (it is project-independent), so BOTH the cancelled run and
+    // the live one continue off this single promise — each generation's own
+    // `cancelled` flag is what has to keep the stale cwd out.
+    let resolvePersistRead!: () => void
     mockPersistRead.mockImplementation(
       () =>
         new Promise<{ success: boolean; data: unknown }>((resolve) => {
-          persistResolvers.push(() => resolve({ success: true, data: undefined }))
+          resolvePersistRead = () => resolve({ success: true, data: undefined })
         })
     )
 
     const { rerender } = renderHook(() => useAcpAgents())
 
-    // Run #1 (proj-1) is in flight, blocked on persistRead; cwd = '/work/proj-1'.
-    await waitFor(() => expect(persistResolvers).toHaveLength(1))
+    // The resolution is in flight, blocked on persistRead; cwd = '/work/proj-1'.
+    await waitFor(() => expect(mockPersistRead).toHaveBeenCalledTimes(1))
 
-    // Switch project + re-render: cleanup cancels run #1; run #2 (proj-2) starts.
+    // Switch project + re-render: cleanup cancels the proj-1 generation.
     projectRef.current.activeProjectId = 'proj-2'
     rerender()
-    await waitFor(() => expect(persistResolvers).toHaveLength(2))
 
-    // Resume run #1 (cancelled) — it must NOT prewarm the stale proj-1 cwd.
-    persistResolvers[0]()
-    // Resume run #2 (the latest) — it prewarms the proj-2 cwd.
-    persistResolvers[1]()
+    // Resume the shared resolution. Only the live (proj-2) generation may warm.
+    resolvePersistRead()
 
     await waitFor(() => {
       expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-2')
     })
     expect(mockPrewarmAgent).not.toHaveBeenCalledWith(expect.any(String), '/work/proj-1')
+    // The catalog round-trip is not repeated per switch.
+    expect(mockPersistRead).toHaveBeenCalledTimes(1)
+  })
+
+  // Every switch used to spawn or retarget an agent process for the project it
+  // passed through, so clicking across tabs paid for each one on the way.
+  it('warms only the project a burst of switches lands on', async () => {
+    projectRef.current.activeProjectId = 'proj-1'
+    mockLoadAgentConfigs.mockImplementation(async () => {
+      stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
+    })
+
+    const { rerender } = renderHook(() => useAcpAgents())
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-1')
+    })
+    mockPrewarmAgent.mockClear()
+    mockRetargetWarmPool.mockClear()
+
+    // Click through an intermediate project faster than the coalesce window.
+    // The two clicks must land in separate tasks the way real ones do: within
+    // one synchronous block the cancelled flag alone would hold proj-2 back,
+    // which would let this pass even with the coalescing removed.
+    projectRef.current.activeProjectId = 'proj-2'
+    rerender()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    projectRef.current.activeProjectId = 'proj-3'
+    rerender()
+
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-3')
+    })
+    expect(mockPrewarmAgent).toHaveBeenCalledTimes(1)
+    expect(mockPrewarmAgent).not.toHaveBeenCalledWith(expect.any(String), '/work/proj-2')
+    expect(mockRetargetWarmPool).toHaveBeenCalledTimes(1)
   })
 
   it('cancels the in-flight prewarm when the component unmounts before persistRead resolves', async () => {
