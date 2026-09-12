@@ -891,6 +891,15 @@ export interface FilesystemApi {
   copyFile: (srcPath: string, destPath: string) => Promise<IpcResult<void>>
   watchDirectory: (dirPath: string) => Promise<IpcResult<void>>
   unwatchDirectory: (dirPath: string) => Promise<IpcResult<void>>
+  /**
+   * Release every directory watcher at once.
+   *
+   * Exists for the app-close path: the desktop watcher is otherwise torn down
+   * inside Tauri's `cleanup_before_exit`, which joins the watcher thread on the
+   * main thread with no timeout. Releasing here keeps that join off the
+   * terminate path. Surfaces with no watchers (web) succeed trivially.
+   */
+  unwatchAllDirectories: () => Promise<IpcResult<void>>
   onFileChanged: (callback: FileChangeCallback) => () => void
   onFileCreated: (callback: FileChangeCallback) => () => void
   onFileDeleted: (callback: FileChangeCallback) => () => void

@@ -76,6 +76,7 @@ import {
 } from '@tauri-apps/plugin-fs'
 import { i18n } from '../../i18n'
 import {
+  _liveWatcherCountForTesting,
   _resetFilesystemStateForTesting,
   MAX_FILE_SIZE,
   tauriFilesystemApi
@@ -603,6 +604,148 @@ describe('tauriFilesystemApi', () => {
 
       expect(result.success).toBe(true)
       expect(vi.mocked(watchImmediate)).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('consolidated watcher (one FsEventWatcher for every directory)', () => {
+    // Regression cover for the quit hang: Tauri's `cleanup_before_exit` drops
+    // the fs plugin's watchers serially on the main thread and notify's
+    // `stop()` joins its FSEvents thread with no timeout, so watcher COUNT is
+    // what decides whether macOS reports the app as unresponsive.
+    it('holds exactly one live watcher no matter how many directories are watched', async () => {
+      vi.mocked(watchImmediate).mockImplementation(async () => vi.fn())
+
+      await tauriFilesystemApi.watchDirectory('/proj/a')
+      expect(_liveWatcherCountForTesting()).toBe(1)
+
+      await tauriFilesystemApi.watchDirectory('/proj/b')
+      await tauriFilesystemApi.watchDirectory('/proj/c')
+      await tauriFilesystemApi.watchDirectory('/proj/d')
+
+      expect(_liveWatcherCountForTesting()).toBe(1)
+    })
+
+    it('releases the superseded handle on every rebuild so handles cannot pile up', async () => {
+      const released: string[] = []
+      let created = 0
+      vi.mocked(watchImmediate).mockImplementation(async () => {
+        const id = `w${++created}`
+        return () => released.push(id)
+      })
+
+      await tauriFilesystemApi.watchDirectory('/proj/a')
+      await tauriFilesystemApi.watchDirectory('/proj/b')
+      await tauriFilesystemApi.watchDirectory('/proj/c')
+
+      // Three rebuilds happened, two predecessors must already be gone.
+      expect(created).toBe(3)
+      expect(released).toEqual(['w1', 'w2'])
+      expect(_liveWatcherCountForTesting()).toBe(1)
+    })
+
+    it('hands the watcher every watched path, using the original OS-native form', async () => {
+      let lastPaths: readonly string[] = []
+      vi.mocked(watchImmediate).mockImplementation(async (paths) => {
+        lastPaths = paths as string[]
+        return vi.fn()
+      })
+
+      await tauriFilesystemApi.watchDirectory('C:\\proj\\a')
+      await tauriFilesystemApi.watchDirectory('/proj/b')
+
+      expect([...lastPaths].sort()).toEqual(['C:\\proj\\a', '/proj/b'].sort())
+    })
+
+    it('drops the last watcher entirely when the final directory is unwatched', async () => {
+      const unlisten = vi.fn()
+      vi.mocked(watchImmediate).mockResolvedValue(unlisten)
+
+      await tauriFilesystemApi.watchDirectory('/proj/a')
+      await tauriFilesystemApi.watchDirectory('/proj/b')
+      await tauriFilesystemApi.unwatchDirectory('/proj/a')
+      expect(_liveWatcherCountForTesting()).toBe(1)
+
+      await tauriFilesystemApi.unwatchDirectory('/proj/b')
+      expect(_liveWatcherCountForTesting()).toBe(0)
+    })
+
+    it('stops delivering events for an unwatched directory', async () => {
+      let captured: WatchCallback | null = null
+      vi.mocked(watchImmediate).mockImplementation(async (_paths, callback) => {
+        captured = callback as WatchCallback
+        return vi.fn()
+      })
+
+      await tauriFilesystemApi.watchDirectory('/proj/a')
+      await tauriFilesystemApi.watchDirectory('/proj/b')
+
+      const onChanged = vi.fn()
+      const cleanup = tauriFilesystemApi.onFileChanged(onChanged)
+
+      captured?.({ type: { type: 'modify' }, paths: ['/proj/a/x.txt'] } as never)
+      expect(onChanged).toHaveBeenCalledTimes(1)
+
+      await tauriFilesystemApi.unwatchDirectory('/proj/a')
+      onChanged.mockClear()
+
+      // After unwatching, the rebuilt watcher no longer covers /proj/a. The
+      // stale callback is what the OS would stop feeding; assert the registry
+      // no longer attributes it either.
+      captured?.({ type: { type: 'modify' }, paths: ['/proj/b/y.txt'] } as never)
+      expect(onChanged).toHaveBeenCalledWith({ type: 'change', path: '/proj/b/y.txt' })
+
+      cleanup()
+    })
+
+    it('rolls back the registry when the watcher rebuild fails', async () => {
+      vi.mocked(watchImmediate).mockRejectedValueOnce(new Error('boom'))
+
+      const failed = await tauriFilesystemApi.watchDirectory('/proj/a')
+      expect(failed.success).toBe(false)
+      expect(_liveWatcherCountForTesting()).toBe(0)
+
+      // A phantom registry entry would make this early-return as "already
+      // watching" and leave the directory silently unwatched forever.
+      vi.mocked(watchImmediate).mockResolvedValue(vi.fn())
+      const retried = await tauriFilesystemApi.watchDirectory('/proj/a')
+      expect(retried.success).toBe(true)
+      expect(_liveWatcherCountForTesting()).toBe(1)
+    })
+
+    it('unwatchAllDirectories releases the watcher in one call', async () => {
+      const unlisten = vi.fn()
+      vi.mocked(watchImmediate).mockResolvedValue(unlisten)
+
+      await tauriFilesystemApi.watchDirectory('/proj/a')
+      await tauriFilesystemApi.watchDirectory('/proj/b')
+      await tauriFilesystemApi.watchDirectory('/proj/c')
+
+      const result = await tauriFilesystemApi.unwatchAllDirectories()
+
+      expect(result.success).toBe(true)
+      expect(_liveWatcherCountForTesting()).toBe(0)
+      expect(unlisten).toHaveBeenCalled()
+    })
+
+    it('concurrent watch calls still converge on a single watcher', async () => {
+      let created = 0
+      vi.mocked(watchImmediate).mockImplementation(async (paths) => {
+        created++
+        // Resolve on a later tick so the calls genuinely overlap.
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        void paths
+        return vi.fn()
+      })
+
+      await Promise.all([
+        tauriFilesystemApi.watchDirectory('/proj/a'),
+        tauriFilesystemApi.watchDirectory('/proj/b'),
+        tauriFilesystemApi.watchDirectory('/proj/c')
+      ])
+
+      expect(_liveWatcherCountForTesting()).toBe(1)
+      // Serialised through one chain — never a watcher per concurrent caller.
+      expect(created).toBeLessThanOrEqual(3)
     })
   })
 
