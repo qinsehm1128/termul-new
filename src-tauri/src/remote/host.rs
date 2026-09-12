@@ -656,7 +656,7 @@ impl RemoteServerState {
             authority: Arc::clone(&self.authority),
             publish_mode: crate::remote::PublishMode::Tunnel,
         });
-        if bind_mode == RemoteBindMode::All {
+        if bind_mode.is_lan_exposed() {
             register_lan_origin(&self.authority, addr.port());
         }
         Ok(status)
@@ -929,7 +929,7 @@ impl RemoteServerState {
 }
 
 fn compose_running_status(server: &RemoteServer) -> RemoteStatus {
-    let lan_url = if server.bind_mode == RemoteBindMode::All {
+    let lan_url = if server.bind_mode.is_lan_exposed() {
         crate::remote::lan::discover_lan_ipv4()
             .map(|ip| crate::remote::lan::lan_http_origin(ip, server.addr.port()))
     } else {
@@ -965,7 +965,7 @@ fn reregister_published_origins(server: &RemoteServer) {
     if let Ok(origin) = url::Url::parse(&format!("http://127.0.0.1:{port}")) {
         let _ = server.authority.set_public_origin(origin);
     }
-    if server.bind_mode == RemoteBindMode::All {
+    if server.bind_mode.is_lan_exposed() {
         register_lan_origin(&server.authority, port);
     }
     if let Some(tunnel) = server.tunnel_url.as_deref() {

@@ -2,6 +2,7 @@
 //!
 //! 1. Scan vendor folders that encode the current project path (names only).
 //! 2. Lazily read the first `session_id` from each JSONL file afterwards.
+//!
 //! Transcript bodies are never consumed. Resume argv is assembled in the renderer.
 
 pub mod commands;

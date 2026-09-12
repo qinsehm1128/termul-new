@@ -1060,8 +1060,10 @@ mod tests {
         // backend once something actually ran — has to win.
         let mut record = record(FIRST, "2026-08-15T09:45:15.123Z");
         record.backend = ConversationBackend::Terminal;
-        let mut frontier = ConversationFrontier::default();
-        frontier.backend = Some(ConversationBackend::Agent);
+        let frontier = ConversationFrontier {
+            backend: Some(ConversationBackend::Agent),
+            ..Default::default()
+        };
 
         apply_scanned_lifecycle(&mut record, &frontier);
 
@@ -1086,8 +1088,10 @@ mod tests {
     fn the_catalog_entry_reports_the_reconciled_backend() {
         let mut record = record(FIRST, "2026-08-15T09:45:15.123Z");
         record.backend = ConversationBackend::Agent;
-        let mut frontier = ConversationFrontier::default();
-        frontier.backend = Some(ConversationBackend::Terminal);
+        let frontier = ConversationFrontier {
+            backend: Some(ConversationBackend::Terminal),
+            ..Default::default()
+        };
 
         apply_scanned_lifecycle(&mut record, &frontier);
         let entry = entry_from_frontier(&record, &frontier);

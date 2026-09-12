@@ -4566,11 +4566,9 @@ mod tests {
         let stop_thread = Arc::clone(&stop);
         let worker = std::thread::spawn(move || {
             let mut buffer = [0u8; 64];
-            loop {
-                match PtyManager::wait_for_readable(Some(duplicated), &stop_thread, "test") {
-                    WaitOutcome::Readable => {}
-                    WaitOutcome::Stop | WaitOutcome::Failed => break,
-                }
+            while let WaitOutcome::Readable =
+                PtyManager::wait_for_readable(Some(duplicated), &stop_thread, "test")
+            {
                 if reader.read(&mut buffer).unwrap_or(0) == 0 {
                     break;
                 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use std::cmp::Reverse;
 use chrono::Utc;
 
 use super::parse::{hydrate_session, is_allowed_transcript_path, scanned_session};
@@ -142,7 +143,7 @@ fn scan_agent(
         }
     }
 
-    files.sort_by(|left, right| right.0.modified.cmp(&left.0.modified));
+    files.sort_by_key(|entry| Reverse(entry.0.modified));
     files.dedup_by(|left, right| left.0.path == right.0.path);
 
     let codex_home = default_codex_home();

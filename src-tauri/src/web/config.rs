@@ -1290,8 +1290,15 @@ mod tests {
 
     #[test]
     fn from_args_accepts_store_file() {
-        let cfg = ServerConfig::from_args(["--store-file", "/var/lib/se-manager/store.json"])
-            .expect("parse");
+        // Through `configured_args`, because the standalone service now refuses
+        // to start without a token file and an allowed origin. This test is
+        // about `--store-file` parsing, not about the auth gate, and it had been
+        // failing on that gate rather than on its own subject.
+        let cfg = ServerConfig::from_args(configured_args(&[
+            "--store-file",
+            "/var/lib/se-manager/store.json",
+        ]))
+        .expect("parse");
         assert_eq!(
             cfg.store_file,
             Some(PathBuf::from("/var/lib/se-manager/store.json"))

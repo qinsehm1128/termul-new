@@ -1,4 +1,5 @@
 use std::fs;
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -30,7 +31,7 @@ pub fn walk_session_files(
         0,
         &mut out,
     );
-    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out.sort_by_key(|entry| Reverse(entry.modified));
     out
 }
 
@@ -62,7 +63,7 @@ fn walk_inner(
         }
         if file_type.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if skip_dir_names.iter().any(|skip| *skip == name) {
+            if skip_dir_names.contains(&name) {
                 continue;
             }
             walk_inner(

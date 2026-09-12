@@ -105,9 +105,7 @@ pub fn root_file_for(project_dir: &Path, path: &Path) -> Option<std::path::PathB
     let mut components = relative.components();
     let first = components.next()?;
     // A root transcript has no further components after its own file name.
-    if components.next().is_none() {
-        return None;
-    }
+    components.next()?;
     Some(project_dir.join(format!("{}.jsonl", first.as_os_str().to_string_lossy())))
 }
 

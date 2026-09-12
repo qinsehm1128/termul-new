@@ -67,6 +67,11 @@ pub const TCC_GRANTS_RESET_NOTICE: &str = "macOS privacy permissions cannot be \
 /// what macOS actually reads, so it — not this list — is the oracle. A key
 /// added there without a line here means the merge notice would understate
 /// what the user is about to lose.
+///
+/// Test-only by construction: it is the oracle that guard compares the plist
+/// against, and nothing in the shipping build reads it. Deleting it to silence
+/// `dead_code` would delete the guard.
+#[cfg(test)]
 pub const TCC_GRANTS_RESET_CATEGORIES: &[&str] = &[
     "NSAppleEventsUsageDescription",
     "NSBluetoothAlwaysUsageDescription",

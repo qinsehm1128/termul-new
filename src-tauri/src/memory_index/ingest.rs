@@ -1873,7 +1873,7 @@ mod tests {
             &IngestOptions::default(),
             &CancelFlag::new(),
             &mut |progress: IngestProgress| {
-                if progress.files_seen % 50 == 0 {
+                if progress.files_seen.is_multiple_of(50) {
                     eprintln!(
                         "  {} {}/{}",
                         progress.vendor, progress.files_seen, progress.files_total

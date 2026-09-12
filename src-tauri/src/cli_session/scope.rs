@@ -108,7 +108,7 @@ mod tests {
         } else {
             "/repo".to_string()
         };
-        let (accepted, issues) = filter_scope_paths(&[path.clone()], None);
+        let (accepted, issues) = filter_scope_paths(std::slice::from_ref(&path), None);
         assert_eq!(accepted.len(), 1);
         assert!(issues.is_empty());
         assert!(is_cwd_in_scope(Some(&format!("{path}/pkg")), &accepted));

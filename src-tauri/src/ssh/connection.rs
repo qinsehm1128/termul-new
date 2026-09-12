@@ -439,7 +439,7 @@ impl SSHConnectionManager {
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)
+            .open(path)
         {
             Ok(mut file) => {
                 #[cfg(unix)]
@@ -871,8 +871,28 @@ mod tests {
     fn connect_tcp_rejects_unresolvable_host_without_panicking() {
         // A syntactically valid but non-resolvable host must produce a
         // descriptive error rather than the old IP-only parse failure.
-        let err = SSHConnectionManager::connect_tcp("nonexistent.invalid.example.test.", 22)
-            .expect_err("unresolvable host should error");
+        //
+        // The fixture depends on the machine's resolver actually failing. A
+        // VPN/proxy running in TUN mode answers *every* name with an address
+        // from 198.18.0.0/15 and accepts the connection, which makes the
+        // "unresolvable" host resolvable and this test red for a reason that
+        // has nothing to do with the code. Say so, rather than leaving the next
+        // reader with `unresolvable host should error: TcpStream { .. }`.
+        let outcome = SSHConnectionManager::connect_tcp("nonexistent.invalid.example.test.", 22);
+        let err = match outcome {
+            Err(err) => err,
+            Ok(stream) => {
+                let peer = stream
+                    .peer_addr()
+                    .map(|addr| addr.to_string())
+                    .unwrap_or_else(|_| "<unknown>".to_string());
+                panic!(
+                    "a name that must not resolve connected to {peer}. If that address is in \
+                     198.18.0.0/15 your proxy is in TUN mode and is faking DNS for every name; \
+                     this fixture cannot hold while that is on."
+                );
+            }
+        };
         assert!(
             err.contains("resolve") || err.contains("TCP connection"),
             "unexpected error message: {}",

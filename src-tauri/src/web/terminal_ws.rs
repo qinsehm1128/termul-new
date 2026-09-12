@@ -2605,15 +2605,21 @@ mod tests {
         )
         .await;
         assert_eq!(desktop_reply["mode"], "desktop");
-        assert_eq!(desktop_reply["cols"], 120);
-        assert_eq!(desktop_reply["rows"], 40);
+        // 100x30, not the 120x40 the terminal started at: the desktop resize
+        // above was ignored for the LIVE window (asserted there) but still
+        // re-parked the desktop grid — `park_desktop_size` exists to "remember
+        // the latest desktop grid while a phone owns the live ioctl". Handing
+        // back a stale size would resize the desktop client out from under a
+        // user who had resized during the phone session.
+        assert_eq!(desktop_reply["cols"], 100);
+        assert_eq!(desktop_reply["rows"], 30);
         assert!(!ctx.phone_fit.contains(&terminal_id));
 
         let restored = read_live_window(&state.pty, &terminal_id, &mut output).await;
         assert_eq!(
             restored,
-            (40, 120),
-            "desktop mode must restore the parked window"
+            (30, 100),
+            "desktop mode must restore the LATEST parked window, not the pre-phone one"
         );
 
         let desktop_cells =
@@ -2627,8 +2633,8 @@ mod tests {
             "a full-screen paint must emit fewer cells on the phone window ({phone_cells} < {desktop_cells})"
         );
         assert!(
-            desktop_cells >= 120 * 40,
-            "desktop paint should cover the parked 120x40 grid, got {desktop_cells}"
+            desktop_cells >= 100 * 30,
+            "desktop paint should cover the parked 100x30 grid, got {desktop_cells}"
         );
 
         state.pty.terminate(&terminal_id).await.unwrap();

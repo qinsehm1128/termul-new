@@ -18,8 +18,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::paths::MemoryVendor;
-
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// What a normalized record is.
@@ -524,6 +522,8 @@ mod pointer_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Test-only: the shipping build never names a vendor here.
+    use super::super::paths::MemoryVendor;
 
     fn identity() -> FileIdentity {
         FileIdentity {

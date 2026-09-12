@@ -1732,7 +1732,7 @@ mod tests {
             harness.ids.clone(),
         )
         .unwrap()
-        .with_legacy_workspace_roots(&[legacy_visible.clone()]);
+        .with_legacy_workspace_roots(std::slice::from_ref(&legacy_visible));
 
         let conversation_id =
             ConversationId::parse("083e32d7-2667-4848-8e02-298a71b2acc9").unwrap();

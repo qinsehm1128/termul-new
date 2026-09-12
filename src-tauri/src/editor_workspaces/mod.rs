@@ -8,7 +8,7 @@ mod zed;
 
 pub use code_workspace::parse_code_workspace_file;
 pub use discover::{discover_editor_workspaces, EditorWorkspaceList};
-pub use normalize::{decode_location, EditorWorkspaceKind};
+pub use normalize::EditorWorkspaceKind;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +31,9 @@ pub enum EditorWorkspaceSource {
 
 #[cfg(test)]
 mod tests {
+    // Only the tests reach for this; re-exporting it from the module made it
+    // look used in a test build and dead in a shipping one.
+    use super::normalize::decode_location;
     use super::*;
     use std::fs;
     use std::io::Write;

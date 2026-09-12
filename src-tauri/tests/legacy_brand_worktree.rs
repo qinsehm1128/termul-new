@@ -181,6 +181,7 @@ fn app_state(project_root: PathBuf) -> AppState {
         acp_catalog: None,
         acp_install: None,
         store: None,
+        memory_index: None,
         project_root: Arc::new(parking_lot::RwLock::new(project_root)),
     }
 }
@@ -225,7 +226,7 @@ async fn harness_reaches_the_real_routes_over_the_frozen_legacy_repo() {
     );
 
     let registry = read_registry(&state).await;
-    assert_eq!(registry.success, true, "mcp registry read: {registry:?}");
+    assert!(registry.success, "mcp registry read: {registry:?}");
     assert_eq!(
         registry.data.as_ref().expect("registry data")[0]["name"],
         "filesystem",
@@ -258,7 +259,7 @@ async fn mcp_registry_write_lands_under_the_canonical_workspace_dir() {
         }])),
     )
     .await;
-    assert_eq!(written.success, true, "mcp registry write: {written:?}");
+    assert!(written.success, "mcp registry write: {written:?}");
 
     let canonical_registry = repo.join(canonical_dir).join("mcp-servers.json");
     assert!(
@@ -291,7 +292,7 @@ async fn legacy_mcp_registry_is_read_only_after_the_rename() {
         Json(json!([{ "name": "filesystem", "command": "npx" }])),
     )
     .await;
-    assert_eq!(written.success, true, "mcp registry write: {written:?}");
+    assert!(written.success, "mcp registry write: {written:?}");
 
     let after =
         std::fs::read_to_string(&legacy_registry).expect("legacy registry must never be deleted");

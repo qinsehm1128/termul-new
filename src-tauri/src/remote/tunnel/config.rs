@@ -634,8 +634,10 @@ mod tests {
 
     #[test]
     fn named_provider_uses_stable_local_port() {
-        let mut config = TunnelConfig::default();
-        config.provider = TunnelProviderKind::CloudflareNamed;
+        let mut config = TunnelConfig {
+            provider: TunnelProviderKind::CloudflareNamed,
+            ..Default::default()
+        };
         assert_eq!(config.preferred_bind_port(), Some(DEFAULT_NAMED_LOCAL_PORT));
         config.cloudflare_named_local_port = Some(8787);
         assert_eq!(config.preferred_bind_port(), Some(8787));

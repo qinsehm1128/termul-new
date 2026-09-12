@@ -715,13 +715,39 @@ impl MemoryStore {
         let mut newer = read_slice(newer_cursor, true, after.max(1))?;
 
         older.append(&mut newer);
-        let messages = older;
+        let mut messages = older;
+
+        // Enforce the character budget this function documents.
+        //
+        // It was clamped and then never applied, so `max_chars` did nothing at
+        // all — and it is an MCP tool input, so an agent asking for a small
+        // window got up to 1000 messages of text instead. Truncating the tail
+        // rather than the head keeps the anchor, which is the message the
+        // caller actually pointed at.
+        let kept = {
+            let mut used = 0usize;
+            let mut kept = 0usize;
+            for hit in &messages {
+                let cost = hit.text.chars().count();
+                // The first message is always kept, so a single message larger
+                // than the whole budget still arrives rather than paging
+                // forever on an empty result.
+                if kept > 0 && used.saturating_add(cost) > max_chars {
+                    break;
+                }
+                used = used.saturating_add(cost);
+                kept += 1;
+            }
+            kept
+        };
+        messages.truncate(kept);
 
         let first_ordinal = messages.first().map(|hit| hit.ordinal);
         let last_ordinal = messages.last().map(|hit| hit.ordinal);
-        // One-row existence probes either side of the kept page. These are
-        // what the client uses to know whether another page exists in that
-        // direction, independent of the budget truncation below.
+        // One-row existence probes either side of the page, run against the
+        // page as actually returned. Probing the pre-truncation bounds would
+        // report `has_newer = false` while the budget had just dropped newer
+        // messages, and the client would stop paging and silently lose them.
         let has_older = match first_ordinal {
             // first == 0 means the session's very first message is on the page.
             Some(first) if first > 0 => !read_slice(Some(first - 1), false, 1)?.is_empty(),
@@ -2065,6 +2091,57 @@ mod tests {
         );
     }
 
+    /// `max_chars` is an MCP tool input with a default, and it was clamped and
+    /// then never applied — so an agent asking for a small window got the whole
+    /// page instead, up to 1000 messages of text straight into its context.
+    #[test]
+    fn the_character_budget_truncates_the_page_and_still_reports_more() {
+        let mut store = store();
+        let body = "x".repeat(100);
+        let messages: Vec<_> = (0..10)
+            .map(|i| message("s1", i, NormalizedRole::User, &body, LineageDepth::ROOT))
+            .collect();
+        store
+            .replace_session(
+                &session("s1", Some(1), SessionScope::Scoped),
+                &messages,
+                &[],
+                0,
+            )
+            .unwrap();
+
+        // 200 is the clamp floor and fits exactly two of these messages.
+        let window = store.session_window("s1", None, 0, 500, 200).unwrap();
+        assert_eq!(window.messages.len(), 2);
+        assert_eq!(window.last_ordinal, Some(1));
+        // The messages the budget dropped have to stay reachable, or the client
+        // reads `has_newer = false` and stops paging with eight messages lost.
+        assert!(window.has_newer);
+
+        let full = store.session_window("s1", None, 0, 500, 400_000).unwrap();
+        assert_eq!(full.messages.len(), 10);
+        assert!(!full.has_newer);
+    }
+
+    /// One message bigger than the whole budget still arrives — an empty page
+    /// would make a client page forever against no progress.
+    #[test]
+    fn a_message_larger_than_the_budget_still_arrives() {
+        let mut store = store();
+        let huge = "y".repeat(5_000);
+        store
+            .replace_session(
+                &session("s1", Some(1), SessionScope::Scoped),
+                &[message("s1", 0, NormalizedRole::User, &huge, LineageDepth::ROOT)],
+                &[],
+                0,
+            )
+            .unwrap();
+
+        let window = store.session_window("s1", None, 0, 500, 200).unwrap();
+        assert_eq!(window.messages.len(), 1);
+    }
+
     #[test]
     fn compactions_are_searchable_and_carry_their_dropped_context_markers() {
         let mut store = store();
@@ -2084,7 +2161,7 @@ mod tests {
             .replace_session(
                 &session("s1", Some(1), SessionScope::Scoped),
                 &[],
-                &[record.clone()], 0,)
+                std::slice::from_ref(&record), 0,)
             .unwrap();
 
         let found = store.search_compactions("migration", false, 10).unwrap();
