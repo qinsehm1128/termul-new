@@ -132,6 +132,22 @@ pub fn is_excluded(path: &Path) -> bool {
     false
 }
 
+/// Roots in the form events actually arrive in.
+///
+/// FSEvents reports real paths, and on macOS even `/tmp` is a symlink — so a
+/// symlinked project root would never prefix-match its own events. The filter
+/// would then fall back to judging the whole absolute path, bringing back the
+/// exact ancestor-name bug it exists to prevent, for precisely that root.
+///
+/// A root that cannot be resolved (it does not exist yet) is kept as given;
+/// nothing is watching it either way.
+fn resolve_filter_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
+        .collect()
+}
+
 /// Whether an absolute event path is excluded, judged inside its own root.
 ///
 /// `dedupe_roots` guarantees no root contains another, so at most one root can
@@ -457,7 +473,9 @@ impl FsWatcherService {
         // The filter needs the roots so it can judge each path *inside* its own
         // root. A fresh watcher is built for every root change, so the set the
         // closure captures is always the one it is watching.
-        let filter_roots = desired.clone();
+        //
+        // Watching still uses the path as given; only the filter is resolved.
+        let filter_roots = resolve_filter_roots(&desired);
         let mut watcher = RecommendedWatcher::new(
             move |result: notify::Result<notify::Event>| {
                 let Ok(event) = result else { return };
@@ -475,29 +493,35 @@ impl FsWatcherService {
         // half-registered watcher inline, joining its backend thread while
         // still holding the state lock.
         let mut failures: Vec<String> = Vec::new();
-        let mut watched = 0usize;
+        let mut watched: Vec<PathBuf> = Vec::new();
         for root in &desired {
             match watcher.watch(root, RecursiveMode::Recursive) {
-                Ok(()) => watched += 1,
+                Ok(()) => watched.push(root.clone()),
                 Err(err) => failures.push(format!("{}: {err}", root.display())),
             }
         }
 
-        if watched == 0 {
+        if watched.is_empty() {
             drop(inner);
             release_watcher(Some(watcher));
             return Err(format!("failed to watch any root ({})", failures.join("; ")));
         }
         if !failures.is_empty() {
             log::warn!(
-                "[fs-watcher] watching {watched}/{} roots; skipped {}",
+                "[fs-watcher] watching {}/{} roots; skipped {}",
+                watched.len(),
                 desired.len(),
                 failures.join("; ")
             );
         }
 
         let previous = inner.watcher.replace(watcher);
-        inner.roots = desired;
+        // What is actually watched, not what was asked for. Caching the request
+        // would let the `inner.roots == desired` short-circuit above turn a root
+        // that was merely missing at this moment into one that is never watched
+        // again: the next identical request would be answered from cache and
+        // never retry it.
+        inner.roots = watched;
         drop(inner);
         release_watcher(previous);
         Ok(())
@@ -754,6 +778,30 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn filter_roots_are_resolved_so_a_symlinked_root_matches_its_own_events() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // Deliberately named after an excluded segment: that is what makes the
+        // difference between the two forms visible rather than theoretical.
+        let real = dir.path().join("build");
+        std::fs::create_dir(&real).expect("create dir");
+        let link = dir.path().join("link-to-build");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        // The caller asks for the link; events arrive under the resolved path.
+        let resolved = resolve_filter_roots(&[link.clone()]);
+        assert_eq!(resolved, vec![real.canonicalize().expect("canonicalize")]);
+
+        let event_path = real.canonicalize().expect("canonicalize").join("src/main.rs");
+        // Resolved: judged inside the root, so the root's own name is not a
+        // segment that can exclude it.
+        assert!(!is_excluded_within(&event_path, &resolved));
+        // Unresolved: the prefix never matches, the whole absolute path gets
+        // judged, and the root's own `build` segment silences the project.
+        assert!(is_excluded_within(&event_path, &[link]));
+    }
+
+    #[test]
     fn exclusion_uses_the_root_the_path_belongs_to() {
         use notify::event::ModifyKind;
         let roots = vec![PathBuf::from("/a/dist"), PathBuf::from("/b")];
@@ -940,9 +988,17 @@ mod tests {
             result.is_ok(),
             "one bad root must not fail the set: {result:?}"
         );
-        // The requested set is what gets cached, so a root that reappears is
-        // picked up by the next genuine change rather than churning the watcher.
-        assert_eq!(service.lock_inner().roots.len(), 2);
+        // Only what is actually watched is cached. Caching the request instead
+        // would make the `inner.roots == desired` short-circuit answer the next
+        // identical call from cache, so a root that was merely missing for a
+        // moment would never be watched again.
+        assert_eq!(service.lock_inner().roots, vec![dir.path().to_path_buf()]);
+
+        // The same request again must therefore retry the missing root rather
+        // than short-circuit.
+        let retried = service.set_roots(vec![dir.path().to_path_buf(), missing]);
+        assert!(retried.is_ok());
+        assert_eq!(service.lock_inner().roots, vec![dir.path().to_path_buf()]);
 
         // Nothing watchable at all is still an error — that one the caller needs.
         let all_bad = service.set_roots(vec![PathBuf::from("/se-manager-missing-root-2-xyz")]);

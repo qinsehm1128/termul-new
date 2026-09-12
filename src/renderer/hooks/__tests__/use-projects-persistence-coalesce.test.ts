@@ -207,6 +207,26 @@ describe('useProjectsAutoSave write coalescing', () => {
     unmount()
   })
 
+  // The close-path handler lives in a module singleton. An unmount that clears
+  // it unconditionally would take out a handler a later mount had already
+  // installed, leaving the close path with nothing to flush.
+  it('keeps the newer instance flush handler when an older instance unmounts', async () => {
+    const first = renderHook(() => useProjectsAutoSave())
+    const second = mountArmed()
+
+    act(() => {
+      useProjectStore.getState().selectProject('p2')
+    })
+    first.unmount()
+
+    await act(async () => {
+      await flushPendingProjectsSnapshot()
+    })
+    expect(writeDebouncedMock).toHaveBeenCalledTimes(1)
+
+    second.unmount()
+  })
+
   it('has nothing to flush once the hook is unmounted', async () => {
     const { unmount } = mountArmed()
     act(() => {

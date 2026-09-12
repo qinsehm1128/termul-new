@@ -822,7 +822,13 @@ export function useProjectsAutoSave(): void {
 
     return () => {
       unsubscribe()
-      pendingFocusSnapshotFlush = null
+      // Only clear our own registration. Another instance mounting before this
+      // one unmounts would otherwise have its handler cleared by this cleanup,
+      // leaving the close path with nothing to flush — the same lost-update
+      // shape as restoring a stale value over a newer one.
+      if (pendingFocusSnapshotFlush === flushCoalescedNow) {
+        pendingFocusSnapshotFlush = null
+      }
       if (coalesceTimer) {
         clearTimeout(coalesceTimer)
         coalesceTimer = null
