@@ -1,0 +1,15 @@
+# Vendored provider matrix. Paths are data, not scanner logic.
+# Update this file only through an explicit provider-matrix update.
+fallback_policy = "ask"
+
+[providers.agents]
+global_roots = ["{home}/.agents/skills"]
+project_roots = ["{project}/.agents/skills"]
+
+[providers.claude]
+global_roots = ["{home}/.claude/skills"]
+project_roots = ["{project}/.claude/skills"]
+
+[providers.codex]
+global_roots = ["{home}/.codex/skills"]
+project_roots = ["{project}/.codex/skills"]

@@ -378,6 +378,9 @@ pub struct AppState {
     /// `acp_install` report their degraded modes. Desktop and standalone each
     /// construct their own; the two must never share a state root.
     pub memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
+    /// Host-owned Skills Hub. Desktop, shared-live, and standalone each construct
+    /// their own from the host state root and must not share mutable catalog files.
+    pub skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     /// Issue #613: server-side generic key-value store for web-client state
     /// (terminal layout, settings, editor state, command history, snapshots,
     /// SSH profiles). `None` when a server does not attach a store — the

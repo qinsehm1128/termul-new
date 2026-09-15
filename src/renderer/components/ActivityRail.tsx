@@ -7,6 +7,7 @@ import {
   Network,
   Palette,
   SlidersHorizontal,
+  Sparkles,
   SquareTerminal
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -294,6 +295,26 @@ export function ActivityRail({
                   'transition-colors',
                   isConversationsActive ? 'text-foreground' : 'text-muted-foreground'
                 )}
+              />
+            </button>
+          </RailTooltip>
+
+          <RailTooltip label="Skills">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                navigate('/skills')
+              }}
+              className={railButtonClass}
+              aria-label="Open Skills"
+              aria-current={location.pathname === '/skills' ? 'page' : undefined}
+            >
+              <Sparkles
+                size={18}
+                className={
+                  location.pathname === '/skills' ? 'text-foreground' : 'text-muted-foreground'
+                }
               />
             </button>
           </RailTooltip>

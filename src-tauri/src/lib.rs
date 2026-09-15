@@ -42,7 +42,7 @@ pub mod server_update;
 mod shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
-mod skills;
+pub mod skills;
 mod ssh;
 mod trackers;
 mod updater_api;
@@ -1947,6 +1947,33 @@ pub fn run() {
             // `switch_project` cwd resolution on the shared-live web server.
             // Lives only while the server runs; cleared on `remote_server_stop`.
             let project_registry = Arc::new(ProjectRegistry::new());
+            let skills_hub = Arc::new(
+                crate::skills::service::SkillsHubService::from_host(
+                    app_data_dir.clone(),
+                    Arc::clone(&project_registry),
+                )
+                .map_err(|error| error.into_string())?,
+            );
+            log::info!(
+                target: "se_manager::skills",
+                "operation=skills_hub_ready host=desktop root={}",
+                skills_hub.root().path().display()
+            );
+            app.manage(Arc::clone(&skills_hub));
+            {
+                let service = Arc::clone(&skills_hub);
+                let app_handle = handle.clone();
+                let _ = std::thread::Builder::new()
+                    .name("skills-hub-watcher".into())
+                    .spawn(move || {
+                        crate::skills::service::SkillsHubService::run_watch_loop(
+                            service,
+                            move |event| {
+                                let _ = app_handle.emit(&event.kind, &event);
+                            },
+                        );
+                    });
+            }
             app.manage(project_registry);
 
             // Create SSH Manager
@@ -2266,6 +2293,12 @@ pub fn run() {
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,
+            skills::commands::skills_status_cmd,
+            skills::commands::skills_refresh_cmd,
+            skills::commands::skills_sync_cmd,
+            skills::commands::skills_install_cmd,
+            skills::commands::skills_project_cmd,
+            skills::commands::skills_repair_cmd,
             // Host-level AI scheduled tasks
             scheduled_tasks::commands::scheduled_task_preview,
             scheduled_tasks::commands::scheduled_task_list,

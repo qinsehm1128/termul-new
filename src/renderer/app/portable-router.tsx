@@ -11,6 +11,7 @@ const ProjectSettings = lazy(() => import('@/pages/ProjectSettings'))
 const AppPreferences = lazy(() => import('@/pages/AppPreferences'))
 const WorkspaceSnapshots = lazy(() => import('@/pages/WorkspaceSnapshots'))
 const ScheduledTasks = lazy(() => import('@/pages/ScheduledTasks'))
+const Skills = lazy(() => import('@/pages/Skills'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
 
 function RouteFallback(): React.JSX.Element {
@@ -57,6 +58,7 @@ export const portableRouteObjects: RouteObject[] = [
       },
       { path: 'snapshots', element: deferred(<WorkspaceSnapshots />) },
       { path: 'scheduled-tasks', element: deferred(<ScheduledTasks />) },
+      { path: 'skills', element: deferred(<Skills />) },
       { path: 'settings', element: deferred(<ProjectSettings />) },
       { path: 'preferences', element: deferred(<AppPreferences />) }
     ]

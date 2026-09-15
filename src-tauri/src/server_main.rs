@@ -386,6 +386,38 @@ fn main() -> ExitCode {
         // signature keeps the current binary running (verify-before-swap), so an
         // unattended server is never bricked by a failed update attempt.
         spawn_periodic_update_loop();
+        let skills_hub = match se_manager_lib::skills::service::SkillsHubService::from_host(
+            cfg.service_account_state_dir(),
+            Arc::clone(&registry),
+        ) {
+            Ok(service) => {
+                let service = Arc::new(service);
+                info!(
+                    root = %service.root().path().display(),
+                    "skills hub ready"
+                );
+                let watcher = Arc::clone(&service);
+                let _ = std::thread::Builder::new()
+                    .name("skills-hub-watcher".into())
+                    .spawn(move || {
+                        se_manager_lib::skills::service::SkillsHubService::run_watch_loop(
+                            watcher,
+                            |event| {
+                                tracing::info!(
+                                    kind = %event.kind,
+                                    revision = event.revision,
+                                    "skills hub event"
+                                );
+                            },
+                        );
+                    });
+                Some(service)
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "skills hub unavailable");
+                None
+            }
+        };
         match serve(
             acp,
             pty,
@@ -404,6 +436,7 @@ fn main() -> ExitCode {
             acp_catalog,
             acp_install,
             Some(Arc::clone(&memory_index)),
+            skills_hub,
             authority,
         )
         .await

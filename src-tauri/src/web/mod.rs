@@ -316,6 +316,7 @@ pub async fn serve(
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
+    skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
@@ -337,6 +338,7 @@ pub async fn serve(
         acp_catalog,
         acp_install,
         memory_index,
+        skills_hub,
         authority,
     )
     .await?;
@@ -391,6 +393,7 @@ pub async fn serve_router(
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
+    skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     // The owning host computes ingress provenance before this shared composition is entered.
@@ -473,6 +476,7 @@ pub async fn serve_router(
         acp_catalog,
         acp_install,
         memory_index,
+        skills_hub,
         store,
         authority,
     );
@@ -830,6 +834,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Arc::clone(&authority),
         )
         .await
@@ -886,6 +891,7 @@ mod tests {
             async move {
                 let _ = shutdown_rx.await;
             },
+            None,
             None,
             None,
             None,

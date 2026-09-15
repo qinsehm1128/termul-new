@@ -146,6 +146,11 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     .merge(classified_routes(
         Router::<AppState>::new()
             .route("/skills", get(skills_api::list))
+            .route("/skills/status", get(skills_api::status))
+            .route("/skills/sync", post(skills_api::sync))
+            .route("/skills/install", post(skills_api::install))
+            .route("/skills/project", post(skills_api::project))
+            .route("/skills/repair", post(skills_api::repair))
             .route("/skills/{name}", get(skills_api::read)),
         RemoteRouteClass::Skill,
     ))
@@ -387,6 +392,7 @@ pub fn router(
     acp_catalog: Option<Arc<AcpCatalogService>>,
     acp_install: Option<Arc<AcpInstallService>>,
     memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
+    skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     store: Option<Arc<WebStore>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Router {
@@ -427,6 +433,7 @@ pub fn router(
         acp_catalog,
         acp_install,
         memory_index,
+        skills_hub,
         store,
         project_root: project_root_handle,
     })
@@ -467,6 +474,7 @@ pub fn router_with_static(
                 // this variant exists for fixtures that do not exercise the
                 // memory routes, which then report MEMORY_INDEX_UNAVAILABLE.
                 memory_index: None,
+                skills_hub: None,
                 terminal_events: pty.terminal_events(),
                 cwd_tracker: pty.cwd_tracker(),
                 git_tracker: pty.git_tracker(),
@@ -597,6 +605,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub: None,
             store: None,
             project_root: Arc::new(parking_lot::RwLock::new(root.to_path_buf())),
         }

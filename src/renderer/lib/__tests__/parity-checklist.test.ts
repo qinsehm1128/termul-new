@@ -1180,6 +1180,64 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  describe('Skills Hub parity', () => {
+    it('facade branches Tauri vs web by isTauriContext()', () => {
+      const facade = readFileSync(join(LIB_DIR, 'skills-api.ts'), 'utf-8')
+      expect(facade).toMatch(/isTauriContext\(\)/)
+      expect(facade).toMatch(/webServerSkills/)
+      for (const method of [
+        'status',
+        'refresh',
+        'sync',
+        'install',
+        'project',
+        'repair',
+        'readSkill',
+        'listSkills',
+        'onCatalogChanged'
+      ]) {
+        expect(facade, `skillsApi is missing ${method}`).toMatch(new RegExp(`\\b${method}\\s*\\(`))
+      }
+    })
+
+    it('web helper and router expose status/sync/install/project/repair', () => {
+      const server = readFileSync(join(LIB_DIR, 'web-server-api.ts'), 'utf-8')
+      const router = readFileSync(
+        join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs'),
+        'utf-8'
+      )
+      for (const route of [
+        '/skills/status',
+        '/skills/sync',
+        '/skills/install',
+        '/skills/project',
+        '/skills/repair'
+      ]) {
+        expect(server).toContain(route)
+        expect(router).toContain(route)
+      }
+    })
+
+    it('desktop commands are registered and the route exists on both roots', () => {
+      const lib = readFileSync(
+        join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'lib.rs'),
+        'utf-8'
+      )
+      for (const command of [
+        'skills_status_cmd',
+        'skills_refresh_cmd',
+        'skills_sync_cmd',
+        'skills_install_cmd',
+        'skills_project_cmd',
+        'skills_repair_cmd'
+      ]) {
+        expect(lib).toContain(command)
+      }
+      const router = readFileSync(join(LIB_DIR, '..', 'app', 'portable-router.tsx'), 'utf-8')
+      expect(router).toMatch(/path:\s*'skills'/)
+    })
+  })
+
   describe('Memory index parity', () => {
     const TauriAdapter = join(LIB_DIR, 'tauri-memory-index-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-memory-index-api.ts')
