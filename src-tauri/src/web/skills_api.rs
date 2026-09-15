@@ -21,12 +21,20 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
+    Extension, Json,
 };
 use serde::Deserialize;
 
+use crate::skills::api_types::{
+    SkillsCatalogRequest, SkillsError, SkillsInstallRequest, SkillsProjectionRequest,
+    SkillsRepairRequest, SkillsStatus, ERR_CANONICAL_ROOT_UNAVAILABLE,
+};
+use crate::skills::scanner;
+use crate::skills::service::SkillsHubService;
 use crate::skills::{AgentSkillContent, AgentSkillSummary};
+use crate::web::auth::IngressProvenance;
 use crate::web::fs_api::IpcBody;
+use crate::web::operation_policy::{self, LocalOnlyOperation};
 use crate::web::ws::AppState;
 
 /// `GET /skills?projectRoot=` query. `projectRoot` is optional: when omitted,
@@ -35,6 +43,7 @@ use crate::web::ws::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct SkillsQuery {
     pub project_root: Option<String>,
+    pub project_id: Option<String>,
 }
 
 /// `GET /skills/:name?projectRoot=` path + query. Mirrors
@@ -43,6 +52,171 @@ pub struct SkillsQuery {
 #[serde(rename_all = "camelCase")]
 pub struct SkillNamePath {
     pub name: String,
+}
+
+fn unavailable<T>(code: &str) -> (StatusCode, Json<IpcBody<T>>) {
+    (
+        StatusCode::OK,
+        Json(IpcBody::<T>::err(
+            "skills hub is unavailable".to_string(),
+            code,
+        )),
+    )
+}
+
+fn ipc_from_skills<T>(result: Result<T, SkillsError>) -> (StatusCode, Json<IpcBody<T>>) {
+    match result {
+        Ok(value) => (StatusCode::OK, Json(IpcBody::ok(value))),
+        Err(error) => (
+            StatusCode::OK,
+            Json(IpcBody::<T>::err(error.message, error.code)),
+        ),
+    }
+}
+
+async fn with_service<T, F>(state: AppState, work: F) -> (StatusCode, Json<IpcBody<T>>)
+where
+    T: Send + 'static,
+    F: FnOnce(std::sync::Arc<SkillsHubService>) -> Result<T, SkillsError> + Send + 'static,
+{
+    let Some(service) = state.skills_hub.clone() else {
+        return unavailable(ERR_CANONICAL_ROOT_UNAVAILABLE);
+    };
+    match tokio::task::spawn_blocking(move || work(service)).await {
+        Ok(result) => ipc_from_skills(result),
+        Err(error) => (
+            StatusCode::OK,
+            Json(IpcBody::<T>::err(
+                format!("skills task failed: {error}"),
+                "SKILLS_STATUS_ERROR",
+            )),
+        ),
+    }
+}
+
+/// `GET /skills/status` — provider-aware catalog status.
+pub async fn status(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Query(query): Query<SkillsQuery>,
+) -> impl IntoResponse {
+    let request = SkillsCatalogRequest {
+        project_id: query.project_id,
+        project_root: query.project_root,
+    };
+    with_service(state, move |service| {
+        let mut status = service.status(request)?;
+        status.watched_roots.clear();
+        if !provenance.allows_local_operator_mutation() {
+            for skill in &mut status.catalog.skills {
+                for source in &mut skill.sources {
+                    source.skill_md_path.clear();
+                }
+            }
+            status.catalog.diagnostics.clear();
+        }
+        Ok(status)
+    })
+    .await
+}
+
+/// `POST /skills/sync` — rescan and persist catalog.
+pub async fn sync(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Json(request): Json<SkillsCatalogRequest>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<SkillsStatus>::err(denial.message, denial.code)),
+        );
+    }
+    with_service(state, move |service| service.sync(request)).await
+}
+
+/// `POST /skills/install` — canonical install plus optional projection.
+pub async fn install(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Json(request): Json<SkillsInstallRequest>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<crate::skills::manifest::SkillManifest>::err(
+                denial.message,
+                denial.code,
+            )),
+        );
+    }
+    let Some(service) = state.skills_hub.as_ref() else {
+        return unavailable(ERR_CANONICAL_ROOT_UNAVAILABLE);
+    };
+    let source = std::path::Path::new(&request.source_path);
+    let allowed = source.is_absolute()
+        && source.canonicalize().ok().is_some_and(|canonical| {
+            scanner::path_is_within(service.root().path(), &canonical)
+                || service
+                    .registered_projects()
+                    .iter()
+                    .any(|project| scanner::path_is_within(&project.root, &canonical))
+        });
+    if !allowed {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<crate::skills::manifest::SkillManifest>::err(
+                "install source is outside the allowed host roots".to_string(),
+                crate::skills::api_types::ERR_PROJECT_OUTSIDE_BOUNDARY,
+            )),
+        );
+    }
+    tracing::info!(scope = %request.scope, "skills install request");
+    with_service(state, move |service| service.install(request)).await
+}
+
+/// `POST /skills/project` — aggregate/projection for an installed skill.
+pub async fn project(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Json(request): Json<SkillsProjectionRequest>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<crate::skills::manifest::SkillManifest>::err(
+                denial.message,
+                denial.code,
+            )),
+        );
+    }
+    with_service(state, move |service| service.project_skill(request)).await
+}
+
+/// `POST /skills/repair` — repair Termul-owned projections only.
+pub async fn repair(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Json(request): Json<SkillsRepairRequest>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<crate::skills::manifest::SkillManifest>::err(
+                denial.message,
+                denial.code,
+            )),
+        );
+    }
+    with_service(state, move |service| service.repair(request)).await
 }
 
 /// `GET /skills?projectRoot=` — list installed agent skills. Reuses
@@ -62,7 +236,16 @@ pub async fn list(
     // and is allowed through (no project skills scanned; only global skills —
     // harmless degrade).
     if let Some(pr) = &q.project_root {
-        if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
+        let Ok(canonical) = std::path::Path::new(pr).canonicalize() else {
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<Vec<AgentSkillSummary>>::err(
+                    "project root does not exist".to_string(),
+                    crate::skills::api_types::ERR_PROJECT_OUTSIDE_BOUNDARY,
+                )),
+            );
+        };
+        {
             // CAP-1: lock-read the live boundary (may have been rebound).
             // CAP-2: also check all registered project roots so a web client
             // that switched to a non-default project can list skills.
@@ -117,7 +300,16 @@ pub async fn read(
     // Enforce `project_root` containment (web-server security boundary) —
     // mirrors `/skills` (list). A non-existent projectRoot is allowed through.
     if let Some(pr) = &q.project_root {
-        if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
+        let Ok(canonical) = std::path::Path::new(pr).canonicalize() else {
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<AgentSkillContent>::err(
+                    "project root does not exist".to_string(),
+                    crate::skills::api_types::ERR_PROJECT_OUTSIDE_BOUNDARY,
+                )),
+            );
+        };
+        {
             // CAP-1: lock-read the live boundary (may have been rebound).
             // CAP-2: also check all registered project roots.
             // Scope in a block so the `!Send` guard drops before the
@@ -164,16 +356,22 @@ pub async fn read(
 mod tests {
     use super::*;
     use crate::acp::AcpManager;
+    use crate::skills::api_types::{SkillsStatus, ERR_PROJECT_NOT_REGISTERED};
+    use crate::skills::service::SkillsHubContext;
     use crate::web::project_registry::ProjectRegistry;
     use crate::web::sink::WsRelaySink;
     use crate::web::test_pty_manager;
     use axum::body::Body;
     use axum::http::Request;
-    use axum::routing::get;
+    use axum::routing::{get, post};
     use std::sync::Arc;
     use tower::ServiceExt;
 
     fn test_state() -> AppState {
+        test_state_with_skills(None)
+    }
+
+    fn test_state_with_skills(skills_hub: Option<Arc<SkillsHubService>>) -> AppState {
         let pty = test_pty_manager();
         AppState {
             acp: Arc::new(AcpManager::new(vec![])),
@@ -198,6 +396,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub,
             store: None,
         }
     }
@@ -205,8 +404,14 @@ mod tests {
     fn test_router(state: AppState) -> axum::Router {
         axum::Router::new()
             .route("/skills", get(list))
+            .route("/skills/status", get(status))
+            .route("/skills/sync", post(sync))
+            .route("/skills/install", post(install))
+            .route("/skills/project", post(project))
+            .route("/skills/repair", post(repair))
             .route("/skills/{name}", get(read))
             .with_state(state)
+            .layer(axum::Extension(IngressProvenance::LocalOperator))
     }
 
     async fn get_request(state: AppState, uri: &str) -> axum::http::Response<Body> {
@@ -241,11 +446,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_skills_degrades_on_scan_failure() {
-        // A non-existent project root — list_agent_skills rejects relative
-        // paths, but an absolute non-existing path still scans (project
-        // skills dir just doesn't exist → empty). Global skills may still
-        // be found. The route must never throw.
+    async fn list_skills_rejects_nonexistent_project_root() {
         let resp = get_request(
             test_state(),
             "/skills?projectRoot=/nonexistent/absolute/path",
@@ -253,7 +454,11 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<Vec<AgentSkillSummary>> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "must degrade gracefully: {:?}", body.error);
+        assert!(!body.success);
+        assert_eq!(
+            body.code.as_deref(),
+            Some(crate::skills::api_types::ERR_PROJECT_OUTSIDE_BOUNDARY)
+        );
     }
 
     #[tokio::test]
@@ -291,5 +496,37 @@ mod tests {
             body.data
         );
         assert_eq!(body.code.as_deref(), Some("SKILL_NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn status_without_service_returns_canonical_root_error() {
+        let resp = get_request(test_state(), "/skills/status").await;
+        let body: IpcBody<SkillsStatus> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(body.code.as_deref(), Some(ERR_CANONICAL_ROOT_UNAVAILABLE));
+    }
+
+    #[tokio::test]
+    async fn status_rejects_unregistered_project_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = Arc::new(
+            SkillsHubService::new(SkillsHubContext {
+                state_root: temp.path().join("state"),
+                home: temp.path().join("home"),
+                config_root: temp.path().join("config"),
+                projects: Vec::new(),
+                user_config: None,
+                project_configs: Vec::new(),
+            })
+            .unwrap(),
+        );
+        let resp = get_request(
+            test_state_with_skills(Some(service)),
+            "/skills/status?projectId=missing",
+        )
+        .await;
+        let body: IpcBody<SkillsStatus> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(body.code.as_deref(), Some(ERR_PROJECT_NOT_REGISTERED));
     }
 }

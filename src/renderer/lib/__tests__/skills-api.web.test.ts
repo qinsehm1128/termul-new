@@ -28,6 +28,10 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: mockInvoke
 }))
 
+vi.mock('../tauri-event', () => ({
+  listen: vi.fn(async () => () => undefined)
+}))
+
 import { skillsApi } from '../skills-api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -172,6 +176,59 @@ describe('skillsApi (web vs desktop branch)', () => {
     expect(mockInvoke).toHaveBeenCalledWith('read_agent_skill_cmd', {
       name: 'forge-idea',
       projectRoot: null
+    })
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('web: status fetches GET /skills/status with projectId', async () => {
+    mockIsTauriContext.mockReturnValue(false)
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: { catalog: { revision: 1, skills: [], diagnostics: [] }, fallbackPolicy: 'ask' }
+      })
+    )
+
+    await skillsApi.status({ projectId: 'p1' })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/skills/status?projectId=p1`,
+      expect.objectContaining({ method: 'GET' })
+    )
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('web: status preserves the stable server error code', async () => {
+    mockIsTauriContext.mockReturnValue(false)
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        success: false,
+        error: 'project is not registered',
+        code: 'PROJECT_NOT_REGISTERED'
+      })
+    )
+
+    await expect(skillsApi.status({ projectId: 'missing' })).rejects.toThrow(
+      'PROJECT_NOT_REGISTERED: project is not registered'
+    )
+  })
+
+  it('desktop: install invokes skills_install_cmd', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValueOnce({
+      name: 'demo',
+      digest: 'abc',
+      canonicalPath: '/tmp',
+      projections: []
+    })
+
+    await skillsApi.install({
+      name: 'demo',
+      sourcePath: '/tmp/SKILL.md'
+    })
+
+    expect(mockInvoke).toHaveBeenCalledWith('skills_install_cmd', {
+      request: { name: 'demo', sourcePath: '/tmp/SKILL.md' }
     })
     expect(mockFetch).not.toHaveBeenCalled()
   })

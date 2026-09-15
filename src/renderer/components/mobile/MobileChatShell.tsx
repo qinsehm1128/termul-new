@@ -16,6 +16,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   TerminalSquare,
   Trash2,
   X
@@ -491,6 +492,15 @@ export function MobileChatShell({
                 }}
               >
                 <TerminalSquare size={16} />
+              </OverflowItem>
+              <OverflowItem
+                label="Skills"
+                onSelect={() => {
+                  closeOverflow()
+                  navigate('/skills')
+                }}
+              >
+                <Sparkles size={16} />
               </OverflowItem>
               <OverflowItem
                 label={t('chatShell.settings')}

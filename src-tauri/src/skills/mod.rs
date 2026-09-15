@@ -5,8 +5,22 @@
 //! dedupes discovered skills against the ACP `availableCommands` so a skill the
 //! agent already reports natively is not shown twice (see `slash-menu-model`).
 
+pub mod api_types;
+pub mod app_data;
+pub mod catalog;
+pub mod catalog_store;
 pub mod commands;
+pub mod digest;
+pub mod frontmatter;
+pub mod installer;
+pub mod manifest;
+pub mod ownership;
+pub mod projection;
+pub mod provider_config;
 pub mod provisioner;
+pub mod scanner;
+pub mod service;
+pub mod watcher;
 
 pub use provisioner::ConversationSkillProvisioner;
 
@@ -47,7 +61,7 @@ fn home_skills_root() -> Result<PathBuf, String> {
 }
 
 /// Zed-compatible skill names: lowercase letters, digits, hyphens; no traversal.
-fn validate_skill_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_skill_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("skill name must not be empty".to_string());
     }
@@ -148,6 +162,17 @@ fn scan_skills_dir(
         let folder_name = entry.file_name().to_string_lossy().to_string();
         let skill_md = entry.path().join("SKILL.md");
         if !skill_md.is_file() {
+            continue;
+        }
+        let Ok(canonical_skill_md) = skill_md.canonicalize() else {
+            continue;
+        };
+        if !crate::skills::scanner::path_is_within(dir, &canonical_skill_md) {
+            log::warn!(
+                "refusing skill file outside root {}: {}",
+                dir.display(),
+                skill_md.display()
+            );
             continue;
         }
 
@@ -252,13 +277,26 @@ fn resolve_skill_path_with_home(
             .join(name)
             .join("SKILL.md");
         if project_skill.is_file() {
-            return Ok((project_skill, "project".to_string()));
+            let canonical = project_skill
+                .canonicalize()
+                .map_err(|error| error.to_string())?;
+            if crate::skills::scanner::path_is_within(
+                &root_path.join(".agents").join("skills"),
+                &canonical,
+            ) {
+                return Ok((project_skill, "project".to_string()));
+            }
         }
     }
 
     let global_skill = home_root.join(name).join("SKILL.md");
     if global_skill.is_file() {
-        return Ok((global_skill, "global".to_string()));
+        let canonical = global_skill
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if crate::skills::scanner::path_is_within(home_root, &canonical) {
+            return Ok((global_skill, "global".to_string()));
+        }
     }
 
     Err(format!("skill '{name}' not found"))

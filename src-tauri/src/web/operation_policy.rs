@@ -16,6 +16,7 @@ pub enum LocalOnlyOperation {
     SetDefaultProject,
     SetCatalogOptIn,
     InstallAcpAgent,
+    SkillsMutation,
 }
 
 impl LocalOnlyOperation {
@@ -25,6 +26,7 @@ impl LocalOnlyOperation {
             Self::SetDefaultProject => "set_default_project",
             Self::SetCatalogOptIn => "set_catalog_opt_in",
             Self::InstallAcpAgent => "install_acp_agent",
+            Self::SkillsMutation => "skills_mutation",
         }
     }
 }

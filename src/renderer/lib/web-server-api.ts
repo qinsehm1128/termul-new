@@ -60,7 +60,17 @@ import {
   parseMemorySessionDetail
 } from '@shared/types/memory-index.types'
 import type { ProjectListPayload } from '@shared/types/web-projects.types'
-import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
+import type {
+  AgentSkillContent,
+  AgentSkillSummary,
+  SkillManifest,
+  SkillsCatalogRequest,
+  SkillsHubEvent,
+  SkillsInstallRequest,
+  SkillsProjectionRequest,
+  SkillsRepairRequest,
+  SkillsStatus
+} from './skills-api'
 import { isTauriContext } from './tauri-runtime'
 import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
@@ -459,7 +469,44 @@ export const webServerCliSessions = {
   }
 }
 
+function skillsError(result: { error: string; code?: string }): Error {
+  return new Error(result.code ? `${result.code}: ${result.error}` : result.error)
+}
+
+function skillsQuery(request: SkillsCatalogRequest = {}): string {
+  const params = new URLSearchParams()
+  if (request.projectId) params.set('projectId', request.projectId)
+  if (request.projectRoot) params.set('projectRoot', request.projectRoot)
+  const encoded = params.toString()
+  return encoded ? `?${encoded}` : ''
+}
+
 export const webServerSkills = {
+  async status(request: SkillsCatalogRequest = {}): Promise<SkillsStatus> {
+    const res = await getJson<SkillsStatus>(`/skills/status${skillsQuery(request)}`)
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
+  async sync(request: SkillsCatalogRequest = {}): Promise<SkillsStatus> {
+    const res = await postJson<SkillsStatus>('/skills/sync', request)
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
+  async install(request: SkillsInstallRequest): Promise<SkillManifest> {
+    const res = await postJson<SkillManifest>('/skills/install', request)
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
+  async project(request: SkillsProjectionRequest): Promise<SkillManifest> {
+    const res = await postJson<SkillManifest>('/skills/project', request)
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
+  async repair(request: SkillsRepairRequest): Promise<SkillManifest> {
+    const res = await postJson<SkillManifest>('/skills/repair', request)
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
   async list(projectRoot?: string): Promise<AgentSkillSummary[]> {
     const params = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : ''
     const res = await getJson<AgentSkillSummary[]>(`/skills${params}`)
@@ -472,6 +519,43 @@ export const webServerSkills = {
     const res = await getJson<AgentSkillContent>(`/skills/${encodeURIComponent(name)}${params}`)
     if (!res.success) throw new Error(res.error)
     return res.data
+  },
+
+  onCatalogChanged(listener: (event: SkillsHubEvent) => void): () => void {
+    let lastStatus: { revision: number; stale?: boolean; diagnostics: string[] } | undefined
+    let inFlight = false
+    const tick = (): void => {
+      if (inFlight) return
+      inFlight = true
+      void webServerSkills
+        .status()
+        .then((status) => {
+          const next = {
+            revision: status.catalog.revision,
+            stale: status.stale,
+            diagnostics: status.catalog.diagnostics
+          }
+          if (
+            lastStatus &&
+            (next.revision !== lastStatus.revision ||
+              next.stale !== lastStatus.stale ||
+              next.diagnostics.join('\n') !== lastStatus.diagnostics.join('\n'))
+          ) {
+            listener({
+              kind: next.stale ? 'skills_sync_stale' : 'skills_catalog_changed',
+              revision: next.revision
+            })
+          }
+          lastStatus = next
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false
+        })
+    }
+    const timer = window.setInterval(tick, 5000)
+    tick()
+    return () => window.clearInterval(timer)
   }
 }
 
