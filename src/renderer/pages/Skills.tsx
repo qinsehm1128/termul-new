@@ -1,5 +1,5 @@
 import { RefreshCw, Sparkles } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -39,6 +39,8 @@ export default function Skills(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<WriteAction | null>(null)
   const [confirmToken, setConfirmToken] = useState<string | null>(null)
+  const loadedRef = useRef(false)
+  const requestInFlightRef = useRef(false)
 
   const request = useMemo<SkillsCatalogRequest>(() => {
     if (projectId === 'all' || !projectId) return {}
@@ -48,14 +50,18 @@ export default function Skills(): React.JSX.Element {
 
   const load = useCallback(
     async (sync = false): Promise<void> => {
-      setLoading(true)
+      if (requestInFlightRef.current) return
+      requestInFlightRef.current = true
+      if (!loadedRef.current) setLoading(true)
       setError(null)
       try {
         const next = sync ? await skillsApi.refresh(request) : await skillsApi.status(request)
         setStatus(next)
+        loadedRef.current = true
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause))
       } finally {
+        requestInFlightRef.current = false
         setLoading(false)
       }
     },

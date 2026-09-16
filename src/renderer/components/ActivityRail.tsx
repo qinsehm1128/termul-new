@@ -298,7 +298,19 @@ export function ActivityRail({
               />
             </button>
           </RailTooltip>
+        </fieldset>
 
+        <div
+          className="my-1.5 h-px w-5 bg-sidebar-border/80"
+          data-activity-rail-divider="tools"
+          aria-hidden="true"
+        />
+
+        <fieldset
+          aria-label="Tools"
+          data-activity-rail-section="tools"
+          className="m-0 flex min-w-0 flex-col items-center border-0 p-0"
+        >
           <RailTooltip label="Skills">
             <button
               type="button"

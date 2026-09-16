@@ -799,7 +799,13 @@ impl SkillsHubService {
     }
 
     fn is_internal_path(&self, path: &Path) -> bool {
-        path == self.root.catalog_path()
+        let is_catalog_file = path == self.root.catalog_path()
+            || path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("catalog.json.tmp-"));
+        is_catalog_file
+            || path == self.root.path()
             || path == self.last_good_config_path()
             || scanner::path_is_within(&self.root.manifests_dir(), path)
     }
@@ -1033,6 +1039,24 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error.code, ERR_PROJECT_OUTSIDE_BOUNDARY);
+    }
+
+    #[test]
+    fn watcher_ignores_catalog_temp_and_manifest_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = SkillsHubService::new(SkillsHubContext {
+            state_root: temp.path().join("state"),
+            home: temp.path().join("home"),
+            config_root: temp.path().join("config"),
+            projects: Vec::new(),
+            user_config: None,
+            project_configs: Vec::new(),
+        })
+        .unwrap();
+        assert!(service.is_internal_path(&service.root.catalog_path()));
+        assert!(service.is_internal_path(&service.root.path().join("catalog.json.tmp-123")));
+        assert!(service.is_internal_path(&service.root.manifests_dir().join("demo.json")));
+        assert!(!service.is_internal_path(&service.root.canonical_dir().join("demo/SKILL.md")));
     }
 
     #[test]
