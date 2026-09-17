@@ -27,9 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::adapters::{
-    self, AdaptedTranscript, AdapterIssue, ResumeFrom, ISSUE_COMPACT_FAILED,
-};
+use super::adapters::{self, AdaptedTranscript, AdapterIssue, ResumeFrom, ISSUE_COMPACT_FAILED};
 use super::paths::{vendor_scan_roots, vendor_store_roots, IndexLocation, MemoryVendor};
 use super::scope::ProjectFence;
 use super::store::MemoryStore;
@@ -1262,7 +1260,12 @@ mod tests {
         let changed = fixture.claude_project_dir.join("c1.jsonl");
         write(
             &changed,
-            &claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", "claude 1 revised"),
+            &claude_lines(
+                "sess-c1",
+                false,
+                "2026-09-01T00:00:00.000Z",
+                "claude 1 revised",
+            ),
         );
         let incremental = build(&fixture, IngestOptions::default());
         assert_eq!(incremental.sessions_indexed, 1);
@@ -1307,7 +1310,10 @@ mod tests {
         );
         {
             use std::io::Write;
-            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
             file.write_all(tail.as_bytes()).unwrap();
         }
 
@@ -1368,7 +1374,12 @@ mod tests {
         let path = fixture.claude_project_dir.join("c1.jsonl");
         write(
             &path,
-            &claude_lines("sess-c1", false, "2026-09-01T00:00:00.000Z", "original turn"),
+            &claude_lines(
+                "sess-c1",
+                false,
+                "2026-09-01T00:00:00.000Z",
+                "original turn",
+            ),
         );
         build(&fixture, IngestOptions::default());
 
@@ -1376,8 +1387,18 @@ mod tests {
         write(
             &path,
             &[
-                claude_lines("sess-c1", false, "2026-09-02T00:00:00.000Z", "rewritten one"),
-                claude_lines("sess-c1", false, "2026-09-02T00:01:00.000Z", "rewritten two"),
+                claude_lines(
+                    "sess-c1",
+                    false,
+                    "2026-09-02T00:00:00.000Z",
+                    "rewritten one",
+                ),
+                claude_lines(
+                    "sess-c1",
+                    false,
+                    "2026-09-02T00:01:00.000Z",
+                    "rewritten two",
+                ),
             ]
             .concat(),
         );
@@ -1454,7 +1475,10 @@ mod tests {
         );
         let split = second.len() / 2;
         std::fs::write(&path, format!("{complete}{}", &second[..split])).unwrap();
-        assert_eq!(build(&fixture, IngestOptions::default()).sessions_indexed, 1);
+        assert_eq!(
+            build(&fixture, IngestOptions::default()).sessions_indexed,
+            1
+        );
 
         std::fs::write(&path, format!("{complete}{second}")).unwrap();
         let warm = build(&fixture, IngestOptions::default());
@@ -1627,7 +1651,11 @@ mod tests {
         // fallback the adapter documents.
         let store = open_store(&fixture);
         assert_eq!(
-            store.get_session(&second_key).unwrap().unwrap().root_session_key,
+            store
+                .get_session(&second_key)
+                .unwrap()
+                .unwrap()
+                .root_session_key,
             second_key
         );
         drop(store);
@@ -1636,7 +1664,12 @@ mod tests {
         // second is re-adapted against whatever the skip branch put in the map.
         write(
             &second_path,
-            &claude_lines("sess-parent", true, "2026-09-01T00:02:00.000Z", "branch b revised"),
+            &claude_lines(
+                "sess-parent",
+                true,
+                "2026-09-01T00:02:00.000Z",
+                "branch b revised",
+            ),
         );
         let report = build(&fixture, IngestOptions::default());
         assert_eq!(report.sessions_skipped_unchanged, 1);

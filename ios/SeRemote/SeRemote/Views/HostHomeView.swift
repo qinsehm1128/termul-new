@@ -102,23 +102,48 @@ struct HostHomeView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
-            List(filteredRows) { row in
-                Button {
-                    selectedId = row.id
-                } label: {
-                    HostListRow(
-                        title: row.title,
-                        preview: row.preview,
-                        previewMono: true,
-                        meta: row.meta,
-                        status: .idle,
-                        time: row.time,
-                        glyph: row.glyph
-                    )
+            List {
+                if section == .sessions {
+                    ForEach(filteredRows) { row in
+                        Button {
+                            selectedId = row.id
+                        } label: {
+                            HostListRow(
+                                title: row.title,
+                                preview: row.preview,
+                                previewMono: true,
+                                meta: row.meta,
+                                status: .idle,
+                                time: row.time,
+                                glyph: row.glyph
+                            )
+                        }
+                        .listRowBackground(SeTheme.canvas)
+                        .listRowSeparatorTint(SeTheme.stroke)
+                        .contextMenu { rowActions(for: row) }
+                    }
+                } else {
+                    ForEach(filteredProjectSections) { group in
+                        Section(group.title) {
+                            ForEach(group.projects) { project in
+                                Button {
+                                    selectedId = project.id
+                                } label: {
+                                    projectRow(project)
+                                }
+                                .listRowBackground(SeTheme.canvas)
+                                .listRowSeparatorTint(SeTheme.stroke)
+                                .contextMenu {
+                                    Button {
+                                        Task { await session.selectProject(project) }
+                                    } label: {
+                                        Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                .listRowBackground(SeTheme.canvas)
-                .listRowSeparatorTint(SeTheme.stroke)
-                .contextMenu { rowActions(for: row) }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -264,7 +289,7 @@ struct HostHomeView: View {
                     .lineLimit(1)
                 Text(section == .sessions
                      ? String(localized: "Independent chats, not project terminals")
-                     : String(localized: "Projects already open on the computer"))
+                     : String(localized: "Running projects first, then desktop groups"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -354,32 +379,45 @@ struct HostHomeView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
-            List(filteredProjects) { project in
-                Button {
-                    Task { await session.selectProject(project) }
-                } label: {
-                    HostListRow(
-                        title: project.name,
-                        preview: project.path,
-                        previewMono: true,
-                        meta: HostTimestamp.folderName(from: project.path),
-                        glyph: "folder",
-                        showsChevron: true
-                    )
-                }
-                .listRowBackground(SeTheme.canvas)
-                .listRowSeparatorTint(SeTheme.stroke)
-                .contextMenu {
-                    Button {
-                        Task { await session.selectProject(project) }
-                    } label: {
-                        Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
+            List {
+                ForEach(filteredProjectSections) { group in
+                    Section(group.title) {
+                        ForEach(group.projects) { project in
+                            Button {
+                                Task { await session.selectProject(project) }
+                            } label: {
+                                projectRow(project)
+                            }
+                            .listRowBackground(SeTheme.canvas)
+                            .listRowSeparatorTint(SeTheme.stroke)
+                            .contextMenu {
+                                Button {
+                                    Task { await session.selectProject(project) }
+                                } label: {
+                                    Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
+                                }
+                            }
+                        }
                     }
                 }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
+    }
+
+    private func projectRow(_ project: HostProject) -> HostListRow {
+        HostListRow(
+            title: project.name,
+            preview: HostTimestamp.folderName(from: project.path),
+            previewMono: false,
+            meta: project.isRunning
+                ? String(localized: "\(project.liveTerminalCount) live terminals")
+                : String(localized: "Not started"),
+            status: project.isRunning ? .working : .idle,
+            glyph: project.isRunning ? "bolt.horizontal.circle.fill" : "folder",
+            showsChevron: true
+        )
     }
 
     private var filteredConversations: [HostConversation] {
@@ -392,12 +430,62 @@ struct HostHomeView: View {
     }
 
     private var filteredProjects: [HostProject] {
-        let projects = session.projects.projects.filter { !$0.isArchived }
-        guard !searchText.isEmpty else { return projects }
-        return projects.filter {
-            $0.name.localizedCaseInsensitiveContains(searchText)
-                || ($0.path ?? "").localizedCaseInsensitiveContains(searchText)
+        filteredProjectSections.flatMap(\.projects)
+    }
+
+    private var filteredProjectSections: [HostProjectSection] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return projectSections.compactMap { section in
+            let projects: [HostProject]
+            if query.isEmpty {
+                projects = section.projects
+            } else {
+                projects = section.projects.filter {
+                    $0.name.localizedCaseInsensitiveContains(query)
+                        || ($0.path ?? "").localizedCaseInsensitiveContains(query)
+                }
+            }
+            guard !projects.isEmpty else { return nil }
+            return HostProjectSection(id: section.id, title: section.title, projects: projects)
         }
+    }
+
+    private var projectSections: [HostProjectSection] {
+        let visible = session.projects.projects.filter { !$0.isArchived }
+        let byId = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
+        var claimed = Set<String>()
+        var sections: [HostProjectSection] = []
+
+        let running = visible
+            .filter(\.isRunning)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        if !running.isEmpty {
+            sections.append(HostProjectSection(
+                id: "running",
+                title: String(localized: "Running"),
+                projects: running
+            ))
+            claimed.formUnion(running.map(\.id))
+        }
+
+        for group in session.projects.groups {
+            let items = group.projectIds.compactMap { byId[$0] }.filter { !claimed.contains($0.id) }
+            guard !items.isEmpty else { continue }
+            sections.append(HostProjectSection(id: group.id, title: group.name, projects: items))
+            claimed.formUnion(items.map(\.id))
+        }
+
+        let rest = visible
+            .filter { !claimed.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        if !rest.isEmpty {
+            sections.append(HostProjectSection(
+                id: "ungrouped",
+                title: String(localized: "Other projects"),
+                projects: rest
+            ))
+        }
+        return sections
     }
 
     private var filteredRows: [HostHomeRow] {
@@ -484,10 +572,18 @@ private struct HostHomeRow: Identifiable {
     init(project: HostProject) {
         id = project.id
         title = project.name
-        preview = project.path
-        meta = HostTimestamp.folderName(from: project.path)
+        preview = HostTimestamp.folderName(from: project.path)
+        meta = project.isRunning
+            ? String(localized: "\(project.liveTerminalCount) live terminals")
+            : String(localized: "Not started")
         time = ""
-        glyph = "folder"
+        glyph = project.isRunning ? "bolt.horizontal.circle.fill" : "folder"
         openTitle = String(localized: "Open project")
     }
+}
+
+private struct HostProjectSection: Identifiable {
+    let id: String
+    let title: String
+    let projects: [HostProject]
 }

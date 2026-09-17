@@ -32,8 +32,7 @@ use super::scope::ProjectFence;
 use super::store::{MemorySearchHit, MemoryStore, MAX_QUERY_LIMIT};
 use super::types::{CompactionRecord, IndexedSession, PointerFreshness, SessionScope};
 use super::{
-    MemoryIndexError, MemoryIndexResult, ERR_BUILD_IN_PROGRESS, ERR_OUT_OF_SCOPE,
-    ERR_STORE_FAILED,
+    MemoryIndexError, MemoryIndexResult, ERR_BUILD_IN_PROGRESS, ERR_OUT_OF_SCOPE, ERR_STORE_FAILED,
 };
 
 /// Default number of hits a query returns when the caller does not say.
@@ -648,7 +647,7 @@ mod tests {
             tool_call_id: None,
             source: pointer,
         };
-        store.replace_session(&session, &[message], &[], 0,).unwrap();
+        store.replace_session(&session, &[message], &[], 0).unwrap();
         key
     }
 
@@ -678,7 +677,7 @@ mod tests {
         };
         let existing = store.get_session(&record.session_key).unwrap();
         let session = existing.expect("seed the session first");
-        store.replace_session(&session, &[], &[record], 0,).unwrap();
+        store.replace_session(&session, &[], &[record], 0).unwrap();
     }
 
     fn search_for(harness: &Harness, query: &str, include_stale: bool) -> MemorySearchResponse {
@@ -712,8 +711,11 @@ mod tests {
         assert_eq!(fresh.stale_hits_omitted, 0);
 
         // Rewrite the transcript so the recorded byte range no longer hashes.
-        std::fs::write(&harness.transcript, b"{\"role\":\"user\",\"text\":\"REWRITTEN\"}\n")
-            .unwrap();
+        std::fs::write(
+            &harness.transcript,
+            b"{\"role\":\"user\",\"text\":\"REWRITTEN\"}\n",
+        )
+        .unwrap();
 
         let after = search_for(&harness, "migration", false);
         assert!(
@@ -783,7 +785,11 @@ mod tests {
 
         let error = harness
             .service
-            .build(&harness.project_root, &IngestOptions::default(), &mut |_| {})
+            .build(
+                &harness.project_root,
+                &IngestOptions::default(),
+                &mut |_| {},
+            )
             .unwrap_err();
         assert_eq!(error.code, ERR_BUILD_IN_PROGRESS, "{error}");
 
@@ -792,7 +798,11 @@ mod tests {
         drop(guard);
         assert!(harness
             .service
-            .build(&harness.project_root, &IngestOptions::default(), &mut |_| {})
+            .build(
+                &harness.project_root,
+                &IngestOptions::default(),
+                &mut |_| {}
+            )
             .is_ok());
     }
 
@@ -917,7 +927,7 @@ mod tests {
 
         let detail = harness
             .service
-            .get_session(&harness.project_root, &key, None, false, false,)
+            .get_session(&harness.project_root, &key, None, false, false)
             .unwrap()
             .expect("session");
         assert_eq!(detail.session.session_key, key);

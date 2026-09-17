@@ -331,7 +331,14 @@ mod session_pointer_tests {
         )
         .unwrap();
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &|_| None, None);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &|_| None,
+            None,
+        );
 
         let session = adapted.session.expect("adapter produced no session");
         assert!(
@@ -364,7 +371,14 @@ mod tests {
         let path = temp.path().join("chat.jsonl");
         write(&path, lines);
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root, None);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &no_root,
+            None,
+        );
         (adapted, path, temp)
     }
 
@@ -444,7 +458,14 @@ mod tests {
         let resolve = |parent: &str| {
             (parent == "sess-root").then(|| "claude-code:/store/root.jsonl".to_string())
         };
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &resolve, None);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &resolve,
+            None,
+        );
         let session = adapted.session.unwrap();
         assert_eq!(session.lineage_depth, LineageDepth::nested(1));
         assert!(!session.lineage_depth.is_root());
@@ -475,7 +496,14 @@ mod tests {
             ],
         );
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root, None);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &no_root,
+            None,
+        );
         assert_eq!(
             adapted.session.unwrap().lineage_depth,
             LineageDepth::nested(1),
@@ -495,7 +523,14 @@ mod tests {
             ],
         );
         let identity = FileIdentity::read(&path).unwrap();
-        let adapted = adapt(&path, &identity, "proj", SessionScope::Scoped, &no_root, None);
+        let adapted = adapt(
+            &path,
+            &identity,
+            "proj",
+            SessionScope::Scoped,
+            &no_root,
+            None,
+        );
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, session.session_key);
         assert_eq!(session.lineage_depth, LineageDepth::nested(1));

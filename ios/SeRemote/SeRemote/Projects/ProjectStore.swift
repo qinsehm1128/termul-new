@@ -5,6 +5,7 @@ import Observation
 @Observable
 final class ProjectStore {
     var projects: [HostProject] = []
+    var groups: [HostProjectGroup] = []
     var active: HostProject?
     var isLoading = false
     var errorMessage: String?
@@ -24,6 +25,7 @@ final class ProjectStore {
         do {
             let payload: ProjectListPayload = try await http.get("projects")
             projects = payload.projects
+            groups = payload.groups
             if let current = active {
                 active = projects.first(where: { $0.id == current.id })
             }

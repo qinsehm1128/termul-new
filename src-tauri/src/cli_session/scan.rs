@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use std::cmp::Reverse;
 use chrono::Utc;
+use std::cmp::Reverse;
 
 use super::parse::{hydrate_session, is_allowed_transcript_path, scanned_session};
 use super::paths::{default_codex_home, is_under_dir, walk_roots_for_agent};

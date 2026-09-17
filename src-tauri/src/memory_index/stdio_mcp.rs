@@ -440,7 +440,10 @@ fn is_namespace_key(key: &str) -> bool {
 }
 
 fn index_database_path(state_root: &Path, key: &str) -> PathBuf {
-    state_root.join("memory-index").join(key).join("index.sqlite3")
+    state_root
+        .join("memory-index")
+        .join(key)
+        .join("index.sqlite3")
 }
 
 #[tool_router(server_handler)]
@@ -486,7 +489,9 @@ impl UniversalMemoryMcpServer {
     /// without a verifiable fence.
     fn resolve_project(&self, key: &str) -> Result<PathBuf, String> {
         if !is_namespace_key(key) {
-            return Err(format!("{TOOL_ERROR_MARKER} VALIDATION_ERROR: unknown project {key}"));
+            return Err(format!(
+                "{TOOL_ERROR_MARKER} VALIDATION_ERROR: unknown project {key}"
+            ));
         }
         let database = index_database_path(&self.state_root, key);
         let root = MemoryStore::stored_project_root(&database).ok_or_else(|| {
@@ -512,10 +517,7 @@ impl UniversalMemoryMcpServer {
         name = "memory_search",
         description = "Search one project's cross-agent conversation memory — every past Claude Code, Codex and pi session for it, normalized into one shape. Use it before re-deriving something the project has already worked through. Read-only. `project` is a key from `memory_projects`."
     )]
-    async fn memory_search(
-        &self,
-        Parameters(input): Parameters<UniversalSearchInput>,
-    ) -> String {
+    async fn memory_search(&self, Parameters(input): Parameters<UniversalSearchInput>) -> String {
         let Ok(project_root) = self.resolve_project(&input.project) else {
             return self.resolve_error(&input.project);
         };
@@ -794,8 +796,7 @@ mod tests {
         let missing_state = parse_args(&args(&[MEMORY_MCP_ARG, PROJECT_ARG, "/repo"])).unwrap_err();
         assert!(missing_state.contains(STATE_ROOT_ARG), "{missing_state}");
 
-        let universal =
-            parse_args(&args(&[MEMORY_MCP_ARG, STATE_ROOT_ARG, "/state"])).unwrap();
+        let universal = parse_args(&args(&[MEMORY_MCP_ARG, STATE_ROOT_ARG, "/state"])).unwrap();
         assert_eq!(universal.project_root, None);
     }
 
@@ -830,9 +831,7 @@ mod tests {
     fn the_printed_invocation_round_trips_through_the_parser() {
         let config = StdioConfig {
             project_root: Some(PathBuf::from("/Users/qs/project/me/termul")),
-            state_root: PathBuf::from(
-                "/Users/qs/Library/Application Support/com.se-manager.app",
-            ),
+            state_root: PathBuf::from("/Users/qs/Library/Application Support/com.se-manager.app"),
         };
         let invocation = invocation_for(Path::new("/Applications/Se.app/se-manager"), &config);
         assert_eq!(invocation[0], "/Applications/Se.app/se-manager");

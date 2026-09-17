@@ -186,6 +186,7 @@ async fn fixture() -> GoldenFixture {
         acp_catalog: None,
         acp_install: None,
         memory_index: None,
+        skills_hub: None,
         store: None,
         project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
     };
@@ -336,6 +337,7 @@ fn production_app(state: AppState, authority: Arc<crate::web::RemoteAccessAuthor
         state.acp_catalog,
         state.acp_install,
         state.memory_index,
+        state.skills_hub,
         state.store,
         authority,
     )

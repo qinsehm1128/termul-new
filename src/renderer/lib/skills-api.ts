@@ -57,6 +57,62 @@ export interface SkillsCatalogRequest {
   projectRoot?: string | null
 }
 
+export type SkillInstallSource =
+  | { type: 'local'; sourcePath: string }
+  | { type: 'github'; repositoryOrUrl: string; reference?: string | null; subpath?: string | null }
+  | { type: 'npm'; package: string; versionOrSpecifier?: string | null; subpath?: string | null }
+  | { type: 'url'; url: string; expectedSha256?: string | null }
+
+export type SkillScope = { type: 'global' } | { type: 'project'; projectId: string }
+export type SkillInstallMode = 'installAndProject' | 'installOnly' | 'projectionOnly'
+
+export interface SkillsPreviewRequest {
+  source: SkillInstallSource
+  scope: SkillScope
+  mode?: SkillInstallMode
+  providerIds?: string[]
+}
+
+export interface SkillsOperationStart {
+  jobId: string
+}
+
+export interface SkillsInstallPlan {
+  source: SkillInstallSource
+  scope: SkillScope
+  mode: SkillInstallMode
+  providerIds: string[]
+  previewId: string
+  name: string
+  actualSha256: string
+  expectedSha256?: string | null
+  requiresDigestConfirmation?: boolean
+  collisionConfirmToken?: string | null
+}
+
+export interface SkillsInstallCommit {
+  previewId: string
+  confirmDigest?: boolean
+  confirmToken?: string | null
+}
+
+export interface SkillsOperationStatus {
+  jobId: string
+  phase: string
+  progress?: {
+    jobId: string
+    phase: string
+    completedUnits?: number | null
+    totalUnits?: number | null
+    bytesReceived?: number | null
+    bytesTotal?: number | null
+    stableCode?: string | null
+    message?: string | null
+  } | null
+  result?: unknown
+  errorCode?: string | null
+}
+
 export interface SkillsInstallRequest {
   name: string
   sourcePath: string
@@ -85,6 +141,14 @@ export interface SkillManifest {
   name: string
   digest: string
   canonicalPath: string
+  source?: {
+    sourceType?: string | null
+    normalizedLocator?: string | null
+    reference?: string | null
+    resolvedVersion?: string | null
+    resolvedCommit?: string | null
+    actualSha256: string
+  } | null
   projections: Array<{
     provider: string
     targetPath: string
@@ -106,6 +170,7 @@ export const SKILLS_CATALOG_CHANGED_EVENT = 'skills_catalog_changed'
 export const SKILLS_CONFLICT_DETECTED_EVENT = 'skills_conflict_detected'
 export const SKILLS_LINK_DRIFT_DETECTED_EVENT = 'skills_link_drift_detected'
 export const SKILLS_SYNC_STALE_EVENT = 'skills_sync_stale'
+export const SKILLS_OPERATION_PROGRESS_EVENT = 'skills_operation_progress'
 
 export interface AgentSkillSummary {
   name: string
@@ -158,6 +223,26 @@ export const skillsApi = {
     })
   },
 
+  async preview(request: SkillsPreviewRequest): Promise<SkillsOperationStart> {
+    if (!isTauriContext()) return webServerSkills.preview(request)
+    return invoke<SkillsOperationStart>('skills_preview_cmd', { request })
+  },
+
+  async installPreview(request: SkillsInstallCommit): Promise<SkillsOperationStart> {
+    if (!isTauriContext()) return webServerSkills.installPreview(request)
+    return invoke<SkillsOperationStart>('skills_install_preview_cmd', { request })
+  },
+
+  async operationStatus(jobId: string): Promise<SkillsOperationStatus> {
+    if (!isTauriContext()) return webServerSkills.operationStatus(jobId)
+    return invoke<SkillsOperationStatus>('skills_operation_status_cmd', { jobId })
+  },
+
+  async cancelOperation(jobId: string): Promise<void> {
+    if (!isTauriContext()) return webServerSkills.cancelOperation(jobId)
+    await invoke<void>('skills_cancel_operation_cmd', { jobId })
+  },
+
   async install(request: SkillsInstallRequest): Promise<SkillManifest> {
     if (!isTauriContext()) return webServerSkills.install(request)
     return invoke<SkillManifest>('skills_install_cmd', { request })
@@ -179,6 +264,14 @@ export const skillsApi = {
       name,
       projectRoot: projectRoot || null
     })
+  },
+
+  onOperationProgress(listener: (status: SkillsOperationStatus) => void): () => void {
+    if (!isTauriContext()) return () => undefined
+    const unlisten = listen<SkillsOperationStatus>(SKILLS_OPERATION_PROGRESS_EVENT, (event) => {
+      listener(event.payload)
+    })
+    return () => cleanupTauriListener(unlisten)
   },
 
   onCatalogChanged(listener: (event: SkillsHubEvent) => void): () => void {

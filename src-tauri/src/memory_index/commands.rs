@@ -42,9 +42,7 @@ const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(150);
 /// `files_seen` and `files_total`: the final event of a vendor is the one where
 /// they are equal, and that is the event a progress bar must not miss or it
 /// sticks at 97%.
-pub(crate) fn throttled(
-    mut sink: impl FnMut(&IngestProgress),
-) -> impl FnMut(IngestProgress) {
+pub(crate) fn throttled(mut sink: impl FnMut(&IngestProgress)) -> impl FnMut(IngestProgress) {
     let mut last_sent: Option<Instant> = None;
     move |progress: IngestProgress| {
         let boundary = progress.files_seen <= 1 || progress.files_seen >= progress.files_total;

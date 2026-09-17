@@ -8250,6 +8250,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: false,
+                live_terminal_count: 0,
             }],
             None,
         );
@@ -8310,6 +8311,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: true,
+                live_terminal_count: 0,
             }],
             Some("p-1".to_string()),
         );
@@ -8362,6 +8364,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: false,
+                live_terminal_count: 0,
             }],
             None,
         );
@@ -8427,6 +8430,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: true,
+                live_terminal_count: 0,
             }],
             Some("p-1".to_string()),
         );
@@ -8892,6 +8896,7 @@ mod tests {
                     path: Some("/a".to_string()),
                     is_archived: false,
                     is_default: true,
+                    live_terminal_count: 0,
                 },
                 crate::web::project_registry::ProjectSummary {
                     id: "p-2".to_string(),
@@ -8900,6 +8905,7 @@ mod tests {
                     path: Some("/b".to_string()),
                     is_archived: false,
                     is_default: false,
+                    live_terminal_count: 0,
                 },
             ],
             Some("p-1".to_string()),
@@ -8972,6 +8978,7 @@ mod tests {
                     path: Some("/a".to_string()),
                     is_archived: false,
                     is_default: true,
+                    live_terminal_count: 0,
                 },
                 crate::web::project_registry::ProjectSummary {
                     id: "p-archived".to_string(),
@@ -8980,6 +8987,7 @@ mod tests {
                     path: Some("/b".to_string()),
                     is_archived: true,
                     is_default: false,
+                    live_terminal_count: 0,
                 },
                 crate::web::project_registry::ProjectSummary {
                     id: "p-pathless".to_string(),
@@ -8988,6 +8996,7 @@ mod tests {
                     path: None,
                     is_archived: false,
                     is_default: false,
+                    live_terminal_count: 0,
                 },
             ],
             Some("p-1".to_string()),
@@ -9038,6 +9047,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: false,
+                live_terminal_count: 0,
             }],
             None,
         );
@@ -9097,6 +9107,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: true,
+                live_terminal_count: 0,
             }],
             Some("p-1".to_string()),
         );
@@ -9178,6 +9189,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: false,
+                live_terminal_count: 0,
             }],
             None,
         );
@@ -9252,6 +9264,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: false,
+                live_terminal_count: 0,
             }],
             None,
         );
@@ -9752,6 +9765,7 @@ mod tests {
                 path: Some("/a".to_string()),
                 is_archived: false,
                 is_default: true,
+                live_terminal_count: 0,
             }],
             Some("p-1".to_string()),
         );

@@ -21,11 +21,11 @@ use std::path::{Component, Path, PathBuf};
 use tokio::task::spawn_blocking;
 use tracing::{error, info, warn};
 
+use crate::memory_index::commands::{throttled, MEMORY_INDEX_PROGRESS_EVENT};
 use crate::memory_index::commands::{
     MemoryIndexBuildArgs, MemoryIndexListArgs, MemoryIndexScopeArgs, MemoryIndexSearchArgs,
     MemoryIndexSessionArgs,
 };
-use crate::memory_index::commands::{throttled, MEMORY_INDEX_PROGRESS_EVENT};
 use crate::memory_index::ingest::{IngestOptions, IngestReport};
 use crate::memory_index::service::{MemoryIndexStatus, MemorySearchResponse, MemorySessionDetail};
 use crate::memory_index::types::IndexedSession;
@@ -144,9 +144,11 @@ pub async fn build_post(
     let body = match spawn_blocking(move || {
         // Same throttle the desktop uses, so the two surfaces show motion at the
         // same rate rather than one of them flooding its transport.
-        let mut emit = throttled(move |progress: &crate::memory_index::ingest::IngestProgress| {
-            broadcast_progress(&relay, progress);
-        });
+        let mut emit = throttled(
+            move |progress: &crate::memory_index::ingest::IngestProgress| {
+                broadcast_progress(&relay, progress);
+            },
+        );
         service.build(
             &project_root,
             &IngestOptions {
@@ -219,8 +221,7 @@ pub async fn status_post(
     // whether or not this host happens to have the service wired up.
     let project_root = root_or_reject!(state, args.project_root, MemoryIndexStatus);
     let service = service_or_unavailable!(state, MemoryIndexStatus);
-    let body = match spawn_blocking(move || service.status(&project_root)).await
-    {
+    let body = match spawn_blocking(move || service.status(&project_root)).await {
         Ok(Ok(status)) => IpcBody::ok(status),
         Ok(Err(error)) => IpcBody::<MemoryIndexStatus>::err(error.detail, error.code),
         Err(error) => {
@@ -243,11 +244,7 @@ pub async fn search_post(
         "operation=memory_index_search agents={}",
         args.request.agents.len()
     );
-    let body = match spawn_blocking(move || {
-        service.search(&project_root, &args.request)
-    })
-    .await
-    {
+    let body = match spawn_blocking(move || service.search(&project_root, &args.request)).await {
         Ok(Ok(response)) => IpcBody::ok(response),
         Ok(Err(error)) => IpcBody::<MemorySearchResponse>::err(error.detail, error.code),
         Err(error) => {
@@ -318,8 +315,8 @@ mod tests {
     use super::*;
     use crate::acp::AcpManager;
     use crate::web::project_registry::ProjectRegistry;
-    use crate::web::test_pty_manager;
     use crate::web::sink::WsRelaySink;
+    use crate::web::test_pty_manager;
     use crate::web::ws::HistoryMode;
     use axum::body::Body;
     use axum::http::Request;
@@ -349,6 +346,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub: None,
             store: None,
         }
     }

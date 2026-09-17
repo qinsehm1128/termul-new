@@ -104,7 +104,10 @@ fn is_cgnat(ip: Ipv4Addr) -> bool {
 }
 
 fn is_documentation_range(ip: Ipv4Addr) -> bool {
-    matches!(ip.octets(), [192, 0, 2, _] | [198, 51, 100, _] | [203, 0, 113, _])
+    matches!(
+        ip.octets(),
+        [192, 0, 2, _] | [198, 51, 100, _] | [203, 0, 113, _]
+    )
 }
 
 #[must_use]
@@ -155,9 +158,15 @@ mod tests {
     #[test]
     fn selection_prefers_physical_rfc1918_over_proxy_tun() {
         let candidates = vec![
-            ("utun4".to_string(), IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1))),
+            (
+                "utun4".to_string(),
+                IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)),
+            ),
             ("en0".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 8))),
-            ("awdl0".to_string(), IpAddr::V4(Ipv4Addr::new(169, 254, 12, 1))),
+            (
+                "awdl0".to_string(),
+                IpAddr::V4(Ipv4Addr::new(169, 254, 12, 1)),
+            ),
         ];
         assert_eq!(
             select_lan_ipv4(candidates.into_iter()),
@@ -168,8 +177,14 @@ mod tests {
     #[test]
     fn selection_skips_vm_and_tunnel_adapters() {
         let candidates = vec![
-            ("vmnet8".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 87, 1))),
-            ("bridge100".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 2, 1))),
+            (
+                "vmnet8".to_string(),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 87, 1)),
+            ),
+            (
+                "bridge100".to_string(),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 2, 1)),
+            ),
             ("en1".to_string(), IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))),
         ];
         assert_eq!(
@@ -181,8 +196,14 @@ mod tests {
     #[test]
     fn selection_falls_back_to_cgnat_physical_adapter() {
         let candidates = vec![
-            ("utun3".to_string(), IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1))),
-            ("en0".to_string(), IpAddr::V4(Ipv4Addr::new(100, 64, 11, 22))),
+            (
+                "utun3".to_string(),
+                IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)),
+            ),
+            (
+                "en0".to_string(),
+                IpAddr::V4(Ipv4Addr::new(100, 64, 11, 22)),
+            ),
         ];
         assert_eq!(
             select_lan_ipv4(candidates.into_iter()),
@@ -194,7 +215,10 @@ mod tests {
     fn selection_prefers_rfc1918_over_cgnat_regardless_of_order() {
         let candidates = vec![
             ("eth0".to_string(), IpAddr::V4(Ipv4Addr::new(100, 64, 1, 1))),
-            ("eth1".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 8))),
+            (
+                "eth1".to_string(),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 8)),
+            ),
         ];
         assert_eq!(
             select_lan_ipv4(candidates.into_iter()),
@@ -208,7 +232,10 @@ mod tests {
         // must refuse; publishing it would only produce a broken QR.
         let candidates = vec![
             ("en0".to_string(), IpAddr::V4(Ipv4Addr::new(128, 30, 4, 77))),
-            ("eth0".to_string(), IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9))),
+            (
+                "eth0".to_string(),
+                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+            ),
         ];
         assert_eq!(select_lan_ipv4(candidates.into_iter()), None);
     }
@@ -216,11 +243,20 @@ mod tests {
     #[test]
     fn selection_never_picks_container_or_vpn_overlays() {
         let candidates = vec![
-            ("docker0".to_string(), IpAddr::V4(Ipv4Addr::new(172, 17, 0, 1))),
-            ("veth2a4f".to_string(), IpAddr::V4(Ipv4Addr::new(172, 17, 0, 2))),
+            (
+                "docker0".to_string(),
+                IpAddr::V4(Ipv4Addr::new(172, 17, 0, 1)),
+            ),
+            (
+                "veth2a4f".to_string(),
+                IpAddr::V4(Ipv4Addr::new(172, 17, 0, 2)),
+            ),
             ("cni0".to_string(), IpAddr::V4(Ipv4Addr::new(10, 244, 0, 1))),
             ("wg0".to_string(), IpAddr::V4(Ipv4Addr::new(10, 13, 37, 2))),
-            ("tailscale0".to_string(), IpAddr::V4(Ipv4Addr::new(100, 101, 1, 1))),
+            (
+                "tailscale0".to_string(),
+                IpAddr::V4(Ipv4Addr::new(100, 101, 1, 1)),
+            ),
             (
                 "vEthernet (Default Switch)".to_string(),
                 IpAddr::V4(Ipv4Addr::new(192, 168, 200, 1)),
@@ -235,7 +271,10 @@ mod tests {
     #[test]
     fn selection_accepts_windows_and_linux_physical_names() {
         let candidates = vec![
-            ("Wi-Fi".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 9))),
+            (
+                "Wi-Fi".to_string(),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 9)),
+            ),
             ("enp3s0".to_string(), IpAddr::V4(Ipv4Addr::new(10, 0, 0, 4))),
         ];
         assert_eq!(

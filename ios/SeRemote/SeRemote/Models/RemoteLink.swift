@@ -99,7 +99,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     /// Dropping it is a locked decision: a pre-rename link saved outside the app
     /// — a Safari bookmark, a message thread — stops opening. Nothing the desktop
     /// hands out is affected, because pairing has never produced a deep link; the
-    /// QR and the copy button both carry an `https` access URL, which reaches
+    /// QR and the copy button both carry an `http` or `https` access URL, which reaches
     /// ``parseAccessURL(_:)`` without consulting this set at all.
     private static let deepLinkSchemes: Set<String> = {
         guard let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] else {
@@ -146,21 +146,15 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         guard let scheme = url.scheme?.lowercased(), let host = url.host(), !host.isEmpty else {
             throw RemoteLinkError.invalidURL
         }
-        if scheme == "http" {
-            // The desktop publishes whatever usable IPv4 its own interface has —
-            // which may be CGNAT or a campus-public LAN, not RFC1918 — so the
-            // honest test is "same link as this phone", plus the named
-            // private ranges for good measure.
-            guard isPrivateNetworkHost(host) || isOnLinkIPv4Host(host) else {
-                HostLog.session.error("Rejected http pairing to a non-LAN host")
-                throw RemoteLinkError.httpsRequired
-            }
-        } else if scheme != "https" {
+        guard scheme == "http" || scheme == "https" else {
             throw RemoteLinkError.httpsRequired
         }
         guard let token = accessToken(in: url), !token.isEmpty else {
             throw RemoteLinkError.missingToken
         }
+        // HTTP is allowed for operator-shared pairing URLs (LAN or an HTTP
+        // reverse tunnel). The bearer in the fragment is the access secret;
+        // scheme is not a substitute for it.
         return RemoteLink(accessURL: url, bearer: token)
     }
 
@@ -296,7 +290,7 @@ enum RemoteLinkError: LocalizedError {
         case .invalidURL:
             String(localized: "That does not look like a Se access link.")
         case .httpsRequired:
-            String(localized: "Public hosts need HTTPS. Private LAN ranges such as 192.168.x.x are allowed over HTTP.")
+            String(localized: "Use an http or https access link from the desktop QR.")
         case .missingToken:
             String(localized: "This link is missing the access secret. Copy or scan the full QR from the desktop.")
         }

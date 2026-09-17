@@ -1,9 +1,12 @@
 use crate::skills::api_types::{
-    SkillsCatalogRequest, SkillsError, SkillsInstallRequest, SkillsProjectionRequest,
-    SkillsRepairRequest, SkillsStatus, ERR_CANONICAL_ROOT_UNAVAILABLE, ERR_INVALID_PROVIDER_CONFIG,
-    ERR_MANAGED_SKILL_PROTECTED, ERR_PROJECTION_DRIFT,
+    SkillInstallMode, SkillScope, SkillsCatalogRequest, SkillsError, SkillsInstallCommit,
+    SkillsInstallPlan, SkillsInstallRequest, SkillsOperationStatus, SkillsPreviewRequest,
+    SkillsProjectionRequest, SkillsRepairRequest, SkillsStatus, ERR_CANONICAL_ROOT_UNAVAILABLE,
+    ERR_INVALID_PROVIDER_CONFIG, ERR_MANAGED_SKILL_PROTECTED, ERR_PROJECTION_DRIFT,
     ERR_PROJECTION_FALLBACK_CONFIRMATION_REQUIRED, ERR_PROJECT_NOT_REGISTERED,
-    ERR_PROJECT_OUTSIDE_BOUNDARY, ERR_SKILL_NOT_FOUND, ERR_UNMANAGED_COLLISION,
+    ERR_PROJECT_OUTSIDE_BOUNDARY, ERR_REMOTE_CONFIRMATION_REQUIRED, ERR_REMOTE_INTEGRITY_MISMATCH,
+    ERR_REMOTE_MODE_UNSUPPORTED, ERR_SKILL_NOT_FOUND, ERR_SKILL_OPERATION_BUSY,
+    ERR_SKILL_OPERATION_CANCELLED, ERR_SKILL_OPERATION_JOIN_FAILED, ERR_UNMANAGED_COLLISION,
 };
 use crate::skills::app_data::{resolve_from_base, CanonicalSkillsRoot};
 use crate::skills::catalog::SkillsCatalog;
@@ -16,12 +19,15 @@ use crate::skills::provider_config::{
     expand_path, ProjectionFallbackPolicy, ProviderConfigSnapshot,
 };
 use crate::skills::scanner::{self, RegisteredProject};
+use crate::skills::source::{self, StagedSkill};
 use crate::web::project_registry::ProjectRegistry;
 use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::task::AbortHandle;
 
 const DEFAULT_PROVIDERS: &str = include_str!("../../resources/skills/providers.default.toml");
 
@@ -58,6 +64,11 @@ struct LastGoodState {
     stale: bool,
 }
 
+struct RemotePreview {
+    plan: SkillsInstallPlan,
+    staged: StagedSkill,
+}
+
 pub struct SkillsHubService {
     root: CanonicalSkillsRoot,
     home: PathBuf,
@@ -67,6 +78,11 @@ pub struct SkillsHubService {
     injected_user_config: Option<String>,
     injected_project_configs: Vec<(String, String)>,
     last_good: Mutex<LastGoodState>,
+    remote_previews: Mutex<HashMap<String, RemotePreview>>,
+    operations: Mutex<HashMap<String, SkillsOperationStatus>>,
+    cancelled_operations: Mutex<HashSet<String>>,
+    operation_handles: Mutex<HashMap<String, AbortHandle>>,
+    operation_created_at: Mutex<HashMap<String, Instant>>,
 }
 
 impl SkillsHubService {
@@ -81,6 +97,11 @@ impl SkillsHubService {
             injected_user_config: context.user_config,
             injected_project_configs: context.project_configs,
             last_good: Mutex::new(LastGoodState::default()),
+            remote_previews: Mutex::new(HashMap::new()),
+            operations: Mutex::new(HashMap::new()),
+            cancelled_operations: Mutex::new(HashSet::new()),
+            operation_handles: Mutex::new(HashMap::new()),
+            operation_created_at: Mutex::new(HashMap::new()),
         })
     }
 
@@ -107,6 +128,11 @@ impl SkillsHubService {
             injected_user_config: None,
             injected_project_configs: Vec::new(),
             last_good: Mutex::new(LastGoodState::default()),
+            remote_previews: Mutex::new(HashMap::new()),
+            operations: Mutex::new(HashMap::new()),
+            cancelled_operations: Mutex::new(HashSet::new()),
+            operation_handles: Mutex::new(HashMap::new()),
+            operation_created_at: Mutex::new(HashMap::new()),
         })
     }
 
@@ -233,6 +259,408 @@ impl SkillsHubService {
 
     pub fn refresh(&self) -> Result<SkillsCatalog, SkillsError> {
         Ok(self.sync(SkillsCatalogRequest::default())?.catalog)
+    }
+
+    fn is_final_phase(phase: &str) -> bool {
+        matches!(phase, "completed" | "failed" | "cancelled")
+    }
+
+    fn prune_operations(&self) {
+        const RETENTION: Duration = Duration::from_secs(30 * 60);
+        const MAX_TERMINAL: usize = 128;
+        let now = Instant::now();
+        let mut created = self.operation_created_at.lock();
+        let mut operations = self.operations.lock();
+        let mut previews = self.remote_previews.lock();
+        let expired: Vec<String> = created
+            .iter()
+            .filter(|(_, at)| now.duration_since(**at) > RETENTION)
+            .filter(|(id, _)| {
+                operations
+                    .get(*id)
+                    .is_some_and(|status| Self::is_final_phase(&status.phase))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in expired {
+            created.remove(&id);
+            operations.remove(&id);
+            previews.remove(&id);
+            self.cancelled_operations.lock().remove(&id);
+            self.operation_handles.lock().remove(&id);
+        }
+        if operations.len() > MAX_TERMINAL {
+            let mut terminal: Vec<(String, Instant)> = created
+                .iter()
+                .filter(|(id, _)| {
+                    operations
+                        .get(*id)
+                        .is_some_and(|status| Self::is_final_phase(&status.phase))
+                })
+                .map(|(id, at)| (id.clone(), *at))
+                .collect();
+            terminal.sort_by_key(|(_, at)| *at);
+            for (id, _) in terminal.into_iter().take(operations.len() - MAX_TERMINAL) {
+                created.remove(&id);
+                operations.remove(&id);
+                previews.remove(&id);
+                self.cancelled_operations.lock().remove(&id);
+            }
+        }
+    }
+
+    fn set_operation_phase(&self, job_id: &str, phase: &str, error_code: Option<String>) {
+        if let Some(status) = self.operations.lock().get_mut(job_id) {
+            if Self::is_final_phase(&status.phase) && status.phase != phase {
+                return;
+            }
+            status.phase = phase.to_string();
+            status.error_code = error_code;
+            status.progress = Some(crate::skills::api_types::SkillsOperationProgress {
+                job_id: job_id.to_string(),
+                phase: phase.to_string(),
+                completed_units: None,
+                total_units: None,
+                bytes_received: None,
+                bytes_total: None,
+                stable_code: status.error_code.clone(),
+                message: None,
+            });
+        }
+    }
+
+    fn insert_operation(&self, status: SkillsOperationStatus) {
+        self.prune_operations();
+        let job_id = status.job_id.clone();
+        self.operations.lock().insert(job_id.clone(), status);
+        self.operation_created_at
+            .lock()
+            .insert(job_id, Instant::now());
+    }
+
+    fn cancelled(&self, job_id: &str) -> bool {
+        self.cancelled_operations.lock().contains(job_id)
+    }
+
+    pub fn start_preview_job(
+        self: &Arc<Self>,
+        request: SkillsPreviewRequest,
+    ) -> Result<crate::skills::api_types::SkillsOperationStart, SkillsError> {
+        let job_id = uuid::Uuid::new_v4().to_string();
+        self.insert_operation(SkillsOperationStatus {
+            job_id: job_id.clone(),
+            phase: "queued".to_string(),
+            progress: None,
+            result: None,
+            error_code: None,
+        });
+        let service = Arc::clone(self);
+        let operation_id = job_id.clone();
+        let handle = tokio::spawn(async move {
+            service.set_operation_phase(&operation_id, "resolving", None);
+            match service.preview_source_for_job(request, &operation_id).await {
+                Ok(plan) => {
+                    if let Some(status) = service.operations.lock().get_mut(&operation_id) {
+                        if !Self::is_final_phase(&status.phase) {
+                            status.phase = "preview_ready".to_string();
+                            status.result = serde_json::to_value(&plan).ok();
+                            status.progress =
+                                Some(crate::skills::api_types::SkillsOperationProgress {
+                                    job_id: operation_id.clone(),
+                                    phase: "preview_ready".to_string(),
+                                    completed_units: Some(1),
+                                    total_units: Some(1),
+                                    bytes_received: None,
+                                    bytes_total: None,
+                                    stable_code: None,
+                                    message: None,
+                                });
+                        }
+                    }
+                }
+                Err(error) => {
+                    service.set_operation_phase(&operation_id, "failed", Some(error.code))
+                }
+            }
+            service.operation_handles.lock().remove(&operation_id);
+        });
+        self.operation_handles
+            .lock()
+            .insert(job_id.clone(), handle.abort_handle());
+        Ok(crate::skills::api_types::SkillsOperationStart { job_id })
+    }
+
+    pub fn start_install_job(
+        self: &Arc<Self>,
+        request: SkillsInstallCommit,
+    ) -> Result<crate::skills::api_types::SkillsOperationStart, SkillsError> {
+        if !self
+            .remote_previews
+            .lock()
+            .contains_key(&request.preview_id)
+        {
+            return Err(SkillsError::coded(
+                crate::skills::api_types::ERR_SKILL_OPERATION_NOT_FOUND,
+            ));
+        }
+        let job_id = request.preview_id.clone();
+        {
+            let mut operations = self.operations.lock();
+            let Some(status) = operations.get_mut(&job_id) else {
+                return Err(SkillsError::coded(
+                    crate::skills::api_types::ERR_SKILL_OPERATION_NOT_FOUND,
+                ));
+            };
+            if status.phase != "preview_ready" {
+                return Err(SkillsError::coded(ERR_SKILL_OPERATION_BUSY));
+            }
+            status.phase = "queued".to_string();
+        }
+        let service = Arc::clone(self);
+        let worker = Arc::clone(self);
+        let operation_id = job_id.clone();
+        let handle = tokio::spawn(async move {
+            service.set_operation_phase(&operation_id, "installing", None);
+            let result = tokio::task::spawn_blocking(move || worker.install_preview(request)).await;
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    if error.code != ERR_SKILL_OPERATION_CANCELLED {
+                        service.set_operation_phase(&operation_id, "failed", Some(error.code));
+                    }
+                }
+                Err(join_error) => {
+                    log::error!(target: "se_manager::skills", "operation=skills_install_job_failed job_id={} error={}", operation_id, join_error);
+                    service.set_operation_phase(
+                        &operation_id,
+                        "failed",
+                        Some(ERR_SKILL_OPERATION_JOIN_FAILED.to_string()),
+                    );
+                }
+            }
+            service.operation_handles.lock().remove(&operation_id);
+        });
+        self.operation_handles
+            .lock()
+            .insert(job_id.clone(), handle.abort_handle());
+        Ok(crate::skills::api_types::SkillsOperationStart { job_id })
+    }
+
+    pub async fn preview_source(
+        &self,
+        request: SkillsPreviewRequest,
+    ) -> Result<SkillsInstallPlan, SkillsError> {
+        let preview_id = uuid::Uuid::new_v4().to_string();
+        self.preview_source_for_job(request, &preview_id).await
+    }
+
+    async fn preview_source_for_job(
+        &self,
+        request: SkillsPreviewRequest,
+        preview_id: &str,
+    ) -> Result<SkillsInstallPlan, SkillsError> {
+        if let SkillScope::Project { ref project_id } = request.scope {
+            self.resolve_request(&SkillsCatalogRequest {
+                project_id: Some(project_id.clone()),
+                project_root: None,
+            })?;
+        }
+        if request.mode == SkillInstallMode::ProjectionOnly {
+            return Err(SkillsError::coded(ERR_REMOTE_MODE_UNSUPPORTED));
+        }
+        if let crate::skills::api_types::SkillSource::Local { source_path } = &request.source {
+            if self.registry.is_some() {
+                let canonical = Path::new(source_path)
+                    .canonicalize()
+                    .map_err(|_| SkillsError::coded(ERR_PROJECT_OUTSIDE_BOUNDARY))?;
+                let allowed = scanner::path_is_within(self.root.path(), &canonical)
+                    || self
+                        .registered_projects()
+                        .iter()
+                        .any(|project| scanner::path_is_within(&project.root, &canonical));
+                if !allowed {
+                    return Err(SkillsError::coded(ERR_PROJECT_OUTSIDE_BOUNDARY));
+                }
+            }
+        }
+        let staged = source::stage_source(&request.source).await?;
+        let expected_sha256 = match &request.source {
+            crate::skills::api_types::SkillSource::Url {
+                expected_sha256, ..
+            } => expected_sha256.clone(),
+            _ => None,
+        };
+        let plan = SkillsInstallPlan {
+            source: request.source,
+            scope: request.scope,
+            mode: request.mode,
+            provider_ids: request.provider_ids,
+            preview_id: preview_id.to_string(),
+            name: staged.name.clone(),
+            actual_sha256: staged.metadata.actual_sha256.clone(),
+            requires_digest_confirmation: expected_sha256.is_none()
+                && !matches!(staged.metadata.source_type.as_deref(), Some("local")),
+            expected_sha256,
+            collision_confirm_token: None,
+        };
+        self.remote_previews.lock().insert(
+            preview_id.to_string(),
+            RemotePreview {
+                plan: plan.clone(),
+                staged,
+            },
+        );
+        Ok(plan)
+    }
+
+    pub fn operation_status(&self, job_id: &str) -> Result<SkillsOperationStatus, SkillsError> {
+        self.operations.lock().get(job_id).cloned().ok_or_else(|| {
+            SkillsError::coded(crate::skills::api_types::ERR_SKILL_OPERATION_NOT_FOUND)
+        })
+    }
+
+    pub fn cancel_operation(&self, job_id: &str) -> Result<(), SkillsError> {
+        let phase = self
+            .operations
+            .lock()
+            .get(job_id)
+            .map(|status| status.phase.clone())
+            .ok_or_else(|| {
+                SkillsError::coded(crate::skills::api_types::ERR_SKILL_OPERATION_NOT_FOUND)
+            })?;
+        if Self::is_final_phase(&phase) {
+            return Ok(());
+        }
+        self.cancelled_operations.lock().insert(job_id.to_string());
+        if phase != "installing" {
+            if let Some(handle) = self.operation_handles.lock().remove(job_id) {
+                handle.abort();
+            }
+        }
+        self.remote_previews.lock().remove(job_id);
+        self.set_operation_phase(
+            job_id,
+            "cancelled",
+            Some(crate::skills::api_types::ERR_SKILL_OPERATION_CANCELLED.to_string()),
+        );
+        Ok(())
+    }
+
+    pub fn install_preview(
+        &self,
+        request: SkillsInstallCommit,
+    ) -> Result<SkillManifest, SkillsError> {
+        if self.cancelled(&request.preview_id) {
+            self.remote_previews.lock().remove(&request.preview_id);
+            return Err(SkillsError::coded(ERR_SKILL_OPERATION_CANCELLED));
+        }
+        let plan = self
+            .remote_previews
+            .lock()
+            .get(&request.preview_id)
+            .map(|preview| preview.plan.clone())
+            .ok_or_else(|| {
+                SkillsError::coded(crate::skills::api_types::ERR_SKILL_OPERATION_NOT_FOUND)
+            })?;
+        if plan.requires_digest_confirmation && !request.confirm_digest {
+            return Err(SkillsError::coded(ERR_REMOTE_CONFIRMATION_REQUIRED));
+        }
+        if plan.mode == SkillInstallMode::ProjectionOnly {
+            return Err(SkillsError::coded(ERR_REMOTE_MODE_UNSUPPORTED));
+        }
+        if let SkillScope::Project { ref project_id } = plan.scope {
+            self.resolve_request(&SkillsCatalogRequest {
+                project_id: Some(project_id.clone()),
+                project_root: None,
+            })?;
+        }
+        let preview = self
+            .remote_previews
+            .lock()
+            .remove(&request.preview_id)
+            .ok_or_else(|| {
+                SkillsError::coded(crate::skills::api_types::ERR_SKILL_OPERATION_NOT_FOUND)
+            })?;
+        if self.cancelled(&request.preview_id) {
+            return Err(SkillsError::coded(ERR_SKILL_OPERATION_CANCELLED));
+        }
+        let actual = crate::skills::digest::sha256_hex(&preview.staged.content);
+        if actual != plan.actual_sha256 {
+            return Err(SkillsError::coded(ERR_REMOTE_INTEGRITY_MISMATCH));
+        }
+        if self.cancelled(&request.preview_id) {
+            return Err(SkillsError::coded(ERR_SKILL_OPERATION_CANCELLED));
+        }
+        let mut manifest = installer::install_file(
+            &self.root,
+            &plan.name,
+            &preview.staged.skill_md,
+            request.confirm_token.as_deref(),
+        )
+        .map_err(map_install_error)?;
+        manifest.source = Some(preview.staged.metadata.clone());
+        if plan.mode == SkillInstallMode::InstallAndProject {
+            let (scope, project) = match &plan.scope {
+                SkillScope::Global => ("global", None),
+                SkillScope::Project { project_id } => {
+                    let projects = self.resolve_request(&SkillsCatalogRequest {
+                        project_id: Some(project_id.clone()),
+                        project_root: None,
+                    })?;
+                    ("project", projects.first().cloned())
+                }
+            };
+            let fallback = self.load_config().0.fallback_policy;
+            let targets = self.project_targets_filtered(
+                &plan.name,
+                scope,
+                project.as_ref(),
+                &plan.provider_ids,
+            )?;
+            for (provider, target) in targets {
+                if self.cancelled(&request.preview_id) {
+                    return Err(SkillsError::coded(ERR_SKILL_OPERATION_CANCELLED));
+                }
+                let projection =
+                    self.project_one(&manifest, &provider, &target, fallback, false)?;
+                manifest.projections.push(projection);
+            }
+        }
+        if self.cancelled(&request.preview_id) {
+            return Err(SkillsError::coded(ERR_SKILL_OPERATION_CANCELLED));
+        }
+        self.save_manifest(&manifest)?;
+        let _ = self.refresh();
+        if let Some(status) = self.operations.lock().get_mut(&request.preview_id) {
+            if status.phase == "cancelled" {
+                return Err(SkillsError::coded(ERR_SKILL_OPERATION_CANCELLED));
+            }
+            if status.phase == "completed" {
+                return Ok(manifest);
+            }
+            status.phase = "completed".to_string();
+            status.result = serde_json::to_value(&manifest).ok();
+            status.progress = Some(crate::skills::api_types::SkillsOperationProgress {
+                job_id: request.preview_id.clone(),
+                phase: "completed".to_string(),
+                completed_units: Some(1),
+                total_units: Some(1),
+                bytes_received: None,
+                bytes_total: None,
+                stable_code: None,
+                message: None,
+            });
+        }
+        log::info!(
+            target: "se_manager::skills",
+            "operation=skills_remote_install_completed name={} scope={}",
+            plan.name,
+            match plan.scope {
+                SkillScope::Global => "global",
+                SkillScope::Project { .. } => "project",
+            }
+        );
+        Ok(manifest)
     }
 
     pub fn install(&self, request: SkillsInstallRequest) -> Result<SkillManifest, SkillsError> {
@@ -478,9 +906,22 @@ impl SkillsHubService {
         scope: &str,
         project: Option<&RegisteredProject>,
     ) -> Result<Vec<(String, PathBuf)>, SkillsError> {
+        self.project_targets_filtered(name, scope, project, &[])
+    }
+
+    fn project_targets_filtered(
+        &self,
+        name: &str,
+        scope: &str,
+        project: Option<&RegisteredProject>,
+        provider_ids: &[String],
+    ) -> Result<Vec<(String, PathBuf)>, SkillsError> {
         let (config, _) = self.load_config();
         let mut targets = Vec::new();
-        for provider in config.providers.iter().filter(|provider| provider.enabled) {
+        for provider in config.providers.iter().filter(|provider| {
+            provider.enabled
+                && (provider_ids.is_empty() || provider_ids.iter().any(|id| id == &provider.id))
+        }) {
             let templates = if scope == "project" {
                 &provider.project_roots
             } else {
@@ -862,6 +1303,136 @@ mod tests {
             format!("---\nname: {name}\ndescription: {name}\n---\n{body}\n"),
         )
         .unwrap();
+    }
+
+    async fn wait_for_operation_phase(service: &SkillsHubService, job_id: &str, phase: &str) {
+        for _ in 0..50 {
+            if service.operation_status(job_id).unwrap().phase == phase {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("job {job_id} did not reach {phase}");
+    }
+
+    #[tokio::test]
+    async fn remote_preview_job_returns_before_terminal_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source/SKILL.md");
+        write_skill(&source.parent().unwrap().to_path_buf(), "job-demo", "body");
+        let service = Arc::new(
+            SkillsHubService::new(SkillsHubContext {
+                state_root: temp.path().join("state"),
+                home: temp.path().join("home"),
+                config_root: temp.path().join("config"),
+                projects: Vec::new(),
+                user_config: None,
+                project_configs: Vec::new(),
+            })
+            .unwrap(),
+        );
+        let start = service
+            .start_preview_job(crate::skills::api_types::SkillsPreviewRequest {
+                source: crate::skills::api_types::SkillSource::Local {
+                    source_path: source.to_string_lossy().into_owned(),
+                },
+                scope: SkillScope::Global,
+                mode: SkillInstallMode::InstallOnly,
+                provider_ids: Vec::new(),
+            })
+            .unwrap();
+        assert!(!start.job_id.is_empty());
+        wait_for_operation_phase(&service, &start.job_id, "preview_ready").await;
+    }
+
+    #[tokio::test]
+    async fn cancelling_ready_preview_removes_installable_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source/SKILL.md");
+        write_skill(
+            &source.parent().unwrap().to_path_buf(),
+            "cancel-demo",
+            "body",
+        );
+        let service = Arc::new(
+            SkillsHubService::new(SkillsHubContext {
+                state_root: temp.path().join("state"),
+                home: temp.path().join("home"),
+                config_root: temp.path().join("config"),
+                projects: Vec::new(),
+                user_config: None,
+                project_configs: Vec::new(),
+            })
+            .unwrap(),
+        );
+        let start = service
+            .start_preview_job(crate::skills::api_types::SkillsPreviewRequest {
+                source: crate::skills::api_types::SkillSource::Local {
+                    source_path: source.to_string_lossy().into_owned(),
+                },
+                scope: SkillScope::Global,
+                mode: SkillInstallMode::InstallOnly,
+                provider_ids: Vec::new(),
+            })
+            .unwrap();
+        wait_for_operation_phase(&service, &start.job_id, "preview_ready").await;
+        service.cancel_operation(&start.job_id).unwrap();
+        assert_eq!(
+            service.operation_status(&start.job_id).unwrap().phase,
+            "cancelled"
+        );
+        assert!(service
+            .start_install_job(crate::skills::api_types::SkillsInstallCommit {
+                preview_id: start.job_id,
+                confirm_digest: false,
+                confirm_token: None,
+            })
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn remote_preview_is_no_write_until_commit() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source/SKILL.md");
+        write_skill(
+            &source.parent().unwrap().to_path_buf(),
+            "preview-demo",
+            "body",
+        );
+        let service = SkillsHubService::new(SkillsHubContext {
+            state_root: temp.path().join("state"),
+            home: temp.path().join("home"),
+            config_root: temp.path().join("config"),
+            projects: Vec::new(),
+            user_config: None,
+            project_configs: Vec::new(),
+        })
+        .unwrap();
+        let plan = service
+            .preview_source(crate::skills::api_types::SkillsPreviewRequest {
+                source: crate::skills::api_types::SkillSource::Local {
+                    source_path: source.to_string_lossy().into_owned(),
+                },
+                scope: SkillScope::Global,
+                mode: SkillInstallMode::InstallOnly,
+                provider_ids: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert!(!service.root().canonical_dir().exists());
+        let manifest = service
+            .install_preview(crate::skills::api_types::SkillsInstallCommit {
+                preview_id: plan.preview_id,
+                confirm_digest: false,
+                confirm_token: None,
+            })
+            .unwrap();
+        assert_eq!(manifest.name, "preview-demo");
+        assert!(service
+            .root()
+            .canonical_dir()
+            .join("preview-demo/SKILL.md")
+            .is_file());
     }
 
     #[test]

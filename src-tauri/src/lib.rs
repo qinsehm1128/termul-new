@@ -2297,6 +2297,10 @@ pub fn run() {
             skills::commands::skills_refresh_cmd,
             skills::commands::skills_sync_cmd,
             skills::commands::skills_install_cmd,
+            skills::commands::skills_preview_cmd,
+            skills::commands::skills_operation_status_cmd,
+            skills::commands::skills_cancel_operation_cmd,
+            skills::commands::skills_install_preview_cmd,
             skills::commands::skills_project_cmd,
             skills::commands::skills_repair_cmd,
             // Host-level AI scheduled tasks
@@ -2331,6 +2335,7 @@ pub fn run() {
             commands::remote_server_rotate_credential,
             remote::tunnel::commands::tunnel_config_get,
             remote::tunnel::commands::tunnel_config_set,
+            remote::tunnel::commands::tunnel_ssh_config_hosts,
             commands::remote_sync_projects,
             commands::list_editor_workspaces,
             commands::parse_code_workspace_file,

@@ -441,6 +441,7 @@ function summaryToProject(summary: ProjectSummary): Project {
     path: summary.path ?? undefined,
     isArchived: summary.isArchived,
     isDefault: summary.isDefault,
+    liveTerminalCount: summary.liveTerminalCount ?? 0,
     envVars: [],
     worktrees: [],
     activeWorktreeId: null

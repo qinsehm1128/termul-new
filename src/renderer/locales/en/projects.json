@@ -1,6 +1,7 @@
 {
   "title": "Projects",
   "groups": "Workspaces",
+  "liveTerminals": "{{count}} live",
   "dragToResize": "Drag to resize",
   "newGroupFolder": "New Group Folder",
   "newProject": "New Project",

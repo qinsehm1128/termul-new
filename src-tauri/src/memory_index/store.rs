@@ -200,8 +200,7 @@ impl MemoryStore {
     /// `None` means there is no readable version marker: a missing file, an
     /// unreadable one, or a version-1 index, which never wrote the key.
     pub fn stored_version(database_path: &Path) -> Option<u32> {
-        Self::read_meta(database_path, META_STORE_VERSION)
-            .and_then(|value| value.parse().ok())
+        Self::read_meta(database_path, META_STORE_VERSION).and_then(|value| value.parse().ok())
     }
 
     /// Read one meta row read-only. `None` on any failure (missing file,
@@ -688,7 +687,10 @@ impl MemoryStore {
                 .prepare(&sql)
                 .map_err(store_error("prepare session window"))?;
             let rows = statement
-                .query_map(params![session_key, cursor_value, limit as i64], read_hit_row)
+                .query_map(
+                    params![session_key, cursor_value, limit as i64],
+                    read_hit_row,
+                )
                 .map_err(store_error("read session window"))?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(store_error("read session window"))
@@ -1053,8 +1055,9 @@ pub fn to_fts_match(query: &str) -> Option<String> {
                 // A run of pure punctuation carries no token, and an FTS5 phrase
                 // with no tokens matches nothing useful — dropping it keeps a
                 // query like `foo :: bar` meaning `foo AND bar`.
-                QueryRun::Other(text) if text.chars().any(char::is_alphanumeric) => terms
-                    .push(format!("{{text}}: \"{}\"", text.replace('"', "\"\""))),
+                QueryRun::Other(text) if text.chars().any(char::is_alphanumeric) => {
+                    terms.push(format!("{{text}}: \"{}\"", text.replace('"', "\"\"")))
+                }
                 QueryRun::Other(_) => {}
             }
         }
@@ -1583,7 +1586,9 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
 
         for (query, expected) in [
@@ -1600,7 +1605,10 @@ mod tests {
                 "query {query:?} returned {} hits, expected exactly one",
                 hits.len()
             );
-            assert_eq!(hits[0].text, expected, "query {query:?} matched the wrong row");
+            assert_eq!(
+                hits[0].text, expected,
+                "query {query:?} matched the wrong row"
+            );
         }
     }
 
@@ -1617,7 +1625,9 @@ mod tests {
                     "内存索引",
                     LineageDepth::ROOT,
                 )],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         // `内` starts the bigram `内存`, so a prefix term reaches it.
         assert_eq!(store.search("内", false, &[], 10).unwrap().len(), 1);
@@ -1649,14 +1659,19 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         // Implicit AND across the two columns: only the first row has both.
         let hits = store.search("ENOENT 文件", false, &[], 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "error ENOENT 找不到文件");
         // And a term glued across the boundary splits into one term per column.
-        assert_eq!(store.search("ENOENT找不到", false, &[], 10).unwrap().len(), 1);
+        assert_eq!(
+            store.search("ENOENT找不到", false, &[], 10).unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -1672,7 +1687,9 @@ mod tests {
                     "git commit --no-verify",
                     LineageDepth::ROOT,
                 )],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         for query in ["no-verify", "--no-verify", "commit", "git commit"] {
             assert_eq!(
@@ -1695,11 +1712,31 @@ mod tests {
             .replace_session(
                 &session("s1", Some(100), SessionScope::Scoped),
                 &[
-                    message("s1", 0, NormalizedRole::ToolResult, "cat .env failed", LineageDepth::ROOT),
-                    message("s1", 1, NormalizedRole::User, "the C++ build breaks", LineageDepth::ROOT),
-                    message("s1", 2, NormalizedRole::ToolCall, "grep -rn \"foo\" src/", LineageDepth::ROOT),
+                    message(
+                        "s1",
+                        0,
+                        NormalizedRole::ToolResult,
+                        "cat .env failed",
+                        LineageDepth::ROOT,
+                    ),
+                    message(
+                        "s1",
+                        1,
+                        NormalizedRole::User,
+                        "the C++ build breaks",
+                        LineageDepth::ROOT,
+                    ),
+                    message(
+                        "s1",
+                        2,
+                        NormalizedRole::ToolCall,
+                        "grep -rn \"foo\" src/",
+                        LineageDepth::ROOT,
+                    ),
                 ],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         for query in [".env", "C++", "-rn", "\"foo\""] {
             assert!(
@@ -1759,7 +1796,9 @@ mod tests {
                         "内存索引",
                         LineageDepth::ROOT,
                     )],
-                    &[], 0,)
+                    &[],
+                    0,
+                )
                 .unwrap();
             assert_eq!(
                 store.search("内存", false, &[], 10).unwrap().len(),
@@ -1812,7 +1851,9 @@ mod tests {
                     "内存索引",
                     LineageDepth::ROOT,
                 )],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         assert_eq!(store.search("内存", false, &[], 10).unwrap().len(), 1);
         assert_eq!(
@@ -1846,7 +1887,9 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         let hits = store.search("redirect", false, &[], 10).unwrap();
         assert_eq!(hits.len(), 2);
@@ -1870,7 +1913,9 @@ mod tests {
                         "persisted text",
                         LineageDepth::ROOT,
                     )],
-                    &[], 0,)
+                    &[],
+                    0,
+                )
                 .unwrap();
         }
         let reopened = MemoryStore::open(&path, PROJECT).unwrap();
@@ -1916,10 +1961,20 @@ mod tests {
             LineageDepth::ROOT,
         )];
         store
-            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &first, &[], 0)
+            .replace_session(
+                &session("s1", Some(1), SessionScope::Scoped),
+                &first,
+                &[],
+                0,
+            )
             .unwrap();
         store
-            .replace_session(&session("s1", Some(1), SessionScope::Scoped), &second, &[], 0)
+            .replace_session(
+                &session("s1", Some(1), SessionScope::Scoped),
+                &second,
+                &[],
+                0,
+            )
             .unwrap();
 
         assert_eq!(store.counts().unwrap(), (1, 1, 0));
@@ -1959,10 +2014,20 @@ mod tests {
     fn sessions_with_no_known_first_message_time_sort_last() {
         let mut store = store();
         store
-            .replace_session(&session("s_unknown", None, SessionScope::Scoped), &[], &[], 0)
+            .replace_session(
+                &session("s_unknown", None, SessionScope::Scoped),
+                &[],
+                &[],
+                0,
+            )
             .unwrap();
         store
-            .replace_session(&session("s_known", Some(1), SessionScope::Scoped), &[], &[], 0)
+            .replace_session(
+                &session("s_known", Some(1), SessionScope::Scoped),
+                &[],
+                &[],
+                0,
+            )
             .unwrap();
         let keys: Vec<String> = store
             .list_sessions(false, &[], 10)
@@ -1988,7 +2053,9 @@ mod tests {
                     "borrowed context",
                     LineageDepth::ROOT,
                 )],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
 
         assert!(store.list_sessions(false, &[], 10).unwrap().is_empty());
@@ -2041,7 +2108,9 @@ mod tests {
                     "ran git commit --no-verify and it failed with ENOENT",
                     LineageDepth::ROOT,
                 )],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
 
         for hostile in [
@@ -2076,7 +2145,9 @@ mod tests {
                     "anything",
                     LineageDepth::ROOT,
                 )],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         for empty in ["", "   ", "-", "***"] {
             assert!(
@@ -2132,7 +2203,13 @@ mod tests {
         store
             .replace_session(
                 &session("s1", Some(1), SessionScope::Scoped),
-                &[message("s1", 0, NormalizedRole::User, &huge, LineageDepth::ROOT)],
+                &[message(
+                    "s1",
+                    0,
+                    NormalizedRole::User,
+                    &huge,
+                    LineageDepth::ROOT,
+                )],
                 &[],
                 0,
             )
@@ -2161,7 +2238,9 @@ mod tests {
             .replace_session(
                 &session("s1", Some(1), SessionScope::Scoped),
                 &[],
-                std::slice::from_ref(&record), 0,)
+                std::slice::from_ref(&record),
+                0,
+            )
             .unwrap();
 
         let found = store.search_compactions("migration", false, 10).unwrap();
@@ -2194,7 +2273,9 @@ mod tests {
                     timestamp_utc: None,
                     timestamp_ms: None,
                     source: pointer("/repo/s1.jsonl", 0, b"{}"),
-                }], 0,)
+                }],
+                0,
+            )
             .unwrap();
         assert!(
             store.search_compactions("%", false, 10).unwrap().is_empty(),
@@ -2215,7 +2296,9 @@ mod tests {
                     "ephemeral",
                     LineageDepth::ROOT,
                 )],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         assert_eq!(store.forget_sessions(&["s1".to_string()]).unwrap(), 1);
         assert_eq!(store.counts().unwrap(), (0, 0, 0));
@@ -2258,7 +2341,9 @@ mod tests {
                         LineageDepth::ROOT,
                     ),
                 ],
-                &[], 0,)
+                &[],
+                0,
+            )
             .unwrap();
         let ordinals: Vec<u32> = store
             .session_messages("s1", 10)

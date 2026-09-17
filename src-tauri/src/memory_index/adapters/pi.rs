@@ -41,8 +41,8 @@ use super::super::types::{
 };
 use super::{
     flatten_text, for_each_record, parse_timestamp, prepare_indexed_text, session_key,
-    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ResumeFrom,
-    ISSUE_LINEAGE_FORK, ISSUE_NO_SESSION_HEADER,
+    string_field, title_candidate, AdaptedTranscript, AdapterIssue, ResumeFrom, ISSUE_LINEAGE_FORK,
+    ISSUE_NO_SESSION_HEADER,
 };
 
 /// Is this filename a pi transcript?
@@ -728,7 +728,9 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             LineageDepth::nested(2),
-            Some("pi:/pi/proj/root.jsonl".to_string()), None,);
+            Some("pi:/pi/proj/root.jsonl".to_string()),
+            None,
+        );
         let session = adapted.session.unwrap();
         assert_eq!(session.lineage_depth, LineageDepth::nested(2));
         assert_eq!(session.root_session_key, "pi:/pi/proj/root.jsonl");

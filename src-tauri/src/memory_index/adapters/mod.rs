@@ -151,8 +151,7 @@ where
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(error) => {
-            scan
-                .issues
+            scan.issues
                 .push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
             return scan;
         }
@@ -160,8 +159,7 @@ where
     if start_offset > 0 {
         use std::io::{Seek, SeekFrom};
         if let Err(error) = file.seek(SeekFrom::Start(start_offset)) {
-            scan
-                .issues
+            scan.issues
                 .push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
             return scan;
         }
@@ -185,8 +183,7 @@ where
                 Ok(buffer) => buffer,
                 Err(ref error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) => {
-                    scan
-                        .issues
+                    scan.issues
                         .push(AdapterIssue::new(ISSUE_UNREADABLE, path, error.to_string()));
                     return scan;
                 }
@@ -560,10 +557,16 @@ mod flattening_invariants {
             );
             // And the pointer's file identity is the session's, which is why
             // `messages` no longer stores a path at all.
-            assert_eq!(message.source.file_path, session.source.file_path, "{label}");
+            assert_eq!(
+                message.source.file_path, session.source.file_path,
+                "{label}"
+            );
             assert_eq!(message.source.device, session.source.device, "{label}");
             assert_eq!(message.source.inode, session.source.inode, "{label}");
-            assert_eq!(message.source.size_bytes, session.source.size_bytes, "{label}");
+            assert_eq!(
+                message.source.size_bytes, session.source.size_bytes,
+                "{label}"
+            );
             assert_eq!(
                 message.source.modified_unix_ms, session.source.modified_unix_ms,
                 "{label}"
@@ -591,7 +594,14 @@ mod flattening_invariants {
         );
         let identity = FileIdentity::read(&claude).unwrap();
         assert_uniform(
-            &super::claude::adapt(&claude, &identity, "p", SessionScope::Scoped, &|_| None, None),
+            &super::claude::adapt(
+                &claude,
+                &identity,
+                "p",
+                SessionScope::Scoped,
+                &|_| None,
+                None,
+            ),
             "claude",
         );
 

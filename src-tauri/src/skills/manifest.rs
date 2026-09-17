@@ -1,3 +1,4 @@
+use crate::skills::api_types::SkillSourceMetadata;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -7,6 +8,8 @@ pub struct SkillManifest {
     pub name: String,
     pub digest: String,
     pub canonical_path: PathBuf,
+    #[serde(default)]
+    pub source: Option<SkillSourceMetadata>,
     #[serde(default)]
     pub projections: Vec<ProjectionManifest>,
 }

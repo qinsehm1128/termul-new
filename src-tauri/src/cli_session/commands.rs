@@ -16,8 +16,8 @@ pub async fn list_cli_sessions_cmd(
         args.scope_paths.as_ref().map(Vec::len).unwrap_or(0)
     );
     tokio::task::spawn_blocking(move || list_cli_sessions(args, None))
-            .await
-            .map_err(|err| format!("cli session scan join failed: {err}"))
+        .await
+        .map_err(|err| format!("cli session scan join failed: {err}"))
 }
 
 #[tauri::command]
@@ -30,6 +30,6 @@ pub async fn resolve_cli_sessions_cmd(
         args.files.len()
     );
     tokio::task::spawn_blocking(move || resolve_cli_sessions(args))
-            .await
-            .map_err(|err| format!("cli session resolve join failed: {err}"))
+        .await
+        .map_err(|err| format!("cli session resolve join failed: {err}"))
 }

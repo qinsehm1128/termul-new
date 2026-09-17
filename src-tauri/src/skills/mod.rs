@@ -20,6 +20,7 @@ pub mod provider_config;
 pub mod provisioner;
 pub mod scanner;
 pub mod service;
+pub mod source;
 pub mod watcher;
 
 pub use provisioner::ConversationSkillProvisioner;

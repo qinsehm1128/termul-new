@@ -13,6 +13,16 @@
     "%lld new" : {
 
     },
+    "%lld live terminals" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个终端在运行"
+          }
+        }
+      }
+    },
     "%lld percent" : {
 
     },
@@ -333,6 +343,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "空闲"
+          }
+        }
+      }
+    },
+    "Not started" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未启动"
+          }
+        }
+      }
+    },
+    "Other projects" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他项目"
           }
         }
       }
@@ -672,6 +702,7 @@
       }
     },
     "Projects already open on the computer" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -682,7 +713,17 @@
       }
     },
     "Public hosts need HTTPS. Private LAN ranges such as 192.168.x.x are allowed over HTTP." : {
-
+      "extractionState" : "stale"
+    },
+    "Running projects first, then desktop groups" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先显示正在运行的项目，再按电脑上的分组"
+          }
+        }
+      }
     },
     "Ready" : {
 
@@ -754,7 +795,14 @@
       }
     },
     "Running" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中"
+          }
+        }
+      }
     },
     "Save" : {
       "localizations" : {
@@ -1066,6 +1114,16 @@
     },
     "Unavailable" : {
 
+    },
+    "Use an http or https access link from the desktop QR." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请使用电脑二维码里的 http 或 https 访问链接。"
+          }
+        }
+      }
     },
     "Use a physical iPhone, or paste the link instead." : {
       "localizations" : {

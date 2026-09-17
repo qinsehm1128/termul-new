@@ -504,6 +504,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub: None,
             store: None,
         };
         (temp, state, revision, repository)

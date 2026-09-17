@@ -148,6 +148,16 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             .route("/skills", get(skills_api::list))
             .route("/skills/status", get(skills_api::status))
             .route("/skills/sync", post(skills_api::sync))
+            .route("/skills/preview", post(skills_api::preview))
+            .route("/skills/install-preview", post(skills_api::install_preview))
+            .route(
+                "/skills/operations/{job_id}",
+                get(skills_api::operation_status),
+            )
+            .route(
+                "/skills/operations/cancel",
+                post(skills_api::cancel_operation),
+            )
             .route("/skills/install", post(skills_api::install))
             .route("/skills/project", post(skills_api::project))
             .route("/skills/repair", post(skills_api::repair))

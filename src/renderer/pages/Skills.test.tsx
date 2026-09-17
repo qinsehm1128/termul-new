@@ -6,6 +6,8 @@ const loadStatus = vi.fn()
 const refreshStatus = vi.fn()
 const installSkill = vi.fn()
 const projectSkill = vi.fn()
+const previewSkill = vi.fn()
+const operationStatus = vi.fn()
 const onCatalogChanged = vi.fn(() => () => undefined)
 
 vi.mock('@/lib/skills-api', () => ({
@@ -14,6 +16,8 @@ vi.mock('@/lib/skills-api', () => ({
     refresh: (...args: unknown[]) => refreshStatus(...args),
     install: (...args: unknown[]) => installSkill(...args),
     project: (...args: unknown[]) => projectSkill(...args),
+    preview: (...args: unknown[]) => previewSkill(...args),
+    operationStatus: (...args: unknown[]) => operationStatus(...args),
     repair: vi.fn(),
     readSkill: vi.fn().mockResolvedValue({
       body: '# Hello',
@@ -29,13 +33,16 @@ vi.mock('@/lib/skills-api', () => ({
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: (
     selector: (state: {
-      projects: Array<{ id: string; name: string; path?: string }>
+      projects: Array<{ id: string; name: string; path?: string; isArchived?: boolean }>
       activeProjectId: string
     }) => unknown
   ) =>
     selector({
-      projects: [{ id: 'p1', name: 'Demo Project', path: '/tmp/project' }],
-      activeProjectId: ''
+      projects: [
+        { id: 'p1', name: 'Demo Project', path: '/tmp/project' },
+        { id: 'p2', name: 'Other Project', path: '/tmp/other' }
+      ],
+      activeProjectId: 'p1'
     })
 }))
 
@@ -76,6 +83,8 @@ describe('Skills page', () => {
     refreshStatus.mockReset()
     installSkill.mockReset()
     projectSkill.mockReset()
+    previewSkill.mockReset()
+    operationStatus.mockReset()
     refreshStatus.mockResolvedValue(catalog)
     loadStatus.mockResolvedValue(catalog)
     installSkill.mockResolvedValue({
@@ -120,6 +129,59 @@ describe('Skills page', () => {
     expect(await screen.findByText('Create provider projection?')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
     expect(await screen.findByText('Copy projection instead of symlink?')).toBeInTheDocument()
+  })
+
+  it('previews a remote skill into an explicit project instead of the active one', async () => {
+    previewSkill.mockResolvedValue({ jobId: 'job-preview' })
+    operationStatus.mockResolvedValue({
+      jobId: 'job-preview',
+      phase: 'preview_ready',
+      result: {
+        previewId: 'pv-1',
+        name: 'remote-demo',
+        actualSha256: 'aa',
+        mode: 'installAndProject',
+        providerIds: [],
+        source: { type: 'github', repositoryOrUrl: 'owner/repo' },
+        scope: { type: 'project', projectId: 'p2' }
+      }
+    })
+    render(<Skills />)
+    expect(await screen.findByText('demo')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Install to'), { target: { value: 'p2' } })
+    fireEvent.change(screen.getByPlaceholderText('owner/repository'), {
+      target: { value: 'owner/repo' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview source' }))
+    await waitFor(() =>
+      expect(previewSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: { type: 'project', projectId: 'p2' },
+          source: { type: 'github', repositoryOrUrl: 'owner/repo' }
+        })
+      )
+    )
+  })
+
+  it('installs a local path into the chosen project, not the selected skill scope', async () => {
+    render(<Skills />)
+    fireEvent.click(await screen.findByText('demo'))
+    fireEvent.change(screen.getByLabelText('Install this skill to'), { target: { value: 'p2' } })
+    fireEvent.change(screen.getByLabelText('Install source path'), {
+      target: { value: '/tmp/demo/SKILL.md' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
+    await waitFor(() =>
+      expect(installSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: 'project',
+          projectId: 'p2',
+          projectRoot: '/tmp/other',
+          sourcePath: '/tmp/demo/SKILL.md'
+        })
+      )
+    )
   })
 
   it('filters by scope from the tablist', async () => {

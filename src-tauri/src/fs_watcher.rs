@@ -192,7 +192,9 @@ pub fn dedupe_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
         }
         // `starts_with` is component-wise, so `/a/bc` is correctly NOT treated
         // as living under `/a/b`.
-        let covered = sorted.iter().any(|kept: &PathBuf| candidate.starts_with(kept));
+        let covered = sorted
+            .iter()
+            .any(|kept: &PathBuf| candidate.starts_with(kept));
         if !covered && !sorted.iter().any(|kept| kept == candidate) {
             sorted.push(candidate.clone());
         }
@@ -220,7 +222,12 @@ fn classify(kind: &EventKind) -> FileChangeKind {
 /// separately as `Any`, with nothing in the event to tell them apart — so ask
 /// the filesystem: the side that is gone is the one that went away. That stat
 /// only runs on rename events, which are rare next to writes.
-fn kind_for_path(event_kind: &EventKind, path: &Path, index: usize, total: usize) -> FileChangeKind {
+fn kind_for_path(
+    event_kind: &EventKind,
+    path: &Path,
+    index: usize,
+    total: usize,
+) -> FileChangeKind {
     use notify::event::{ModifyKind, RenameMode};
     let EventKind::Modify(ModifyKind::Name(mode)) = event_kind else {
         return classify(event_kind);
@@ -513,7 +520,10 @@ impl FsWatcherService {
         if watched.is_empty() {
             drop(inner);
             release_watcher(Some(watcher));
-            return Err(format!("failed to watch any root ({})", failures.join("; ")));
+            return Err(format!(
+                "failed to watch any root ({})",
+                failures.join("; ")
+            ));
         }
         if !failures.is_empty() {
             log::warn!(
@@ -620,11 +630,7 @@ mod tests {
 
     #[test]
     fn dedupe_drops_empty_roots_and_exact_duplicates() {
-        let roots = vec![
-            PathBuf::from(""),
-            PathBuf::from("/a"),
-            PathBuf::from("/a"),
-        ];
+        let roots = vec![PathBuf::from(""), PathBuf::from("/a"), PathBuf::from("/a")];
         assert_eq!(dedupe_roots(&roots), vec![PathBuf::from("/a")]);
     }
 
@@ -716,7 +722,10 @@ mod tests {
             kind: FileChangeKind::Unlink,
             path: "/p/0.ts".into(),
         });
-        assert_eq!(c.pending.get("/p/0.ts").map(|slot| slot.0), Some(FileChangeKind::Unlink));
+        assert_eq!(
+            c.pending.get("/p/0.ts").map(|slot| slot.0),
+            Some(FileChangeKind::Unlink)
+        );
     }
 
     fn event(kind: EventKind, paths: &[&str]) -> notify::Event {
@@ -853,7 +862,10 @@ mod tests {
         }
         let first = c.drain_batch();
         assert_eq!(first[0].path, "/p/0.ts");
-        assert_eq!(first[MAX_BATCH - 1].path, format!("/p/{}.ts", MAX_BATCH - 1));
+        assert_eq!(
+            first[MAX_BATCH - 1].path,
+            format!("/p/{}.ts", MAX_BATCH - 1)
+        );
         let second = c.drain_batch();
         let tail: Vec<String> = second.iter().map(|e| e.path.clone()).collect();
         assert_eq!(

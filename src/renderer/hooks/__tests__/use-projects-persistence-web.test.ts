@@ -33,7 +33,15 @@ vi.mock('@/lib/api', () => ({
 
 const payload: ProjectListPayload = {
   projects: [
-    { id: 'p1', name: 'Alpha', color: 'blue', path: '/a', isArchived: false, isDefault: true },
+    {
+      id: 'p1',
+      name: 'Alpha',
+      color: 'blue',
+      path: '/a',
+      isArchived: false,
+      isDefault: true,
+      liveTerminalCount: 3
+    },
     { id: 'p2', name: 'Beta', color: 'gray', path: null, isArchived: true, isDefault: false }
   ],
   groups: [],
@@ -68,6 +76,8 @@ describe('useProjectsLoader (web/remote mode)', () => {
     // Epic 7: the initial load seeds activeProjectId from the host default.
     expect(useProjectStore.getState().activeProjectId).toBe('p1')
     expect(useProjectStore.getState().projects[1].isArchived).toBe(true)
+    expect(useProjectStore.getState().projects[0].liveTerminalCount).toBe(3)
+    expect(useProjectStore.getState().projects[1].liveTerminalCount).toBe(0)
   })
 
   it('mirrors project groups while keeping group activation client-local', async () => {

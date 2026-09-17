@@ -26,7 +26,8 @@ use axum::{
 use serde::Deserialize;
 
 use crate::skills::api_types::{
-    SkillsCatalogRequest, SkillsError, SkillsInstallRequest, SkillsProjectionRequest,
+    SkillsCatalogRequest, SkillsError, SkillsInstallCommit, SkillsInstallRequest,
+    SkillsOperationStart, SkillsOperationStatus, SkillsPreviewRequest, SkillsProjectionRequest,
     SkillsRepairRequest, SkillsStatus, ERR_CANONICAL_ROOT_UNAVAILABLE,
 };
 use crate::skills::scanner;
@@ -137,6 +138,92 @@ pub async fn sync(
     with_service(state, move |service| service.sync(request)).await
 }
 
+/// `POST /skills/preview` — host-side source preview without canonical writes.
+pub async fn preview(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Json(request): Json<SkillsPreviewRequest>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<SkillsOperationStart>::err(
+                denial.message,
+                denial.code,
+            )),
+        );
+    }
+    with_service(state, move |service| service.start_preview_job(request)).await
+}
+
+/// `POST /skills/install-preview` — commit a validated host-side preview.
+pub async fn install_preview(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Json(request): Json<SkillsInstallCommit>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<SkillsOperationStart>::err(
+                denial.message,
+                denial.code,
+            )),
+        );
+    }
+    with_service(state, move |service| service.start_install_job(request)).await
+}
+
+/// `GET /skills/operations/:job_id` — operation status polling.
+pub async fn operation_status(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<SkillsOperationStatus>::err(
+                denial.message,
+                denial.code,
+            )),
+        );
+    }
+    with_service(state, move |service| service.operation_status(&job_id)).await
+}
+
+/// `POST /skills/operations/cancel` — cancel a pending operation.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelSkillOperationRequest {
+    pub job_id: String,
+}
+
+pub async fn cancel_operation(
+    State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
+    Json(request): Json<CancelSkillOperationRequest>,
+) -> impl IntoResponse {
+    if let Err(denial) =
+        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
+    {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<()>::err(denial.message, denial.code)),
+        );
+    }
+    with_service(state, move |service| {
+        service.cancel_operation(&request.job_id)
+    })
+    .await
+}
+
 /// `POST /skills/install` — canonical install plus optional projection.
 pub async fn install(
     State(state): State<AppState>,
@@ -227,6 +314,7 @@ pub async fn repair(
 /// usable on web).
 pub async fn list(
     State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
     Query(q): Query<SkillsQuery>,
 ) -> impl IntoResponse {
     // Enforce `project_root` containment (web-server security boundary): a web
@@ -273,7 +361,14 @@ pub async fn list(
     .map_err(|e| format!("skills list task failed: {e}"));
 
     let body = match result {
-        Ok(Ok(skills)) => IpcBody::ok(skills),
+        Ok(Ok(mut skills)) => {
+            if !provenance.allows_local_operator_mutation() {
+                for skill in &mut skills {
+                    skill.path.clear();
+                }
+            }
+            IpcBody::ok(skills)
+        }
         Ok(Err(_e)) => {
             log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
             // Degrade: return an empty list so the slash menu stays usable,
@@ -294,6 +389,7 @@ pub async fn list(
 /// `IpcBody::ok(AgentSkillContent)` or `IpcBody::err(msg, "SKILL_NOT_FOUND")`.
 pub async fn read(
     State(state): State<AppState>,
+    Extension(provenance): Extension<IngressProvenance>,
     axum::extract::Path(name): axum::extract::Path<String>,
     Query(q): Query<SkillsQuery>,
 ) -> impl IntoResponse {
@@ -336,7 +432,12 @@ pub async fn read(
     .map_err(|e| format!("skills read task failed: {e}"));
 
     let body = match result {
-        Ok(Ok(content)) => IpcBody::ok(content),
+        Ok(Ok(mut content)) => {
+            if !provenance.allows_local_operator_mutation() {
+                content.path.clear();
+            }
+            IpcBody::ok(content)
+        }
         Ok(Err(e)) => {
             log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
             IpcBody::<AgentSkillContent>::err(e, "SKILL_NOT_FOUND")
@@ -402,16 +503,24 @@ mod tests {
     }
 
     fn test_router(state: AppState) -> axum::Router {
+        test_router_with_provenance(state, IngressProvenance::LocalOperator)
+    }
+
+    fn test_router_with_provenance(state: AppState, provenance: IngressProvenance) -> axum::Router {
         axum::Router::new()
             .route("/skills", get(list))
             .route("/skills/status", get(status))
             .route("/skills/sync", post(sync))
+            .route("/skills/preview", post(preview))
+            .route("/skills/install-preview", post(install_preview))
+            .route("/skills/operations/{job_id}", get(operation_status))
+            .route("/skills/operations/cancel", post(cancel_operation))
             .route("/skills/install", post(install))
             .route("/skills/project", post(project))
             .route("/skills/repair", post(repair))
             .route("/skills/{name}", get(read))
             .with_state(state)
-            .layer(axum::Extension(IngressProvenance::LocalOperator))
+            .layer(axum::Extension(provenance))
     }
 
     async fn get_request(state: AppState, uri: &str) -> axum::http::Response<Body> {
@@ -427,11 +536,47 @@ mod tests {
             .expect("router response")
     }
 
+    async fn post_json_request(
+        state: AppState,
+        provenance: IngressProvenance,
+        uri: &str,
+        body: &str,
+    ) -> axum::http::Response<Body> {
+        test_router_with_provenance(state, provenance)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response")
+    }
+
     async fn body_as_json<T: serde::de::DeserializeOwned>(body: Body) -> T {
         let bytes = axum::body::to_bytes(body, usize::MAX)
             .await
             .expect("read body");
         serde_json::from_slice(&bytes).expect("deserialize IpcBody")
+    }
+
+    #[tokio::test]
+    async fn public_preview_is_rejected_before_job_creation() {
+        let resp = post_json_request(
+            test_state(),
+            IngressProvenance::PublicTunnel,
+            "/skills/preview",
+            r#"{"source":{"type":"url","url":"https://example.com/skill.md"},"scope":{"type":"global"},"mode":"installOnly","providerIds":[]}"#,
+        )
+        .await;
+        let body: IpcBody<SkillsOperationStart> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(
+            body.code.as_deref(),
+            Some(crate::web::operation_policy::FORBIDDEN)
+        );
     }
 
     #[tokio::test]

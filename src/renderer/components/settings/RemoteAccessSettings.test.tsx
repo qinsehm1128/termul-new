@@ -1,16 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { getMock, setMock, isTauriRef } = vi.hoisted(() => ({
+const { getMock, setMock, listHostsMock, isTauriRef } = vi.hoisted(() => ({
   getMock: vi.fn(),
   setMock: vi.fn(),
+  listHostsMock: vi.fn(),
   isTauriRef: { current: true }
 }))
 
 vi.mock('@/lib/api', () => ({
   tunnelConfigApi: {
     get: (...args: unknown[]) => getMock(...args),
-    set: (...args: unknown[]) => setMock(...args)
+    set: (...args: unknown[]) => setMock(...args),
+    listSshHosts: (...args: unknown[]) => listHostsMock(...args)
   }
 }))
 
@@ -37,23 +39,27 @@ const VIEW = {
   frpServerPort: null,
   frpCustomDomain: null,
   frpRemotePort: null,
-  frpPublicHttps: true,
+  frpPublicHttps: false,
   frpTokenSet: false,
   sshHost: null,
   sshPort: null,
   sshUser: null,
   sshRemotePort: null,
   sshPublicHostname: null,
-  sshPublicHttps: true,
-  sshPrivateKeySet: false
+  sshIdentityFile: null,
+  sshPublicHttps: false,
+  sshPrivateKeySet: false,
+  sshPasswordSet: false
 }
 
 describe('RemoteAccessSettings', () => {
   beforeEach(() => {
     getMock.mockReset()
     setMock.mockReset()
+    listHostsMock.mockReset()
     isTauriRef.current = true
     getMock.mockResolvedValue({ success: true, data: VIEW })
+    listHostsMock.mockResolvedValue({ success: true, data: [] })
     setMock.mockResolvedValue({
       success: true,
       data: { ...VIEW, provider: 'cloudflareNamed', cloudflareNamedHostname: 'se.example.com' }
@@ -74,5 +80,34 @@ describe('RemoteAccessSettings', () => {
     await waitFor(() => {
       expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ provider: 'cloudflareNamed' }))
     })
+  })
+
+  it('imports an OpenSSH config host into the reverse-tunnel form', async () => {
+    getMock.mockResolvedValue({
+      success: true,
+      data: { ...VIEW, provider: 'sshReverse' }
+    })
+    listHostsMock.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          name: 'vps',
+          host: '1.2.3.4',
+          port: 22,
+          username: 'ubuntu',
+          authMethod: 'key',
+          privateKeyPath: '/home/u/.ssh/id_ed25519'
+        }
+      ]
+    })
+    render(<RemoteAccessSettings />)
+    const picker = await screen.findByLabelText('remoteAccess.sshConfigHost')
+    fireEvent.change(picker, { target: { value: 'vps' } })
+    expect((screen.getByLabelText('remoteAccess.sshHost') as HTMLInputElement).value).toBe(
+      '1.2.3.4'
+    )
+    expect((screen.getByLabelText('remoteAccess.sshUser') as HTMLInputElement).value).toBe('ubuntu')
+    expect(screen.queryByText('remoteAccess.sshPublicHttps')).toBeNull()
+    expect(screen.getByLabelText('remoteAccess.sshPassword')).toBeDefined()
   })
 })

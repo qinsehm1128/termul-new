@@ -1008,6 +1008,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub: None,
             store: None,
         }
     }
@@ -2332,6 +2333,7 @@ mod tests {
                     path: Some(root.path().to_string_lossy().into_owned()),
                     is_archived: false,
                     is_default: true,
+                    live_terminal_count: 0,
                 },
                 ProjectSummary {
                     id: "registered".to_string(),
@@ -2340,6 +2342,7 @@ mod tests {
                     path: Some(registered.path().to_string_lossy().into_owned()),
                     is_archived: false,
                     is_default: false,
+                    live_terminal_count: 0,
                 },
             ],
             Some("default".to_string()),

@@ -711,6 +711,15 @@ export type TunnelProviderKind = 'cloudflareQuick' | 'cloudflareNamed' | 'frp' |
 
 export type RemotePublishMode = 'lan' | 'tunnel'
 
+export interface SshConfigHost {
+  name: string
+  host: string
+  port: number
+  username: string
+  authMethod: string
+  privateKeyPath: string | null
+}
+
 export interface TunnelConfigView {
   provider: TunnelProviderKind
   cloudflareNamedHostname: string | null
@@ -727,8 +736,10 @@ export interface TunnelConfigView {
   sshUser: string | null
   sshRemotePort: number | null
   sshPublicHostname: string | null
+  sshIdentityFile: string | null
   sshPublicHttps: boolean
   sshPrivateKeySet: boolean
+  sshPasswordSet: boolean
 }
 
 export interface TunnelConfigUpdate {
@@ -749,8 +760,10 @@ export interface TunnelConfigUpdate {
   sshUser?: string | null
   sshRemotePort?: number | null
   sshPublicHostname?: string | null
+  sshIdentityFile?: string | null
   sshPublicHttps?: boolean
   sshPrivateKey?: string | null
+  sshPassword?: string | null
 }
 
 export interface RemoteAccessIntent {
@@ -761,6 +774,7 @@ export interface RemoteAccessIntent {
 export interface TunnelConfigApi {
   get: () => Promise<IpcResult<TunnelConfigView>>
   set: (update: TunnelConfigUpdate) => Promise<IpcResult<TunnelConfigView>>
+  listSshHosts: () => Promise<IpcResult<SshConfigHost[]>>
 }
 
 // Remote terminal server status (mirrors Rust remote::RemoteStatus)

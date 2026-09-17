@@ -55,8 +55,9 @@ pub struct TunnelConfig {
     pub frp_custom_domain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frp_remote_port: Option<u16>,
-    /// When true the QR uses `https://`; FRP itself may still speak HTTP to origin.
-    #[serde(default = "default_true")]
+    /// When true the QR uses `https://`. Defaults to HTTP; a hostname that already
+    /// includes `https://` still wins in `normalize_public_http_origin`.
+    #[serde(default)]
     pub frp_public_https: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_host: Option<String>,
@@ -68,12 +69,11 @@ pub struct TunnelConfig {
     pub ssh_remote_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_public_hostname: Option<String>,
-    #[serde(default = "default_true")]
+    /// Optional OpenSSH identity file (typically from `~/.ssh/config`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_identity_file: Option<String>,
+    #[serde(default)]
     pub ssh_public_https: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for TunnelConfig {
@@ -86,13 +86,14 @@ impl Default for TunnelConfig {
             frp_server_port: None,
             frp_custom_domain: None,
             frp_remote_port: None,
-            frp_public_https: true,
+            frp_public_https: false,
             ssh_host: None,
             ssh_port: None,
             ssh_user: None,
             ssh_remote_port: None,
             ssh_public_hostname: None,
-            ssh_public_https: true,
+            ssh_identity_file: None,
+            ssh_public_https: false,
         }
     }
 }
@@ -178,10 +179,7 @@ impl TunnelConfig {
                 if self.ssh_remote_port.unwrap_or(0) == 0 {
                     return Err("SSH remote port is required".to_string());
                 }
-                normalize_public_http_origin(
-                    self.ssh_public_hostname.as_deref().unwrap_or(""),
-                    self.ssh_public_https,
-                )?;
+                normalize_public_http_origin(&self.ssh_public_host()?, self.ssh_public_https)?;
                 Ok(())
             }
         }
@@ -223,11 +221,32 @@ impl TunnelConfig {
                 })?;
                 Ok(format!("{scheme}://{addr}:{port}"))
             }
-            TunnelProviderKind::SshReverse => normalize_public_http_origin(
-                self.ssh_public_hostname.as_deref().unwrap_or(""),
-                self.ssh_public_https,
-            ),
+            TunnelProviderKind::SshReverse => {
+                normalize_public_http_origin(&self.ssh_public_host()?, self.ssh_public_https)
+            }
         }
+    }
+
+    fn ssh_public_host(&self) -> Result<String, String> {
+        if let Some(host) = self
+            .ssh_public_hostname
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Ok(host.to_string());
+        }
+        let host = self
+            .ssh_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "SSH host is required".to_string())?;
+        let port = self
+            .ssh_remote_port
+            .filter(|p| *p > 0)
+            .ok_or_else(|| "SSH remote port is required".to_string())?;
+        Ok(format!("{host}:{port}"))
     }
 }
 
@@ -250,8 +269,10 @@ pub struct TunnelConfigView {
     pub ssh_user: Option<String>,
     pub ssh_remote_port: Option<u16>,
     pub ssh_public_hostname: Option<String>,
+    pub ssh_identity_file: Option<String>,
     pub ssh_public_https: bool,
     pub ssh_private_key_set: bool,
+    pub ssh_password_set: bool,
 }
 
 /// Partial update from the renderer. `None` on a secret field means "leave as-is";
@@ -289,9 +310,13 @@ pub struct TunnelConfigUpdate {
     #[serde(default)]
     pub ssh_public_hostname: Option<String>,
     #[serde(default)]
+    pub ssh_identity_file: Option<String>,
+    #[serde(default)]
     pub ssh_public_https: Option<bool>,
     #[serde(default)]
     pub ssh_private_key: Option<String>,
+    #[serde(default)]
+    pub ssh_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -303,6 +328,8 @@ struct TunnelSecrets {
     frp_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ssh_private_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ssh_password: Option<String>,
     /// Desktop pairing bearer. Reused while remote access stays wanted.
     /// Never returned to the renderer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -384,6 +411,7 @@ impl TunnelConfigStore {
         config.ssh_user = empty_to_none(update.ssh_user);
         config.ssh_remote_port = update.ssh_remote_port.filter(|p| *p > 0);
         config.ssh_public_hostname = empty_to_none(update.ssh_public_hostname);
+        config.ssh_identity_file = empty_to_none(update.ssh_identity_file);
         if let Some(https) = update.ssh_public_https {
             config.ssh_public_https = https;
         }
@@ -391,6 +419,7 @@ impl TunnelConfigStore {
             update.cloudflare_named_token,
             update.frp_token,
             update.ssh_private_key,
+            update.ssh_password,
         )?;
         self.save(&config)?;
         log::info!(
@@ -420,8 +449,10 @@ impl TunnelConfigStore {
             ssh_user: config.ssh_user,
             ssh_remote_port: config.ssh_remote_port,
             ssh_public_hostname: config.ssh_public_hostname,
+            ssh_identity_file: config.ssh_identity_file,
             ssh_public_https: config.ssh_public_https,
             ssh_private_key_set: token_is_set(secrets.ssh_private_key.as_deref()),
+            ssh_password_set: token_is_set(secrets.ssh_password.as_deref()),
         })
     }
 
@@ -439,6 +470,11 @@ impl TunnelConfigStore {
     pub fn ssh_private_key(&self) -> Result<Option<String>, String> {
         let secrets = self.load_secrets()?;
         Ok(empty_to_none(secrets.ssh_private_key))
+    }
+
+    pub fn ssh_password(&self) -> Result<Option<String>, String> {
+        let secrets = self.load_secrets()?;
+        Ok(empty_to_none(secrets.ssh_password))
     }
 
     pub fn pairing_token(&self) -> Result<Option<String>, String> {
@@ -482,8 +518,13 @@ impl TunnelConfigStore {
         cloudflare_named_token: Option<String>,
         frp_token: Option<String>,
         ssh_private_key: Option<String>,
+        ssh_password: Option<String>,
     ) -> Result<(), String> {
-        if cloudflare_named_token.is_none() && frp_token.is_none() && ssh_private_key.is_none() {
+        if cloudflare_named_token.is_none()
+            && frp_token.is_none()
+            && ssh_private_key.is_none()
+            && ssh_password.is_none()
+        {
             return Ok(());
         }
         let mut secrets = self.load_secrets()?;
@@ -495,6 +536,9 @@ impl TunnelConfigStore {
         }
         if let Some(value) = ssh_private_key {
             secrets.ssh_private_key = empty_to_none(Some(value));
+        }
+        if let Some(value) = ssh_password {
+            secrets.ssh_password = empty_to_none(Some(value));
         }
         write_secrets(&self.secrets_path, &secrets)?;
         let mut guard = self
@@ -589,11 +633,11 @@ pub fn normalize_public_http_origin(raw: &str, https: bool) -> Result<String, St
     if trimmed.is_empty() {
         return Err("public hostname is required".to_string());
     }
-    let scheme = if https { "https" } else { "http" };
+    let default_scheme = if https { "https" } else { "http" };
     let candidate = if trimmed.contains("://") {
         trimmed.to_string()
     } else {
-        format!("{scheme}://{trimmed}")
+        format!("{default_scheme}://{trimmed}")
     };
     let parsed =
         Url::parse(&candidate).map_err(|_| "public hostname is not a valid host".to_string())?;
@@ -613,6 +657,7 @@ pub fn normalize_public_http_origin(raw: &str, https: bool) -> Result<String, St
     if !path.is_empty() && path != "/" {
         return Err("public hostname must not include a path".to_string());
     }
+    let scheme = parsed.scheme();
     match parsed.port() {
         Some(port) => Ok(format!("{scheme}://{host}:{port}")),
         None => Ok(format!("{scheme}://{host}")),
@@ -672,6 +717,8 @@ mod tests {
         assert!(config.validate_for_start().is_err());
         config.frp_remote_port = Some(8443);
         assert!(config.validate_for_start().is_ok());
+        assert_eq!(config.public_origin().unwrap(), "http://1.2.3.4:8443");
+        config.frp_public_https = true;
         assert_eq!(config.public_origin().unwrap(), "https://1.2.3.4:8443");
         config.frp_public_https = false;
         config.frp_custom_domain = Some("se-manager.example.com".to_string());
@@ -688,15 +735,18 @@ mod tests {
             ssh_host: Some("vps.example.com".to_string()),
             ssh_user: Some("se-manager".to_string()),
             ssh_remote_port: Some(18787),
-            ssh_public_hostname: Some("remote.example.com".to_string()),
             ..TunnelConfig::default()
         };
         assert!(config.validate_for_start().is_ok());
         assert_eq!(
             config.public_origin().unwrap(),
+            "http://vps.example.com:18787"
+        );
+        config.ssh_public_hostname = Some("https://remote.example.com".to_string());
+        assert_eq!(
+            config.public_origin().unwrap(),
             "https://remote.example.com"
         );
-        config.ssh_public_https = false;
         config.ssh_public_hostname = Some("remote.example.com:8443".to_string());
         assert_eq!(
             config.public_origin().unwrap(),
@@ -724,8 +774,10 @@ mod tests {
             ssh_user: None,
             ssh_remote_port: None,
             ssh_public_hostname: None,
-            ssh_public_https: true,
+            ssh_identity_file: None,
+            ssh_public_https: false,
             ssh_private_key_set: false,
+            ssh_password_set: false,
         };
         let json = serde_json::to_string(&view).unwrap();
         assert!(!json.contains("eyJ"));
@@ -764,14 +816,20 @@ mod tests {
                 ssh_user: None,
                 ssh_remote_port: None,
                 ssh_public_hostname: None,
+                ssh_identity_file: None,
                 ssh_public_https: None,
                 ssh_private_key: None,
+                ssh_password: Some("ssh-pass".to_string()),
             })
             .unwrap();
         let view = store.view().unwrap();
         assert!(view.cloudflare_named_token_set);
         assert!(!view.frp_token_set);
+        assert!(view.ssh_password_set);
         assert_eq!(store.named_token().unwrap(), "named-token");
+        assert_eq!(store.ssh_password().unwrap().as_deref(), Some("ssh-pass"));
+        let view_json = serde_json::to_string(&view).unwrap();
+        assert!(!view_json.contains("ssh-pass"));
         let secrets = std::fs::read_to_string(dir.path().join("secrets.json")).unwrap();
         assert!(secrets.contains("named-token"));
     }

@@ -52,6 +52,10 @@ pub struct ProjectSummary {
     /// `default_project_id`). Distinct from a client's per-connection active
     /// project — the host cannot know which project a specific client is on.
     pub is_default: bool,
+    /// Active PTYs currently attributed to this project. Registry snapshots
+    /// leave this at 0; `GET /projects` fills it from the live PTY catalog.
+    #[serde(default)]
+    pub live_terminal_count: u32,
 }
 
 /// A project-group summary exposed to the web/remote client.
@@ -506,6 +510,7 @@ impl From<VfsRoot> for ProjectSummary {
                 .then(|| root.path.to_string_lossy().into_owned()),
             is_archived: root.is_archived,
             is_default: false,
+            live_terminal_count: 0,
         }
     }
 }
@@ -551,6 +556,7 @@ mod tests {
             path: path.map(str::to_string),
             is_archived: archived,
             is_default: false,
+            live_terminal_count: 0,
         }
     }
 

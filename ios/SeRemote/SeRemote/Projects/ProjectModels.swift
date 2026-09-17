@@ -7,11 +7,62 @@ struct HostProject: Identifiable, Hashable, Decodable, Sendable {
     var path: String?
     var isArchived: Bool
     var isDefault: Bool
+    var liveTerminalCount: Int
+
+    var isRunning: Bool { liveTerminalCount > 0 }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, color, path, isArchived, isDefault, liveTerminalCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+        liveTerminalCount = try container.decodeIfPresent(Int.self, forKey: .liveTerminalCount) ?? 0
+    }
+}
+
+struct HostProjectGroup: Identifiable, Hashable, Decodable, Sendable {
+    let id: String
+    var name: String
+    var projectIds: [String]
+    var color: String?
+    var preferredProjectId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, projectIds, color, preferredProjectId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        projectIds = try container.decodeIfPresent([String].self, forKey: .projectIds) ?? []
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        preferredProjectId = try container.decodeIfPresent(String.self, forKey: .preferredProjectId)
+    }
 }
 
 struct ProjectListPayload: Decodable, Sendable {
     var projects: [HostProject]
+    var groups: [HostProjectGroup]
     var defaultProjectId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case projects, groups, defaultProjectId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projects = try container.decodeIfPresent([HostProject].self, forKey: .projects) ?? []
+        groups = try container.decodeIfPresent([HostProjectGroup].self, forKey: .groups) ?? []
+        defaultProjectId = try container.decodeIfPresent(String.self, forKey: .defaultProjectId)
+    }
 }
 
 struct CatalogAgent: Decodable, Sendable, Identifiable {

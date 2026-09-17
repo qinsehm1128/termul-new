@@ -11,11 +11,14 @@
 //! Carries NO env-var values — [`ProjectSummary`] redacts-by-omission (frozen
 //! constraint). Only the identity/display fields a project switcher needs.
 
+use std::collections::HashMap;
+
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::pty::PtyManager;
 use crate::web::auth::IngressProvenance;
 use crate::web::project_registry::ProjectListPayload;
 use crate::web::sink::broadcast_projects_changed;
@@ -73,8 +76,34 @@ pub struct SetDefaultProjectRequest {
 /// browser just shows nothing (the desktop will push a `projects_changed`
 /// event when it syncs).
 pub async fn list(State(state): State<AppState>) -> impl IntoResponse {
-    let payload: ProjectListPayload = state.registry.snapshot();
+    let mut payload: ProjectListPayload = state.registry.snapshot();
+    apply_live_terminal_counts(&mut payload, &live_terminal_counts(&state.pty));
     Json(IpcBody::ok(payload))
+}
+
+fn live_terminal_counts(pty: &PtyManager) -> HashMap<String, u32> {
+    let mut counts = HashMap::new();
+    for instance in pty.get_all() {
+        if !instance.is_active() {
+            continue;
+        }
+        let Some(project_id) = instance
+            .project_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        *counts.entry(project_id.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn apply_live_terminal_counts(payload: &mut ProjectListPayload, counts: &HashMap<String, u32>) {
+    for project in &mut payload.projects {
+        project.live_terminal_count = counts.get(&project.id).copied().unwrap_or(0);
+    }
 }
 
 /// `POST /projects/default` → set the host's default project (Epic 7).
@@ -218,6 +247,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub: None,
             store: None,
         }
     }
@@ -250,6 +280,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub: None,
             store: None,
         }
     }
@@ -262,6 +293,7 @@ mod tests {
             path: path.map(str::to_string),
             is_archived: archived,
             is_default: default,
+            live_terminal_count: 0,
         }
     }
 
@@ -316,6 +348,12 @@ mod tests {
         assert_eq!(data.projects[0].id, "p-1");
         assert!(data.projects[0].is_default);
         assert!(data.projects[2].is_archived);
+        assert_eq!(data.projects[0].live_terminal_count, 0);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["data"]["projects"][0]
+                ["liveTerminalCount"],
+            0
+        );
         // No env-var values cross the wire (redact-by-omission): ProjectSummary
         // simply has no env-var field — assert the shape.
         assert!(
@@ -325,6 +363,22 @@ mod tests {
                 .get("envVars")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn annotates_live_terminal_counts_by_project_id() {
+        let mut payload = ProjectListPayload {
+            projects: vec![
+                summary("p-1", Some("/a"), false, true),
+                summary("p-2", Some("/b"), false, false),
+            ],
+            groups: vec![],
+            default_project_id: Some("p-1".to_string()),
+        };
+        let counts = HashMap::from([("p-1".to_string(), 2)]);
+        apply_live_terminal_counts(&mut payload, &counts);
+        assert_eq!(payload.projects[0].live_terminal_count, 2);
+        assert_eq!(payload.projects[1].live_terminal_count, 0);
     }
 
     #[tokio::test]

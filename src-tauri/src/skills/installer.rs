@@ -40,6 +40,7 @@ pub fn install_file(
                 name: name.to_string(),
                 digest,
                 canonical_path: target,
+                source: None,
                 projections: Vec::new(),
             });
         }
@@ -79,6 +80,7 @@ pub fn install_file(
         name: name.to_string(),
         digest,
         canonical_path: target,
+        source: None,
         projections: Vec::new(),
     })
 }

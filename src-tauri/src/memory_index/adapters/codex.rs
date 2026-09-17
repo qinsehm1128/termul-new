@@ -430,7 +430,9 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root, None,);
+            &no_root,
+            None,
+        );
 
         let roles: Vec<NormalizedRole> = adapted.messages.iter().map(|m| m.role).collect();
         assert_eq!(
@@ -482,7 +484,9 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root, None,);
+            &no_root,
+            None,
+        );
         assert_eq!(adapted.messages[0].role, NormalizedRole::System);
         assert!(
             adapted.session.unwrap().title.is_none(),
@@ -504,7 +508,9 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &resolve, None,);
+            &resolve,
+            None,
+        );
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, "codex:/store/root.jsonl");
         assert_eq!(session.lineage_depth, LineageDepth::nested(2));
@@ -528,7 +534,9 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root, None,);
+            &no_root,
+            None,
+        );
         let session = adapted.session.unwrap();
         assert_eq!(session.root_session_key, session.session_key);
         assert_eq!(session.lineage_depth, LineageDepth::UNKNOWN);
@@ -548,7 +556,9 @@ mod tests {
             "proj",
             SessionScope::Scoped,
             &meta,
-            &no_root, None,);
+            &no_root,
+            None,
+        );
         let text = &adapted.messages[0].text;
         assert!(!text.contains("xai-ziyhFXhJ9KTrUDl8Fv8CNNzx4t"), "{text}");
         assert!(text.contains("[redacted:"), "{text}");

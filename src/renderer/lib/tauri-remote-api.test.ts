@@ -130,6 +130,12 @@ describe('remoteServerApi', () => {
     })
   })
 
+  it('tunnelConfigApi.listSshHosts forwards tunnel_ssh_config_hosts', async () => {
+    mockInvoke.mockResolvedValueOnce({ success: true, data: [] })
+    await tunnelConfigApi.listSshHosts()
+    expect(mockInvoke).toHaveBeenCalledWith('tunnel_ssh_config_hosts', undefined)
+  })
+
   it('syncProjects transports project groups in the desktop sync payload', async () => {
     const ipc: IpcResult<void> = { success: true, data: undefined }
     mockInvoke.mockResolvedValueOnce(ipc)

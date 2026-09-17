@@ -1,6 +1,7 @@
 {
   "title": "项目",
   "groups": "工作区分组",
+  "liveTerminals": "{{count}} 个终端在运行",
   "dragToResize": "拖动调整大小",
   "newGroupFolder": "新建分组文件夹",
   "newProject": "新建项目",

@@ -13,3 +13,11 @@ project_roots = ["{project}/.claude/skills"]
 [providers.codex]
 global_roots = ["{home}/.codex/skills"]
 project_roots = ["{project}/.codex/skills"]
+
+[providers.pi]
+global_roots = ["{home}/.pi/skills", "{home}/.pi/agent/skills"]
+project_roots = ["{project}/.pi/skills"]
+
+[providers.zcode]
+global_roots = ["{home}/.zcode/skills"]
+project_roots = ["{project}/.zcode/skills"]

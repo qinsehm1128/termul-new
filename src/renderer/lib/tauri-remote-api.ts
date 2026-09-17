@@ -4,6 +4,7 @@ import type {
   RemoteBindMode,
   RemoteServerApi,
   RemoteStatus,
+  SshConfigHost,
   TunnelConfigApi,
   TunnelConfigUpdate,
   TunnelConfigView
@@ -56,6 +57,9 @@ export const tunnelConfigApi: TunnelConfigApi = {
   },
   async set(update: TunnelConfigUpdate): Promise<IpcResult<TunnelConfigView>> {
     return invokeIpc<TunnelConfigView>('tunnel_config_set', { update })
+  },
+  async listSshHosts(): Promise<IpcResult<SshConfigHost[]>> {
+    return invokeIpc<SshConfigHost[]>('tunnel_ssh_config_hosts')
   }
 }
 

@@ -1766,6 +1766,7 @@ mod tests {
             path: Some(dir_a.to_string_lossy().into_owned()),
             is_archived: false,
             is_default: true,
+            live_terminal_count: 0,
         };
         let project_b = crate::web::ProjectSummary {
             id: "p-b".to_string(),
@@ -1774,6 +1775,7 @@ mod tests {
             path: Some(dir_b.to_string_lossy().into_owned()),
             is_archived: false,
             is_default: false,
+            live_terminal_count: 0,
         };
         registry.set(vec![project_a, project_b], Some("p-a".to_string()));
 

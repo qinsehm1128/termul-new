@@ -1762,6 +1762,7 @@ mod tests {
                 path: Some(cwd.path().to_string_lossy().into_owned()),
                 is_archived: false,
                 is_default: true,
+                live_terminal_count: 0,
             }],
             Some("project-1".into()),
         );
@@ -1865,6 +1866,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             memory_index: None,
+            skills_hub: None,
             store: None,
             project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
         }

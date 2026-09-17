@@ -58,6 +58,7 @@ const projects = [
     path: '/g',
     isArchived: false,
     isActive: false,
+    liveTerminalCount: 2,
     envVars: [],
     worktrees: [],
     activeWorktreeId: null
@@ -104,6 +105,7 @@ describe('ProjectSwitcherDrawer', () => {
     const gammaBtn = screen.getByText('Gamma').closest('button')
     expect(gammaBtn).not.toBeDisabled()
     expect(gammaBtn).not.toHaveAttribute('aria-current', 'true')
+    expect(screen.getByText('2 live')).toBeInTheDocument()
   })
 
   it('switches the shared session on clicking a non-active project', async () => {

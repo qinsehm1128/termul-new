@@ -182,6 +182,7 @@ fn app_state(project_root: PathBuf) -> AppState {
         acp_install: None,
         store: None,
         memory_index: None,
+        skills_hub: None,
         project_root: Arc::new(parking_lot::RwLock::new(project_root)),
     }
 }

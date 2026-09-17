@@ -6,6 +6,7 @@ use tauri::State;
 
 use super::config::{TunnelConfigStore, TunnelConfigUpdate, TunnelConfigView};
 use crate::commands::IpcResult;
+use crate::ssh::config_parser::{self, ParsedSSHProfile};
 
 #[tauri::command]
 pub async fn tunnel_config_get(
@@ -29,4 +30,9 @@ pub async fn tunnel_config_set(
         },
         Err(error) => Ok(IpcResult::error(error, "TUNNEL_CONFIG_WRITE_FAILED")),
     }
+}
+
+#[tauri::command]
+pub async fn tunnel_ssh_config_hosts() -> Result<IpcResult<Vec<ParsedSSHProfile>>, String> {
+    Ok(IpcResult::success(config_parser::parse_ssh_config()))
 }

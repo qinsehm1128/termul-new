@@ -37,6 +37,8 @@ export interface ProjectSummary {
    * The renderer's `Project.isActive` stays (set locally by `selectProject`).
    */
   isDefault: boolean
+  /** Active PTYs attributed to this project. Older hosts omit this. */
+  liveTerminalCount?: number
 }
 
 /**

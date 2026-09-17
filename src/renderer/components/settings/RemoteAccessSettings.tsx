@@ -1,4 +1,5 @@
 import type {
+  SshConfigHost,
   TunnelConfigUpdate,
   TunnelConfigView,
   TunnelProviderKind
@@ -7,7 +8,6 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import { tunnelConfigApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 
@@ -22,15 +22,17 @@ const EMPTY_VIEW: TunnelConfigView = {
   frpServerPort: null,
   frpCustomDomain: null,
   frpRemotePort: null,
-  frpPublicHttps: true,
+  frpPublicHttps: false,
   frpTokenSet: false,
   sshHost: null,
   sshPort: null,
   sshUser: null,
   sshRemotePort: null,
   sshPublicHostname: null,
-  sshPublicHttps: true,
-  sshPrivateKeySet: false
+  sshIdentityFile: null,
+  sshPublicHttps: false,
+  sshPrivateKeySet: false,
+  sshPasswordSet: false
 }
 
 export function RemoteAccessSettings(): React.JSX.Element {
@@ -45,12 +47,16 @@ export function RemoteAccessSettings(): React.JSX.Element {
   const [frpDomain, setFrpDomain] = useState('')
   const [frpRemotePort, setFrpRemotePort] = useState('')
   const [frpToken, setFrpToken] = useState('')
+  const [sshHosts, setSshHosts] = useState<SshConfigHost[]>([])
+  const [sshConfigName, setSshConfigName] = useState('')
   const [sshHost, setSshHost] = useState('')
   const [sshPort, setSshPort] = useState('')
   const [sshUser, setSshUser] = useState('')
   const [sshRemotePort, setSshRemotePort] = useState('')
   const [sshPublicHostname, setSshPublicHostname] = useState('')
+  const [sshIdentityFile, setSshIdentityFile] = useState('')
   const [sshPrivateKey, setSshPrivateKey] = useState('')
+  const [sshPassword, setSshPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
@@ -67,9 +73,11 @@ export function RemoteAccessSettings(): React.JSX.Element {
     setSshUser(next.sshUser ?? '')
     setSshRemotePort(next.sshRemotePort ? String(next.sshRemotePort) : '')
     setSshPublicHostname(next.sshPublicHostname ?? '')
+    setSshIdentityFile(next.sshIdentityFile ?? '')
     setNamedToken('')
     setFrpToken('')
     setSshPrivateKey('')
+    setSshPassword('')
   }, [])
 
   useEffect(() => {
@@ -78,12 +86,15 @@ export function RemoteAccessSettings(): React.JSX.Element {
       return
     }
     let cancelled = false
-    void tunnelConfigApi.get().then((result) => {
-      if (cancelled) return
-      if (result.success) applyView(result.data)
-      else toast.error(result.error ?? t('remoteAccess.loadFailed'))
-      setLoaded(true)
-    })
+    void Promise.all([tunnelConfigApi.get(), tunnelConfigApi.listSshHosts()]).then(
+      ([configResult, hostsResult]) => {
+        if (cancelled) return
+        if (configResult.success) applyView(configResult.data)
+        else toast.error(configResult.error ?? t('remoteAccess.loadFailed'))
+        if (hostsResult.success) setSshHosts(hostsResult.data)
+        setLoaded(true)
+      }
+    )
     return () => {
       cancelled = true
     }
@@ -105,45 +116,47 @@ export function RemoteAccessSettings(): React.JSX.Element {
     }
   }
 
+  const detailsUpdate = (): TunnelConfigUpdate => ({
+    provider: view.provider,
+    cloudflareNamedHostname: hostname,
+    cloudflareNamedLocalPort: namedPort ? Number(namedPort) : null,
+    frpServerAddr: frpAddr,
+    frpServerPort: frpPort ? Number(frpPort) : null,
+    frpCustomDomain: frpDomain,
+    frpRemotePort: frpRemotePort ? Number(frpRemotePort) : null,
+    frpPublicHttps: false,
+    sshHost,
+    sshPort: sshPort ? Number(sshPort) : null,
+    sshUser,
+    sshRemotePort: sshRemotePort ? Number(sshRemotePort) : null,
+    sshPublicHostname,
+    sshIdentityFile,
+    sshPublicHttps: false
+  })
+
   const saveProvider = (provider: TunnelProviderKind): void => {
-    void persist({
-      provider,
-      cloudflareNamedHostname: hostname,
-      cloudflareNamedLocalPort: namedPort ? Number(namedPort) : null,
-      frpServerAddr: frpAddr,
-      frpServerPort: frpPort ? Number(frpPort) : null,
-      frpCustomDomain: frpDomain,
-      frpRemotePort: frpRemotePort ? Number(frpRemotePort) : null,
-      frpPublicHttps: view.frpPublicHttps,
-      sshHost,
-      sshPort: sshPort ? Number(sshPort) : null,
-      sshUser,
-      sshRemotePort: sshRemotePort ? Number(sshRemotePort) : null,
-      sshPublicHostname,
-      sshPublicHttps: view.sshPublicHttps
-    })
+    void persist({ ...detailsUpdate(), provider })
   }
 
   const saveDetails = (): void => {
     void persist({
-      provider: view.provider,
-      cloudflareNamedHostname: hostname,
-      cloudflareNamedLocalPort: namedPort ? Number(namedPort) : null,
+      ...detailsUpdate(),
       cloudflareNamedToken: namedToken.trim() ? namedToken.trim() : undefined,
-      frpServerAddr: frpAddr,
-      frpServerPort: frpPort ? Number(frpPort) : null,
-      frpCustomDomain: frpDomain,
-      frpRemotePort: frpRemotePort ? Number(frpRemotePort) : null,
-      frpPublicHttps: view.frpPublicHttps,
       frpToken: frpToken.trim() ? frpToken.trim() : undefined,
-      sshHost,
-      sshPort: sshPort ? Number(sshPort) : null,
-      sshUser,
-      sshRemotePort: sshRemotePort ? Number(sshRemotePort) : null,
-      sshPublicHostname,
-      sshPublicHttps: view.sshPublicHttps,
-      sshPrivateKey: sshPrivateKey.trim() ? sshPrivateKey.trim() : undefined
+      sshPrivateKey: sshPrivateKey.trim() ? sshPrivateKey.trim() : undefined,
+      sshPassword: sshPassword.trim() ? sshPassword.trim() : undefined
     })
+  }
+
+  const applySshConfigHost = (name: string): void => {
+    setSshConfigName(name)
+    const profile = sshHosts.find((host) => host.name === name)
+    if (!profile) return
+    setSshHost(profile.host)
+    setSshPort(String(profile.port))
+    setSshUser(profile.username)
+    setSshIdentityFile(profile.privateKeyPath ?? '')
+    if (!sshRemotePort) setSshRemotePort('18787')
   }
 
   if (!desktop) {
@@ -249,7 +262,7 @@ export function RemoteAccessSettings(): React.JSX.Element {
             hint={t('remoteAccess.frpRemotePortHint')}
             value={frpRemotePort}
             onChange={setFrpRemotePort}
-            placeholder="8443"
+            placeholder="18787"
             inputMode="numeric"
           />
           <Field
@@ -261,36 +274,38 @@ export function RemoteAccessSettings(): React.JSX.Element {
             type="password"
             autoComplete="off"
           />
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm text-foreground">{t('remoteAccess.frpPublicHttps')}</div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {t('remoteAccess.frpPublicHttpsHint')}
-              </p>
-            </div>
-            <Switch
-              checked={view.frpPublicHttps}
-              disabled={busy}
-              onCheckedChange={(checked) => {
-                setView((current) => ({ ...current, frpPublicHttps: checked }))
-                void persist({
-                  provider: 'frp',
-                  cloudflareNamedHostname: hostname,
-                  frpServerAddr: frpAddr,
-                  frpServerPort: frpPort ? Number(frpPort) : null,
-                  frpCustomDomain: frpDomain,
-                  frpRemotePort: frpRemotePort ? Number(frpRemotePort) : null,
-                  frpPublicHttps: checked
-                })
-              }}
-              aria-label={t('remoteAccess.frpPublicHttps')}
-            />
-          </div>
         </div>
       )}
 
       {view.provider === 'sshReverse' && (
         <div className="space-y-3">
+          {sshHosts.length > 0 && (
+            <div>
+              <label
+                className="block text-sm font-medium text-secondary-foreground mb-2"
+                htmlFor="ssh-config-host"
+              >
+                {t('remoteAccess.sshConfigHost')}
+              </label>
+              <select
+                id="ssh-config-host"
+                value={sshConfigName}
+                disabled={busy}
+                onChange={(event) => applySshConfigHost(event.target.value)}
+                className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+              >
+                <option value="">{t('remoteAccess.sshConfigHostNone')}</option>
+                {sshHosts.map((host) => (
+                  <option key={host.name} value={host.name}>
+                    {host.name} ({host.username}@{host.host}:{host.port})
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                {t('remoteAccess.sshConfigHostHint')}
+              </p>
+            </div>
+          )}
           <Field
             id="ssh-host"
             label={t('remoteAccess.sshHost')}
@@ -317,6 +332,17 @@ export function RemoteAccessSettings(): React.JSX.Element {
             placeholder="ubuntu"
           />
           <Field
+            id="ssh-password"
+            label={t('remoteAccess.sshPassword')}
+            hint={
+              view.sshPasswordSet ? t('remoteAccess.tokenSet') : t('remoteAccess.sshPasswordHint')
+            }
+            value={sshPassword}
+            onChange={setSshPassword}
+            type="password"
+            autoComplete="off"
+          />
+          <Field
             id="ssh-remote-port"
             label={t('remoteAccess.sshRemotePort')}
             hint={t('remoteAccess.sshRemotePortHint')}
@@ -331,7 +357,15 @@ export function RemoteAccessSettings(): React.JSX.Element {
             hint={t('remoteAccess.sshPublicHostnameHint')}
             value={sshPublicHostname}
             onChange={setSshPublicHostname}
-            placeholder="se.example.com"
+            placeholder="vps.example.com:18787"
+          />
+          <Field
+            id="ssh-identity-file"
+            label={t('remoteAccess.sshIdentityFile')}
+            hint={t('remoteAccess.sshIdentityFileHint')}
+            value={sshIdentityFile}
+            onChange={setSshIdentityFile}
+            placeholder="~/.ssh/id_ed25519"
           />
           <Field
             id="ssh-private-key"
@@ -346,36 +380,6 @@ export function RemoteAccessSettings(): React.JSX.Element {
             type="password"
             autoComplete="off"
           />
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm text-foreground">{t('remoteAccess.sshPublicHttps')}</div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {t('remoteAccess.sshPublicHttpsHint')}
-              </p>
-            </div>
-            <Switch
-              checked={view.sshPublicHttps}
-              disabled={busy}
-              onCheckedChange={(checked) => {
-                setView((current) => ({ ...current, sshPublicHttps: checked }))
-                void persist({
-                  provider: 'sshReverse',
-                  cloudflareNamedHostname: hostname,
-                  frpServerAddr: frpAddr,
-                  frpServerPort: frpPort ? Number(frpPort) : null,
-                  frpCustomDomain: frpDomain,
-                  frpRemotePort: frpRemotePort ? Number(frpRemotePort) : null,
-                  sshHost,
-                  sshPort: sshPort ? Number(sshPort) : null,
-                  sshUser,
-                  sshRemotePort: sshRemotePort ? Number(sshRemotePort) : null,
-                  sshPublicHostname,
-                  sshPublicHttps: checked
-                })
-              }}
-              aria-label={t('remoteAccess.sshPublicHttps')}
-            />
-          </div>
         </div>
       )}
 

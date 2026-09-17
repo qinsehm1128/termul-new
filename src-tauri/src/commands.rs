@@ -3983,6 +3983,7 @@ pub async fn remote_server_start(
     acp_catalog_store: State<'_, HostAcpCatalogStore>,
     acp_install_store: State<'_, HostAcpInstallStore>,
     memory_index: State<'_, Arc<crate::memory_index::service::MemoryIndexService>>,
+    skills_hub: State<'_, Arc<crate::skills::service::SkillsHubService>>,
     tunnel_store: State<'_, Arc<remote::TunnelConfigStore>>,
     intent_store: State<'_, Arc<remote::RemoteAccessIntentStore>>,
     bind_mode: Option<String>,
@@ -4037,6 +4038,7 @@ pub async fn remote_server_start(
     // browser client reads the same index the desktop does rather than a second
     // one. `None` degrades to `MEMORY_INDEX_UNAVAILABLE`.
     let memory_index = Some(Arc::clone(&memory_index));
+    let skills_hub = Some(Arc::clone(&skills_hub));
     let tunnel_store = tunnel_store.inner();
     let tunnel_config = match tunnel_store.load() {
         Ok(config) => config,
@@ -4059,6 +4061,7 @@ pub async fn remote_server_start(
                 acp_catalog,
                 acp_install,
                 memory_index,
+                skills_hub.clone(),
                 bind_port,
             )
             .await
@@ -4076,6 +4079,7 @@ pub async fn remote_server_start(
                 acp_catalog,
                 acp_install,
                 memory_index,
+                skills_hub,
             )
             .await
     };
@@ -7686,6 +7690,7 @@ mod remote_sync_mcp_registry_tests {
             path: Some(project_root.to_string_lossy().into_owned()),
             is_archived: false,
             is_default: false,
+            live_terminal_count: 0,
         };
         reg.set(vec![project], Some("p1".to_string()));
         reg

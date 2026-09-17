@@ -51,6 +51,8 @@ export interface Project {
    */
   isDefault?: boolean
   isArchived?: boolean
+  /** Active PTYs attributed to this project. Web/remote hosts fill this. */
+  liveTerminalCount?: number
   gitBranch?: string
   lastOpened?: Date
   defaultShell?: string

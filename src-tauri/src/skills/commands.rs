@@ -2,12 +2,14 @@
 
 use super::{list_agent_skills, read_agent_skill, AgentSkillContent, AgentSkillSummary};
 use crate::skills::api_types::{
-    SkillsCatalogRequest, SkillsError, SkillsInstallRequest, SkillsProjectionRequest,
+    SkillsCatalogRequest, SkillsError, SkillsInstallCommit, SkillsInstallRequest,
+    SkillsOperationStart, SkillsOperationStatus, SkillsPreviewRequest, SkillsProjectionRequest,
     SkillsRepairRequest, SkillsStatus,
 };
 use crate::skills::manifest::SkillManifest;
 use crate::skills::service::SkillsHubService;
 use std::sync::Arc;
+use tauri::Emitter;
 
 #[tauri::command]
 pub async fn skills_status_cmd(
@@ -54,6 +56,71 @@ pub async fn skills_sync_cmd(
     project_root: Option<String>,
 ) -> Result<SkillsStatus, String> {
     skills_refresh_cmd(service, project_id, project_root).await
+}
+
+#[tauri::command]
+pub async fn skills_preview_cmd(
+    app: tauri::AppHandle,
+    service: tauri::State<'_, Arc<SkillsHubService>>,
+    request: SkillsPreviewRequest,
+) -> Result<SkillsOperationStart, String> {
+    let start = service
+        .start_preview_job(request)
+        .map_err(SkillsError::into_string)?;
+    watch_operation_progress(app, Arc::clone(&service), start.job_id.clone());
+    Ok(start)
+}
+
+#[tauri::command]
+pub async fn skills_operation_status_cmd(
+    service: tauri::State<'_, Arc<SkillsHubService>>,
+    job_id: String,
+) -> Result<SkillsOperationStatus, String> {
+    service
+        .operation_status(&job_id)
+        .map_err(SkillsError::into_string)
+}
+
+#[tauri::command]
+pub async fn skills_cancel_operation_cmd(
+    service: tauri::State<'_, Arc<SkillsHubService>>,
+    job_id: String,
+) -> Result<(), String> {
+    service
+        .cancel_operation(&job_id)
+        .map_err(SkillsError::into_string)
+}
+
+#[tauri::command]
+pub async fn skills_install_preview_cmd(
+    app: tauri::AppHandle,
+    service: tauri::State<'_, Arc<SkillsHubService>>,
+    request: SkillsInstallCommit,
+) -> Result<SkillsOperationStart, String> {
+    let start = service
+        .start_install_job(request)
+        .map_err(SkillsError::into_string)?;
+    watch_operation_progress(app, Arc::clone(&service), start.job_id.clone());
+    Ok(start)
+}
+
+fn watch_operation_progress(app: tauri::AppHandle, service: Arc<SkillsHubService>, job_id: String) {
+    tokio::spawn(async move {
+        for _ in 0..1800 {
+            let Ok(status) = service.operation_status(&job_id) else {
+                return;
+            };
+            let terminal = matches!(
+                status.phase.as_str(),
+                "completed" | "preview_ready" | "failed" | "cancelled"
+            );
+            let _ = app.emit("skills_operation_progress", &status);
+            if terminal {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    });
 }
 
 #[tauri::command]

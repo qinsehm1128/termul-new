@@ -66,7 +66,11 @@ import type {
   SkillManifest,
   SkillsCatalogRequest,
   SkillsHubEvent,
+  SkillsInstallCommit,
   SkillsInstallRequest,
+  SkillsOperationStart,
+  SkillsOperationStatus,
+  SkillsPreviewRequest,
   SkillsProjectionRequest,
   SkillsRepairRequest,
   SkillsStatus
@@ -491,6 +495,27 @@ export const webServerSkills = {
     const res = await postJson<SkillsStatus>('/skills/sync', request)
     if (!res.success) throw skillsError(res)
     return res.data
+  },
+  async preview(request: SkillsPreviewRequest): Promise<SkillsOperationStart> {
+    const res = await postJson<SkillsOperationStart>('/skills/preview', request)
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
+  async installPreview(request: SkillsInstallCommit): Promise<SkillsOperationStart> {
+    const res = await postJson<SkillsOperationStart>('/skills/install-preview', request)
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
+  async operationStatus(jobId: string): Promise<SkillsOperationStatus> {
+    const res = await getJson<SkillsOperationStatus>(
+      `/skills/operations/${encodeURIComponent(jobId)}`
+    )
+    if (!res.success) throw skillsError(res)
+    return res.data
+  },
+  async cancelOperation(jobId: string): Promise<void> {
+    const res = await postJson<null>('/skills/operations/cancel', { jobId })
+    if (!res.success) throw skillsError(res)
   },
   async install(request: SkillsInstallRequest): Promise<SkillManifest> {
     const res = await postJson<SkillManifest>('/skills/install', request)

@@ -236,6 +236,11 @@ export function ProjectSwitcherDrawer({
                       <span className="min-w-0 flex-1 truncate text-foreground">
                         {project.name}
                       </span>
+                      {(project.liveTerminalCount ?? 0) > 0 && (
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {t('liveTerminals', { count: project.liveTerminalCount })}
+                        </span>
+                      )}
                       {isHostDefault && !isSwitching && !isQueued && !isFailed && (
                         <span
                           title={t('hostDefault')}

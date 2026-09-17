@@ -476,13 +476,19 @@ mod boundary_tests {
     #[test]
     fn a_glued_password_is_still_masked() {
         let out = redact("mysql -pSECRET mydb");
-        assert_eq!(out.text, "mysql -p[redacted:credential-omitted] mydb".replace(
-            "[redacted:credential-omitted]", "[redacted:password]"
-        ));
+        assert_eq!(
+            out.text,
+            "mysql -p[redacted:credential-omitted] mydb"
+                .replace("[redacted:credential-omitted]", "[redacted:password]")
+        );
         assert_eq!(out.redactions, 1);
 
         let out = redact("psql --password=hunter2 -U user");
-        assert!(out.text.contains("--password=[redacted:password]"), "{}", out.text);
+        assert!(
+            out.text.contains("--password=[redacted:password]"),
+            "{}",
+            out.text
+        );
         assert!(!out.text.contains("hunter2"));
     }
 
