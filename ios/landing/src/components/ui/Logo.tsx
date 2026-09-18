@@ -19,7 +19,7 @@ export const Logo = ({ className, iconClassName, textClassName }: LogoProps) => 
       )}
     >
       <img
-        src="/termul.svg"
+        src="/se-mark.png"
         alt=""
         width={24}
         height={24}

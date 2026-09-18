@@ -115,7 +115,9 @@ describe('ActivityRail', () => {
   it('renders the brand mark', () => {
     renderRail()
 
-    expect(screen.getByRole('img', { name: 'Se' })).toBeInTheDocument()
+    const mark = screen.getByRole('img', { name: 'Se' })
+    expect(mark).toBeInTheDocument()
+    expect(mark).toHaveAttribute('src', '/se-mark.png')
   })
 
   it('separates project actions from the conversations workspace', () => {
