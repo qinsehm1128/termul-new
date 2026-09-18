@@ -3,9 +3,9 @@ name: Deploy Landing
 on:
   push:
     branches: [main, dev]
-    paths: ['landing/**']
+    paths: ['ios/landing/**']
   pull_request:
-    paths: ['landing/**']
+    paths: ['ios/landing/**']
 
 concurrency:
   group: deploy-landing-${{ github.ref }}
@@ -42,15 +42,15 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-        working-directory: landing
+        working-directory: ios/landing
 
       - name: Build
         run: bun run build
-        working-directory: landing
+        working-directory: ios/landing
 
       - name: Verify prerender
         run: bun run verify:prerender
-        working-directory: landing
+        working-directory: ios/landing
 
       - name: Deploy to Cloudflare Pages
         if: >-
@@ -61,6 +61,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: landing
+          workingDirectory: ios/landing
           command: pages deploy dist --project-name=se-landing --branch=${{ github.ref_name == 'main' && 'main' || github.head_ref || github.ref_name }} --commit-dirty=true
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
