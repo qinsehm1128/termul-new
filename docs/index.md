@@ -3,11 +3,11 @@
 **Type:** monolith
 **Primary Language:** TypeScript and Rust
 **Architecture:** Tauri desktop application with React renderer and Rust native runtime
-**Last Updated:** 2026-05-09
+**Last Updated:** 2026-09-18
 
 ## Project Overview
 
-Se Manager is a project-aware desktop terminal workspace built with Tauri 2. It combines terminal management, project organization, snapshots, file exploration, editor panels, embedded browser tabs, and browser annotation workflows inside a single desktop shell.
+Se Manager is a project-aware desktop workspace built with Tauri 2. The GitHub repo is still `termul-new`; the product name is **Se**. It combines terminals, ACP agent chat, Skills Hub, Git, file exploration, editor panels, embedded browser tabs, shared-live remote access, a standalone `se-server` + browser client, and a native iOS companion (Se Remote).
 
 ## Quick Reference
 

@@ -1,10 +1,14 @@
 <div align="center">
 
-# 🖥️ Se Manager
+<img src="src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Se Manager logo">
 
-**A modern, project-aware terminal manager built with Tauri**
+# Se Manager
 
-Se treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+**A project-aware workspace for terminals, agents, and remote pairing.**
+
+Se 把项目当一等公民：桌面终端、ACP 对话、Skills Hub，以及可扫码接入的 iOS / 浏览器远程。
+
+GitHub 仓库仍叫 [`qinsehm1128/termul-new`](https://github.com/qinsehm1128/termul-new)（历史名称）。产品名、图标与文档统一为 **Se Manager**。
 
 _An independent project — not a GitHub fork. Derived from [gnoviawan/termul](https://github.com/gnoviawan/termul) under the MIT License; see [License & Provenance](#-license--provenance)._
 
@@ -18,11 +22,32 @@ _An independent project — not a GitHub fork. Derived from [gnoviawan/termul](h
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 
-[Getting Started](#-getting-started) · [Features](#-features) · [Documentation](#-documentation) · [Contributing](CONTRIBUTING.md) · [Report Bug](https://github.com/qinsehm1128/termul-new/issues/new?template=bug_report.md) · [Request Feature](https://github.com/qinsehm1128/termul-new/issues/new?template=feature_request.md)
+[Getting Started](#-getting-started) · [What Se adds](#-what-se-adds) · [Features](#-features) · [Documentation](#-documentation) · [Contributing](CONTRIBUTING.md) · [Report Bug](https://github.com/qinsehm1128/termul-new/issues/new?template=bug_report.md) · [Request Feature](https://github.com/qinsehm1128/termul-new/issues/new?template=feature_request.md)
 
 </div>
 
 ---
+
+## 🚀 What Se adds
+
+These are the capabilities built on top of the original Termul workspace — not just a rename.
+
+这些是相对原版 Termul 新增的产品能力。
+
+| Area | What you get |
+| ---- | ------------ |
+| **ACP agent chat** | Conversations with Cursor, Codex, Claude, OpenCode and other ACP agents live next to the terminal. Plans, permissions, attachments, and session restore stay on the host. |
+| **Skills Hub** | Browse, project, and repair skills. Preview GitHub / npm / HTTPS sources as background jobs, then install to **Global** or any registered project with a path. |
+| **Shared-live remote** | The desktop (or `se-server`) hosts agents and PTYs. A browser client and the iOS app attach to the same session over LAN or a tunnel. |
+| **HTTP reverse pairing** | Remote Access publishes an HTTP QR (token in the URL fragment). Import `~/.ssh/config` hosts, use password / `SSH_ASKPASS`, optional identity file, and bind `0.0.0.0` for SSH reverse tunnels. |
+| **Se Remote (iOS)** | Native SwiftUI companion — Chat, Terminal, project switching, read-only files. No WebView. Pair by QR or paste. English / 简体中文. |
+| **Standalone `se-server`** | Headless host with the same web client. linux-x64 builds ship on GitHub Releases for self-hosting. |
+| **Memory index** | Search local agent history without copying corpora into the project tree. |
+| **Scheduled tasks** | Recurring / delayed workspace jobs from a conversation. |
+| **Live project list** | `GET /projects` annotates `liveTerminalCount`. Phone and web group running vs idle projects. |
+| **i18n** | Desktop and web UI in English and Simplified Chinese; iOS follows system / EN / 简体中文. |
+
+Switching projects does **not** kill live PTY sessions. The same Rust services back desktop Tauri, shared-live remote, `se-server`, and the browser/phone UI.
 
 ## ✨ Features
 
@@ -63,6 +88,26 @@ _An independent project — not a GitHub fork. Derived from [gnoviawan/termul](h
 | **Git Integration**    | Status bar shows current branch, working directory, git status, and exit code                          |
 | **Custom Title Bar**   | Desktop-native title bar with window controls, sidebar toggles, and settings navigation                |
 
+### 🤖 Agents, Skills & Memory
+
+| Feature              | Description                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **ACP Conversations** | In-workspace chat with ACP agents (Cursor, Codex, Claude, OpenCode, …); plans, tool permissions, attachments |
+| **Skills Hub**        | Catalog, project, and repair skills; remote GitHub / npm / URL preview jobs; install to Global or a project  |
+| **Memory Index**      | Host-private search over local agent history                                                                 |
+| **Scheduled Tasks**   | Recurring and delayed jobs from a conversation                                                               |
+
+### 📡 Remote, Server & iOS
+
+| Feature                    | Description                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Shared-live host**       | Desktop publishes the live session; browser and phone attach without owning a PTY                   |
+| **Reverse-tunnel QR**      | HTTP pairing URL with the access token in the fragment; Cloudflare / FRP / SSH reverse              |
+| **SSH config import**      | Pick a host from `~/.ssh/config`; password, `SSH_ASKPASS`, or identity file                         |
+| **`se-server`**            | Standalone headless host + the same web client                                                      |
+| **Se Remote**              | Native iOS app (`ios/SeRemote`) — Chat, Terminal, projects, files; see [ios/README.md](ios/README.md) |
+| **English / 简体中文**     | Renderer, web, and iOS strings                                                                      |
+
 ### 🔧 System & Reliability
 
 | Feature                   | Description                                                                                                               |
@@ -85,6 +130,9 @@ _An independent project — not a GitHub fork. Derived from [gnoviawan/termul](h
 | **File Explorer** | `FileExplorer`, `FileTreeNode`, `FileTreeContextMenu`                              | —                                                  |
 | **Snapshots**     | `CreateSnapshotModal`, `RestoreSnapshotModal`, `DeleteSnapshotModal`               | `snapshot-store`                                   |
 | **Projects**      | `ProjectSidebar`, `NewProjectModal`                                                | `project-store`                                    |
+| **Agent Chat**    | `AgentChatPanel`, `ChatMessage`, `ChatInputBar`                                    | conversation / ACP stores                          |
+| **Skills**        | `Skills` page, install-target picker                                               | —                                                  |
+| **Remote Access** | `RemoteAccessSettings`, tunnel QR, SSH reverse                                     | —                                                  |
 | **Settings**      | `ShortcutRecorder`, `ColorPickerPopover`, `ContextBarSettingsPopover`              | `app-settings-store`, `context-bar-settings-store` |
 | **Updates**       | `UpdateAvailableToast`, `UpdateReadyModal`                                         | `updater-store`                                    |
 | **Shared**        | `CommandPalette`, `ContextMenu`, `ConfirmDialog`, `ShellSelector`, `ErrorBoundary` | —                                                  |
@@ -218,23 +266,9 @@ bun install
 bun run dev
 ```
 
-### Landing Page
+### iOS companion
 
-This repository also includes a standalone Vite landing page under `landing/`.
-
-```bash
-# Install landing page dependencies (from landing/)
-cd landing && bun install
-
-# Start the landing page dev server
-bun run landing:dev
-
-# Lint the landing page
-bun run landing:lint
-
-# Build the landing page for production
-bun run landing:build
-```
+The native SwiftUI client lives in `ios/SeRemote`. Pairing, language, and terminal notes: [ios/README.md](ios/README.md).
 
 ### Building for Production
 
@@ -317,15 +351,17 @@ Build output: `src-tauri/target/release/bundle/`
 
 ```text
 src/
-├── renderer/           # React frontend
-│   ├── components/     # UI components
-│   ├── hooks/          # Custom React hooks
-│   ├── lib/            # Runtime adapters & desktop integration
-│   ├── pages/          # Page components
-│   └── stores/         # Zustand stores
-├── shared/             # Shared types (main/renderer)
-src-tauri/              # Rust backend, config & bundling
-docs/electron-old/      # Archived Electron docs & migration history
+├── renderer/           # React frontend (desktop + web client)
+│   ├── components/
+│   ├── hooks/
+│   ├── lib/            # Tauri / web facades (no direct @tauri-apps in UI)
+│   ├── locales/        # en + zh-CN
+│   ├── pages/          # Skills, ScheduledTasks, settings, …
+│   └── stores/
+├── shared/             # Runtime-neutral contracts (incl. brand)
+src-tauri/              # Rust: desktop, se-server, shared-live host, web API
+ios/SeRemote/           # Native iOS companion
+docs/                   # Architecture and contributor docs
 ```
 
 #### Platform Adapters
@@ -389,22 +425,33 @@ Copyright (c) 2025 gnoviawan
 Copyright (c) 2026 mannnrachman (Tauri porting contributions)
 ```
 
-Credit for the original work belongs to its authors and contributors. The contributor
-grid on the landing page and the `contributors` field in `package.json` are kept as an
-attribution roll for that work; they are not a claim of authorship by this project.
+Credit for the original work belongs to its authors and contributors. The `contributors`
+field in `package.json` is kept as an attribution roll for that work; it is not a claim
+of authorship by this project.
 
 ## 🙏 Acknowledgments
 
-- [Windows Terminal](https://github.com/microsoft/terminal) — Tab bar UX inspiration
-- [Hyper](https://github.com/vercel/hyper) — Extensible terminal design inspiration
-- [xterm.js](https://github.com/xtermjs/xterm.js) — Terminal rendering
-- [shadcn/ui](https://ui.shadcn.com/) — UI components
-- [Tauri](https://tauri.app/) — Desktop app framework
+Se Manager stands on a lot of good work. Thank you:
+
+- [gnoviawan](https://github.com/gnoviawan) — original [Termul](https://github.com/gnoviawan/termul)
+- [mannnrachman](https://github.com/mannnrachman) — Tauri port that this tree grew from
+- [Windows Terminal](https://github.com/microsoft/terminal) — tab-bar UX
+- [Hyper](https://github.com/vercel/hyper) — extensible terminal ideas
+- [xterm.js](https://github.com/xtermjs/xterm.js) — renderer terminal
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) — iOS terminal emulator
+- [Agent Client Protocol](https://agentclientprotocol.com/) — agent chat wire format
+- [shadcn/ui](https://ui.shadcn.com/) — UI primitives
+- [Tauri](https://tauri.app/) — desktop runtime
+- [BlockNote](https://www.blocknotejs.org/) — markdown editor
 
 ---
 
 <div align="center">
 
-Maintained by [qinsehm1128](https://github.com/qinsehm1128) · Originally created by [gnoviawan](https://github.com/gnoviawan)
+<img src="src-tauri/icons/32x32.png" width="32" height="32" alt="">
+
+**Se Manager** · maintained by [qinsehm1128](https://github.com/qinsehm1128)
+
+Originally created by [gnoviawan](https://github.com/gnoviawan) · Tauri port by [mannnrachman](https://github.com/mannnrachman)
 
 </div>

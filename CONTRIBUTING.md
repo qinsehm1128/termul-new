@@ -1,6 +1,8 @@
 # Contributing to Se Manager
 
-Thank you for your interest in contributing to Se Manager! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to **Se Manager**. The GitHub repository is still named `termul-new`; the product, docs, and bundle id are Se.
+
+This document provides guidelines and instructions for contributing.
 
 ## Code of Conduct
 
@@ -39,8 +41,8 @@ Feature requests are welcome! Please:
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/termul.git
-   cd termul
+   git clone https://github.com/YOUR_USERNAME/termul-new.git
+   cd termul-new
    ```
 3. Install dependencies:
    ```bash

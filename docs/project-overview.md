@@ -1,12 +1,14 @@
 # Se Manager - Project Overview
 
-**Date:** 2026-05-09
+**Date:** 2026-09-18
 **Type:** Desktop Application
 **Architecture:** Tauri desktop application with React renderer and Rust native runtime
 
 ## Executive Summary
 
-Se Manager is a project-aware desktop terminal workspace built on **Tauri 2**, with a **React 18 + TypeScript** frontend and a **Rust** backend runtime. The app organizes terminals by project, persists workspace state, supports snapshots and command history, and combines multiple interaction surfaces in a single desktop shell: terminal panes, file explorer, editor panels, and embedded browser tabs with annotation support.
+**Se Manager** (GitHub: `qinsehm1128/termul-new`) is a project-aware desktop workspace built on **Tauri 2**, with a **React 18 + TypeScript** frontend and a **Rust** backend runtime. The same crate also runs as a shared-live remote host and as standalone `se-server`.
+
+The app organizes terminals by project, persists workspace state, hosts ACP agent conversations and Skills Hub, supports snapshots and command history, and combines terminal panes, file explorer, editor panels, embedded browser tabs, and remote pairing (browser + native iOS Se Remote) in one product.
 
 The repository is a **single desktop application** rather than a multi-part monorepo. Its architecture separates concerns cleanly between:
 
@@ -44,8 +46,13 @@ The repository is a **single desktop application** rather than a multi-part mono
 
 ## Key Features
 
-- Project-based workspace organization
+- Project-based workspace organization (live PTYs survive project switches)
 - Multiple terminal sessions with persistence and restore
+- ACP agent chat (Cursor / Codex / Claude / OpenCode and other ACP agents)
+- Skills Hub: catalog, project, repair; remote GitHub/npm/URL install to Global or a chosen project
+- Shared-live remote access, HTTP reverse-tunnel QR pairing, `se-server`, native iOS companion
+- Memory index over local agent history; scheduled tasks
+- English and Simplified Chinese UI
 - Pane-based workspace layout with terminal, browser, and editor tabs
 - Embedded browser tabs backed by child webviews
 - Annotation tooling for browser capture/export workflows
