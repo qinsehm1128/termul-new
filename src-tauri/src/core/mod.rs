@@ -10,9 +10,9 @@ pub mod ipc;
 pub mod launcher;
 pub mod terminal;
 
-pub use acp::run_acp_core;
+pub use acp::{run_acp_core, run_acp_core_with_roots, AcpCoreClient, AcpCoreEvent};
 pub use handles::{
-    AcpRuntimeHandle, AcpServiceHandle, CoreServices, InProcessAcpRuntime,
+    AcpRuntimeHandle, AcpServiceHandle, CoreServices, DetachedTerminalRuntime, InProcessAcpRuntime,
     InProcessTerminalRuntime, TerminalRuntimeHandle, TerminalServiceHandle,
 };
 pub use ipc::{

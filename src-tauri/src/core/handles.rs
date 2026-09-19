@@ -9,6 +9,7 @@
 //! constructed with [`TerminalServiceHandle::from_runtime`] /
 //! [`AcpServiceHandle::from_runtime`] once T4/T5 own the Core servers.
 
+use super::acp::AcpCoreClient;
 use super::ipc::{CoreError, CoreErrorPayload, CoreRequest, CoreResponse};
 use super::terminal::TerminalCoreClient;
 use crate::acp::AcpManager;
@@ -22,6 +23,37 @@ pub trait TerminalRuntimeHandle: Send + Sync {
     async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError>;
     async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError>;
     fn is_live(&self, terminal_id: &str) -> bool;
+}
+
+/// Terminal runtime used by the ACP Core process: it owns no PTYs and cannot
+/// reach one. Every operation reports the same stable error, and nothing is
+/// ever live. Replaced by a Terminal-Core-linking runtime when the ACP Core
+/// learns to drive terminal IPC directly.
+pub struct DetachedTerminalRuntime;
+
+#[async_trait]
+impl TerminalRuntimeHandle for DetachedTerminalRuntime {
+    async fn write(&self, _terminal_id: &str, _data: &str) -> Result<(), CoreError> {
+        Err(CoreError::InvalidRequest(
+            "acp core has no terminal runtime linked".into(),
+        ))
+    }
+
+    async fn resize(&self, _terminal_id: &str, _cols: u16, _rows: u16) -> Result<(), CoreError> {
+        Err(CoreError::InvalidRequest(
+            "acp core has no terminal runtime linked".into(),
+        ))
+    }
+
+    async fn terminate(&self, _terminal_id: &str) -> Result<(), CoreError> {
+        Err(CoreError::InvalidRequest(
+            "acp core has no terminal runtime linked".into(),
+        ))
+    }
+
+    fn is_live(&self, _terminal_id: &str) -> bool {
+        false
+    }
 }
 
 #[derive(Clone)]
@@ -212,6 +244,13 @@ impl AcpRuntimeHandle for InProcessAcpRuntime {
     }
 }
 
+#[async_trait]
+impl AcpRuntimeHandle for AcpCoreClient {
+    async fn request(&self, request: CoreRequest) -> Result<CoreResponse, CoreError> {
+        AcpCoreClient::raw_request(self, request).await
+    }
+}
+
 /// Cloneable composition handle for ACP operations.
 ///
 /// Desktop and shared-live inject this instead of holding only a concrete
@@ -221,6 +260,7 @@ impl AcpRuntimeHandle for InProcessAcpRuntime {
 pub struct AcpServiceHandle {
     runtime: Arc<dyn AcpRuntimeHandle>,
     in_process: Option<Arc<AcpManager>>,
+    core: Option<Arc<AcpCoreClient>>,
 }
 
 impl AcpServiceHandle {
@@ -228,6 +268,7 @@ impl AcpServiceHandle {
         Self {
             runtime: Arc::new(InProcessAcpRuntime::new(Arc::clone(&acp))),
             in_process: Some(acp),
+            core: None,
         }
     }
 
@@ -235,7 +276,26 @@ impl AcpServiceHandle {
         Self {
             runtime,
             in_process: None,
+            core: None,
         }
+    }
+
+    /// Core-backed handle: the runtime forwards raw core-IPC requests to the
+    /// ACP Core process. There is no in-process manager in this mode.
+    pub fn from_core_client(client: AcpCoreClient) -> Self {
+        Self {
+            runtime: Arc::new(client.clone()),
+            in_process: None,
+            core: Some(Arc::new(client)),
+        }
+    }
+
+    pub fn core_client(&self) -> Option<Arc<AcpCoreClient>> {
+        self.core.clone()
+    }
+
+    pub fn owns_core_process(&self) -> bool {
+        self.core.is_some() && self.in_process.is_none()
     }
 
     pub fn runtime(&self) -> Arc<dyn AcpRuntimeHandle> {

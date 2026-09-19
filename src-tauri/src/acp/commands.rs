@@ -1,24 +1,191 @@
-//! Thin `#[tauri::command]` wrappers over `AcpManager`.
+//! Thin `#[tauri::command]` wrappers over ACP.
 //!
-//! Each command takes `State<'_, Arc<AcpManager>>`, forwards to the manager
-//! (which talks to the per-agent driver thread over channels), and awaits the
-//! `Send` oneshot reply. No command awaits a `!Send` connection future
-//! directly — that work is confined to the driver threads.
+//! Desktop dual-process mode proxies each command through
+//! [`crate::core::AcpServiceHandle::core_client`]. Standalone and tests keep
+//! the in-process `AcpManager` path via [`crate::core::AcpServiceHandle::require_in_process`].
+//! No command awaits a `!Send` connection future directly — that work is
+//! confined to the driver threads (in-process) or the ACP Core process.
 
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ListSessionsResponse, McpServer, SessionConfigOption, StopReason, TextContent,
+    AgentCapabilities, ContentBlock, ListSessionsResponse, McpServer, SessionConfigOption,
+    StopReason, TextContent,
 };
+use serde::Deserialize;
 use serde_json::json;
 use tauri::State;
 
 use crate::acp::config::{require_config_id, AgentConfig, AgentId, PermissionPolicy, SessionId};
+use crate::acp::events::{AuthMethodInfo, SessionModel, SessionModelState};
 use crate::acp::manager::{
-    AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
+    NewSessionOutcome, SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
 };
-use crate::acp::session_persistence::{SessionIndexEntry, SessionRegistration};
+use crate::acp::session_persistence::{SessionIndexEntry, SessionMetadata, SessionRegistration};
 use crate::web::WsRelaySink;
+
+async fn proxy_core<T: serde::de::DeserializeOwned>(
+    client: &crate::core::AcpCoreClient,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<T, String> {
+    let value = client
+        .request(method, params)
+        .await
+        .map_err(|error| error.command_message())?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+async fn proxy_core_into<T, U>(
+    client: &crate::core::AcpCoreClient,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<U, String>
+where
+    T: serde::de::DeserializeOwned,
+    U: From<T>,
+{
+    Ok(proxy_core::<T>(client, method, params).await?.into())
+}
+
+fn intern_persistence(value: &str) -> &'static str {
+    match value {
+        "ephemeral" => "ephemeral",
+        "conversation" => "conversation",
+        other => Box::leak(other.to_string().into_boxed_str()),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthMethodInfoWire {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+impl From<AuthMethodInfoWire> for AuthMethodInfo {
+    fn from(wire: AuthMethodInfoWire) -> Self {
+        Self {
+            id: wire.id,
+            name: wire.name,
+            description: wire.description,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionModelWire {
+    model_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+impl From<SessionModelWire> for SessionModel {
+    fn from(wire: SessionModelWire) -> Self {
+        Self {
+            model_id: wire.model_id,
+            name: wire.name,
+            description: wire.description,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionModelStateWire {
+    current_model_id: String,
+    available_models: Vec<SessionModelWire>,
+}
+
+impl From<SessionModelStateWire> for SessionModelState {
+    fn from(wire: SessionModelStateWire) -> Self {
+        Self {
+            current_model_id: wire.current_model_id,
+            available_models: wire.available_models.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpawnOutcomeWire {
+    agent_id: AgentId,
+    capabilities: AgentCapabilities,
+    #[serde(default)]
+    auth_methods: Vec<AuthMethodInfoWire>,
+    #[serde(default)]
+    stable_namespace: Option<String>,
+}
+
+impl From<SpawnOutcomeWire> for SpawnOutcome {
+    fn from(wire: SpawnOutcomeWire) -> Self {
+        Self {
+            agent_id: wire.agent_id,
+            capabilities: wire.capabilities,
+            auth_methods: wire.auth_methods.into_iter().map(Into::into).collect(),
+            stable_namespace: wire.stable_namespace,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionReopenOutcomeWire {
+    #[serde(default)]
+    modes: Option<agent_client_protocol::schema::v1::SessionModeState>,
+    #[serde(default)]
+    models: Option<SessionModelStateWire>,
+    #[serde(default)]
+    config_options: Option<Vec<SessionConfigOption>>,
+}
+
+impl From<SessionReopenOutcomeWire> for SessionReopenOutcome {
+    fn from(wire: SessionReopenOutcomeWire) -> Self {
+        Self {
+            modes: wire.modes,
+            models: wire.models.map(Into::into),
+            config_options: wire.config_options,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NewSessionOutcomeWire {
+    persistence: String,
+    #[serde(default)]
+    conversation_id: Option<crate::conversation::ConversationId>,
+    #[serde(default)]
+    workspace_cwd: Option<String>,
+    #[serde(default)]
+    execution_cwd: Option<String>,
+    session_id: SessionId,
+    #[serde(default)]
+    modes: Option<agent_client_protocol::schema::v1::SessionModeState>,
+    #[serde(default)]
+    models: Option<SessionModelStateWire>,
+    #[serde(default)]
+    config_options: Option<Vec<SessionConfigOption>>,
+}
+
+impl From<NewSessionOutcomeWire> for NewSessionOutcome {
+    fn from(wire: NewSessionOutcomeWire) -> Self {
+        Self {
+            persistence: intern_persistence(&wire.persistence),
+            conversation_id: wire.conversation_id,
+            workspace_cwd: wire.workspace_cwd,
+            execution_cwd: wire.execution_cwd,
+            session_id: wire.session_id,
+            modes: wire.modes,
+            models: wire.models.map(Into::into),
+            config_options: wire.config_options,
+        }
+    }
+}
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
 /// Returns the authoritative [`SpawnOutcome`] (capabilities + auth methods +
@@ -27,37 +194,73 @@ use crate::web::WsRelaySink;
 /// source of truth). Mirrors the WS `spawn_agent` handler payload.
 #[tauri::command]
 pub async fn acp_spawn_agent(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     config: AgentConfig,
 ) -> Result<SpawnOutcome, String> {
     // OQ1: reject an AgentConfig without a non-empty `configId` so the spawn
     // path derives a stable `config:{config_id}` namespace (no fallback hash).
     // Shared with the WS `spawn_agent` handler via `require_config_id`.
     require_config_id(&config)?;
+    if let Some(client) = acp.core_client() {
+        return proxy_core_into::<SpawnOutcomeWire, SpawnOutcome>(
+            client.as_ref(),
+            "spawnAgent",
+            serde_json::to_value(&config).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.spawn(config).await
 }
 
 /// Kill an agent and join its driver thread. Idempotent.
 #[tauri::command]
 pub async fn acp_kill_agent(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(client.as_ref(), "killAgent", json!({ "agentId": agent_id })).await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.kill(&agent_id).await
 }
 
 /// List the ids of all live agents.
 #[tauri::command]
-pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<AgentId>, String> {
+pub async fn acp_list_agents(
+    acp: State<'_, crate::core::AcpServiceHandle>,
+) -> Result<Vec<AgentId>, String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(client.as_ref(), "listAgents", serde_json::Value::Null).await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     Ok(manager.list_agents())
 }
 
 #[tauri::command]
-pub fn acp_set_permission_policy(
-    manager: State<'_, Arc<AcpManager>>,
+pub async fn acp_set_permission_policy(
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     policy: PermissionPolicy,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "setPermissionPolicy",
+            json!({ "agentId": agent_id, "policy": policy }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.set_permission_policy(&agent_id, policy)
 }
 
@@ -69,7 +272,7 @@ pub fn acp_set_permission_policy(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn acp_new_session(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     cwd: String,
     mcp_servers: Option<Vec<McpServer>>,
@@ -81,6 +284,28 @@ pub async fn acp_new_session(
     project_attachment: Option<crate::conversation::ProjectAttachment>,
     execution_target: Option<crate::conversation::ExecutionTarget>,
 ) -> Result<NewSessionOutcome, String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core_into::<NewSessionOutcomeWire, NewSessionOutcome>(
+            client.as_ref(),
+            "newSession",
+            json!({
+                "agentId": agent_id,
+                "cwd": cwd,
+                "mcpServers": mcp_servers,
+                "ephemeral": ephemeral,
+                "projectId": project_id,
+                "worktreePath": worktree_path,
+                "worktreeBranch": worktree_branch,
+                "conversationId": conversation_id,
+                "projectAttachment": project_attachment,
+                "executionTarget": execution_target,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     let result = manager
         .new_session_with_context(
             &agent_id,
@@ -121,13 +346,30 @@ pub async fn acp_new_session(
 /// Load an existing session (requires the agent's `loadSession` capability).
 #[tauri::command]
 pub async fn acp_load_session(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
     conversation_id: Option<String>,
     mcp_servers: Option<Vec<McpServer>>,
 ) -> Result<SessionReopenOutcome, String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core_into::<SessionReopenOutcomeWire, SessionReopenOutcome>(
+            client.as_ref(),
+            "loadSession",
+            json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "cwd": cwd,
+                "conversationId": conversation_id,
+                "mcpServers": mcp_servers,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     let session_id_str = session_id.0.clone();
     // Register before contacting the agent: load can synchronously emit
     // session/update notifications, and those must resolve canonical
@@ -157,13 +399,30 @@ pub async fn acp_load_session(
 /// Resume a session (requires the agent's `sessionCapabilities.resume`).
 #[tauri::command]
 pub async fn acp_resume_session(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
     conversation_id: Option<String>,
     mcp_servers: Option<Vec<McpServer>>,
 ) -> Result<SessionReopenOutcome, String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core_into::<SessionReopenOutcomeWire, SessionReopenOutcome>(
+            client.as_ref(),
+            "resumeSession",
+            json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "cwd": cwd,
+                "conversationId": conversation_id,
+                "mcpServers": mcp_servers,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     let session_id_str = session_id.0.clone();
     // Resume may emit updates before its response, so make the durable route
     // visible before sending the ACP request.
@@ -192,17 +451,32 @@ pub async fn acp_resume_session(
 /// Close a session (requires the agent's `sessionCapabilities.close`).
 #[tauri::command]
 pub async fn acp_close_session(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     pty: State<'_, Arc<crate::pty::PtyManager>>,
-    relay: State<'_, Arc<WsRelaySink>>,
+    relay: State<'_, Option<Arc<WsRelaySink>>>,
     agent_id: AgentId,
     session_id: SessionId,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "closeSession",
+            json!({ "agentId": agent_id, "sessionId": session_id }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
+    let relay = relay
+        .inner()
+        .as_ref()
+        .ok_or_else(|| "relay unavailable".to_string())?;
     let retirement_id = session_id.0.clone();
     let result =
         if let Some(conversation_id) = manager.conversation_id_for_current_session(&session_id.0) {
             let service = crate::conversation::ConversationLifecycleService::from_manager(
-                manager.inner().clone(),
+                manager.clone(),
                 pty.inner().clone(),
             )
             .map_err(|error| error.to_string())?;
@@ -222,21 +496,36 @@ pub async fn acp_close_session(
         } else {
             manager.close_session(&agent_id, session_id).await
         };
-    retire_after_success(result, relay.inner(), &retirement_id).await
+    retire_after_success(result, relay, &retirement_id).await
 }
 
 #[tauri::command]
 pub async fn acp_dispose_ephemeral_session(
-    manager: State<'_, Arc<AcpManager>>,
-    relay: State<'_, Arc<WsRelaySink>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    relay: State<'_, Option<Arc<WsRelaySink>>>,
     agent_id: AgentId,
     session_id: SessionId,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "disposeEphemeralSession",
+            json!({ "agentId": agent_id, "sessionId": session_id }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
+    let relay = relay
+        .inner()
+        .as_ref()
+        .ok_or_else(|| "relay unavailable".to_string())?;
     let retirement_id = session_id.0.clone();
     let result = manager
         .dispose_ephemeral_session(&agent_id, session_id)
         .await;
-    retire_after_success(result, relay.inner(), &retirement_id).await
+    retire_after_success(result, relay, &retirement_id).await
 }
 
 async fn retire_after_success(
@@ -255,18 +544,29 @@ async fn retire_after_success(
 /// Pass `cwd` to filter by working directory; `cursor` for pagination.
 #[tauri::command]
 pub async fn acp_list_sessions(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     cwd: Option<String>,
     cursor: Option<String>,
 ) -> Result<ListSessionsResponse, String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "listSessions",
+            json!({ "agentId": agent_id, "cwd": cwd, "cursor": cursor }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.list_sessions(&agent_id, cwd, cursor).await
 }
 
 /// Promote agent-owned discovered session metadata into host persistence.
 #[tauri::command]
 pub async fn acp_register_discovered_session(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     session_id: String,
     agent_id: AgentId,
     cwd: String,
@@ -277,6 +577,25 @@ pub async fn acp_register_discovered_session(
     if session_id.trim().is_empty() || cwd.trim().is_empty() {
         return Err("session id and cwd are required".to_string());
     }
+    if let Some(client) = acp.core_client() {
+        let metadata: SessionMetadata = proxy_core(
+            client.as_ref(),
+            "registerDiscoveredSession",
+            json!({
+                "sessionId": session_id,
+                "agentId": agent_id,
+                "cwd": cwd,
+                "title": title,
+                "updatedAt": updated_at,
+                "projectId": project_id,
+            }),
+        )
+        .await?;
+        return Ok(SessionIndexEntry::from(&metadata));
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     let persistence = manager
         .persistence()
         .ok_or_else(|| "session persistence unavailable".to_string())?;
@@ -318,13 +637,29 @@ pub async fn acp_register_discovered_session(
 /// renderer's dedup is Tauri-event-based, not wire-level).
 #[tauri::command]
 pub async fn acp_send_prompt(
-    manager: State<'_, Arc<AcpManager>>,
-    relay: State<'_, Arc<WsRelaySink>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    relay: State<'_, Option<Arc<WsRelaySink>>>,
     agent_id: AgentId,
     session_id: SessionId,
     content: Option<Vec<ContentBlock>>,
     text: Option<String>,
 ) -> Result<StopReason, String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "sendPrompt",
+            json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "content": content,
+                "text": text,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     let blocks = match (content, text) {
         (Some(blocks), _) if !blocks.is_empty() => blocks,
         // Empty `content` falls back to `text` when provided.
@@ -364,8 +699,16 @@ pub async fn acp_send_prompt(
             .conversation_id_for_current_session(&session_id.0)
             .is_some();
         if bound {
-            if let Err(error) =
-                persist_accepted_prompt(relay.inner(), &agent_id, &session_id, &blocks).await
+            if let Err(error) = persist_accepted_prompt(
+                relay
+                    .inner()
+                    .as_ref()
+                    .ok_or_else(|| "relay unavailable".to_string())?,
+                &agent_id,
+                &session_id,
+                &blocks,
+            )
+            .await
             {
                 // Persistence failure rejects dispatch so a transport failure
                 // cannot erase an accepted user message. Log session context only
@@ -421,22 +764,49 @@ pub(crate) async fn persist_accepted_prompt(
 /// Cancel the active turn for a session.
 #[tauri::command]
 pub async fn acp_cancel_prompt(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     session_id: SessionId,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "cancelPrompt",
+            json!({ "agentId": agent_id, "sessionId": session_id }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.cancel_prompt(&agent_id, session_id).await
 }
 
 /// Set a session configuration option, returning the updated option set.
 #[tauri::command]
 pub async fn acp_set_config_option(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     session_id: SessionId,
     config_id: String,
     value_id: String,
 ) -> Result<Vec<SessionConfigOption>, String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "setConfigOption",
+            json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "configId": config_id,
+                "valueId": value_id,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager
         .set_config_option(&agent_id, session_id, config_id, value_id)
         .await
@@ -445,22 +815,52 @@ pub async fn acp_set_config_option(
 /// Set the active session mode.
 #[tauri::command]
 pub async fn acp_set_mode(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     session_id: SessionId,
     mode_id: String,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "setMode",
+            json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "modeId": mode_id,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.set_mode(&agent_id, session_id, mode_id).await
 }
 
 /// Set the active session model.
 #[tauri::command]
 pub async fn acp_set_model(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     session_id: SessionId,
     model_id: String,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "setModel",
+            json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "modelId": model_id,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.set_model(&agent_id, session_id, model_id).await
 }
 
@@ -468,10 +868,21 @@ pub async fn acp_set_model(
 /// the ids advertised in the agent's `initialize` response.
 #[tauri::command]
 pub async fn acp_authenticate(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     method_id: String,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "authenticate",
+            json!({ "agentId": agent_id, "methodId": method_id }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     manager.authenticate(&agent_id, method_id).await
 }
 
@@ -490,11 +901,26 @@ pub async fn acp_authenticate(
 /// show a confusing error for the loser of a race the user intended to win.
 #[tauri::command]
 pub async fn acp_respond_permission(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     request_id: String,
     option_id: Option<String>,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "respondPermission",
+            json!({
+                "agentId": agent_id,
+                "requestId": request_id,
+                "optionId": option_id,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     match manager
         .respond_permission(&agent_id, request_id, option_id)
         .await
@@ -518,11 +944,26 @@ pub async fn acp_respond_permission(
 /// error for the loser of a race the user intended to win.
 #[tauri::command]
 pub async fn acp_answer_question(
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     agent_id: AgentId,
     question_id: String,
     values: Option<Vec<String>>,
 ) -> Result<(), String> {
+    if let Some(client) = acp.core_client() {
+        return proxy_core(
+            client.as_ref(),
+            "answerQuestion",
+            json!({
+                "agentId": agent_id,
+                "questionId": question_id,
+                "values": values,
+            }),
+        )
+        .await;
+    }
+    let manager = acp
+        .require_in_process()
+        .map_err(|error| error.to_string())?;
     match manager
         .answer_question(&agent_id, question_id, values)
         .await
@@ -553,7 +994,7 @@ pub async fn acp_list_catalog(
     refresh: Option<bool>,
     store: State<'_, crate::commands::HostAcpCatalogStore>,
     install_store: State<'_, crate::commands::HostAcpInstallStore>,
-    manager: State<'_, Arc<AcpManager>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
 ) -> Result<crate::commands::IpcResult<crate::acp::AcpCatalog>, String> {
     let refresh = refresh.unwrap_or(false);
     log::info!("[acp-catalog] list start refresh={refresh}");
@@ -573,7 +1014,20 @@ pub async fn acp_list_catalog(
                 .store()
                 .map(|install| install.installed_agents())
                 .unwrap_or_default();
-            let running = manager.list_running_namespaces();
+            let running = if let Some(client) = acp.core_client() {
+                match client.request("listAgents", serde_json::Value::Null).await {
+                    Ok(value) => serde_json::from_value::<Vec<AgentId>>(value)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|id| (id.0, None))
+                        .collect(),
+                    Err(_) => Vec::new(),
+                }
+            } else {
+                acp.require_in_process()
+                    .map(|manager| manager.list_running_namespaces())
+                    .unwrap_or_default()
+            };
             crate::acp::apply_host_catalog_overlays(&mut catalog, &installed, &running);
             log::info!("[acp-catalog] list success agents={}", catalog.agents.len());
             Ok(crate::commands::IpcResult::success(catalog))

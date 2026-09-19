@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use serde::de::DeserializeOwned;
+use serde_json::json;
 use tauri::{AppHandle, Emitter, State};
 
 use super::ingest::{IngestOptions, IngestProgress, IngestReport};
@@ -16,6 +18,29 @@ use super::service::{
     MemorySessionDetail,
 };
 use super::types::IndexedSession;
+
+/// Optional in-process memory-index service. `None` in ACP-Core desktop mode
+/// (commands proxy over `AcpServiceHandle`).
+#[derive(Clone, Default)]
+pub struct HostMemoryIndex(pub Option<Arc<crate::memory_index::service::MemoryIndexService>>);
+
+async fn via_core<T: DeserializeOwned>(
+    client: &crate::core::AcpCoreClient,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<T, String> {
+    let value = client
+        .request(method, params)
+        .await
+        .map_err(|error| error.command_message())?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+fn require_service(host: &HostMemoryIndex) -> Result<Arc<MemoryIndexService>, String> {
+    host.0
+        .clone()
+        .ok_or_else(|| "memory index service unavailable".to_string())
+}
 
 /// Progress event name.
 ///
@@ -57,13 +82,13 @@ pub(crate) fn throttled(mut sink: impl FnMut(&IngestProgress)) -> impl FnMut(Ing
 /// Arguments shared by every command. `projectRoot` is a single path on
 /// purpose: the memory index is per-project, and a list here would be the first
 /// step toward serving one project's history as another's.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryIndexScopeArgs {
     pub project_root: String,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryIndexBuildArgs {
     pub project_root: String,
@@ -73,7 +98,7 @@ pub struct MemoryIndexBuildArgs {
     pub index_unscoped: bool,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryIndexSearchArgs {
     pub project_root: String,
@@ -81,7 +106,7 @@ pub struct MemoryIndexSearchArgs {
     pub request: MemorySearchRequest,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryIndexListArgs {
     pub project_root: String,
@@ -93,7 +118,7 @@ pub struct MemoryIndexListArgs {
     pub agents: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryIndexSessionArgs {
     pub project_root: String,
@@ -116,10 +141,19 @@ pub struct MemoryIndexSessionArgs {
 #[tauri::command]
 pub async fn memory_index_build_cmd(
     app: AppHandle,
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
     args: MemoryIndexBuildArgs,
 ) -> Result<IngestReport, String> {
-    let service = Arc::clone(&service);
+    if let Some(client) = acp.core_client() {
+        return via_core(
+            client.as_ref(),
+            "memoryBuild",
+            serde_json::to_value(&args).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    let service = require_service(host.inner())?;
     log::info!(
         target: "se_manager::memory_index",
         "operation=memory_index_build full_rebuild={} index_unscoped={}",
@@ -149,20 +183,38 @@ pub async fn memory_index_build_cmd(
 /// Ask a running build to stop. `false` means nothing was running.
 #[tauri::command]
 pub async fn memory_index_cancel_cmd(
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
     args: MemoryIndexScopeArgs,
 ) -> Result<bool, String> {
-    service
+    if let Some(client) = acp.core_client() {
+        return via_core(
+            client.as_ref(),
+            "memoryCancel",
+            serde_json::to_value(&args).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    require_service(host.inner())?
         .cancel_build(&PathBuf::from(args.project_root))
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn memory_index_status_cmd(
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
     args: MemoryIndexScopeArgs,
 ) -> Result<MemoryIndexStatus, String> {
-    let service = Arc::clone(&service);
+    if let Some(client) = acp.core_client() {
+        return via_core(
+            client.as_ref(),
+            "memoryStatus",
+            serde_json::to_value(&args).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    let service = require_service(host.inner())?;
     tokio::task::spawn_blocking(move || {
         service
             .status(&PathBuf::from(args.project_root))
@@ -174,10 +226,19 @@ pub async fn memory_index_status_cmd(
 
 #[tauri::command]
 pub async fn memory_index_search_cmd(
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
     args: MemoryIndexSearchArgs,
 ) -> Result<MemorySearchResponse, String> {
-    let service = Arc::clone(&service);
+    if let Some(client) = acp.core_client() {
+        return via_core(
+            client.as_ref(),
+            "memorySearch",
+            serde_json::to_value(&args).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    let service = require_service(host.inner())?;
     tokio::task::spawn_blocking(move || {
         service
             .search(&PathBuf::from(args.project_root), &args.request)
@@ -189,10 +250,19 @@ pub async fn memory_index_search_cmd(
 
 #[tauri::command]
 pub async fn memory_index_sessions_cmd(
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
     args: MemoryIndexListArgs,
 ) -> Result<Vec<IndexedSession>, String> {
-    let service = Arc::clone(&service);
+    if let Some(client) = acp.core_client() {
+        return via_core(
+            client.as_ref(),
+            "memorySessions",
+            serde_json::to_value(&args).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    let service = require_service(host.inner())?;
     tokio::task::spawn_blocking(move || {
         service
             .list_sessions(
@@ -209,10 +279,19 @@ pub async fn memory_index_sessions_cmd(
 
 #[tauri::command]
 pub async fn memory_index_session_cmd(
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
     args: MemoryIndexSessionArgs,
 ) -> Result<Option<MemorySessionDetail>, String> {
-    let service = Arc::clone(&service);
+    if let Some(client) = acp.core_client() {
+        return via_core(
+            client.as_ref(),
+            "memorySession",
+            serde_json::to_value(&args).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    let service = require_service(host.inner())?;
     tokio::task::spawn_blocking(move || {
         service
             .get_session(
@@ -236,9 +315,19 @@ pub async fn memory_index_session_cmd(
 /// that could drift from what the app actually uses.
 #[tauri::command]
 pub async fn memory_index_mcp_invocation_cmd(
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
     args: MemoryIndexScopeArgs,
 ) -> Result<Vec<String>, String> {
+    if let Some(client) = acp.core_client() {
+        return via_core(
+            client.as_ref(),
+            "memoryMcpInvocation",
+            serde_json::to_value(&args).map_err(|error| error.to_string())?,
+        )
+        .await;
+    }
+    let service = require_service(host.inner())?;
     let executable = std::env::current_exe()
         .map_err(|error| format!("could not resolve executable: {error}"))?;
     Ok(super::stdio_mcp::invocation_for(
@@ -255,8 +344,13 @@ pub async fn memory_index_mcp_invocation_cmd(
 /// project selection happens inside the server, not in the client config.
 #[tauri::command]
 pub async fn memory_index_universal_mcp_invocation_cmd(
-    service: State<'_, Arc<MemoryIndexService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostMemoryIndex>,
 ) -> Result<Vec<String>, String> {
+    if let Some(client) = acp.core_client() {
+        return via_core(client.as_ref(), "memoryUniversalMcpInvocation", json!({})).await;
+    }
+    let service = require_service(host.inner())?;
     let executable = std::env::current_exe()
         .map_err(|error| format!("could not resolve executable: {error}"))?;
     Ok(super::stdio_mcp::universal_invocation_for(

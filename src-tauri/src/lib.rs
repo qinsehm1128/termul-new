@@ -1530,6 +1530,62 @@ fn launch_desktop_terminal_core(
     })
 }
 
+fn desktop_acp_service(
+    app_data_dir: &Path,
+    conversation_workspace_base: &Path,
+    app_handle: tauri::AppHandle,
+) -> Option<crate::core::AcpServiceHandle> {
+    #[cfg(unix)]
+    {
+        // Safety: desktop setup is single-threaded here; the ACP Core process
+        // reads this workspace root at spawn and does not race later mutations.
+        unsafe {
+            std::env::set_var("TERMUL_CORE_WORKSPACE_ROOT", conversation_workspace_base);
+        }
+        match launch_desktop_acp_core(app_data_dir) {
+            Ok(client) => {
+                let mut events = client.subscribe_events();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match events.recv().await {
+                            Ok(envelope) => {
+                                let _ = app_handle.emit(&envelope.type_, envelope.data.clone());
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+                log::info!(
+                    target: "se_manager::core",
+                    "operation=desktop_acp_core stable_code=READY"
+                );
+                return Some(crate::core::AcpServiceHandle::from_core_client(client));
+            }
+            Err(error) => {
+                log::warn!(
+                    target: "se_manager::core",
+                    "operation=desktop_acp_core stable_code={} detail=falling_back_in_process",
+                    error.code()
+                );
+            }
+        }
+    }
+    let _ = (app_data_dir, conversation_workspace_base, app_handle);
+    None
+}
+
+#[cfg(unix)]
+fn launch_desktop_acp_core(
+    app_data_dir: &Path,
+) -> Result<crate::core::AcpCoreClient, crate::core::CoreError> {
+    let config = crate::core::CoreLaunchConfig::for_current_executable(app_data_dir)?;
+    tauri::async_runtime::block_on(async {
+        let process = crate::core::ensure_core(crate::core::CoreRole::AcpCore, &config).await?;
+        crate::core::AcpCoreClient::connect(&process.endpoint).await
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Keep the legacy importer linkable for compatibility tests and older internal callers, but
@@ -1649,34 +1705,44 @@ pub fn run() {
                     "CONVERSATION_ROOT_INVALID: no document or home directory is available"
                         .to_string()
                 })?;
-            let conversation_bootstrap = crate::conversation::ConversationBootstrap::run(
-                crate::conversation::HostConversationRoots::desktop(
-                    app_data_dir.clone(),
-                    conversation_workspace_base,
-                ),
-                crate::conversation::MigrationHostMode::Desktop,
-            )
-            .map_err(|error| error.to_string())?;
-            log::info!(
-                "[conversation-bootstrap] desktop repository ready phase={:?} precedence={:?} recovery_count={}",
-                conversation_bootstrap.migration_phase,
-                conversation_bootstrap.reader_precedence,
-                conversation_bootstrap.recovery_item_count
+            let acp_core_handle = desktop_acp_service(
+                &app_data_dir,
+                &conversation_workspace_base,
+                handle.clone(),
             );
-            app.manage(Arc::clone(&conversation_bootstrap.repository));
-            app.manage(Arc::clone(&conversation_bootstrap.reader));
-            app.manage(Arc::clone(&conversation_bootstrap.creation));
-            app.manage(Arc::clone(&conversation_bootstrap.persistence_adapter));
-            // Publish the exact bootstrap-owned ordering/shutdown authority. Relay construction
-            // below resolves this same core; no second writer task set is admitted.
-            app.manage(Arc::clone(&conversation_bootstrap.ordered_persistence));
-            app.manage(Arc::clone(&conversation_bootstrap.workspace));
-            app.manage(Arc::clone(&conversation_bootstrap.application));
-            let conversation_migration_control = Arc::new(
-                crate::conversation::ConversationMigrationControlService::new(&app_data_dir)
-                    .map_err(|error| error.to_string())?,
-            );
-            app.manage(conversation_migration_control);
+            let conversation_bootstrap = if acp_core_handle.is_none() {
+                let conversation_bootstrap = crate::conversation::ConversationBootstrap::run(
+                    crate::conversation::HostConversationRoots::desktop(
+                        app_data_dir.clone(),
+                        conversation_workspace_base,
+                    ),
+                    crate::conversation::MigrationHostMode::Desktop,
+                )
+                .map_err(|error| error.to_string())?;
+                log::info!(
+                    "[conversation-bootstrap] desktop repository ready phase={:?} precedence={:?} recovery_count={}",
+                    conversation_bootstrap.migration_phase,
+                    conversation_bootstrap.reader_precedence,
+                    conversation_bootstrap.recovery_item_count
+                );
+                app.manage(Arc::clone(&conversation_bootstrap.repository));
+                app.manage(Arc::clone(&conversation_bootstrap.reader));
+                app.manage(Arc::clone(&conversation_bootstrap.creation));
+                app.manage(Arc::clone(&conversation_bootstrap.persistence_adapter));
+                // Publish the exact bootstrap-owned ordering/shutdown authority. Relay construction
+                // below resolves this same core; no second writer task set is admitted.
+                app.manage(Arc::clone(&conversation_bootstrap.ordered_persistence));
+                app.manage(Arc::clone(&conversation_bootstrap.workspace));
+                app.manage(Arc::clone(&conversation_bootstrap.application));
+                let conversation_migration_control = Arc::new(
+                    crate::conversation::ConversationMigrationControlService::new(&app_data_dir)
+                        .map_err(|error| error.to_string())?,
+                );
+                app.manage(conversation_migration_control);
+                Some(conversation_bootstrap)
+            } else {
+                None
+            };
 
             // Window chrome is configured before show(). macOS overlay settings
             // live in tauri.conf.json — avoid set_decorations(true) there because
@@ -1752,10 +1818,14 @@ pub fn run() {
             // The legacy `acp-sessions` root was already inventoried/migrated synchronously and
             // is not opened as a live SessionPersistence store.
             app.manage(chat_history_store);
-            app.manage(commands::HostHistoryStore::conversation(
-                Arc::clone(&conversation_bootstrap.persistence_adapter),
-                None,
-            ));
+            if let Some(conversation_bootstrap) = conversation_bootstrap.as_ref() {
+                app.manage(commands::HostHistoryStore::conversation(
+                    Arc::clone(&conversation_bootstrap.persistence_adapter),
+                    None,
+                ));
+            } else {
+                app.manage(commands::HostHistoryStore::unavailable());
+            }
 
             // CAP-5 / Story 5: open the host-owned workspace-manifests root
             // under `<app_data_dir>/workspace-manifests`. The desktop owns its
@@ -1884,123 +1954,158 @@ pub fn run() {
                 acp_install_service.clone(),
             ));
 
-            // Create ACP Manager — spawns/owns ACP agent subprocesses.
-            //
-            // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
-            // (the renderer's `acp:*` events, byte-for-byte unchanged) and a
-            // `WsRelaySink` (the shared-live web server's per-session event log
-            // + subscriber set). `fan_out` serializes once and fans N, so adding
-            // the second sink does not change the `TauriEventSink` payloads.
-            // With host persistence attached, the relay additionally durables
-            // every session-scoped event (the same seam the standalone server
-            // uses) — transport-agnostic, so desktop-origin and browser-origin
-            // sessions are persisted identically.
-            //
-            // The shared-live web server (`remote/host.rs`) pulls both
-            // `Arc<AcpManager>` and `Arc<WsRelaySink>` as Tauri state and serves
-            // the desktop's live sessions to a browser/phone over the LAN.
-            let mut sinks: Vec<Arc<dyn crate::web::EventSink>> =
-                vec![Arc::new(TauriEventSink::new(handle.clone()))];
-            let ws_relay = Arc::new(WsRelaySink::with_conversation_persistence(
-                4096,
-                Arc::clone(&conversation_bootstrap.persistence_adapter),
-                None,
-            ));
-            let relay_ordered = ws_relay
-                .ordered_conversation_persistence()
-                .ok_or_else(|| anyhow::anyhow!("desktop relay is missing ordered persistence"))?;
-            if !relay_ordered.shares_authority(&conversation_bootstrap.ordered_persistence) {
-                return Err(anyhow::anyhow!(
-                    "desktop relay did not retain the bootstrap ordering authority"
-                )
-                .into());
-            }
-            sinks.push(ws_relay.clone());
-            let acp_manager = Arc::new(AcpManager::with_conversation_services(
-                sinks,
-                Arc::clone(&conversation_bootstrap.creation),
-                Arc::clone(&conversation_bootstrap.persistence_adapter),
-            ));
-            acp_manager.set_terminal_service(terminal_handle.clone());
-            let acp_handle = crate::core::AcpServiceHandle::in_process(Arc::clone(&acp_manager));
-            conversation_bootstrap
-                .application
-                .attach_lifecycle(
-                    crate::conversation::ConversationLifecycleService::from_terminal(
-                        Arc::clone(&acp_manager),
-                        terminal_handle.clone(),
-                    )
-                    .map_err(|error| error.to_string())?,
-                )
-                .map_err(|error| error.to_string())?;
-            // Attach the server-side permission rendezvous so a phone can
-            // respond to `acp:permission_request` over WS. The desktop renderer
-            // still responds via the `acp_respond_permission` Tauri command
-            // (direct `AcpManager::respond_permission`); the rendezvous's
-            // at-most-one `take_permission` gate ensures whichever path responds
-            // first wins.
-            //
-            // Capture the runtime handle explicitly (`tauri::async_runtime`)
-            // rather than relying on `Handle::try_current()` — `setup` runs on
-            // the main thread and is not guaranteed to be inside a tokio runtime
-            // context, so capturing the handle here keeps `arm_timeout` reliable
-            // when it runs later on the agent driver thread.
-            let rendezvous = Arc::new(PermissionRendezvous::with_handle_and_policy(
-                Arc::clone(&acp_manager),
-                std::time::Duration::from_secs(60),
-                std::time::Duration::from_secs(15),
-                tauri::async_runtime::handle().inner().clone(),
-            ));
-            ws_relay.set_rendezvous(rendezvous);
-            // Attach the server-side question rendezvous so a phone attached
-            // to a desktop host can answer structured questions over WS too
-            // (desktop renderer answers via the `acp_answer_question` Tauri
-            // command; first-response-wins across both paths).
-            let question_rendezvous = Arc::new(QuestionRendezvous::with_handle(
-                Arc::clone(&acp_manager),
-                std::time::Duration::from_secs(60),
-                tauri::async_runtime::handle().inner().clone(),
-            ));
-            ws_relay.set_question_rendezvous(question_rendezvous);
-            let scheduled_task_root = app_data_dir.join("scheduled-tasks").join("v1");
-            let scheduled_task_store = Arc::new(
-                crate::scheduled_tasks::ScheduledTaskStore::open_with_legacy_root(
-                    scheduled_task_root.join("catalog"),
-                    Some(scheduled_task_root.join("projects")),
-                )
-                .map_err(|error| format!("failed to open scheduled task store: {error}"))?,
-            );
-            let scheduled_task_executor = Arc::new(
-                crate::scheduled_tasks::AcpScheduledTaskExecutor::new(
-                    Arc::clone(&acp_manager),
-                    Arc::clone(&ws_relay),
-                ),
-            );
-            let scheduled_tasks = crate::scheduled_tasks::ScheduledTaskService::new(
-                scheduled_task_store,
-                scheduled_task_executor,
-            );
-            acp_manager.set_scheduled_tasks(&scheduled_tasks);
-            // Cross-agent memory index. Host-private by construction: the state
-            // root is Tauri's `app_data_dir()`, the same tree Termul's own
-            // conversations live in, and never the user's project directory.
+            // Filesystem watch is not ACP-owned; keep it available in both
+            // in-process fallback and ACP Core desktop modes.
             app.manage(crate::fs_watcher::FsWatcherService::new());
-            let memory_index = Arc::new(crate::memory_index::service::MemoryIndexService::new(app_data_dir.clone()));
-            acp_manager.set_memory_index(&memory_index);
-            log::info!(
-                "[memory-index] boundary=service_ready host=desktop state_root={}",
-                memory_index.state_root().display()
-            );
-            app.manage(Arc::clone(&memory_index));
-            scheduled_tasks.start_on(tauri::async_runtime::handle().inner());
-            log::info!(
-                "[scheduled-task] boundary=service_started host=desktop root={}",
-                scheduled_tasks.store().root().display()
-            );
-            app.manage(Arc::clone(&scheduled_tasks));
-            app.manage(acp_handle);
-            app.manage(acp_manager);
-            app.manage(ws_relay);
+
+            if acp_core_handle.is_none() {
+                let conversation_bootstrap = conversation_bootstrap.expect(
+                    "in-process ACP composition requires Conversation bootstrap",
+                );
+                // Create ACP Manager — spawns/owns ACP agent subprocesses.
+                //
+                // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
+                // (the renderer's `acp:*` events, byte-for-byte unchanged) and a
+                // `WsRelaySink` (the shared-live web server's per-session event log
+                // + subscriber set). `fan_out` serializes once and fans N, so adding
+                // the second sink does not change the `TauriEventSink` payloads.
+                // With host persistence attached, the relay additionally durables
+                // every session-scoped event (the same seam the standalone server
+                // uses) — transport-agnostic, so desktop-origin and browser-origin
+                // sessions are persisted identically.
+                //
+                // The shared-live web server (`remote/host.rs`) pulls both
+                // `Arc<AcpManager>` and `Arc<WsRelaySink>` as Tauri state and serves
+                // the desktop's live sessions to a browser/phone over the LAN.
+                let mut sinks: Vec<Arc<dyn crate::web::EventSink>> =
+                    vec![Arc::new(TauriEventSink::new(handle.clone()))];
+                let ws_relay = Arc::new(WsRelaySink::with_conversation_persistence(
+                    4096,
+                    Arc::clone(&conversation_bootstrap.persistence_adapter),
+                    None,
+                ));
+                let relay_ordered = ws_relay
+                    .ordered_conversation_persistence()
+                    .ok_or_else(|| anyhow::anyhow!("desktop relay is missing ordered persistence"))?;
+                if !relay_ordered.shares_authority(&conversation_bootstrap.ordered_persistence) {
+                    return Err(anyhow::anyhow!(
+                        "desktop relay did not retain the bootstrap ordering authority"
+                    )
+                    .into());
+                }
+                sinks.push(ws_relay.clone());
+                let acp_manager = Arc::new(AcpManager::with_conversation_services(
+                    sinks,
+                    Arc::clone(&conversation_bootstrap.creation),
+                    Arc::clone(&conversation_bootstrap.persistence_adapter),
+                ));
+                acp_manager.set_terminal_service(terminal_handle.clone());
+                let acp_handle = crate::core::AcpServiceHandle::in_process(Arc::clone(&acp_manager));
+                conversation_bootstrap
+                    .application
+                    .attach_lifecycle(
+                        crate::conversation::ConversationLifecycleService::from_terminal(
+                            Arc::clone(&acp_manager),
+                            terminal_handle.clone(),
+                        )
+                        .map_err(|error| error.to_string())?,
+                    )
+                    .map_err(|error| error.to_string())?;
+                // Attach the server-side permission rendezvous so a phone can
+                // respond to `acp:permission_request` over WS. The desktop renderer
+                // still responds via the `acp_respond_permission` Tauri command
+                // (direct `AcpManager::respond_permission`); the rendezvous's
+                // at-most-one `take_permission` gate ensures whichever path responds
+                // first wins.
+                //
+                // Capture the runtime handle explicitly (`tauri::async_runtime`)
+                // rather than relying on `Handle::try_current()` — `setup` runs on
+                // the main thread and is not guaranteed to be inside a tokio runtime
+                // context, so capturing the handle here keeps `arm_timeout` reliable
+                // when it runs later on the agent driver thread.
+                let rendezvous = Arc::new(PermissionRendezvous::with_handle_and_policy(
+                    Arc::clone(&acp_manager),
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_secs(15),
+                    tauri::async_runtime::handle().inner().clone(),
+                ));
+                ws_relay.set_rendezvous(rendezvous);
+                // Attach the server-side question rendezvous so a phone attached
+                // to a desktop host can answer structured questions over WS too
+                // (desktop renderer answers via the `acp_answer_question` Tauri
+                // command; first-response-wins across both paths).
+                let question_rendezvous = Arc::new(QuestionRendezvous::with_handle(
+                    Arc::clone(&acp_manager),
+                    std::time::Duration::from_secs(60),
+                    tauri::async_runtime::handle().inner().clone(),
+                ));
+                ws_relay.set_question_rendezvous(question_rendezvous);
+                let scheduled_task_root = app_data_dir.join("scheduled-tasks").join("v1");
+                let scheduled_task_store = Arc::new(
+                    crate::scheduled_tasks::ScheduledTaskStore::open_with_legacy_root(
+                        scheduled_task_root.join("catalog"),
+                        Some(scheduled_task_root.join("projects")),
+                    )
+                    .map_err(|error| format!("failed to open scheduled task store: {error}"))?,
+                );
+                let scheduled_task_executor = Arc::new(
+                    crate::scheduled_tasks::AcpScheduledTaskExecutor::new(
+                        Arc::clone(&acp_manager),
+                        Arc::clone(&ws_relay),
+                    ),
+                );
+                let scheduled_tasks = crate::scheduled_tasks::ScheduledTaskService::new(
+                    scheduled_task_store,
+                    scheduled_task_executor,
+                );
+                acp_manager.set_scheduled_tasks(&scheduled_tasks);
+                // Cross-agent memory index. Host-private by construction: the state
+                // root is Tauri's `app_data_dir()`, the same tree Termul's own
+                // conversations live in, and never the user's project directory.
+                let memory_index = Arc::new(crate::memory_index::service::MemoryIndexService::new(app_data_dir.clone()));
+                acp_manager.set_memory_index(&memory_index);
+                log::info!(
+                    "[memory-index] boundary=service_ready host=desktop state_root={}",
+                    memory_index.state_root().display()
+                );
+                app.manage(Arc::clone(&memory_index));
+                scheduled_tasks.start_on(tauri::async_runtime::handle().inner());
+                log::info!(
+                    "[scheduled-task] boundary=service_started host=desktop root={}",
+                    scheduled_tasks.store().root().display()
+                );
+                app.manage(Arc::clone(&scheduled_tasks));
+                app.manage(acp_handle);
+                app.manage(acp_manager);
+                app.manage(Option::<Arc<WsRelaySink>>::Some(ws_relay.clone()));
+                app.manage(ws_relay);
+                app.manage(commands::HostConversationStore(Some(Arc::clone(
+                    &conversation_bootstrap.application,
+                ))));
+                app.manage(commands::HostConversationCreation(Some(Arc::clone(
+                    &conversation_bootstrap.creation,
+                ))));
+                app.manage(crate::scheduled_tasks::commands::HostScheduledTasks(Some(
+                    Arc::clone(&scheduled_tasks),
+                )));
+                app.manage(crate::memory_index::commands::HostMemoryIndex(Some(
+                    Arc::clone(&memory_index),
+                )));
+            } else {
+                let acp_core_handle = acp_core_handle.expect(
+                    "ACP core handle is present when in-process composition is skipped",
+                );
+                app.manage(acp_core_handle);
+                app.manage(commands::HostConversationStore(None));
+                app.manage(commands::HostConversationCreation(None));
+                app.manage(crate::scheduled_tasks::commands::HostScheduledTasks(None));
+                app.manage(crate::memory_index::commands::HostMemoryIndex(None));
+                app.manage(Option::<Arc<WsRelaySink>>::None);
+                log::info!(
+                    target: "se_manager::core",
+                    "[desktop-exit-independent] acp core owns conversation writer stable_code=CORE_OWNED"
+                );
+            }
 
             // In-memory project registry (Epic-4 bridge) — renderer-fed via
             // `remote_sync_projects`; the source for `GET /projects` +
@@ -2576,6 +2681,9 @@ pub fn run() {
             let ws_relay = app_handle
                 .try_state::<Arc<WsRelaySink>>()
                 .map(|state| state.inner().clone());
+            let acp_service = app_handle
+                .try_state::<crate::core::AcpServiceHandle>()
+                .map(|state| state.inner().clone());
             let scheduled_tasks = app_handle
                 .try_state::<Arc<crate::scheduled_tasks::ScheduledTaskService>>()
                 .map(|state| state.inner().clone());
@@ -2630,12 +2738,22 @@ pub fn run() {
                         .await;
                 }
 
-                let mut durability = stop_desktop_producers_and_drain(
-                    acp_manager.as_deref(),
-                    ws_relay.as_deref(),
-                    deadline,
-                )
-                .await;
+                let mut durability = if acp_service
+                    .as_ref()
+                    .is_some_and(crate::core::AcpServiceHandle::owns_core_process)
+                {
+                    log::info!(
+                        "[desktop-exit] shutdown_phase=acp_drain stable_code=CORE_OWNED_SKIP result=NOT_APPLICABLE"
+                    );
+                    DesktopExitDurabilityOutcome::default()
+                } else {
+                    stop_desktop_producers_and_drain(
+                        acp_manager.as_deref(),
+                        ws_relay.as_deref(),
+                        deadline,
+                    )
+                    .await
+                };
 
                 if let Some(ssh_manager) = ssh_manager {
                     if tokio::time::timeout_at(deadline, ssh_manager.shutdown())
@@ -2792,6 +2910,29 @@ mod tests {
         assert!(branch.contains("owns_core_process"));
         assert!(branch.contains("CORE_OWNED_SKIP"));
         assert!(!branch.contains("kill_all_until"));
+    }
+
+    #[test]
+    fn desktop_adopts_acp_core_and_skips_core_owned_acp_drain() {
+        let source = include_str!("lib.rs");
+        assert!(
+            source.contains("operation=desktop_acp_core stable_code=READY"),
+            "desktop ACP Core ready log must stay in source"
+        );
+        assert!(
+            source.contains(
+                "operation=desktop_acp_core stable_code={} detail=falling_back_in_process"
+            ),
+            "desktop ACP Core fallback log must stay in source"
+        );
+        let drain_start = source
+            .find("shutdown_phase=acp_drain")
+            .expect("ACP drain classification");
+        let drain = &source[drain_start.saturating_sub(400)..drain_start + 280];
+        assert!(drain.contains("CORE_OWNED_SKIP"));
+        assert!(drain.contains("owns_core_process"));
+        assert!(!drain.contains("stopProducers"));
+        assert!(!drain.contains("client.shutdown"));
     }
 
     #[test]

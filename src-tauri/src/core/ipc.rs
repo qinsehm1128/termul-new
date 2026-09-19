@@ -87,6 +87,15 @@ pub enum CoreError {
 }
 
 impl CoreError {
+    /// Message for command-layer mapping: keep the request detail (often a
+    /// stable code) when present, else the generic client message.
+    pub fn command_message(&self) -> String {
+        match self {
+            Self::InvalidRequest(detail) if !detail.is_empty() => detail.clone(),
+            other => other.to_string(),
+        }
+    }
+
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Io(_) => "CORE_IPC_IO",

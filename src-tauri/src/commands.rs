@@ -144,6 +144,20 @@ fn require_in_process_pty(
         .map_err(|error| error.to_string())
 }
 
+async fn acp_core_ipc<T: serde::de::DeserializeOwned>(
+    client: &crate::core::AcpCoreClient,
+    method: &str,
+    params: serde_json::Value,
+) -> IpcResult<T> {
+    match client.request(method, params).await {
+        Ok(value) => match serde_json::from_value(value) {
+            Ok(data) => IpcResult::success(data),
+            Err(error) => IpcResult::error(error.to_string(), "ACP_CORE"),
+        },
+        Err(error) => IpcResult::error(error.command_message(), "ACP_CORE"),
+    }
+}
+
 fn ipc_from_core<T>(result: Result<T, crate::core::CoreError>) -> IpcResult<T> {
     match result {
         Ok(value) => IpcResult::success(value),
@@ -4942,6 +4956,45 @@ impl HostHistoryStore {
             legacy_read_only,
         }
     }
+
+    pub fn unavailable() -> Self {
+        Self {
+            conversation: None,
+            legacy_read_only: None,
+        }
+    }
+}
+
+/// Optional in-process Conversation application service. `None` in ACP-Core
+/// desktop mode (commands proxy over `AcpServiceHandle`) and when bootstrap
+/// did not install the service.
+#[derive(Clone, Default)]
+pub struct HostConversationStore(
+    pub Option<Arc<crate::conversation::ConversationApplicationService>>,
+);
+
+/// Optional in-process Conversation creation service. `None` in ACP-Core
+/// desktop mode; `conversation_prepare_terminal` / `conversation_provision_terminal`
+/// proxy those calls instead.
+#[derive(Clone, Default)]
+pub struct HostConversationCreation(
+    pub Option<Arc<crate::conversation::ConversationCreationService>>,
+);
+
+fn require_conversation_service(
+    host: &HostConversationStore,
+) -> Result<&crate::conversation::ConversationApplicationService, String> {
+    host.0
+        .as_deref()
+        .ok_or_else(|| "conversation service unavailable".to_string())
+}
+
+fn require_conversation_creation(
+    host: &HostConversationCreation,
+) -> Result<&Arc<crate::conversation::ConversationCreationService>, String> {
+    host.0
+        .as_ref()
+        .ok_or_else(|| "conversation service unavailable".to_string())
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -4988,13 +5041,36 @@ fn host_entry_to_desktop(
 
 #[tauri::command]
 pub async fn acp_history_list(
+    acp: State<'_, crate::core::AcpServiceHandle>,
     host: State<'_, HostHistoryStore>,
     store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
 ) -> Result<IpcResult<DesktopChatHistoryList>, String> {
     log::info!("[acp-history] list start");
     // The legacy flag still gates the renderer's one-time KV wipe migration;
-    // the session list itself is host-owned now.
+    // the session list itself is host-owned now. It stays GUI-side even when
+    // history entries come from ACP Core.
     let legacy_import_complete = store.list().1;
+    if let Some(client) = acp.core_client() {
+        match client.request("historyList", serde_json::Value::Null).await {
+            Ok(value) => {
+                let entries: Vec<crate::acp::SessionIndexEntry> =
+                    match serde_json::from_value(value) {
+                        Ok(entries) => entries,
+                        Err(error) => return Ok(IpcResult::error(error.to_string(), "ACP_CORE")),
+                    };
+                let sessions = entries
+                    .into_iter()
+                    .map(host_entry_to_desktop)
+                    .collect::<Vec<_>>();
+                log::info!("[acp-history] list success sessions={}", sessions.len());
+                return Ok(IpcResult::success(DesktopChatHistoryList {
+                    sessions,
+                    legacy_import_complete,
+                }));
+            }
+            Err(error) => return Ok(IpcResult::error(error.command_message(), "ACP_CORE")),
+        }
+    }
     let sessions = if let Some(persistence) = &host.conversation {
         persistence
             .list_sessions()
@@ -5044,7 +5120,7 @@ fn charge_acp_history_encoded_bytes(
     }
 }
 
-fn materialize_acp_history_with_ceiling(
+pub(crate) fn materialize_acp_history_with_ceiling(
     persistence: &crate::conversation::ConversationPersistenceAdapter,
     session_id: &str,
 ) -> Result<
@@ -5148,12 +5224,21 @@ fn acp_history_get_inner(
 #[tauri::command]
 pub async fn acp_history_get(
     session_id: String,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     host: State<'_, HostHistoryStore>,
 ) -> Result<IpcResult<Option<serde_json::Value>>, String> {
     log::info!(
         "[acp-history] get start session_id={}",
         sanitize_log_field(&session_id)
     );
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "historyGet",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await);
+    }
     let persistence = host.inner().conversation.clone();
     let legacy_read_only = host.inner().legacy_read_only.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -5221,8 +5306,22 @@ pub async fn acp_history_get_page(
     after_seq: u64,
     limit: usize,
     target_last_seq: Option<u64>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
     host: State<'_, HostHistoryStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationHistoryPageV1>, String> {
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "historyGetPage",
+            serde_json::json!({
+                "sessionId": session_id,
+                "afterSeq": after_seq,
+                "limit": limit,
+                "targetLastSeq": target_last_seq,
+            }),
+        )
+        .await);
+    }
     Ok(
         acp_history_get_page_inner(&session_id, after_seq, limit, target_last_seq, host.inner())
             .await,
@@ -5810,10 +5909,21 @@ pub(crate) fn conversation_host_status_inner(
 }
 
 #[tauri::command]
-pub fn conversation_host_status(
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+pub async fn conversation_host_status(
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationHostStatus>, String> {
-    Ok(conversation_host_status_inner(service.inner()))
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationHostStatus",
+            serde_json::json!({}),
+        )
+        .await);
+    }
+    Ok(conversation_host_status_inner(
+        require_conversation_service(host.inner())?,
+    ))
 }
 
 pub(crate) fn conversation_list_inner(
@@ -5823,10 +5933,16 @@ pub(crate) fn conversation_list_inner(
 }
 
 #[tauri::command]
-pub fn conversation_list(
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+pub async fn conversation_list(
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<Vec<crate::conversation::ConversationRecordV2>>, String> {
-    Ok(conversation_list_inner(service.inner()))
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(client.as_ref(), "conversationList", serde_json::json!({})).await);
+    }
+    Ok(conversation_list_inner(require_conversation_service(
+        host.inner(),
+    )?))
 }
 
 pub(crate) fn conversation_get_inner(
@@ -5844,11 +5960,23 @@ pub(crate) fn conversation_get_inner(
 }
 
 #[tauri::command]
-pub fn conversation_get(
+pub async fn conversation_get(
     conversation_id: String,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationRecordV2>, String> {
-    Ok(conversation_get_inner(service.inner(), &conversation_id))
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationGet",
+            serde_json::json!({ "conversationId": conversation_id }),
+        )
+        .await);
+    }
+    Ok(conversation_get_inner(
+        require_conversation_service(host.inner())?,
+        &conversation_id,
+    ))
 }
 
 pub(crate) fn conversation_get_binding_inner(
@@ -5866,12 +5994,21 @@ pub(crate) fn conversation_get_binding_inner(
 }
 
 #[tauri::command]
-pub fn conversation_get_binding(
+pub async fn conversation_get_binding(
     conversation_id: String,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationBindingSnapshot>, String> {
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationGetBinding",
+            serde_json::json!({ "conversationId": conversation_id }),
+        )
+        .await);
+    }
     Ok(conversation_get_binding_inner(
-        service.inner(),
+        require_conversation_service(host.inner())?,
         &conversation_id,
     ))
 }
@@ -5880,8 +6017,21 @@ pub fn conversation_get_binding(
 pub async fn conversation_rename(
     conversation_id: String,
     title: String,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationRecordV2>, String> {
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationRename",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "title": title,
+            }),
+        )
+        .await);
+    }
+    let service = require_conversation_service(host.inner())?;
     let conversation_id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -5962,9 +6112,22 @@ pub(crate) async fn conversation_prepare_terminal_inner(
 #[tauri::command]
 pub async fn conversation_prepare_terminal(
     request: serde_json::Value,
-    creation: State<'_, Arc<crate::conversation::ConversationCreationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    creation: State<'_, HostConversationCreation>,
 ) -> Result<IpcResult<crate::conversation::PreparedConversation>, String> {
-    Ok(conversation_prepare_terminal_inner(creation.inner(), request).await)
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationPrepareTerminal",
+            serde_json::json!({ "request": request }),
+        )
+        .await);
+    }
+    Ok(conversation_prepare_terminal_inner(
+        require_conversation_creation(creation.inner())?,
+        request,
+    )
+    .await)
 }
 
 pub(crate) async fn conversation_provision_terminal_inner(
@@ -5995,20 +6158,47 @@ pub(crate) async fn conversation_provision_terminal_inner(
 pub async fn conversation_provision_terminal(
     conversation_id: String,
     terminal_id: String,
-    creation: State<'_, Arc<crate::conversation::ConversationCreationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    creation: State<'_, HostConversationCreation>,
 ) -> Result<IpcResult<()>, String> {
-    Ok(
-        conversation_provision_terminal_inner(creation.inner(), &conversation_id, &terminal_id)
-            .await,
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationProvisionTerminal",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "terminalId": terminal_id,
+            }),
+        )
+        .await);
+    }
+    Ok(conversation_provision_terminal_inner(
+        require_conversation_creation(creation.inner())?,
+        &conversation_id,
+        &terminal_id,
     )
+    .await)
 }
 
 #[tauri::command]
 pub async fn conversation_open(
     conversation_id: String,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationOpenOutcome>, String> {
-    Ok(conversation_open_inner(service.inner(), &conversation_id).await)
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationOpen",
+            serde_json::json!({ "conversationId": conversation_id }),
+        )
+        .await);
+    }
+    Ok(conversation_open_inner(
+        require_conversation_service(host.inner())?,
+        &conversation_id,
+    )
+    .await)
 }
 
 pub(crate) fn conversation_resolve_legacy_id_inner(
@@ -6032,12 +6222,16 @@ pub(crate) fn conversation_resolve_legacy_id_inner(
 }
 
 #[tauri::command]
-pub fn conversation_resolve_legacy_id(
+pub async fn conversation_resolve_legacy_id(
     request: serde_json::Value,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::LegacyConversationResolution>, String> {
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(client.as_ref(), "conversationResolveLegacyId", request).await);
+    }
     Ok(conversation_resolve_legacy_id_inner(
-        service.inner(),
+        require_conversation_service(host.inner())?,
         request,
     ))
 }
@@ -6045,8 +6239,18 @@ pub fn conversation_resolve_legacy_id(
 #[tauri::command]
 pub async fn session_workspace_get(
     conversation_id: String,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::SessionWorkspaceLoadOutcome>, String> {
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationGetWorkspace",
+            serde_json::json!({ "conversationId": conversation_id }),
+        )
+        .await);
+    }
+    let service = require_conversation_service(host.inner())?;
     let conversation_id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -6062,11 +6266,25 @@ pub async fn session_workspace_write(
     conversation_id: String,
     based_revision: Option<u64>,
     workspace: serde_json::Value,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::SessionWorkspaceWriteOutcome>, String> {
+    if let Some(client) = acp.core_client() {
+        return Ok(acp_core_ipc(
+            client.as_ref(),
+            "conversationWriteWorkspace",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "basedRevision": based_revision,
+                "workspace": workspace,
+            }),
+        )
+        .await);
+    }
     if let Err(error) = require_host_admission() {
         return Ok(error);
     }
+    let service = require_conversation_service(host.inner())?;
     let conversation_id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -6116,9 +6334,20 @@ pub(crate) async fn conversation_recovery_resolve_inner(
 pub async fn conversation_recovery_resolve(
     app: AppHandle,
     request: serde_json::Value,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::migration::RecoveryActionResult>, String> {
-    let outcome = conversation_recovery_resolve_inner(service.inner(), request).await;
+    let outcome = if let Some(client) = acp.core_client() {
+        acp_core_ipc(
+            client.as_ref(),
+            "conversationRecoveryResolve",
+            serde_json::json!({ "request": request }),
+        )
+        .await
+    } else {
+        conversation_recovery_resolve_inner(require_conversation_service(host.inner())?, request)
+            .await
+    };
     if outcome.success {
         let _ = app.emit("conversation:host-status", ());
     }
@@ -6163,15 +6392,29 @@ pub async fn conversation_attach_project(
     conversation_id: String,
     expected_revision: u64,
     attachment: serde_json::Value,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationAggregateMutationOutcome>, String> {
-    let outcome = conversation_attach_project_inner(
-        service.inner(),
-        &conversation_id,
-        expected_revision,
-        attachment,
-    )
-    .await;
+    let outcome = if let Some(client) = acp.core_client() {
+        acp_core_ipc(
+            client.as_ref(),
+            "conversationAttachProject",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+                "attachment": attachment,
+            }),
+        )
+        .await
+    } else {
+        conversation_attach_project_inner(
+            require_conversation_service(host.inner())?,
+            &conversation_id,
+            expected_revision,
+            attachment,
+        )
+        .await
+    };
     if outcome.success {
         let _ = app.emit("conversation:aggregate", outcome.data.as_ref());
     }
@@ -6204,11 +6447,27 @@ pub async fn conversation_detach_project(
     app: AppHandle,
     conversation_id: String,
     expected_revision: u64,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationAggregateMutationOutcome>, String> {
-    let outcome =
-        conversation_detach_project_inner(service.inner(), &conversation_id, expected_revision)
-            .await;
+    let outcome = if let Some(client) = acp.core_client() {
+        acp_core_ipc(
+            client.as_ref(),
+            "conversationDetachProject",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+            }),
+        )
+        .await
+    } else {
+        conversation_detach_project_inner(
+            require_conversation_service(host.inner())?,
+            &conversation_id,
+            expected_revision,
+        )
+        .await
+    };
     if outcome.success {
         let _ = app.emit("conversation:aggregate", outcome.data.as_ref());
     }
@@ -6253,15 +6512,29 @@ pub async fn conversation_update_execution_target(
     conversation_id: String,
     expected_revision: u64,
     execution_target: serde_json::Value,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationAggregateMutationOutcome>, String> {
-    let outcome = conversation_update_execution_target_inner(
-        service.inner(),
-        &conversation_id,
-        expected_revision,
-        execution_target,
-    )
-    .await;
+    let outcome = if let Some(client) = acp.core_client() {
+        acp_core_ipc(
+            client.as_ref(),
+            "conversationUpdateExecutionTarget",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+                "executionTarget": execution_target,
+            }),
+        )
+        .await
+    } else {
+        conversation_update_execution_target_inner(
+            require_conversation_service(host.inner())?,
+            &conversation_id,
+            expected_revision,
+            execution_target,
+        )
+        .await
+    };
     if outcome.success {
         let _ = app.emit("conversation:aggregate", outcome.data.as_ref());
     }
@@ -6291,8 +6564,25 @@ pub async fn conversation_detach_binding(
     app: AppHandle,
     conversation_id: String,
     expected_revision: u64,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationLifecycleOutcome>, String> {
+    if let Some(client) = acp.core_client() {
+        let outcome = acp_core_ipc(
+            client.as_ref(),
+            "conversationDetachBinding",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+            }),
+        )
+        .await;
+        if outcome.success {
+            let _ = app.emit("conversation:lifecycle", outcome.data.as_ref());
+        }
+        return Ok(outcome);
+    }
+    let service = require_conversation_service(host.inner())?;
     let id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -6310,8 +6600,25 @@ pub async fn conversation_rebind_detached_binding(
     app: AppHandle,
     conversation_id: String,
     expected_revision: u64,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationLifecycleOutcome>, String> {
+    if let Some(client) = acp.core_client() {
+        let outcome = acp_core_ipc(
+            client.as_ref(),
+            "conversationRebindBinding",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+            }),
+        )
+        .await;
+        if outcome.success {
+            let _ = app.emit("conversation:lifecycle", outcome.data.as_ref());
+        }
+        return Ok(outcome);
+    }
+    let service = require_conversation_service(host.inner())?;
     let id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -6329,8 +6636,25 @@ pub async fn conversation_suspend_binding(
     app: AppHandle,
     conversation_id: String,
     expected_revision: u64,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationLifecycleOutcome>, String> {
+    if let Some(client) = acp.core_client() {
+        let outcome = acp_core_ipc(
+            client.as_ref(),
+            "conversationSuspendBinding",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+            }),
+        )
+        .await;
+        if outcome.success {
+            let _ = app.emit("conversation:lifecycle", outcome.data.as_ref());
+        }
+        return Ok(outcome);
+    }
+    let service = require_conversation_service(host.inner())?;
     let id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -6351,8 +6675,27 @@ pub async fn conversation_replace_binding(
     request: serde_json::Value,
     // Runtime id of the agent to bind to. `None` restarts on the same agent.
     target_runtime_agent_id: Option<String>,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
 ) -> Result<IpcResult<crate::conversation::ConversationLifecycleOutcome>, String> {
+    if let Some(client) = acp.core_client() {
+        let outcome = acp_core_ipc(
+            client.as_ref(),
+            "conversationReplaceBinding",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+                "request": request,
+                "targetRuntimeAgentId": target_runtime_agent_id,
+            }),
+        )
+        .await;
+        if outcome.success {
+            let _ = app.emit("conversation:lifecycle", outcome.data.as_ref());
+        }
+        return Ok(outcome);
+    }
+    let service = require_conversation_service(host.inner())?;
     let id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -6447,9 +6790,50 @@ pub async fn conversation_delete(
     conversation_id: String,
     expected_revision: u64,
     remove_workspace: Option<bool>,
-    service: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
+    acp: State<'_, crate::core::AcpServiceHandle>,
+    host: State<'_, HostConversationStore>,
     relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<crate::conversation::ConversationLifecycleOutcome>, String> {
+    if let Some(client) = acp.core_client() {
+        let outcome = acp_core_ipc(
+            client.as_ref(),
+            "conversationDelete",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": expected_revision,
+                "removeWorkspace": remove_workspace,
+            }),
+        )
+        .await;
+        if outcome.success {
+            if remove_workspace == Some(true) {
+                if let Some(crate::conversation::ConversationLifecycleOutcome::Updated {
+                    workspace_cwd,
+                    ..
+                }) = outcome.data.as_ref()
+                {
+                    if !workspace_cwd.trim().is_empty() {
+                        if let Err(error) = std::fs::remove_dir_all(workspace_cwd) {
+                            log::warn!(
+                                "[conversation-delete] workspace removal failed conversation_id={} path={} error={error}",
+                                conversation_id,
+                                workspace_cwd
+                            );
+                        } else {
+                            log::info!(
+                                "[conversation-delete] workspace removed conversation_id={} path={}",
+                                conversation_id,
+                                workspace_cwd
+                            );
+                        }
+                    }
+                }
+            }
+            let _ = app.emit("conversation:lifecycle", outcome.data.as_ref());
+        }
+        return Ok(outcome);
+    }
+    let service = require_conversation_service(host.inner())?;
     let id = match parse_conversation_id(&conversation_id) {
         Ok(value) => value,
         Err(error) => return Ok(error),
@@ -6459,8 +6843,7 @@ pub async fn conversation_delete(
         .ok()
         .map(|record| record.workspace_cwd);
     let outcome =
-        conversation_delete_with_retirement(service.inner(), relay.inner(), id, expected_revision)
-            .await;
+        conversation_delete_with_retirement(service, relay.inner(), id, expected_revision).await;
     if outcome.success {
         if remove_workspace == Some(true) {
             if let Some(path) = workspace_cwd.filter(|path| !path.trim().is_empty()) {
