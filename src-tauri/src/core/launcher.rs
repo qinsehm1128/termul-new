@@ -66,7 +66,7 @@ async fn role_lock(role: CoreRole) -> Arc<tokio::sync::Mutex<()>> {
 }
 
 #[cfg(unix)]
-async fn probe_endpoint(
+pub(crate) async fn probe_endpoint(
     endpoint: &CoreEndpoint,
     expected_role: CoreRole,
 ) -> Result<CoreHelloAck, CoreError> {
@@ -92,7 +92,7 @@ async fn probe_endpoint(
 }
 
 #[cfg(not(unix))]
-async fn probe_endpoint(
+pub(crate) async fn probe_endpoint(
     _endpoint: &CoreEndpoint,
     _expected_role: CoreRole,
 ) -> Result<CoreHelloAck, CoreError> {

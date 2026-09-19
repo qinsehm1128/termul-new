@@ -4694,7 +4694,7 @@ pub fn parse_code_workspace_file(
 pub async fn remote_sync_projects(
     payload: SyncProjectsPayload,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
 ) -> Result<IpcResult<()>, String> {
     let project_count = payload.projects.len();
     let group_count = payload.groups.len();
@@ -4703,7 +4703,9 @@ pub async fn remote_sync_projects(
         payload.groups,
         payload.default_project_id.clone(),
     );
-    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.default_project_id.as_deref());
+    if let Some(relay) = ws_relay.inner().as_ref() {
+        crate::web::broadcast_projects_changed(relay, payload.default_project_id.as_deref());
+    }
     log::info!(
         target: "se_manager::remote_sync_projects",
         "operation=remote_sync_projects stable_code=OK projects={} groups={}",
@@ -4726,7 +4728,7 @@ pub async fn remote_sync_projects(
 pub async fn set_host_default_project(
     project_id: String,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
 ) -> Result<IpcResult<()>, String> {
     // Validate via switch_context (unknown/archived/pathless → NOT_FOUND).
     if project_registry.switch_context(&project_id).is_none() {
@@ -4749,7 +4751,9 @@ pub async fn set_host_default_project(
             "NOT_FOUND",
         ));
     }
-    crate::web::broadcast_projects_changed(ws_relay.inner(), Some(&project_id));
+    if let Some(relay) = ws_relay.inner().as_ref() {
+        crate::web::broadcast_projects_changed(relay, Some(&project_id));
+    }
     log::info!(
         "set_host_default_project: host default updated to '{}' + broadcast",
         project_id
@@ -4787,7 +4791,7 @@ pub struct SyncChatHistoryPayload {
 #[tauri::command]
 pub async fn remote_sync_chat_history(
     payload: SyncChatHistoryPayload,
-    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
 ) -> Result<IpcResult<()>, String> {
     // Defense in depth: the TS caller already gates on `running`, but the
@@ -4802,7 +4806,9 @@ pub async fn remote_sync_chat_history(
     // this command to request a browser index refresh, but payload/index values
     // are deliberately not retained or cloned in Rust memory.
     let _ = payload;
-    crate::web::broadcast_chat_history_changed(ws_relay.inner());
+    if let Some(relay) = ws_relay.inner().as_ref() {
+        crate::web::broadcast_chat_history_changed(relay);
+    }
     Ok(IpcResult::success(()))
 }
 
@@ -5355,7 +5361,7 @@ pub async fn acp_history_save(
     payload: serde_json::Value,
     store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
     host: State<'_, HostHistoryStore>,
-    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
 ) -> Result<IpcResult<()>, String> {
     let _ = (session_id, payload, store, host, ws_relay);
     log::warn!("[acp-history] legacy mutation rejected code=LEGACY_STORE_READ_ONLY");
@@ -5369,7 +5375,7 @@ pub async fn acp_history_save(
 pub async fn acp_history_delete(
     session_id: String,
     host: State<'_, HostHistoryStore>,
-    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
 ) -> Result<IpcResult<()>, String> {
     let _ = (session_id, host, ws_relay);
     log::warn!("[acp-history] legacy mutation rejected code=LEGACY_STORE_READ_ONLY");
@@ -5392,7 +5398,7 @@ pub async fn acp_history_flush(
 pub async fn acp_history_mark_legacy_import_complete(
     store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
     host: State<'_, HostHistoryStore>,
-    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
 ) -> Result<IpcResult<()>, String> {
     let _ = (store, host, ws_relay);
     log::warn!("[acp-history] legacy mutation rejected code=LEGACY_STORE_READ_ONLY");
@@ -6808,7 +6814,7 @@ pub async fn conversation_delete(
     remove_workspace: Option<bool>,
     acp: State<'_, crate::core::AcpServiceHandle>,
     host: State<'_, HostConversationStore>,
-    relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
 ) -> Result<IpcResult<crate::conversation::ConversationLifecycleOutcome>, String> {
     if let Some(client) = acp.core_client() {
         let outcome = acp_core_ipc(
@@ -6858,8 +6864,16 @@ pub async fn conversation_delete(
         .get_conversation(id)
         .ok()
         .map(|record| record.workspace_cwd);
-    let outcome =
-        conversation_delete_with_retirement(service, relay.inner(), id, expected_revision).await;
+    let outcome = conversation_delete_with_retirement(
+        service,
+        relay
+            .inner()
+            .as_ref()
+            .ok_or_else(|| "relay unavailable".to_string())?,
+        id,
+        expected_revision,
+    )
+    .await;
     if outcome.success {
         if remove_workspace == Some(true) {
             if let Some(path) = workspace_cwd.filter(|path| !path.trim().is_empty()) {

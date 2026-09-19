@@ -198,6 +198,7 @@ const FRESH = {
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,
+  connectionDegraded: false,
   queuedProjectSwitchId: null
 }
 
@@ -6189,6 +6190,33 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agentStatus).toEqual({})
     useAcpStore.setState({ transportReconnecting: false })
     expect(useAcpStore.getState().transportReconnecting).toBe(false)
+  })
+
+  it('toggles connectionDegraded and refreshes session index on acp:connection_changed', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    _setAcpTransportForTests({
+      setReconnectListener: vi.fn(),
+      setReconnectPriorityProvider: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+
+    expect(useAcpStore.getState().connectionDegraded).toBe(false)
+    listeners.get('acp:connection_changed')?.({ connected: false })
+    expect(useAcpStore.getState().connectionDegraded).toBe(true)
+    expect(loadSessionIndex).not.toHaveBeenCalled()
+
+    listeners.get('acp:connection_changed')?.({ connected: true })
+    await Promise.resolve()
+    expect(useAcpStore.getState().connectionDegraded).toBe(false)
+    expect(loadSessionIndex).toHaveBeenCalled()
+
+    teardown()
   })
 })
 

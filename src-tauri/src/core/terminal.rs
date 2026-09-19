@@ -847,6 +847,7 @@ struct ClientInner {
     live: Mutex<HashSet<String>>,
     events: broadcast::Sender<TerminalEvent>,
     reader: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    reconnect: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -857,24 +858,7 @@ pub struct TerminalCoreClient {
 impl TerminalCoreClient {
     #[cfg(unix)]
     pub async fn connect(endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
-        use tokio::net::UnixStream;
-
-        let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
-        let mut stream = UnixStream::connect(path).await.map_err(CoreError::from)?;
-        let hello = CoreHello {
-            role: CoreRole::TerminalCore,
-            protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
-            client_name: "termul-gui".to_string(),
-        };
-        write_json_frame(&mut stream, &hello).await?;
-        let ack: super::ipc::CoreHelloAck = read_json_frame(&mut stream).await?;
-        if ack.role != CoreRole::TerminalCore || ack.protocol_version != CURRENT_PROTOCOL_VERSION {
-            return Err(CoreError::InvalidHandshake(
-                "core returned an incompatible handshake".into(),
-            ));
-        }
-
-        let (reader, writer) = stream.into_split();
+        let (reader, writer) = open_terminal_stream(endpoint).await?;
         let (events, _) = broadcast::channel(256);
         let inner = Arc::new(ClientInner {
             writer: tokio::sync::Mutex::new(writer),
@@ -884,12 +868,9 @@ impl TerminalCoreClient {
             live: Mutex::new(HashSet::new()),
             events,
             reader: Mutex::new(None),
+            reconnect: tokio::sync::Mutex::new(()),
         });
-        let reader_inner = Arc::clone(&inner);
-        let handle = tokio::spawn(async move {
-            client_read_loop(reader, reader_inner).await;
-        });
-        *inner.reader.lock() = Some(handle);
+        spawn_terminal_read_loop(&inner, reader);
         let client = Self { inner };
         if let Ok(list) = client.list().await {
             let mut live = client.inner.live.lock();
@@ -905,6 +886,30 @@ impl TerminalCoreClient {
 
     #[cfg(not(unix))]
     pub async fn connect(_endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
+        Err(CoreError::UnsupportedPlatform)
+    }
+
+    /// Re-handshake against `endpoint` and swap the live stream. The event
+    /// broadcast stays on the same inner Arc so the GUI event-hub mirror keeps
+    /// receiving after a Core restart.
+    #[cfg(unix)]
+    pub async fn reconnect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
+        let _guard = self.inner.reconnect.lock().await;
+        let (reader, writer) = open_terminal_stream(endpoint).await?;
+        {
+            let mut writer_guard = self.inner.writer.lock().await;
+            if let Some(handle) = self.inner.reader.lock().take() {
+                handle.abort();
+            }
+            fail_stale_pending(&self.inner);
+            *writer_guard = writer;
+        }
+        spawn_terminal_read_loop(&self.inner, reader);
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub async fn reconnect(&self, _endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         Err(CoreError::UnsupportedPlatform)
     }
 
@@ -1158,6 +1163,59 @@ impl TerminalCoreClient {
 }
 
 #[cfg(unix)]
+async fn open_terminal_stream(
+    endpoint: &CoreEndpoint,
+) -> Result<
+    (
+        tokio::net::unix::OwnedReadHalf,
+        tokio::net::unix::OwnedWriteHalf,
+    ),
+    CoreError,
+> {
+    use tokio::net::UnixStream;
+
+    let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
+    let mut stream = UnixStream::connect(path).await.map_err(CoreError::from)?;
+    let hello = CoreHello {
+        role: CoreRole::TerminalCore,
+        protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+        client_name: "termul-gui".to_string(),
+    };
+    write_json_frame(&mut stream, &hello).await?;
+    let ack: super::ipc::CoreHelloAck = read_json_frame(&mut stream).await?;
+    if ack.role != CoreRole::TerminalCore || ack.protocol_version != CURRENT_PROTOCOL_VERSION {
+        return Err(CoreError::InvalidHandshake(
+            "core returned an incompatible handshake".into(),
+        ));
+    }
+    Ok(stream.into_split())
+}
+
+#[cfg(unix)]
+fn spawn_terminal_read_loop(inner: &Arc<ClientInner>, reader: tokio::net::unix::OwnedReadHalf) {
+    let reader_inner = Arc::clone(inner);
+    let handle = tokio::spawn(async move {
+        client_read_loop(reader, reader_inner).await;
+    });
+    *inner.reader.lock() = Some(handle);
+}
+
+#[cfg(unix)]
+fn fail_stale_pending(inner: &ClientInner) {
+    let pending: Vec<_> = inner.pending.lock().drain().map(|(_, tx)| tx).collect();
+    for tx in pending {
+        let _ = tx.send(CoreResponse {
+            id: 0,
+            result: None,
+            error: Some(CoreErrorPayload {
+                code: CoreError::Io(String::new()).code().to_string(),
+                message: CoreError::Io(String::new()).client_message().to_string(),
+            }),
+        });
+    }
+}
+
+#[cfg(unix)]
 async fn client_read_loop(mut reader: tokio::net::unix::OwnedReadHalf, inner: Arc<ClientInner>) {
     loop {
         let payload = match read_frame(&mut reader).await {
@@ -1196,17 +1254,7 @@ async fn client_read_loop(mut reader: tokio::net::unix::OwnedReadHalf, inner: Ar
             }
         }
     }
-    let pending: Vec<_> = inner.pending.lock().drain().map(|(_, tx)| tx).collect();
-    for tx in pending {
-        let _ = tx.send(CoreResponse {
-            id: 0,
-            result: None,
-            error: Some(CoreErrorPayload {
-                code: CoreError::Io(String::new()).code().to_string(),
-                message: CoreError::Io(String::new()).client_message().to_string(),
-            }),
-        });
-    }
+    fail_stale_pending(&inner);
 }
 
 impl Drop for ClientInner {
@@ -1407,6 +1455,46 @@ mod tests {
         );
 
         client.shutdown().await.expect("shutdown core");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_reconnect(client: &TerminalCoreClient, endpoint: &CoreEndpoint) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match client.reconnect(endpoint).await {
+                Ok(()) => return,
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(error) => panic!("terminal core reconnect failed: {error}"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_core_client_reconnects_to_a_new_server_on_the_same_endpoint() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server =
+            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+
+        let client = wait_for_client(&endpoint).await;
+        client.list().await.expect("list before reconnect");
+
+        server.abort();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+
+        let server_endpoint = endpoint.clone();
+        let server =
+            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+
+        wait_for_reconnect(&client, &endpoint).await;
+        client.list().await.expect("list after reconnect");
+
+        client.shutdown().await.expect("shutdown second server");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
     }
 }

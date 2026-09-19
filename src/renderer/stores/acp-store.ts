@@ -420,6 +420,11 @@ interface AcpState {
    * (which fires when `openHistorySession` is in flight — both can show).
    */
   transportReconnecting: boolean
+  /**
+   * Desktop ACP Core unreachable. Set from the additive `acp:connection_changed`
+   * event; cleared on reconnect. Distinct from WS `transportReconnecting`.
+   */
+  connectionDegraded: boolean
   /** Sessions recovered live-only after stale because no server snapshot exists. */
   degradedRecoverySessions: Record<SessionId, true>
   /** Target project waiting for the current turn to finish, if any. */
@@ -3609,6 +3614,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,
+  connectionDegraded: false,
   degradedRecoverySessions: {},
   queuedProjectSwitchId: null,
   failedProjectSwitchId: null,
@@ -7260,7 +7266,15 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<SessionClosedEvent>(ACP_EVENTS.sessionClosed, (e) =>
       useAcpStore.getState()._onSessionClosed(e)
-    )
+    ),
+    acpApi.onEvent<{ connected: boolean }>('acp:connection_changed', (e) => {
+      if (e.connected) {
+        useAcpStore.setState({ connectionDegraded: false })
+        refetchHistoryAfterReconnect()
+      } else {
+        useAcpStore.setState({ connectionDegraded: true })
+      }
+    })
   ]
   // Sweep far more often than the TTL: the sweep is what OBSERVES an agent as
   // idle, and the TTL is only counted from the first such observation, so a

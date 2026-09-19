@@ -1982,6 +1982,7 @@ struct ClientInner {
     pending: Mutex<HashMap<u64, oneshot::Sender<CoreResponse>>>,
     events: broadcast::Sender<AcpCoreEvent>,
     reader: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    reconnect: tokio::sync::Mutex<()>,
 }
 
 /// Client for the ACP Core process. Mirrors `TerminalCoreClient`: one framed
@@ -1995,24 +1996,7 @@ pub struct AcpCoreClient {
 impl AcpCoreClient {
     #[cfg(unix)]
     pub async fn connect(endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
-        use tokio::net::UnixStream;
-
-        let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
-        let mut stream = UnixStream::connect(path).await.map_err(CoreError::from)?;
-        let hello = CoreHello {
-            role: CoreRole::AcpCore,
-            protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
-            client_name: "termul-gui".to_string(),
-        };
-        write_json_frame(&mut stream, &hello).await?;
-        let ack: super::ipc::CoreHelloAck = read_json_frame(&mut stream).await?;
-        if ack.role != CoreRole::AcpCore || ack.protocol_version != CURRENT_PROTOCOL_VERSION {
-            return Err(CoreError::InvalidHandshake(
-                "core returned an incompatible handshake".into(),
-            ));
-        }
-
-        let (reader, writer) = stream.into_split();
+        let (reader, writer) = open_acp_stream(endpoint).await?;
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let inner = Arc::new(ClientInner {
             writer: tokio::sync::Mutex::new(writer),
@@ -2020,17 +2004,38 @@ impl AcpCoreClient {
             pending: Mutex::new(HashMap::new()),
             events,
             reader: Mutex::new(None),
+            reconnect: tokio::sync::Mutex::new(()),
         });
-        let reader_inner = Arc::clone(&inner);
-        let handle = tokio::spawn(async move {
-            client_read_loop(reader, reader_inner).await;
-        });
-        *inner.reader.lock() = Some(handle);
+        spawn_acp_read_loop(&inner, reader);
         Ok(Self { inner })
     }
 
     #[cfg(not(unix))]
     pub async fn connect(_endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
+        Err(CoreError::UnsupportedPlatform)
+    }
+
+    /// Re-handshake against `endpoint` and swap the live stream. Pending RPCs
+    /// and the event broadcast stay on the same inner Arc so GUI mirror tasks
+    /// keep receiving after a Core restart.
+    #[cfg(unix)]
+    pub async fn reconnect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
+        let _guard = self.inner.reconnect.lock().await;
+        let (reader, writer) = open_acp_stream(endpoint).await?;
+        {
+            let mut writer_guard = self.inner.writer.lock().await;
+            if let Some(handle) = self.inner.reader.lock().take() {
+                handle.abort();
+            }
+            fail_stale_pending(&self.inner);
+            *writer_guard = writer;
+        }
+        spawn_acp_read_loop(&self.inner, reader);
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub async fn reconnect(&self, _endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         Err(CoreError::UnsupportedPlatform)
     }
 
@@ -2164,6 +2169,59 @@ impl Drop for ClientInner {
 }
 
 #[cfg(unix)]
+async fn open_acp_stream(
+    endpoint: &CoreEndpoint,
+) -> Result<
+    (
+        tokio::net::unix::OwnedReadHalf,
+        tokio::net::unix::OwnedWriteHalf,
+    ),
+    CoreError,
+> {
+    use tokio::net::UnixStream;
+
+    let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
+    let mut stream = UnixStream::connect(path).await.map_err(CoreError::from)?;
+    let hello = CoreHello {
+        role: CoreRole::AcpCore,
+        protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+        client_name: "termul-gui".to_string(),
+    };
+    write_json_frame(&mut stream, &hello).await?;
+    let ack: super::ipc::CoreHelloAck = read_json_frame(&mut stream).await?;
+    if ack.role != CoreRole::AcpCore || ack.protocol_version != CURRENT_PROTOCOL_VERSION {
+        return Err(CoreError::InvalidHandshake(
+            "core returned an incompatible handshake".into(),
+        ));
+    }
+    Ok(stream.into_split())
+}
+
+#[cfg(unix)]
+fn spawn_acp_read_loop(inner: &Arc<ClientInner>, reader: tokio::net::unix::OwnedReadHalf) {
+    let reader_inner = Arc::clone(inner);
+    let handle = tokio::spawn(async move {
+        client_read_loop(reader, reader_inner).await;
+    });
+    *inner.reader.lock() = Some(handle);
+}
+
+#[cfg(unix)]
+fn fail_stale_pending(inner: &ClientInner) {
+    let pending: Vec<_> = inner.pending.lock().drain().map(|(_, tx)| tx).collect();
+    for tx in pending {
+        let _ = tx.send(CoreResponse {
+            id: 0,
+            result: None,
+            error: Some(CoreErrorPayload {
+                code: CoreError::Io(String::new()).code().to_string(),
+                message: CoreError::Io(String::new()).client_message().to_string(),
+            }),
+        });
+    }
+}
+
+#[cfg(unix)]
 async fn client_read_loop(mut reader: tokio::net::unix::OwnedReadHalf, inner: Arc<ClientInner>) {
     loop {
         let payload = match read_frame(&mut reader).await {
@@ -2184,17 +2242,7 @@ async fn client_read_loop(mut reader: tokio::net::unix::OwnedReadHalf, inner: Ar
             }
         }
     }
-    let pending: Vec<_> = inner.pending.lock().drain().map(|(_, tx)| tx).collect();
-    for tx in pending {
-        let _ = tx.send(CoreResponse {
-            id: 0,
-            result: None,
-            error: Some(CoreErrorPayload {
-                code: CoreError::Io(String::new()).code().to_string(),
-                message: CoreError::Io(String::new()).client_message().to_string(),
-            }),
-        });
-    }
+    fail_stale_pending(&inner);
 }
 
 #[cfg(test)]
@@ -2384,5 +2432,57 @@ mod tests {
                 Err(error) => panic!("acp core did not become ready: {error}"),
             }
         }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_reconnect(client: &AcpCoreClient, endpoint: &CoreEndpoint) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match client.reconnect(endpoint).await {
+                Ok(()) => return,
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                Err(error) => panic!("acp core reconnect failed: {error}"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn acp_core_client_reconnects_to_a_new_server_on_the_same_endpoint() {
+        let profile = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::AcpCore);
+        let state_root = profile.path().to_path_buf();
+        let workspace_root = workspace.path().to_path_buf();
+        let server =
+            tokio::spawn(async move { run_acp_core_with_roots(state_root, workspace_root).await });
+
+        let client = wait_for_client(&endpoint).await;
+        client.health().await.expect("health before reconnect");
+        let _watermark = client.event_watermark().await.expect("watermark");
+
+        client.shutdown().await.expect("shutdown first server");
+        let _ = tokio::time::timeout(Duration::from_secs(10), server).await;
+
+        let state_root = profile.path().to_path_buf();
+        let workspace_root = workspace.path().to_path_buf();
+        let server =
+            tokio::spawn(async move { run_acp_core_with_roots(state_root, workspace_root).await });
+
+        wait_for_reconnect(&client, &endpoint).await;
+        let health = client.health().await.expect("health after reconnect");
+        assert_eq!(health["role"], "acp-core");
+        assert_eq!(health["status"], "ready");
+        let _watermark = client
+            .event_watermark()
+            .await
+            .expect("watermark after reconnect");
+
+        client.shutdown().await.expect("shutdown second server");
+        let _ = tokio::time::timeout(Duration::from_secs(10), server).await;
+        workspace.close().unwrap();
+        profile.close().unwrap();
     }
 }

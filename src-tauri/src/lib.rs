@@ -1586,6 +1586,136 @@ fn launch_desktop_acp_core(
     })
 }
 
+#[cfg(unix)]
+const CORE_SUPERVISE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+#[cfg(unix)]
+const ACP_CONNECTION_CHANGED_EVENT: &str = "acp:connection_changed";
+
+#[cfg(unix)]
+#[derive(Clone, Serialize)]
+struct AcpConnectionChangedPayload {
+    connected: bool,
+}
+
+/// Probe both desktop cores on a fixed 3s tick. Dead endpoints are respawned
+/// via `ensure_core` and the live client is reconnected in place so event
+/// mirrors keep their broadcast receivers. In-process fallback is skipped
+/// (no core client in app state). GUI exit tears the task down with the runtime.
+#[cfg(unix)]
+fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path::PathBuf) {
+    let supervise_acp = app_handle
+        .try_state::<crate::core::AcpServiceHandle>()
+        .is_some_and(|handle| handle.core_client().is_some());
+    let supervise_terminal = app_handle
+        .try_state::<crate::core::TerminalServiceHandle>()
+        .is_some_and(|handle| handle.core_client().is_some());
+    tauri::async_runtime::spawn(async move {
+        let mut acp_ready = supervise_acp;
+        let mut terminal_ready = supervise_terminal;
+        let mut ticker = tokio::time::interval(CORE_SUPERVISE_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            supervise_one_core(
+                &app_handle,
+                &profile_root,
+                crate::core::CoreRole::AcpCore,
+                &mut acp_ready,
+                supervise_acp,
+            )
+            .await;
+            supervise_one_core(
+                &app_handle,
+                &profile_root,
+                crate::core::CoreRole::TerminalCore,
+                &mut terminal_ready,
+                supervise_terminal,
+            )
+            .await;
+        }
+    });
+}
+
+#[cfg(unix)]
+async fn supervise_one_core(
+    app_handle: &tauri::AppHandle,
+    profile_root: &Path,
+    role: crate::core::CoreRole,
+    ready: &mut bool,
+    supervised: bool,
+) {
+    if !supervised {
+        return;
+    }
+    let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
+    if crate::core::launcher::probe_endpoint(&endpoint, role)
+        .await
+        .is_ok()
+    {
+        *ready = true;
+        return;
+    }
+    if *ready {
+        log::info!(
+            target: "se_manager::core",
+            "operation=core_restart role={} stable_code=RESTARTING reason=endpoint_unreachable",
+            role.endpoint_name()
+        );
+        if role == crate::core::CoreRole::AcpCore {
+            let _ = app_handle.emit(
+                ACP_CONNECTION_CHANGED_EVENT,
+                AcpConnectionChangedPayload { connected: false },
+            );
+        }
+    }
+    *ready = false;
+    if restart_and_reconnect(app_handle, profile_root, role).await {
+        if role == crate::core::CoreRole::AcpCore {
+            let _ = app_handle.emit(
+                ACP_CONNECTION_CHANGED_EVENT,
+                AcpConnectionChangedPayload { connected: true },
+            );
+        }
+        *ready = true;
+    }
+}
+
+#[cfg(unix)]
+async fn restart_and_reconnect(
+    app_handle: &tauri::AppHandle,
+    profile_root: &Path,
+    role: crate::core::CoreRole,
+) -> bool {
+    let Ok(config) = crate::core::CoreLaunchConfig::for_current_executable(profile_root) else {
+        return false;
+    };
+    let Ok(process) = crate::core::ensure_core(role, &config).await else {
+        return false;
+    };
+    match role {
+        crate::core::CoreRole::AcpCore => {
+            let Some(client) = app_handle
+                .try_state::<crate::core::AcpServiceHandle>()
+                .and_then(|handle| handle.core_client())
+            else {
+                return false;
+            };
+            client.reconnect(&process.endpoint).await.is_ok()
+        }
+        crate::core::CoreRole::TerminalCore => {
+            let Some(client) = app_handle
+                .try_state::<crate::core::TerminalServiceHandle>()
+                .and_then(|handle| handle.core_client())
+            else {
+                return false;
+            };
+            client.reconnect(&process.endpoint).await.is_ok()
+        }
+        crate::core::CoreRole::Gui => false,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Keep the legacy importer linkable for compatibility tests and older internal callers, but
@@ -2092,17 +2222,30 @@ pub fn run() {
                     Arc::clone(&memory_index),
                 )));
             } else if let Some(acp_core_handle) = acp_core_handle {
-                app.manage(acp_core_handle);
+                app.manage(acp_core_handle.clone());
                 app.manage(commands::HostConversationStore(None));
                 app.manage(commands::HostConversationCreation(None));
                 app.manage(crate::scheduled_tasks::commands::HostScheduledTasks(None));
                 app.manage(crate::memory_index::commands::HostMemoryIndex(None));
-                app.manage(Option::<Arc<WsRelaySink>>::None);
+                // One shared live-only relay per GUI process, fed from the ACP
+                // Core event stream. Every GUI consumer (project broadcast,
+                // history refresh, shared-live subscribers) sees the same fan-out
+                // instead of each caller minting a divergent relay.
+                if let Some(client) = acp_core_handle.core_client() {
+                    let live_relay = Arc::new(WsRelaySink::new());
+                    crate::core::web_host::CoreRelayHost::start(client, Arc::clone(&live_relay));
+                    app.manage(Option::<Arc<WsRelaySink>>::Some(live_relay));
+                } else {
+                    app.manage(Option::<Arc<WsRelaySink>>::None);
+                }
                 log::info!(
                     target: "se_manager::core",
                     "[desktop-exit-independent] acp core owns conversation writer stable_code=CORE_OWNED"
                 );
             }
+
+            #[cfg(unix)]
+            supervise_desktop_cores(handle.clone(), app_data_dir.clone());
 
             // In-memory project registry (Epic-4 bridge) — renderer-fed via
             // `remote_sync_projects`; the source for `GET /projects` +
