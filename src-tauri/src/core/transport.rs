@@ -297,21 +297,29 @@ impl CoreListener {
             }
             #[cfg(windows)]
             Self::Pipe { name, server } => {
-                let mut connected = match server.take() {
-                    Some(connected) => connected,
+                // Cancel-safe instance-per-connection loop (tokio contract):
+                // `connect()` waits on a borrow while the instance stays in
+                // the Option, so a `select!` cancellation leaves the listener
+                // intact. Only after a successful connect do we move the
+                // handle out and create the next waiting instance.
+                let connected = match server.as_mut() {
+                    Some(waiting) => {
+                        if let Err(error) = waiting.connect().await {
+                            return Err(error.into());
+                        }
+                        server.take()
+                    }
                     None => {
                         return Err(CoreError::Io(
                             "named pipe listener has no waiting instance".to_string(),
                         ))
                     }
                 };
-                if let Err(error) = connected.connect().await {
-                    *server = Some(connected);
-                    return Err(error.into());
-                }
                 let next = ServerOptions::new().create(name).map_err(CoreError::from)?;
                 *server = Some(next);
-                Ok(CoreServerStream::Pipe(connected))
+                Ok(CoreServerStream::Pipe(
+                    connected.expect("connected instance was just proven present"),
+                ))
             }
             #[cfg(not(any(unix, windows)))]
             _ => Err(CoreError::UnsupportedPlatform),

@@ -12,13 +12,24 @@ use se_manager_lib::SpawnOptions;
 use std::collections::HashMap;
 use std::time::Duration;
 
-struct Reaper(std::process::Child);
+/// Kills by PID on drop so an assertion failure cannot leak live Cores
+/// holding the profile sockets (ensure_core parks the Child globally and
+/// returns `child: None`, so there is no handle to guard).
+struct PidReaper(Vec<u32>);
 
-impl Drop for Reaper {
+impl Drop for PidReaper {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        for pid in &self.0 {
+            let _ = kill_by_pid(*pid);
+        }
     }
+}
+
+fn kill_by_pid(pid: u32) -> std::io::Result<()> {
+    std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status()
+        .map(|_| ())
 }
 
 async fn wait_for_terminal(endpoint: &CoreEndpoint) -> TerminalCoreClient {
@@ -68,6 +79,7 @@ async fn packaged_binary_runs_both_cores_and_second_process_adopts() {
         .await
         .expect("spawn acp core");
     assert!(!acp_spawned.reused);
+    let _reaper = PidReaper(vec![terminal_spawned.pid, acp_spawned.pid]);
 
     // The ACP Core must own the conversation root on this shared profile.
     for _ in 0..100 {
@@ -104,6 +116,24 @@ async fn packaged_binary_runs_both_cores_and_second_process_adopts() {
         .expect("write");
     let listed = terminal.list().await.expect("list");
     assert!(listed.iter().any(|status| status.id == spawned.info.id));
+    // A write RPC alone proves nothing — observe the PTY actually ran.
+    let mut session = terminal
+        .attach(&spawned.info.id, &spawned.claim, 0)
+        .await
+        .expect("attach for output");
+    let mut observed = String::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !observed.contains("DUAL_CORE_SMOKE") && tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(5), session.output.recv()).await {
+            Ok(Some(frame)) => observed.push_str(&String::from_utf8_lossy(&frame.data)),
+            _ => break,
+        }
+    }
+    assert!(
+        observed.contains("DUAL_CORE_SMOKE"),
+        "PTY output marker missing: {observed:?}"
+    );
+    drop(session);
     terminal
         .terminate(&spawned.info.id)
         .await

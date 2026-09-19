@@ -49,9 +49,21 @@ impl CoreEndpoint {
 
     #[cfg(windows)]
     pub fn for_profile(profile_root: impl AsRef<Path>, role: CoreRole) -> Self {
-        let runtime_root = profile_root.as_ref().join("core-runtime");
-        let name = runtime_root.join(role.endpoint_name());
-        Self::NamedPipe(format!(r"\\.\pipe\{}", name.to_string_lossy()))
+        // CreateNamedPipe rejects backslashes in the pipe name, so a
+        // filesystem path cannot be embedded directly. Profile isolation is
+        // preserved with a stable FNV-1a digest of the absolute profile path
+        // (deterministic across processes, unlike RandomState hashing).
+        let raw = profile_root.as_ref();
+        let canonical = raw.canonicalize().unwrap_or_else(|_| raw.to_path_buf());
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in canonical.to_string_lossy().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+        Self::NamedPipe(format!(
+            r"\\.\pipe\termul-{}-{hash:016x}",
+            role.endpoint_name()
+        ))
     }
 
     #[cfg(unix)]
@@ -393,7 +405,30 @@ mod tests {
 
     #[test]
     fn endpoint_is_profile_scoped() {
-        let endpoint = CoreEndpoint::for_profile("/tmp/termul-test", CoreRole::AcpCore);
-        assert!(endpoint.describe().contains("acp-core"));
+        #[cfg(unix)]
+        {
+            let endpoint = CoreEndpoint::for_profile("/tmp/termul-test", CoreRole::AcpCore);
+            assert!(endpoint.describe().contains("acp-core"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pipe_name_is_flat_and_profile_scoped() {
+        let first = CoreEndpoint::for_profile("C:\\Users\\a\\Se", CoreRole::TerminalCore);
+        let second = CoreEndpoint::for_profile("C:\\Users\\b\\Se", CoreRole::TerminalCore);
+        let other_role = CoreEndpoint::for_profile("C:\\Users\\a\\Se", CoreRole::AcpCore);
+        for endpoint in [first.clone(), second.clone(), other_role] {
+            let name = endpoint.describe();
+            let suffix = name.strip_prefix(r"\\.\pipe\").unwrap_or_default();
+            assert!(!suffix.contains('\\'), "pipe name must be flat: {name}");
+            assert!(suffix.len() <= 256, "pipe name too long: {name}");
+        }
+        assert_ne!(first.describe(), second.describe(), "profiles must isolate");
+        assert_ne!(
+            first.describe(),
+            other_role.describe(),
+            "roles must isolate"
+        );
     }
 }
