@@ -2091,10 +2091,7 @@ pub fn run() {
                 app.manage(crate::memory_index::commands::HostMemoryIndex(Some(
                     Arc::clone(&memory_index),
                 )));
-            } else {
-                let acp_core_handle = acp_core_handle.expect(
-                    "ACP core handle is present when in-process composition is skipped",
-                );
+            } else if let Some(acp_core_handle) = acp_core_handle {
                 app.manage(acp_core_handle);
                 app.manage(commands::HostConversationStore(None));
                 app.manage(commands::HostConversationCreation(None));

@@ -123,7 +123,12 @@ impl CoreError {
 
 impl fmt::Display for CoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code(), self.client_message())
+        match self {
+            Self::InvalidRequest(detail) if !detail.is_empty() => {
+                write!(formatter, "{}: {detail}", self.code())
+            }
+            other => write!(formatter, "{}: {}", other.code(), other.client_message()),
+        }
     }
 }
 

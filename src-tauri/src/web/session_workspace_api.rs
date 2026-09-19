@@ -360,17 +360,22 @@ mod tests {
             ReaderPrecedence::ConversationV2Only,
         ));
         let pty = crate::web::test_pty_manager();
+        let relay = Arc::new(crate::web::sink::WsRelaySink::new());
         (
             temp,
             repository,
             AppState {
-                acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+                acp: crate::core::AcpWebHostHandle::in_process(
+                    Arc::new(crate::acp::AcpManager::new(vec![])),
+                    Arc::clone(&relay),
+                ),
+                terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 terminal_events: pty.terminal_events(),
                 cwd_tracker: pty.cwd_tracker(),
                 git_tracker: pty.git_tracker(),
                 exit_code_tracker: pty.exit_code_tracker(),
                 pty,
-                relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+                relay,
                 registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
                 registry_persistence: None,
                 projects_file: None,

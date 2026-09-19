@@ -283,10 +283,14 @@ impl AcpServiceHandle {
     /// Core-backed handle: the runtime forwards raw core-IPC requests to the
     /// ACP Core process. There is no in-process manager in this mode.
     pub fn from_core_client(client: AcpCoreClient) -> Self {
+        Self::from_core_client_arc(Arc::new(client))
+    }
+
+    pub fn from_core_client_arc(client: Arc<AcpCoreClient>) -> Self {
         Self {
-            runtime: Arc::new(client.clone()),
+            runtime: Arc::clone(&client) as Arc<dyn AcpRuntimeHandle>,
             in_process: None,
-            core: Some(Arc::new(client)),
+            core: Some(client),
         }
     }
 

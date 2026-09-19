@@ -218,6 +218,7 @@ async fn install_core_output_forwarder(
     }
 }
 
+#[allow(dead_code)]
 fn require_in_process_acp(
     acp: &crate::core::AcpServiceHandle,
 ) -> Result<Arc<crate::acp::AcpManager>, String> {
@@ -4321,15 +4322,16 @@ pub async fn sftp_create_file(
 pub async fn remote_server_start(
     acp_manager: State<'_, crate::core::AcpServiceHandle>,
     pty_manager: State<'_, crate::core::TerminalServiceHandle>,
-    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    local_pty: State<'_, Arc<crate::pty::PtyManager>>,
+    ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
-    conversation: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
-    conversation_creation: State<'_, Arc<crate::conversation::ConversationCreationService>>,
+    conversation: State<'_, HostConversationStore>,
+    conversation_creation: State<'_, HostConversationCreation>,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     workspace_manifest_store: State<'_, HostWorkspaceManifestStore>,
     acp_catalog_store: State<'_, HostAcpCatalogStore>,
     acp_install_store: State<'_, HostAcpInstallStore>,
-    memory_index: State<'_, Arc<crate::memory_index::service::MemoryIndexService>>,
+    memory_index: State<'_, crate::memory_index::commands::HostMemoryIndex>,
     skills_hub: State<'_, Arc<crate::skills::service::SkillsHubService>>,
     tunnel_store: State<'_, Arc<remote::TunnelConfigStore>>,
     intent_store: State<'_, Arc<remote::RemoteAccessIntentStore>>,
@@ -4383,8 +4385,7 @@ pub async fn remote_server_start(
     let acp_install = acp_install_store.store().map(Arc::clone);
     // The desktop's cross-agent memory index, threaded through so the shared-live
     // browser client reads the same index the desktop does rather than a second
-    // one. `None` degrades to `MEMORY_INDEX_UNAVAILABLE`.
-    let memory_index = Some(Arc::clone(&memory_index));
+    // one. `None` (ACP Core mode) degrades to `MEMORY_INDEX_UNAVAILABLE`.
     let skills_hub = Some(Arc::clone(&skills_hub));
     let tunnel_store = tunnel_store.inner();
     let tunnel_config = match tunnel_store.load() {
@@ -4394,22 +4395,36 @@ pub async fn remote_server_start(
     if let Err(e) = tunnel_config.validate_for_start() {
         return Ok(IpcResult::error(e, "TUNNEL_CONFIG_INVALID"));
     }
-    let acp_manager = require_in_process_acp(acp_manager.inner())?;
-    let pty_manager = require_in_process_pty(pty_manager.inner())?;
+    let acp_host =
+        match crate::core::resolve_acp_web_host(acp_manager.inner(), ws_relay.inner().clone()) {
+            Ok(host) => host,
+            Err(error) => {
+                return Ok(IpcResult::error(
+                    error,
+                    crate::core::SHARED_LIVE_UNAVAILABLE,
+                ))
+            }
+        };
+    let terminal = pty_manager.inner().clone();
+    let pty_manager = local_pty.inner().clone();
+    let conversation = conversation.inner().0.clone();
+    let conversation_creation = conversation_creation.inner().0.clone();
+    let memory_index = memory_index.inner().0.clone();
     let started = if let Some(bind_port) = tunnel_config.preferred_bind_port() {
         remote_state
             .start_on_port(
-                acp_manager.clone(),
+                acp_host.clone(),
                 pty_manager.clone(),
-                ws_relay.inner().clone(),
+                terminal.clone(),
+                acp_host.live_relay(),
                 project_registry.inner().clone(),
                 bind_mode,
-                Some(conversation.inner().clone()),
-                Some(conversation_creation.inner().clone()),
+                conversation.clone(),
+                conversation_creation.clone(),
                 workspace_manifest,
                 acp_catalog,
                 acp_install,
-                memory_index,
+                memory_index.clone(),
                 skills_hub.clone(),
                 bind_port,
             )
@@ -4417,13 +4432,14 @@ pub async fn remote_server_start(
     } else {
         remote_state
             .start(
-                acp_manager.clone(),
+                acp_host.clone(),
                 pty_manager.clone(),
-                ws_relay.inner().clone(),
+                terminal,
+                acp_host.live_relay(),
                 project_registry.inner().clone(),
                 bind_mode,
-                Some(conversation.inner().clone()),
-                Some(conversation_creation.inner().clone()),
+                conversation,
+                conversation_creation,
                 workspace_manifest,
                 acp_catalog,
                 acp_install,

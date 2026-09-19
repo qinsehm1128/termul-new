@@ -227,15 +227,20 @@ mod tests {
     use tower::ServiceExt;
 
     fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
+        let relay = Arc::new(WsRelaySink::new());
         let pty = test_pty_manager();
         AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
+            acp: crate::core::AcpWebHostHandle::in_process(
+                Arc::new(AcpManager::new(vec![])),
+                Arc::clone(&relay),
+            ),
+            terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             terminal_events: pty.terminal_events(),
             cwd_tracker: pty.cwd_tracker(),
             git_tracker: pty.git_tracker(),
             exit_code_tracker: pty.exit_code_tracker(),
             pty,
-            relay: Arc::new(WsRelaySink::new()),
+            relay,
             registry,
             registry_persistence: None,
             projects_file: None,
@@ -262,7 +267,11 @@ mod tests {
     ) -> AppState {
         let pty = test_pty_manager();
         AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
+            acp: crate::core::AcpWebHostHandle::in_process(
+                Arc::new(AcpManager::new(vec![])),
+                Arc::clone(&relay),
+            ),
+            terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             terminal_events: pty.terminal_events(),
             cwd_tracker: pty.cwd_tracker(),
             git_tracker: pty.git_tracker(),

@@ -384,8 +384,9 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
 /// [`assets::static_fallback`].
 #[allow(clippy::too_many_arguments)]
 pub fn router(
-    acp: Arc<AcpManager>,
+    acp: crate::core::AcpWebHostHandle,
     pty: Arc<PtyManager>,
+    terminal: crate::core::TerminalServiceHandle,
     terminal_events: TerminalEventHub,
     cwd_tracker: Arc<CwdTracker>,
     git_tracker: Arc<GitTracker>,
@@ -406,9 +407,9 @@ pub fn router(
     store: Option<Arc<WebStore>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Router {
-    acp.set_terminal_service(crate::core::TerminalServiceHandle::in_process(Arc::clone(
-        &pty,
-    )));
+    if let Some(manager) = acp.in_process_manager() {
+        manager.set_terminal_service(terminal.clone());
+    }
     let provenance = authority.ingress_provenance();
     let mut r = api_routes(provenance);
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
@@ -429,6 +430,7 @@ pub fn router(
 
     r.with_state(AppState {
         acp,
+        terminal,
         pty,
         terminal_events,
         cwd_tracker,
@@ -476,6 +478,8 @@ pub fn router_with_static(
     acp.set_terminal_service(crate::core::TerminalServiceHandle::in_process(Arc::clone(
         &pty,
     )));
+    let terminal = crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty));
+    let acp = crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&ws_relay));
     api_routes(IngressProvenance::LocalOperator)
         .fallback_service(assets::static_service_from(static_dir))
         // CAP-1: same RwLock wrap + handle registration as `router`.
@@ -484,6 +488,7 @@ pub fn router_with_static(
             registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
             AppState {
                 acp,
+                terminal,
                 // Same degrade rationale as the manifest/catalog services above:
                 // this variant exists for fixtures that do not exercise the
                 // memory routes, which then report MEMORY_INDEX_UNAVAILABLE.
@@ -600,15 +605,20 @@ mod tests {
     }
 
     fn route_test_state(root: &Path) -> AppState {
+        let relay = Arc::new(WsRelaySink::new());
         let pty = crate::web::test_pty_manager();
         AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
+            acp: crate::core::AcpWebHostHandle::in_process(
+                Arc::new(AcpManager::new(vec![])),
+                Arc::clone(&relay),
+            ),
+            terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             terminal_events: pty.terminal_events(),
             cwd_tracker: pty.cwd_tracker(),
             git_tracker: pty.git_tracker(),
             exit_code_tracker: pty.exit_code_tracker(),
             pty,
-            relay: Arc::new(WsRelaySink::new()),
+            relay,
             registry: Arc::new(ProjectRegistry::new()),
             registry_persistence: None,
             projects_file: None,

@@ -9,6 +9,7 @@ pub mod handles;
 pub mod ipc;
 pub mod launcher;
 pub mod terminal;
+pub mod web_host;
 
 pub use acp::{run_acp_core, run_acp_core_with_roots, AcpCoreClient, AcpCoreEvent};
 pub use handles::{
@@ -27,4 +28,8 @@ pub use launcher::{
 pub use terminal::{
     run_terminal_core, OutputFrame, OutputKind, TerminalAttachSession, TerminalCoreClient,
     TerminalStatus,
+};
+pub use web_host::{
+    resolve_acp_web_host, AcpWebHost, AcpWebHostHandle, CoreAcpWebHost, CoreRelayHost,
+    HostStartedPrompt, InProcessAcpWebHost, SHARED_LIVE_UNAVAILABLE,
 };

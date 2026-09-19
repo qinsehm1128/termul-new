@@ -78,7 +78,7 @@ pub async fn list(
                 .as_ref()
                 .map(|install| install.installed_agents())
                 .unwrap_or_default();
-            let running = state.acp.list_running_namespaces();
+            let running = state.acp.list_running_namespaces().await;
             crate::acp::apply_host_catalog_overlays(&mut catalog, &installed, &running);
             debug!(
                 target: "se_manager::web::catalog_api",
@@ -223,18 +223,23 @@ mod tests {
     }
 
     async fn state_with_store(root: &std::path::Path) -> AppState {
+        let relay = Arc::new(crate::web::sink::WsRelaySink::new());
         let store = AcpCatalogService::open(root.join("catalog"))
             .await
             .expect("open store");
         let pty = crate::web::test_pty_manager();
         AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            acp: crate::core::AcpWebHostHandle::in_process(
+                Arc::new(crate::acp::AcpManager::new(vec![])),
+                Arc::clone(&relay),
+            ),
+            terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             terminal_events: pty.terminal_events(),
             cwd_tracker: pty.cwd_tracker(),
             git_tracker: pty.git_tracker(),
             exit_code_tracker: pty.exit_code_tracker(),
             pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            relay,
             registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             registry_persistence: None,
             projects_file: None,
@@ -252,15 +257,20 @@ mod tests {
     }
 
     async fn state_without_store() -> AppState {
+        let relay = Arc::new(crate::web::sink::WsRelaySink::new());
         let pty = crate::web::test_pty_manager();
         AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            acp: crate::core::AcpWebHostHandle::in_process(
+                Arc::new(crate::acp::AcpManager::new(vec![])),
+                Arc::clone(&relay),
+            ),
+            terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             terminal_events: pty.terminal_events(),
             cwd_tracker: pty.cwd_tracker(),
             git_tracker: pty.git_tracker(),
             exit_code_tracker: pty.exit_code_tracker(),
             pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            relay,
             registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             registry_persistence: None,
             projects_file: None,

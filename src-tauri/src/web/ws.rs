@@ -43,7 +43,9 @@ use tokio::sync::{mpsc, Notify, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use crate::acp::config::{AgentConfig, PermissionPolicy};
-use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
+#[cfg(test)]
+use crate::acp::AcpManager;
+use crate::acp::{AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
 use crate::cli_session::{
     list_cli_sessions, resolve_cli_sessions, CliSessionListArgs, CliSessionResolveArgs,
 };
@@ -321,12 +323,14 @@ pub fn map_prompt_error_code(err: &str) -> Option<WsErrorCode> {
 /// struct (preferred over tuple state past 2 fields).
 #[derive(Clone)]
 pub struct AppState {
-    /// The ACP manager (server is the ACP client-of-record).
-    pub acp: Arc<AcpManager>,
+    /// ACP manager/relay host. In-process fallback wraps `AcpManager` +
+    /// `WsRelaySink`; Core mode talks to ACP Core over IPC.
+    pub acp: crate::core::AcpWebHostHandle,
+    /// Terminal service (in-process `PtyManager` or Terminal Core client).
+    pub terminal: crate::core::TerminalServiceHandle,
     /// Interactive PTYs exposed on the separate `/terminal/ws` endpoint.
-    /// Remaining in-process seam until T4 migrates spawn/claim/replay onto
-    /// Terminal Core: route handlers still use this manager through the
-    /// [`Self::terminal_service`] adapter.
+    /// In-process fallback is the live manager; Core mode uses a local
+    /// tracker shell while spawn/watch/write go through [`Self::terminal`].
     pub pty: Arc<PtyManager>,
     pub terminal_events: TerminalEventHub,
     pub cwd_tracker: Arc<CwdTracker>,
@@ -414,17 +418,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// In-process adapter over [`Self::pty`]. Standalone and tests keep this
-    /// owner. Desktop shared-live still uses the in-process manager (deferred
-    /// T4 seam); desktop Tauri commands talk to Terminal Core directly.
     pub fn terminal_service(&self) -> crate::core::TerminalServiceHandle {
-        crate::core::TerminalServiceHandle::in_process(Arc::clone(&self.pty))
+        self.terminal.clone()
     }
 
-    /// In-process adapter over [`Self::acp`]. Same injection type as desktop
-    /// commands; ACP Core clients replace this in T5.
     pub fn acp_service(&self) -> crate::core::AcpServiceHandle {
-        crate::core::AcpServiceHandle::in_process(Arc::clone(&self.acp))
+        self.acp.acp_service()
     }
 }
 
@@ -865,9 +864,9 @@ async fn run_relay(
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = outbound_channel();
     let relay = Arc::clone(&state.relay);
-    // Story 1.8: the ACP manager — the server is the ACP client-of-record; the
+    // Story 1.8: the ACP host — the server is the ACP client-of-record; the
     // 10 ACP command handlers (`send_prompt`, `create_session`, …) forward to it.
-    let acp = Arc::clone(&state.acp);
+    let acp = state.acp.clone();
     // Epic-4 bridge: the in-memory project registry — source for `GET /projects`
     // (router) + `switch_project` cwd resolution (this handler).
     let registry = Arc::clone(&state.registry);
@@ -1204,7 +1203,7 @@ async fn dispatch_connection_text_with_conversation(
     text: &str,
     authed: &mut bool,
     principal: &mut Option<RemotePrincipal>,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
     registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
@@ -1243,7 +1242,7 @@ async fn dispatch_connection_text_with_conversation(
         }
         return match accept_send_prompt(id, &payload, acp, relay).await {
             Ok(accepted) => {
-                let prompt_acp = Arc::clone(acp);
+                let prompt_acp = acp.clone();
                 let prompt_tx = write_tx.clone();
                 tokio::spawn(async move {
                     let reply = complete_send_prompt(accepted, &prompt_acp).await;
@@ -1290,7 +1289,7 @@ async fn dispatch_connection_text_with_conversation(
 async fn dispatch_connection_text(
     text: &str,
     authed: &mut bool,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
     registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
@@ -1402,7 +1401,7 @@ struct SubscribePayload {
 async fn handle_request(
     text: &str,
     authed: &mut bool,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
     registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
@@ -1461,7 +1460,7 @@ async fn handle_request_with_conversation(
     text: &str,
     authed: &mut bool,
     principal: &mut Option<RemotePrincipal>,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
     registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
@@ -1676,12 +1675,12 @@ async fn handle_request_with_conversation(
         // decision through the server-side rendezvous (first-response-wins,
         // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
         // which resolves the agent's `Responder` on the driver thread.
-        "respond_permission" => handle_respond_permission(id, &req.payload, relay, subscribed_clients).await,
+        "respond_permission" => handle_respond_permission(id, &req.payload, acp, relay, subscribed_clients).await,
         // Issue #411: `answer_question` — route the browser's structured-question
         // answer through the server-side question rendezvous (first-response-wins,
         // TOCTOU re-validation) to `AcpManager::answer_question`, which resolves
         // the agent's `Responder` on the driver thread.
-        "answer_question" => handle_answer_question(id, &req.payload, relay, subscribed_clients).await,
+        "answer_question" => handle_answer_question(id, &req.payload, acp, relay, subscribed_clients).await,
         // Story 1.8: ACP command forwarding → `AcpManager`. The streaming events
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the
@@ -1899,8 +1898,8 @@ async fn handle_request_with_conversation(
             )
             .await
         }
-        "list_agents" => handle_list_agents(id, acp),
-        "set_permission_policy" => handle_set_permission_policy(id, &req.payload, acp),
+        "list_agents" => handle_list_agents(id, acp).await,
+        "set_permission_policy" => handle_set_permission_policy(id, &req.payload, acp).await,
         // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.
         // `pi_terminal_login`). Distinct from the WS connection `authenticate`
         // token gate — this runs the method on the host where the agent lives.
@@ -2905,7 +2904,7 @@ async fn retire_ws_deleted_binding_if_updated(
 async fn handle_conversation_lifecycle(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     mutation: ConversationWsMutation,
 ) -> WsReply {
@@ -2926,6 +2925,13 @@ async fn handle_conversation_lifecycle(
                 return WsReply::err_with_code(id, "CONVERSATION_INVALID_ID", error.to_string())
             }
         };
+    let Some(manager) = acp.in_process_manager() else {
+        return WsReply::err_with_code(
+            id,
+            "CONVERSATION_RECOVERY_REQUIRED",
+            "bootstrap-published PtyManager is unavailable",
+        );
+    };
     let Some(pty) = acp.pty_manager() else {
         return WsReply::err_with_code(
             id,
@@ -2934,8 +2940,7 @@ async fn handle_conversation_lifecycle(
         );
     };
     let service =
-        match crate::conversation::ConversationLifecycleService::from_manager(Arc::clone(acp), pty)
-        {
+        match crate::conversation::ConversationLifecycleService::from_manager(manager, pty) {
             Ok(service) => service,
             Err(error) => return WsReply::err_with_code(id, error.code.as_str(), error.detail),
         };
@@ -3161,7 +3166,7 @@ struct SpawnAgentPayload {
 async fn handle_spawn_agent(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     current_agent: &mut Option<crate::acp::AgentId>,
 ) -> WsReply {
     let mut parsed: SpawnAgentPayload = match serde_json::from_value(payload.clone()) {
@@ -3218,7 +3223,7 @@ struct KillAgentPayload {
 async fn handle_kill_agent(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     current_agent: &mut Option<AgentId>,
     current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
     current_project: &Arc<parking_lot::Mutex<Option<String>>>,
@@ -3254,8 +3259,8 @@ async fn handle_kill_agent(
 }
 
 /// `list_agents` → `AcpManager::list_agents()`. Reply = `AgentId[]` (JSON array).
-fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
-    ok_with_payload(id, &acp.list_agents())
+async fn handle_list_agents(id: String, acp: &crate::core::AcpWebHostHandle) -> WsReply {
+    ok_with_payload(id, &acp.list_agents().await)
 }
 
 #[derive(Debug, Deserialize)]
@@ -3265,7 +3270,11 @@ struct SetPermissionPolicyPayload {
     policy: PermissionPolicy,
 }
 
-fn handle_set_permission_policy(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_set_permission_policy(
+    id: String,
+    payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let parsed: SetPermissionPolicyPayload = match serde_json::from_value(payload.clone()) {
         Ok(value) => value,
         Err(error) => {
@@ -3278,7 +3287,10 @@ fn handle_set_permission_policy(id: String, payload: &Value, acp: &Arc<AcpManage
             )
         }
     };
-    match acp.set_permission_policy(&parsed.agent_id, parsed.policy) {
+    match acp
+        .set_permission_policy(&parsed.agent_id, parsed.policy)
+        .await
+    {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(error) => acp_err_to_reply(id, error),
     }
@@ -3297,7 +3309,7 @@ struct ListAcpCatalogPayload {
 async fn handle_list_acp_catalog(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<&Arc<crate::acp::install::AcpInstallService>>,
 ) -> WsReply {
@@ -3330,7 +3342,7 @@ async fn handle_list_acp_catalog(
             let installed = acp_install
                 .map(|install| install.installed_agents())
                 .unwrap_or_default();
-            let running = acp.list_running_namespaces();
+            let running = acp.list_running_namespaces().await;
             crate::acp::apply_host_catalog_overlays(&mut catalog, &installed, &running);
             ok_with_payload(id, &catalog)
         }
@@ -3675,7 +3687,11 @@ struct AuthenticateAgentPayload {
     method_id: String,
 }
 
-async fn handle_authenticate_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_authenticate_agent(
+    id: String,
+    payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let parsed: AuthenticateAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -3738,7 +3754,7 @@ struct CurrentConversationRefs<'a> {
 async fn handle_create_session(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     registry: &Arc<ProjectRegistry>,
     current_agent: &mut Option<crate::acp::AgentId>,
     current: CurrentConversationRefs<'_>,
@@ -4055,7 +4071,7 @@ fn project_switch_failed_event(
 /// reopen attempt fails (the caller falls back to `new_session_with_context`
 /// in both the `None` and `Err` cases).
 async fn try_reopen_session_for_switch(
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     agent_id: &AgentId,
     persistence: &Arc<crate::acp::SessionPersistence>,
     target: &ProjectSwitchContext,
@@ -4066,7 +4082,7 @@ async fn try_reopen_session_for_switch(
     // (project_id, cwd). Falls back to the unfiltered lookup when the
     // namespace cannot be resolved (agent unknown / has no stable
     // namespace).
-    let agent_namespace = acp.stable_agent_namespace(agent_id).ok().flatten();
+    let agent_namespace = acp.stable_agent_namespace(agent_id).await.ok().flatten();
     let Some(entry) = persistence.find_most_recent_for_project(
         &target.project_id,
         &target.cwd,
@@ -4091,7 +4107,6 @@ async fn try_reopen_session_for_switch(
             agent_id,
             session_id.clone(),
             target.cwd.clone(),
-            Vec::new(),
             target.mcp_servers.clone(),
         )
         .await
@@ -4102,7 +4117,6 @@ async fn try_reopen_session_for_switch(
                 agent_id,
                 session_id.clone(),
                 target.cwd.clone(),
-                Vec::new(),
                 target.mcp_servers.clone(),
             )
             .await
@@ -4125,7 +4139,7 @@ async fn execute_project_switch(
     agent_id: &AgentId,
     target: ProjectSwitchContext,
     previous_session_id: SessionId,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
     current_project: &Arc<parking_lot::Mutex<Option<String>>>,
@@ -4227,7 +4241,7 @@ fn execute_cold_tab_select(
 #[allow(clippy::too_many_arguments)]
 async fn run_switch_queue(
     agent_id: AgentId,
-    acp: Arc<AcpManager>,
+    acp: crate::core::AcpWebHostHandle,
     relay: Arc<WsRelaySink>,
     out_tx: OutboundSender,
     current_session: Arc<parking_lot::Mutex<Option<SessionId>>>,
@@ -4292,7 +4306,7 @@ async fn run_switch_queue(
                 mcp_server_count,
             }) => {
                 *current_conversation.lock() =
-                    acp.conversation_id_for_current_session(&session_id.0);
+                    acp.conversation_id_for_current_session(&session_id.0).await;
                 let event = SequencedEvent::new(
                     Some(pending.previous_session_id.0.clone()),
                     0,
@@ -4339,7 +4353,7 @@ async fn run_switch_queue(
 async fn handle_switch_project(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
     out_tx: &OutboundSender,
@@ -4418,7 +4432,7 @@ async fn handle_switch_project(
             Ok(outcome) => {
                 if let SwitchProjectOutcome::Completed { session_id, .. } = &outcome {
                     *current_conversation.lock() =
-                        acp.conversation_id_for_current_session(&session_id.0);
+                        acp.conversation_id_for_current_session(&session_id.0).await;
                 }
                 ok_with_payload(id, &outcome)
             }
@@ -4447,7 +4461,7 @@ async fn handle_switch_project(
                 queue.worker_running = true;
                 tokio::spawn(run_switch_queue(
                     agent_id,
-                    Arc::clone(acp),
+                    acp.clone(),
                     Arc::clone(relay),
                     out_tx.clone(),
                     Arc::clone(current_session),
@@ -4479,7 +4493,7 @@ struct LoadResumeSessionPayload {
 async fn handle_load_session(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     current_agent: &mut Option<crate::acp::AgentId>,
     current_session: &Arc<parking_lot::Mutex<Option<crate::acp::SessionId>>>,
     current_conversation: &Arc<parking_lot::Mutex<Option<crate::conversation::ConversationId>>>,
@@ -4504,22 +4518,18 @@ async fn handle_load_session(
     // persistence route first so those in-flight notifications are durable.
     if let Some(raw) = &load_conversation_id {
         if let Ok(conversation_id) = crate::conversation::ConversationId::parse(raw) {
-            acp.register_conversation_binding(&session_id.0, conversation_id);
+            acp.register_conversation_binding(&session_id.0, conversation_id)
+                .await;
         }
     }
     match acp
-        .load_session(
-            &agent_id,
-            parsed.session_id,
-            parsed.cwd,
-            Vec::new(),
-            parsed.mcp_servers,
-        )
+        .load_session(&agent_id, parsed.session_id, parsed.cwd, parsed.mcp_servers)
         .await
     {
         Ok(outcome) => {
             *current_agent = Some(agent_id);
-            *current_conversation.lock() = acp.conversation_id_for_current_session(&session_id.0);
+            *current_conversation.lock() =
+                acp.conversation_id_for_current_session(&session_id.0).await;
             *current_session.lock() = Some(session_id);
             *current_project.lock() = None;
             ok_with_payload(id, &outcome)
@@ -4533,7 +4543,7 @@ async fn handle_load_session(
 async fn handle_resume_session(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     current_agent: &mut Option<crate::acp::AgentId>,
     current_session: &Arc<parking_lot::Mutex<Option<crate::acp::SessionId>>>,
     current_conversation: &Arc<parking_lot::Mutex<Option<crate::conversation::ConversationId>>>,
@@ -4557,22 +4567,18 @@ async fn handle_resume_session(
     // `session/resume` can stream before returning; bind before dispatch.
     if let Some(raw) = &resume_conversation_id {
         if let Ok(conversation_id) = crate::conversation::ConversationId::parse(raw) {
-            acp.register_conversation_binding(&session_id.0, conversation_id);
+            acp.register_conversation_binding(&session_id.0, conversation_id)
+                .await;
         }
     }
     match acp
-        .resume_session(
-            &agent_id,
-            parsed.session_id,
-            parsed.cwd,
-            Vec::new(),
-            parsed.mcp_servers,
-        )
+        .resume_session(&agent_id, parsed.session_id, parsed.cwd, parsed.mcp_servers)
         .await
     {
         Ok(outcome) => {
             *current_agent = Some(agent_id);
-            *current_conversation.lock() = acp.conversation_id_for_current_session(&session_id.0);
+            *current_conversation.lock() =
+                acp.conversation_id_for_current_session(&session_id.0).await;
             *current_session.lock() = Some(session_id);
             *current_project.lock() = None;
             ok_with_payload(id, &outcome)
@@ -4592,7 +4598,7 @@ struct GetComposerControlsPayload {
 async fn handle_get_composer_controls(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
 ) -> WsReply {
     let parsed: GetComposerControlsPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -4624,7 +4630,7 @@ struct CloseSessionPayload {
 async fn handle_dispose_ephemeral_session(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     subscribed_clients: &mut Vec<(String, ClientId)>,
     current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
@@ -4676,7 +4682,7 @@ async fn handle_dispose_ephemeral_session(
 async fn handle_close_session(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
     current_project: &Arc<parking_lot::Mutex<Option<String>>>,
@@ -4692,9 +4698,22 @@ async fn handle_close_session(
         }
     };
     let closing_session_id = parsed.session_id.clone();
-    let close_result = if let Some(conversation_id) =
-        acp.conversation_id_for_current_session(&closing_session_id.0)
+    let close_result = if let Some(conversation_id) = acp
+        .conversation_id_for_current_session(&closing_session_id.0)
+        .await
     {
+        let Some(manager) = acp.in_process_manager() else {
+            return match acp
+                .close_session(&parsed.agent_id, parsed.session_id.clone())
+                .await
+            {
+                Ok(()) => {
+                    let _ = relay.retire_session(&closing_session_id.0).await;
+                    WsReply::ok(id, Some(json!({})))
+                }
+                Err(e) => acp_err_to_reply(id, e),
+            };
+        };
         let Some(pty) = acp.pty_manager() else {
             return WsReply::err_with_code(
                 id,
@@ -4702,13 +4721,11 @@ async fn handle_close_session(
                 "bootstrap-published PtyManager is unavailable",
             );
         };
-        let service = match crate::conversation::ConversationLifecycleService::from_manager(
-            Arc::clone(acp),
-            pty,
-        ) {
-            Ok(service) => service,
-            Err(error) => return WsReply::err_with_code(id, error.code.as_str(), error.detail),
-        };
+        let service =
+            match crate::conversation::ConversationLifecycleService::from_manager(manager, pty) {
+                Ok(service) => service,
+                Err(error) => return WsReply::err_with_code(id, error.code.as_str(), error.detail),
+            };
         let expected_revision = match acp
             .conversation_creation()
             .and_then(|creation| creation.repository().get_conversation(conversation_id).ok())
@@ -4762,7 +4779,11 @@ struct ListSessionsPayload {
     cursor: Option<String>,
 }
 
-async fn handle_list_sessions(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_list_sessions(
+    id: String,
+    payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let parsed: ListSessionsPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -4800,8 +4821,8 @@ struct RegisterDiscoveredSessionPayload {
 async fn handle_register_discovered_session(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
-    relay: &Arc<WsRelaySink>,
+    acp: &crate::core::AcpWebHostHandle,
+    _relay: &Arc<WsRelaySink>,
 ) -> WsReply {
     let parsed: RegisterDiscoveredSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(parsed) => parsed,
@@ -4822,39 +4843,23 @@ async fn handle_register_discovered_session(
             "sessionId and cwd are required",
         );
     }
-    let Some(persistence) = relay.persistence() else {
-        return WsReply::err(
-            id,
-            WsErrorCode::Unsupported,
-            "session persistence unavailable",
-        );
-    };
-    let stable_agent_namespace = match acp.stable_agent_namespace(&parsed.agent_id) {
-        Ok(namespace) => namespace,
-        Err(error) => return acp_err_to_reply(id, error),
-    };
-    match persistence
+    match acp
         .register_discovered_session(
-            crate::acp::SessionRegistration {
-                session_id: parsed.session_id,
-                stable_agent_namespace,
-                runtime_agent_id: Some(parsed.agent_id.0),
-                project_id: parsed.project_id,
-                cwd: parsed.cwd.into(),
-                ..Default::default()
-            },
+            parsed.session_id,
+            parsed.agent_id,
+            parsed.cwd,
             parsed.title,
             parsed.updated_at,
+            parsed.project_id,
         )
         .await
     {
         Ok(metadata) => {
             tracing::info!(
                 target: "se_manager::web::ws",
-                session_id = %metadata.session_id,
                 "register_discovered_session: metadata promoted"
             );
-            ok_with_payload(id, &crate::acp::SessionIndexEntry::from(&metadata))
+            ok_with_payload(id, &metadata)
         }
         Err(error) => {
             tracing::warn!(
@@ -4895,7 +4900,7 @@ struct SendPromptPayload {
 
 struct AcceptedSendPrompt {
     id: String,
-    started: crate::acp::manager::StartedPrompt,
+    started: crate::core::HostStartedPrompt,
     claim: PromptClaim,
 }
 
@@ -4934,7 +4939,7 @@ impl Drop for PromptClaim {
 async fn accept_send_prompt(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
 ) -> Result<AcceptedSendPrompt, WsReply> {
     let parsed: SendPromptPayload = serde_json::from_value(payload.clone()).map_err(|error| {
@@ -5011,8 +5016,9 @@ async fn accept_send_prompt(
         // store; only a missing durable home is skipped.
         let bound = acp
             .conversation_id_for_current_session(&parsed.session_id.0)
+            .await
             .is_some();
-        if let Err(error) = relay
+        if let Err(error) = acp
             .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
             .await
         {
@@ -5037,7 +5043,10 @@ async fn accept_send_prompt(
     Ok(AcceptedSendPrompt { id, started, claim })
 }
 
-async fn complete_send_prompt(accepted: AcceptedSendPrompt, acp: &Arc<AcpManager>) -> WsReply {
+async fn complete_send_prompt(
+    accepted: AcceptedSendPrompt,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let AcceptedSendPrompt { id, started, claim } = accepted;
     match acp.wait_prompt(started).await {
         Ok(stop_reason) => {
@@ -5051,7 +5060,7 @@ async fn complete_send_prompt(accepted: AcceptedSendPrompt, acp: &Arc<AcpManager
 async fn handle_send_prompt(
     id: String,
     payload: &Value,
-    acp: &Arc<AcpManager>,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
 ) -> WsReply {
     match accept_send_prompt(id, payload, acp, relay).await {
@@ -5068,7 +5077,11 @@ struct SessionOnlyPayload {
     session_id: crate::acp::SessionId,
 }
 
-async fn handle_cancel_prompt(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_cancel_prompt(
+    id: String,
+    payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let parsed: SessionOnlyPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -5094,7 +5107,11 @@ struct SetModePayload {
     mode_id: String,
 }
 
-async fn handle_set_mode(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_set_mode(
+    id: String,
+    payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let parsed: SetModePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -5123,7 +5140,11 @@ struct SetModelPayload {
     model_id: String,
 }
 
-async fn handle_set_model(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_set_model(
+    id: String,
+    payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let parsed: SetModelPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -5155,7 +5176,11 @@ struct SetConfigOptionPayload {
     value_id: String,
 }
 
-async fn handle_set_config_option(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_set_config_option(
+    id: String,
+    payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
+) -> WsReply {
     let parsed: SetConfigOptionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_config_option payload (want agentId, sessionId, configId, valueId): {e}")),
@@ -5322,15 +5347,28 @@ struct RespondPermissionPayload {
 async fn handle_respond_permission(
     id: String,
     payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     subscribed_clients: &[(String, ClientId)],
 ) -> WsReply {
     let Some(rdz) = relay.rendezvous() else {
-        return WsReply::err(
-            id,
-            WsErrorCode::NotImplemented,
-            "permission rendezvous is not attached (desktop path uses the Tauri command)",
-        );
+        let parsed: RespondPermissionPayload = match serde_json::from_value(payload.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return WsReply::err(
+                    id,
+                    WsErrorCode::Unsupported,
+                    format!("malformed respond_permission payload: {e}"),
+                )
+            }
+        };
+        return match acp
+            .respond_permission(&parsed.agent_id, parsed.request_id, parsed.option_id)
+            .await
+        {
+            Ok(()) => WsReply::ok(id, Some(json!({}))),
+            Err(error) => acp_err_to_reply(id, error),
+        };
     };
 
     let parsed: RespondPermissionPayload = match serde_json::from_value(payload.clone()) {
@@ -5456,15 +5494,29 @@ struct AnswerQuestionPayload {
 async fn handle_answer_question(
     id: String,
     payload: &Value,
+    acp: &crate::core::AcpWebHostHandle,
     relay: &Arc<WsRelaySink>,
     subscribed_clients: &[(String, ClientId)],
 ) -> WsReply {
     let Some(rdz) = relay.question_rendezvous() else {
-        return WsReply::err(
-            id,
-            WsErrorCode::NotImplemented,
-            "question rendezvous is not attached (desktop path uses the Tauri command)",
-        );
+        let parsed: AnswerQuestionPayload = match serde_json::from_value(payload.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return WsReply::err(
+                    id,
+                    WsErrorCode::Unsupported,
+                    format!("malformed answer_question payload: {e}"),
+                )
+            }
+        };
+        let values = serde_json::to_value(parsed.values).unwrap_or(Value::Null);
+        return match acp
+            .answer_question(&parsed.agent_id, parsed.question_id, values)
+            .await
+        {
+            Ok(()) => WsReply::ok(id, Some(json!({}))),
+            Err(error) => acp_err_to_reply(id, error),
+        };
     };
 
     let parsed: AnswerQuestionPayload = match serde_json::from_value(payload.clone()) {
@@ -5571,11 +5623,12 @@ pub(crate) async fn dispatch_conversation_golden_request(
     let authority = Arc::new(RemoteAccessAuthority::for_tests("test-remote-access-token"));
     let mut principal =
         (*authed).then(|| authority.verify_bearer("test-remote-access-token").unwrap());
+    let host = crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay));
     handle_request_with_conversation(
         text,
         authed,
         &mut principal,
-        &acp,
+        &host,
         &relay,
         &registry,
         None,
@@ -5642,7 +5695,7 @@ mod tests {
                 "text": "must not persist",
                 "turnId": "turn-cross-agent"
             }),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
         )
         .await;
@@ -5797,7 +5850,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-long","type":"send_prompt","payload":{"agentId":"agent-long","sessionId":"session-long","text":"long","turnId":"turn-long"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -5825,7 +5878,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"ping-1","type":"ping","payload":{}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -5859,7 +5912,7 @@ mod tests {
                 "text": "second",
                 "turnId": "turn-concurrent"
             }),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
         )
         .await;
@@ -5882,7 +5935,7 @@ mod tests {
                 "text": "duplicate",
                 "turnId": "turn-long"
             }),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
         )
         .await;
@@ -5897,7 +5950,7 @@ mod tests {
                 "text": "next",
                 "turnId": "turn-next"
             }),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
         )
         .await;
@@ -5927,7 +5980,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-ordered","type":"send_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel","text":"start then cancel","turnId":"turn-ordered"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -5949,7 +6002,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"cancel-ordered","type":"cancel_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -6015,7 +6068,10 @@ mod tests {
                     "text": "long",
                     "turnId": "turn-cancel"
                 }),
-                &prompt_acp,
+                &crate::core::AcpWebHostHandle::in_process(
+                    Arc::clone(&prompt_acp),
+                    Arc::clone(&prompt_relay),
+                ),
                 &prompt_relay,
             )
             .await
@@ -6075,7 +6131,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-resume","type":"send_prompt","payload":{"agentId":"agent-resume","sessionId":"session-resume","text":"continue after disconnect","turnId":"turn-resume"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -6157,7 +6213,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -6260,7 +6316,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -6339,7 +6395,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -6534,7 +6590,7 @@ mod tests {
                 "text": "hello from client A",
                 "turnId": "turn-cross"
             }),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
         )
         .await;
@@ -6907,12 +6963,46 @@ mod tests {
         );
     }
 
+    async fn handle_await(text: &str, authed: &mut bool) -> WsReply {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let host = crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay));
+        let (tx, _rx) = outbound_channel();
+        let mut subs = Vec::new();
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        handle_request(
+            text,
+            authed,
+            &host,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
     fn handle_sync(text: &str, authed: &mut bool) -> WsReply {
         let relay = Arc::new(WsRelaySink::new());
         // Story 1.8: handle_request now takes `&Arc<AcpManager>`. The no-op
         // manager (`vec![]` sinks) returns fast `Err`s for the ACP command
         // methods (no agent spawned) which the handlers map to `WsErrorCode`.
         let acp = Arc::new(AcpManager::new(vec![]));
+        let host = crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay));
         let (tx, _rx) = outbound_channel();
         let mut subs = Vec::new();
         // Epic-4 bridge: `handle_request` now also takes the project registry +
@@ -6932,7 +7022,7 @@ mod tests {
             .block_on(handle_request(
                 text,
                 authed,
-                &acp,
+                &host,
                 &relay,
                 &registry,
                 None,
@@ -7004,6 +7094,7 @@ mod tests {
         let peer = SocketAddr::from(([192, 0, 2, 44], 3000));
         let mut authed = false;
         let mut principal = None;
+        let host = crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay));
 
         for attempt in 1..=6 {
             let reply = handle_request_with_conversation(
@@ -7012,7 +7103,7 @@ mod tests {
                 ),
                 &mut authed,
                 &mut principal,
-                &acp,
+                &host,
                 &relay,
                 &registry,
                 None,
@@ -7372,7 +7463,7 @@ mod tests {
         let reply = handle_request(
             r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"does-not-exist"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7536,15 +7627,20 @@ mod tests {
     /// `respond_permission` handler replies `not_implemented` (the desktop uses
     /// the `acp_respond_permission` Tauri command directly). This guards the
     /// `relay.rendezvous() == None` branch.
-    #[test]
-    fn handle_respond_permission_without_rendezvous_is_not_implemented() {
+    /// Without a local rendezvous (core-mode desktop or relay-less host),
+    /// `respond_permission` now routes through the ACP web host instead of
+    /// stubbing. With no outstanding request the host error maps to
+    /// `not_found` (unknown-permission semantics, first-wins contract).
+    #[tokio::test]
+    async fn handle_respond_permission_without_rendezvous_routes_through_host() {
         let mut authed = true;
-        let reply = handle_sync(
+        let reply = handle_await(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-x"}}"#,
             &mut authed,
-        );
+        )
+        .await;
         assert!(!reply.ok);
-        assert_eq!(reply.err.unwrap().code, "not_implemented");
+        assert_eq!(reply.err.unwrap().code, "not_found");
     }
 
     /// Story 1.7: a malformed `respond_permission` payload is rejected with
@@ -7572,7 +7668,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -7660,7 +7756,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7714,7 +7810,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7752,7 +7848,7 @@ mod tests {
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7773,7 +7869,7 @@ mod tests {
         let stale_reply = block_on(handle_request(
             r#"{"id":"r2","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7810,7 +7906,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7869,17 +7965,19 @@ mod tests {
         (relay, subs)
     }
 
-    /// Issue #411: without a question rendezvous attached (desktop path), the
-    /// `answer_question` handler replies `not_implemented`.
-    #[test]
-    fn handle_answer_question_without_rendezvous_is_not_implemented() {
+    /// Without a local rendezvous (core-mode desktop), `answer_question`
+    /// routes through the ACP web host; an unknown question maps to
+    /// `not_found` (same first-wins semantics as respond_permission).
+    #[tokio::test]
+    async fn handle_answer_question_without_rendezvous_routes_through_host() {
         let mut authed = true;
-        let reply = handle_sync(
+        let reply = handle_await(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-x"}}"#,
             &mut authed,
-        );
+        )
+        .await;
         assert!(!reply.ok);
-        assert_eq!(reply.err.unwrap().code, "not_implemented");
+        assert_eq!(reply.err.unwrap().code, "not_found");
     }
 
     /// Issue #411: a malformed `answer_question` payload is rejected with
@@ -7902,7 +8000,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7938,7 +8036,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a2","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -7990,7 +8088,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-A","values":["plan-a"]}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -8027,7 +8125,7 @@ mod tests {
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -8047,7 +8145,7 @@ mod tests {
         let stale_reply = block_on(handle_request(
             r#"{"id":"r2","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -8083,7 +8181,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["escalate"]}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -8143,7 +8241,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub1","type":"subscribe","payload":{"sessionId":"s1","lastSeq":0}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -8171,7 +8269,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub2","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -8198,7 +8296,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub3","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -8226,7 +8324,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub4","type":"subscribe","payload":{"sessionId":"s1"}}"#,
                 &mut authed,
-                &acp,
+                &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
                 &relay,
                 &registry,
                 None,
@@ -8282,7 +8380,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -8343,7 +8441,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -8462,7 +8560,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -8543,7 +8641,7 @@ mod tests {
                 "updatedAt": 42,
                 "projectId": "p-1"
             }),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
         )
         .await;
@@ -8841,15 +8939,20 @@ mod tests {
             .await
             .unwrap();
         let acp = Arc::new(AcpManager::new(vec![]));
+        let relay = Arc::new(WsRelaySink::new());
         let target = ProjectSwitchContext {
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],
         };
-        let result =
-            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
-                .await
-                .unwrap();
+        let result = try_reopen_session_for_switch(
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
+            &AgentId("a-1".to_string()),
+            &persistence,
+            &target,
+        )
+        .await
+        .unwrap();
         assert!(result.is_none());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -8880,6 +8983,7 @@ mod tests {
             .await
             .unwrap();
         let acp = Arc::new(AcpManager::new(vec![]));
+        let relay = Arc::new(WsRelaySink::new());
         let target = ProjectSwitchContext {
             project_id: "p-1".to_string(),
             // `register_session` canonicalizes cwd; match exactly so the
@@ -8887,9 +8991,13 @@ mod tests {
             cwd: persistence.metadata("s-1").unwrap().cwd,
             mcp_servers: vec![],
         };
-        let result =
-            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
-                .await;
+        let result = try_reopen_session_for_switch(
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
+            &AgentId("a-1".to_string()),
+            &persistence,
+            &target,
+        )
+        .await;
         assert!(
             result.is_err(),
             "no registered agent → reopen fails → Err → new session"
@@ -9167,7 +9275,7 @@ mod tests {
             &AgentId("a-1".to_string()),
             target,
             SessionId("s-old".to_string()),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &current_session,
             &current_project,
@@ -9227,7 +9335,7 @@ mod tests {
         let reply_a = handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &registry,
             None,
@@ -9584,11 +9692,13 @@ mod tests {
             let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
             let mut authed = false;
             let mut principal = None;
+            let host =
+                crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay));
             let reply = handle_request_with_conversation(
                 r#"{"id":"legacy","type":"resolve_legacy_conversation_id","payload":{"sourceKind":"legacyStorageKey","value":"storage-one"}}"#,
                 &mut authed,
                 &mut principal,
-                &acp,
+                &host,
                 &relay,
                 &registry,
                 None,
@@ -9739,10 +9849,12 @@ mod tests {
         #[tokio::test]
         async fn detach_and_stale_revision_match_other_transports() {
             let (_temp, acp, _pty, relay, revision) = fixture().await;
+            let host =
+                crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay));
             let reply = handle_conversation_lifecycle(
                 "detach-1".to_string(),
                 &json!({"conversationId":ID,"expectedRevision":revision}),
-                &acp,
+                &host,
                 &relay,
                 ConversationWsMutation::Detach,
             )
@@ -9757,7 +9869,7 @@ mod tests {
             let stale = handle_conversation_lifecycle(
                 "delete-1".to_string(),
                 &json!({"conversationId":ID,"expectedRevision":revision}),
-                &acp,
+                &host,
                 &relay,
                 ConversationWsMutation::Delete,
             )
@@ -9801,7 +9913,7 @@ mod tests {
             &AgentId("a-1".to_string()),
             target,
             SessionId("s-prev".to_string()),
-            &acp,
+            &crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay)),
             &relay,
             &current_session,
             &current_project,
@@ -9841,11 +9953,12 @@ mod tests {
         let current_conversation = Arc::new(parking_lot::Mutex::new(None));
         let current_project = Arc::new(parking_lot::Mutex::new(None));
         let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let host = crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(relay));
         handle_request_with_conversation(
             text,
             authed,
             principal,
-            &acp,
+            &host,
             relay,
             registry,
             None,
@@ -10072,11 +10185,12 @@ mod tests {
         let mut authed = false;
         let mut principal = None;
         let live = AtomicU64::new(0);
+        let host = crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay));
         let reply = handle_request_with_conversation(
             r#"{"id":"a","type":"authenticate","payload":{"token":"test-remote-access-token"}}"#,
             &mut authed,
             &mut principal,
-            &acp,
+            &host,
             &relay,
             &registry,
             None,

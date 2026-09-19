@@ -485,14 +485,16 @@ mod tests {
             )
             .unwrap();
         let revision = repository.get_conversation(id).unwrap().last_seq;
+        let relay = Arc::new(crate::web::sink::WsRelaySink::new());
         let state = AppState {
-            acp,
+            acp: crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay)),
+            terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             terminal_events: pty.terminal_events(),
             cwd_tracker: pty.cwd_tracker(),
             git_tracker: pty.git_tracker(),
             exit_code_tracker: pty.exit_code_tracker(),
             pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            relay,
             registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             registry_persistence: None,
             projects_file: None,

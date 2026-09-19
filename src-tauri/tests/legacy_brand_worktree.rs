@@ -153,6 +153,7 @@ fn materialise_legacy_repo(temp: &TempDir) -> PathBuf {
 /// `web::test_pty_manager` is `#[cfg(test)] pub(crate)` and so invisible here;
 /// this rebuilds the same shape from the crate's public constructors.
 fn app_state(project_root: PathBuf) -> AppState {
+    let relay = Arc::new(WsRelaySink::new());
     let events = TerminalEventHub::standalone();
     let cwd = Arc::new(CwdTracker::new(events.clone()));
     let git_tracker = Arc::new(GitTracker::new(None, events.clone()));
@@ -164,13 +165,17 @@ fn app_state(project_root: PathBuf) -> AppState {
         exit.clone(),
     ));
     AppState {
-        acp: Arc::new(AcpManager::new(vec![])),
+        acp: se_manager_lib::core::AcpWebHostHandle::in_process(
+            Arc::new(AcpManager::new(vec![])),
+            Arc::clone(&relay),
+        ),
+        terminal: se_manager_lib::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
         pty,
         terminal_events: events,
         cwd_tracker: cwd,
         git_tracker,
         exit_code_tracker: exit,
-        relay: Arc::new(WsRelaySink::new()),
+        relay,
         registry: Arc::new(ProjectRegistry::new()),
         registry_persistence: None,
         projects_file: None,

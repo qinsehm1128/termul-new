@@ -16,7 +16,7 @@ use agent_client_protocol::schema::v1::{
     SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions, SessionMode,
     SessionModeId, StopReason, ToolCall, ToolCallUpdate,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::conversation::{
     ConversationPersistenceAdapter, CONVERSATION_PERSISTENCE_COMMIT_INDETERMINATE,
@@ -245,7 +245,7 @@ pub async fn deliver<P: Serialize>(
 /// 0.14 — they are a `SessionConfigOption` with `category = "model"` — so
 /// Se reconstructs this legacy view from `config_options` to keep the
 /// renderer's Model Picker contract byte-compatible.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionModel {
     pub model_id: String,
@@ -258,7 +258,7 @@ pub struct SessionModel {
 ///
 /// Wire-identical to the pre-1.3 schema `SessionModelState`
 /// (`{ currentModelId, availableModels[] }`).
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionModelState {
     pub current_model_id: String,
@@ -400,7 +400,7 @@ pub enum ChunkRole {
 /// (`env_var`, `terminal`); those remain out of scope, so only the stable
 /// `id`/`name`/`description` surface is carried here. No agent-type filtering is
 /// applied — every advertised method is forwarded as an opaque descriptor.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthMethodInfo {
     pub id: String,

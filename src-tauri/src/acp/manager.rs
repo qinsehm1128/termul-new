@@ -446,7 +446,7 @@ where
 }
 
 /// Option snapshot returned by a successful `session/load` or `session/resume`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionReopenOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -821,6 +821,12 @@ pub(crate) struct StartedPrompt {
     completion: oneshot::Receiver<Result<StopReason, String>>,
 }
 
+impl StartedPrompt {
+    pub(crate) fn into_completion(self) -> oneshot::Receiver<Result<StopReason, String>> {
+        self.completion
+    }
+}
+
 /// Result of a successful `initialize` handshake, carried back to the spawning
 /// task: the negotiated capabilities plus every advertised authentication
 /// method (opaque `id`/`name`/optional `description`). The renderer needs the
@@ -840,7 +846,7 @@ struct InitOutcome {
 /// emitted for observers but is no longer the source of truth — the spawn
 /// response is. Serialized camelCase on the wire so desktop (Tauri `Result`)
 /// and web (`WsReply` payload) share one contract.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnOutcome {
     pub agent_id: AgentId,

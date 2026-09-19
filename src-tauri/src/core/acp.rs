@@ -97,6 +97,11 @@ pub const METHOD_SUBSCRIBE_EVENTS: &str = "subscribeEvents";
 pub const METHOD_STOP_PRODUCERS: &str = "stopProducers";
 pub const METHOD_SHUTDOWN_PERSISTENCE: &str = "shutdownPersistence";
 pub const METHOD_SHUTDOWN: &str = "shutdown";
+pub const METHOD_RETIRE_SESSION: &str = "retireSession";
+pub const METHOD_FLUSH_CATALOG: &str = "flushCatalog";
+pub const METHOD_REGISTER_CONVERSATION_BINDING: &str = "registerConversationBinding";
+pub const METHOD_STABLE_AGENT_NAMESPACE: &str = "stableAgentNamespace";
+pub const METHOD_LIST_RUNNING_NAMESPACES: &str = "listRunningNamespaces";
 
 pub const METHOD_CONVERSATION_HOST_STATUS: &str = "conversationHostStatus";
 pub const METHOD_CONVERSATION_LIST: &str = "conversationList";
@@ -317,17 +322,16 @@ pub async fn run_acp_core_with_roots(
 
         let (shutdown, mut shutdown_rx) = watch::channel(false);
         let state = Arc::new(
-            compose_acp_core(state_root, workspace_base, shutdown).map_err(|error| {
+            compose_acp_core(state_root, workspace_base, shutdown).inspect_err(|error| {
                 log::error!(
                     target: "se_manager::core",
                     "operation=acp_core_compose stable_code={} detail={}",
                     error.code(),
-                    match &error {
+                    match error {
                         CoreError::InvalidRequest(detail) => detail.as_str(),
                         _ => error.client_message(),
                     }
                 );
-                error
             })?,
         );
         log::info!(
@@ -645,6 +649,8 @@ struct SendPromptParams {
     content: Option<Vec<ContentBlock>>,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    turn_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1185,7 +1191,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 }
             }
             let stop_reason: StopReason = manager
-                .send_prompt(&agent_id, params.session_id, blocks, None)
+                .send_prompt(&agent_id, params.session_id, blocks, params.turn_id)
                 .await
                 .map_err(invalid)?;
             serde_json::to_value(stop_reason).map_err(|error| invalid(error.to_string()))
@@ -1899,6 +1905,39 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             );
             to_json(invocation)
         }
+        METHOD_RETIRE_SESSION => {
+            let params: SessionIdParams = parse_params(request)?;
+            state
+                .relay
+                .retire_session(&params.session_id)
+                .await
+                .map_err(invalid)?;
+            Ok(Value::Null)
+        }
+        METHOD_FLUSH_CATALOG => {
+            let deadline = tokio::time::Instant::now() + crate::conversation::DEFAULT_DRAIN_TIMEOUT;
+            state
+                .relay
+                .flush_catalog_until(deadline)
+                .await
+                .map_err(|_| invalid("flushCatalog failed"))?;
+            Ok(Value::Null)
+        }
+        METHOD_REGISTER_CONVERSATION_BINDING => {
+            let params: RegisterBindingParams = parse_params(request)?;
+            let conversation_id = parse_conversation_id(&params.conversation_id)?;
+            manager.register_conversation_binding(&params.session_id, conversation_id);
+            Ok(Value::Null)
+        }
+        METHOD_STABLE_AGENT_NAMESPACE => {
+            let params: AgentIdParams = parse_params(request)?;
+            let namespace = manager
+                .stable_agent_namespace(&params.agent_id)
+                .map_err(invalid)?;
+            Ok(json!({ "namespace": namespace }))
+        }
+        METHOD_LIST_RUNNING_NAMESPACES => serde_json::to_value(manager.list_running_namespaces())
+            .map_err(|error| invalid(error.to_string())),
         other => Err(invalid(format!(
             "acp method '{other}' is not exported over core IPC"
         ))),
@@ -1909,6 +1948,13 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
 #[serde(rename_all = "camelCase")]
 struct SessionIdParams {
     session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterBindingParams {
+    session_id: String,
+    conversation_id: String,
 }
 
 #[derive(Deserialize)]

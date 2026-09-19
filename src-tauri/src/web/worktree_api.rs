@@ -573,15 +573,20 @@ mod tests {
     }
 
     fn test_state(root: &std::path::Path) -> AppState {
+        let relay = Arc::new(WsRelaySink::new());
         let pty = test_pty_manager();
         AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
+            acp: crate::core::AcpWebHostHandle::in_process(
+                Arc::new(AcpManager::new(vec![])),
+                Arc::clone(&relay),
+            ),
+            terminal: crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             terminal_events: pty.terminal_events(),
             cwd_tracker: pty.cwd_tracker(),
             git_tracker: pty.git_tracker(),
             exit_code_tracker: pty.exit_code_tracker(),
             pty,
-            relay: Arc::new(WsRelaySink::new()),
+            relay,
             registry: Arc::new(ProjectRegistry::new()),
             registry_persistence: None,
             projects_file: None,
@@ -1075,14 +1080,17 @@ mod tests {
     fn production_router(root: &std::path::Path) -> axum::Router {
         let pty = crate::web::test_pty_manager();
         let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
         crate::web::router::router(
-            Arc::new(AcpManager::new(vec![])),
+            crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay)),
             pty.clone(),
+            crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
             pty.terminal_events(),
             pty.cwd_tracker(),
             pty.git_tracker(),
             pty.exit_code_tracker(),
-            Arc::new(WsRelaySink::new()),
+            relay,
             Arc::new(ProjectRegistry::new()),
             None,
             None,

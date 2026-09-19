@@ -33,7 +33,9 @@ use serde::Serialize;
 use tokio::process::Child;
 use tokio::sync::oneshot;
 
-use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, WorkspaceManifestService};
+#[cfg(test)]
+use crate::acp::AcpManager;
+use crate::acp::{AcpCatalogService, AcpInstallService, WorkspaceManifestService};
 use crate::pty::PtyManager;
 use crate::web::auth::{DesktopCredentialLease, IngressProvenance};
 use crate::web::config::MAX_EVENT_LOG_CAPACITY;
@@ -426,8 +428,9 @@ impl RemoteServerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
-        acp: Arc<AcpManager>,
+        acp: crate::core::AcpWebHostHandle,
         pty: Arc<PtyManager>,
+        terminal: crate::core::TerminalServiceHandle,
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
         bind_mode: RemoteBindMode,
@@ -442,6 +445,7 @@ impl RemoteServerState {
         self.start_on_port(
             acp,
             pty,
+            terminal,
             ws_relay,
             registry,
             bind_mode,
@@ -465,8 +469,9 @@ impl RemoteServerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn start_on_port(
         &self,
-        acp: Arc<AcpManager>,
+        acp: crate::core::AcpWebHostHandle,
         pty: Arc<PtyManager>,
+        terminal: crate::core::TerminalServiceHandle,
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
         _bind_mode: RemoteBindMode,
@@ -479,10 +484,11 @@ impl RemoteServerState {
         skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
         bind_port: u16,
     ) -> Result<RemoteStatus, String> {
-        // Shared-live stays in-process until T4/T5 migrate ownership. The handle
-        // layer is the injection boundary so this host does not grow a second
-        // concrete-manager coupling.
-        let _services = crate::core::CoreServices::in_process(Arc::clone(&pty), Arc::clone(&acp));
+        // In-process fallback still wires ACP onto the local PTY manager.
+        // Core mode already owns both runtimes; skip the in-process bundle.
+        if let Some(manager) = acp.in_process_manager() {
+            let _services = crate::core::CoreServices::in_process(Arc::clone(&pty), manager);
+        }
         let _lifecycle = self.lifecycle.lock().await;
         let bind_mode = _bind_mode;
         {
@@ -610,6 +616,7 @@ impl RemoteServerState {
         let (addr, serve_handle) = serve_router(
             acp,
             Arc::clone(&pty),
+            terminal,
             pty.terminal_events(),
             pty.cwd_tracker(),
             pty.git_tracker(),
@@ -1167,8 +1174,9 @@ mod tests {
             RemoteServerState::with_desktop_authority(authority).with_pairing_store(store.clone());
         state
             .start(
-                acp,
-                pty,
+                crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay)),
+                pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay,
                 registry,
                 RemoteBindMode::Localhost,
@@ -1224,8 +1232,9 @@ mod tests {
 
         let status = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&relay)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
@@ -1268,8 +1277,9 @@ mod tests {
         // Restart works (the slot was cleared by stop) with a distinct bearer.
         let again = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&relay)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
@@ -1304,8 +1314,9 @@ mod tests {
         let state = RemoteServerState::new();
         let _first = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&relay)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
@@ -1322,8 +1333,9 @@ mod tests {
 
         let second = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&relay)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
@@ -1352,8 +1364,9 @@ mod tests {
         let oversized = Arc::new(WsRelaySink::with_log_capacity(MAX_EVENT_LOG_CAPACITY + 1));
         let error = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&oversized)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 oversized,
                 registry.clone(),
                 RemoteBindMode::Localhost,
@@ -1373,8 +1386,9 @@ mod tests {
         let maximum = Arc::new(WsRelaySink::with_log_capacity(MAX_EVENT_LOG_CAPACITY));
         let status = state
             .start(
-                acp,
-                pty,
+                crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&maximum)),
+                pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 maximum,
                 registry,
                 RemoteBindMode::Localhost,
@@ -1398,8 +1412,9 @@ mod tests {
         let state = RemoteServerState::new();
         state
             .start(
-                acp,
-                pty,
+                crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay)),
+                pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay,
                 registry,
                 RemoteBindMode::Localhost,
@@ -1440,8 +1455,9 @@ mod tests {
         let state = RemoteServerState::new();
         let _ = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&relay)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
@@ -1471,8 +1487,9 @@ mod tests {
         let state = RemoteServerState::new();
         let _ = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&relay)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
@@ -1517,8 +1534,9 @@ mod tests {
         let state = RemoteServerState::new();
         let status = state
             .start(
-                acp,
-                pty,
+                crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay)),
+                pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay,
                 registry,
                 RemoteBindMode::All,
@@ -1788,8 +1806,9 @@ mod tests {
         let state = RemoteServerState::new();
         let status = state
             .start(
-                acp.clone(),
+                crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&relay)),
                 pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,

@@ -319,9 +319,13 @@ pub async fn serve(
     skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let terminal = crate::core::TerminalServiceHandle::in_process(pty.clone());
+    acp.set_terminal_service(terminal.clone());
+    let host = crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&ws_relay));
     let (_addr, handle) = serve_router(
-        acp.clone(),
+        host,
         pty.clone(),
+        terminal,
         terminal_events,
         cwd_tracker,
         git_tracker,
@@ -375,8 +379,9 @@ pub async fn serve(
 /// toggling the server off never kills the desktop's live agents.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_router(
-    acp: Arc<AcpManager>,
+    acp: crate::core::AcpWebHostHandle,
     pty: Arc<PtyManager>,
+    terminal: crate::core::TerminalServiceHandle,
     terminal_events: TerminalEventHub,
     cwd_tracker: Arc<CwdTracker>,
     git_tracker: Arc<GitTracker>,
@@ -458,8 +463,9 @@ pub async fn serve_router(
     // value and injects it before request middleware; ConnectInfo remains transport metadata only.
     debug_assert_eq!(authority.ingress_provenance(), host_ingress_provenance);
     let app = router::router(
-        Arc::clone(&acp),
+        acp,
         pty,
+        terminal,
         terminal_events,
         cwd_tracker,
         git_tracker,
@@ -813,9 +819,12 @@ mod tests {
         authority.set_ingress_provenance(crate::web::auth::IngressProvenance::PublicTunnel);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
+        let host = crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay));
+        let terminal = crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty));
         let (addr, handle) = serve_router(
-            acp,
+            host,
             Arc::clone(&pty),
+            terminal,
             pty.terminal_events(),
             pty.cwd_tracker(),
             pty.git_tracker(),
@@ -876,9 +885,12 @@ mod tests {
         let authority = Arc::new(RemoteAccessAuthority::for_tests("shared-live-test-token"));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
+        let host = crate::core::AcpWebHostHandle::in_process(Arc::clone(&acp), Arc::clone(&relay));
+        let terminal = crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty));
         let (_addr, handle) = serve_router(
-            Arc::clone(&acp),
+            host,
             Arc::clone(&pty),
+            terminal,
             pty.terminal_events(),
             pty.cwd_tracker(),
             pty.git_tracker(),
