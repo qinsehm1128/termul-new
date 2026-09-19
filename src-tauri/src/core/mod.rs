@@ -31,5 +31,5 @@ pub use terminal::{
 };
 pub use web_host::{
     resolve_acp_web_host, AcpWebHost, AcpWebHostHandle, CoreAcpWebHost, CoreRelayHost,
-    HostStartedPrompt, InProcessAcpWebHost, SHARED_LIVE_UNAVAILABLE,
+    HostStartedPrompt, InProcessAcpWebHost, PermissionRequestInfo, SHARED_LIVE_UNAVAILABLE,
 };

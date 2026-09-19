@@ -442,9 +442,10 @@ pub async fn serve_router(
         );
     }
 
-    // Advertise `Server` history mode when the relay has either canonical Conversation
-    // persistence or the pre-cutover SessionPersistence compatibility provider.
-    let history_mode = if ws_relay.has_persisted_history() {
+    // Advertise `Server` history mode from the ACP web host: Core mode always
+    // has persisted history inside the Core process; in-process fallback still
+    // uses the relay's Conversation / SessionPersistence providers.
+    let history_mode = if acp.has_persisted_history() {
         HistoryMode::Server
     } else {
         HistoryMode::LiveOnly

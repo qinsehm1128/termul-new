@@ -36,11 +36,23 @@ use crate::web::ws::AppState;
 /// Error code returned when a caller names a project root it may not name.
 pub const ERR_ROOT_NOT_REGISTERED: &str = "MEMORY_INDEX_ROOT_NOT_REGISTERED";
 
-/// Resolve the service, or report the same failure shape every handler uses.
-macro_rules! service_or_unavailable {
-    ($state:expr, $body:ty) => {
+/// Local service, else Core RPC, else the same unavailable body.
+macro_rules! service_or_host {
+    ($state:expr, $body:ty, $method:expr, $params:expr) => {
         match $state.memory_index.clone() {
             Some(service) => service,
+            None if $state.acp.is_core_backed() => {
+                let body = match $state.acp.memory_request($method, $params).await {
+                    Ok(value) => match serde_json::from_value::<$body>(value) {
+                        Ok(data) => IpcBody::ok(data),
+                        Err(error) => {
+                            IpcBody::<$body>::err(error.to_string(), "MEMORY_INDEX_UNAVAILABLE")
+                        }
+                    },
+                    Err(error) => IpcBody::<$body>::err(error, "MEMORY_INDEX_UNAVAILABLE"),
+                };
+                return (StatusCode::OK, Json(body));
+            }
             None => {
                 return (
                     StatusCode::OK,
@@ -129,12 +141,19 @@ macro_rules! root_or_reject {
 
 pub async fn build_post(
     State(state): State<AppState>,
-    Json(args): Json<MemoryIndexBuildArgs>,
+    Json(mut args): Json<MemoryIndexBuildArgs>,
 ) -> impl IntoResponse {
     // Authorization first: an unauthorized root is rejected the same way
     // whether or not this host happens to have the service wired up.
     let project_root = root_or_reject!(state, args.project_root, IngestReport);
-    let service = service_or_unavailable!(state, IngestReport);
+    args.project_root = project_root.to_string_lossy().into_owned();
+    let params = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+    let service = service_or_host!(
+        state,
+        IngestReport,
+        crate::core::acp::METHOD_MEMORY_BUILD,
+        params
+    );
     info!(
         target: "se_manager::web::memory_index_api",
         "operation=memory_index_build full_rebuild={}",
@@ -202,10 +221,12 @@ fn broadcast_progress(
 /// Ask a running build to stop. `false` means nothing was running.
 pub async fn cancel_post(
     State(state): State<AppState>,
-    Json(args): Json<MemoryIndexScopeArgs>,
+    Json(mut args): Json<MemoryIndexScopeArgs>,
 ) -> impl IntoResponse {
     let project_root = root_or_reject!(state, args.project_root, bool);
-    let service = service_or_unavailable!(state, bool);
+    args.project_root = project_root.to_string_lossy().into_owned();
+    let params = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+    let service = service_or_host!(state, bool, crate::core::acp::METHOD_MEMORY_CANCEL, params);
     let body = match service.cancel_build(&project_root) {
         Ok(cancelled) => IpcBody::ok(cancelled),
         Err(error) => IpcBody::<bool>::err(error.detail, error.code),
@@ -215,12 +236,19 @@ pub async fn cancel_post(
 
 pub async fn status_post(
     State(state): State<AppState>,
-    Json(args): Json<MemoryIndexScopeArgs>,
+    Json(mut args): Json<MemoryIndexScopeArgs>,
 ) -> impl IntoResponse {
     // Authorization first: an unauthorized root is rejected the same way
     // whether or not this host happens to have the service wired up.
     let project_root = root_or_reject!(state, args.project_root, MemoryIndexStatus);
-    let service = service_or_unavailable!(state, MemoryIndexStatus);
+    args.project_root = project_root.to_string_lossy().into_owned();
+    let params = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+    let service = service_or_host!(
+        state,
+        MemoryIndexStatus,
+        crate::core::acp::METHOD_MEMORY_STATUS,
+        params
+    );
     let body = match spawn_blocking(move || service.status(&project_root)).await {
         Ok(Ok(status)) => IpcBody::ok(status),
         Ok(Err(error)) => IpcBody::<MemoryIndexStatus>::err(error.detail, error.code),
@@ -233,12 +261,19 @@ pub async fn status_post(
 
 pub async fn search_post(
     State(state): State<AppState>,
-    Json(args): Json<MemoryIndexSearchArgs>,
+    Json(mut args): Json<MemoryIndexSearchArgs>,
 ) -> impl IntoResponse {
     // Authorization first: an unauthorized root is rejected the same way
     // whether or not this host happens to have the service wired up.
     let project_root = root_or_reject!(state, args.project_root, MemorySearchResponse);
-    let service = service_or_unavailable!(state, MemorySearchResponse);
+    args.project_root = project_root.to_string_lossy().into_owned();
+    let params = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+    let service = service_or_host!(
+        state,
+        MemorySearchResponse,
+        crate::core::acp::METHOD_MEMORY_SEARCH,
+        params
+    );
     info!(
         target: "se_manager::web::memory_index_api",
         "operation=memory_index_search agents={}",
@@ -256,12 +291,19 @@ pub async fn search_post(
 
 pub async fn sessions_post(
     State(state): State<AppState>,
-    Json(args): Json<MemoryIndexListArgs>,
+    Json(mut args): Json<MemoryIndexListArgs>,
 ) -> impl IntoResponse {
     // Authorization first: an unauthorized root is rejected the same way
     // whether or not this host happens to have the service wired up.
     let project_root = root_or_reject!(state, args.project_root, Vec<IndexedSession>);
-    let service = service_or_unavailable!(state, Vec<IndexedSession>);
+    args.project_root = project_root.to_string_lossy().into_owned();
+    let params = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+    let service = service_or_host!(
+        state,
+        Vec<IndexedSession>,
+        crate::core::acp::METHOD_MEMORY_SESSIONS,
+        params
+    );
     let body = match spawn_blocking(move || {
         service.list_sessions(
             &project_root,
@@ -283,12 +325,19 @@ pub async fn sessions_post(
 
 pub async fn session_post(
     State(state): State<AppState>,
-    Json(args): Json<MemoryIndexSessionArgs>,
+    Json(mut args): Json<MemoryIndexSessionArgs>,
 ) -> impl IntoResponse {
     // Authorization first: an unauthorized root is rejected the same way
     // whether or not this host happens to have the service wired up.
     let project_root = root_or_reject!(state, args.project_root, Option<MemorySessionDetail>);
-    let service = service_or_unavailable!(state, Option<MemorySessionDetail>);
+    args.project_root = project_root.to_string_lossy().into_owned();
+    let params = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+    let service = service_or_host!(
+        state,
+        Option<MemorySessionDetail>,
+        crate::core::acp::METHOD_MEMORY_SESSION,
+        params
+    );
     let body = match spawn_blocking(move || {
         service.get_session(
             &project_root,

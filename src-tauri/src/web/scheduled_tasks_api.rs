@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -9,7 +7,7 @@ use serde::Deserialize;
 
 use crate::scheduled_tasks::{
     ActivateTaskRequestV1, RevisionRequestV1, ScheduleSpecV1, ScheduledTaskDraftInputV1,
-    ScheduledTaskService, TaskMutationContextV1, UpdateDraftRequestV1,
+    TaskMutationContextV1, UpdateDraftRequestV1,
 };
 use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
@@ -32,13 +30,13 @@ fn preview_count() -> usize {
     5
 }
 
-fn service(state: &AppState) -> Result<Arc<ScheduledTaskService>, IpcBody<()>> {
-    state.acp.scheduled_tasks().ok_or_else(|| {
-        IpcBody::err(
-            "scheduled task service is unavailable",
-            "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
-        )
-    })
+async fn via_core<T: serde::de::DeserializeOwned>(
+    state: &AppState,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<T, String> {
+    let value = state.acp.scheduled_task_request(method, params).await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 fn ok<T>(value: T) -> (StatusCode, Json<IpcBody<T>>) {
@@ -59,24 +57,36 @@ pub async fn preview(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::SchedulePreviewV1>>,
 ) {
-    let service = match service(&state) {
-        Ok(service) => service,
-        Err(body) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(IpcBody {
-                    success: false,
-                    data: None,
-                    error: body.error,
-                    code: body.code,
-                }),
-            )
-        }
-    };
-    match service.preview(&request.schedule, request.count) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.preview(&request.schedule, request.count) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_PREVIEW,
+            serde_json::json!({
+                "schedule": request.schedule,
+                "count": request.count,
+            }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(IpcBody {
+            success: false,
+            data: None,
+            error: Some("scheduled task service is unavailable".to_string()),
+            code: Some("SCHEDULED_TASK_SERVICE_UNAVAILABLE".to_string()),
+        }),
+    )
 }
 
 pub async fn list(
@@ -86,19 +96,31 @@ pub async fn list(
     StatusCode,
     Json<IpcBody<Vec<crate::scheduled_tasks::ScheduledTaskV1>>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(IpcBody::err(
-                "scheduled task service is unavailable",
-                "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
-            )),
-        );
-    };
-    match service.list_tasks(query.project_id.as_deref()) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.list_tasks(query.project_id.as_deref()) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_LIST,
+            serde_json::json!({ "projectId": query.project_id }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(IpcBody::err(
+            "scheduled task service is unavailable",
+            "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
+        )),
+    )
 }
 
 pub async fn get(
@@ -108,19 +130,31 @@ pub async fn get(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::ScheduledTaskV1>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(IpcBody::err(
-                "scheduled task service is unavailable",
-                "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
-            )),
-        );
-    };
-    match service.get_task(&task_id) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.get_task(&task_id) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_GET,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(IpcBody::err(
+            "scheduled task service is unavailable",
+            "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
+        )),
+    )
 }
 
 pub async fn create_draft(
@@ -130,13 +164,25 @@ pub async fn create_draft(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::ScheduledTaskV1>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return unavailable();
-    };
-    match service.create_draft(input, TaskMutationContextV1::default()) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.create_draft(input, TaskMutationContextV1::default()) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_DRAFT_CREATE,
+            serde_json::json!({ "input": input }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    unavailable()
 }
 
 pub async fn update_draft(
@@ -147,18 +193,30 @@ pub async fn update_draft(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::ScheduledTaskV1>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return unavailable();
-    };
-    match service.update_draft(
-        &task_id,
-        request.expected_revision,
-        request.input,
-        TaskMutationContextV1::default(),
-    ) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.update_draft(
+            &task_id,
+            request.expected_revision,
+            request.input,
+            TaskMutationContextV1::default(),
+        ) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_DRAFT_UPDATE,
+            serde_json::json!({ "taskId": task_id, "request": request }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    unavailable()
 }
 
 pub async fn activate(
@@ -169,18 +227,30 @@ pub async fn activate(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::ScheduledTaskV1>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return unavailable();
-    };
-    match service.activate(
-        &task_id,
-        request.expected_revision,
-        &request.expected_draft_hash,
-        TaskMutationContextV1::default(),
-    ) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.activate(
+            &task_id,
+            request.expected_revision,
+            &request.expected_draft_hash,
+            TaskMutationContextV1::default(),
+        ) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_ACTIVATE,
+            serde_json::json!({ "taskId": task_id, "request": request }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    unavailable()
 }
 
 pub async fn pause(
@@ -214,26 +284,43 @@ async fn mutate_status(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::ScheduledTaskV1>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return unavailable();
-    };
-    let result = if resume {
-        service.resume(
-            &task_id,
-            request.expected_revision,
-            TaskMutationContextV1::default(),
-        )
-    } else {
-        service.pause(
-            &task_id,
-            request.expected_revision,
-            TaskMutationContextV1::default(),
-        )
-    };
-    match result {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        let result = if resume {
+            service.resume(
+                &task_id,
+                request.expected_revision,
+                TaskMutationContextV1::default(),
+            )
+        } else {
+            service.pause(
+                &task_id,
+                request.expected_revision,
+                TaskMutationContextV1::default(),
+            )
+        };
+        return match result {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        let method = if resume {
+            crate::core::acp::METHOD_SCHEDULED_TASK_RESUME
+        } else {
+            crate::core::acp::METHOD_SCHEDULED_TASK_PAUSE
+        };
+        return match via_core(
+            &state,
+            method,
+            serde_json::json!({ "taskId": task_id, "request": request }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    unavailable()
 }
 
 pub async fn delete_task(
@@ -241,23 +328,35 @@ pub async fn delete_task(
     Path(task_id): Path<String>,
     Json(request): Json<RevisionRequestV1>,
 ) -> (StatusCode, Json<IpcBody<()>>) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(IpcBody::err(
-                "scheduled task service is unavailable",
-                "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
-            )),
-        );
-    };
-    match service.delete(
-        &task_id,
-        request.expected_revision,
-        TaskMutationContextV1::default(),
-    ) {
-        Ok(()) => ok(()),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.delete(
+            &task_id,
+            request.expected_revision,
+            TaskMutationContextV1::default(),
+        ) {
+            Ok(()) => ok(()),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_DELETE,
+            serde_json::json!({ "taskId": task_id, "request": request }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(IpcBody::err(
+            "scheduled task service is unavailable",
+            "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
+        )),
+    )
 }
 
 pub async fn run_now(
@@ -267,13 +366,25 @@ pub async fn run_now(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::ScheduledTaskRunV1>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return unavailable_run();
-    };
-    match service.run_now(&task_id) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.run_now(&task_id) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_RUN_NOW,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    unavailable_run()
 }
 
 pub async fn retry_run(
@@ -283,13 +394,25 @@ pub async fn retry_run(
     StatusCode,
     Json<IpcBody<crate::scheduled_tasks::ScheduledTaskRunV1>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return unavailable_run();
-    };
-    match service.retry_run(&task_id, &run_id) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.retry_run(&task_id, &run_id) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_RETRY_RUN,
+            serde_json::json!({ "taskId": task_id, "runId": run_id }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    unavailable_run()
 }
 
 pub async fn list_runs(
@@ -299,19 +422,31 @@ pub async fn list_runs(
     StatusCode,
     Json<IpcBody<Vec<crate::scheduled_tasks::ScheduledTaskRunV1>>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(IpcBody::err(
-                "scheduled task service is unavailable",
-                "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
-            )),
-        );
-    };
-    match service.list_runs(&task_id) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.list_runs(&task_id) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_LIST_RUNS,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(IpcBody::err(
+            "scheduled task service is unavailable",
+            "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
+        )),
+    )
 }
 
 pub async fn list_audit(
@@ -321,19 +456,31 @@ pub async fn list_audit(
     StatusCode,
     Json<IpcBody<Vec<crate::scheduled_tasks::ScheduledTaskAuditEventV1>>>,
 ) {
-    let Some(service) = state.acp.scheduled_tasks() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(IpcBody::err(
-                "scheduled task service is unavailable",
-                "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
-            )),
-        );
-    };
-    match service.list_audit(&task_id) {
-        Ok(value) => ok(value),
-        Err(error_value) => error(error_value.to_string()),
+    if let Some(service) = state.acp.scheduled_tasks() {
+        return match service.list_audit(&task_id) {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value.to_string()),
+        };
     }
+    if state.acp.is_core_backed() {
+        return match via_core(
+            &state,
+            crate::core::acp::METHOD_SCHEDULED_TASK_LIST_AUDIT,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        {
+            Ok(value) => ok(value),
+            Err(error_value) => error(error_value),
+        };
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(IpcBody::err(
+            "scheduled task service is unavailable",
+            "SCHEDULED_TASK_SERVICE_UNAVAILABLE",
+        )),
+    )
 }
 
 fn unavailable() -> (

@@ -1629,12 +1629,13 @@ async fn handle_request_with_conversation(
                 &req.payload,
                 conversation,
                 current_conversation,
+                Some(acp),
             )
             .await
         }
         "subscribe" => handle_subscribe(id, &req.payload, relay, out_tx, subscribed_clients).await,
         "list_persisted_sessions" => {
-            handle_list_persisted_sessions(id, relay, history_mode).await
+            handle_list_persisted_sessions(id, relay, history_mode, Some(acp)).await
         }
         "open_persisted_session" => {
             handle_open_persisted_session(
@@ -1644,14 +1645,15 @@ async fn handle_request_with_conversation(
                 out_tx,
                 subscribed_clients,
                 history_mode,
+                Some(acp),
             )
             .await
         }
         "get_session_payload" => {
-            handle_get_session_payload(id, &req.payload, relay, history_mode).await
+            handle_get_session_payload(id, &req.payload, relay, history_mode, Some(acp)).await
         }
         "get_session_payload_page" => {
-            handle_get_session_payload_page(id, &req.payload, relay, history_mode).await
+            handle_get_session_payload_page(id, &req.payload, relay, history_mode, Some(acp)).await
         }
         "recover_session_snapshot" => {
             handle_recover_session_snapshot(
@@ -1669,7 +1671,7 @@ async fn handle_request_with_conversation(
         // subscription), this only returns `{ sessionId, watermark }` so a
         // refreshed transport seeds `lastSeq` before its first subscribe.
         "get_session_cursor" => {
-            handle_get_session_cursor(id, &req.payload, relay, history_mode).await
+            handle_get_session_cursor(id, &req.payload, relay, history_mode, Some(acp)).await
         }
         // Story 1.7: `respond_permission` — route the browser's permission
         // decision through the server-side rendezvous (first-response-wins,
@@ -1734,6 +1736,7 @@ async fn handle_request_with_conversation(
                 conversation,
                 relay,
                 ConversationWsMutation::Detach,
+                Some(acp),
             )
             .await
         }
@@ -1744,6 +1747,7 @@ async fn handle_request_with_conversation(
                 conversation,
                 relay,
                 ConversationWsMutation::Rebind,
+                Some(acp),
             )
             .await
         }
@@ -1754,6 +1758,7 @@ async fn handle_request_with_conversation(
                 conversation,
                 relay,
                 ConversationWsMutation::Suspend,
+                Some(acp),
             )
             .await
         }
@@ -1764,6 +1769,7 @@ async fn handle_request_with_conversation(
                 conversation,
                 relay,
                 ConversationWsMutation::Replace,
+                Some(acp),
             )
             .await
         }
@@ -1774,6 +1780,7 @@ async fn handle_request_with_conversation(
                 conversation,
                 relay,
                 ConversationWsMutation::Delete,
+                Some(acp),
             )
             .await
         }
@@ -1934,6 +1941,7 @@ async fn handle_list_persisted_sessions(
     id: String,
     relay: &Arc<WsRelaySink>,
     history_mode: HistoryMode,
+    acp: Option<&crate::core::AcpWebHostHandle>,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
         return WsReply::err(
@@ -1945,14 +1953,20 @@ async fn handle_list_persisted_sessions(
     if let Some(persistence) = relay.conversation_persistence() {
         return ok_with_payload(id, &persistence.list_sessions());
     }
-    match relay.persistence() {
-        Some(persistence) => ok_with_payload(id, &persistence.list_sessions()),
-        None => WsReply::err(
-            id,
-            WsErrorCode::Unsupported,
-            "persisted history is unavailable",
-        ),
+    if let Some(persistence) = relay.persistence() {
+        return ok_with_payload(id, &persistence.list_sessions());
     }
+    if let Some(acp) = acp {
+        return match acp.history_list().await {
+            Ok(value) => WsReply::ok(id, Some(value)),
+            Err(error) => host_history_err(id, error),
+        };
+    }
+    WsReply::err(
+        id,
+        WsErrorCode::Unsupported,
+        "persisted history is unavailable",
+    )
 }
 
 fn charge_compat_history_bytes(
@@ -2033,6 +2047,7 @@ async fn handle_get_session_payload(
     payload: &Value,
     relay: &Arc<WsRelaySink>,
     history_mode: HistoryMode,
+    acp: Option<&crate::core::AcpWebHostHandle>,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
         return WsReply::err(
@@ -2122,7 +2137,18 @@ async fn handle_get_session_payload(
                 }
             }
         }
-        None => WsReply::err(id, WsErrorCode::NotFound, "session payload not found"),
+        None => {
+            if let Some(acp) = acp {
+                return match acp.history_get(&parsed.session_id).await {
+                    Ok(Value::Null) => {
+                        WsReply::err(id, WsErrorCode::NotFound, "session payload not found")
+                    }
+                    Ok(value) => WsReply::ok(id, Some(value)),
+                    Err(error) => host_history_err(id, error),
+                };
+            }
+            WsReply::err(id, WsErrorCode::NotFound, "session payload not found")
+        }
     }
 }
 
@@ -2133,6 +2159,7 @@ async fn handle_get_session_payload_page(
     payload: &Value,
     relay: &Arc<WsRelaySink>,
     history_mode: HistoryMode,
+    acp: Option<&crate::core::AcpWebHostHandle>,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
         return WsReply::err(
@@ -2175,6 +2202,20 @@ async fn handle_get_session_payload_page(
         }
     };
     let Some(persistence) = relay.conversation_persistence() else {
+        if let Some(acp) = acp {
+            return match acp
+                .history_get_page(
+                    &request.session_id,
+                    request.after_seq,
+                    request.limit,
+                    request.target_last_seq,
+                )
+                .await
+            {
+                Ok(value) => WsReply::ok(id, Some(value)),
+                Err(error) => host_history_err(id, error),
+            };
+        }
         return WsReply::err_with_code(
             id,
             crate::conversation::CONVERSATION_HISTORY_PAGING_REQUIRED,
@@ -2433,6 +2474,7 @@ async fn handle_get_session_cursor(
     payload: &Value,
     relay: &Arc<WsRelaySink>,
     history_mode: HistoryMode,
+    acp: Option<&crate::core::AcpWebHostHandle>,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
         return WsReply::err(
@@ -2465,6 +2507,14 @@ async fn handle_get_session_cursor(
     // but `Err(_)` for a real I/O / decode failure. `unwrap_or(0)` would mask a
     // storage failure as "new session" in the reply + logs; log the `Err` first
     // so a corrupted payload or permission error is visible, then default to 0.
+    if relay.conversation_persistence().is_none() && relay.persistence().is_none() {
+        if let Some(acp) = acp {
+            return match acp.history_cursor(&parsed.session_id).await {
+                Ok(value) => WsReply::ok(id, Some(value)),
+                Err(error) => host_history_err(id, error),
+            };
+        }
+    }
     let watermark = if let Some(persistence) = relay.conversation_persistence() {
         persistence
             .last_seq(&parsed.session_id)
@@ -2512,6 +2562,7 @@ async fn handle_open_persisted_session(
     out_tx: &OutboundSender,
     subscribed_clients: &mut Vec<(String, ClientId)>,
     history_mode: HistoryMode,
+    acp: Option<&crate::core::AcpWebHostHandle>,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
         return WsReply::err(
@@ -2519,6 +2570,21 @@ async fn handle_open_persisted_session(
             WsErrorCode::Unsupported,
             "persisted history is unavailable",
         );
+    }
+    if relay.conversation_persistence().is_none() && relay.persistence().is_none() {
+        if let Some(acp) = acp {
+            if let Err(error) = acp
+                .history_open(
+                    payload
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                )
+                .await
+            {
+                return host_history_err(id, error);
+            }
+        }
     }
     handle_subscribe(id, payload, relay, out_tx, subscribed_clients).await
 }
@@ -2531,6 +2597,20 @@ async fn handle_open_persisted_session(
 /// …"` / `"unknown permission request: …"` → `NotFound`; capability-gate
 /// failures (`"agent does not support …"`) → `Unsupported`. Unrecognized
 /// errors fall back to `NotImplemented` (preserves the human message verbatim).
+fn host_history_err(id: String, err: String) -> WsReply {
+    if err.contains("not found") || err.contains("CONVERSATION_NOT_FOUND") {
+        return WsReply::err(id, WsErrorCode::NotFound, "session payload not found");
+    }
+    if err.contains("unavailable") {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    WsReply::err_with_code(id, "PERSIST_FAILED", err)
+}
+
 fn acp_err_to_reply(id: String, err: String) -> WsReply {
     if let Some(failure) = crate::conversation::AgentCompensationFailure::from_wire_error(&err) {
         return WsReply::err_with_code(
@@ -2628,19 +2708,94 @@ struct ConversationUpdateExecutionTargetWsPayload {
     execution_target: crate::conversation::ExecutionTarget,
 }
 
+fn parse_host_service_error(error: String) -> (String, String) {
+    match error.split_once(':') {
+        Some((code, detail)) if !code.is_empty() && !code.contains(' ') => {
+            (code.to_string(), detail.to_string())
+        }
+        _ => ("ACP_CORE".to_string(), error),
+    }
+}
+
+fn ws_host_service_err(id: String, error: String) -> WsReply {
+    let (code, detail) = parse_host_service_error(error);
+    WsReply::err_with_code(id, code, detail)
+}
+
+fn conversation_ws_method(type_: &str) -> Option<&'static str> {
+    Some(match type_ {
+        "conversation_host_status" => crate::core::acp::METHOD_CONVERSATION_HOST_STATUS,
+        "list_conversations" => crate::core::acp::METHOD_CONVERSATION_LIST,
+        "get_conversation" => crate::core::acp::METHOD_CONVERSATION_GET,
+        "get_conversation_binding" => crate::core::acp::METHOD_CONVERSATION_GET_BINDING,
+        "open_conversation" => crate::core::acp::METHOD_CONVERSATION_OPEN,
+        "resolve_legacy_conversation_id" => crate::core::acp::METHOD_CONVERSATION_RESOLVE_LEGACY_ID,
+        "get_session_workspace" => crate::core::acp::METHOD_CONVERSATION_GET_WORKSPACE,
+        "write_session_workspace" => crate::core::acp::METHOD_CONVERSATION_WRITE_WORKSPACE,
+        "resolve_recovery_item" => crate::core::acp::METHOD_CONVERSATION_RECOVERY_RESOLVE,
+        "attach_project" => crate::core::acp::METHOD_CONVERSATION_ATTACH_PROJECT,
+        "detach_project" => crate::core::acp::METHOD_CONVERSATION_DETACH_PROJECT,
+        "update_execution_target" => crate::core::acp::METHOD_CONVERSATION_UPDATE_EXECUTION_TARGET,
+        _ => return None,
+    })
+}
+
+fn conversation_ws_params(type_: &str, payload: &Value) -> Value {
+    match type_ {
+        "conversation_host_status" | "list_conversations" => Value::Null,
+        "resolve_recovery_item" => json!({ "request": payload }),
+        _ => payload.clone(),
+    }
+}
+
 async fn handle_conversation_application(
     id: String,
     type_: &str,
     payload: &Value,
     service: Option<&Arc<crate::conversation::ConversationApplicationService>>,
     current_conversation: &Arc<parking_lot::Mutex<Option<crate::conversation::ConversationId>>>,
+    acp: Option<&crate::core::AcpWebHostHandle>,
 ) -> WsReply {
-    let Some(service) = service else {
+    if service.is_none() {
+        if let Some(acp) = acp.filter(|host| host.is_core_backed()) {
+            let Some(method) = conversation_ws_method(type_) else {
+                return WsReply::err_with_code(
+                    id,
+                    "NOT_IMPLEMENTED",
+                    "unknown Conversation request",
+                );
+            };
+            return match acp
+                .conversation_request(method, conversation_ws_params(type_, payload))
+                .await
+            {
+                Ok(value) => {
+                    if type_ == "open_conversation" {
+                        if let Ok(parsed) =
+                            serde_json::from_value::<ConversationIdWsPayload>(payload.clone())
+                        {
+                            if let Ok(conversation_id) =
+                                crate::conversation::ConversationId::parse_path_component(
+                                    &parsed.conversation_id,
+                                )
+                            {
+                                *current_conversation.lock() = Some(conversation_id);
+                            }
+                        }
+                    }
+                    WsReply::ok(id, Some(value))
+                }
+                Err(error) => ws_host_service_err(id, error),
+            };
+        }
         return WsReply::err_with_code(
             id,
             "CONVERSATION_SERVICE_UNAVAILABLE",
             "bootstrap-published Conversation application service is unavailable",
         );
+    }
+    let Some(service) = service else {
+        unreachable!();
     };
     match type_ {
         "conversation_host_status" => match service.host_status() {
@@ -3023,12 +3178,23 @@ async fn handle_conversation_lifecycle(
     }
 }
 
+fn conversation_lifecycle_method(mutation: ConversationWsMutation) -> &'static str {
+    match mutation {
+        ConversationWsMutation::Detach => crate::core::acp::METHOD_CONVERSATION_DETACH_BINDING,
+        ConversationWsMutation::Rebind => crate::core::acp::METHOD_CONVERSATION_REBIND_BINDING,
+        ConversationWsMutation::Suspend => crate::core::acp::METHOD_CONVERSATION_SUSPEND_BINDING,
+        ConversationWsMutation::Replace => crate::core::acp::METHOD_CONVERSATION_REPLACE_BINDING,
+        ConversationWsMutation::Delete => crate::core::acp::METHOD_CONVERSATION_DELETE,
+    }
+}
+
 async fn handle_conversation_lifecycle_with_service(
     id: String,
     payload: &Value,
     service: Option<&Arc<crate::conversation::ConversationApplicationService>>,
     relay: &Arc<WsRelaySink>,
     mutation: ConversationWsMutation,
+    acp: Option<&crate::core::AcpWebHostHandle>,
 ) -> WsReply {
     let parsed: ConversationLifecycleWsPayload = match serde_json::from_value(payload.clone()) {
         Ok(value) => value,
@@ -3047,12 +3213,35 @@ async fn handle_conversation_lifecycle_with_service(
                 return WsReply::err_with_code(id, "CONVERSATION_INVALID_ID", error.to_string())
             }
         };
-    let Some(service) = service else {
+    if service.is_none() {
+        if let Some(acp) = acp.filter(|host| host.is_core_backed()) {
+            return match acp
+                .conversation_request(conversation_lifecycle_method(mutation), payload.clone())
+                .await
+            {
+                Ok(value) => match relay.emit(&AcpEvent {
+                    sid: None,
+                    type_: "conversation_lifecycle",
+                    payload: value.clone(),
+                }) {
+                    Ok(_) => WsReply::ok(id, Some(value)),
+                    Err(error) => WsReply::err_with_code(
+                        id,
+                        error.code,
+                        "conversation lifecycle event delivery degraded",
+                    ),
+                },
+                Err(error) => ws_host_service_err(id, error),
+            };
+        }
         return WsReply::err_with_code(
             id,
             "CONVERSATION_SERVICE_UNAVAILABLE",
             "bootstrap-published Conversation application service is unavailable",
         );
+    }
+    let Some(service) = service else {
+        unreachable!();
     };
     let current_session_id = if matches!(mutation, ConversationWsMutation::Delete) {
         match service
@@ -5336,14 +5525,14 @@ struct RespondPermissionPayload {
     option_id: Option<String>,
 }
 
-/// Wire `respond_permission` → [`crate::web::permissions::PermissionRendezvous`]
-/// (first-response-wins, TOCTOU re-validation, at-most-one) →
-/// `AcpManager::respond_permission` (resolves the agent `Responder` on the
-/// driver thread). Maps the rendezvous outcome/error to a stable `err.code`.
+/// Wire `respond_permission`.
 ///
-/// Requires a server-side rendezvous attached to the relay (`relay.rendezvous()`).
-/// On the desktop path (no rendezvous) the browser never reaches this handler
-/// — the desktop uses the `acp_respond_permission` Tauri command directly.
+/// Two branches:
+/// - Relay rendezvous present (standalone / in-process shared-live): first-response-wins
+///   via [`crate::web::permissions::PermissionRendezvous`], then `AcpManager`.
+/// - No local rendezvous (ACP Core / desktop dual-process): look up the ticket via
+///   `permission_info`, enforce the same agent-match + subscribed-session (NFR5) checks,
+///   then `respond_permission` on the host. Unknown ids map to `not_found`.
 async fn handle_respond_permission(
     id: String,
     payload: &Value,
@@ -5362,6 +5551,36 @@ async fn handle_respond_permission(
                 )
             }
         };
+        if parsed.request_id.is_empty() {
+            return WsReply::err(id, WsErrorCode::Unsupported, "requestId is required");
+        }
+        let info = match acp.permission_info(&parsed.request_id).await {
+            Ok(info) => info,
+            Err(_) => {
+                return WsReply::err(
+                    id,
+                    WsErrorCode::NotFound,
+                    "no outstanding permission for this requestId",
+                )
+            }
+        };
+        if info.agent_id != parsed.agent_id {
+            return WsReply::err(
+                id,
+                WsErrorCode::PermissionDenied,
+                "agentId does not match the permission's agent",
+            );
+        }
+        if !subscribed_clients
+            .iter()
+            .any(|(sid, _)| *sid == info.session_id)
+        {
+            return WsReply::err(
+                id,
+                WsErrorCode::NotFound,
+                "this connection is not subscribed to the permission's session",
+            );
+        }
         return match acp
             .respond_permission(&parsed.agent_id, parsed.request_id, parsed.option_id)
             .await
@@ -5487,10 +5706,10 @@ struct AnswerQuestionPayload {
 /// (resolves the agent `Responder` on the driver thread). Maps the rendezvous
 /// outcome/error to a stable `err.code` (mirrors `handle_respond_permission`).
 ///
-/// Requires a server-side question rendezvous attached to the relay
-/// (`relay.question_rendezvous()`). On the desktop path (no rendezvous) the
-/// browser never reaches this handler — the desktop uses the `acp_answer_question`
-/// Tauri command directly.
+/// Two branches, mirroring `handle_respond_permission`:
+/// - Relay question rendezvous present: first-response-wins locally.
+/// - No local rendezvous (ACP Core): `question_info` + NFR5 subscription gate,
+///   then `answer_question` on the host. Unknown ids map to `not_found`.
 async fn handle_answer_question(
     id: String,
     payload: &Value,
@@ -5509,6 +5728,36 @@ async fn handle_answer_question(
                 )
             }
         };
+        if parsed.question_id.is_empty() {
+            return WsReply::err(id, WsErrorCode::Unsupported, "questionId is required");
+        }
+        let info = match acp.question_info(&parsed.question_id).await {
+            Ok(info) => info,
+            Err(_) => {
+                return WsReply::err(
+                    id,
+                    WsErrorCode::NotFound,
+                    "no outstanding question for this questionId",
+                )
+            }
+        };
+        if info.agent_id != parsed.agent_id {
+            return WsReply::err(
+                id,
+                WsErrorCode::PermissionDenied,
+                "agentId does not match the question's agent",
+            );
+        }
+        if !subscribed_clients
+            .iter()
+            .any(|(sid, _)| *sid == info.session_id)
+        {
+            return WsReply::err(
+                id,
+                WsErrorCode::NotFound,
+                "this connection is not subscribed to the question's session",
+            );
+        }
         let values = serde_json::to_value(parsed.values).unwrap_or(Value::Null);
         return match acp
             .answer_question(&parsed.agent_id, parsed.question_id, values)
@@ -6606,6 +6855,7 @@ mod tests {
             &json!({ "sessionId": "session-cross" }),
             &relay,
             HistoryMode::Server,
+            None,
         )
         .await;
         assert!(reply_b.ok, "client B restores the session from the host");
@@ -8605,7 +8855,8 @@ mod tests {
             .unwrap();
         let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
         let reply =
-            handle_list_persisted_sessions("r1".to_string(), &relay, HistoryMode::Server).await;
+            handle_list_persisted_sessions("r1".to_string(), &relay, HistoryMode::Server, None)
+                .await;
         assert!(reply.ok);
         let value = serde_json::to_value(&reply).unwrap();
         assert_eq!(value["payload"][0]["sessionId"], "s-1");
@@ -8670,6 +8921,7 @@ mod tests {
             &json!({ "sessionId": "s-1" }),
             &relay,
             HistoryMode::LiveOnly,
+            None,
         )
         .await;
         assert!(!reply.ok);
@@ -8773,6 +9025,7 @@ mod tests {
             &json!({ "sessionId": "session-p" }),
             &relay,
             HistoryMode::Server,
+            None,
         )
         .await;
         assert!(reply.ok, "reply: {reply:?}");
@@ -8802,6 +9055,7 @@ mod tests {
             &json!({ "sessionId": "session-p" }),
             &relay,
             HistoryMode::Server,
+            None,
         )
         .await;
         assert!(reply2.ok);
@@ -8838,6 +9092,7 @@ mod tests {
             &json!({ "sessionId": "session-absent" }),
             &relay,
             HistoryMode::Server,
+            None,
         )
         .await;
         assert!(!reply.ok);
@@ -8854,6 +9109,7 @@ mod tests {
             &json!({ "sessionId": "s-1" }),
             &relay,
             HistoryMode::Server,
+            None,
         )
         .await;
         assert!(!reply.ok);
@@ -8920,6 +9176,7 @@ mod tests {
             &json!({ "sessionId": "session-c" }),
             &relay,
             HistoryMode::Server,
+            None,
         )
         .await;
         assert!(!reply.ok);
@@ -9590,6 +9847,7 @@ mod tests {
                     &json!({"sourceKind":source_kind,"value":value}),
                     Some(&service),
                     &current,
+                    None,
                 )
                 .await;
                 assert!(reply.ok, "{source_kind}: {:?}", reply.err);
@@ -9605,6 +9863,7 @@ mod tests {
                 &json!({"conversationId":ID}),
                 Some(&service),
                 &current,
+                None,
             )
             .await;
             assert!(open.ok, "open: {:?}", open.err);
@@ -9619,6 +9878,7 @@ mod tests {
                 &json!({"sourceKind":"legacyStorageKey","value":"missing"}),
                 Some(&service),
                 &current,
+                None,
             )
             .await;
             assert_eq!(missing.err.unwrap().code, "CONVERSATION_NOT_FOUND");
@@ -9667,6 +9927,7 @@ mod tests {
                     &request,
                     Some(&service),
                     &current,
+                    None,
                 )
                 .await;
                 assert!(reply.ok, "{action}: {:?}", reply.err);
@@ -9733,6 +9994,7 @@ mod tests {
                 Some(&service),
                 &relay,
                 ConversationWsMutation::Detach,
+                None,
             )
             .await;
             assert_eq!(reply.err.unwrap().code, "LEGACY_COMPATIBILITY_READ_ONLY");

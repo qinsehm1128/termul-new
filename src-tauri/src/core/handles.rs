@@ -225,10 +225,9 @@ impl InProcessAcpRuntime {
 #[async_trait]
 impl AcpRuntimeHandle for InProcessAcpRuntime {
     async fn request(&self, request: CoreRequest) -> Result<CoreResponse, CoreError> {
-        // T5 owns ACP method dispatch over Core IPC. The in-process adapter is
-        // a real handle, not a stub server: method calls stay on `AcpManager`
-        // until that migration, and unknown core-IPC methods return a stable
-        // error instead of panicking or inventing remote behavior.
+        // In-process adapter: ACP method dispatch stays on `AcpManager`.
+        // Unknown core-IPC methods return a stable error instead of panicking
+        // or inventing remote behavior. Core IPC dispatch lives in `core/acp.rs`.
         let _ = &self.acp;
         Ok(CoreResponse {
             id: request.id,

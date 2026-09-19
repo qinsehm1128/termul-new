@@ -907,7 +907,7 @@ pub async fn acp_respond_permission(
     option_id: Option<String>,
 ) -> Result<(), String> {
     if let Some(client) = acp.core_client() {
-        return proxy_core(
+        return match proxy_core(
             client.as_ref(),
             "respondPermission",
             json!({
@@ -916,7 +916,12 @@ pub async fn acp_respond_permission(
                 "optionId": option_id,
             }),
         )
-        .await;
+        .await
+        {
+            Ok(()) => Ok(()),
+            Err(detail) if detail.contains("unknown permission request") => Ok(()),
+            Err(detail) => Err(detail),
+        };
     }
     let manager = acp
         .require_in_process()
@@ -950,7 +955,7 @@ pub async fn acp_answer_question(
     values: Option<Vec<String>>,
 ) -> Result<(), String> {
     if let Some(client) = acp.core_client() {
-        return proxy_core(
+        return match proxy_core(
             client.as_ref(),
             "answerQuestion",
             json!({
@@ -959,7 +964,12 @@ pub async fn acp_answer_question(
                 "values": values,
             }),
         )
-        .await;
+        .await
+        {
+            Ok(()) => Ok(()),
+            Err(detail) if detail.contains("unknown question request") => Ok(()),
+            Err(detail) => Err(detail),
+        };
     }
     let manager = acp
         .require_in_process()
@@ -1015,12 +1025,12 @@ pub async fn acp_list_catalog(
                 .map(|install| install.installed_agents())
                 .unwrap_or_default();
             let running = if let Some(client) = acp.core_client() {
-                match client.request("listAgents", serde_json::Value::Null).await {
-                    Ok(value) => serde_json::from_value::<Vec<AgentId>>(value)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|id| (id.0, None))
-                        .collect(),
+                match client
+                    .request("listRunningNamespaces", serde_json::Value::Null)
+                    .await
+                {
+                    Ok(value) => serde_json::from_value::<Vec<(String, Option<String>)>>(value)
+                        .unwrap_or_default(),
                     Err(_) => Vec::new(),
                 }
             } else {

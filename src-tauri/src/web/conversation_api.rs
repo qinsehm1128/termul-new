@@ -19,6 +19,7 @@ use crate::conversation::{
 use crate::web::auth::{status_for_code, RemoteAccessAuthority, RemoteCapability, RemotePrincipal};
 use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
+use serde_json::{json, Value};
 
 fn service(state: &AppState) -> Result<Arc<ConversationApplicationService>, (String, String)> {
     state.conversation.clone().ok_or_else(|| {
@@ -29,20 +30,58 @@ fn service(state: &AppState) -> Result<Arc<ConversationApplicationService>, (Str
     })
 }
 
+fn parse_host_error(error: String) -> (String, String) {
+    match error.split_once(':') {
+        Some((code, detail)) if !code.is_empty() && !code.contains(' ') => {
+            (code.to_string(), detail.to_string())
+        }
+        _ => ("ACP_CORE".to_string(), error),
+    }
+}
+
+async fn host_conversation<T: serde::de::DeserializeOwned>(
+    state: &AppState,
+    method: &str,
+    params: Value,
+) -> Result<T, (String, String)> {
+    let value = state
+        .acp
+        .conversation_request(method, params)
+        .await
+        .map_err(parse_host_error)?;
+    serde_json::from_value(value).map_err(|error| ("ACP_CORE".to_string(), error.to_string()))
+}
+
+fn use_core_conversation(state: &AppState) -> bool {
+    state.conversation.is_none() && state.acp.is_core_backed()
+}
+
 pub async fn host_status(
     State(state): State<AppState>,
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
     Extension(principal): Extension<RemotePrincipal>,
 ) -> impl IntoResponse {
-    let result = require(&authority, &principal, RemoteCapability::Read).and_then(|()| {
-        service(&state).and_then(|service| {
+    if let Err(error) = require(&authority, &principal, RemoteCapability::Read) {
+        return respond(Err(error));
+    }
+    match service(&state) {
+        Ok(service) => respond(
             service
                 .host_status()
                 .map(redact_host_status)
-                .map_err(|error| (error.code, error.detail))
-        })
-    });
-    respond(result)
+                .map_err(|error| (error.code, error.detail)),
+        ),
+        Err(_) if use_core_conversation(&state) => respond(
+            host_conversation(
+                &state,
+                crate::core::acp::METHOD_CONVERSATION_HOST_STATUS,
+                Value::Null,
+            )
+            .await
+            .map(redact_host_status),
+        ),
+        Err(error) => respond(Err(error)),
+    }
 }
 
 pub async fn list(
@@ -50,9 +89,21 @@ pub async fn list(
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
     Extension(principal): Extension<RemotePrincipal>,
 ) -> impl IntoResponse {
-    let result = require(&authority, &principal, RemoteCapability::Read)
-        .and_then(|()| service(&state).map(|service| service.list_conversations()));
-    respond(result)
+    if let Err(error) = require(&authority, &principal, RemoteCapability::Read) {
+        return respond(Err(error));
+    }
+    match service(&state) {
+        Ok(service) => respond(Ok(service.list_conversations())),
+        Err(_) if use_core_conversation(&state) => respond(
+            host_conversation(
+                &state,
+                crate::core::acp::METHOD_CONVERSATION_LIST,
+                Value::Null,
+            )
+            .await,
+        ),
+        Err(error) => respond(Err(error)),
+    }
 }
 
 pub async fn get(
@@ -61,15 +112,25 @@ pub async fn get(
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
     Extension(principal): Extension<RemotePrincipal>,
 ) -> impl IntoResponse {
-    let result = require(&authority, &principal, RemoteCapability::Read)
+    let result = match require(&authority, &principal, RemoteCapability::Read)
         .and_then(|()| parse_id(&conversation_id))
-        .and_then(|conversation_id| {
-            service(&state).and_then(|service| {
-                service
-                    .get_conversation(conversation_id)
-                    .map_err(|error| (error.code, error.detail))
-            })
-        });
+    {
+        Err(error) => Err(error),
+        Ok(conversation_id) => match service(&state) {
+            Ok(service) => service
+                .get_conversation(conversation_id)
+                .map_err(|error| (error.code, error.detail)),
+            Err(_) if use_core_conversation(&state) => {
+                host_conversation(
+                    &state,
+                    crate::core::acp::METHOD_CONVERSATION_GET,
+                    json!({ "conversationId": conversation_id }),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        },
+    };
     respond(result)
 }
 
@@ -79,15 +140,25 @@ pub async fn current_binding(
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
     Extension(principal): Extension<RemotePrincipal>,
 ) -> impl IntoResponse {
-    let result = require(&authority, &principal, RemoteCapability::Read)
+    let result = match require(&authority, &principal, RemoteCapability::Read)
         .and_then(|()| parse_id(&conversation_id))
-        .and_then(|conversation_id| {
-            service(&state).and_then(|service| {
-                service
-                    .current_binding(conversation_id)
-                    .map_err(|error| (error.code, error.detail))
-            })
-        });
+    {
+        Err(error) => Err(error),
+        Ok(conversation_id) => match service(&state) {
+            Ok(service) => service
+                .current_binding(conversation_id)
+                .map_err(|error| (error.code, error.detail)),
+            Err(_) if use_core_conversation(&state) => {
+                host_conversation(
+                    &state,
+                    crate::core::acp::METHOD_CONVERSATION_GET_BINDING,
+                    json!({ "conversationId": conversation_id }),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        },
+    };
     respond(result)
 }
 
@@ -105,6 +176,14 @@ pub async fn open(
                 .open_conversation(conversation_id)
                 .await
                 .map_err(|error| (error.code, error.detail)),
+            Err(_) if use_core_conversation(&state) => {
+                host_conversation(
+                    &state,
+                    crate::core::acp::METHOD_CONVERSATION_OPEN,
+                    json!({ "conversationId": conversation_id }),
+                )
+                .await
+            }
             Err(error) => Err(error),
         },
         Err(error) => Err(error),
@@ -133,6 +212,17 @@ pub async fn rename(
                 .rename_conversation(conversation_id, request.title)
                 .await
                 .map_err(|error| (error.code, error.detail)),
+            Err(_) if use_core_conversation(&state) => {
+                host_conversation(
+                    &state,
+                    crate::core::acp::METHOD_CONVERSATION_RENAME,
+                    json!({
+                        "conversationId": conversation_id,
+                        "title": request.title,
+                    }),
+                )
+                .await
+            }
             Err(error) => Err(error),
         },
         Err(error) => Err(error),
@@ -192,6 +282,18 @@ pub async fn attach_project(
             )
             .await
             .map_err(|error| (error.code, error.detail)),
+        Err(_) if use_core_conversation(&state) => {
+            host_conversation(
+                &state,
+                crate::core::acp::METHOD_CONVERSATION_ATTACH_PROJECT,
+                json!({
+                    "conversationId": conversation_id,
+                    "expectedRevision": request.expected_revision,
+                    "attachment": request.attachment,
+                }),
+            )
+            .await
+        }
         Err(error) => Err(error),
     };
     respond(result)
@@ -225,6 +327,17 @@ pub async fn detach_project(
             .detach_project(conversation_id, request.expected_revision)
             .await
             .map_err(|error| (error.code, error.detail)),
+        Err(_) if use_core_conversation(&state) => {
+            host_conversation(
+                &state,
+                crate::core::acp::METHOD_CONVERSATION_DETACH_PROJECT,
+                json!({
+                    "conversationId": conversation_id,
+                    "expectedRevision": request.expected_revision,
+                }),
+            )
+            .await
+        }
         Err(error) => Err(error),
     };
     respond(result)
@@ -262,6 +375,18 @@ pub async fn update_execution_target(
             )
             .await
             .map_err(|error| (error.code, error.detail)),
+        Err(_) if use_core_conversation(&state) => {
+            host_conversation(
+                &state,
+                crate::core::acp::METHOD_CONVERSATION_UPDATE_EXECUTION_TARGET,
+                json!({
+                    "conversationId": conversation_id,
+                    "expectedRevision": request.expected_revision,
+                    "executionTarget": request.execution_target,
+                }),
+            )
+            .await
+        }
         Err(error) => Err(error),
     };
     respond(result)
@@ -285,11 +410,21 @@ pub async fn resolve_legacy(
             )))
         }
     };
-    let result = service(&state).and_then(|service| {
-        service
+    let result = match service(&state) {
+        Ok(service) => service
             .resolve_legacy_conversation_id(request)
-            .map_err(|error| (error.code, error.detail))
-    });
+            .map_err(|error| (error.code, error.detail)),
+        Err(_) if use_core_conversation(&state) => {
+            let params = serde_json::to_value(&request).unwrap_or(Value::Null);
+            host_conversation(
+                &state,
+                crate::core::acp::METHOD_CONVERSATION_RESOLVE_LEGACY_ID,
+                params,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
     respond(result)
 }
 
@@ -322,6 +457,14 @@ pub async fn resolve_recovery(
             .resolve_recovery_item(request)
             .await
             .map_err(|error| (error.code, error.detail)),
+        Err(_) if use_core_conversation(&state) => {
+            host_conversation(
+                &state,
+                crate::core::acp::METHOD_CONVERSATION_RECOVERY_RESOLVE,
+                json!({ "request": request }),
+            )
+            .await
+        }
         Err(error) => Err(error),
     };
     respond(result)
@@ -370,6 +513,14 @@ pub async fn prepare_terminal(
                     )),
                 }
             }
+            Err(_) if use_core_conversation(&state) => {
+                host_conversation(
+                    &state,
+                    crate::core::acp::METHOD_CONVERSATION_PREPARE_TERMINAL,
+                    json!({ "request": request }),
+                )
+                .await
+            }
             Err(error) => Err(error),
         },
         Err(error) => Err(error),
@@ -400,6 +551,17 @@ pub async fn provision_terminal(
                 .await
                 .map(|()| serde_json::Value::Null)
                 .map_err(|error| (format!("{:?}", error.code), error.detail)),
+            Err(_) if use_core_conversation(&state) => {
+                host_conversation(
+                    &state,
+                    crate::core::acp::METHOD_CONVERSATION_PROVISION_TERMINAL,
+                    json!({
+                        "conversationId": conversation_id,
+                        "terminalId": body.terminal_id,
+                    }),
+                )
+                .await
+            }
             Err(error) => Err(error),
         },
         Err(error) => Err(error),

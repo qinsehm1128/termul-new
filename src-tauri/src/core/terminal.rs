@@ -838,12 +838,17 @@ pub struct TerminalAttachSession {
     pub output: mpsc::Receiver<OutputFrame>,
 }
 
+struct StreamSlot {
+    sender: mpsc::Sender<OutputFrame>,
+    last_seq: u64,
+}
+
 struct ClientInner {
     #[cfg(unix)]
     writer: tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<CoreResponse>>>,
-    streams: Mutex<HashMap<String, mpsc::Sender<OutputFrame>>>,
+    streams: Mutex<HashMap<String, StreamSlot>>,
     live: Mutex<HashSet<String>>,
     events: broadcast::Sender<TerminalEvent>,
     reader: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -891,7 +896,9 @@ impl TerminalCoreClient {
 
     /// Re-handshake against `endpoint` and swap the live stream. The event
     /// broadcast stays on the same inner Arc so the GUI event-hub mirror keeps
-    /// receiving after a Core restart.
+    /// receiving after a Core restart. After the socket swap we refresh `live`,
+    /// drop stream senders whose terminal is gone, and re-watch remaining ids
+    /// from each stream's last known seq so output resumes.
     #[cfg(unix)]
     pub async fn reconnect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         let _guard = self.inner.reconnect.lock().await;
@@ -905,6 +912,38 @@ impl TerminalCoreClient {
             *writer_guard = writer;
         }
         spawn_terminal_read_loop(&self.inner, reader);
+
+        let listed = self.list().await.unwrap_or_default();
+        let active: HashSet<String> = listed
+            .into_iter()
+            .filter(|status| status.active)
+            .map(|status| status.id)
+            .collect();
+        {
+            let mut live = self.inner.live.lock();
+            live.clear();
+            live.extend(active.iter().cloned());
+        }
+        let mut to_rewatch = Vec::new();
+        {
+            let mut streams = self.inner.streams.lock();
+            streams.retain(|id, slot| {
+                if active.contains(id) {
+                    to_rewatch.push((id.clone(), slot.last_seq));
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        for (terminal_id, last_seq) in to_rewatch {
+            let _ = self
+                .rpc(
+                    METHOD_WATCH,
+                    json!({ "terminalId": terminal_id, "lastSeq": last_seq }),
+                )
+                .await;
+        }
         Ok(())
     }
 
@@ -1102,10 +1141,13 @@ impl TerminalCoreClient {
         terminal_id: &str,
     ) -> Result<TerminalAttachSession, CoreError> {
         let (tx, rx) = mpsc::channel(256);
-        self.inner
-            .streams
-            .lock()
-            .insert(terminal_id.to_string(), tx);
+        self.inner.streams.lock().insert(
+            terminal_id.to_string(),
+            StreamSlot {
+                sender: tx,
+                last_seq: 0,
+            },
+        );
         let value = match self.rpc(method, params).await {
             Ok(value) => value,
             Err(error) => {
@@ -1224,7 +1266,15 @@ async fn client_read_loop(mut reader: tokio::net::unix::OwnedReadHalf, inner: Ar
         };
         if is_output_frame(&payload) {
             if let Ok(frame) = decode_output_frame(&payload) {
-                let tx = inner.streams.lock().get(&frame.terminal_id).cloned();
+                let tx = {
+                    let mut streams = inner.streams.lock();
+                    streams.get_mut(&frame.terminal_id).map(|slot| {
+                        if frame.seq > slot.last_seq {
+                            slot.last_seq = frame.seq;
+                        }
+                        slot.sender.clone()
+                    })
+                };
                 if let Some(tx) = tx {
                     let _ = tx.send(frame).await;
                 }
@@ -1473,6 +1523,18 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn spawn_test_shell(cwd: &str) -> SpawnOptions {
+        SpawnOptions {
+            cwd: Some(cwd.to_string()),
+            cols: Some(80),
+            rows: Some(24),
+            shell: Some("/bin/sh".into()),
+            env: Some(HashMap::from([("PS1".into(), "$ ".into())])),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn terminal_core_client_reconnects_to_a_new_server_on_the_same_endpoint() {
         let profile = tempfile::tempdir().unwrap();
@@ -1482,7 +1544,27 @@ mod tests {
             tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
 
         let client = wait_for_client(&endpoint).await;
-        client.list().await.expect("list before reconnect");
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client
+            .spawn(spawn_test_shell(&cwd))
+            .await
+            .expect("spawn before reconnect");
+        let terminal_id = spawned.info.id.clone();
+        let mut session = client
+            .attach(&terminal_id, &spawned.claim, 0)
+            .await
+            .expect("attach before reconnect");
+        client
+            .write(&terminal_id, "printf 'TERMUL_RECONNECT_BEFORE\\n'\n")
+            .await
+            .expect("write before reconnect");
+        let before = collect_until_marker(
+            &mut session.output,
+            "TERMUL_RECONNECT_BEFORE",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert!(before.contains("TERMUL_RECONNECT_BEFORE"));
 
         server.abort();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
@@ -1493,8 +1575,89 @@ mod tests {
 
         wait_for_reconnect(&client, &endpoint).await;
         client.list().await.expect("list after reconnect");
+        assert!(
+            client.inner.streams.lock().is_empty(),
+            "inactive streams must be dropped after reconnect to a new empty server"
+        );
+
+        let spawned = client
+            .spawn(spawn_test_shell(&cwd))
+            .await
+            .expect("spawn after reconnect");
+        let terminal_id = spawned.info.id.clone();
+        let mut session = client
+            .attach(&terminal_id, &spawned.claim, 0)
+            .await
+            .expect("attach after reconnect");
+        client
+            .write(&terminal_id, "printf 'TERMUL_RECONNECT_AFTER\\n'\n")
+            .await
+            .expect("write after reconnect");
+        let after = collect_until_marker(
+            &mut session.output,
+            "TERMUL_RECONNECT_AFTER",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert!(
+            after.contains("TERMUL_RECONNECT_AFTER"),
+            "output frames must resume after reconnect write: {after:?}"
+        );
 
         client.shutdown().await.expect("shutdown second server");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_core_client_rewatches_live_streams_on_reconnect() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server =
+            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+
+        let client = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+        let mut session = client
+            .attach(&terminal_id, &spawned.claim, 0)
+            .await
+            .expect("attach");
+        client
+            .write(&terminal_id, "printf 'TERMUL_REWATCH_ONE\\n'\n")
+            .await
+            .expect("write one");
+        collect_until_marker(
+            &mut session.output,
+            "TERMUL_REWATCH_ONE",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+
+        wait_for_reconnect(&client, &endpoint).await;
+        assert!(
+            client.inner.streams.lock().contains_key(&terminal_id),
+            "active stream must be retained across reconnect to the same server"
+        );
+
+        client
+            .write(&terminal_id, "printf 'TERMUL_REWATCH_TWO\\n'\n")
+            .await
+            .expect("write two");
+        let resumed = collect_until_marker(
+            &mut session.output,
+            "TERMUL_REWATCH_TWO",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert!(
+            resumed.contains("TERMUL_REWATCH_TWO"),
+            "rewatch must resume output on the existing stream: {resumed:?}"
+        );
+
+        client.shutdown().await.expect("shutdown");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
     }
 }

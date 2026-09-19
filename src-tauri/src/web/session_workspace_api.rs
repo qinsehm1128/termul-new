@@ -119,6 +119,15 @@ fn service(
     })
 }
 
+fn parse_host_error(error: String) -> (String, String) {
+    match error.split_once(':') {
+        Some((code, detail)) if !code.is_empty() && !code.contains(' ') => {
+            (code.to_string(), detail.to_string())
+        }
+        _ => ("ACP_CORE".to_string(), error),
+    }
+}
+
 pub async fn get(
     State(state): State<AppState>,
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
@@ -142,8 +151,25 @@ pub async fn get(
             )
         }
     };
-    let service = match service(&state) {
-        Ok(service) => service,
+    let loaded = match service(&state) {
+        Ok(service) => service
+            .get_workspace(conversation_id)
+            .await
+            .map_err(|error| (error.code, error.detail)),
+        Err(_) if state.acp.is_core_backed() => {
+            match state
+                .acp
+                .conversation_request(
+                    crate::core::acp::METHOD_CONVERSATION_GET_WORKSPACE,
+                    serde_json::json!({ "conversationId": conversation_id }),
+                )
+                .await
+            {
+                Ok(value) => serde_json::from_value(value)
+                    .map_err(|error| ("ACP_CORE".to_string(), error.to_string())),
+                Err(error) => Err(parse_host_error(error)),
+            }
+        }
         Err((code, detail)) => {
             return (
                 status_for_code(code),
@@ -151,7 +177,7 @@ pub async fn get(
             )
         }
     };
-    match service.get_workspace(conversation_id).await {
+    match loaded {
         Ok(outcome) => {
             let status = if matches!(
                 outcome,
@@ -166,19 +192,16 @@ pub async fn get(
                 Json(IpcBody::ok(SessionWorkspaceLoadWire::from(outcome))),
             )
         }
-        Err(error) => {
+        Err((code, detail)) => {
             warn!(
                 target: "se_manager::web::session_workspace_api",
                 conversation_id = %conversation_id,
-                code = %error.code,
+                code = %code,
                 "workspace get failed"
             );
             (
-                status_for_code(&error.code),
-                Json(IpcBody::<SessionWorkspaceLoadWire>::err(
-                    error.detail,
-                    error.code,
-                )),
+                status_for_code(&code),
+                Json(IpcBody::<SessionWorkspaceLoadWire>::err(detail, code)),
             )
         }
     }
@@ -220,8 +243,29 @@ pub async fn write(
             )
         }
     };
-    let service = match service(&state) {
-        Ok(service) => service,
+    let written = match service(&state) {
+        Ok(service) => service
+            .write_workspace(conversation_id, request.based_revision, request.workspace)
+            .await
+            .map_err(|error| (error.code, error.detail)),
+        Err(_) if state.acp.is_core_backed() => {
+            match state
+                .acp
+                .conversation_request(
+                    crate::core::acp::METHOD_CONVERSATION_WRITE_WORKSPACE,
+                    serde_json::json!({
+                        "conversationId": conversation_id,
+                        "basedRevision": request.based_revision,
+                        "workspace": request.workspace,
+                    }),
+                )
+                .await
+            {
+                Ok(value) => serde_json::from_value(value)
+                    .map_err(|error| ("ACP_CORE".to_string(), error.to_string())),
+                Err(error) => Err(parse_host_error(error)),
+            }
+        }
         Err((code, detail)) => {
             return (
                 status_for_code(code),
@@ -229,10 +273,7 @@ pub async fn write(
             )
         }
     };
-    match service
-        .write_workspace(conversation_id, request.based_revision, request.workspace)
-        .await
-    {
+    match written {
         Ok(outcome) => {
             let status = if matches!(outcome, SessionWorkspaceWriteOutcome::Conflict { .. }) {
                 StatusCode::CONFLICT
@@ -249,19 +290,16 @@ pub async fn write(
                 Json(IpcBody::ok(SessionWorkspaceWriteWire::from(outcome))),
             )
         }
-        Err(error) => {
+        Err((code, detail)) => {
             warn!(
                 target: "se_manager::web::session_workspace_api",
                 conversation_id = %conversation_id,
-                code = %error.code,
+                code = %code,
                 "workspace write failed"
             );
             (
-                status_for_code(&error.code),
-                Json(IpcBody::<SessionWorkspaceWriteWire>::err(
-                    error.detail,
-                    error.code,
-                )),
+                status_for_code(&code),
+                Json(IpcBody::<SessionWorkspaceWriteWire>::err(detail, code)),
             )
         }
     }

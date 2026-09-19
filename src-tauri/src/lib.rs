@@ -1612,6 +1612,8 @@ fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path
     tauri::async_runtime::spawn(async move {
         let mut acp_ready = supervise_acp;
         let mut terminal_ready = supervise_terminal;
+        let mut acp_misses = 0u32;
+        let mut terminal_misses = 0u32;
         let mut ticker = tokio::time::interval(CORE_SUPERVISE_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
@@ -1622,6 +1624,7 @@ fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path
                 &profile_root,
                 crate::core::CoreRole::AcpCore,
                 &mut acp_ready,
+                &mut acp_misses,
                 supervise_acp,
             )
             .await;
@@ -1630,6 +1633,7 @@ fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path
                 &profile_root,
                 crate::core::CoreRole::TerminalCore,
                 &mut terminal_ready,
+                &mut terminal_misses,
                 supervise_terminal,
             )
             .await;
@@ -1643,6 +1647,7 @@ async fn supervise_one_core(
     profile_root: &Path,
     role: crate::core::CoreRole,
     ready: &mut bool,
+    consecutive_misses: &mut u32,
     supervised: bool,
 ) {
     if !supervised {
@@ -1653,7 +1658,12 @@ async fn supervise_one_core(
         .await
         .is_ok()
     {
+        *consecutive_misses = 0;
         *ready = true;
+        return;
+    }
+    *consecutive_misses = consecutive_misses.saturating_add(1);
+    if !crate::core::launcher::should_declare_core_death(*consecutive_misses) {
         return;
     }
     if *ready {
@@ -1678,6 +1688,7 @@ async fn supervise_one_core(
             );
         }
         *ready = true;
+        *consecutive_misses = 0;
     }
 }
 

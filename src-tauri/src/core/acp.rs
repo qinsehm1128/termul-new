@@ -80,6 +80,8 @@ pub const METHOD_IS_TURN_ACTIVE: &str = "isTurnActive";
 pub const METHOD_WAIT_TURN_IDLE: &str = "waitTurnIdle";
 pub const METHOD_RESPOND_PERMISSION: &str = "respondPermission";
 pub const METHOD_ANSWER_QUESTION: &str = "answerQuestion";
+pub const METHOD_PERMISSION_INFO: &str = "permissionInfo";
+pub const METHOD_QUESTION_INFO: &str = "questionInfo";
 pub const METHOD_AUTHENTICATE: &str = "authenticate";
 pub const METHOD_SET_MODE: &str = "setMode";
 pub const METHOD_SET_MODEL: &str = "setModel";
@@ -88,6 +90,8 @@ pub const METHOD_COMPOSER_CONTROLS: &str = "composerControls";
 pub const METHOD_HISTORY_LIST: &str = "historyList";
 pub const METHOD_HISTORY_GET: &str = "historyGet";
 pub const METHOD_HISTORY_GET_PAGE: &str = "historyGetPage";
+pub const METHOD_HISTORY_CURSOR: &str = "historyCursor";
+pub const METHOD_HISTORY_OPEN: &str = "historyOpen";
 pub const METHOD_WORKSPACE_ENSURE_TERMINAL_REF_WRITABLE: &str =
     "workspaceEnsureTerminalRefWritable";
 pub const METHOD_WORKSPACE_ADD_TERMINAL_REF: &str = "workspaceAddTerminalRef";
@@ -155,9 +159,10 @@ const LONG_RPC_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 /// Event envelope crossing the Core boundary. `data` is the verbatim
-/// renderer-facing payload; `seq` is a monotonic watermark the GUI uses to
-/// detect gaps and trigger list-based resync (per-session durable replay
-/// stays owned by the relay inside the Core).
+/// renderer-facing payload; `seq` is a monotonic informational watermark.
+/// Gap detection is not implemented on the GUI client — `connection_changed`
+/// is the resync signal. Per-session durable replay stays owned by the relay
+/// inside the Core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpCoreEvent {
@@ -660,6 +665,18 @@ struct RespondPermissionParams {
     request_id: String,
     #[serde(default)]
     option_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionInfoParams {
+    request_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionInfoParams {
+    question_id: String,
 }
 
 #[derive(Deserialize)]
@@ -1230,29 +1247,57 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
         }
         METHOD_RESPOND_PERMISSION => {
             let params: RespondPermissionParams = parse_params(request)?;
-            // Mirror the command wrapper: an unknown request id is a lost
-            // race with cancellation/timeout, resolved as success.
-            if let Err(error) = manager
+            manager
                 .respond_permission(&params.agent_id, params.request_id, params.option_id)
                 .await
-            {
-                if !error.contains("unknown permission request") {
-                    return Err(invalid(error));
-                }
-            }
+                .map_err(invalid)?;
             Ok(Value::Null)
         }
         METHOD_ANSWER_QUESTION => {
             let params: AnswerQuestionParams = parse_params(request)?;
-            if let Err(error) = manager
+            manager
                 .answer_question(&params.agent_id, params.question_id, params.values)
                 .await
-            {
-                if !error.contains("unknown question request") {
-                    return Err(invalid(error));
-                }
-            }
+                .map_err(invalid)?;
             Ok(Value::Null)
+        }
+        METHOD_PERMISSION_INFO => {
+            let params: PermissionInfoParams = parse_params(request)?;
+            let Some(rdz) = state.relay.rendezvous() else {
+                return Err(invalid("unknown permission request"));
+            };
+            let Some(agent_id) = rdz.agent_for_request(&params.request_id) else {
+                return Err(invalid(format!(
+                    "unknown permission request: {}",
+                    params.request_id
+                )));
+            };
+            let Some(session_id) = rdz.session_for_request(&params.request_id) else {
+                return Err(invalid(format!(
+                    "unknown permission request: {}",
+                    params.request_id
+                )));
+            };
+            Ok(json!({ "agentId": agent_id, "sessionId": session_id }))
+        }
+        METHOD_QUESTION_INFO => {
+            let params: QuestionInfoParams = parse_params(request)?;
+            let Some(rdz) = state.relay.question_rendezvous() else {
+                return Err(invalid("unknown question request"));
+            };
+            let Some(agent_id) = rdz.agent_for_question(&params.question_id) else {
+                return Err(invalid(format!(
+                    "unknown question request: {}",
+                    params.question_id
+                )));
+            };
+            let Some(session_id) = rdz.session_for_question(&params.question_id) else {
+                return Err(invalid(format!(
+                    "unknown question request: {}",
+                    params.question_id
+                )));
+            };
+            Ok(json!({ "agentId": agent_id, "sessionId": session_id }))
         }
         METHOD_AUTHENTICATE => {
             let params: AuthenticateParams = parse_params(request)?;
@@ -1338,6 +1383,24 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                     ))
                 })?;
             serde_json::to_value(&page).map_err(|error| invalid(error.to_string()))
+        }
+        METHOD_HISTORY_CURSOR => {
+            let params: SessionIdParams = parse_params(request)?;
+            let watermark = state.persistence.last_seq(&params.session_id).unwrap_or(0);
+            Ok(json!({ "sessionId": params.session_id, "watermark": watermark }))
+        }
+        METHOD_HISTORY_OPEN => {
+            let params: SessionIdParams = parse_params(request)?;
+            match state.persistence.last_seq(&params.session_id) {
+                Ok(_) => Ok(json!({ "sessionId": params.session_id })),
+                Err(error) if error.code == "CONVERSATION_NOT_FOUND" => {
+                    Err(invalid("session payload not found"))
+                }
+                Err(error) => Err(invalid(format!(
+                    "failed to open persisted session: {}: {}",
+                    error.code, error.detail
+                ))),
+            }
         }
         METHOD_WORKSPACE_ENSURE_TERMINAL_REF_WRITABLE => {
             let params: WorkspaceConversationParams = parse_params(request)?;
@@ -2263,6 +2326,10 @@ mod tests {
     fn core_exports_the_full_control_surface() {
         assert_eq!(METHOD_SEND_PROMPT, "sendPrompt");
         assert_eq!(METHOD_HISTORY_GET_PAGE, "historyGetPage");
+        assert_eq!(METHOD_HISTORY_CURSOR, "historyCursor");
+        assert_eq!(METHOD_HISTORY_OPEN, "historyOpen");
+        assert_eq!(METHOD_PERMISSION_INFO, "permissionInfo");
+        assert_eq!(METHOD_QUESTION_INFO, "questionInfo");
         assert_eq!(METHOD_WORKSPACE_ADD_TERMINAL_REF, "workspaceAddTerminalRef");
         assert_eq!(METHOD_SUBSCRIBE_EVENTS, "subscribeEvents");
         assert_eq!(METHOD_CONVERSATION_HOST_STATUS, "conversationHostStatus");

@@ -12,10 +12,11 @@
 use super::acp::{
     AcpCoreClient, METHOD_ANSWER_QUESTION, METHOD_AUTHENTICATE, METHOD_CANCEL_PROMPT,
     METHOD_CLOSE_SESSION, METHOD_COMPOSER_CONTROLS, METHOD_CONVERSATION_ID_FOR_SESSION,
-    METHOD_DISPOSE_EPHEMERAL_SESSION, METHOD_HISTORY_GET, METHOD_HISTORY_GET_PAGE,
-    METHOD_HISTORY_LIST, METHOD_IS_EPHEMERAL_SESSION, METHOD_IS_TURN_ACTIVE,
-    METHOD_LIST_RUNNING_NAMESPACES, METHOD_LIST_SESSIONS, METHOD_LOAD_SESSION, METHOD_NEW_SESSION,
-    METHOD_OWNS_SESSION, METHOD_REGISTER_CONVERSATION_BINDING, METHOD_REGISTER_DISCOVERED_SESSION,
+    METHOD_DISPOSE_EPHEMERAL_SESSION, METHOD_HISTORY_CURSOR, METHOD_HISTORY_GET,
+    METHOD_HISTORY_GET_PAGE, METHOD_HISTORY_LIST, METHOD_HISTORY_OPEN, METHOD_IS_EPHEMERAL_SESSION,
+    METHOD_IS_TURN_ACTIVE, METHOD_LIST_RUNNING_NAMESPACES, METHOD_LIST_SESSIONS,
+    METHOD_LOAD_SESSION, METHOD_NEW_SESSION, METHOD_OWNS_SESSION, METHOD_PERMISSION_INFO,
+    METHOD_QUESTION_INFO, METHOD_REGISTER_CONVERSATION_BINDING, METHOD_REGISTER_DISCOVERED_SESSION,
     METHOD_RESPOND_PERMISSION, METHOD_RESUME_SESSION, METHOD_RETIRE_SESSION, METHOD_SEND_PROMPT,
     METHOD_SET_CONFIG_OPTION, METHOD_SET_MODE, METHOD_SET_MODEL, METHOD_SET_PERMISSION_POLICY,
     METHOD_SPAWN_AGENT, METHOD_STABLE_AGENT_NAMESPACE, METHOD_WAIT_TURN_IDLE,
@@ -42,6 +43,14 @@ use tokio::sync::oneshot;
 /// or a Core-backed host.
 pub const SHARED_LIVE_UNAVAILABLE: &str = "SHARED_LIVE_UNAVAILABLE";
 
+/// Agent + session owning an outstanding permission or question request.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequestInfo {
+    pub agent_id: AgentId,
+    pub session_id: String,
+}
+
 /// Prompt turn that has been accepted and is awaiting completion.
 pub struct HostStartedPrompt {
     completion: oneshot::Receiver<Result<StopReason, String>>,
@@ -54,6 +63,9 @@ pub trait AcpWebHost: Send + Sync {
     fn live_relay(&self) -> Arc<WsRelaySink>;
     fn acp_service(&self) -> AcpServiceHandle;
     fn has_persisted_history(&self) -> bool;
+    fn is_core_backed(&self) -> bool {
+        self.in_process_manager().is_none()
+    }
     fn scheduled_tasks(&self) -> Option<Arc<crate::scheduled_tasks::ScheduledTaskService>>;
     fn conversation_creation(
         &self,
@@ -169,6 +181,8 @@ pub trait AcpWebHost: Send + Sync {
         question_id: String,
         values: Value,
     ) -> Result<(), String>;
+    async fn permission_info(&self, request_id: &str) -> Result<PermissionRequestInfo, String>;
+    async fn question_info(&self, question_id: &str) -> Result<PermissionRequestInfo, String>;
     async fn register_discovered_session(
         &self,
         session_id: String,
@@ -187,6 +201,11 @@ pub trait AcpWebHost: Send + Sync {
         limit: usize,
         target_last_seq: Option<u64>,
     ) -> Result<Value, String>;
+    async fn history_cursor(&self, session_id: &str) -> Result<Value, String>;
+    async fn history_open(&self, session_id: &str) -> Result<Value, String>;
+    async fn conversation_request(&self, method: &str, params: Value) -> Result<Value, String>;
+    async fn scheduled_task_request(&self, method: &str, params: Value) -> Result<Value, String>;
+    async fn memory_request(&self, method: &str, params: Value) -> Result<Value, String>;
     async fn owns_session(&self, agent_id: &AgentId, session_id: SessionId)
         -> Result<bool, String>;
     async fn is_turn_active(
@@ -364,6 +383,64 @@ fn intern_unknown_event_type(value: &str) -> &'static str {
     leaked
 }
 
+fn in_process_permission_info(
+    relay: &WsRelaySink,
+    request_id: &str,
+) -> Result<PermissionRequestInfo, String> {
+    let Some(rdz) = relay.rendezvous() else {
+        return Err("unknown permission request".into());
+    };
+    let agent_id = rdz
+        .agent_for_request(request_id)
+        .ok_or_else(|| format!("unknown permission request: {request_id}"))?;
+    let session_id = rdz
+        .session_for_request(request_id)
+        .ok_or_else(|| format!("unknown permission request: {request_id}"))?;
+    Ok(PermissionRequestInfo {
+        agent_id,
+        session_id,
+    })
+}
+
+fn in_process_question_info(
+    relay: &WsRelaySink,
+    question_id: &str,
+) -> Result<PermissionRequestInfo, String> {
+    let Some(rdz) = relay.question_rendezvous() else {
+        return Err("unknown question request".into());
+    };
+    let agent_id = rdz
+        .agent_for_question(question_id)
+        .ok_or_else(|| format!("unknown question request: {question_id}"))?;
+    let session_id = rdz
+        .session_for_question(question_id)
+        .ok_or_else(|| format!("unknown question request: {question_id}"))?;
+    Ok(PermissionRequestInfo {
+        agent_id,
+        session_id,
+    })
+}
+
+fn in_process_history_cursor(relay: &WsRelaySink, session_id: &str) -> Result<Value, String> {
+    let watermark = if let Some(persistence) = relay.conversation_persistence() {
+        persistence.last_seq(session_id).unwrap_or(0)
+    } else {
+        relay
+            .persistence()
+            .map(|persistence| persistence.last_seq(session_id).unwrap_or(0))
+            .unwrap_or(0)
+    };
+    Ok(json!({ "sessionId": session_id, "watermark": watermark }))
+}
+
+fn in_process_history_open(relay: &WsRelaySink, session_id: &str) -> Result<Value, String> {
+    if relay.conversation_persistence().is_some() || relay.persistence().is_some() {
+        Ok(json!({ "sessionId": session_id }))
+    } else {
+        Err("persisted history is unavailable".into())
+    }
+}
+
 fn json_question_values(values: Value) -> Result<Option<Vec<String>>, String> {
     if values.is_null() {
         Ok(None)
@@ -388,6 +465,10 @@ impl AcpWebHost for InProcessAcpWebHost {
 
     fn has_persisted_history(&self) -> bool {
         self.relay.has_persisted_history()
+    }
+
+    fn is_core_backed(&self) -> bool {
+        false
     }
 
     fn scheduled_tasks(&self) -> Option<Arc<crate::scheduled_tasks::ScheduledTaskService>> {
@@ -629,6 +710,14 @@ impl AcpWebHost for InProcessAcpWebHost {
             .await
     }
 
+    async fn permission_info(&self, request_id: &str) -> Result<PermissionRequestInfo, String> {
+        in_process_permission_info(&self.relay, request_id)
+    }
+
+    async fn question_info(&self, question_id: &str) -> Result<PermissionRequestInfo, String> {
+        in_process_question_info(&self.relay, question_id)
+    }
+
     async fn register_discovered_session(
         &self,
         session_id: String,
@@ -687,6 +776,26 @@ impl AcpWebHost for InProcessAcpWebHost {
         Err("use the in-process relay persistence path".into())
     }
 
+    async fn history_cursor(&self, session_id: &str) -> Result<Value, String> {
+        in_process_history_cursor(&self.relay, session_id)
+    }
+
+    async fn history_open(&self, session_id: &str) -> Result<Value, String> {
+        in_process_history_open(&self.relay, session_id)
+    }
+
+    async fn conversation_request(&self, _method: &str, _params: Value) -> Result<Value, String> {
+        Err("CONVERSATION_SERVICE_UNAVAILABLE:bootstrap-published Conversation application service is unavailable".into())
+    }
+
+    async fn scheduled_task_request(&self, _method: &str, _params: Value) -> Result<Value, String> {
+        Err("SCHEDULED_TASK_SERVICE_UNAVAILABLE:scheduled task service is unavailable".into())
+    }
+
+    async fn memory_request(&self, _method: &str, _params: Value) -> Result<Value, String> {
+        Err("MEMORY_INDEX_UNAVAILABLE:memory index service unavailable".into())
+    }
+
     async fn owns_session(
         &self,
         agent_id: &AgentId,
@@ -727,6 +836,10 @@ impl AcpWebHost for CoreAcpWebHost {
     }
 
     fn has_persisted_history(&self) -> bool {
+        true
+    }
+
+    fn is_core_backed(&self) -> bool {
         true
     }
 
@@ -1179,6 +1292,24 @@ impl AcpWebHost for CoreAcpWebHost {
             .map_err(core_err)
     }
 
+    async fn permission_info(&self, request_id: &str) -> Result<PermissionRequestInfo, String> {
+        let value = self
+            .client
+            .request(METHOD_PERMISSION_INFO, json!({ "requestId": request_id }))
+            .await
+            .map_err(core_err)?;
+        decode(value)
+    }
+
+    async fn question_info(&self, question_id: &str) -> Result<PermissionRequestInfo, String> {
+        let value = self
+            .client
+            .request(METHOD_QUESTION_INFO, json!({ "questionId": question_id }))
+            .await
+            .map_err(core_err)?;
+        decode(value)
+    }
+
     async fn register_discovered_session(
         &self,
         session_id: String,
@@ -1237,6 +1368,32 @@ impl AcpWebHost for CoreAcpWebHost {
             )
             .await
             .map_err(core_err)
+    }
+
+    async fn history_cursor(&self, session_id: &str) -> Result<Value, String> {
+        self.client
+            .request(METHOD_HISTORY_CURSOR, json!({ "sessionId": session_id }))
+            .await
+            .map_err(core_err)
+    }
+
+    async fn history_open(&self, session_id: &str) -> Result<Value, String> {
+        self.client
+            .request(METHOD_HISTORY_OPEN, json!({ "sessionId": session_id }))
+            .await
+            .map_err(core_err)
+    }
+
+    async fn conversation_request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.client.request(method, params).await.map_err(core_err)
+    }
+
+    async fn scheduled_task_request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.client.request(method, params).await.map_err(core_err)
+    }
+
+    async fn memory_request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.client.request(method, params).await.map_err(core_err)
     }
 
     async fn owns_session(
