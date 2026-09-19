@@ -32,8 +32,6 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::conversation::ConversationId;
-#[cfg(test)]
-use crate::pty::manager::SpawnOptions;
 use crate::pty::manager::{TerminalReplay, TerminalResumeRequest, TerminalSpawnIntentV1};
 use crate::trackers::TerminalDisplayMode;
 use crate::web::auth::{
@@ -1367,18 +1365,12 @@ async fn spawn_project_terminal(
         "[terminal-ws] spawn requested project_id={} conversation_id=none cwd_source=project",
         project.project_id
     );
-    let options = crate::pty::manager::SpawnOptions {
-        shell: None,
-        cwd: Some(project.cwd),
-        env: None,
-        conversation_id: None,
-        project_id: Some(project.project_id.clone()),
-        cols: Some(intent.cols),
-        rows: Some(intent.rows),
-        program: None,
-        args: None,
-        kind: None,
-    };
+    let options = crate::commands::project_spawn_options_from_intent(
+        &project.project_id,
+        project.cwd.clone(),
+        intent.cols,
+        intent.rows,
+    );
     let spawned = match terminal_workspace_service(state) {
         Ok(workspace) => {
             let result =
@@ -1587,6 +1579,8 @@ async fn send_error(
 
 #[cfg(test)]
 mod tests {
+    use crate::pty::manager::SpawnOptions;
+
     use super::*;
 
     fn conversation_id() -> crate::conversation::ConversationId {

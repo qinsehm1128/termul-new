@@ -1319,7 +1319,7 @@ mod tests {
     async fn remote_preview_job_returns_before_terminal_state() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source/SKILL.md");
-        write_skill(&source.parent().unwrap().to_path_buf(), "job-demo", "body");
+        write_skill(source.parent().unwrap(), "job-demo", "body");
         let service = Arc::new(
             SkillsHubService::new(SkillsHubContext {
                 state_root: temp.path().join("state"),
@@ -1349,11 +1349,7 @@ mod tests {
     async fn cancelling_ready_preview_removes_installable_staging() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source/SKILL.md");
-        write_skill(
-            &source.parent().unwrap().to_path_buf(),
-            "cancel-demo",
-            "body",
-        );
+        write_skill(source.parent().unwrap(), "cancel-demo", "body");
         let service = Arc::new(
             SkillsHubService::new(SkillsHubContext {
                 state_root: temp.path().join("state"),
@@ -1394,11 +1390,7 @@ mod tests {
     async fn remote_preview_is_no_write_until_commit() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source/SKILL.md");
-        write_skill(
-            &source.parent().unwrap().to_path_buf(),
-            "preview-demo",
-            "body",
-        );
+        write_skill(source.parent().unwrap(), "preview-demo", "body");
         let service = SkillsHubService::new(SkillsHubContext {
             state_root: temp.path().join("state"),
             home: temp.path().join("home"),

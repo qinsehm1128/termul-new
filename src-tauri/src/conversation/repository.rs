@@ -207,6 +207,11 @@ pub struct CatalogFlushCoordinator {
     durable_fs: DurableFileSystem,
     path: PathBuf,
     scheduled: AtomicBool,
+    /// Test isolation: when set, `schedule()` becomes a no-op so a test's
+    /// explicit `flush_once_for_test` is the only writer competing for the
+    /// injected failure budget. Production never sets this.
+    #[cfg(test)]
+    suppress_auto_flush: std::sync::atomic::AtomicBool,
     wake: Notify,
     replace_fence: Arc<CatalogReplaceFence>,
     in_flight_replace: ParkingMutex<Option<tokio::task::JoinHandle<CatalogReplaceOutcome>>>,
@@ -236,6 +241,8 @@ impl CatalogFlushCoordinator {
             durable_fs,
             path,
             scheduled: AtomicBool::new(false),
+            #[cfg(test)]
+            suppress_auto_flush: std::sync::atomic::AtomicBool::new(false),
             wake: Notify::new(),
             replace_fence: Arc::new(CatalogReplaceFence::new()),
             in_flight_replace: ParkingMutex::new(None),
@@ -285,6 +292,13 @@ impl CatalogFlushCoordinator {
     }
 
     fn schedule(self: &Arc<Self>) {
+        #[cfg(test)]
+        if self
+            .suppress_auto_flush
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
         if self
             .scheduled
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1463,6 +1477,15 @@ impl ConversationRepository {
     #[cfg(test)]
     pub(crate) fn catalog_last_admission_metrics(&self) -> CatalogAdmissionMetrics {
         self.catalog_flush.last_admission_metrics()
+    }
+
+    #[cfg(test)]
+    /// Suppress the background debounce flush loop (test isolation only).
+    #[cfg(test)]
+    pub(crate) fn suppress_auto_catalog_flush_for_test(&self) {
+        self.catalog_flush
+            .suppress_auto_flush
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     #[cfg(test)]

@@ -662,10 +662,14 @@ fn reachable_has_call(module: &ModuleInfo, entry: &str, expected: &str) -> bool 
         let Some(info) = module.functions.get(function) else {
             return false;
         };
+        // Follow plain calls AND same-module method calls: `start` may
+        // delegate to `start_on_port` via `self.` — same non-owning path,
+        // just one hop deeper.
         info.calls.contains(expected)
+            || info.methods.contains(expected)
             || info
                 .calls
-                .iter()
+                .union(&info.methods)
                 .any(|callee| walk(module, callee, expected, visited))
     }
 

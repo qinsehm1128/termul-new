@@ -442,6 +442,29 @@ pub async fn terminal_spawn(
     Ok(terminal_spawn_resource(options, Some(on_data), &pty_manager, workspace.inner()).await)
 }
 
+/// Host-owned construction of project-scope spawn options from a remote
+/// spawn intent. Web modules must not construct raw `SpawnOptions` — the
+/// conversation-first guardrail keeps that authority in the commands layer.
+pub(crate) fn project_spawn_options_from_intent(
+    project_id: &str,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+) -> SpawnOptions {
+    SpawnOptions {
+        shell: None,
+        cwd: Some(cwd),
+        env: None,
+        conversation_id: None,
+        project_id: Some(project_id.to_string()),
+        cols: Some(cols),
+        rows: Some(rows),
+        program: None,
+        args: None,
+        kind: None,
+    }
+}
+
 pub(crate) async fn terminal_spawn_resource(
     options: SpawnOptions,
     on_data: Option<Channel<Response>>,

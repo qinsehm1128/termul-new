@@ -1152,6 +1152,10 @@ mod tests {
     #[tokio::test]
     async fn completed_mutation_admits_catalog_generation_before_failed_barrier_retry() {
         let fixture = fixture().await;
+        // Isolate the injected failure budget from the background debounce
+        // loop: only this test's explicit flush competes for
+        // `fail_next_catalog_writes(1)`.
+        fixture.repository.suppress_auto_catalog_flush_for_test();
         fixture
             .repository
             .flush_catalog_until(tokio::time::Instant::now() + std::time::Duration::from_secs(2))

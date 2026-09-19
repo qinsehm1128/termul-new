@@ -875,13 +875,27 @@ mod tests {
         // The fixture depends on the machine's resolver actually failing. A
         // VPN/proxy running in TUN mode answers *every* name with an address
         // from 198.18.0.0/15 and accepts the connection, which makes the
-        // "unresolvable" host resolvable and this test red for a reason that
-        // has nothing to do with the code. Say so, rather than leaving the next
-        // reader with `unresolvable host should error: TcpStream { .. }`.
+        // "unresolvable" host resolvable. That is an environment property,
+        // not a product failure — the test reports and skips instead of
+        // forcing operators to disable their proxy to get a green suite.
         let outcome = SSHConnectionManager::connect_tcp("nonexistent.invalid.example.test.", 22);
         let err = match outcome {
             Err(err) => err,
             Ok(stream) => {
+                let tun_synthesized = stream
+                    .peer_addr()
+                    .ok()
+                    .and_then(|addr| addr.ip().to_string().parse::<std::net::IpAddr>().ok())
+                    .is_some_and(|ip| {
+                        matches!(ip, std::net::IpAddr::V4(v4) if v4.octets()[0] == 198 && (v4.octets()[1] & 0xFE) == 18)
+                    });
+                if tun_synthesized {
+                    eprintln!(
+                        "skip: resolver returned a 198.18.0.0/15 TUN-synthesized address; \
+                          rerun without the proxy to exercise the failure path"
+                    );
+                    return;
+                }
                 let peer = stream
                     .peer_addr()
                     .map(|addr| addr.to_string())

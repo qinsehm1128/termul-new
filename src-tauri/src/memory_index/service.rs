@@ -1149,6 +1149,11 @@ mod tests {
             "memory_index/commands.rs",
             // Its HTTP twin, which the browser client's same menu item calls.
             "web/memory_index_api.rs",
+            // The ACP Core's memoryBuild IPC arm: since the Core owns the
+            // memory service, the explicit GUI/web actions execute here. The
+            // chain is still explicit-action-driven — the Core never builds
+            // on its own initiative.
+            "core/acp.rs",
             // The implementation and its own tests.
             "memory_index/service.rs",
             "memory_index/ingest.rs",
