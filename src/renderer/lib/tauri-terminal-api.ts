@@ -21,7 +21,8 @@ import type {
   TerminalResumeRequest,
   TerminalScopedDataCallback,
   TerminalSpawnedEvent,
-  TerminalSpawnOptions
+  TerminalSpawnOptions,
+  TerminalStatus
 } from '@shared/types/ipc.types'
 import { Channel, type InvokeArgs, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -76,6 +77,7 @@ type SharedListenerEntry<T> = {
  */
 const IPC_COMMANDS = {
   SPAWN: 'terminal_spawn',
+  LIST: 'terminal_list',
   RESUME: 'terminal_resume',
   ATTACH: 'terminal_attach',
   WATCH: 'terminal_watch',
@@ -579,6 +581,10 @@ export function createTauriTerminalApi(): TerminalApi {
       }
 
       return result
+    },
+
+    async list(): Promise<IpcResult<TerminalStatus[]>> {
+      return invokeIpc<TerminalStatus[]>(IPC_COMMANDS.LIST)
     },
 
     /**

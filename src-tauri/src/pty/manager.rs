@@ -533,10 +533,15 @@ pub struct TerminalAttachResult {
 
 /// Cold-renderer resume request. Unknown fields are rejected so this path can
 /// never grow into a raw spawn or environment override surface.
+///
+/// `conversation_id` is required for SessionWorkspace-backed terminals. Scope-less
+/// project terminals omit it; the host then rotates a claim only for an active,
+/// untracked PTY (GUI restart after Core kept the process alive).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalResumeRequest {
-    pub conversation_id: ConversationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<ConversationId>,
     pub terminal_id: String,
     pub last_seq: u64,
 }
@@ -3520,6 +3525,35 @@ impl PtyManager {
             "[terminal-resume] granted terminal_id={} conversation_id={} latest_seq={} gap={}",
             terminal_id,
             conversation_id,
+            terminal.latest_seq,
+            terminal.gap
+        );
+        Ok((TerminalResumeGrant { terminal, claim }, replay))
+    }
+
+    /// Trusted GUI-restart adoption for a scope-less project PTY. No SessionWorkspace
+    /// reference exists; the host rotates a fresh claim for an active, untracked
+    /// terminal without accepting the (lost) spawn-issued credential.
+    pub fn resume_project_terminal(
+        &self,
+        terminal_id: &str,
+        last_seq: u64,
+    ) -> Result<(TerminalResumeGrant, TerminalReplay), ClaimError> {
+        let instance = self
+            .get(terminal_id)
+            .filter(|instance| instance.is_active() && !instance.workspace_ref_tracked)
+            .ok_or(ClaimError)?;
+        let mut replay = instance.subscribe_from(last_seq);
+        let (claim, generation) = self.claims.rotate_for_resume(
+            terminal_id,
+            instance.conversation_id,
+            instance.project_id.as_deref(),
+        )?;
+        replay.claim_generation = Some(generation);
+        let terminal = self.build_attach_result(&instance, &replay);
+        log::info!(
+            "[terminal-resume] granted terminal_id={} conversation_id=<none> latest_seq={} gap={}",
+            terminal_id,
             terminal.latest_seq,
             terminal.gap
         );

@@ -19,13 +19,17 @@ const {
   mockSaveTerminalLayout,
   mockSetTerminalRestoreInProgress,
   mockTerminalSpawn,
-  mockTerminalKill
+  mockTerminalKill,
+  mockTerminalList,
+  mockTerminalResume
 } = vi.hoisted(() => ({
   mockLoadPersistedTerminals: vi.fn(),
   mockSaveTerminalLayout: vi.fn(),
   mockSetTerminalRestoreInProgress: vi.fn(),
   mockTerminalSpawn: vi.fn(),
-  mockTerminalKill: vi.fn()
+  mockTerminalKill: vi.fn(),
+  mockTerminalList: vi.fn(),
+  mockTerminalResume: vi.fn()
 }))
 
 vi.mock('./useTerminalAutoSave', () => ({
@@ -38,7 +42,9 @@ vi.mock('@/lib/api', () => ({
   terminalApi: {
     spawn: mockTerminalSpawn,
     terminate: mockTerminalKill,
-    kill: mockTerminalKill
+    kill: mockTerminalKill,
+    list: mockTerminalList,
+    resume: mockTerminalResume
   },
   sessionApi: {
     restore: vi.fn(async () => ({
@@ -203,6 +209,12 @@ beforeEach(() => {
     data: { id: 'pty-1', claim: 'lease-claim-restore' }
   })
   mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
+  mockTerminalList.mockResolvedValue({ success: true, data: [] })
+  mockTerminalResume.mockResolvedValue({
+    success: false,
+    error: 'Terminal unavailable',
+    code: 'TERMINAL_NOT_FOUND'
+  })
   mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'new-terminal' }))
 })
 
@@ -756,6 +768,186 @@ describe('useTerminalRestore', () => {
         })
       )
     })
+  })
+
+  it('adopts a live Core PTY by ptyId instead of spawning', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-shell',
+      terminals: [
+        {
+          id: 'persisted-shell',
+          name: 'Terminal 1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          ptyId: 'pty-live-1',
+          scrollback: ['kept']
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    mockTerminalList.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'pty-live-1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          pid: 11,
+          cols: 80,
+          rows: 24,
+          workspaceRefTracked: false,
+          latestSeq: 9,
+          active: true,
+          lifecycle: 'active',
+          projectId: 'project-a'
+        }
+      ]
+    })
+    mockTerminalResume.mockResolvedValue({
+      success: true,
+      data: {
+        terminal: {
+          id: 'pty-live-1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          pid: 11,
+          cols: 80,
+          rows: 24,
+          latestSeq: 9,
+          gap: false
+        },
+        claim: 'adopted-claim'
+      }
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalResume).toHaveBeenCalledWith({
+        terminalId: 'pty-live-1',
+        lastSeq: 9
+      })
+    })
+    expect(mockTerminalResume.mock.calls[0]?.[0]).not.toHaveProperty('conversationId')
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+    expect(mockTerminalStoreState.setTerminals).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'Terminal 1',
+          ptyId: 'pty-live-1',
+          claim: 'adopted-claim',
+          pendingScrollback: ['kept']
+        })
+      ])
+    )
+  })
+
+  it('falls back to spawn when the persisted ptyId is absent from list', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-shell',
+      terminals: [
+        {
+          id: 'persisted-shell',
+          name: 'Terminal 1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          ptyId: 'pty-gone',
+          scrollback: []
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    mockTerminalList.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'pty-other',
+          shell: 'bash',
+          cwd: '/projects/a',
+          pid: 12,
+          cols: 80,
+          rows: 24,
+          workspaceRefTracked: false,
+          latestSeq: 1,
+          active: true,
+          lifecycle: 'active',
+          projectId: 'project-a'
+        }
+      ]
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'project-a',
+          shell: 'bash',
+          cwd: '/projects/a'
+        })
+      )
+    })
+    expect(mockTerminalResume).not.toHaveBeenCalled()
+  })
+
+  it('does not adopt a conversation-scoped live PTY even when ptyId matches', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-shell',
+      terminals: [
+        {
+          id: 'persisted-shell',
+          name: 'Terminal 1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          ptyId: 'pty-conv',
+          scrollback: []
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    mockTerminalList.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'pty-conv',
+          shell: 'bash',
+          cwd: '/projects/a',
+          pid: 13,
+          cols: 80,
+          rows: 24,
+          conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+          workspaceRefTracked: true,
+          latestSeq: 3,
+          active: true,
+          lifecycle: 'active',
+          projectId: 'project-a'
+        }
+      ]
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'project-a',
+          cwd: '/projects/a'
+        })
+      )
+    })
+    expect(mockTerminalResume).not.toHaveBeenCalled()
   })
 
   it('passes projectId when spawning the default terminal on restore error fallback', async () => {

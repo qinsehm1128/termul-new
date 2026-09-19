@@ -671,11 +671,16 @@ async fn handle(
             if resume.terminal_id.trim().is_empty() {
                 return Err(("VALIDATION_ERROR", "missing terminalId".to_string()));
             }
+            let conversation_id = resume
+                .conversation_id
+                .ok_or_else(|| unauthorized_error(&resume.terminal_id))?;
             let workspace = terminal_workspace_service(state)?;
             // Every denial variant collapses to one generic response here. The
             // remote surface has proved nothing, so telling it apart "gone"
             // from "not authorized" would be an existence leak — that
-            // distinction is reserved for the local Tauri boundary.
+            // distinction is reserved for the local Tauri boundary. Scope-less
+            // project resume is desktop-only; remote callers must prove a
+            // Conversation.
             let (grant, replay) =
                 crate::commands::terminal_resume_resource(&resume, &state.pty, &workspace)
                     .await
@@ -683,7 +688,7 @@ async fn handle(
             let generation = replay
                 .claim_generation
                 .ok_or_else(|| unauthorized_error(&resume.terminal_id))?;
-            ctx.authorize(&resume.terminal_id, resume.conversation_id, generation);
+            ctx.authorize(&resume.terminal_id, conversation_id, generation);
             install_replay_forwarder(
                 &resume.terminal_id,
                 replay,
@@ -699,7 +704,7 @@ async fn handle(
             .await?;
             info!(
                 "[terminal-ws] resume success conversation_id={} terminal_id={} latest_seq={} gap={}",
-                resume.conversation_id,
+                conversation_id,
                 resume.terminal_id,
                 grant.terminal.latest_seq,
                 grant.terminal.gap

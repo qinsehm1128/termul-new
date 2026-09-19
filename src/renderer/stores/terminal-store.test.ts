@@ -1523,9 +1523,10 @@ describe('terminal-store', () => {
       // Ordinary continuity data still persists...
       expect(persisted?.transcript).toBe('persisted output line 1\npersisted output line 2\n')
       expect(persisted?.scrollback).toEqual(['persisted output line 1', 'persisted output line 2'])
+      // Project terminals persist host identity so a GUI restart can adopt the live PTY.
+      expect(persisted?.ptyId).toBe('pty-cap3-persist')
       // ...but the lease credential never does.
       expect(persisted).not.toHaveProperty('claim')
-      expect(persisted).not.toHaveProperty('ptyId')
 
       const serialized = JSON.stringify(layout)
       expect(serialized).not.toContain(claimCredential)

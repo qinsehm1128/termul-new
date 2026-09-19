@@ -76,6 +76,9 @@ pub struct TerminalStatus {
     pub pid: u32,
     pub cols: u16,
     pub rows: u16,
+    /// Empty when the PTY is scope-less (project/SSH). The process-local
+    /// ConversationId used for claims is not a conversation identity.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub conversation_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
@@ -308,7 +311,7 @@ fn ok_response(id: u64, result: Value) -> CoreResponse {
     }
 }
 
-fn status_from_instance(
+pub(crate) fn status_from_instance(
     pty: &PtyManager,
     instance: &crate::pty::manager::TerminalInstance,
 ) -> TerminalStatus {
@@ -329,7 +332,11 @@ fn status_from_instance(
         pid: instance.pid,
         cols: *instance.cols.read(),
         rows: *instance.rows.read(),
-        conversation_id: instance.conversation_id.to_string(),
+        conversation_id: if instance.workspace_ref_tracked {
+            instance.conversation_id.to_string()
+        } else {
+            String::new()
+        },
         project_id: instance.project_id.clone(),
         workspace_ref_tracked: instance.workspace_ref_tracked,
         latest_seq,
@@ -337,6 +344,13 @@ fn status_from_instance(
         lifecycle: instance.lifecycle_state().as_str().to_string(),
         claim_generation: pty.claim_generation(&instance.id),
     }
+}
+
+pub(crate) fn list_terminal_statuses(pty: &PtyManager) -> Vec<TerminalStatus> {
+    pty.get_all()
+        .iter()
+        .map(|instance| status_from_instance(pty, instance))
+        .collect()
 }
 
 fn construct_pty_manager() -> Arc<PtyManager> {
@@ -522,11 +536,7 @@ async fn handle_method(
             serde_json::to_value(&spawned).map_err(|error| invalid(error.to_string()))
         }
         METHOD_LIST => {
-            let statuses: Vec<TerminalStatus> = pty
-                .get_all()
-                .iter()
-                .map(|instance| status_from_instance(pty, instance))
-                .collect();
+            let statuses = list_terminal_statuses(pty);
             serde_json::to_value(&statuses).map_err(|error| invalid(error.to_string()))
         }
         METHOD_STATUS => {
@@ -624,13 +634,15 @@ async fn handle_method(
         METHOD_RESUME => {
             let params: TerminalResumeRequest = serde_json::from_value(request.params.clone())
                 .map_err(|error| invalid(error.to_string()))?;
-            let (grant, _replay) = pty
-                .resume_for_conversation(
-                    params.conversation_id,
+            let (grant, _replay) = match params.conversation_id {
+                Some(conversation_id) => pty.resume_for_conversation(
+                    conversation_id,
                     &params.terminal_id,
                     params.last_seq,
-                )
-                .map_err(|_| unauthorized())?;
+                ),
+                None => pty.resume_project_terminal(&params.terminal_id, params.last_seq),
+            }
+            .map_err(|_| unauthorized())?;
             serde_json::to_value(&grant).map_err(|error| invalid(error.to_string()))
         }
         METHOD_CLOSE_VIEW => {

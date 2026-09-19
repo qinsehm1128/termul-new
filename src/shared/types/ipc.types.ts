@@ -190,11 +190,33 @@ export interface TerminalReplayCoverage {
 }
 
 /**
+ * Live host PTY snapshot returned by `terminal_list` / Core `list`.
+ * Conversation identity is omitted for scope-less project terminals.
+ */
+export interface TerminalStatus {
+  id: string
+  shell: string
+  cwd: string
+  pid: number
+  cols: number
+  rows: number
+  conversationId?: string
+  projectId?: string | null
+  workspaceRefTracked: boolean
+  latestSeq: number
+  active: boolean
+  lifecycle: string
+  claimGeneration?: number
+}
+
+/**
  * Cold-renderer request for a host-authorized, one-time claim rotation.
  * The narrow request cannot override spawn authority, cwd, argv, or env.
+ * `conversationId` is required for SessionWorkspace terminals and omitted for
+ * scope-less project PTY adoption after a GUI restart.
  */
 export interface TerminalResumeRequest {
-  conversationId: ConversationId
+  conversationId?: ConversationId
   terminalId: string
   lastSeq: number
 }
@@ -266,6 +288,7 @@ export type AcpHistoryIpcChannels = {
 
 export type TerminalIpcChannels = {
   'terminal:spawn': (options: TerminalSpawnOptions) => IpcResult<SpawnedTerminal>
+  'terminal:list': () => IpcResult<TerminalStatus[]>
   'terminal:resume': (request: TerminalResumeRequest) => IpcResult<TerminalResumeGrant>
   'terminal:attach': (
     terminalId: string,
@@ -451,9 +474,15 @@ export interface GitApi {
 export interface TerminalApi {
   spawn: (options?: TerminalSpawnOptions) => Promise<IpcResult<SpawnedTerminal>>
   /**
+   * Enumerate live host PTYs. Optional so older test doubles keep working;
+   * project-layout restore adopts by identity when this is present.
+   */
+  list?: () => Promise<IpcResult<TerminalStatus[]>>
+  /**
    * Resume a passive SessionWorkspace terminal reference without spawning.
    * The host validates the Conversation scope, rotates a one-time claim, and
    * replays from `lastSeq`; the returned claim remains renderer-memory-only.
+   * Scope-less project terminals omit `conversationId` (GUI restart adoption).
    */
   resume: (request: TerminalResumeRequest) => Promise<IpcResult<TerminalResumeGrant>>
   /**

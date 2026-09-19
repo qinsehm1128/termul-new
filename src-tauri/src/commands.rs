@@ -758,17 +758,20 @@ pub(crate) async fn terminal_resume_resource(
     pty_manager: &Arc<PtyManager>,
     workspace: &Arc<crate::conversation::SessionWorkspaceService>,
 ) -> Result<(TerminalResumeGrant, TerminalReplay), TerminalResumeDenial> {
-    let has_passive_ref = match workspace.load(request.conversation_id).await {
+    let Some(conversation_id) = request.conversation_id else {
+        return resume_project_terminal_resource(request, pty_manager);
+    };
+    let has_passive_ref = match workspace.load(conversation_id).await {
         Ok(crate::conversation::SessionWorkspaceLoadOutcome::Loaded { workspace }) => {
             workspace.resources.iter().any(|resource| {
                 matches!(
                     resource,
                     crate::conversation::SessionWorkspaceResourceDescriptor::Terminal {
                         terminal_id,
-                        conversation_id,
+                        conversation_id: resource_conversation_id,
                         ..
                     } if terminal_id == &request.terminal_id
-                        && *conversation_id == request.conversation_id
+                        && *resource_conversation_id == conversation_id
                 )
             })
         }
@@ -781,7 +784,7 @@ pub(crate) async fn terminal_resume_resource(
     if !has_passive_ref {
         log::warn!(
             "[terminal-resume] denied conversation_id={} terminal_id={} code=UNAUTHORIZED",
-            request.conversation_id,
+            conversation_id,
             request.terminal_id
         );
         return Err(TerminalResumeDenial::Unauthorized);
@@ -802,18 +805,44 @@ pub(crate) async fn terminal_resume_resource(
     if !alive {
         log::info!(
             "[terminal-resume] gone conversation_id={} terminal_id={} code=TERMINAL_GONE",
-            request.conversation_id,
+            conversation_id,
             request.terminal_id
         );
         return Err(TerminalResumeDenial::Gone);
     }
 
     pty_manager
-        .resume_for_conversation(
-            request.conversation_id,
-            &request.terminal_id,
-            request.last_seq,
-        )
+        .resume_for_conversation(conversation_id, &request.terminal_id, request.last_seq)
+        .map_err(|_: ClaimError| TerminalResumeDenial::Unauthorized)
+}
+
+fn resume_project_terminal_resource(
+    request: &TerminalResumeRequest,
+    pty_manager: &Arc<PtyManager>,
+) -> Result<(TerminalResumeGrant, TerminalReplay), TerminalResumeDenial> {
+    let Some(instance) = pty_manager.get(&request.terminal_id) else {
+        log::info!(
+            "[terminal-resume] gone conversation_id=<none> terminal_id={} code=TERMINAL_GONE",
+            request.terminal_id
+        );
+        return Err(TerminalResumeDenial::Gone);
+    };
+    if instance.workspace_ref_tracked {
+        log::warn!(
+            "[terminal-resume] denied conversation_id=<none> terminal_id={} code=UNAUTHORIZED",
+            request.terminal_id
+        );
+        return Err(TerminalResumeDenial::Unauthorized);
+    }
+    if !instance.is_active() {
+        log::info!(
+            "[terminal-resume] gone conversation_id=<none> terminal_id={} code=TERMINAL_GONE",
+            request.terminal_id
+        );
+        return Err(TerminalResumeDenial::Gone);
+    }
+    pty_manager
+        .resume_project_terminal(&request.terminal_id, request.last_seq)
         .map_err(|_: ClaimError| TerminalResumeDenial::Unauthorized)
 }
 
@@ -880,7 +909,7 @@ pub async fn terminal_resume(
     for chunk in &replay.chunks {
         if on_data.send(Response::new(chunk.data.clone())).is_err() {
             log::warn!(
-                "[terminal-resume] replay channel closed conversation_id={} terminal_id={} latest_seq={} gap={}",
+                "[terminal-resume] replay channel closed conversation_id={:?} terminal_id={} latest_seq={} gap={}",
                 request.conversation_id,
                 request.terminal_id,
                 grant.terminal.latest_seq,
@@ -890,13 +919,36 @@ pub async fn terminal_resume(
         }
     }
     log::info!(
-        "[terminal-resume] desktop grant delivered conversation_id={} terminal_id={} latest_seq={} gap={}",
+        "[terminal-resume] desktop grant delivered conversation_id={:?} terminal_id={} latest_seq={} gap={}",
         request.conversation_id,
         request.terminal_id,
         grant.terminal.latest_seq,
         grant.terminal.gap
     );
     Ok(IpcResult::success(grant))
+}
+
+/// Enumerate live host PTYs for GUI layout restore. Core-owned processes survive a
+/// renderer restart; the renderer matches persisted `ptyId` against this list.
+#[tauri::command]
+pub async fn terminal_list(
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
+) -> Result<IpcResult<Vec<crate::core::TerminalStatus>>, String> {
+    if let Err(error) = require_host_admission() {
+        return Ok(error);
+    }
+    if let Some(client) = terminal.core_client() {
+        return Ok(match client.list().await {
+            Ok(statuses) => IpcResult::success(statuses),
+            Err(error) => ipc_from_core(Err(error)),
+        });
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
+    Ok(IpcResult::success(terminal_list_resource(&pty_manager)))
+}
+
+pub(crate) fn terminal_list_resource(pty_manager: &PtyManager) -> Vec<crate::core::TerminalStatus> {
+    crate::core::terminal::list_terminal_statuses(pty_manager)
 }
 
 /// Attach to a terminal's output stream with a claim credential (CAP-3).
@@ -7460,7 +7512,7 @@ mod tests {
             .await
             .unwrap();
         let denied = TerminalResumeRequest {
-            conversation_id,
+            conversation_id: Some(conversation_id),
             terminal_id: untracked.info.id.clone(),
             last_seq: 0,
         };
@@ -7491,7 +7543,7 @@ mod tests {
         assert!(spawned.success, "spawn failed: {:?}", spawned.error);
         let spawned = spawned.data.unwrap();
         let request = TerminalResumeRequest {
-            conversation_id,
+            conversation_id: Some(conversation_id),
             terminal_id: spawned.info.id.clone(),
             last_seq: 0,
         };
@@ -7602,7 +7654,7 @@ mod tests {
         assert!(spawned.success, "spawn failed: {:?}", spawned.error);
         let spawned = spawned.data.unwrap();
         let request = TerminalResumeRequest {
-            conversation_id,
+            conversation_id: Some(conversation_id),
             terminal_id: spawned.info.id.clone(),
             last_seq: 0,
         };
@@ -7628,7 +7680,7 @@ mod tests {
         // A reference that was never committed is still a denial, not a dead
         // end — the two causes must not collapse back into each other.
         let unknown = TerminalResumeRequest {
-            conversation_id,
+            conversation_id: Some(conversation_id),
             terminal_id: "terminal-never-existed".to_string(),
             last_seq: 0,
         };
@@ -7636,6 +7688,117 @@ mod tests {
             terminal_resume_resource(&unknown, &pty, &workspace).await,
             Err(TerminalResumeDenial::Unauthorized)
         ));
+    }
+
+    #[tokio::test]
+    async fn terminal_list_includes_seeded_in_process_ptys() {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().canonicalize().unwrap();
+        let pty = crate::web::test_pty_manager();
+        let spawned = pty
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    project_id: Some("proj-list".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let listed = terminal_list_resource(&pty);
+        let status = listed
+            .iter()
+            .find(|item| item.id == spawned.info.id)
+            .expect("seeded PTY must appear in terminal_list");
+        assert!(status.active);
+        assert!(!status.workspace_ref_tracked);
+        assert!(status.conversation_id.is_empty());
+        assert_eq!(status.project_id.as_deref(), Some("proj-list"));
+        assert_eq!(status.shell, spawned.info.shell);
+        assert_eq!(status.cwd, spawned.info.cwd);
+
+        let json = serde_json::to_value(&listed).unwrap();
+        let first = json.as_array().unwrap()[0].as_object().unwrap();
+        assert!(first.contains_key("id"));
+        assert!(first.contains_key("workspaceRefTracked"));
+        assert!(!first.contains_key("conversationId"));
+        assert!(!first.contains_key("claim"));
+    }
+
+    #[tokio::test]
+    async fn terminal_resume_scope_less_project_pty_rotates_claim() {
+        use crate::conversation::SessionWorkspaceService;
+
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().canonicalize().unwrap();
+        let (repository, _) =
+            crate::conversation::ConversationRepository::open(cwd.join("conversations/v2"))
+                .unwrap();
+        let writer = crate::conversation::ConversationWriter::for_test(Arc::clone(&repository));
+        let workspace = Arc::new(SessionWorkspaceService::new(writer));
+        let pty = crate::web::test_pty_manager();
+        let spawned = pty
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    project_id: Some("proj-resume".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !pty.get(&spawned.info.id)
+                .expect("project PTY")
+                .workspace_ref_tracked
+        );
+
+        let request = TerminalResumeRequest {
+            conversation_id: None,
+            terminal_id: spawned.info.id.clone(),
+            last_seq: 0,
+        };
+        let (grant, _replay) = terminal_resume_resource(&request, &pty, &workspace)
+            .await
+            .unwrap();
+        assert_eq!(grant.terminal.id, spawned.info.id);
+        assert_eq!(
+            pty.verify_claim(&spawned.info.id, &spawned.claim),
+            Err(ClaimError)
+        );
+        assert!(pty.verify_claim(&spawned.info.id, &grant.claim).is_ok());
+
+        // A workspace-tracked PTY must not be adoptable through the project path.
+        let tracked = pty
+            .spawn(
+                SpawnOptions {
+                    conversation_id: Some(
+                        crate::conversation::ConversationId::parse(
+                            "018f7a1c-1b4d-7c8a-9f01-0123456789ab",
+                        )
+                        .unwrap(),
+                    ),
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(pty.get(&tracked.info.id).unwrap().workspace_ref_tracked);
+        let denied = TerminalResumeRequest {
+            conversation_id: None,
+            terminal_id: tracked.info.id.clone(),
+            last_seq: 0,
+        };
+        assert!(matches!(
+            terminal_resume_resource(&denied, &pty, &workspace).await,
+            Err(TerminalResumeDenial::Unauthorized)
+        ));
+        assert!(pty.verify_claim(&tracked.info.id, &tracked.claim).is_ok());
     }
 
     /// The host-owned list maps `SessionIndexEntry` (camelCase wire) into the

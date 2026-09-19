@@ -70,6 +70,9 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
       name: terminal.name,
       shell: terminal.shell,
       cwd: terminal.cwd,
+      // Project-scope only: serializeTerminalsForProject already drops conversation
+      // terminals, so a ptyId here never becomes a second conversation authority.
+      ...(terminal.ptyId && !terminal.conversationId ? { ptyId: terminal.ptyId } : {}),
       scrollback: mergeScrollback(extractedScrollback, terminal.transcript),
       transcript: terminal.transcript,
       ...(capturedModes ? { modes: capturedModes } : {}),

@@ -1,3 +1,4 @@
+import type { TerminalStatus } from '@shared/types/ipc.types'
 import { useEffect, useRef, useState } from 'react'
 import { i18n } from '@/i18n'
 import { formatNumber } from '@/i18n/format'
@@ -125,13 +126,62 @@ function resetSpawnCallCount(sessionId: string): void {
   debugLog('SPAWN_LOCK', `RESET SPAWN COUNT [${sessionId}]`)
 }
 
+function isAdoptableLiveTerminal(live: TerminalStatus, projectId: string): boolean {
+  if (!live.active || live.workspaceRefTracked || live.conversationId) {
+    return false
+  }
+  if (live.projectId && live.projectId !== projectId) {
+    return false
+  }
+  return true
+}
+
+async function loadLiveProjectPtys(projectId: string): Promise<TerminalStatus[]> {
+  if (typeof terminalApi.list !== 'function') {
+    return []
+  }
+  try {
+    const listed = await terminalApi.list()
+    if (!listed.success) {
+      return []
+    }
+    return listed.data.filter((live) => isAdoptableLiveTerminal(live, projectId))
+  } catch {
+    return []
+  }
+}
+
+function matchLiveProjectPty(
+  persisted: PersistedTerminal,
+  liveById: Map<string, TerminalStatus>,
+  unmatchedLive: TerminalStatus[],
+  claimed: Set<string>,
+  normalizedShell: string
+): TerminalStatus | undefined {
+  if (persisted.ptyId) {
+    const live = liveById.get(persisted.ptyId)
+    if (live && !claimed.has(live.id)) {
+      return live
+    }
+    return undefined
+  }
+  return unmatchedLive.find(
+    (live) => !claimed.has(live.id) && live.shell === normalizedShell && live.cwd === persisted.cwd
+  )
+}
+
 async function cleanupSpawnedPtys(
-  terminals: Array<{ ptyId?: string }>,
+  terminals: Array<{ ptyId?: string; adopted?: boolean }>,
   restoreId: string,
   phase: string
 ): Promise<void> {
   const ptyIds = Array.from(
-    new Set(terminals.map((terminal) => terminal.ptyId).filter((ptyId): ptyId is string => !!ptyId))
+    new Set(
+      terminals
+        .filter((terminal) => !terminal.adopted)
+        .map((terminal) => terminal.ptyId)
+        .filter((ptyId): ptyId is string => !!ptyId)
+    )
   )
 
   if (ptyIds.length === 0) {
@@ -866,8 +916,10 @@ async function restoreFromLayout(
       // R3: DEC private-mode snapshot replayed before pendingScrollback on mount.
       pendingModes?: PersistedTerminal['modes']
       ptyId?: string
-      // CAP-3: lease credential issued by the restore re-spawn (in-memory
-      // only, never persisted).
+      // Live Core PTY adopted by identity; must not be terminated on cancel.
+      adopted?: boolean
+      // CAP-3: lease credential issued by resume (adopt) or restore re-spawn.
+      // In-memory only, never persisted.
       claim?: string
       // ADR-004.4: restored agent metadata (re-applied after store insert)
       kind?: 'shell' | 'agent'
@@ -879,6 +931,13 @@ async function restoreFromLayout(
 
     // Map old IDs to new IDs for active terminal selection and pane remapping
     const idMap = new Map<string, string>()
+    const liveProjectPtys = await loadLiveProjectPtys(projectId)
+    if (isCancelled()) {
+      debugLog('restoreFromLayout', `CANCELLED [${restoreId}] after live PTY list`)
+      return { status: 'cancelled', path: 'persisted-replay' }
+    }
+    const liveById = new Map(liveProjectPtys.map((live) => [live.id, live]))
+    const claimedLiveIds = new Set<string>()
 
     for (const persistedTerminal of layout.terminals) {
       if (isCancelled()) {
@@ -933,6 +992,70 @@ async function restoreFromLayout(
               kind: 'agent' as const
             }
           : null
+
+        const liveMatch = matchLiveProjectPty(
+          persistedTerminal,
+          liveById,
+          liveProjectPtys,
+          claimedLiveIds,
+          normalizedShell
+        )
+        if (liveMatch) {
+          const resumeResult = await terminalApi.resume({
+            terminalId: liveMatch.id,
+            lastSeq: liveMatch.latestSeq ?? 0
+          })
+          if (
+            resumeResult.success &&
+            resumeResult.data.terminal.id === liveMatch.id &&
+            resumeResult.data.claim
+          ) {
+            if (isCancelled()) {
+              debugLog(
+                'restoreFromLayout',
+                `CANCELLED [${terminalCallId}] after live PTY adopt; leaving Core PTY intact`,
+                { ptyId: liveMatch.id }
+              )
+              continue
+            }
+            claimedLiveIds.add(liveMatch.id)
+            idMap.set(persistedTerminal.id, newId)
+            newTerminals.push({
+              id: newId,
+              name: persistedTerminal.name,
+              projectId,
+              shell: normalizedShell,
+              cwd: persistedTerminal.cwd,
+              output: [],
+              healthStatus: 'running',
+              viewState: 'visible',
+              pendingScrollback: persistedTerminal.scrollback,
+              transcript: persistedTerminal.transcript,
+              ptyId: liveMatch.id,
+              adopted: true,
+              claim: resumeResult.data.claim,
+              ...(persistedTerminal.modes ? { pendingModes: persistedTerminal.modes } : {}),
+              ...(isAgentTerminal
+                ? {
+                    kind: 'agent' as const,
+                    agentId: persistedTerminal.agentId,
+                    agentName: persistedTerminal.agentName,
+                    agentProgram: persistedTerminal.agentProgram,
+                    agentArgs: persistedTerminal.agentArgs
+                  }
+                : {})
+            })
+            debugLog('restoreFromLayout', `Adopted live PTY [${terminalCallId}]`, {
+              ptyId: liveMatch.id
+            })
+            continue
+          }
+          debugLog('restoreFromLayout', `Live PTY resume failed, spawning [${terminalCallId}]`, {
+            ptyId: liveMatch.id,
+            error: resumeResult.success ? 'invalid grant' : resumeResult.error
+          })
+        }
+
         // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
         // FIX #1b: Kill orphan PTY if timeout fires after spawn resolves
         let spawnPtyId: string | null = null

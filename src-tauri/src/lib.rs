@@ -2443,6 +2443,7 @@ pub fn run() {
             // Terminal commands
             commands::terminal_spawn,
             commands::terminal_resume,
+            commands::terminal_list,
             commands::terminal_attach,
             commands::terminal_watch,
             commands::terminal_rotate_claim,

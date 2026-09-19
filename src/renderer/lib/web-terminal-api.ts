@@ -21,7 +21,8 @@ import type {
   TerminalResumeRequest,
   TerminalScopedDataCallback,
   TerminalSpawnedEvent,
-  TerminalSpawnOptions
+  TerminalSpawnOptions,
+  TerminalStatus
 } from '@shared/types/ipc.types'
 import {
   decodeWebTerminalBinaryFrame,
@@ -926,6 +927,12 @@ export function createWebTerminalApi(): TerminalApi {
         }
       }
       return result
+    },
+    list: async (): Promise<IpcResult<TerminalStatus[]>> => {
+      // Web servers own their PTYs for the page lifetime; a layout restore
+      // there re-spawns by design. Companion `list` is scoped (conversation or
+      // project) and is not an unscoped Core identity catalog.
+      return { success: true, data: [] }
     },
     resume: (request) => client.resume(request),
     attach: (terminalId, claim, lastSeq) => client.attachWithCursor(terminalId, claim, lastSeq),

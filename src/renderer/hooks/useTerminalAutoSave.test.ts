@@ -132,6 +132,32 @@ describe('useTerminalAutoSave', () => {
       expect(result.terminals.map((terminal) => terminal.id)).toEqual(['1'])
     })
 
+    it('writes ptyId only for project-scope terminals', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          name: 'Project terminal',
+          projectId: 'proj-1',
+          shell: 'bash',
+          ptyId: 'pty-project'
+        },
+        {
+          id: '2',
+          name: 'Chat terminal',
+          projectId: 'proj-1',
+          conversationId: 'conv-a',
+          shell: 'bash',
+          ptyId: 'pty-chat'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(result.terminals).toHaveLength(1)
+      expect(result.terminals[0].ptyId).toBe('pty-project')
+      expect(result.terminals.some((terminal) => terminal.ptyId === 'pty-chat')).toBe(false)
+    })
+
     it('drops the active id when the active terminal is conversation-scoped', () => {
       const terminals: Terminal[] = [
         {

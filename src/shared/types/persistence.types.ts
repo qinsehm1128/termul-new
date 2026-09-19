@@ -6,6 +6,8 @@ export interface PersistedTerminal {
   name: string
   shell: string
   cwd?: string
+  /** Host PTY id for project-scope terminals only. Never written for conversation terminals. */
+  ptyId?: string
   scrollback?: string[] // Legacy text snapshot for restoration fallback
   transcript?: string // Raw PTY transcript for ANSI/styling-preserving restoration; cap at renderer MAX_TRANSCRIPT_CHARS to avoid unbounded persistence
   /**
