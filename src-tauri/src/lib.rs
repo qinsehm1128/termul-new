@@ -1484,6 +1484,7 @@ fn desktop_terminal_service(
     local_pty: Arc<PtyManager>,
     app_handle: tauri::AppHandle,
 ) -> crate::core::TerminalServiceHandle {
+    // This lands transport plumbing only; activation is a later verified-on-real-Windows step.
     #[cfg(unix)]
     {
         match launch_desktop_terminal_core(app_data_dir) {
@@ -1535,6 +1536,7 @@ fn desktop_acp_service(
     conversation_workspace_base: &Path,
     app_handle: tauri::AppHandle,
 ) -> Option<crate::core::AcpServiceHandle> {
+    // This lands transport plumbing only; activation is a later verified-on-real-Windows step.
     #[cfg(unix)]
     {
         // Safety: desktop setup is single-threaded here; the ACP Core process

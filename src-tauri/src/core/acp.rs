@@ -20,6 +20,7 @@ use super::ipc::{
     write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload, CoreEvent, CoreHello, CoreRequest,
     CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
+use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
 use crate::acp::config::{AgentConfig, AgentId, PermissionPolicy, SessionId};
 use crate::acp::manager::{
     AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
@@ -312,18 +313,12 @@ pub async fn run_acp_core_with_roots(
     state_root: PathBuf,
     workspace_base: PathBuf,
 ) -> Result<(), CoreError> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-        use tokio::net::UnixListener;
-
         let endpoint = CoreEndpoint::for_profile(&state_root, CoreRole::AcpCore);
         prepare_runtime_dir(&endpoint)?;
         let _ = remove_stale_socket(&endpoint);
-        let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
-        let listener = UnixListener::bind(path).map_err(CoreError::from)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(CoreError::from)?;
+        let mut listener = listen_core(&endpoint, CoreRole::AcpCore).await?;
 
         let (shutdown, mut shutdown_rx) = watch::channel(false);
         let state = Arc::new(
@@ -353,7 +348,7 @@ pub async fn run_acp_core_with_roots(
                     }
                 }
                 accepted = listener.accept() => {
-                    let (stream, _) = accepted.map_err(CoreError::from)?;
+                    let stream = accepted?;
                     let state = Arc::clone(&state);
                     tokio::spawn(async move {
                         if let Err(error) = handle_connection(stream, state).await {
@@ -365,7 +360,7 @@ pub async fn run_acp_core_with_roots(
         }
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (state_root, workspace_base);
         Err(CoreError::UnsupportedPlatform)
@@ -511,9 +506,8 @@ async fn shutdown_acp_core(state: &AcpCoreState) -> Result<(), CoreError> {
     Ok(())
 }
 
-#[cfg(unix)]
 async fn handle_connection(
-    stream: tokio::net::UnixStream,
+    stream: CoreServerStream,
     state: Arc<AcpCoreState>,
 ) -> Result<(), CoreError> {
     let mut stream = stream;
@@ -2040,7 +2034,7 @@ struct ConversationWriteWorkspaceParams {
 // ---------------------------------------------------------------------------
 
 struct ClientInner {
-    writer: tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>,
+    writer: tokio::sync::Mutex<CoreWriteHalf>,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<CoreResponse>>>,
     events: broadcast::Sender<AcpCoreEvent>,
@@ -2057,7 +2051,6 @@ pub struct AcpCoreClient {
 }
 
 impl AcpCoreClient {
-    #[cfg(unix)]
     pub async fn connect(endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
         let (reader, writer) = open_acp_stream(endpoint).await?;
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -2073,15 +2066,9 @@ impl AcpCoreClient {
         Ok(Self { inner })
     }
 
-    #[cfg(not(unix))]
-    pub async fn connect(_endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
-        Err(CoreError::UnsupportedPlatform)
-    }
-
     /// Re-handshake against `endpoint` and swap the live stream. Pending RPCs
     /// and the event broadcast stay on the same inner Arc so GUI mirror tasks
     /// keep receiving after a Core restart.
-    #[cfg(unix)]
     pub async fn reconnect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         let _guard = self.inner.reconnect.lock().await;
         let (reader, writer) = open_acp_stream(endpoint).await?;
@@ -2097,11 +2084,6 @@ impl AcpCoreClient {
         Ok(())
     }
 
-    #[cfg(not(unix))]
-    pub async fn reconnect(&self, _endpoint: &CoreEndpoint) -> Result<(), CoreError> {
-        Err(CoreError::UnsupportedPlatform)
-    }
-
     pub fn subscribe_events(&self) -> broadcast::Receiver<AcpCoreEvent> {
         self.inner.events.subscribe()
     }
@@ -2114,19 +2096,12 @@ impl AcpCoreClient {
         let id = request.id;
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().insert(id, tx);
-        #[cfg(unix)]
         {
             let mut writer = self.inner.writer.lock().await;
             if let Err(error) = write_json_frame(&mut *writer, &request).await {
                 self.inner.pending.lock().remove(&id);
                 return Err(error);
             }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (&request, id, method);
-            self.inner.pending.lock().remove(&id);
-            return Err(CoreError::UnsupportedPlatform);
         }
         let timeout = if method == METHOD_SEND_PROMPT
             || method == METHOD_WAIT_TURN_IDLE
@@ -2159,19 +2134,12 @@ impl AcpCoreClient {
             method: method.to_string(),
             params,
         };
-        #[cfg(unix)]
         {
             let mut writer = self.inner.writer.lock().await;
             if let Err(error) = write_json_frame(&mut *writer, &request).await {
                 self.inner.pending.lock().remove(&id);
                 return Err(error);
             }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (&request, id);
-            let _ = timeout;
-            return Err(CoreError::UnsupportedPlatform);
         }
         let response = tokio::time::timeout(timeout, rx)
             .await
@@ -2231,20 +2199,10 @@ impl Drop for ClientInner {
     }
 }
 
-#[cfg(unix)]
 async fn open_acp_stream(
     endpoint: &CoreEndpoint,
-) -> Result<
-    (
-        tokio::net::unix::OwnedReadHalf,
-        tokio::net::unix::OwnedWriteHalf,
-    ),
-    CoreError,
-> {
-    use tokio::net::UnixStream;
-
-    let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
-    let mut stream = UnixStream::connect(path).await.map_err(CoreError::from)?;
+) -> Result<(CoreReadHalf, CoreWriteHalf), CoreError> {
+    let mut stream = connect_core(endpoint).await?;
     let hello = CoreHello {
         role: CoreRole::AcpCore,
         protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
@@ -2260,8 +2218,7 @@ async fn open_acp_stream(
     Ok(stream.into_split())
 }
 
-#[cfg(unix)]
-fn spawn_acp_read_loop(inner: &Arc<ClientInner>, reader: tokio::net::unix::OwnedReadHalf) {
+fn spawn_acp_read_loop(inner: &Arc<ClientInner>, reader: CoreReadHalf) {
     let reader_inner = Arc::clone(inner);
     let handle = tokio::spawn(async move {
         client_read_loop(reader, reader_inner).await;
@@ -2269,7 +2226,6 @@ fn spawn_acp_read_loop(inner: &Arc<ClientInner>, reader: tokio::net::unix::Owned
     *inner.reader.lock() = Some(handle);
 }
 
-#[cfg(unix)]
 fn fail_stale_pending(inner: &ClientInner) {
     let pending: Vec<_> = inner.pending.lock().drain().map(|(_, tx)| tx).collect();
     for tx in pending {
@@ -2284,8 +2240,7 @@ fn fail_stale_pending(inner: &ClientInner) {
     }
 }
 
-#[cfg(unix)]
-async fn client_read_loop(mut reader: tokio::net::unix::OwnedReadHalf, inner: Arc<ClientInner>) {
+async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
     loop {
         let payload = match read_frame(&mut reader).await {
             Ok(payload) => payload,

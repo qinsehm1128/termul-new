@@ -10,6 +10,7 @@ use super::ipc::{
     write_frame, write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload, CoreEvent, CoreHello,
     CoreRequest, CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
+use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
 use crate::conversation::ConversationId;
 use crate::pty::claims::RotatedClaim;
 use crate::pty::manager::{
@@ -366,28 +367,23 @@ struct TerminalCoreState {
     shutdown: watch::Sender<bool>,
 }
 
-#[cfg(unix)]
 pub async fn run_terminal_core(profile_root: PathBuf) -> Result<(), CoreError> {
-    let endpoint = CoreEndpoint::for_profile(&profile_root, CoreRole::TerminalCore);
-    run_terminal_core_on_endpoint(endpoint).await
+    #[cfg(any(unix, windows))]
+    {
+        let endpoint = CoreEndpoint::for_profile(&profile_root, CoreRole::TerminalCore);
+        run_terminal_core_on_endpoint(endpoint).await
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = profile_root;
+        Err(CoreError::UnsupportedPlatform)
+    }
 }
 
-#[cfg(not(unix))]
-pub async fn run_terminal_core(_profile_root: PathBuf) -> Result<(), CoreError> {
-    Err(CoreError::UnsupportedPlatform)
-}
-
-#[cfg(unix)]
 pub async fn run_terminal_core_on_endpoint(endpoint: CoreEndpoint) -> Result<(), CoreError> {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use tokio::net::UnixListener;
-
     prepare_runtime_dir(&endpoint)?;
     let _ = remove_stale_socket(&endpoint);
-    let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
-    let listener = UnixListener::bind(path).map_err(CoreError::from)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(CoreError::from)?;
+    let mut listener = listen_core(&endpoint, CoreRole::TerminalCore).await?;
 
     let pty = construct_pty_manager();
     let (shutdown, shutdown_rx) = watch::channel(false);
@@ -410,7 +406,7 @@ pub async fn run_terminal_core_on_endpoint(endpoint: CoreEndpoint) -> Result<(),
                 }
             }
             accepted = listener.accept() => {
-                let (stream, _) = accepted.map_err(CoreError::from)?;
+                let stream = accepted?;
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
                     if let Err(error) = handle_connection(stream, state).await {
@@ -428,13 +424,11 @@ pub async fn run_terminal_core_on_endpoint(endpoint: CoreEndpoint) -> Result<(),
     Ok(())
 }
 
-#[cfg(unix)]
 async fn handle_connection(
-    stream: tokio::net::UnixStream,
+    stream: CoreServerStream,
     state: Arc<TerminalCoreState>,
 ) -> Result<(), CoreError> {
     use tokio::io::AsyncWriteExt;
-    use tokio::net::unix::OwnedWriteHalf;
 
     let mut stream = stream;
     let hello: CoreHello = read_json_frame(&mut stream).await?;
@@ -503,15 +497,14 @@ async fn handle_connection(
         state.pty.note_view_closed(&terminal_id);
     }
     let mut guard = writer.lock().await;
-    let _ = OwnedWriteHalf::shutdown(&mut *guard).await;
+    let _ = guard.shutdown().await;
     result
 }
 
-#[cfg(unix)]
 async fn dispatch_request(
     state: &Arc<TerminalCoreState>,
     request: &CoreRequest,
-    writer: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
     subscriptions: &mut HashMap<String, tokio::task::JoinHandle<()>>,
 ) -> CoreResponse {
     match handle_method(state, request, writer, subscriptions).await {
@@ -520,11 +513,10 @@ async fn dispatch_request(
     }
 }
 
-#[cfg(unix)]
 async fn handle_method(
     state: &Arc<TerminalCoreState>,
     request: &CoreRequest,
-    writer: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
     subscriptions: &mut HashMap<String, tokio::task::JoinHandle<()>>,
 ) -> Result<Value, CoreError> {
     let pty = &state.pty;
@@ -702,10 +694,9 @@ fn stream_should_stop(captured_generation: Option<u64>, current_generation: Opti
     captured_generation != current_generation
 }
 
-#[cfg(unix)]
 async fn begin_output_stream(
     pty: &Arc<PtyManager>,
-    writer: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
     subscriptions: &mut HashMap<String, tokio::task::JoinHandle<()>>,
     terminal_id: &str,
     claim: Option<&str>,
@@ -752,10 +743,9 @@ async fn begin_output_stream(
     Ok(reply)
 }
 
-#[cfg(unix)]
 async fn start_replay_forwarder(
     pty: &Arc<PtyManager>,
-    writer: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
     subscriptions: &mut HashMap<String, tokio::task::JoinHandle<()>>,
     terminal_id: &str,
     replay: crate::pty::manager::TerminalReplay,
@@ -856,8 +846,7 @@ struct StreamSlot {
 }
 
 struct ClientInner {
-    #[cfg(unix)]
-    writer: tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>,
+    writer: tokio::sync::Mutex<CoreWriteHalf>,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<CoreResponse>>>,
     streams: Mutex<HashMap<String, StreamSlot>>,
@@ -873,7 +862,6 @@ pub struct TerminalCoreClient {
 }
 
 impl TerminalCoreClient {
-    #[cfg(unix)]
     pub async fn connect(endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
         let (reader, writer) = open_terminal_stream(endpoint).await?;
         let (events, _) = broadcast::channel(256);
@@ -901,17 +889,11 @@ impl TerminalCoreClient {
         Ok(client)
     }
 
-    #[cfg(not(unix))]
-    pub async fn connect(_endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
-        Err(CoreError::UnsupportedPlatform)
-    }
-
     /// Re-handshake against `endpoint` and swap the live stream. The event
     /// broadcast stays on the same inner Arc so the GUI event-hub mirror keeps
     /// receiving after a Core restart. After the socket swap we refresh `live`,
     /// drop stream senders whose terminal is gone, and re-watch remaining ids
     /// from each stream's last known seq so output resumes.
-    #[cfg(unix)]
     pub async fn reconnect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         let _guard = self.inner.reconnect.lock().await;
         let (reader, writer) = open_terminal_stream(endpoint).await?;
@@ -957,11 +939,6 @@ impl TerminalCoreClient {
                 .await;
         }
         Ok(())
-    }
-
-    #[cfg(not(unix))]
-    pub async fn reconnect(&self, _endpoint: &CoreEndpoint) -> Result<(), CoreError> {
-        Err(CoreError::UnsupportedPlatform)
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<TerminalEvent> {
@@ -1188,18 +1165,10 @@ impl TerminalCoreClient {
             params,
         };
         {
-            #[cfg(unix)]
-            {
-                let mut writer = self.inner.writer.lock().await;
-                if let Err(error) = write_json_frame(&mut *writer, &request).await {
-                    self.inner.pending.lock().remove(&id);
-                    return Err(error);
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = (&request, id);
-                return Err(CoreError::UnsupportedPlatform);
+            let mut writer = self.inner.writer.lock().await;
+            if let Err(error) = write_json_frame(&mut *writer, &request).await {
+                self.inner.pending.lock().remove(&id);
+                return Err(error);
             }
         }
         let response = tokio::time::timeout(RPC_TIMEOUT, rx)
@@ -1216,20 +1185,10 @@ impl TerminalCoreClient {
     }
 }
 
-#[cfg(unix)]
 async fn open_terminal_stream(
     endpoint: &CoreEndpoint,
-) -> Result<
-    (
-        tokio::net::unix::OwnedReadHalf,
-        tokio::net::unix::OwnedWriteHalf,
-    ),
-    CoreError,
-> {
-    use tokio::net::UnixStream;
-
-    let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
-    let mut stream = UnixStream::connect(path).await.map_err(CoreError::from)?;
+) -> Result<(CoreReadHalf, CoreWriteHalf), CoreError> {
+    let mut stream = connect_core(endpoint).await?;
     let hello = CoreHello {
         role: CoreRole::TerminalCore,
         protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
@@ -1245,8 +1204,7 @@ async fn open_terminal_stream(
     Ok(stream.into_split())
 }
 
-#[cfg(unix)]
-fn spawn_terminal_read_loop(inner: &Arc<ClientInner>, reader: tokio::net::unix::OwnedReadHalf) {
+fn spawn_terminal_read_loop(inner: &Arc<ClientInner>, reader: CoreReadHalf) {
     let reader_inner = Arc::clone(inner);
     let handle = tokio::spawn(async move {
         client_read_loop(reader, reader_inner).await;
@@ -1254,7 +1212,6 @@ fn spawn_terminal_read_loop(inner: &Arc<ClientInner>, reader: tokio::net::unix::
     *inner.reader.lock() = Some(handle);
 }
 
-#[cfg(unix)]
 fn fail_stale_pending(inner: &ClientInner) {
     let pending: Vec<_> = inner.pending.lock().drain().map(|(_, tx)| tx).collect();
     for tx in pending {
@@ -1269,8 +1226,7 @@ fn fail_stale_pending(inner: &ClientInner) {
     }
 }
 
-#[cfg(unix)]
-async fn client_read_loop(mut reader: tokio::net::unix::OwnedReadHalf, inner: Arc<ClientInner>) {
+async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
     loop {
         let payload = match read_frame(&mut reader).await {
             Ok(payload) => payload,

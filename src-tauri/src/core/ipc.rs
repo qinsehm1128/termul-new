@@ -320,7 +320,13 @@ pub fn remove_stale_socket(endpoint: &CoreEndpoint) -> Result<bool, CoreError> {
     Ok(true)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn remove_stale_socket(_endpoint: &CoreEndpoint) -> Result<bool, CoreError> {
+    // Named pipes vanish with their server; there is no filesystem socket to clean.
+    Ok(false)
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn remove_stale_socket(_endpoint: &CoreEndpoint) -> Result<bool, CoreError> {
     Err(CoreError::UnsupportedPlatform)
 }

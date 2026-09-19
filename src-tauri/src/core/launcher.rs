@@ -8,6 +8,7 @@ use super::ipc::{
     prepare_runtime_dir, read_json_frame, write_json_frame, CoreEndpoint, CoreError, CoreHello,
     CoreHelloAck, CoreRequest, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
+use super::transport::connect_core;
 use std::collections::HashMap;
 #[cfg(test)]
 use std::path::Path;
@@ -131,12 +132,8 @@ async fn wait_for_owned_exit(
         if child.try_wait().ok().flatten().is_some() {
             return true;
         }
-        if let Some(path) = endpoint.as_path() {
-            if tokio::net::UnixStream::connect(path).await.is_err()
-                && child.try_wait().ok().flatten().is_some()
-            {
-                return true;
-            }
+        if connect_core(endpoint).await.is_err() && child.try_wait().ok().flatten().is_some() {
+            return true;
         }
         if tokio::time::Instant::now() >= deadline {
             return child.try_wait().ok().flatten().is_some();
@@ -174,15 +171,11 @@ async fn terminate_owned_core(role: CoreRole, endpoint: &CoreEndpoint) -> bool {
     }
 }
 
-#[cfg(unix)]
 pub(crate) async fn probe_endpoint(
     endpoint: &CoreEndpoint,
     expected_role: CoreRole,
 ) -> Result<CoreHelloAck, CoreError> {
-    use tokio::net::UnixStream;
-
-    let path = endpoint.as_path().ok_or(CoreError::UnsupportedPlatform)?;
-    let mut stream = UnixStream::connect(path).await.map_err(CoreError::from)?;
+    let mut stream = connect_core(endpoint).await?;
     let hello = CoreHello {
         // Hello.role names the target server, not the caller. The GUI identifies
         // itself with `client_name` and asks for `expected_role`.
@@ -200,52 +193,31 @@ pub(crate) async fn probe_endpoint(
     Ok(ack)
 }
 
-#[cfg(not(unix))]
-pub(crate) async fn probe_endpoint(
-    _endpoint: &CoreEndpoint,
-    _expected_role: CoreRole,
-) -> Result<CoreHelloAck, CoreError> {
-    Err(CoreError::UnsupportedPlatform)
-}
-
 async fn replace_incompatible_core(endpoint: &CoreEndpoint, role: CoreRole) {
-    #[cfg(unix)]
-    {
-        let shutdown_sent = try_shutdown_core(endpoint, role).await;
-        if shutdown_sent {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-            while tokio::time::Instant::now() < deadline {
-                if probe_endpoint(endpoint, role).await.is_err() {
-                    log::info!(
-                        target: "se_manager::core",
-                        "operation=core_replace role={} stable_code=INCOMPATIBLE_REPLACED",
-                        role.endpoint_name()
-                    );
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+    let shutdown_sent = try_shutdown_core(endpoint, role).await;
+    if shutdown_sent {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            if probe_endpoint(endpoint, role).await.is_err() {
+                log::info!(
+                    target: "se_manager::core",
+                    "operation=core_replace role={} stable_code=INCOMPATIBLE_REPLACED",
+                    role.endpoint_name()
+                );
+                return;
             }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        log::error!(
-            target: "se_manager::core",
-            "operation=core_replace role={} stable_code=ZOMBIE_ORPHANED detail=shutdown_not_acknowledged",
-            role.endpoint_name()
-        );
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (endpoint, role);
-    }
+    log::error!(
+        target: "se_manager::core",
+        "operation=core_replace role={} stable_code=ZOMBIE_ORPHANED detail=shutdown_not_acknowledged",
+        role.endpoint_name()
+    );
 }
 
-#[cfg(unix)]
 async fn try_shutdown_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
-    use tokio::net::UnixStream;
-
-    let Some(path) = endpoint.as_path() else {
-        return false;
-    };
-    let Ok(mut stream) = UnixStream::connect(path).await else {
+    let Ok(mut stream) = connect_core(endpoint).await else {
         return true; // nothing listening; socket file is stale
     };
     let hello = CoreHello {
@@ -398,7 +370,7 @@ pub fn profile_root_from_env() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("termul-core"))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub fn run_core_process(role: CoreRole) -> i32 {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -428,7 +400,7 @@ pub fn run_core_process(role: CoreRole) -> i32 {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn run_core_process(role: CoreRole) -> i32 {
     eprintln!(
         "{} process is not supported on this platform yet",

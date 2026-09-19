@@ -9,6 +9,7 @@ pub mod handles;
 pub mod ipc;
 pub mod launcher;
 pub mod terminal;
+pub mod transport;
 pub mod web_host;
 
 pub use acp::{run_acp_core, run_acp_core_with_roots, AcpCoreClient, AcpCoreEvent};
