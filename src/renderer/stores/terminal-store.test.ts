@@ -1597,14 +1597,14 @@ describe('terminal-store', () => {
             healthStatus: 'running'
           },
           {
-            id: 't-pending',
-            name: 'Pending',
+            // In-flight restarts hold no ptyId while their replacement spawn
+            // resolves, so they must never be degraded by the restart event.
+            id: 't-inflight',
+            name: 'InFlight',
             projectId: '1',
             shell: 'bash',
             output: [],
-            ptyId: 'pty-pending',
-            healthStatus: 'running',
-            pendingSpawn: true
+            healthStatus: 'running'
           }
         ]
       })
@@ -1616,7 +1616,7 @@ describe('terminal-store', () => {
       const { terminals } = useTerminalStore.getState()
       expect(terminals.find((t) => t.id === 't-stale')?.healthStatus).toBe('exited')
       expect(terminals.find((t) => t.id === 't-live')?.healthStatus).toBe('running')
-      expect(terminals.find((t) => t.id === 't-pending')?.healthStatus).toBe('running')
+      expect(terminals.find((t) => t.id === 't-inflight')?.healthStatus).toBe('running')
       expect(terminals).toHaveLength(3)
     })
   })

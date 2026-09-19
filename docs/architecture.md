@@ -382,7 +382,7 @@ Crash / update matrix:
 
 - **GUI quit/relaunch:** Cores stay alive; the GUI adopts the existing endpoint on return. Graceful exit reports `CORE_OWNED_SKIP` and does not kill Core-owned PTYs or ACP work.
 - **Core crash:** supervisor 3-miss detection → SIGTERM-owned respawn → reconnect. ACP recovers from the durable repository. Terminal PTYs are unrecoverable in v1; `terminal:core_restarted` marks stale renderer terminals `exited` (users respawn).
-- **App update:** GUI-only updater relaunch keeps Cores. When the app binary changes, Core respawn happens on the next GUI start because the adopted endpoint must speak the same protocol (handshake failure → old Core is terminated by the launcher's owned-child path). fd-passing handoff is deferred.
+- **App update:** GUI-only updater relaunch keeps Cores. When the app binary changes, Core respawn happens on the next GUI start because the adopted endpoint must speak the same protocol (incompatible handshake → best-effort wire shutdown of the old Core, then replace). fd-passing handoff is deferred.
 - **Explicit Core shutdown:** invokes the selected Core's shutdown operation and cleans only that Core's resources.
 
 Standalone `se-server` remains an in-process, owning compatibility host and continues its existing drain-then-kill shutdown order. Browser/mobile keeps `/terminal/ws` and `/ws`; desktop shared-live remains non-owning and stops by detaching/draining clients. The browser and standalone surfaces therefore do not launch local Core processes.
@@ -422,7 +422,7 @@ sleep 600
 
 Quit only the GUI; do not explicitly shut down the Core. The Core process and endpoint should remain available, the exit log should report `stable_code=CORE_OWNED_SKIP result=NOT_APPLICABLE`, and it must not report `PTY_CLEANUP_FAILED`. Relaunch with `bun run dev:tauri`, reopen the same conversation, and verify that the marker is replayed, the same terminal continues producing output, and a post-relaunch shell PID matches the pre-relaunch PID when the shell is resumed rather than replaced.
 
-Project-layout restore currently re-spawns terminals and is not a Core adoption test. ACP desktop commands, Conversation persistence, and `WsRelaySink` remain in-process; ACP Core migration is deferred. Shared-live still requires an in-process `PtyManager`, so shared-live plus successful Terminal Core ownership is unsupported in this cutline. Windows remains an in-process fallback while named-pipe Core support is deferred. Packaged dual-role smoke remains outside this development acceptance path. Crash/update behavior is in the matrix above; fd-passing Core handoff is deferred.
+Project-layout restore adopts live Core PTYs by persisted `ptyId` (Core replay from seq 0 paints the downtime transcript); layouts without `ptyId` are legacy and fall back to heuristic match or re-spawn. Conversation SessionWorkspace restore remains the smoke for claim-issued replay. ACP desktop commands, Conversation persistence, and `WsRelaySink` remain in-process; ACP Core migration is deferred. Shared-live still requires an in-process `PtyManager`, so shared-live plus successful Terminal Core ownership is unsupported in this cutline. Windows remains an in-process fallback while named-pipe Core support is deferred. Packaged dual-role smoke remains outside this development acceptance path. Crash/update behavior is in the matrix above; fd-passing Core handoff is deferred.
 
 ### Browser/annotation work
 1. `src/renderer/components/browser/BrowserPanel.tsx`

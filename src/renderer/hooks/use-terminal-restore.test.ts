@@ -827,9 +827,11 @@ describe('useTerminalRestore', () => {
     })
 
     await waitFor(() => {
+      // Full Core replay paints the downtime transcript (RV-202); the
+      // persisted snapshot is intentionally not applied on adopt.
       expect(mockTerminalResume).toHaveBeenCalledWith({
         terminalId: 'pty-live-1',
-        lastSeq: 9
+        lastSeq: 0
       })
     })
     expect(mockTerminalResume.mock.calls[0]?.[0]).not.toHaveProperty('conversationId')
@@ -839,11 +841,17 @@ describe('useTerminalRestore', () => {
         expect.objectContaining({
           name: 'Terminal 1',
           ptyId: 'pty-live-1',
-          claim: 'adopted-claim',
-          pendingScrollback: ['kept']
+          claim: 'adopted-claim'
         })
       ])
     )
+    // RV-202: the Core replay is the single painter on adopt — the persisted
+    // snapshot must NOT be double-applied.
+    const adoptedRecord = mockTerminalStoreState.setTerminals.mock.calls
+      .flatMap((call) => call[0] as Array<Record<string, unknown>>)
+      .find((record) => record.ptyId === 'pty-live-1')
+    expect(adoptedRecord).not.toHaveProperty('pendingScrollback')
+    expect(adoptedRecord).not.toHaveProperty('transcript')
   })
 
   it('falls back to spawn when the persisted ptyId is absent from list', async () => {

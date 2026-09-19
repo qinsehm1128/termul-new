@@ -130,10 +130,9 @@ function isAdoptableLiveTerminal(live: TerminalStatus, projectId: string): boole
   if (!live.active || live.workspaceRefTracked || live.conversationId) {
     return false
   }
-  if (live.projectId && live.projectId !== projectId) {
-    return false
-  }
-  return true
+  // Strict project identity: an unscoped PTY (SSH, ad-hoc spawn) belongs to
+  // no project restore, and a PTY of another project must never be adopted.
+  return live.projectId === projectId
 }
 
 async function loadLiveProjectPtys(projectId: string): Promise<TerminalStatus[]> {
@@ -165,6 +164,10 @@ function matchLiveProjectPty(
     }
     return undefined
   }
+  // Legacy layouts carry no ptyId; same-project + shell + cwd is the best
+  // available identity for them. Two same-directory shells in one project
+  // can still cross-adopt on legacy data — new autosave writes ptyId, so this
+  // path shrinks to zero over time.
   return unmatchedLive.find(
     (live) => !claimed.has(live.id) && live.shell === normalizedShell && live.cwd === persisted.cwd
   )
@@ -1001,9 +1004,12 @@ async function restoreFromLayout(
           normalizedShell
         )
         if (liveMatch) {
+          // Replay from 0: the Core's 256 KiB buffer is the single painter for
+          // the GUI-downtime transcript (RV-202). The persisted snapshot is
+          // deliberately NOT applied on top of it.
           const resumeResult = await terminalApi.resume({
             terminalId: liveMatch.id,
-            lastSeq: liveMatch.latestSeq ?? 0
+            lastSeq: 0
           })
           if (
             resumeResult.success &&
@@ -1029,8 +1035,6 @@ async function restoreFromLayout(
               output: [],
               healthStatus: 'running',
               viewState: 'visible',
-              pendingScrollback: persistedTerminal.scrollback,
-              transcript: persistedTerminal.transcript,
               ptyId: liveMatch.id,
               adopted: true,
               claim: resumeResult.data.claim,

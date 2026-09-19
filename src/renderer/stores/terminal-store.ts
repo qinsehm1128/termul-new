@@ -1312,7 +1312,6 @@ function applyTerminalCoreRestarted(payload: TerminalCoreRestartedEvent): void {
   const live = new Set(payload.liveTerminalIds)
   const store = useTerminalStore.getState()
   for (const terminal of store.terminals) {
-    if (terminal.pendingSpawn) continue
     const ptyId = terminal.ptyId
     if (!ptyId || live.has(ptyId)) continue
     store.setTerminalHealthStatus(terminal.id, 'exited')

@@ -6,7 +6,7 @@
 
 use super::ipc::{
     prepare_runtime_dir, read_json_frame, write_json_frame, CoreEndpoint, CoreError, CoreHello,
-    CoreHelloAck, CoreRole, CURRENT_PROTOCOL_VERSION,
+    CoreHelloAck, CoreRequest, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
 use std::collections::HashMap;
 #[cfg(test)]
@@ -208,6 +208,70 @@ pub(crate) async fn probe_endpoint(
     Err(CoreError::UnsupportedPlatform)
 }
 
+async fn replace_incompatible_core(endpoint: &CoreEndpoint, role: CoreRole) {
+    #[cfg(unix)]
+    {
+        let shutdown_sent = try_shutdown_core(endpoint, role).await;
+        if shutdown_sent {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            while tokio::time::Instant::now() < deadline {
+                if probe_endpoint(endpoint, role).await.is_err() {
+                    log::info!(
+                        target: "se_manager::core",
+                        "operation=core_replace role={} stable_code=INCOMPATIBLE_REPLACED",
+                        role.endpoint_name()
+                    );
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+        log::error!(
+            target: "se_manager::core",
+            "operation=core_replace role={} stable_code=ZOMBIE_ORPHANED detail=shutdown_not_acknowledged",
+            role.endpoint_name()
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (endpoint, role);
+    }
+}
+
+#[cfg(unix)]
+async fn try_shutdown_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
+    use tokio::net::UnixStream;
+
+    let Some(path) = endpoint.as_path() else {
+        return false;
+    };
+    let Ok(mut stream) = UnixStream::connect(path).await else {
+        return true; // nothing listening; socket file is stale
+    };
+    let hello = CoreHello {
+        role,
+        protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+        client_name: "termul-gui-replacer".to_string(),
+    };
+    if super::ipc::write_json_frame(&mut stream, &hello)
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    // The ack is irrelevant — old cores may reject the offered version while
+    // still accepting the shutdown method on their own protocol.
+    let _ = super::ipc::read_json_frame::<_, CoreHelloAck>(&mut stream).await;
+    let request = CoreRequest {
+        id: 1,
+        method: "shutdown".to_string(),
+        params: serde_json::Value::Null,
+    };
+    super::ipc::write_json_frame(&mut stream, &request)
+        .await
+        .is_ok()
+}
+
 pub async fn ensure_core(
     role: CoreRole,
     config: &CoreLaunchConfig,
@@ -239,7 +303,14 @@ pub async fn ensure_core(
                 "operation=core_probe role={} stable_code=INCOMPATIBLE",
                 role.endpoint_name()
             );
-            return Err(error);
+            // An incompatible Core (e.g. after an app update bumped the
+            // protocol) must not keep squatting the endpoint while the GUI
+            // silently falls back in-process. Ask it to shut down over the
+            // wire it still speaks, wait briefly, then replace it. A core
+            // that ignores the request is orphaned with a loud log — never
+            // a silent second writer.
+            replace_incompatible_core(&endpoint, role).await;
+            let _ = error;
         }
         Err(CoreError::UnsupportedPlatform) => return Err(CoreError::UnsupportedPlatform),
         Err(CoreError::Io(_))
