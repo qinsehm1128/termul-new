@@ -18,6 +18,24 @@ import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-st
 import { useTerminalStore } from '@/stores/terminal-store'
 import { terminalTabId, useWorkspaceStore } from '@/stores/workspace-store'
 
+let localSpawnInFlight = 0
+const localSpawnedTerminalIds = new Set<string>()
+
+/** True while this renderer is awaiting a locally initiated PTY spawn reply. */
+export function isLocalTerminalSpawnInFlight(): boolean {
+  return localSpawnInFlight > 0
+}
+
+/** Consume a local spawn marker when its mirrored host event arrives late. */
+export function consumeLocalSpawnEvent(terminalId: string): boolean {
+  return localSpawnedTerminalIds.delete(terminalId)
+}
+
+function rememberLocalSpawn(terminalId: string): void {
+  localSpawnedTerminalIds.add(terminalId)
+  setTimeout(() => localSpawnedTerminalIds.delete(terminalId), 10_000)
+}
+
 export interface SpawnTerminalOptions {
   /** Override the active Conversation scope (used by restart). */
   conversationId?: string
@@ -121,13 +139,19 @@ export async function spawnTerminalInPane(
     const env = { ...projectEnv, ...extraEnv }
     const hasEnv = hasProjectEnv || Object.keys(extraEnv).length > 0
 
-    const spawnResult = await terminalApi.spawn({
-      shell,
-      cwd,
-      conversationId,
-      projectId,
-      ...(hasEnv ? { env } : {})
-    })
+    localSpawnInFlight += 1
+    let spawnResult: Awaited<ReturnType<typeof terminalApi.spawn>>
+    try {
+      spawnResult = await terminalApi.spawn({
+        shell,
+        cwd,
+        conversationId,
+        projectId,
+        ...(hasEnv ? { env } : {})
+      })
+    } finally {
+      localSpawnInFlight = Math.max(0, localSpawnInFlight - 1)
+    }
 
     if (!spawnResult.success) {
       return {
@@ -141,6 +165,7 @@ export async function spawnTerminalInPane(
       }
     }
 
+    rememberLocalSpawn(spawnResult.data.id)
     const adopted = terminalStore.findTerminalByPtyId?.(spawnResult.data.id)
     if (adopted) {
       if (spawnResult.data.claim) {

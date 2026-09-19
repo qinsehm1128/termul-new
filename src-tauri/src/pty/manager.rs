@@ -494,7 +494,7 @@ pub struct TerminalInfo {
 /// transports (desktop `terminal_spawn` IpcResult data and the web `spawn`
 /// reply data) expose the same top-level camelCase shape. This is the initial
 /// issuance path; authenticated resume and explicit rotation can replace it.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnedTerminal {
     #[serde(flatten)]
@@ -518,7 +518,7 @@ impl std::fmt::Debug for SpawnedTerminal {
 /// Carries the live terminal metadata plus the replay cursor (`latestSeq`) and
 /// `gap` flag. It NEVER carries a claim key: attach is credential-consuming,
 /// never credential-issuing.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalAttachResult {
     pub id: String,
@@ -533,7 +533,7 @@ pub struct TerminalAttachResult {
 
 /// Cold-renderer resume request. Unknown fields are rejected so this path can
 /// never grow into a raw spawn or environment override surface.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalResumeRequest {
     pub conversation_id: ConversationId,
@@ -543,7 +543,7 @@ pub struct TerminalResumeRequest {
 
 /// One-time resume handoff. The claim exists only in this authenticated
 /// response and the renderer's memory; it is never persisted or logged.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalResumeGrant {
     pub terminal: TerminalAttachResult,
@@ -1261,7 +1261,7 @@ fn empty_phone_fit() -> Arc<RwLock<PhoneFitLease>> {
 }
 
 /// Current phone/desktop geometry owner for a live PTY.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayModeState {
     pub mode: TerminalDisplayMode,

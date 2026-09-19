@@ -406,7 +406,9 @@ pub fn router(
     store: Option<Arc<WebStore>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Router {
-    acp.set_pty_manager(&pty);
+    acp.set_terminal_service(crate::core::TerminalServiceHandle::in_process(Arc::clone(
+        &pty,
+    )));
     let provenance = authority.ingress_provenance();
     let mut r = api_routes(provenance);
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
@@ -471,7 +473,9 @@ pub fn router_with_static(
     static_dir: &Path,
     project_root: PathBuf,
 ) -> Router {
-    acp.set_pty_manager(&pty);
+    acp.set_terminal_service(crate::core::TerminalServiceHandle::in_process(Arc::clone(
+        &pty,
+    )));
     api_routes(IngressProvenance::LocalOperator)
         .fallback_service(assets::static_service_from(static_dir))
         // CAP-1: same RwLock wrap + handle registration as `router`.

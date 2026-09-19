@@ -1047,6 +1047,10 @@ pub struct AcpManager {
     persistence: Option<Arc<SessionPersistence>>,
     conversation_creation: Option<Arc<ConversationCreationService>>,
     conversation_persistence: Option<Arc<ConversationPersistenceAdapter>>,
+    /// Narrow terminal runtime used by ACP. Ownership of the in-process PTY
+    /// manager stays with desktop/standalone composition; this is only a Weak
+    /// compatibility view plus the runtime handle.
+    terminal_runtime: Mutex<Option<Arc<dyn crate::core::TerminalRuntimeHandle>>>,
     pty_manager: Mutex<Option<Weak<crate::pty::PtyManager>>>,
     /// Replacement `session_created` gates keyed by provisional opaque session id. The provider
     /// result is not renderer-visible until canonical `binding_replaced` commits.
@@ -1181,6 +1185,7 @@ impl AcpManager {
             persistence: None,
             conversation_creation: None,
             conversation_persistence: None,
+            terminal_runtime: Mutex::new(None),
             pty_manager: Mutex::new(None),
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
@@ -1205,6 +1210,7 @@ impl AcpManager {
             persistence: Some(persistence),
             conversation_creation: None,
             conversation_persistence: None,
+            terminal_runtime: Mutex::new(None),
             pty_manager: Mutex::new(None),
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
@@ -1231,6 +1237,7 @@ impl AcpManager {
             persistence: None,
             conversation_creation: Some(creation),
             conversation_persistence: Some(persistence),
+            terminal_runtime: Mutex::new(None),
             pty_manager: Mutex::new(None),
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
@@ -1454,8 +1461,24 @@ impl AcpManager {
         }
     }
 
+    pub fn set_terminal_service(&self, terminal: crate::core::TerminalServiceHandle) {
+        *self.pty_manager.lock() = terminal.in_process_pty().map(|pty| Arc::downgrade(&pty));
+        *self.terminal_runtime.lock() = Some(terminal.runtime_for_acp());
+    }
+
+    pub fn set_terminal_runtime(&self, runtime: Arc<dyn crate::core::TerminalRuntimeHandle>) {
+        *self.terminal_runtime.lock() = Some(runtime);
+    }
+
     pub fn set_pty_manager(&self, pty: &Arc<crate::pty::PtyManager>) {
-        *self.pty_manager.lock() = Some(Arc::downgrade(pty));
+        self.set_terminal_service(crate::core::TerminalServiceHandle::in_process(Arc::clone(
+            pty,
+        )));
+    }
+
+    #[must_use]
+    pub fn terminal_runtime(&self) -> Option<Arc<dyn crate::core::TerminalRuntimeHandle>> {
+        self.terminal_runtime.lock().clone()
     }
 
     #[must_use]

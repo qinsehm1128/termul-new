@@ -357,7 +357,8 @@ fn main() -> ExitCode {
             Arc::clone(&git_tracker),
             Arc::clone(&exit_code_tracker),
         ));
-        acp.set_pty_manager(&pty);
+        let _services =
+            se_manager_lib::core::CoreServices::in_process(Arc::clone(&pty), Arc::clone(&acp));
         let lifecycle =
             match se_manager_lib::conversation::ConversationLifecycleService::from_manager(
                 Arc::clone(&acp),

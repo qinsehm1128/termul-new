@@ -8,6 +8,7 @@ mod browser_tab_manager;
 mod cli_session;
 mod commands;
 pub mod conversation;
+pub mod core;
 /// The injectable seam every OS-keychain read/write goes through. Public
 /// because the brand-migration harness in `tests/` links this crate as an
 /// external dependency and has to be able to substitute the backend.
@@ -402,7 +403,7 @@ pub use conversation::{
     ConversationRecordV2, CreationPartition, ExecutionTarget, ProjectAttachment,
     TerminalResourceRef,
 };
-pub use pty::PtyManager;
+pub use pty::{PtyManager, SpawnOptions};
 pub use scheduled_tasks::ScheduledTaskStore;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
@@ -1478,6 +1479,57 @@ const LAST_RESORT_PTY_CLEANUP_DEADLINE: std::time::Duration = std::time::Duratio
 /// with the PTY reap that follows.
 const LAST_RESORT_ACP_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_millis(800);
 
+fn desktop_terminal_service(
+    app_data_dir: &Path,
+    local_pty: Arc<PtyManager>,
+    app_handle: tauri::AppHandle,
+) -> crate::core::TerminalServiceHandle {
+    #[cfg(unix)]
+    {
+        match launch_desktop_terminal_core(app_data_dir) {
+            Ok(client) => {
+                let mut events = client.subscribe_events();
+                let mirror = TerminalEventHub::tauri(app_handle);
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match events.recv().await {
+                            Ok(event) => mirror.emit(event),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+                log::info!(
+                    target: "se_manager::core",
+                    "operation=desktop_terminal_core stable_code=READY"
+                );
+                return crate::core::TerminalServiceHandle::from_core_client(client);
+            }
+            Err(error) => {
+                log::warn!(
+                    target: "se_manager::core",
+                    "operation=desktop_terminal_core stable_code={} detail=falling_back_in_process",
+                    error.code()
+                );
+            }
+        }
+    }
+    let _ = app_handle;
+    crate::core::TerminalServiceHandle::in_process(local_pty)
+}
+
+#[cfg(unix)]
+fn launch_desktop_terminal_core(
+    app_data_dir: &Path,
+) -> Result<crate::core::TerminalCoreClient, crate::core::CoreError> {
+    let config = crate::core::CoreLaunchConfig::for_current_executable(app_data_dir)?;
+    tauri::async_runtime::block_on(async {
+        let process =
+            crate::core::ensure_core(crate::core::CoreRole::TerminalCore, &config).await?;
+        crate::core::TerminalCoreClient::connect(&process.endpoint).await
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Keep the legacy importer linkable for compatibility tests and older internal callers, but
@@ -1667,12 +1719,18 @@ pub fn run() {
             app.manage(exit_code_tracker.clone());
 
             let pty_manager = Arc::new(PtyManager::new(
-                terminal_events,
+                terminal_events.clone(),
                 cwd_tracker,
                 git_tracker,
                 exit_code_tracker,
             ));
+            let terminal_handle = desktop_terminal_service(
+                &app_data_dir,
+                Arc::clone(&pty_manager),
+                handle.clone(),
+            );
             app.manage(pty_manager.clone());
+            app.manage(terminal_handle.clone());
 
             // Create Browser Tab Manager
             let browser_tab_manager =
@@ -1863,13 +1921,14 @@ pub fn run() {
                 Arc::clone(&conversation_bootstrap.creation),
                 Arc::clone(&conversation_bootstrap.persistence_adapter),
             ));
-            acp_manager.set_pty_manager(&pty_manager);
+            acp_manager.set_terminal_service(terminal_handle.clone());
+            let acp_handle = crate::core::AcpServiceHandle::in_process(Arc::clone(&acp_manager));
             conversation_bootstrap
                 .application
                 .attach_lifecycle(
-                    crate::conversation::ConversationLifecycleService::from_manager(
+                    crate::conversation::ConversationLifecycleService::from_terminal(
                         Arc::clone(&acp_manager),
-                        Arc::clone(&pty_manager),
+                        terminal_handle.clone(),
                     )
                     .map_err(|error| error.to_string())?,
                 )
@@ -1939,6 +1998,7 @@ pub fn run() {
                 scheduled_tasks.store().root().display()
             );
             app.manage(Arc::clone(&scheduled_tasks));
+            app.manage(acp_handle);
             app.manage(acp_manager);
             app.manage(ws_relay);
 
@@ -2418,9 +2478,17 @@ pub fn run() {
             let acp_manager = app_handle
                 .try_state::<Arc<AcpManager>>()
                 .map(|state| state.inner().clone());
-            let pty_manager = app_handle
-                .try_state::<Arc<pty::PtyManager>>()
+            let terminal_service = app_handle
+                .try_state::<crate::core::TerminalServiceHandle>()
                 .map(|state| state.inner().clone());
+            let pty_manager = terminal_service
+                .as_ref()
+                .filter(|service| !service.owns_core_process())
+                .and_then(|_| {
+                    app_handle
+                        .try_state::<Arc<pty::PtyManager>>()
+                        .map(|state| state.inner().clone())
+                });
             if acp_manager.is_none() && pty_manager.is_none() {
                 return;
             }
@@ -2455,6 +2523,9 @@ pub fn run() {
                     }
                 }
                 if let Some(pty_manager) = pty_manager {
+                    // Core-owned PTYs live in the Terminal Core process and are
+                    // not in this manager. This reap only covers the in-process
+                    // fallback / shared-live seam.
                     let receipt = pty_manager
                         .kill_all_until(started + LAST_RESORT_PTY_CLEANUP_DEADLINE)
                         .await;
@@ -2508,9 +2579,17 @@ pub fn run() {
             let scheduled_tasks = app_handle
                 .try_state::<Arc<crate::scheduled_tasks::ScheduledTaskService>>()
                 .map(|state| state.inner().clone());
-            let pty_manager = app_handle
-                .try_state::<Arc<PtyManager>>()
+            let terminal_service = app_handle
+                .try_state::<crate::core::TerminalServiceHandle>()
                 .map(|state| state.inner().clone());
+            let pty_manager = terminal_service
+                .as_ref()
+                .filter(|service| !service.owns_core_process())
+                .and_then(|_| {
+                    app_handle
+                        .try_state::<Arc<PtyManager>>()
+                        .map(|state| state.inner().clone())
+                });
             let app_handle_clone = app_handle.clone();
 
             // The run callback may execute outside a Tokio reactor; Tauri owns this runtime.
@@ -2569,6 +2648,9 @@ pub fn run() {
                     }
                 }
                 if let Some(pty_manager) = pty_manager {
+                    // Core-owned PTYs live in the Terminal Core process and are
+                    // not in this manager. This reap only covers the in-process
+                    // fallback / shared-live seam.
                     let receipt = pty_manager.kill_all_until(deadline).await;
                     log::info!(
                         "[desktop-exit] shutdown_phase=cleanup_ptys stable_code={} result={} attempted={} succeeded={} failed={} in_flight={} elapsed_ms={}",
@@ -2588,6 +2670,13 @@ pub fn run() {
                         durability.failures.push(crate::web::PTY_CLEANUP_FAILED);
                     }
                     durability.pty_shutdown = Some(receipt);
+                } else if terminal_service
+                    .as_ref()
+                    .is_some_and(crate::core::TerminalServiceHandle::owns_core_process)
+                {
+                    log::info!(
+                        "[desktop-exit] shutdown_phase=cleanup_ptys stable_code=CORE_OWNED_SKIP result=NOT_APPLICABLE attempted=0 succeeded=0 failed=0 in_flight=0 elapsed_ms=0"
+                    );
                 } else {
                     log::error!(
                         "[desktop-exit] shutdown_phase=cleanup_ptys stable_code={} result=FAILED attempted=0 succeeded=0 failed=0 in_flight=0 elapsed_ms=0",
@@ -2689,6 +2778,22 @@ mod tests {
     /// adapter: the `Exit` arm reaped only the PTYs. An adapter that outlives
     /// the app keeps its own children alive — including the injected plan MCP
     /// server, which waits on a stdin EOF the orphaned adapter never sends.
+    #[test]
+    fn graceful_exit_skips_cleanup_failure_for_core_owned_ptys() {
+        let source = include_str!("lib.rs");
+        let branch_start = source
+            .find("} else if terminal_service")
+            .expect("Core-owned cleanup branch");
+        let branch_end = source[branch_start..]
+            .find("let mut clean_exit")
+            .map(|offset| branch_start + offset)
+            .expect("cleanup result boundary");
+        let branch = &source[branch_start..branch_end];
+        assert!(branch.contains("owns_core_process"));
+        assert!(branch.contains("CORE_OWNED_SKIP"));
+        assert!(!branch.contains("kill_all_until"));
+    }
+
     #[test]
     fn loop_exit_also_reaps_acp_agents_not_just_ptys() {
         let source = include_str!("lib.rs");

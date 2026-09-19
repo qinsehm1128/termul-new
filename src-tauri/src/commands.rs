@@ -136,6 +136,80 @@ impl<T> IpcResult<T> {
     }
 }
 
+fn require_in_process_pty(
+    terminal: &crate::core::TerminalServiceHandle,
+) -> Result<Arc<PtyManager>, String> {
+    terminal
+        .require_in_process_pty()
+        .map_err(|error| error.to_string())
+}
+
+fn ipc_from_core<T>(result: Result<T, crate::core::CoreError>) -> IpcResult<T> {
+    match result {
+        Ok(value) => IpcResult::success(value),
+        Err(crate::core::CoreError::Unauthorized) => {
+            IpcResult::error("Unauthorized", "UNAUTHORIZED")
+        }
+        Err(error) => {
+            let code = error.code();
+            let message = match &error {
+                crate::core::CoreError::InvalidRequest(detail) if !detail.is_empty() => {
+                    detail.clone()
+                }
+                other => other.client_message().to_string(),
+            };
+            IpcResult::error(message, code)
+        }
+    }
+}
+
+async fn install_core_output_forwarder(
+    terminal_id: String,
+    mut output: tokio::sync::mpsc::Receiver<crate::core::OutputFrame>,
+    on_data: Channel<Response>,
+    log_label: &'static str,
+) {
+    let token = ATTACH_FORWARDER_TOKENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    {
+        let mut forwarders = lock_forwarders();
+        if let Some((_, previous)) = forwarders.remove(&terminal_id) {
+            previous.abort();
+            log::info!("[{log_label}] aborted previous forwarder terminal_id={terminal_id}");
+        }
+    }
+    let forwarder_id = terminal_id.clone();
+    let handle = tokio::spawn(async move {
+        while let Some(frame) = output.recv().await {
+            if on_data.send(Response::new(frame.data)).is_err() {
+                break;
+            }
+        }
+        let mut forwarders = lock_forwarders();
+        if let Some((tracked_token, _)) = forwarders.get(&forwarder_id) {
+            if *tracked_token == token {
+                forwarders.remove(&forwarder_id);
+            }
+        }
+    });
+    crate::host_admission::HostAdmission::global().track_abort(handle.abort_handle());
+    if !handle.is_finished() {
+        let mut forwarders = lock_forwarders();
+        if let Some((prev_token, prev_abort)) =
+            forwarders.insert(terminal_id, (token, handle.abort_handle()))
+        {
+            if prev_token != token {
+                prev_abort.abort();
+            }
+        }
+    }
+}
+
+fn require_in_process_acp(
+    acp: &crate::core::AcpServiceHandle,
+) -> Result<Arc<crate::acp::AcpManager>, String> {
+    acp.require_in_process().map_err(|error| error.to_string())
+}
+
 /// Safe terminal cleanup/compound detail shared by Tauri and terminal WebSocket responses.
 /// The outer `IpcResult.code` distinguishes ordinary termination from compound rollback; this
 /// payload carries only the stable primary code, exact cleanup stage, and recoverable identity.
@@ -341,16 +415,16 @@ pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
 pub async fn terminal_spawn(
     options: SpawnOptions,
     on_data: Channel<Response>,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
     workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
 ) -> Result<IpcResult<SpawnedTerminal>, String> {
-    Ok(terminal_spawn_resource(
-        options,
-        Some(on_data),
-        pty_manager.inner(),
-        workspace.inner(),
-    )
-    .await)
+    if let Some(client) = terminal.core_client() {
+        return Ok(
+            terminal_spawn_via_core(options, Some(on_data), &client, workspace.inner()).await,
+        );
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
+    Ok(terminal_spawn_resource(options, Some(on_data), &pty_manager, workspace.inner()).await)
 }
 
 pub(crate) async fn terminal_spawn_resource(
@@ -360,6 +434,94 @@ pub(crate) async fn terminal_spawn_resource(
     workspace: &Arc<crate::conversation::SessionWorkspaceService>,
 ) -> IpcResult<SpawnedTerminal> {
     terminal_spawn_resource_impl(options, on_data, pty_manager, workspace).await
+}
+
+async fn terminal_spawn_via_core(
+    options: SpawnOptions,
+    on_data: Option<Channel<Response>>,
+    client: &crate::core::TerminalCoreClient,
+    workspace: &Arc<crate::conversation::SessionWorkspaceService>,
+) -> IpcResult<SpawnedTerminal> {
+    if let Err(error) = require_host_admission() {
+        return error;
+    }
+    let is_ephemeral_ssh = options.kind.as_deref() == Some("ssh");
+    let conversation_id = if is_ephemeral_ssh {
+        None
+    } else {
+        match options.conversation_id {
+            Some(conversation_id) => {
+                if let Err(error) = workspace.ensure_terminal_ref_writable(conversation_id, true) {
+                    log::warn!(
+                        "[terminal-command] durable spawn admission rejected conversation_id={} code={}",
+                        conversation_id,
+                        error.code.as_str()
+                    );
+                    return IpcResult::error(error.detail, error.code.as_str());
+                }
+                Some(conversation_id)
+            }
+            None => None,
+        }
+    };
+    let spawned = match client.spawn(options).await {
+        Ok(spawned) => spawned,
+        Err(crate::core::CoreError::Unauthorized) => {
+            return IpcResult::error("Unauthorized", "UNAUTHORIZED")
+        }
+        Err(error) => {
+            return IpcResult::error(
+                match error {
+                    crate::core::CoreError::InvalidRequest(detail) if !detail.is_empty() => detail,
+                    other => other.to_string(),
+                },
+                "SPAWN_FAILED",
+            )
+        }
+    };
+    let spawned = if let Some(conversation_id) = conversation_id {
+        if let Err(primary) = workspace
+            .add_terminal_ref(conversation_id, &spawned.info.id)
+            .await
+        {
+            let primary_code = primary.code.as_str();
+            match client.terminate(&spawned.info.id).await {
+                Ok(()) => {
+                    return IpcResult::error(primary.detail, primary_code);
+                }
+                Err(_) => {
+                    return IpcResult::error(
+                        primary.detail,
+                        crate::conversation::TERMINAL_RESOURCE_ROLLBACK_FAILED,
+                    )
+                }
+            }
+        }
+        spawned
+    } else {
+        spawned
+    };
+    if let Some(on_data) = on_data {
+        match client.watch(&spawned.info.id, 0).await {
+            Ok(session) => {
+                install_core_output_forwarder(
+                    spawned.info.id.clone(),
+                    session.output,
+                    on_data,
+                    "terminal-spawn",
+                )
+                .await;
+            }
+            Err(error) => {
+                log::warn!(
+                    "[terminal-command] core spawn watch failed terminal_id={} code={}",
+                    spawned.info.id,
+                    error.code()
+                );
+            }
+        }
+    }
+    IpcResult::success(spawned)
 }
 
 /// Remote-only spawn path. The wire payload is already narrowed to
@@ -647,11 +809,43 @@ pub(crate) async fn terminal_resume_resource(
 pub async fn terminal_resume(
     request: TerminalResumeRequest,
     on_data: Channel<Response>,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
     workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
 ) -> Result<IpcResult<TerminalResumeGrant>, String> {
+    if let Some(client) = terminal.core_client() {
+        let grant = match client.resume(request.clone()).await {
+            Ok(grant) => grant,
+            Err(crate::core::CoreError::Unauthorized) => {
+                return Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED"))
+            }
+            Err(_) => return Ok(IpcResult::error("Terminal is gone", "TERMINAL_GONE")),
+        };
+        match client
+            .attach(&request.terminal_id, &grant.claim, request.last_seq)
+            .await
+        {
+            Ok(session) => {
+                install_core_output_forwarder(
+                    request.terminal_id.clone(),
+                    session.output,
+                    on_data,
+                    "terminal-resume",
+                )
+                .await;
+            }
+            Err(error) => {
+                log::warn!(
+                    "[terminal-resume] core replay attach failed terminal_id={} code={}",
+                    request.terminal_id,
+                    error.code()
+                );
+            }
+        }
+        return Ok(IpcResult::success(grant));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     let (grant, replay) =
-        match terminal_resume_resource(&request, pty_manager.inner(), workspace.inner()).await {
+        match terminal_resume_resource(&request, &pty_manager, workspace.inner()).await {
             Ok(value) => value,
             // Distinct on purpose: the renderer retires a record it can never
             // revive, and keeps the retryable placeholder for everything else.
@@ -709,11 +903,31 @@ pub async fn terminal_attach(
     claim: String,
     last_seq: u64,
     on_data: Channel<Response>,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<TerminalAttachResult>, String> {
     if let Err(error) = require_host_admission() {
         return Ok(error);
     }
+    if let Some(client) = terminal.core_client() {
+        return Ok(match client.attach(&terminal_id, &claim, last_seq).await {
+            Ok(session) => {
+                let result = session.result.clone();
+                install_core_output_forwarder(
+                    terminal_id,
+                    session.output,
+                    on_data,
+                    "terminal-attach",
+                )
+                .await;
+                IpcResult::success(result)
+            }
+            Err(crate::core::CoreError::Unauthorized) => {
+                IpcResult::error("Unauthorized", "UNAUTHORIZED")
+            }
+            Err(error) => ipc_from_core(Err(error)),
+        });
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     // Capture the generation BEFORE verifying (TOCTOU-safe ordering): if a
     // rotate/revoke lands between capture and verify, verify fails (the
     // credential was invalidated) and we reject; if it lands after verify, the
@@ -737,7 +951,7 @@ pub async fn terminal_attach(
         generation,
         on_data,
         instance,
-        pty_manager.inner().clone(),
+        pty_manager,
         "terminal-attach",
     )
     .await)
@@ -750,11 +964,33 @@ pub async fn terminal_watch(
     terminal_id: String,
     last_seq: u64,
     on_data: Channel<Response>,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<TerminalAttachResult>, String> {
     if let Err(error) = require_host_admission() {
         return Ok(error);
     }
+    if let Some(client) = terminal.core_client() {
+        return Ok(match client.watch(&terminal_id, last_seq).await {
+            Ok(session) => {
+                let result = session.result.clone();
+                install_core_output_forwarder(
+                    terminal_id,
+                    session.output,
+                    on_data,
+                    "terminal-watch",
+                )
+                .await;
+                IpcResult::success(result)
+            }
+            Err(error) => match error {
+                crate::core::CoreError::InvalidRequest(detail) if detail.contains("not found") => {
+                    IpcResult::error("Terminal not found", "TERMINAL_NOT_FOUND")
+                }
+                other => ipc_from_core(Err(other)),
+            },
+        });
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     let Some(instance) = pty_manager
         .get(&terminal_id)
         .filter(|item| item.is_active())
@@ -769,7 +1005,7 @@ pub async fn terminal_watch(
         generation,
         on_data,
         instance,
-        pty_manager.inner().clone(),
+        pty_manager,
         "terminal-watch",
     )
     .await)
@@ -898,8 +1134,15 @@ async fn install_desktop_output_forwarder(
 pub async fn terminal_rotate_claim(
     terminal_id: String,
     claim: String,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<RotatedClaim>, String> {
+    if let Some(client) = terminal.core_client() {
+        return Ok(match client.rotate(&terminal_id, &claim).await {
+            Ok(new_claim) => IpcResult::success(RotatedClaim { claim: new_claim }),
+            Err(_) => IpcResult::error("Unauthorized", "UNAUTHORIZED"),
+        });
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     match pty_manager.rotate_claim(&terminal_id, &claim) {
         Ok(new_claim) => Ok(IpcResult::success(RotatedClaim { claim: new_claim })),
         Err(_) => Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED")),
@@ -916,8 +1159,15 @@ pub async fn terminal_rotate_claim(
 pub async fn terminal_revoke_claim(
     terminal_id: String,
     claim: String,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
+    if let Some(client) = terminal.core_client() {
+        return Ok(match client.revoke(&terminal_id, &claim).await {
+            Ok(()) => IpcResult::success(()),
+            Err(_) => IpcResult::error("Unauthorized", "UNAUTHORIZED"),
+        });
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     match pty_manager.revoke_claim(&terminal_id, &claim) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(_) => Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED")),
@@ -929,11 +1179,14 @@ pub async fn terminal_revoke_claim(
 pub async fn terminal_write(
     terminal_id: String,
     data: String,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.write(&terminal_id, &data).await {
+    match terminal.runtime().write(&terminal_id, &data).await {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "WRITE_FAILED")),
+        Err(crate::core::CoreError::InvalidRequest(detail)) if !detail.is_empty() => {
+            Ok(IpcResult::error(detail, "WRITE_FAILED"))
+        }
+        Err(error) => Ok(IpcResult::error(error.to_string(), "WRITE_FAILED")),
     }
 }
 
@@ -943,11 +1196,14 @@ pub async fn terminal_resize(
     terminal_id: String,
     cols: u16,
     rows: u16,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.resize(&terminal_id, cols, rows).await {
+    match terminal.runtime().resize(&terminal_id, cols, rows).await {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "RESIZE_FAILED")),
+        Err(crate::core::CoreError::InvalidRequest(detail)) if !detail.is_empty() => {
+            Ok(IpcResult::error(detail, "RESIZE_FAILED"))
+        }
+        Err(error) => Ok(IpcResult::error(error.to_string(), "RESIZE_FAILED")),
     }
 }
 
@@ -958,8 +1214,21 @@ pub async fn terminal_set_display_mode(
     mode: String,
     cols: Option<u16>,
     rows: Option<u16>,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<crate::pty::manager::DisplayModeState>, String> {
+    if let Some(client) = terminal.core_client() {
+        let parsed = match crate::trackers::TerminalDisplayMode::parse(&mode) {
+            Ok(mode) => mode,
+            Err(error) => return Ok(IpcResult::error(error, "VALIDATION_ERROR")),
+        };
+        let force = parsed == crate::trackers::TerminalDisplayMode::Desktop;
+        return Ok(ipc_from_core(
+            client
+                .set_display_mode(&terminal_id, &mode, cols, rows, force)
+                .await,
+        ));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     let parsed = match crate::trackers::TerminalDisplayMode::parse(&mode) {
         Ok(mode) => mode,
         Err(error) => return Ok(IpcResult::error(error, "VALIDATION_ERROR")),
@@ -979,8 +1248,15 @@ pub async fn terminal_set_display_mode(
 #[tauri::command]
 pub async fn terminal_close_view(
     terminal_id: String,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
+    if let Some(client) = terminal.core_client() {
+        if let Some((_, forwarder)) = lock_forwarders().remove(&terminal_id) {
+            forwarder.abort();
+        }
+        return Ok(ipc_from_core(client.close_view(&terminal_id).await));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     let had_forwarder = if let Some((_, forwarder)) = lock_forwarders().remove(&terminal_id) {
         forwarder.abort();
         true
@@ -1000,10 +1276,41 @@ pub async fn terminal_close_view(
 #[tauri::command]
 pub async fn terminal_terminate(
     terminal_id: String,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
     workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
 ) -> Result<IpcResult<()>, String> {
-    Ok(terminal_terminate_resource(&terminal_id, pty_manager.inner(), workspace.inner()).await)
+    if let Some(client) = terminal.core_client() {
+        return Ok(terminal_terminate_via_core(&terminal_id, &client, workspace.inner()).await);
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
+    Ok(terminal_terminate_resource(&terminal_id, &pty_manager, workspace.inner()).await)
+}
+
+async fn terminal_terminate_via_core(
+    terminal_id: &str,
+    client: &crate::core::TerminalCoreClient,
+    workspace: &Arc<crate::conversation::SessionWorkspaceService>,
+) -> IpcResult<()> {
+    let status = match client.status(terminal_id).await {
+        Ok(status) => status,
+        Err(_) => return IpcResult::success(()),
+    };
+    if status.workspace_ref_tracked {
+        if let Ok(conversation_id) =
+            crate::conversation::ConversationId::parse(&status.conversation_id)
+        {
+            match terminate_workspace_scope(workspace, conversation_id).await {
+                Ok(_) => {}
+                Err(error) => {
+                    return IpcResult::error(error.detail, error.code.as_str());
+                }
+            }
+        }
+    }
+    match client.terminate(terminal_id).await {
+        Ok(()) => IpcResult::success(()),
+        Err(error) => ipc_from_core(Err(error)),
+    }
 }
 
 pub(crate) async fn terminal_terminate_resource(
@@ -1147,10 +1454,10 @@ async fn terminate_workspace_scope(
 #[tauri::command]
 pub async fn terminal_kill(
     terminal_id: String,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
     workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
 ) -> Result<IpcResult<()>, String> {
-    terminal_terminate(terminal_id, pty_manager, workspace).await
+    terminal_terminate(terminal_id, terminal, workspace).await
 }
 
 /// Get the current working directory for a terminal
@@ -1197,8 +1504,12 @@ pub async fn terminal_get_exit_code(
 #[tauri::command]
 pub async fn terminal_update_orphan_detection(
     settings: OrphanDetectionSettings,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
+    if terminal.core_client().is_some() {
+        return Ok(IpcResult::success(()));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     pty_manager
         .update_orphan_detection_settings(settings.enabled, settings.timeout_minutes)
         .await;
@@ -1209,8 +1520,12 @@ pub async fn terminal_update_orphan_detection(
 #[tauri::command]
 pub async fn terminal_add_renderer_ref(
     request: RendererRefRequest,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
+    if terminal.core_client().is_some() {
+        return Ok(IpcResult::success(()));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     match pty_manager.add_renderer_ref(&request.terminal_id, &request.renderer_id) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "TERMINAL_NOT_FOUND")),
@@ -1221,8 +1536,12 @@ pub async fn terminal_add_renderer_ref(
 #[tauri::command]
 pub async fn terminal_remove_renderer_ref(
     request: RendererRefRequest,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
+    if terminal.core_client().is_some() {
+        return Ok(IpcResult::success(()));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     match pty_manager.remove_renderer_ref(&request.terminal_id, &request.renderer_id) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "TERMINAL_NOT_FOUND")),
@@ -1238,8 +1557,16 @@ pub async fn terminal_remove_renderer_ref(
 #[tauri::command]
 pub async fn terminal_set_protected(
     request: SetTerminalProtectedRequest,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
+    if let Some(client) = terminal.core_client() {
+        return Ok(ipc_from_core(
+            client
+                .set_protected(&request.terminal_id, request.protected)
+                .await,
+        ));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     // `set_protected` is intentionally idempotent and infallible (it is a no-op
     // when the terminal is already gone), so there is no error case to map.
     pty_manager.set_protected(&request.terminal_id, request.protected);
@@ -1250,10 +1577,16 @@ pub async fn terminal_set_protected(
 #[tauri::command]
 pub async fn terminal_set_visibility(
     request: SetVisibilityRequest,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
     cwd_tracker: State<'_, Arc<CwdTracker>>,
     git_tracker: State<'_, Arc<GitTracker>>,
 ) -> Result<IpcResult<()>, String> {
+    if terminal.core_client().is_some() {
+        cwd_tracker.set_visibility(request.is_visible);
+        git_tracker.set_visibility(request.is_visible);
+        return Ok(IpcResult::success(()));
+    }
+    let pty_manager = require_in_process_pty(terminal.inner())?;
     pty_manager.set_hidden(!request.is_visible);
     cwd_tracker.set_visibility(request.is_visible);
     git_tracker.set_visibility(request.is_visible);
@@ -3972,8 +4305,8 @@ pub async fn sftp_create_file(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn remote_server_start(
-    acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    acp_manager: State<'_, crate::core::AcpServiceHandle>,
+    pty_manager: State<'_, crate::core::TerminalServiceHandle>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     conversation: State<'_, Arc<crate::conversation::ConversationApplicationService>>,
@@ -4047,11 +4380,13 @@ pub async fn remote_server_start(
     if let Err(e) = tunnel_config.validate_for_start() {
         return Ok(IpcResult::error(e, "TUNNEL_CONFIG_INVALID"));
     }
+    let acp_manager = require_in_process_acp(acp_manager.inner())?;
+    let pty_manager = require_in_process_pty(pty_manager.inner())?;
     let started = if let Some(bind_port) = tunnel_config.preferred_bind_port() {
         remote_state
             .start_on_port(
-                acp_manager.inner().clone(),
-                pty_manager.inner().clone(),
+                acp_manager.clone(),
+                pty_manager.clone(),
                 ws_relay.inner().clone(),
                 project_registry.inner().clone(),
                 bind_mode,
@@ -4068,8 +4403,8 @@ pub async fn remote_server_start(
     } else {
         remote_state
             .start(
-                acp_manager.inner().clone(),
-                pty_manager.inner().clone(),
+                acp_manager.clone(),
+                pty_manager.clone(),
                 ws_relay.inner().clone(),
                 project_registry.inner().clone(),
                 bind_mode,

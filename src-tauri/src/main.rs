@@ -2,6 +2,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if let Some(role) = std::env::args()
+        .skip(1)
+        .find_map(|argument| match argument.as_str() {
+            "--terminal-core" => Some(se_manager_lib::core::CoreRole::TerminalCore),
+            "--acp-core" => Some(se_manager_lib::core::CoreRole::AcpCore),
+            _ => None,
+        })
+    {
+        std::process::exit(se_manager_lib::core::run_core_process(role));
+    }
+
     // Self-spawned `--internal-mcp-plan-server` child: the agent spawns this
     // binary (current_exe) as the injected `McpServer::Stdio` for the
     // host-injected `plan` tool. Branch BEFORE any Tauri/log setup so

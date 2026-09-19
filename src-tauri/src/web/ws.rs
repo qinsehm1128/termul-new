@@ -324,6 +324,9 @@ pub struct AppState {
     /// The ACP manager (server is the ACP client-of-record).
     pub acp: Arc<AcpManager>,
     /// Interactive PTYs exposed on the separate `/terminal/ws` endpoint.
+    /// Remaining in-process seam until T4 migrates spawn/claim/replay onto
+    /// Terminal Core: route handlers still use this manager through the
+    /// [`Self::terminal_service`] adapter.
     pub pty: Arc<PtyManager>,
     pub terminal_events: TerminalEventHub,
     pub cwd_tracker: Arc<CwdTracker>,
@@ -408,6 +411,21 @@ pub struct AppState {
     /// for the duration of the `starts_with` containment check (no `.await`
     /// under the guard).
     pub project_root: Arc<parking_lot::RwLock<std::path::PathBuf>>,
+}
+
+impl AppState {
+    /// In-process adapter over [`Self::pty`]. Standalone and tests keep this
+    /// owner. Desktop shared-live still uses the in-process manager (deferred
+    /// T4 seam); desktop Tauri commands talk to Terminal Core directly.
+    pub fn terminal_service(&self) -> crate::core::TerminalServiceHandle {
+        crate::core::TerminalServiceHandle::in_process(Arc::clone(&self.pty))
+    }
+
+    /// In-process adapter over [`Self::acp`]. Same injection type as desktop
+    /// commands; ACP Core clients replace this in T5.
+    pub fn acp_service(&self) -> crate::core::AcpServiceHandle {
+        crate::core::AcpServiceHandle::in_process(Arc::clone(&self.acp))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

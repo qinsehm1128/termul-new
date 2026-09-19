@@ -359,11 +359,70 @@ Standalone `se-server` owns its `PtyManager` and terminates those PTYs after gra
 ## Recommended Reading Order for Changes
 
 ### Terminal work
-1. `src/renderer/components/terminal/ConnectedTerminal.tsx`
-2. `src/renderer/stores/terminal-store.ts`
-3. `src/renderer/lib/tauri-terminal-api.ts`
-4. `src-tauri/src/commands.rs`
-5. `src-tauri/src/pty/manager.rs`
+1. `src-tauri/src/core/terminal.rs` (independent Terminal Core ownership, local IPC, attach/replay)
+2. `src/renderer/components/terminal/ConnectedTerminal.tsx`
+3. `src/renderer/stores/terminal-store.ts`
+4. `src/renderer/lib/tauri-terminal-api.ts`
+5. `src-tauri/src/commands.rs`
+6. `src-tauri/src/pty/manager.rs`
+
+## Independent Core Processes (v1)
+
+Desktop can run two independent long-lived roles from the packaged executable:
+
+- `--terminal-core`: the sole owner of desktop PTYs, claims, trackers, output sequence/replay state, bounded scrollback, and terminal cleanup.
+- `--acp-core`: the sole owner of its ACP manager and agent-driver process lifecycle. Its control IPC currently covers health, agent listing, spawn, kill, and explicit shutdown; the desktop Conversation durable-writer and full ACP event replay migration remain compatibility work in progress.
+- normal Tauri GUI: a client/launcher. It may adopt an existing Core endpoint and must not kill Core-owned PTYs during ordinary exit/relaunch.
+
+The local IPC layer is shared by both roles: length-delimited bounded frames, role/version handshake, per-profile endpoints, and OS-local permissions. Unix uses a user-owned runtime directory (0700) and socket (0600); Windows uses a current-user named-pipe ACL. This is one shared local policy, not two independent token systems. A live endpoint with an incompatible handshake is not replaced automatically.
+
+Terminal Core uses the existing terminal semantics: claim validation precedes attach replay; output carries sequence numbers and gap detection; the 256 KiB scrollback cap, `se-terminal-v2.binary`/`TML2` framing, watch subscriptions, and generic unauthorized claim errors remain unchanged. A GUI disconnect only removes a subscription; it does not terminate the PTY. Reconnect attaches to the existing terminal and replays retained output.
+
+Lifecycle meanings are intentionally separate:
+
+- **GUI detach/relaunch:** closes client connections only; Core and owned work continue.
+- **Explicit Core shutdown:** invokes the selected Core's shutdown operation and cleans only that Core's resources.
+- **Core crash:** Terminal Core's in-memory PTYs are not recoverable in v1; ACP durable recovery remains governed by the existing in-process Conversation path until its migration is complete.
+- **Core update/handoff:** deferred. GUI-only updater relaunch is the supported update path; automatic Core replacement is forbidden.
+
+Standalone `se-server` remains an in-process, owning compatibility host and continues its existing drain-then-kill shutdown order. Browser/mobile keeps `/terminal/ws` and `/ws`; desktop shared-live remains non-owning and stops by detaching/draining clients. The browser and standalone surfaces therefore do not launch local Core processes.
+
+Every Core-owned mutable resource must have one writer. GUI renderer stores are client caches; GUI must not open ACP Conversation/catalog/install/memory roots directly. Terminal and ACP Core failure domains are independent, although the current ACP desktop command migration is not yet complete.
+
+### Unix `bun run dev:tauri` Terminal Core smoke
+
+This is the supported manual development smoke for Unix/macOS. Start the desktop app with:
+
+```sh
+bun run dev:tauri
+```
+
+A Core-backed run must show both the role-process signal and the GUI connection signal:
+
+```text
+operation=core_ready role=terminal-core stable_code=READY
+operation=desktop_terminal_core stable_code=READY
+```
+
+On a relaunch where the profile-scoped endpoint already exists, the first line is replaced by:
+
+```text
+operation=core_adopt role=terminal-core stable_code=ADOPTED
+operation=desktop_terminal_core stable_code=READY
+```
+
+If startup logs `falling_back_in_process`, the application may still be usable, but that run is an in-process fallback and is not Terminal Core acceptance evidence. Confirming the Core process and its profile-scoped local endpoint is part of the smoke; a window opening alone is not proof of Core ownership.
+
+For continuity testing, use a conversation-scoped terminal restored from `SessionWorkspace`, not a project-layout terminal. In the terminal, record a stable shell marker and keep the shell alive, for example:
+
+```sh
+printf 'CORE_SMOKE_PID=%s\\n' "$$"
+sleep 600
+```
+
+Quit only the GUI; do not explicitly shut down the Core. The Core process and endpoint should remain available, the exit log should report `stable_code=CORE_OWNED_SKIP result=NOT_APPLICABLE`, and it must not report `PTY_CLEANUP_FAILED`. Relaunch with `bun run dev:tauri`, reopen the same conversation, and verify that the marker is replayed, the same terminal continues producing output, and a post-relaunch shell PID matches the pre-relaunch PID when the shell is resumed rather than replaced.
+
+Project-layout restore currently re-spawns terminals and is not a Core adoption test. ACP desktop commands, Conversation persistence, and `WsRelaySink` remain in-process; ACP Core migration is deferred. Shared-live still requires an in-process `PtyManager`, so shared-live plus successful Terminal Core ownership is unsupported in this cutline. Windows remains an in-process fallback while named-pipe Core support is deferred. Core crash recovery, automatic Core update/handoff, and packaged dual-role smoke are also outside this development acceptance path.
 
 ### Browser/annotation work
 1. `src/renderer/components/browser/BrowserPanel.tsx`

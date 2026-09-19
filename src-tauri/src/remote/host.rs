@@ -479,6 +479,10 @@ impl RemoteServerState {
         skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
         bind_port: u16,
     ) -> Result<RemoteStatus, String> {
+        // Shared-live stays in-process until T4/T5 migrate ownership. The handle
+        // layer is the injection boundary so this host does not grow a second
+        // concrete-manager coupling.
+        let _services = crate::core::CoreServices::in_process(Arc::clone(&pty), Arc::clone(&acp));
         let _lifecycle = self.lifecycle.lock().await;
         let bind_mode = _bind_mode;
         {

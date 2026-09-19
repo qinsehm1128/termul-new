@@ -275,6 +275,24 @@ impl TerminalResourceInspector for PtyManager {
     }
 }
 
+impl TerminalResourceInspector for crate::core::TerminalServiceHandle {
+    fn is_live(&self, terminal_id: &str) -> bool {
+        self.runtime().is_live(terminal_id)
+    }
+
+    fn terminate<'a>(
+        &'a self,
+        terminal_id: &'a str,
+    ) -> ProviderFuture<'a, std::result::Result<(), String>> {
+        Box::pin(async move {
+            self.runtime()
+                .terminate(terminal_id)
+                .await
+                .map_err(|error| error.to_string())
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct ConversationLifecycleService {
     writer: Arc<ConversationWriter>,
@@ -312,6 +330,26 @@ impl ConversationLifecycleService {
             )
         })?;
         Ok(Self::new(Arc::clone(creation.writer()), creation, acp, pty))
+    }
+
+    pub fn from_terminal(
+        acp: Arc<AcpManager>,
+        terminal: crate::core::TerminalServiceHandle,
+    ) -> Result<Self> {
+        let creation = acp.conversation_creation().ok_or_else(|| {
+            lifecycle_error(
+                ConversationLifecycleErrorCode::ConversationRecoveryRequired,
+                "construct",
+                None,
+                "bootstrap-published ConversationCreationService is unavailable",
+            )
+        })?;
+        Ok(Self::new(
+            Arc::clone(creation.writer()),
+            creation,
+            acp,
+            Arc::new(terminal),
+        ))
     }
 
     pub async fn detach_agent_binding(

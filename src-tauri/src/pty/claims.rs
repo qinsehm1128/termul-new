@@ -43,7 +43,7 @@ const DUMMY_DIGEST: [u8; 32] = [0xA5; 32];
 /// (desktop `terminal_rotate_claim` IpcResult data; web `rotate_claim` reply
 /// data). Possession-based rotation is one of the explicit response-only
 /// issuance paths, alongside initial spawn and authenticated cold resume.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RotatedClaim {
     pub claim: String,

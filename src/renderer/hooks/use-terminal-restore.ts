@@ -1072,8 +1072,11 @@ async function restoreFromLayout(
     }
 
     // Add all terminals at once
-    const existingTerminals = terminalStore.terminals
-    terminalStore.setTerminals([...existingTerminals, ...newTerminals])
+    // The restore work awaits PTY spawns. Read the store again here so a
+    // terminal created by the user while restore was in flight is not erased
+    // by the stale startup snapshot.
+    const existingTerminals = useTerminalStore.getState().terminals
+    useTerminalStore.getState().setTerminals([...existingTerminals, ...newTerminals])
 
     if (idMap.size > 0) {
       useWorkspaceStore.getState().remapTerminalTabs(Object.fromEntries(idMap))

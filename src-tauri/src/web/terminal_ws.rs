@@ -87,6 +87,13 @@ struct AuthorizedTerminalScope {
 
 type AuthorizedTerminals = Arc<RwLock<HashMap<String, AuthorizedTerminalScope>>>;
 
+fn core_error_detail(error: crate::core::CoreError) -> String {
+    match error {
+        crate::core::CoreError::InvalidRequest(detail) if !detail.is_empty() => detail,
+        other => other.to_string(),
+    }
+}
+
 pub async fn terminal_ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -757,11 +764,12 @@ async fn handle(
             authorized_terminal_scope(state, ctx, terminal_id)?;
             let data = string_field(&request.payload, "data")?;
             state
-                .pty
+                .terminal_service()
+                .runtime()
                 .write(terminal_id, data)
                 .await
                 .map(|_| Value::Null)
-                .map_err(|error| ("WRITE_FAILED", error))
+                .map_err(|error| ("WRITE_FAILED", core_error_detail(error)))
         }
         "resize" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
@@ -769,11 +777,12 @@ async fn handle(
             let cols = u16_field(&request.payload, "cols")?;
             let rows = u16_field(&request.payload, "rows")?;
             state
-                .pty
+                .terminal_service()
+                .runtime()
                 .resize(terminal_id, cols, rows)
                 .await
                 .map(|_| Value::Null)
-                .map_err(|error| ("RESIZE_FAILED", error))
+                .map_err(|error| ("RESIZE_FAILED", core_error_detail(error)))
         }
         "set_display_mode" => {
             let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
