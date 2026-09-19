@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { Keyboard } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
@@ -27,11 +27,12 @@ interface TitleBarShortcutsPopoverProps {
   onOpenChange?: (open: boolean) => void
 }
 
-export function TitleBarShortcutsPopover({
-  buttonClassName,
-  open,
-  onOpenChange
-}: TitleBarShortcutsPopoverProps): React.JSX.Element {
+// forwardRef: Radix Tooltip's Slot attaches a ref to the trigger child; a
+// plain function component would drop it and warn under `asChild`.
+export const TitleBarShortcutsPopover = React.forwardRef<
+  HTMLButtonElement,
+  TitleBarShortcutsPopoverProps & React.ComponentPropsWithoutRef<'button'>
+>(function TitleBarShortcutsPopover({ buttonClassName, open, onOpenChange, ...buttonProps }) {
   const { t } = useTranslation('shell')
   const reducedMotion = useReducedMotion() ?? false
   const [openFallback, setOpenFallback] = useState(false)
@@ -104,6 +105,7 @@ export function TitleBarShortcutsPopover({
   return (
     <>
       <button
+        {...buttonProps}
         type="button"
         className={buttonClassName}
         title={t('titleBar.keyboardShortcuts')}
@@ -186,4 +188,4 @@ export function TitleBarShortcutsPopover({
       </AnimatePresence>
     </>
   )
-}
+})

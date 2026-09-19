@@ -59,8 +59,10 @@ export function RemoteAccessPopover(): React.JSX.Element {
 
   useEffect(() => {
     let cancelled = false
-    void remoteServerApi.intent().then((result) => {
-      if (cancelled || !result.success) return
+    // Transport may resolve without an IpcResult under degraded mocks; the
+    // guard keeps the effect inert instead of throwing on `.success`.
+    void Promise.resolve(remoteServerApi.intent()).then((result) => {
+      if (cancelled || !result?.success || !result.data) return
       if (runningRef.current) return
       setPublishMode(result.data.publishMode)
     })

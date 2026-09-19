@@ -21,7 +21,11 @@ vi.mock('@/stores/remote-status-store', () => ({
 
 const startMock = vi.fn()
 const stopMock = vi.fn()
-const intentMock = vi.fn()
+// Factory-level default so the mount effect never observes a bare
+// `undefined` resolve, regardless of test ordering or reset timing.
+const intentMock = vi.fn(() =>
+  Promise.resolve({ success: true, data: { wanted: false, publishMode: 'tunnel' } })
+)
 const setIntentMock = vi.fn()
 const rotateMock = vi.fn()
 vi.mock('@/lib/api', () => ({

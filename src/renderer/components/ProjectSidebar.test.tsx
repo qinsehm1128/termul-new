@@ -41,6 +41,19 @@ vi.mock('@/lib/api', () => ({
   },
   clipboardApi: {
     writeText: (text: string) => mockClipboardWriteText(text)
+  },
+  dialogApi: {
+    selectDirectory: vi.fn().mockResolvedValue({ success: false })
+  },
+  memoryIndexApi: {
+    status: vi.fn().mockResolvedValue({ success: false }),
+    build: vi.fn().mockResolvedValue({ success: false }),
+    cancel: vi.fn().mockResolvedValue({ success: true })
+  },
+  persistenceApi: {
+    read: vi.fn().mockResolvedValue({ success: true, data: undefined }),
+    write: vi.fn().mockResolvedValue({ success: true }),
+    writeDebounced: vi.fn().mockResolvedValue({ success: true })
   }
 }))
 
