@@ -371,8 +371,8 @@ Standalone `se-server` owns its `PtyManager` and terminates those PTYs after gra
 Desktop can run two independent long-lived roles from the packaged executable:
 
 - `--terminal-core`: the sole owner of desktop PTYs, claims, trackers, output sequence/replay state, bounded scrollback, and terminal cleanup.
-- `--acp-core`: the sole owner of its ACP manager and agent-driver process lifecycle. Its control IPC currently covers health, agent listing, spawn, kill, and explicit shutdown; the desktop Conversation durable-writer and full ACP event replay migration remain compatibility work in progress.
-- normal Tauri GUI: a client/launcher. It may adopt an existing Core endpoint and must not kill Core-owned PTYs during ordinary exit/relaunch.
+- `--acp-core`: the sole owner of the ACP manager, the Conversation durable writer (bootstrap-owned ordered persistence), the WS relay's durable admission, both rendezvous, scheduled tasks, and the memory index. The GUI proxies every command family over Core IPC (acp/history/conversation/scheduled-task/memory) and mirrors `acp:*` events verbatim; shared-live serves phone/browser history, conversations, tasks, and memory through the same Core-backed host.
+- normal Tauri GUI: a client/launcher. It may adopt an existing Core endpoint and must not kill Core-owned PTYs during ordinary exit/relaunch. A supervisor watches both endpoints (3-miss detection, owned-child SIGTERM before respawn, in-place client reconnect with terminal stream restore); Windows named-pipe transport is compile-level only until validated on real Windows.
 
 The local IPC layer is shared by both roles: length-delimited bounded frames, role/version handshake, per-profile endpoints, and OS-local permissions. Unix uses a user-owned runtime directory (0700) and socket (0600); Windows uses a current-user named-pipe ACL. This is one shared local policy, not two independent token systems. A live compatible endpoint is adopted; an incompatible handshake is not a silent adopt (see the crash/update matrix).
 

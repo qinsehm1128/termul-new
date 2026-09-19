@@ -52,8 +52,10 @@ vi.mock('@/lib/api', () => ({
   },
   persistenceApi: {
     read: vi.fn().mockResolvedValue({ success: true, data: undefined }),
-    write: vi.fn().mockResolvedValue({ success: true }),
-    writeDebounced: vi.fn().mockResolvedValue({ success: true })
+    // Fail-closed like the other unused defaults: opt into success only in
+    // tests that actually assert a write.
+    write: vi.fn().mockResolvedValue({ success: false }),
+    writeDebounced: vi.fn().mockResolvedValue({ success: false })
   }
 }))
 

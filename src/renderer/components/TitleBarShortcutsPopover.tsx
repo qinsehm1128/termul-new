@@ -32,7 +32,7 @@ interface TitleBarShortcutsPopoverProps {
 export const TitleBarShortcutsPopover = React.forwardRef<
   HTMLButtonElement,
   TitleBarShortcutsPopoverProps & React.ComponentPropsWithoutRef<'button'>
->(function TitleBarShortcutsPopover({ buttonClassName, open, onOpenChange, ...buttonProps }) {
+>(function TitleBarShortcutsPopover({ buttonClassName, open, onOpenChange, ...buttonProps }, ref) {
   const { t } = useTranslation('shell')
   const reducedMotion = useReducedMotion() ?? false
   const [openFallback, setOpenFallback] = useState(false)
@@ -106,12 +106,15 @@ export const TitleBarShortcutsPopover = React.forwardRef<
     <>
       <button
         {...buttonProps}
+        ref={ref}
         type="button"
         className={buttonClassName}
         title={t('titleBar.keyboardShortcuts')}
         aria-label={t('titleBar.openKeyboardShortcuts')}
         aria-expanded={isOpen}
         onClick={(event) => {
+          buttonProps.onClick?.(event)
+          if (event.defaultPrevented) return
           event.stopPropagation()
           setOpen(!isOpen)
         }}

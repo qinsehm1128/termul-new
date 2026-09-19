@@ -641,8 +641,11 @@ fn reachable_has_method(module: &ModuleInfo, entry: &str, forbidden: &HashSet<&s
         {
             return true;
         }
+        // Recurse through plain calls AND same-module method delegation:
+        // `stop() { self.stop_inner() }` must still surface a teardown that
+        // lives one method hop away (mirrors reachable_has_call).
         info.calls
-            .iter()
+            .union(&info.methods)
             .any(|callee| walk(module, callee, forbidden, visited))
     }
 
@@ -1310,6 +1313,35 @@ pub fn handler(authority: &Authority, principal: &Principal) { let _ = RemoteCap
 "#,
     ));
     assert_eq!(findings.len(), 1);
+}
+
+/// Mutation fixture for the method-delegation reachability fix: `stop()`
+/// delegates through `self.stop_inner()`, and the teardown lives one method
+/// hop away. The negative walker must see through the delegation — before
+/// the fix this shape passed the ownership guard while reaching kill_all.
+#[test]
+fn rejects_teardown_hidden_behind_method_delegation() {
+    let host = fixture(
+        "src/remote/host.rs",
+        r#"
+pub struct Host;
+impl Host {
+    pub async fn start(&self) { self.start_on_port().await; }
+    pub async fn start_on_port(&self) { serve_router(); }
+    pub async fn stop(&self) { self.stop_inner().await; }
+    async fn stop_inner(&self) { self.kill_all().await; }
+    async fn kill_all(&self) {}
+}
+async fn serve_router() {}
+"#,
+    );
+    let mut findings = Vec::new();
+    check_shared_live_teardown(&[host], &mut findings);
+    assert!(
+        findings.iter().any(|finding| finding.rule == "desktop-shared-live-ownership"
+            && finding.message.contains("teardown")),
+        "method-delegated teardown must be rejected: {findings:?}"
+    );
 }
 
 #[test]
