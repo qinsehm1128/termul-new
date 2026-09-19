@@ -1,5 +1,6 @@
 import type {
   IpcResult,
+  TerminalCoreRestartedEvent,
   TerminalReplayCoverage,
   TerminalResumeGrant,
   TerminalSpawnedEvent
@@ -1304,6 +1305,37 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return get().terminals.length >= GLOBAL_TERMINAL_LIMIT
   }
 }))
+
+let terminalListenersInitialized = false
+
+function applyTerminalCoreRestarted(payload: TerminalCoreRestartedEvent): void {
+  const live = new Set(payload.liveTerminalIds)
+  const store = useTerminalStore.getState()
+  for (const terminal of store.terminals) {
+    if (terminal.pendingSpawn) continue
+    const ptyId = terminal.ptyId
+    if (!ptyId || live.has(ptyId)) continue
+    store.setTerminalHealthStatus(terminal.id, 'exited')
+  }
+}
+
+/**
+ * Subscribe the store to desktop Terminal Core restart events. Idempotent:
+ * a second call is a no-op until the returned teardown runs.
+ */
+export function initTerminalEventListeners(): () => void {
+  if (terminalListenersInitialized) {
+    return () => {
+      /* already initialized elsewhere; the owning caller tears down */
+    }
+  }
+  terminalListenersInitialized = true
+  const unsubscribe = terminalApi.onCoreRestarted?.(applyTerminalCoreRestarted)
+  return () => {
+    unsubscribe?.()
+    terminalListenersInitialized = false
+  }
+}
 
 // Helper to cleanup project terminals from outside the store
 export function cleanupProjectTerminals(projectId: string): void {

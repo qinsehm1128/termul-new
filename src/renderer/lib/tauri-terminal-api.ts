@@ -6,6 +6,7 @@ import type {
   SpawnedTerminal,
   TerminalApi,
   TerminalAttachResult,
+  TerminalCoreRestartedEvent,
   TerminalCwdChangedCallback,
   TerminalDataCallback,
   TerminalDisplayMode,
@@ -668,6 +669,10 @@ export function createTauriTerminalApi(): TerminalApi {
 
     onSpawned(callback: (event: TerminalSpawnedEvent) => void): () => void {
       return subscribeSharedEvent(IPC_EVENTS.TERMINAL_SPAWNED, callback, 'terminal-spawned')
+    },
+
+    onCoreRestarted(callback: (event: TerminalCoreRestartedEvent) => void): () => void {
+      return _registerListener('terminal:core_restarted', callback, 'terminal-core-restarted')
     },
 
     /**

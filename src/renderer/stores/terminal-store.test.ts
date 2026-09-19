@@ -7,7 +7,8 @@ vi.mock('@/lib/terminal-api', () => ({
     closeView: vi.fn(async () => ({ success: true, data: undefined })),
     terminate: vi.fn(async () => ({ success: true, data: undefined })),
     spawn: vi.fn(),
-    resume: vi.fn()
+    resume: vi.fn(),
+    onCoreRestarted: vi.fn(() => () => {})
   }
 }))
 
@@ -21,6 +22,7 @@ import { useProjectStore } from './project-store'
 import { useSessionWorkspaceSyncStore } from './session-workspace-sync-store'
 import {
   HIDDEN_BUFFER_TRUNCATION_DELAY,
+  initTerminalEventListeners,
   MAX_TRANSCRIPT_CHARS,
   TRUNCATED_BUFFER_SIZE,
   useTerminalStore
@@ -57,6 +59,8 @@ describe('terminal-store', () => {
     vi.mocked(terminalApi.terminate).mockResolvedValue({ success: true, data: undefined })
     vi.mocked(terminalApi.spawn).mockReset()
     vi.mocked(terminalApi.resume).mockReset()
+    vi.mocked(terminalApi.onCoreRestarted!).mockReset()
+    vi.mocked(terminalApi.onCoreRestarted!).mockImplementation(() => () => {})
     vi.mocked(logFrontendError).mockClear()
   })
 
@@ -1561,6 +1565,59 @@ describe('terminal-store', () => {
       expect(
         useTerminalStore.getState().terminals.filter((item) => item.ptyId === 'pty-phone')
       ).toHaveLength(1)
+    })
+  })
+
+  describe('terminal:core_restarted', () => {
+    it('flips stale terminals to exited and leaves live-listed ones untouched', () => {
+      const listeners = new Map<string, (payload: { liveTerminalIds: string[] }) => void>()
+      vi.mocked(terminalApi.onCoreRestarted!).mockImplementation((callback) => {
+        listeners.set('terminal:core_restarted', callback)
+        return () => listeners.delete('terminal:core_restarted')
+      })
+
+      useTerminalStore.setState({
+        terminals: [
+          {
+            id: 't-stale',
+            name: 'Stale',
+            projectId: '1',
+            shell: 'bash',
+            output: [],
+            ptyId: 'pty-stale',
+            healthStatus: 'running'
+          },
+          {
+            id: 't-live',
+            name: 'Live',
+            projectId: '1',
+            shell: 'bash',
+            output: [],
+            ptyId: 'pty-live',
+            healthStatus: 'running'
+          },
+          {
+            id: 't-pending',
+            name: 'Pending',
+            projectId: '1',
+            shell: 'bash',
+            output: [],
+            ptyId: 'pty-pending',
+            healthStatus: 'running',
+            pendingSpawn: true
+          }
+        ]
+      })
+
+      const teardown = initTerminalEventListeners()
+      listeners.get('terminal:core_restarted')?.({ liveTerminalIds: ['pty-live'] })
+      teardown()
+
+      const { terminals } = useTerminalStore.getState()
+      expect(terminals.find((t) => t.id === 't-stale')?.healthStatus).toBe('exited')
+      expect(terminals.find((t) => t.id === 't-live')?.healthStatus).toBe('running')
+      expect(terminals.find((t) => t.id === 't-pending')?.healthStatus).toBe('running')
+      expect(terminals).toHaveLength(3)
     })
   })
 })

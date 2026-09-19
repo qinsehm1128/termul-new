@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { performSessionWorkspaceWrite } from '@/hooks/use-session-workspace-sync'
 import { terminalApi } from '@/lib/terminal-api'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
-import { useTerminalStore } from '@/stores/terminal-store'
+import { initTerminalEventListeners, useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 /**
@@ -14,6 +14,10 @@ import { useWorkspaceStore } from '@/stores/workspace-store'
  */
 export function useTerminalResourceLifecycle(): void {
   const conversationId = useSessionWorkspaceSyncStore((state) => state.activeConversationId)
+
+  useEffect(() => {
+    return initTerminalEventListeners()
+  }, [])
 
   useEffect(() => {
     if (!conversationId) return

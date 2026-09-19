@@ -132,6 +132,11 @@ export interface TerminalSpawnedEvent {
   shell: string
 }
 
+/** Desktop-only: Terminal Core restarted; ids still live on the new process. */
+export interface TerminalCoreRestartedEvent {
+  liveTerminalIds: string[]
+}
+
 /** Live PTY geometry owner. Phone parks the desktop size until restore. */
 export type TerminalDisplayMode = 'phone' | 'desktop'
 
@@ -504,6 +509,8 @@ export interface TerminalApi {
   watch?: (terminalId: string, lastSeq: number) => Promise<IpcResult<TerminalAttachResult>>
   /** Host catalog event when any surface creates a PTY. */
   onSpawned?: (callback: (event: TerminalSpawnedEvent) => void) => () => void
+  /** Desktop-only: Terminal Core restarted with the live PTY id set. */
+  onCoreRestarted?: (callback: (event: TerminalCoreRestartedEvent) => void) => () => void
   /** CAP-3: possession-based rotation — old credential invalidated atomically. */
   rotateClaim: (terminalId: string, claim: string) => Promise<IpcResult<RotatedClaim>>
   /** CAP-3: revoke the credential; the PTY keeps running. */

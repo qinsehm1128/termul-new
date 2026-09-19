@@ -374,16 +374,16 @@ Desktop can run two independent long-lived roles from the packaged executable:
 - `--acp-core`: the sole owner of its ACP manager and agent-driver process lifecycle. Its control IPC currently covers health, agent listing, spawn, kill, and explicit shutdown; the desktop Conversation durable-writer and full ACP event replay migration remain compatibility work in progress.
 - normal Tauri GUI: a client/launcher. It may adopt an existing Core endpoint and must not kill Core-owned PTYs during ordinary exit/relaunch.
 
-The local IPC layer is shared by both roles: length-delimited bounded frames, role/version handshake, per-profile endpoints, and OS-local permissions. Unix uses a user-owned runtime directory (0700) and socket (0600); Windows uses a current-user named-pipe ACL. This is one shared local policy, not two independent token systems. A live endpoint with an incompatible handshake is not replaced automatically.
+The local IPC layer is shared by both roles: length-delimited bounded frames, role/version handshake, per-profile endpoints, and OS-local permissions. Unix uses a user-owned runtime directory (0700) and socket (0600); Windows uses a current-user named-pipe ACL. This is one shared local policy, not two independent token systems. A live compatible endpoint is adopted; an incompatible handshake is not a silent adopt (see the crash/update matrix).
 
 Terminal Core uses the existing terminal semantics: claim validation precedes attach replay; output carries sequence numbers and gap detection; the 256 KiB scrollback cap, `se-terminal-v2.binary`/`TML2` framing, watch subscriptions, and generic unauthorized claim errors remain unchanged. A GUI disconnect only removes a subscription; it does not terminate the PTY. Reconnect attaches to the existing terminal and replays retained output.
 
-Lifecycle meanings are intentionally separate:
+Crash / update matrix:
 
-- **GUI detach/relaunch:** closes client connections only; Core and owned work continue.
+- **GUI quit/relaunch:** Cores stay alive; the GUI adopts the existing endpoint on return. Graceful exit reports `CORE_OWNED_SKIP` and does not kill Core-owned PTYs or ACP work.
+- **Core crash:** supervisor 3-miss detection → SIGTERM-owned respawn → reconnect. ACP recovers from the durable repository. Terminal PTYs are unrecoverable in v1; `terminal:core_restarted` marks stale renderer terminals `exited` (users respawn).
+- **App update:** GUI-only updater relaunch keeps Cores. When the app binary changes, Core respawn happens on the next GUI start because the adopted endpoint must speak the same protocol (handshake failure → old Core is terminated by the launcher's owned-child path). fd-passing handoff is deferred.
 - **Explicit Core shutdown:** invokes the selected Core's shutdown operation and cleans only that Core's resources.
-- **Core crash:** Terminal Core's in-memory PTYs are not recoverable in v1; ACP durable recovery remains governed by the existing in-process Conversation path until its migration is complete.
-- **Core update/handoff:** deferred. GUI-only updater relaunch is the supported update path; automatic Core replacement is forbidden.
 
 Standalone `se-server` remains an in-process, owning compatibility host and continues its existing drain-then-kill shutdown order. Browser/mobile keeps `/terminal/ws` and `/ws`; desktop shared-live remains non-owning and stops by detaching/draining clients. The browser and standalone surfaces therefore do not launch local Core processes.
 
@@ -422,7 +422,7 @@ sleep 600
 
 Quit only the GUI; do not explicitly shut down the Core. The Core process and endpoint should remain available, the exit log should report `stable_code=CORE_OWNED_SKIP result=NOT_APPLICABLE`, and it must not report `PTY_CLEANUP_FAILED`. Relaunch with `bun run dev:tauri`, reopen the same conversation, and verify that the marker is replayed, the same terminal continues producing output, and a post-relaunch shell PID matches the pre-relaunch PID when the shell is resumed rather than replaced.
 
-Project-layout restore currently re-spawns terminals and is not a Core adoption test. ACP desktop commands, Conversation persistence, and `WsRelaySink` remain in-process; ACP Core migration is deferred. Shared-live still requires an in-process `PtyManager`, so shared-live plus successful Terminal Core ownership is unsupported in this cutline. Windows remains an in-process fallback while named-pipe Core support is deferred. Core crash recovery, automatic Core update/handoff, and packaged dual-role smoke are also outside this development acceptance path.
+Project-layout restore currently re-spawns terminals and is not a Core adoption test. ACP desktop commands, Conversation persistence, and `WsRelaySink` remain in-process; ACP Core migration is deferred. Shared-live still requires an in-process `PtyManager`, so shared-live plus successful Terminal Core ownership is unsupported in this cutline. Windows remains an in-process fallback while named-pipe Core support is deferred. Packaged dual-role smoke remains outside this development acceptance path. Crash/update behavior is in the matrix above; fd-passing Core handoff is deferred.
 
 ### Browser/annotation work
 1. `src/renderer/components/browser/BrowserPanel.tsx`

@@ -133,6 +133,8 @@ export interface Terminal {
   detachedOutput?: string // Raw PTY output captured while no renderer is mounted
   rendererAttachmentCount?: number // Number of mounted renderers bound to this PTY
   healthStatus?: TerminalHealthStatus // Terminal health status
+  /** True while a spawn round-trip is in flight for this record. */
+  pendingSpawn?: boolean
   /** Latest host replay watermark retained only for renderer-side resume retries. */
   resumeCursor?: number
   /** Explicit view lifecycle, independent from the live PTY resource. */

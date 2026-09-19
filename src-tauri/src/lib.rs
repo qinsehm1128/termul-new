@@ -1590,11 +1590,20 @@ fn launch_desktop_acp_core(
 const CORE_SUPERVISE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 #[cfg(unix)]
 const ACP_CONNECTION_CHANGED_EVENT: &str = "acp:connection_changed";
+#[cfg(unix)]
+const TERMINAL_CORE_RESTARTED_EVENT: &str = "terminal:core_restarted";
 
 #[cfg(unix)]
 #[derive(Clone, Serialize)]
 struct AcpConnectionChangedPayload {
     connected: bool,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalCoreRestartedPayload {
+    live_terminal_ids: Vec<String>,
 }
 
 /// Probe both desktop cores on a fixed 3s tick. Dead endpoints are respawned
@@ -1681,15 +1690,42 @@ async fn supervise_one_core(
     }
     *ready = false;
     if restart_and_reconnect(app_handle, profile_root, role).await {
-        if role == crate::core::CoreRole::AcpCore {
-            let _ = app_handle.emit(
-                ACP_CONNECTION_CHANGED_EVENT,
-                AcpConnectionChangedPayload { connected: true },
-            );
+        match role {
+            crate::core::CoreRole::AcpCore => {
+                let _ = app_handle.emit(
+                    ACP_CONNECTION_CHANGED_EVENT,
+                    AcpConnectionChangedPayload { connected: true },
+                );
+            }
+            crate::core::CoreRole::TerminalCore => {
+                emit_terminal_core_restarted(app_handle).await;
+            }
+            crate::core::CoreRole::Gui => {}
         }
         *ready = true;
         *consecutive_misses = 0;
     }
+}
+
+/// After Terminal Core restart+reconnect, tell the renderer which PTYs still
+/// exist so stale store records can degrade to `exited` without retirement.
+#[cfg(unix)]
+async fn emit_terminal_core_restarted(app_handle: &tauri::AppHandle) {
+    let live_terminal_ids = match app_handle
+        .try_state::<crate::core::TerminalServiceHandle>()
+        .and_then(|handle| handle.core_client())
+    {
+        Some(client) => client
+            .list()
+            .await
+            .map(|list| list.into_iter().map(|status| status.id).collect())
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let _ = app_handle.emit(
+        TERMINAL_CORE_RESTARTED_EVENT,
+        TerminalCoreRestartedPayload { live_terminal_ids },
+    );
 }
 
 #[cfg(unix)]
@@ -3085,6 +3121,31 @@ mod tests {
         assert!(drain.contains("owns_core_process"));
         assert!(!drain.contains("stopProducers"));
         assert!(!drain.contains("client.shutdown"));
+    }
+
+    #[test]
+    fn terminal_core_restart_emits_live_ids_once() {
+        let source = include_str!("lib.rs");
+        assert!(
+            source.contains("\"terminal:core_restarted\""),
+            "additive renderer event name must stay in source"
+        );
+        let helper_start = source
+            .find("async fn emit_terminal_core_restarted")
+            .expect("terminal core restart emit helper");
+        let helper_end = source[helper_start..]
+            .find("async fn restart_and_reconnect")
+            .map(|offset| helper_start + offset)
+            .expect("restart_and_reconnect follows the emit helper");
+        let helper = &source[helper_start..helper_end];
+        assert!(helper.contains("TERMINAL_CORE_RESTARTED_EVENT"));
+        assert!(helper.contains("live_terminal_ids"));
+        assert!(helper.contains(".list()"));
+        assert_eq!(
+            helper.matches("app_handle.emit(").count(),
+            1,
+            "exactly one terminal:core_restarted emission after reconnect"
+        );
     }
 
     #[test]
