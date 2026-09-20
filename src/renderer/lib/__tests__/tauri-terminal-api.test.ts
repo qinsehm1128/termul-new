@@ -22,7 +22,7 @@ vi.mock('../log-api', () => ({
 
 describe('tauri-terminal-api', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
   })
 
