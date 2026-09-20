@@ -711,7 +711,8 @@ impl Default for SpawnOptions {
 /// Scope-less project terminals and ephemeral SSH keep a process-local
 /// ConversationId for claims, but they never enter workspace admission.
 pub(crate) fn tracks_session_workspace_ref(options: &SpawnOptions) -> bool {
-    options.kind.as_deref() != Some("ssh") && options.conversation_id.is_some()
+    !matches!(options.kind.as_deref(), Some("ssh") | Some("project"))
+        && options.conversation_id.is_some()
 }
 
 /// Observable cleanup phase. These are the only phase names allowed onto the wire.
@@ -5929,6 +5930,11 @@ mod tests {
         }));
         assert!(!tracks_session_workspace_ref(&SpawnOptions {
             kind: Some("ssh".to_string()),
+            ..Default::default()
+        }));
+        assert!(!tracks_session_workspace_ref(&SpawnOptions {
+            conversation_id: Some(conversation_id),
+            kind: Some("project".to_string()),
             ..Default::default()
         }));
     }

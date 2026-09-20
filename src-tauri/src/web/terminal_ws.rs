@@ -78,7 +78,9 @@ struct TerminalProjectSpawnIntent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AuthorizedTerminalScope {
-    conversation_id: crate::conversation::ConversationId,
+    /// Durable conversation scope when present; project/SSH Core terminals
+    /// intentionally have no conversation identity.
+    conversation_id: Option<crate::conversation::ConversationId>,
     claim_generation: Option<u64>,
     cleanup_only: bool,
 }
@@ -154,10 +156,6 @@ fn optional_workspace_service(
         .conversation
         .as_ref()
         .map(|conversation| conversation.session_workspace())
-}
-
-fn parse_core_conversation_id(raw: &str, fallback: ConversationId) -> ConversationId {
-    ConversationId::parse(raw).unwrap_or(fallback)
 }
 
 async fn core_claim_generation(
@@ -280,8 +278,7 @@ fn spawn_terminal_event_task(
                             | crate::trackers::TerminalEvent::Exit { .. }
                     );
                     if !catalog_event
-                        && live_authorized_terminal_scope(&state, &authorized, &terminal_id)
-                            .is_none()
+                        && !live_authorized_terminal_scope(&state, &authorized, &terminal_id)
                     {
                         continue;
                     }
@@ -499,12 +496,31 @@ impl ConnectionContext {
         conversation_id: crate::conversation::ConversationId,
         claim_generation: u64,
     ) {
+        self.authorize_scope(
+            terminal_id,
+            Some(conversation_id),
+            Some(claim_generation),
+            false,
+        );
+    }
+
+    fn authorize_unscoped(&mut self, terminal_id: &str, claim_generation: u64) {
+        self.authorize_scope(terminal_id, None, Some(claim_generation), false);
+    }
+
+    fn authorize_scope(
+        &mut self,
+        terminal_id: &str,
+        conversation_id: Option<crate::conversation::ConversationId>,
+        claim_generation: Option<u64>,
+        cleanup_only: bool,
+    ) {
         self.authorized.write().insert(
             terminal_id.to_string(),
             AuthorizedTerminalScope {
                 conversation_id,
-                claim_generation: Some(claim_generation),
-                cleanup_only: false,
+                claim_generation,
+                cleanup_only,
             },
         );
     }
@@ -514,14 +530,7 @@ impl ConnectionContext {
         terminal_id: &str,
         conversation_id: crate::conversation::ConversationId,
     ) {
-        self.authorized.write().insert(
-            terminal_id.to_string(),
-            AuthorizedTerminalScope {
-                conversation_id,
-                claim_generation: None,
-                cleanup_only: true,
-            },
-        );
+        self.authorize_scope(terminal_id, Some(conversation_id), None, true);
     }
 
     fn scope(&self, terminal_id: &str) -> Option<AuthorizedTerminalScope> {
@@ -535,9 +544,9 @@ impl ConnectionContext {
             .iter()
             .map(|(terminal_id, scope)| (terminal_id.clone(), *scope))
             .collect::<Vec<_>>();
-        scopes.into_iter().any(|(terminal_id, scope)| {
-            terminal_authorization_is_live(state, &terminal_id, scope).is_some()
-        })
+        scopes
+            .into_iter()
+            .any(|(terminal_id, scope)| terminal_authorization_is_live(state, &terminal_id, scope))
     }
 
     #[cfg(test)]
@@ -983,7 +992,7 @@ async fn handle(
         }
         "terminate" | "kill" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
-            let scope = authorized_terminal_cleanup_scope(state, ctx, terminal_id)?;
+            authorized_terminal_cleanup_scope(state, ctx, terminal_id)?;
             let workspace = optional_workspace_service(state);
             let result = if let Some(client) = core_terminal(state) {
                 crate::commands::terminal_terminate_via_core_optional_workspace(
@@ -1010,7 +1019,7 @@ async fn handle(
             }
             debug_assert!(
                 core_terminal(state).is_some() || state.pty.get(terminal_id).is_none(),
-                "scope={scope}"
+                "terminal cleanup must remove the in-process PTY"
             );
             release_connection_phone_fit(state, ctx, terminal_id).await;
             release_connection_view(state, ctx, terminal_id, true).await;
@@ -1035,9 +1044,10 @@ async fn handle(
                 let generation = session
                     .claim_generation
                     .ok_or_else(|| unauthorized_error(&terminal_id))?;
-                let conversation_id =
-                    parse_core_conversation_id(&session.conversation_id, ConversationId::new_v4());
-                ctx.authorize(&terminal_id, conversation_id, generation);
+                // Attach proves the claim and generation, not a durable
+                // conversation identity. Core's reply may contain its
+                // process-local scope, which must never be parsed as one.
+                ctx.authorize_unscoped(&terminal_id, generation);
                 let attach_result = session.result.clone();
                 install_core_stream_forwarder(
                     &terminal_id,
@@ -1255,35 +1265,47 @@ fn terminal_authorization_is_live(
     state: &AppState,
     terminal_id: &str,
     expected: AuthorizedTerminalScope,
-) -> Option<crate::conversation::ConversationId> {
+) -> bool {
     if expected.cleanup_only {
-        return None;
+        return false;
     }
-    let instance = state.pty.get(terminal_id).filter(|instance| {
-        instance.is_active() && instance.conversation_matches(expected.conversation_id)
-    })?;
-    (state.pty.claim_generation(terminal_id) == expected.claim_generation)
-        .then_some(instance.conversation_id)
+    if state.terminal.core_client().is_some() {
+        return state.terminal.runtime().is_live(terminal_id);
+    }
+    let Some(_instance) = state.pty.get(terminal_id).filter(|instance| {
+        instance.is_active()
+            && expected
+                .conversation_id
+                .is_some_and(|conversation_id| instance.conversation_matches(conversation_id))
+    }) else {
+        return false;
+    };
+    state.pty.claim_generation(terminal_id) == expected.claim_generation
 }
 
 fn terminal_cleanup_authorization_is_live(
     state: &AppState,
     terminal_id: &str,
     expected: AuthorizedTerminalScope,
-) -> Option<crate::conversation::ConversationId> {
-    let instance = state
-        .pty
-        .get(terminal_id)
-        .filter(|instance| instance.conversation_matches(expected.conversation_id))?;
+) -> bool {
+    if state.terminal.core_client().is_some() {
+        return state.terminal.runtime().is_live(terminal_id);
+    }
+    let Some(instance) = state.pty.get(terminal_id).filter(|instance| {
+        expected
+            .conversation_id
+            .is_some_and(|conversation_id| instance.conversation_matches(conversation_id))
+    }) else {
+        return false;
+    };
     match instance.lifecycle_state() {
-        crate::pty::manager::TerminalLifecycleState::Active => (!expected.cleanup_only
-            && state.pty.claim_generation(terminal_id) == expected.claim_generation)
-            .then_some(instance.conversation_id),
-        crate::pty::manager::TerminalLifecycleState::Terminating
-        | crate::pty::manager::TerminalLifecycleState::Quarantined => {
-            Some(instance.conversation_id)
+        crate::pty::manager::TerminalLifecycleState::Active => {
+            !expected.cleanup_only
+                && state.pty.claim_generation(terminal_id) == expected.claim_generation
         }
-        crate::pty::manager::TerminalLifecycleState::Removed => None,
+        crate::pty::manager::TerminalLifecycleState::Terminating
+        | crate::pty::manager::TerminalLifecycleState::Quarantined => true,
+        crate::pty::manager::TerminalLifecycleState::Removed => false,
     }
 }
 
@@ -1291,8 +1313,10 @@ fn live_authorized_terminal_scope(
     state: &AppState,
     authorized: &AuthorizedTerminals,
     terminal_id: &str,
-) -> Option<crate::conversation::ConversationId> {
-    let expected = authorized.read().get(terminal_id).copied()?;
+) -> bool {
+    let Some(expected) = authorized.read().get(terminal_id).copied() else {
+        return false;
+    };
     terminal_authorization_is_live(state, terminal_id, expected)
 }
 
@@ -1300,11 +1324,12 @@ fn authorized_terminal_scope(
     state: &AppState,
     ctx: &ConnectionContext,
     terminal_id: &str,
-) -> Result<crate::conversation::ConversationId, (&'static str, String)> {
+) -> Result<(), (&'static str, String)> {
     let expected = ctx
         .scope(terminal_id)
         .ok_or_else(|| unauthorized_error(terminal_id))?;
     terminal_authorization_is_live(state, terminal_id, expected)
+        .then_some(())
         .ok_or_else(|| unauthorized_error(terminal_id))
 }
 
@@ -1312,11 +1337,12 @@ fn authorized_terminal_cleanup_scope(
     state: &AppState,
     ctx: &ConnectionContext,
     terminal_id: &str,
-) -> Result<crate::conversation::ConversationId, (&'static str, String)> {
+) -> Result<(), (&'static str, String)> {
     let expected = ctx
         .scope(terminal_id)
         .ok_or_else(|| unauthorized_error(terminal_id))?;
     terminal_cleanup_authorization_is_live(state, terminal_id, expected)
+        .then_some(())
         .ok_or_else(|| unauthorized_error(terminal_id))
 }
 
@@ -1353,8 +1379,8 @@ struct PassiveForwardAuth<'a> {
 async fn install_core_stream_forwarder(
     terminal_id: &str,
     session: crate::core::TerminalAttachSession,
-    _generation: u64,
-    _state: &AppState,
+    generation: u64,
+    state: &AppState,
     forward_auth: PassiveForwardAuth<'_>,
     tx: &mpsc::Sender<Message>,
     ctx: &mut ConnectionContext,
@@ -1365,32 +1391,102 @@ async fn install_core_stream_forwarder(
     let binary_output = ctx.binary_output;
     let output_tx = tx.clone();
     let attached_id = terminal_id.to_string();
-    tokio::spawn(async move {
+    let client = core_terminal(state);
+    let task = tokio::spawn(async move {
         let mut output = session.output;
-        while let Some(frame) = output.recv().await {
-            let kind = match frame.kind {
-                crate::core::OutputKind::Replay => BinaryOutputKind::Replay,
-                crate::core::OutputKind::Live => BinaryOutputKind::Live,
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_millis(ATTACH_GENERATION_CHECK_MS));
+        tick.tick().await;
+        loop {
+            let frame = tokio::select! {
+                frame = output.recv() => frame,
+                _ = tick.tick() => {
+                    if let Some(client) = client.as_ref() {
+                        let valid = client
+                            .status(&attached_id)
+                            .await
+                            .ok()
+                            .and_then(|status| status.claim_generation)
+                            == Some(generation);
+                        if !valid {
+                            break;
+                        }
+                    }
+                    continue;
+                }
             };
-            let result = if binary_output {
-                send_binary_output(&output_tx, kind, &attached_id, frame.seq, &frame.data).await
-            } else {
-                send_json(
-                    &output_tx,
-                    json!({
-                        "type": if matches!(kind, BinaryOutputKind::Replay) { "replay_chunk" } else { "output" },
-                        "terminalId": attached_id,
-                        "seq": frame.seq,
-                        "data": frame.data.iter().map(|byte| *byte as u64).collect::<Vec<u64>>()
-                    }),
-                )
-                .await
+            let Some(frame) = frame else { break };
+
+            let result = match frame.kind {
+                crate::core::OutputKind::Gap => {
+                    send_json(
+                        &output_tx,
+                        json!({
+                            "type": "gap",
+                            "terminalId": attached_id,
+                            "lastSeq": frame.seq,
+                        }),
+                    )
+                    .await
+                }
+                crate::core::OutputKind::Replay => {
+                    if binary_output {
+                        send_binary_output(
+                            &output_tx,
+                            BinaryOutputKind::Replay,
+                            &attached_id,
+                            frame.seq,
+                            &frame.data,
+                        )
+                        .await
+                    } else {
+                        send_json(
+                            &output_tx,
+                            json!({
+                                "type": "replay_chunk",
+                                "terminalId": attached_id,
+                                "seq": frame.seq,
+                                "data": frame.data.iter().map(|byte| *byte as u64).collect::<Vec<u64>>()
+                            }),
+                        )
+                        .await
+                    }
+                }
+                crate::core::OutputKind::Live => {
+                    if binary_output {
+                        send_binary_output(
+                            &output_tx,
+                            BinaryOutputKind::Live,
+                            &attached_id,
+                            frame.seq,
+                            &frame.data,
+                        )
+                        .await
+                    } else {
+                        send_json(
+                            &output_tx,
+                            json!({
+                                "type": "output",
+                                "terminalId": attached_id,
+                                "seq": frame.seq,
+                                "data": frame.data.iter().map(|byte| *byte as u64).collect::<Vec<u64>>()
+                            }),
+                        )
+                        .await
+                    }
+                }
             };
             if result.is_err() {
                 break;
             }
         }
+        if let Some(client) = client {
+            let _ = client.close_view(&attached_id).await;
+        }
     });
+    if let Some(previous) = ctx.attachments.insert(terminal_id.to_string(), task) {
+        previous.abort();
+    }
     Ok(())
 }
 
@@ -1644,36 +1740,48 @@ async fn spawn_project_terminal(
         intent.cols,
         intent.rows,
     );
-    let spawned = match terminal_workspace_service(state) {
-        Ok(workspace) => {
-            let result =
-                crate::commands::terminal_spawn_resource(options, None, &state.pty, &workspace)
-                    .await;
-            if !result.success {
-                let code = terminal_resource_code(result.code.as_deref());
-                let error = result
-                    .error
-                    .unwrap_or_else(|| "terminal spawn failed".to_string());
-                retain_compound_cleanup_authorization(state, ctx, code, &error);
-                return Err((code, error));
-            }
-            result.data.expect("successful terminal spawn has data")
+    let project_claim_scope = options.conversation_id;
+    let spawned = if let Some(client) = state.terminal.core_client() {
+        let result = crate::commands::terminal_spawn_project_via_core(options, &client).await;
+        if !result.success {
+            let code = terminal_resource_code(result.code.as_deref());
+            let error = result
+                .error
+                .unwrap_or_else(|| "terminal spawn failed".to_string());
+            retain_compound_cleanup_authorization(state, ctx, code, &error);
+            return Err((code, error));
         }
-        Err(_) => state
-            .pty
-            .spawn(options, None)
-            .await
-            .map_err(|error| ("SPAWN_FAILED", error))?,
+        result
+            .data
+            .expect("successful terminal project spawn has data")
+    } else {
+        match terminal_workspace_service(state) {
+            Ok(workspace) => {
+                let result =
+                    crate::commands::terminal_spawn_resource(options, None, &state.pty, &workspace)
+                        .await;
+                if !result.success {
+                    let code = terminal_resource_code(result.code.as_deref());
+                    let error = result
+                        .error
+                        .unwrap_or_else(|| "terminal spawn failed".to_string());
+                    retain_compound_cleanup_authorization(state, ctx, code, &error);
+                    return Err((code, error));
+                }
+                result.data.expect("successful terminal spawn has data")
+            }
+            Err(_) => state
+                .pty
+                .spawn(options, None)
+                .await
+                .map_err(|error| ("SPAWN_FAILED", error))?,
+        }
     };
-    let instance = state
-        .pty
-        .get(&spawned.info.id)
-        .ok_or_else(|| unauthorized_error(&spawned.info.id))?;
-    let generation = state
-        .pty
-        .claim_generation(&spawned.info.id)
-        .ok_or_else(|| unauthorized_error(&spawned.info.id))?;
-    ctx.authorize(&spawned.info.id, instance.conversation_id, generation);
+    let generation = core_claim_generation(state, &spawned.info.id).await?;
+    match project_claim_scope {
+        Some(conversation_id) => ctx.authorize(&spawned.info.id, conversation_id, generation),
+        None => ctx.authorize_unscoped(&spawned.info.id, generation),
+    }
     info!(
         "[terminal-ws] spawn success project_id={} terminal_id={} cwd_source=project",
         project.project_id, spawned.info.id
@@ -2026,7 +2134,7 @@ mod tests {
         );
         assert_eq!(
             authorized_terminal_cleanup_scope(&state, &ctx, &failure.terminal_id),
-            Ok(conversation_id)
+            Ok(())
         );
         assert_eq!(
             authorized_terminal_scope(&state, &ctx, &failure.terminal_id),
@@ -2409,12 +2517,13 @@ mod tests {
 
         assert_eq!(
             authorized_terminal_scope(&state, &ctx, &terminal_id),
-            Ok(conversation_id)
+            Ok(())
         );
-        assert_eq!(
-            live_authorized_terminal_scope(&state, &ctx.authorized, &terminal_id),
-            Some(conversation_id)
-        );
+        assert!(live_authorized_terminal_scope(
+            &state,
+            &ctx.authorized,
+            &terminal_id
+        ));
         assert!(ctx.has_live_authorization(&state));
 
         let successor = state
@@ -2426,10 +2535,11 @@ mod tests {
             authorized_terminal_scope(&state, &ctx, &terminal_id),
             Err(unauthorized_error(&terminal_id))
         );
-        assert_eq!(
-            live_authorized_terminal_scope(&state, &ctx.authorized, &terminal_id),
-            None
-        );
+        assert!(!live_authorized_terminal_scope(
+            &state,
+            &ctx.authorized,
+            &terminal_id
+        ));
         assert!(!ctx.has_live_authorization(&state));
         assert!(
             state.pty.get(&terminal_id).is_some(),

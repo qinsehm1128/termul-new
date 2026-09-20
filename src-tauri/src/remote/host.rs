@@ -88,6 +88,13 @@ impl RemoteBindMode {
     pub fn is_lan_exposed(self) -> bool {
         matches!(self, Self::All)
     }
+
+    fn ingress_provenance(self) -> IngressProvenance {
+        match self {
+            Self::Localhost => IngressProvenance::LocalOperator,
+            Self::All => IngressProvenance::PublicTunnel,
+        }
+    }
 }
 
 /// Status of the desktop-hosted web server, returned to the frontend.
@@ -474,7 +481,7 @@ impl RemoteServerState {
         terminal: crate::core::TerminalServiceHandle,
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
-        _bind_mode: RemoteBindMode,
+        bind_mode: RemoteBindMode,
         conversation: Option<Arc<crate::conversation::ConversationApplicationService>>,
         conversation_creation: Option<Arc<crate::conversation::ConversationCreationService>>,
         workspace_manifest: Option<Arc<WorkspaceManifestService>>,
@@ -490,7 +497,6 @@ impl RemoteServerState {
             let _services = crate::core::CoreServices::in_process(Arc::clone(&pty), manager);
         }
         let _lifecycle = self.lifecycle.lock().await;
-        let bind_mode = _bind_mode;
         {
             let slot = self.inner.lock().unwrap();
             if slot.is_some() {
@@ -504,7 +510,7 @@ impl RemoteServerState {
             ));
         }
         self.authority
-            .set_ingress_provenance(IngressProvenance::PublicTunnel);
+            .set_ingress_provenance(bind_mode.ingress_provenance());
         let stored = self.load_pairing_token();
         let (lease, issued) = self
             .authority
@@ -1052,6 +1058,18 @@ mod tests {
     fn remote_bind_mode_is_lan_exposed() {
         assert!(!RemoteBindMode::Localhost.is_lan_exposed());
         assert!(RemoteBindMode::All.is_lan_exposed());
+    }
+
+    #[test]
+    fn remote_bind_mode_sets_ingress_provenance() {
+        assert_eq!(
+            RemoteBindMode::Localhost.ingress_provenance(),
+            IngressProvenance::LocalOperator
+        );
+        assert_eq!(
+            RemoteBindMode::All.ingress_provenance(),
+            IngressProvenance::PublicTunnel
+        );
     }
 
     #[test]

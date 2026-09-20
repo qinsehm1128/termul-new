@@ -462,13 +462,15 @@ pub(crate) fn project_spawn_options_from_intent(
         shell: None,
         cwd: Some(cwd),
         env: None,
-        conversation_id: None,
+        // Project terminals need a process-local claim scope even though they
+        // must never become durable ConversationWorkspace resources.
+        conversation_id: Some(crate::conversation::ConversationId::new_v4()),
         project_id: Some(project_id.to_string()),
         cols: Some(cols),
         rows: Some(rows),
         program: None,
         args: None,
-        kind: None,
+        kind: Some("project".to_string()),
     }
 }
 
@@ -481,6 +483,30 @@ pub(crate) async fn terminal_spawn_resource(
     terminal_spawn_resource_impl(options, on_data, pty_manager, workspace).await
 }
 
+/// Core-backed project spawn keeps the remote project boundary in the
+/// commands layer while avoiding any GUI-side PtyManager lookup.
+pub(crate) async fn terminal_spawn_project_via_core(
+    options: SpawnOptions,
+    client: &crate::core::TerminalCoreClient,
+) -> IpcResult<SpawnedTerminal> {
+    if let Err(error) = require_host_admission() {
+        return error;
+    }
+    if options.kind.as_deref() != Some("project") || options.project_id.is_none() {
+        return IpcResult::error("project spawn options are invalid", "VALIDATION_ERROR");
+    }
+    match client.spawn(options).await {
+        Ok(spawned) => IpcResult::success(spawned),
+        Err(crate::core::CoreError::Unauthorized) => {
+            IpcResult::error("Unauthorized", "UNAUTHORIZED")
+        }
+        Err(crate::core::CoreError::InvalidRequest(detail)) if !detail.is_empty() => {
+            IpcResult::error(detail, "SPAWN_FAILED")
+        }
+        Err(error) => IpcResult::error(error.to_string(), "SPAWN_FAILED"),
+    }
+}
+
 async fn terminal_spawn_via_core(
     options: SpawnOptions,
     on_data: Option<Channel<Response>>,
@@ -490,8 +516,8 @@ async fn terminal_spawn_via_core(
     if let Err(error) = require_host_admission() {
         return error;
     }
-    let is_ephemeral_ssh = options.kind.as_deref() == Some("ssh");
-    let conversation_id = if is_ephemeral_ssh {
+    let is_scope_less = matches!(options.kind.as_deref(), Some("ssh") | Some("project"));
+    let conversation_id = if is_scope_less {
         None
     } else {
         match options.conversation_id {
@@ -652,10 +678,10 @@ async fn terminal_spawn_resource_impl(
     if let Err(error) = require_host_admission() {
         return error;
     }
-    let is_ephemeral_ssh = options.kind.as_deref() == Some("ssh");
-    // Scope-less durable terminals (regular project workspace) spawn without a
+    let is_scope_less = matches!(options.kind.as_deref(), Some("ssh") | Some("project"));
+    // Scope-less project terminals and ephemeral SSH spawn without a
     // SessionWorkspace resource; conversation-scoped terminals keep admission.
-    let conversation_id = if is_ephemeral_ssh {
+    let conversation_id = if is_scope_less {
         None
     } else {
         match options.conversation_id {
@@ -1286,9 +1312,19 @@ async fn register_desktop_live_forwarder(
                         }
                         crate::core::terminal::LiveOutputDecision::FailGap { last_seq } => {
                             log::warn!(
-                                "[{log_label}] output receiver lagged terminal_id={forwarder_id} last_seq={last_seq}; failing stream"
+                                "[{log_label}] output receiver lagged terminal_id={forwarder_id} last_seq={last_seq}; rewatching"
                             );
-                            break;
+                            let Some(instance) = pty.get(&forwarder_id) else {
+                                break;
+                            };
+                            let replay = instance.subscribe_from(last_seq);
+                            for chunk in &replay.chunks {
+                                if on_data.send(Response::new(chunk.data.clone())).is_err() {
+                                    return;
+                                }
+                            }
+                            receiver = replay.receiver;
+                            current_seq = replay.latest_seq;
                         }
                         crate::core::terminal::LiveOutputDecision::Stop => break,
                     }

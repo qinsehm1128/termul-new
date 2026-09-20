@@ -58,6 +58,7 @@ pub const METHOD_SET_PROTECTED: &str = "set_protected";
 pub enum OutputKind {
     Live,
     Replay,
+    Gap,
 }
 
 #[derive(Debug, Clone)]
@@ -230,6 +231,7 @@ pub fn encode_output_frame(
     let kind_byte = match kind {
         OutputKind::Live => OUTPUT_KIND_LIVE,
         OutputKind::Replay => OUTPUT_KIND_REPLAY,
+        OutputKind::Gap => return Err(invalid("gap is not a binary output frame")),
     };
     let mut frame = Vec::with_capacity(15 + id_bytes.len() + data.len());
     frame.extend_from_slice(OUTPUT_FRAME_MAGIC);
@@ -1341,15 +1343,17 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
                         .get(&gap.terminal_id)
                         .map(|slot| slot.last_seq)
                         .unwrap_or(gap.last_seq);
-                    let inner = Arc::clone(&inner);
-                    tokio::spawn(async move {
-                        let _ = client_rpc(
-                            &inner,
-                            METHOD_WATCH,
-                            json!({ "terminalId": gap.terminal_id, "lastSeq": last_seq }),
-                        )
-                        .await;
-                    });
+                    let frame = OutputFrame {
+                        kind: OutputKind::Gap,
+                        terminal_id: gap.terminal_id.clone(),
+                        seq: last_seq,
+                        data: Vec::new(),
+                    };
+                    let _ = deliver_client_output_frame(&mut inner.streams.lock(), frame);
+                    // A lagged stream has lost data. Do not silently re-watch it
+                    // behind the consumer's back; the WebSocket must receive a
+                    // gap and perform an explicit replay/resume.
+                    inner.streams.lock().remove(&gap.terminal_id);
                 }
                 continue;
             }
@@ -1370,6 +1374,10 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
         }
     }
     fail_stale_pending(&inner);
+    // A broken Core transport invalidates cached liveness. Keep stream slots
+    // so the reconnect handshake can explicitly re-watch them from last_seq;
+    // ordinary authorization still fails closed while the transport is down.
+    inner.live.lock().clear();
 }
 
 impl Drop for ClientInner {
