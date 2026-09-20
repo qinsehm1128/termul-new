@@ -120,6 +120,14 @@ impl CoreError {
         }
     }
 
+    /// True only for a connect that never reached a peer (nothing listening, or
+    /// the platform has no local Core IPC). A post-connect handshake failure
+    /// may also surface as [`Self::Io`], but that is a live peer — including a
+    /// core that rejected Hello and closed before the request loop.
+    pub const fn is_connect_absence(&self) -> bool {
+        matches!(self, Self::Io(_) | Self::UnsupportedPlatform)
+    }
+
     pub fn client_message(&self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
@@ -373,6 +381,16 @@ mod tests {
             Err(CoreError::Unauthorized)
         );
         assert_eq!(CoreError::Unauthorized.client_message(), "unauthorized");
+    }
+
+    #[test]
+    fn connect_absence_does_not_include_handshake_rejects() {
+        assert!(CoreError::Io("connection refused".into()).is_connect_absence());
+        assert!(CoreError::UnsupportedPlatform.is_connect_absence());
+        assert!(!CoreError::InvalidHandshake("incompatible".into()).is_connect_absence());
+        assert!(!CoreError::Unauthorized.is_connect_absence());
+        assert!(!CoreError::UnsupportedProtocol { offered: vec![99] }.is_connect_absence());
+        assert!(!CoreError::InvalidFrame("eof".into()).is_connect_absence());
     }
 
     #[tokio::test]

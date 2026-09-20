@@ -1479,12 +1479,32 @@ const LAST_RESORT_PTY_CLEANUP_DEADLINE: std::time::Duration = std::time::Duratio
 /// with the PTY reap that follows.
 const LAST_RESORT_ACP_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_millis(800);
 
+fn refuse_in_process_fallback(operation: &str, error: &crate::core::CoreError) -> String {
+    log::error!(
+        target: "se_manager::core",
+        "operation={operation} stable_code=LIVE_CORE_UNREACHABLE detail=refusing_in_process_fallback",
+    );
+    format!(
+        "{operation} is live but the GUI client failed to connect ({}); refusing in-process fallback",
+        error.code()
+    )
+}
+
+#[cfg(unix)]
+fn core_allows_in_process_fallback(app_data_dir: &Path, role: crate::core::CoreRole) -> bool {
+    tauri::async_runtime::block_on(async {
+        let endpoint = crate::core::CoreEndpoint::for_profile(app_data_dir, role);
+        crate::core::launcher::probe_endpoint_presence(&endpoint, role)
+            .await
+            .allows_in_process_fallback()
+    })
+}
+
 fn desktop_terminal_service(
     app_data_dir: &Path,
     local_pty: Arc<PtyManager>,
     app_handle: tauri::AppHandle,
-) -> crate::core::TerminalServiceHandle {
-    // This lands transport plumbing only; activation is a later verified-on-real-Windows step.
+) -> Result<crate::core::TerminalServiceHandle, String> {
     #[cfg(unix)]
     {
         match launch_desktop_terminal_core(app_data_dir) {
@@ -1504,9 +1524,15 @@ fn desktop_terminal_service(
                     target: "se_manager::core",
                     "operation=desktop_terminal_core stable_code=READY"
                 );
-                return crate::core::TerminalServiceHandle::from_core_client(client);
+                return Ok(crate::core::TerminalServiceHandle::from_core_client(client));
             }
             Err(error) => {
+                if !core_allows_in_process_fallback(
+                    app_data_dir,
+                    crate::core::CoreRole::TerminalCore,
+                ) {
+                    return Err(refuse_in_process_fallback("desktop_terminal_core", &error));
+                }
                 log::warn!(
                     target: "se_manager::core",
                     "operation=desktop_terminal_core stable_code={} detail=falling_back_in_process",
@@ -1515,8 +1541,16 @@ fn desktop_terminal_service(
             }
         }
     }
-    let _ = app_handle;
-    crate::core::TerminalServiceHandle::in_process(local_pty)
+    #[cfg(not(unix))]
+    {
+        log::info!(
+            target: "se_manager::core",
+            "operation=desktop_terminal_core stable_code=ACTIVATION_DEFERRED detail=in_process_fallback platform={}",
+            std::env::consts::OS
+        );
+        let _ = app_handle;
+    }
+    Ok(crate::core::TerminalServiceHandle::in_process(local_pty))
 }
 
 #[cfg(unix)]
@@ -1527,7 +1561,21 @@ fn launch_desktop_terminal_core(
     tauri::async_runtime::block_on(async {
         let process =
             crate::core::ensure_core(crate::core::CoreRole::TerminalCore, &config).await?;
-        crate::core::TerminalCoreClient::connect(&process.endpoint).await
+        let mut last_error = None;
+        for _ in 0..3 {
+            match crate::core::TerminalCoreClient::connect(&process.endpoint).await {
+                Ok(client) => return Ok(client),
+                Err(error) => {
+                    last_error = Some(error);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+        }
+        if !process.reused {
+            let _ =
+                crate::core::launcher::terminate_owned_core(process.role, &process.endpoint).await;
+        }
+        Err(last_error.expect("terminal core connect retry records an error"))
     })
 }
 
@@ -1535,8 +1583,7 @@ fn desktop_acp_service(
     app_data_dir: &Path,
     conversation_workspace_base: &Path,
     app_handle: tauri::AppHandle,
-) -> Option<crate::core::AcpServiceHandle> {
-    // This lands transport plumbing only; activation is a later verified-on-real-Windows step.
+) -> Result<Option<crate::core::AcpServiceHandle>, String> {
     #[cfg(unix)]
     {
         // Safety: desktop setup is single-threaded here; the ACP Core process
@@ -1562,9 +1609,14 @@ fn desktop_acp_service(
                     target: "se_manager::core",
                     "operation=desktop_acp_core stable_code=READY"
                 );
-                return Some(crate::core::AcpServiceHandle::from_core_client(client));
+                return Ok(Some(crate::core::AcpServiceHandle::from_core_client(
+                    client,
+                )));
             }
             Err(error) => {
+                if !core_allows_in_process_fallback(app_data_dir, crate::core::CoreRole::AcpCore) {
+                    return Err(refuse_in_process_fallback("desktop_acp_core", &error));
+                }
                 log::warn!(
                     target: "se_manager::core",
                     "operation=desktop_acp_core stable_code={} detail=falling_back_in_process",
@@ -1573,8 +1625,16 @@ fn desktop_acp_service(
             }
         }
     }
-    let _ = (app_data_dir, conversation_workspace_base, app_handle);
-    None
+    #[cfg(not(unix))]
+    {
+        log::info!(
+            target: "se_manager::core",
+            "operation=desktop_acp_core stable_code=ACTIVATION_DEFERRED detail=in_process_fallback platform={}",
+            std::env::consts::OS
+        );
+        let _ = (app_data_dir, conversation_workspace_base, app_handle);
+    }
+    Ok(None)
 }
 
 #[cfg(unix)]
@@ -1584,7 +1644,21 @@ fn launch_desktop_acp_core(
     let config = crate::core::CoreLaunchConfig::for_current_executable(app_data_dir)?;
     tauri::async_runtime::block_on(async {
         let process = crate::core::ensure_core(crate::core::CoreRole::AcpCore, &config).await?;
-        crate::core::AcpCoreClient::connect(&process.endpoint).await
+        let mut last_error = None;
+        for _ in 0..3 {
+            match crate::core::AcpCoreClient::connect(&process.endpoint).await {
+                Ok(client) => return Ok(client),
+                Err(error) => {
+                    last_error = Some(error);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+        }
+        if !process.reused {
+            let _ =
+                crate::core::launcher::terminate_owned_core(process.role, &process.endpoint).await;
+        }
+        Err(last_error.expect("acp core connect retry records an error"))
     })
 }
 
@@ -1888,7 +1962,7 @@ pub fn run() {
                 &app_data_dir,
                 &conversation_workspace_base,
                 handle.clone(),
-            );
+            )?;
             let conversation_bootstrap = if acp_core_handle.is_none() {
                 let conversation_bootstrap = crate::conversation::ConversationBootstrap::run(
                     crate::conversation::HostConversationRoots::desktop(
@@ -1973,7 +2047,7 @@ pub fn run() {
                 &app_data_dir,
                 Arc::clone(&pty_manager),
                 handle.clone(),
-            );
+            )?;
             app.manage(pty_manager.clone());
             app.manage(terminal_handle.clone());
 
@@ -3115,6 +3189,15 @@ mod tests {
             ),
             "desktop ACP Core fallback log must stay in source"
         );
+        assert!(
+            source
+                .contains("stable_code=LIVE_CORE_UNREACHABLE detail=refusing_in_process_fallback"),
+            "a live Core must not fall back to a GUI Conversation writer"
+        );
+        assert!(
+            source.contains("stable_code=ACTIVATION_DEFERRED detail=in_process_fallback"),
+            "non-unix Core activation must be an explicit deferred fallback, not silent"
+        );
         let drain_start = source
             .find("shutdown_phase=acp_drain")
             .expect("ACP drain classification");
@@ -3123,6 +3206,34 @@ mod tests {
         assert!(drain.contains("owns_core_process"));
         assert!(!drain.contains("stopProducers"));
         assert!(!drain.contains("client.shutdown"));
+    }
+
+    #[test]
+    fn live_core_does_not_bootstrap_gui_conversation_writer() {
+        let source = include_str!("lib.rs");
+        let acp_fn = source
+            .find("fn desktop_acp_service(")
+            .expect("desktop_acp_service");
+        let acp_end = source[acp_fn..]
+            .find("fn launch_desktop_acp_core(")
+            .map(|offset| acp_fn + offset)
+            .expect("launch_desktop_acp_core follows desktop_acp_service");
+        let acp = &source[acp_fn..acp_end];
+        let refuse = acp
+            .find("refuse_in_process_fallback(\"desktop_acp_core\"")
+            .expect("live ACP Core must refuse in-process fallback");
+        let fallback = acp
+            .find("detail=falling_back_in_process")
+            .expect("absent-core fallback remains");
+        assert!(
+            refuse < fallback,
+            "in-process Conversation fallback must run only after a live-peer check"
+        );
+        assert!(acp.contains("core_allows_in_process_fallback"));
+        assert!(
+            source.contains("let conversation_bootstrap = if acp_core_handle.is_none()"),
+            "GUI ConversationBootstrap is only admitted when no ACP Core handle exists"
+        );
     }
 
     #[test]

@@ -80,6 +80,59 @@ pub(crate) fn may_unlink_owned_socket(owned_child_alive: bool) -> bool {
     !owned_child_alive
 }
 
+/// Observed occupancy of a Core endpoint. Connect success means a live peer
+/// even when Hello is rejected and the socket is then closed: that peer does
+/// not enter the request loop, so shutdown must not be assumed.
+#[derive(Debug)]
+pub(crate) enum EndpointPresence {
+    Absent,
+    LiveCompatible(CoreHelloAck),
+    LiveIncompatible(CoreError),
+}
+
+impl EndpointPresence {
+    pub(crate) fn from_connect_and_handshake(
+        connect: Result<(), CoreError>,
+        handshake: Option<Result<CoreHelloAck, CoreError>>,
+    ) -> Self {
+        match connect {
+            Err(error) if error.is_connect_absence() => Self::Absent,
+            Err(error) => Self::LiveIncompatible(error),
+            Ok(()) => match handshake {
+                Some(Ok(ack)) => Self::LiveCompatible(ack),
+                Some(Err(error)) => Self::LiveIncompatible(error),
+                None => Self::LiveIncompatible(CoreError::Io(
+                    "connected core closed before handshake".into(),
+                )),
+            },
+        }
+    }
+
+    pub(crate) fn is_live(&self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    pub(crate) fn allows_in_process_fallback(&self) -> bool {
+        !self.is_live()
+    }
+
+    pub(crate) fn allows_unlink_and_spawn(&self) -> bool {
+        !self.is_live()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IncompatibleReplaceOutcome {
+    Cleared,
+    StillLive,
+}
+
+impl IncompatibleReplaceOutcome {
+    pub(crate) fn allows_unlink_and_spawn(self) -> bool {
+        matches!(self, Self::Cleared)
+    }
+}
+
 struct OwnedCore {
     pid: u32,
     child: Child,
@@ -121,7 +174,6 @@ fn send_sigterm(pid: u32) {
     }
 }
 
-#[cfg(unix)]
 async fn wait_for_owned_exit(
     child: &mut Child,
     endpoint: &CoreEndpoint,
@@ -142,11 +194,13 @@ async fn wait_for_owned_exit(
     }
 }
 
-/// SIGTERM a previously spawned child for `role` and wait until it is reaped
-/// (and the socket stops accepting). Returns whether the child is gone so the
-/// caller may unlink. The child is put back in the registry if it is still
-/// alive — never unlink while we still own a live process.
-async fn terminate_owned_core(role: CoreRole, endpoint: &CoreEndpoint) -> bool {
+/// SIGTERM (Unix) / TerminateProcess (Windows) a previously spawned child for
+/// `role` and wait until it is reaped (and the endpoint stops accepting).
+/// Returns whether the child is gone so the caller may unlink. The child is
+/// put back in the registry if it is still alive — never unlink while we still
+/// own a live process. Windows uses the same `try_wait` poll as Unix; it must
+/// not block the async worker on `Child::wait`.
+pub(crate) async fn terminate_owned_core(role: CoreRole, endpoint: &CoreEndpoint) -> bool {
     let Some(mut owned) = take_owned_core(role) else {
         return true;
     };
@@ -155,13 +209,7 @@ async fn terminate_owned_core(role: CoreRole, endpoint: &CoreEndpoint) -> bool {
     #[cfg(not(unix))]
     let _ = owned.child.kill();
 
-    #[cfg(unix)]
     let exited = wait_for_owned_exit(&mut owned.child, endpoint, Duration::from_secs(3)).await;
-    #[cfg(not(unix))]
-    let exited = {
-        let _ = endpoint;
-        owned.child.wait().is_ok()
-    };
 
     if exited {
         true
@@ -171,11 +219,16 @@ async fn terminate_owned_core(role: CoreRole, endpoint: &CoreEndpoint) -> bool {
     }
 }
 
-pub(crate) async fn probe_endpoint(
+pub(crate) async fn probe_endpoint_presence(
     endpoint: &CoreEndpoint,
     expected_role: CoreRole,
-) -> Result<CoreHelloAck, CoreError> {
-    let mut stream = connect_core(endpoint).await?;
+) -> EndpointPresence {
+    let mut stream = match connect_core(endpoint).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            return EndpointPresence::from_connect_and_handshake(Err(error), None);
+        }
+    };
     let hello = CoreHello {
         // Hello.role names the target server, not the caller. The GUI identifies
         // itself with `client_name` and asks for `expected_role`.
@@ -183,37 +236,66 @@ pub(crate) async fn probe_endpoint(
         protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
         client_name: "termul-gui-launcher".to_string(),
     };
-    write_json_frame(&mut stream, &hello).await?;
-    let ack: CoreHelloAck = read_json_frame(&mut stream).await?;
-    if ack.role != expected_role || ack.protocol_version != CURRENT_PROTOCOL_VERSION {
-        return Err(CoreError::InvalidHandshake(
-            "core returned an incompatible handshake".to_string(),
-        ));
+    if let Err(error) = write_json_frame(&mut stream, &hello).await {
+        return EndpointPresence::from_connect_and_handshake(Ok(()), Some(Err(error)));
     }
-    Ok(ack)
+    match read_json_frame::<_, CoreHelloAck>(&mut stream).await {
+        Ok(ack)
+            if ack.role == expected_role && ack.protocol_version == CURRENT_PROTOCOL_VERSION =>
+        {
+            EndpointPresence::LiveCompatible(ack)
+        }
+        Ok(_) => EndpointPresence::from_connect_and_handshake(
+            Ok(()),
+            Some(Err(CoreError::InvalidHandshake(
+                "core returned an incompatible handshake".to_string(),
+            ))),
+        ),
+        Err(error) => EndpointPresence::from_connect_and_handshake(Ok(()), Some(Err(error))),
+    }
 }
 
-async fn replace_incompatible_core(endpoint: &CoreEndpoint, role: CoreRole) {
+pub(crate) async fn probe_endpoint(
+    endpoint: &CoreEndpoint,
+    expected_role: CoreRole,
+) -> Result<CoreHelloAck, CoreError> {
+    match probe_endpoint_presence(endpoint, expected_role).await {
+        EndpointPresence::LiveCompatible(ack) => Ok(ack),
+        EndpointPresence::Absent => Err(CoreError::Io("core endpoint is not listening".into())),
+        EndpointPresence::LiveIncompatible(error) => Err(error),
+    }
+}
+
+async fn replace_incompatible_core(
+    endpoint: &CoreEndpoint,
+    role: CoreRole,
+) -> IncompatibleReplaceOutcome {
     let shutdown_sent = try_shutdown_core(endpoint, role).await;
-    if shutdown_sent {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            if probe_endpoint(endpoint, role).await.is_err() {
-                log::info!(
-                    target: "se_manager::core",
-                    "operation=core_replace role={} stable_code=INCOMPATIBLE_REPLACED",
-                    role.endpoint_name()
-                );
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+    // Always wait for the endpoint to go absent. A rejected pre-hello peer is
+    // not in the request loop, so a shutdown frame must not be treated as
+    // processed just because connect succeeded.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let presence = probe_endpoint_presence(endpoint, role).await;
+        if presence.allows_unlink_and_spawn() {
+            log::info!(
+                target: "se_manager::core",
+                "operation=core_replace role={} stable_code=INCOMPATIBLE_REPLACED shutdown_sent={shutdown_sent}",
+                role.endpoint_name()
+            );
+            return IncompatibleReplaceOutcome::Cleared;
         }
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     log::error!(
         target: "se_manager::core",
-        "operation=core_replace role={} stable_code=ZOMBIE_ORPHANED detail=shutdown_not_acknowledged",
+        "operation=core_replace role={} stable_code=ZOMBIE_ORPHANED detail=shutdown_not_acknowledged shutdown_sent={shutdown_sent}",
         role.endpoint_name()
     );
+    IncompatibleReplaceOutcome::StillLive
 }
 
 async fn try_shutdown_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
@@ -231,9 +313,15 @@ async fn try_shutdown_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
     {
         return false;
     }
-    // The ack is irrelevant — old cores may reject the offered version while
-    // still accepting the shutdown method on their own protocol.
-    let _ = super::ipc::read_json_frame::<_, CoreHelloAck>(&mut stream).await;
+    // Only a peer that wrote HelloAck has entered the request loop. A core
+    // that rejected Hello (role/protocol) drops this socket before shutdown
+    // can be processed; best-effort wire shutdown applies only after ack.
+    if super::ipc::read_json_frame::<_, CoreHelloAck>(&mut stream)
+        .await
+        .is_err()
+    {
+        return false;
+    }
     let request = CoreRequest {
         id: 1,
         method: "shutdown".to_string(),
@@ -252,8 +340,8 @@ pub async fn ensure_core(
     let lock = role_lock(role).await;
     let _guard = lock.lock().await;
 
-    match probe_endpoint(&endpoint, role).await {
-        Ok(_) => {
+    match probe_endpoint_presence(&endpoint, role).await {
+        EndpointPresence::LiveCompatible(_) => {
             log::info!(
                 target: "se_manager::core",
                 "operation=core_adopt role={} stable_code=ADOPTED",
@@ -267,9 +355,7 @@ pub async fn ensure_core(
                 child: None,
             });
         }
-        Err(error @ CoreError::InvalidHandshake(_))
-        | Err(error @ CoreError::UnsupportedProtocol { .. })
-        | Err(error @ CoreError::Unauthorized) => {
+        EndpointPresence::LiveIncompatible(_) => {
             log::error!(
                 target: "se_manager::core",
                 "operation=core_probe role={} stable_code=INCOMPATIBLE",
@@ -277,17 +363,23 @@ pub async fn ensure_core(
             );
             // An incompatible Core (e.g. after an app update bumped the
             // protocol) must not keep squatting the endpoint while the GUI
-            // silently falls back in-process. Ask it to shut down over the
-            // wire it still speaks, wait briefly, then replace it. A core
-            // that ignores the request is orphaned with a loud log — never
-            // a silent second writer.
-            replace_incompatible_core(&endpoint, role).await;
-            let _ = error;
+            // silently falls back in-process. Ask it to shut down only if it
+            // acked Hello, wait until the endpoint is absent, then replace.
+            // A rejected pre-hello peer is still live: never unlink+spawn.
+            if !replace_incompatible_core(&endpoint, role)
+                .await
+                .allows_unlink_and_spawn()
+            {
+                return Err(CoreError::Io(format!(
+                    "incompatible {} is still live; refusing to unlink and spawn a second core",
+                    role.endpoint_name()
+                )));
+            }
         }
-        Err(CoreError::UnsupportedPlatform) => return Err(CoreError::UnsupportedPlatform),
-        Err(CoreError::Io(_))
-        | Err(CoreError::InvalidFrame(_))
-        | Err(CoreError::InvalidRequest(_)) => {}
+        EndpointPresence::Absent => {
+            #[cfg(not(any(unix, windows)))]
+            return Err(CoreError::UnsupportedPlatform);
+        }
     }
 
     prepare_runtime_dir(&endpoint)?;
@@ -430,6 +522,8 @@ mod tests {
         let source = include_str!("launcher.rs");
         assert!(source.contains("operation=core_adopt role={} stable_code=ADOPTED"));
         assert!(source.contains("operation=core_ready role={} stable_code=READY pid={pid}"));
+        assert!(source.contains("stable_code=INCOMPATIBLE_REPLACED"));
+        assert!(source.contains("stable_code=ZOMBIE_ORPHANED"));
     }
 
     #[test]
@@ -445,6 +539,101 @@ mod tests {
     fn never_unlinks_socket_while_owned_child_is_alive() {
         assert!(!may_unlink_owned_socket(true));
         assert!(may_unlink_owned_socket(false));
+    }
+
+    fn compatible_ack() -> CoreHelloAck {
+        CoreHelloAck {
+            role: CoreRole::AcpCore,
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+        }
+    }
+
+    #[test]
+    fn connect_failure_is_absent_and_allows_fallback_and_spawn() {
+        let presence = EndpointPresence::from_connect_and_handshake(
+            Err(CoreError::Io("connection refused".into())),
+            None,
+        );
+        assert!(!presence.is_live());
+        assert!(presence.allows_in_process_fallback());
+        assert!(presence.allows_unlink_and_spawn());
+    }
+
+    #[test]
+    fn pre_hello_close_is_live_and_blocks_fallback_and_spawn() {
+        let presence = EndpointPresence::from_connect_and_handshake(
+            Ok(()),
+            Some(Err(CoreError::Io("unexpected eof".into()))),
+        );
+        assert!(presence.is_live());
+        assert!(!presence.allows_in_process_fallback());
+        assert!(!presence.allows_unlink_and_spawn());
+    }
+
+    #[test]
+    fn incompatible_ack_is_live_and_blocks_fallback_and_spawn() {
+        let presence = EndpointPresence::from_connect_and_handshake(
+            Ok(()),
+            Some(Err(CoreError::InvalidHandshake(
+                "core returned an incompatible handshake".into(),
+            ))),
+        );
+        assert!(presence.is_live());
+        assert!(!presence.allows_in_process_fallback());
+        assert!(!presence.allows_unlink_and_spawn());
+        assert!(!IncompatibleReplaceOutcome::StillLive.allows_unlink_and_spawn());
+        assert!(IncompatibleReplaceOutcome::Cleared.allows_unlink_and_spawn());
+    }
+
+    #[test]
+    fn compatible_ack_is_live_and_must_be_adopted_not_fallback() {
+        let presence =
+            EndpointPresence::from_connect_and_handshake(Ok(()), Some(Ok(compatible_ack())));
+        assert!(presence.is_live());
+        assert!(!presence.allows_in_process_fallback());
+        match presence {
+            EndpointPresence::LiveCompatible(ack) => {
+                assert_eq!(ack.role, CoreRole::AcpCore);
+                assert_eq!(ack.protocol_version, CURRENT_PROTOCOL_VERSION);
+            }
+            other => panic!("expected live compatible, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn incompatible_still_live_returns_before_unlink() {
+        let source = include_str!("launcher.rs");
+        let refuse = source
+            .find("incompatible {} is still live; refusing to unlink and spawn a second core")
+            .expect("still-live replace must fail closed");
+        let unlink = source
+            .find("remove_stale_socket")
+            .expect("unix stale-socket unlink");
+        assert!(
+            refuse < unlink,
+            "StillLive must return before remove_stale_socket + spawn"
+        );
+        let blocking_wait = concat!("owned.child", ".wait()");
+        assert!(
+            !source.contains(blocking_wait),
+            "Windows/non-unix owned exit must poll try_wait, not block on Child::wait"
+        );
+        assert!(source.contains("wait_for_owned_exit"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_for_owned_exit_reaps_a_short_lived_child_without_blocking_wait() {
+        let mut child = Command::new("sleep")
+            .arg("0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep 0");
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::Gui);
+        assert!(wait_for_owned_exit(&mut child, &endpoint, Duration::from_secs(2)).await);
     }
 
     #[cfg(unix)]
