@@ -275,6 +275,35 @@ export function createTauriTerminalApi(): TerminalApi {
   // Tauri Channels have no unsubscribe, so Rust keeps sending on both regardless
   // and the loser has to drop its chunks on arrival.
   const spawnOutputGates = new Map<string, { muted: boolean }>()
+  const PRIMARY_PENDING_CAP_BYTES = 256 * 1024
+  const pendingPrimaryBuffers = new Map<string, { chunks: Uint8Array[]; bytes: number }>()
+
+  const enqueuePendingPrimary = (terminalId: string, bytes: Uint8Array): void => {
+    let pending = pendingPrimaryBuffers.get(terminalId)
+    if (!pending) {
+      pending = { chunks: [], bytes: 0 }
+      pendingPrimaryBuffers.set(terminalId, pending)
+    }
+    pending.chunks.push(bytes)
+    pending.bytes += bytes.byteLength
+    while (pending.bytes > PRIMARY_PENDING_CAP_BYTES && pending.chunks.length > 0) {
+      const dropped = pending.chunks.shift()
+      if (dropped) pending.bytes -= dropped.byteLength
+    }
+  }
+
+  const flushPendingPrimary = (terminalId: string, callback: TerminalScopedDataCallback): void => {
+    const pending = pendingPrimaryBuffers.get(terminalId)
+    if (!pending) return
+    pendingPrimaryBuffers.delete(terminalId)
+    for (const chunk of pending.chunks) {
+      try {
+        callback(chunk)
+      } catch (error) {
+        console.error('[BinaryChannel] Error flushing pending primary terminal data:', error)
+      }
+    }
+  }
 
   const dispatchTerminalData = (terminalId: string, bytes: Uint8Array): void => {
     // Paint first so a slow sidecar cannot delay what the user sees.
@@ -285,6 +314,8 @@ export function createTauriTerminalApi(): TerminalApi {
       } catch (error) {
         console.error('[BinaryChannel] Error in primary terminal data handler:', error)
       }
+    } else {
+      enqueuePendingPrimary(terminalId, bytes)
     }
 
     for (const callback of dataSidecars) {
@@ -315,6 +346,7 @@ export function createTauriTerminalApi(): TerminalApi {
         release()
         boundTerminalId = terminalId
         primaryDataHandlers.set(terminalId, callback)
+        flushPendingPrimary(terminalId, callback)
       },
       dispose: release
     }
@@ -342,7 +374,8 @@ export function createTauriTerminalApi(): TerminalApi {
       // spawn Channel is the authoritative live source for the PTY lifetime, so
       // this second Channel must stay quiet or every chunk is written twice.
       const gate = spawnOutputGates.get(terminalId)
-      if (gate && !gate.muted) {
+      const suppressForSpawn = gate && !gate.muted
+      if (suppressForSpawn) {
         if (!reportedLiveSuppression.has(terminalId)) {
           reportedLiveSuppression.add(terminalId)
           reportDataPathAnomaly(
@@ -550,7 +583,9 @@ export function createTauriTerminalApi(): TerminalApi {
         const bytes = new Uint8Array(buf)
 
         if (capturedTerminalId) {
-          if (spawnOutputGates.get(capturedTerminalId)?.muted) return
+          if (spawnOutputGates.get(capturedTerminalId)?.muted) {
+            return
+          }
           dispatchTerminalData(capturedTerminalId, bytes)
         } else {
           // Data arrived before spawn result — buffer it
@@ -566,7 +601,6 @@ export function createTauriTerminalApi(): TerminalApi {
       if (result.success && result.data) {
         capturedTerminalId = result.data.id
         spawnOutputGates.set(capturedTerminalId, { muted: false })
-
         // Flush any buffered data that arrived before we knew the terminal ID
         if (pendingBuffer.length > 0) {
           for (const bytes of pendingBuffer) {
@@ -589,20 +623,17 @@ export function createTauriTerminalApi(): TerminalApi {
     },
 
     /**
-     * Resume a passive SessionWorkspace reference, then attach from the
-     * returned replay watermark so this method resolves only after live output
-     * continuity is installed. Neither operation spawns or terminates a PTY.
+     * Resume a passive SessionWorkspace reference. The host command delivers
+     * ring replay then keeps the live forwarder on this same Channel — a
+     * second attach from `latestSeq` aborted that forwarder and dropped the
+     * in-flight replay.
      */
     async resume(request: TerminalResumeRequest): Promise<IpcResult<TerminalResumeGrant>> {
       const handoff = beginLiveHandoff(request.terminalId, request.lastSeq, 'resume')
       const replayChannel = createTerminalDataChannel(request.terminalId)
-      if (handoff.handedOff) {
-        // Spawn already painted this history. Drop the resume replay so it
-        // cannot reprint the prompt / last command on top of the live buffer.
-        replayChannel.onmessage = () => {}
-      }
+      if (handoff.handedOff) replayChannel.onmessage = () => {}
       const resumed = await invokeIpc<TerminalResumeGrant>(IPC_COMMANDS.RESUME, {
-        request,
+        request: { ...request, lastSeq: handoff.lastSeq },
         onData: replayChannel
       })
       if (!resumed.success) {
@@ -621,21 +652,6 @@ export function createTauriTerminalApi(): TerminalApi {
           success: false,
           error: 'Terminal resume failed',
           code: 'NETWORK_ERROR'
-        }
-      }
-
-      const attached = await attachTerminal(
-        resumed.data.terminal.id,
-        resumed.data.claim,
-        resumed.data.terminal.latestSeq
-      )
-      if (!attached.success) {
-        replayChannel.onmessage = () => {}
-        if (handoff.handedOff) unmuteSpawnOutput(request.terminalId)
-        return {
-          success: false,
-          error: attached.code === 'UNAUTHORIZED' ? 'Unauthorized' : 'Terminal resume failed',
-          code: attached.code
         }
       }
 

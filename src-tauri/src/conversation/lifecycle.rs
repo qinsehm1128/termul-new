@@ -240,6 +240,12 @@ impl ConversationAgentLifecycle for AcpManager {
 
 pub trait TerminalResourceInspector: Send + Sync {
     fn is_live(&self, terminal_id: &str) -> bool;
+    /// False when this inspector cannot see the process that owns PTYs.
+    /// Conversation delete/suspend must then treat listed terminal resources
+    /// as live instead of claiming they are gone.
+    fn observes_live_terminals(&self) -> bool {
+        true
+    }
     fn terminate<'a>(
         &'a self,
         terminal_id: &'a str,
@@ -278,6 +284,10 @@ impl TerminalResourceInspector for PtyManager {
 impl TerminalResourceInspector for crate::core::TerminalServiceHandle {
     fn is_live(&self, terminal_id: &str) -> bool {
         self.runtime().is_live(terminal_id)
+    }
+
+    fn observes_live_terminals(&self) -> bool {
+        self.runtime().observes_live_terminals()
     }
 
     fn terminate<'a>(
@@ -433,6 +443,23 @@ impl ConversationLifecycleService {
                 "suspend_binding",
                 Some(conversation_id),
                 "suspend requires the current active binding",
+            ));
+        }
+        let unobservable_terminals = self.unobservable_terminal_resource_ids(conversation_id)?;
+        if !unobservable_terminals.is_empty() {
+            log::warn!(
+                "[conversation-lifecycle] suspend blocked conversation_id={} unobservable_terminal_count={}",
+                conversation_id,
+                unobservable_terminals.len()
+            );
+            return Err(lifecycle_error(
+                ConversationLifecycleErrorCode::ConversationLiveResources,
+                "suspend_binding",
+                Some(conversation_id),
+                format!(
+                    "ACP Core cannot observe conversation terminals {:?}; suspend is fail-closed until Terminal Core is linked",
+                    unobservable_terminals
+                ),
             ));
         }
         if let Err(source) = self.provider.suspend(&binding).await {
@@ -806,12 +833,13 @@ impl ConversationLifecycleService {
                 "workspace.json identity/schema is invalid",
             ));
         }
+        let observes = self.terminals.observes_live_terminals();
         let mut ids = workspace
             .resources
             .into_iter()
             .filter_map(|resource| match resource {
                 SessionWorkspaceResourceDescriptor::Terminal { terminal_id, .. }
-                    if self.terminals.is_live(&terminal_id) =>
+                    if !observes || self.terminals.is_live(&terminal_id) =>
                 {
                     Some(terminal_id)
                 }
@@ -821,6 +849,16 @@ impl ConversationLifecycleService {
         ids.sort();
         ids.dedup();
         Ok(ids)
+    }
+
+    fn unobservable_terminal_resource_ids(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<Vec<String>> {
+        if self.terminals.observes_live_terminals() {
+            return Ok(Vec::new());
+        }
+        self.live_terminal_resource_ids(conversation_id)
     }
 }
 
@@ -982,11 +1020,16 @@ mod tests {
     struct FakeTerminals {
         live: Mutex<HashSet<String>>,
         fail_terminate: std::sync::atomic::AtomicBool,
+        cannot_observe_liveness: std::sync::atomic::AtomicBool,
     }
 
     impl TerminalResourceInspector for FakeTerminals {
         fn is_live(&self, terminal_id: &str) -> bool {
             self.live.lock().contains(terminal_id)
+        }
+
+        fn observes_live_terminals(&self) -> bool {
+            !self.cannot_observe_liveness.load(Ordering::SeqCst)
         }
 
         fn terminate<'a>(
@@ -1679,5 +1722,129 @@ mod tests {
             ConversationLifecycleState::Ready
         );
         assert_eq!(fixture.provider.suspend_calls.load(Ordering::SeqCst), 1);
+    }
+
+    async fn write_terminal_workspace(fixture: &Fixture, terminal_id: &str) {
+        let workspace_service = SessionWorkspaceService::new(Arc::clone(fixture.creation.writer()));
+        workspace_service
+            .write(
+                fixture.id,
+                None,
+                SessionWorkspaceV1 {
+                    schema_version: SESSION_WORKSPACE_SCHEMA_VERSION,
+                    conversation_id: fixture.id,
+                    revision: 0,
+                    updated_at_utc: String::new(),
+                    update_identity: Some("test".to_string()),
+                    topology: None,
+                    active_pane_id: None,
+                    resources: vec![SessionWorkspaceResourceDescriptor::Terminal {
+                        terminal_id: terminal_id.to_string(),
+                        terminal_record_id: None,
+                        conversation_id: fixture.id,
+                    }],
+                    projection_state: SessionWorkspaceProjectionState::Native,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_blocks_when_terminal_runtime_cannot_observe_liveness() {
+        let fixture = fixture().await;
+        fixture
+            .terminals
+            .cannot_observe_liveness
+            .store(true, Ordering::SeqCst);
+        write_terminal_workspace(&fixture, "terminal-unobserved").await;
+
+        let blocked = fixture
+            .service
+            .delete_conversation(fixture.id, revision(&fixture))
+            .await
+            .unwrap();
+        assert!(matches!(
+            blocked,
+            ConversationLifecycleOutcome::Blocked {
+                action: ConversationLifecycleAction::DeleteConversation,
+                code: ConversationLifecycleErrorCode::ConversationLiveResources,
+                ..
+            }
+        ));
+        assert_eq!(
+            fixture
+                .repository
+                .get_conversation(fixture.id)
+                .unwrap()
+                .lifecycle_state,
+            ConversationLifecycleState::Ready
+        );
+        assert!(!fixture.terminals.is_live("terminal-unobserved"));
+    }
+
+    #[tokio::test]
+    async fn suspend_fails_closed_when_terminal_runtime_cannot_observe_liveness() {
+        let fixture = fixture().await;
+        fixture
+            .terminals
+            .cannot_observe_liveness
+            .store(true, Ordering::SeqCst);
+        write_terminal_workspace(&fixture, "terminal-unobserved").await;
+
+        let error = fixture
+            .service
+            .suspend_agent_binding(fixture.id, revision(&fixture))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            ConversationLifecycleErrorCode::ConversationLiveResources
+        );
+        assert_eq!(
+            fixture
+                .repository
+                .current_binding(fixture.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            AgentSessionBindingState::Active
+        );
+        assert_eq!(fixture.provider.suspend_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_blocks_detached_runtime_when_workspace_lists_terminals() {
+        let fixture = fixture().await;
+        write_terminal_workspace(&fixture, "terminal-core-owned").await;
+        let service = ConversationLifecycleService::new(
+            Arc::clone(fixture.creation.writer()),
+            Arc::clone(&fixture.creation),
+            Arc::clone(&fixture.provider) as Arc<dyn ConversationAgentLifecycle>,
+            Arc::new(crate::core::TerminalServiceHandle::from_runtime(Arc::new(
+                crate::core::DetachedTerminalRuntime,
+            ))),
+        );
+
+        let blocked = service
+            .delete_conversation(fixture.id, revision(&fixture))
+            .await
+            .unwrap();
+        assert!(matches!(
+            blocked,
+            ConversationLifecycleOutcome::Blocked {
+                action: ConversationLifecycleAction::DeleteConversation,
+                code: ConversationLifecycleErrorCode::ConversationLiveResources,
+                ..
+            }
+        ));
+        assert_eq!(
+            fixture
+                .repository
+                .get_conversation(fixture.id)
+                .unwrap()
+                .lifecycle_state,
+            ConversationLifecycleState::Ready
+        );
     }
 }

@@ -12,7 +12,10 @@ pub mod terminal;
 pub mod transport;
 pub mod web_host;
 
-pub use acp::{run_acp_core, run_acp_core_with_roots, AcpCoreClient, AcpCoreEvent};
+pub use acp::{
+    run_acp_core, run_acp_core_with_roots, AcpCoreClient, AcpCoreEvent,
+    ACP_CONNECTION_CHANGED_EVENT,
+};
 pub use handles::{
     AcpRuntimeHandle, AcpServiceHandle, CoreServices, DetachedTerminalRuntime, InProcessAcpRuntime,
     InProcessTerminalRuntime, TerminalRuntimeHandle, TerminalServiceHandle,

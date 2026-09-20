@@ -23,12 +23,19 @@ pub trait TerminalRuntimeHandle: Send + Sync {
     async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError>;
     async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError>;
     fn is_live(&self, terminal_id: &str) -> bool;
+    /// Whether `is_live` is a real observation. Detached ACP Core runtimes
+    /// cannot see Terminal Core PTYs, so callers must fail closed instead of
+    /// treating every id as dead.
+    fn observes_live_terminals(&self) -> bool {
+        true
+    }
 }
 
 /// Terminal runtime used by the ACP Core process: it owns no PTYs and cannot
-/// reach one. Every operation reports the same stable error, and nothing is
-/// ever live. Replaced by a Terminal-Core-linking runtime when the ACP Core
-/// learns to drive terminal IPC directly.
+/// reach one. Every operation reports the same stable error. `is_live` is
+/// always false *and* `observes_live_terminals` is false so conversation
+/// delete/suspend cannot claim cleanup succeeded. Replaced by a
+/// Terminal-Core-linking runtime when the ACP Core drives terminal IPC.
 pub struct DetachedTerminalRuntime;
 
 #[async_trait]
@@ -52,6 +59,10 @@ impl TerminalRuntimeHandle for DetachedTerminalRuntime {
     }
 
     fn is_live(&self, _terminal_id: &str) -> bool {
+        false
+    }
+
+    fn observes_live_terminals(&self) -> bool {
         false
     }
 }
@@ -364,6 +375,18 @@ mod tests {
         assert_eq!(error.code(), "CORE_IPC_INVALID_REQUEST");
         assert_eq!(error.client_message(), "invalid core IPC request");
         assert!(!runtime.is_live("missing-terminal"));
+    }
+
+    #[tokio::test]
+    async fn detached_terminal_runtime_cannot_observe_or_claim_liveness() {
+        let runtime = DetachedTerminalRuntime;
+        assert!(!runtime.observes_live_terminals());
+        assert!(!runtime.is_live("any"));
+        let error = runtime.terminate("any").await.unwrap_err();
+        assert_eq!(error.code(), "CORE_IPC_INVALID_REQUEST");
+        let handle = TerminalServiceHandle::from_runtime(Arc::new(DetachedTerminalRuntime));
+        assert!(!handle.runtime().observes_live_terminals());
+        assert!(!handle.runtime().is_live("any"));
     }
 
     #[tokio::test]

@@ -92,6 +92,92 @@ fn core_error_detail(error: crate::core::CoreError) -> String {
     }
 }
 
+fn core_terminal(state: &AppState) -> Option<Arc<crate::core::TerminalCoreClient>> {
+    state.terminal.core_client()
+}
+
+fn parse_host_error(error: String) -> (String, String) {
+    match error.split_once(':') {
+        Some((code, detail)) if !code.is_empty() && !code.contains(' ') => {
+            (code.to_string(), detail.to_string())
+        }
+        _ => ("ACP_CORE".to_string(), error),
+    }
+}
+
+async fn host_conversation<T: serde::de::DeserializeOwned>(
+    state: &AppState,
+    method: &str,
+    params: Value,
+) -> Result<T, (&'static str, String)> {
+    let value = state
+        .acp
+        .conversation_request(method, params)
+        .await
+        .map_err(|error| {
+            let (code, detail) = parse_host_error(error);
+            (terminal_resource_code(Some(&code)), detail)
+        })?;
+    serde_json::from_value(value).map_err(|error| ("ACP_CORE", error.to_string()))
+}
+
+async fn load_conversation_record(
+    state: &AppState,
+    conversation_id: ConversationId,
+) -> Result<crate::conversation::ConversationRecordV2, (&'static str, String)> {
+    if let Some(service) = state.conversation.as_ref() {
+        return service.get_conversation(conversation_id).map_err(|error| {
+            (
+                terminal_resource_code(Some(error.code.as_str())),
+                error.detail,
+            )
+        });
+    }
+    if state.acp.is_core_backed() {
+        return host_conversation(
+            state,
+            crate::core::acp::METHOD_CONVERSATION_GET,
+            json!({ "conversationId": conversation_id }),
+        )
+        .await;
+    }
+    Err((
+        "CONVERSATION_SERVICE_UNAVAILABLE",
+        "Conversation application service is unavailable".to_string(),
+    ))
+}
+
+fn optional_workspace_service(
+    state: &AppState,
+) -> Option<Arc<crate::conversation::SessionWorkspaceService>> {
+    state
+        .conversation
+        .as_ref()
+        .map(|conversation| conversation.session_workspace())
+}
+
+fn parse_core_conversation_id(raw: &str, fallback: ConversationId) -> ConversationId {
+    ConversationId::parse(raw).unwrap_or(fallback)
+}
+
+async fn core_claim_generation(
+    state: &AppState,
+    terminal_id: &str,
+) -> Result<u64, (&'static str, String)> {
+    if let Some(client) = core_terminal(state) {
+        return client
+            .status(terminal_id)
+            .await
+            .ok()
+            .and_then(|status| status.claim_generation)
+            .ok_or_else(|| unauthorized_error(terminal_id));
+    }
+    state
+        .pty
+        .claim_generation(terminal_id)
+        .ok_or_else(|| unauthorized_error(terminal_id))
+}
+
 pub async fn terminal_ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -475,7 +561,7 @@ impl ConnectionContext {
     }
 }
 
-fn release_connection_view(
+async fn release_connection_view(
     state: &AppState,
     ctx: &mut ConnectionContext,
     terminal_id: &str,
@@ -486,9 +572,19 @@ fn release_connection_view(
     } else {
         ctx.close_view(terminal_id)
     };
-    if released {
-        state.pty.note_view_closed(terminal_id);
+    if !released {
+        return;
     }
+    if let Some(client) = core_terminal(state) {
+        if let Err(error) = client.close_view(terminal_id).await {
+            info!(
+                "[terminal-ws] core close-view failed terminal_id={terminal_id} error={}",
+                core_error_detail(error)
+            );
+        }
+        return;
+    }
+    state.pty.note_view_closed(terminal_id);
 }
 
 async fn release_connection_phone_fit(
@@ -497,6 +593,18 @@ async fn release_connection_phone_fit(
     terminal_id: &str,
 ) {
     if !ctx.phone_fit.remove(terminal_id) {
+        return;
+    }
+    if let Some(client) = core_terminal(state) {
+        if let Err(error) = client
+            .set_display_mode(terminal_id, "desktop", None, None, false)
+            .await
+        {
+            info!(
+                "[terminal-ws] phone-fit release failed terminal_id={terminal_id} error={}",
+                core_error_detail(error)
+            );
+        }
         return;
     }
     if let Err(error) = state
@@ -622,20 +730,26 @@ async fn handle(
                 cwd_source
             );
 
-            let conversation = terminal_conversation_service(state)?;
-            let record = conversation
-                .get_conversation(conversation_id)
-                .map_err(|error| {
-                    (
-                        terminal_resource_code(Some(error.code.as_str())),
-                        error.detail,
-                    )
-                })?;
-            let workspace = conversation.session_workspace();
-            let result = crate::commands::terminal_spawn_intent_resource(
-                intent, &record, &state.pty, &workspace,
-            )
-            .await;
+            let record = load_conversation_record(state, conversation_id).await?;
+            let workspace = optional_workspace_service(state);
+            let result = if let Some(client) = core_terminal(state) {
+                crate::commands::terminal_spawn_intent_via_core(
+                    intent,
+                    &record,
+                    &client,
+                    workspace.as_ref(),
+                )
+                .await
+            } else {
+                let workspace = workspace.ok_or((
+                    "CONVERSATION_SERVICE_UNAVAILABLE",
+                    "Conversation application service is unavailable".to_string(),
+                ))?;
+                crate::commands::terminal_spawn_intent_resource(
+                    intent, &record, &state.pty, &workspace,
+                )
+                .await
+            };
             if !result.success {
                 let code = terminal_resource_code(result.code.as_deref());
                 let error = result
@@ -645,17 +759,7 @@ async fn handle(
                 return Err((code, error));
             }
             let spawned = result.data.expect("successful terminal spawn has data");
-            debug_assert_eq!(
-                state
-                    .pty
-                    .get(&spawned.info.id)
-                    .map(|instance| instance.conversation_id),
-                Some(conversation_id)
-            );
-            let generation = state
-                .pty
-                .claim_generation(&spawned.info.id)
-                .ok_or_else(|| unauthorized_error(&spawned.info.id))?;
+            let generation = core_claim_generation(state, &spawned.info.id).await?;
             ctx.authorize(&spawned.info.id, conversation_id, generation);
             info!(
                 "[terminal-ws] spawn success conversation_id={} terminal_id={} cwd_source={}",
@@ -672,13 +776,49 @@ async fn handle(
             let conversation_id = resume
                 .conversation_id
                 .ok_or_else(|| unauthorized_error(&resume.terminal_id))?;
-            let workspace = terminal_workspace_service(state)?;
             // Every denial variant collapses to one generic response here. The
             // remote surface has proved nothing, so telling it apart "gone"
             // from "not authorized" would be an existence leak — that
             // distinction is reserved for the local Tauri boundary. Scope-less
             // project resume is desktop-only; remote callers must prove a
             // Conversation.
+            if let Some(client) = core_terminal(state) {
+                let grant = client
+                    .resume(resume.clone())
+                    .await
+                    .map_err(|_| unauthorized_error(&resume.terminal_id))?;
+                let session = client
+                    .attach(&resume.terminal_id, &grant.claim, resume.last_seq)
+                    .await
+                    .map_err(|_| unauthorized_error(&resume.terminal_id))?;
+                let generation = session
+                    .claim_generation
+                    .ok_or_else(|| unauthorized_error(&resume.terminal_id))?;
+                ctx.authorize(&resume.terminal_id, conversation_id, generation);
+                install_core_stream_forwarder(
+                    &resume.terminal_id,
+                    session,
+                    generation,
+                    state,
+                    PassiveForwardAuth {
+                        authority,
+                        principal_generation: principal.generation(),
+                    },
+                    tx,
+                    ctx,
+                )
+                .await?;
+                info!(
+                    "[terminal-ws] resume success conversation_id={} terminal_id={} latest_seq={} gap={}",
+                    conversation_id,
+                    resume.terminal_id,
+                    grant.terminal.latest_seq,
+                    grant.terminal.gap
+                );
+                return serde_json::to_value(grant)
+                    .map_err(|error| ("NETWORK_ERROR", error.to_string()));
+            }
+            let workspace = terminal_workspace_service(state)?;
             let (grant, replay) =
                 crate::commands::terminal_resume_resource(&resume, &state.pty, &workspace)
                     .await
@@ -722,23 +862,41 @@ async fn handle(
                     "list requires conversationId or projectId".to_string(),
                 ));
             }
-            let terminals: Vec<Value> = state
-                .pty
-                .get_all()
-                .into_iter()
-                .filter(|instance| {
-                    instance.is_active()
-                        && companion_list_matches(instance, conversation_filter, project_filter)
-                })
-                .map(|instance| {
-                    let cwd = state
-                        .cwd_tracker
-                        .get_cwd(&instance.id)
-                        .unwrap_or_else(|| instance.cwd.clone());
-                    let git_branch = state.git_tracker.get_branch(&instance.id);
-                    live_terminal_summary(&instance, cwd, git_branch)
-                })
-                .collect();
+            let terminals: Vec<Value> = if let Some(client) = core_terminal(state) {
+                client
+                    .list()
+                    .await
+                    .map_err(|error| ("NETWORK_ERROR", core_error_detail(error)))?
+                    .into_iter()
+                    .filter(|status| {
+                        status.active
+                            && companion_status_matches(status, conversation_filter, project_filter)
+                    })
+                    .map(|status| {
+                        let snapshot = state.terminal_events.snapshot(&status.id);
+                        let cwd = snapshot.cwd.unwrap_or_else(|| status.cwd.clone());
+                        live_terminal_summary_from_status(&status, cwd, snapshot.git_branch)
+                    })
+                    .collect()
+            } else {
+                state
+                    .pty
+                    .get_all()
+                    .into_iter()
+                    .filter(|instance| {
+                        instance.is_active()
+                            && companion_list_matches(instance, conversation_filter, project_filter)
+                    })
+                    .map(|instance| {
+                        let cwd = state
+                            .cwd_tracker
+                            .get_cwd(&instance.id)
+                            .unwrap_or_else(|| instance.cwd.clone());
+                        let git_branch = state.git_tracker.get_branch(&instance.id);
+                        live_terminal_summary(&instance, cwd, git_branch)
+                    })
+                    .collect()
+            };
             info!(
                 "[terminal-ws] list success conversation_filter={} project_filter={} count={}",
                 conversation_filter.is_some(),
@@ -795,11 +953,24 @@ async fn handle(
             let cols = optional_u16_field(&request.payload, "cols")?;
             let rows = optional_u16_field(&request.payload, "rows")?;
             let force = request.payload["force"].as_bool().unwrap_or(false);
-            let state_value = state
-                .pty
-                .set_display_mode(&terminal_id, mode, cols, rows, &ctx.id, force)
-                .await
-                .map_err(|error| ("RESIZE_FAILED", error))?;
+            let state_value = if let Some(client) = core_terminal(state) {
+                client
+                    .set_display_mode(
+                        &terminal_id,
+                        terminal_display_mode_wire(mode),
+                        cols,
+                        rows,
+                        force,
+                    )
+                    .await
+                    .map_err(|error| ("RESIZE_FAILED", core_error_detail(error)))?
+            } else {
+                state
+                    .pty
+                    .set_display_mode(&terminal_id, mode, cols, rows, &ctx.id, force)
+                    .await
+                    .map_err(|error| ("RESIZE_FAILED", error))?
+            };
             match mode {
                 TerminalDisplayMode::Phone => {
                     ctx.phone_fit.insert(terminal_id);
@@ -813,10 +984,22 @@ async fn handle(
         "terminate" | "kill" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             let scope = authorized_terminal_cleanup_scope(state, ctx, terminal_id)?;
-            let workspace = terminal_workspace_service(state)?;
-            let result =
+            let workspace = optional_workspace_service(state);
+            let result = if let Some(client) = core_terminal(state) {
+                crate::commands::terminal_terminate_via_core_optional_workspace(
+                    terminal_id,
+                    &client,
+                    workspace.as_ref(),
+                )
+                .await
+            } else {
+                let workspace = workspace.ok_or((
+                    "CONVERSATION_SERVICE_UNAVAILABLE",
+                    "Conversation application service is unavailable".to_string(),
+                ))?;
                 crate::commands::terminal_terminate_resource(terminal_id, &state.pty, &workspace)
-                    .await;
+                    .await
+            };
             if !result.success {
                 return Err((
                     terminal_resource_code(result.code.as_deref()),
@@ -825,9 +1008,12 @@ async fn handle(
                         .unwrap_or_else(|| "terminal termination failed".to_string()),
                 ));
             }
-            debug_assert!(state.pty.get(terminal_id).is_none(), "scope={scope}");
+            debug_assert!(
+                core_terminal(state).is_some() || state.pty.get(terminal_id).is_none(),
+                "scope={scope}"
+            );
             release_connection_phone_fit(state, ctx, terminal_id).await;
-            release_connection_view(state, ctx, terminal_id, true);
+            release_connection_view(state, ctx, terminal_id, true).await;
             Ok(Value::Null)
         }
         "attach" => {
@@ -840,6 +1026,35 @@ async fn handle(
             // invalid claim" collapses into the one generic error).
             let claim = request.payload["claim"].as_str().unwrap_or("");
             let last_seq = request.payload["lastSeq"].as_u64().unwrap_or(0);
+
+            if let Some(client) = core_terminal(state) {
+                let session = client
+                    .attach(&terminal_id, claim, last_seq)
+                    .await
+                    .map_err(|_| unauthorized_error(&terminal_id))?;
+                let generation = session
+                    .claim_generation
+                    .ok_or_else(|| unauthorized_error(&terminal_id))?;
+                let conversation_id =
+                    parse_core_conversation_id(&session.conversation_id, ConversationId::new_v4());
+                ctx.authorize(&terminal_id, conversation_id, generation);
+                let attach_result = session.result.clone();
+                install_core_stream_forwarder(
+                    &terminal_id,
+                    session,
+                    generation,
+                    state,
+                    PassiveForwardAuth {
+                        authority,
+                        principal_generation: principal.generation(),
+                    },
+                    tx,
+                    ctx,
+                )
+                .await?;
+                return serde_json::to_value(attach_result)
+                    .map_err(|error| ("NETWORK_ERROR", error.to_string()));
+            }
 
             // Capture the generation BEFORE verifying (TOCTOU-safe ordering,
             // same as the desktop command): captured-first means a rotate/
@@ -896,17 +1111,24 @@ async fn handle(
             // (missing claims flow through verification, never a shape error).
             let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
             let claim = request.payload["claim"].as_str().unwrap_or("");
-            let rotated = state
-                .pty
-                .rotate_claim(&terminal_id, claim)
-                .map_err(|_| unauthorized_error(&terminal_id))?;
+            let rotated = if let Some(client) = core_terminal(state) {
+                client
+                    .rotate(&terminal_id, claim)
+                    .await
+                    .map_err(|_| unauthorized_error(&terminal_id))?
+            } else {
+                state
+                    .pty
+                    .rotate_claim(&terminal_id, claim)
+                    .map_err(|_| unauthorized_error(&terminal_id))?
+            };
             // Teardown (amendment R1): the invalidated holder loses the output
             // stream (attachment task detached) AND write/resize access
             // (removed from the authorized set). Holders on OTHER connections
             // are severed by the claim-generation check inside their
             // attachment tasks. The PTY keeps running.
             release_connection_phone_fit(state, ctx, &terminal_id).await;
-            release_connection_view(state, ctx, &terminal_id, true);
+            release_connection_view(state, ctx, &terminal_id, true).await;
             info!("[terminal-ws] claim rotated terminal_id={terminal_id}");
             serde_json::to_value(crate::pty::RotatedClaim { claim: rotated })
                 .map_err(|e| ("NETWORK_ERROR", e.to_string()))
@@ -918,24 +1140,31 @@ async fn handle(
             // UNAUTHORIZED as attach.
             let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
             let claim = request.payload["claim"].as_str().unwrap_or("");
-            state
-                .pty
-                .revoke_claim(&terminal_id, claim)
-                .map_err(|_| unauthorized_error(&terminal_id))?;
+            if let Some(client) = core_terminal(state) {
+                client
+                    .revoke(&terminal_id, claim)
+                    .await
+                    .map_err(|_| unauthorized_error(&terminal_id))?;
+            } else {
+                state
+                    .pty
+                    .revoke_claim(&terminal_id, claim)
+                    .map_err(|_| unauthorized_error(&terminal_id))?;
+            }
             // Teardown (amendment R1): same severing as rotate — the revoked
             // holder is a credential-less client and receives no further
             // metadata or output; other connections are severed by the
             // generation check in their attachment tasks. The PTY keeps
             // running.
             release_connection_phone_fit(state, ctx, &terminal_id).await;
-            release_connection_view(state, ctx, &terminal_id, true);
+            release_connection_view(state, ctx, &terminal_id, true).await;
             info!("[terminal-ws] claim revoked terminal_id={terminal_id}");
             Ok(Value::Null)
         }
         "detach" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             release_connection_phone_fit(state, ctx, terminal_id).await;
-            release_connection_view(state, ctx, terminal_id, true);
+            release_connection_view(state, ctx, terminal_id, true).await;
             info!("[terminal-ws] detached terminal_id={terminal_id}");
             Ok(Value::Null)
         }
@@ -946,7 +1175,7 @@ async fn handle(
             // renderer component's unmount cleanup to remove its backend ref.
             // That cleanup then sends `detach`, which drops authorization.
             release_connection_phone_fit(state, ctx, terminal_id).await;
-            release_connection_view(state, ctx, terminal_id, false);
+            release_connection_view(state, ctx, terminal_id, false).await;
             info!("[terminal-ws] close-view terminal_id={terminal_id}");
             Ok(Value::Null)
         }
@@ -1119,6 +1348,50 @@ fn retain_compound_cleanup_authorization(
 struct PassiveForwardAuth<'a> {
     authority: &'a Arc<RemoteAccessAuthority>,
     principal_generation: u64,
+}
+
+async fn install_core_stream_forwarder(
+    terminal_id: &str,
+    session: crate::core::TerminalAttachSession,
+    _generation: u64,
+    _state: &AppState,
+    forward_auth: PassiveForwardAuth<'_>,
+    tx: &mpsc::Sender<Message>,
+    ctx: &mut ConnectionContext,
+) -> Result<(), (&'static str, String)> {
+    if !should_forward_passive(forward_auth.authority, forward_auth.principal_generation) {
+        return Err(unauthorized_error(terminal_id));
+    }
+    let binary_output = ctx.binary_output;
+    let output_tx = tx.clone();
+    let attached_id = terminal_id.to_string();
+    tokio::spawn(async move {
+        let mut output = session.output;
+        while let Some(frame) = output.recv().await {
+            let kind = match frame.kind {
+                crate::core::OutputKind::Replay => BinaryOutputKind::Replay,
+                crate::core::OutputKind::Live => BinaryOutputKind::Live,
+            };
+            let result = if binary_output {
+                send_binary_output(&output_tx, kind, &attached_id, frame.seq, &frame.data).await
+            } else {
+                send_json(
+                    &output_tx,
+                    json!({
+                        "type": if matches!(kind, BinaryOutputKind::Replay) { "replay_chunk" } else { "output" },
+                        "terminalId": attached_id,
+                        "seq": frame.seq,
+                        "data": frame.data.iter().map(|byte| *byte as u64).collect::<Vec<u64>>()
+                    }),
+                )
+                .await
+            };
+            if result.is_err() {
+                break;
+            }
+        }
+    });
+    Ok(())
 }
 
 async fn install_replay_forwarder(
@@ -1452,6 +1725,44 @@ fn live_terminal_summary(
         "gitBranch": git_branch,
         "displayMode": instance.display_mode(),
     })
+}
+
+fn companion_status_matches(
+    status: &crate::core::TerminalStatus,
+    conversation_filter: Option<ConversationId>,
+    project_filter: Option<&str>,
+) -> bool {
+    if let Some(conversation_id) = conversation_filter {
+        return ConversationId::parse(&status.conversation_id).ok() == Some(conversation_id);
+    }
+    project_filter.is_some_and(|project_id| status.project_id.as_deref() == Some(project_id))
+}
+
+fn live_terminal_summary_from_status(
+    status: &crate::core::TerminalStatus,
+    cwd: String,
+    git_branch: Option<String>,
+) -> Value {
+    json!({
+        "id": status.id,
+        "shell": status.shell,
+        "cwd": cwd,
+        "pid": status.pid,
+        "cols": status.cols,
+        "rows": status.rows,
+        "conversationId": status.conversation_id,
+        "projectId": status.project_id,
+        "title": terminal_display_title(&cwd, &status.shell),
+        "gitBranch": git_branch,
+        "displayMode": "desktop",
+    })
+}
+
+fn terminal_display_mode_wire(mode: TerminalDisplayMode) -> &'static str {
+    match mode {
+        TerminalDisplayMode::Phone => "phone",
+        TerminalDisplayMode::Desktop => "desktop",
+    }
 }
 
 fn terminal_conversation_service(

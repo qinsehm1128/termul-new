@@ -149,7 +149,7 @@ describe('tauri-terminal-api', () => {
       }
     })
 
-    it('resumes with the exact scoped request, replays first, then attaches live from latestSeq', async () => {
+    it('resumes on one Channel and does not attach again from latestSeq', async () => {
       const { api, Channel } = await loadApi()
       const request = {
         conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
@@ -169,13 +169,11 @@ describe('tauri-terminal-api', () => {
         },
         claim: 'resume-claim-rotated'
       }
-      mockInvoke
-        .mockImplementationOnce(async (_command: string, args: Record<string, unknown>) => {
-          const channel = args.onData as unknown as ChannelLike
-          channel.onmessage?.(new Uint8Array([114, 101, 112, 108, 97, 121]).buffer)
-          return { success: true, data: grant }
-        })
-        .mockResolvedValueOnce({ success: true, data: grant.terminal })
+      mockInvoke.mockImplementationOnce(async (_command: string, args: Record<string, unknown>) => {
+        const channel = args.onData as unknown as ChannelLike
+        channel.onmessage?.(new Uint8Array([114, 101, 112, 108, 97, 121]).buffer)
+        return { success: true, data: grant }
+      })
 
       const received: Array<{ terminalId: string; bytes: Uint8Array }> = []
       const off = api.onData((terminalId, bytes) => received.push({ terminalId, bytes }))
@@ -183,29 +181,17 @@ describe('tauri-terminal-api', () => {
       const result = await api.resume(request)
 
       expect(result).toEqual({ success: true, data: grant })
-      expect(mockInvoke).toHaveBeenCalledTimes(2)
+      expect(mockInvoke).toHaveBeenCalledTimes(1)
       const [resumeCommand, resumeArgs] = mockInvoke.mock.calls[0]
       expect(resumeCommand).toBe('terminal_resume')
       expect(resumeArgs.request).toEqual(request)
       expect(resumeArgs.onData).toBeInstanceOf(Channel)
       expect(resumeArgs).not.toHaveProperty('program')
       expect(resumeArgs).not.toHaveProperty('env')
+      expect(received.map(({ bytes }) => new TextDecoder().decode(bytes))).toEqual(['replay'])
 
-      const [attachCommand, attachArgs] = mockInvoke.mock.calls[1]
-      expect(attachCommand).toBe('terminal_attach')
-      expect(attachArgs).toMatchObject({
-        terminalId: 'terminal-1752-1',
-        claim: 'resume-claim-rotated',
-        lastSeq: 87
-      })
-      expect(attachArgs.onData).toBeInstanceOf(Channel)
-      ;(attachArgs.onData as unknown as ChannelLike).onmessage?.(
-        new Uint8Array([108, 105, 118, 101]).buffer
-      )
-      expect(received.map(({ terminalId }) => terminalId)).toEqual([
-        'terminal-1752-1',
-        'terminal-1752-1'
-      ])
+      const resumeChannel = resumeArgs.onData as unknown as ChannelLike
+      resumeChannel.onmessage?.(new Uint8Array([108, 105, 118, 101]).buffer)
       expect(received.map(({ bytes }) => new TextDecoder().decode(bytes))).toEqual([
         'replay',
         'live'
@@ -607,20 +593,21 @@ describe('tauri-terminal-api', () => {
       await api.spawn()
       const spawnChannel = mockInvoke.mock.calls[0][1].onData as unknown as ChannelLike
 
-      // Unbound handles own nothing, so pre-bind chunks reach no writer.
+      // Unbound handles own nothing yet; pre-bind chunks are held until bind.
       spawnChannel.onmessage?.(new Uint8Array([97]).buffer)
       expect(first).toEqual([])
       expect(second).toEqual([])
 
       firstHandle?.bind(SPAWNED.id)
+      expect(first).toEqual(['a'])
       spawnChannel.onmessage?.(new Uint8Array([98]).buffer)
-      expect(first).toEqual(['b'])
+      expect(first).toEqual(['a', 'b'])
       expect(second).toEqual([])
 
       // Taking over evicts the previous owner rather than adding a second writer.
       secondHandle?.bind(SPAWNED.id)
       spawnChannel.onmessage?.(new Uint8Array([99]).buffer)
-      expect(first).toEqual(['b'])
+      expect(first).toEqual(['a', 'b'])
       expect(second).toEqual(['c'])
 
       // A stale handle must not release the slot it no longer owns.
@@ -631,6 +618,36 @@ describe('tauri-terminal-api', () => {
       secondHandle?.dispose()
       spawnChannel.onmessage?.(new Uint8Array([101]).buffer)
       expect(second).toEqual(['c', 'd'])
+    })
+
+    it('flushes attach bytes that arrived before the primary handler bound', async () => {
+      const { api } = await loadApi()
+      mockInvoke.mockResolvedValue({
+        success: true,
+        data: {
+          id: SPAWNED.id,
+          shell: SPAWNED.shell,
+          cwd: SPAWNED.cwd,
+          pid: SPAWNED.pid,
+          cols: SPAWNED.cols,
+          rows: SPAWNED.rows,
+          latestSeq: 3,
+          gap: false
+        }
+      })
+
+      const painted: string[] = []
+      const handle = api.registerPrimaryTerminalData?.((bytes) =>
+        painted.push(new TextDecoder().decode(bytes))
+      )
+      await api.attach(SPAWNED.id, 'lease-claim-64-hex', 0)
+      const channel = mockInvoke.mock.calls[0][1].onData as unknown as ChannelLike
+      channel.onmessage?.(new Uint8Array([114, 101, 112, 108, 97, 121]).buffer)
+      expect(painted).toEqual([])
+
+      handle?.bind(SPAWNED.id)
+      expect(painted).toEqual(['replay'])
+      handle?.dispose()
     })
 
     it('never presents an id-only attach: empty claim fails without an invoke', async () => {

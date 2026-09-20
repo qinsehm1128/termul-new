@@ -16,6 +16,11 @@ pub enum LocalOnlyOperation {
     SetDefaultProject,
     SetCatalogOptIn,
     InstallAcpAgent,
+    SpawnAgent,
+    CreateSession,
+    StoreAccess,
+    PermissionPolicy,
+    KillAgent,
     SkillsMutation,
 }
 
@@ -26,6 +31,11 @@ impl LocalOnlyOperation {
             Self::SetDefaultProject => "set_default_project",
             Self::SetCatalogOptIn => "set_catalog_opt_in",
             Self::InstallAcpAgent => "install_acp_agent",
+            Self::SpawnAgent => "spawn_agent",
+            Self::CreateSession => "create_session",
+            Self::StoreAccess => "store_access",
+            Self::PermissionPolicy => "set_permission_policy",
+            Self::KillAgent => "kill_agent",
             Self::SkillsMutation => "skills_mutation",
         }
     }

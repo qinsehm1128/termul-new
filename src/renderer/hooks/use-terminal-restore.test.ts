@@ -804,52 +804,33 @@ describe('useTerminalRestore', () => {
         }
       ]
     })
-    mockTerminalResume.mockResolvedValue({
-      success: true,
-      data: {
-        terminal: {
-          id: 'pty-live-1',
-          shell: 'bash',
-          cwd: '/projects/a',
-          pid: 11,
-          cols: 80,
-          rows: 24,
-          latestSeq: 9,
-          gap: false
-        },
-        claim: 'adopted-claim'
-      }
-    })
-
     renderHook(() => {
       mockProjectState.activeProjectId = 'project-a'
       useTerminalRestore()
     })
 
     await waitFor(() => {
-      // Full Core replay paints the downtime transcript (RV-202); the
-      // persisted snapshot is intentionally not applied on adopt.
-      expect(mockTerminalResume).toHaveBeenCalledWith({
-        terminalId: 'pty-live-1',
-        lastSeq: 0
-      })
+      expect(mockTerminalStoreState.setTerminals).toHaveBeenCalled()
     })
-    expect(mockTerminalResume.mock.calls[0]?.[0]).not.toHaveProperty('conversationId')
+    // Layout adopt is identity-only. Resume/watch before the primary handler
+    // binds drops the 256 KiB ring replay; ConnectedTerminal watches from 0
+    // after bind so Core remains the single painter (RV-202).
+    expect(mockTerminalResume).not.toHaveBeenCalled()
     expect(mockTerminalSpawn).not.toHaveBeenCalled()
     expect(mockTerminalStoreState.setTerminals).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
           name: 'Terminal 1',
           ptyId: 'pty-live-1',
-          claim: 'adopted-claim'
+          adopted: true
         })
       ])
     )
-    // RV-202: the Core replay is the single painter on adopt — the persisted
-    // snapshot must NOT be double-applied.
     const adoptedRecord = mockTerminalStoreState.setTerminals.mock.calls
       .flatMap((call) => call[0] as Array<Record<string, unknown>>)
       .find((record) => record.ptyId === 'pty-live-1')
+    expect(adoptedRecord).not.toHaveProperty('claim')
+    expect(adoptedRecord).not.toHaveProperty('healthStatus')
     expect(adoptedRecord).not.toHaveProperty('pendingScrollback')
     expect(adoptedRecord).not.toHaveProperty('transcript')
   })

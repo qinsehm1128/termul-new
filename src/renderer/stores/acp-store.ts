@@ -7084,6 +7084,50 @@ export function initAcpEventListeners(): () => void {
   let historyRetryTimer: ReturnType<typeof setTimeout> | null = null
   let historyRetryAttempt = 0
   let historyTornDown = false
+  const coreResyncSessionIds = new Set<SessionId>()
+  const markLiveSessionsClosedForCoreResync = (): void => {
+    const state = useAcpStore.getState()
+    const nextSessions = { ...state.sessions }
+    let changed = false
+    for (const id of Object.keys(nextSessions) as SessionId[]) {
+      if (ephemeralSessionIds.has(id)) continue
+      const session = nextSessions[id]
+      if (!session || session.status === 'closed' || session.status === 'error') continue
+      nextSessions[id] = {
+        ...session,
+        status: 'closed',
+        activeTurn: false,
+        openTurnId: null,
+        replaying: null
+      }
+      coreResyncSessionIds.add(id)
+      changed = true
+    }
+    if (changed) {
+      useAcpStore.setState({ sessions: nextSessions })
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp-store.coreEventGap',
+        message: `ACP live event stream lost; marked ${coreResyncSessionIds.size} session(s) for durable refresh`
+      })
+    }
+  }
+  const refreshLiveSessionsAfterCoreResync = (): void => {
+    const ids = [...coreResyncSessionIds]
+    coreResyncSessionIds.clear()
+    for (const id of ids) {
+      void useAcpStore
+        .getState()
+        .openHistorySession(id)
+        .catch((error) => {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp-store.coreEventGapRefresh',
+            message: `ACP durable refresh after event gap failed: ${String(error)}`
+          })
+        })
+    }
+  }
   const refetchHistoryAfterReconnect = (): void => {
     const run = (): void => {
       if (historyTornDown) return
@@ -7269,9 +7313,14 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<{ connected: boolean }>('acp:connection_changed', (e) => {
       if (e.connected) {
+        if (coreResyncSessionIds.size === 0) {
+          markLiveSessionsClosedForCoreResync()
+        }
         useAcpStore.setState({ connectionDegraded: false })
         refetchHistoryAfterReconnect()
+        refreshLiveSessionsAfterCoreResync()
       } else {
+        markLiveSessionsClosedForCoreResync()
         useAcpStore.setState({ connectionDegraded: true })
       }
     })

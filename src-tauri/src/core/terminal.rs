@@ -694,6 +694,61 @@ fn stream_should_stop(captured_generation: Option<u64>, current_generation: Opti
     captured_generation != current_generation
 }
 
+const STREAM_OUTPUT_CAPACITY: usize = 256;
+
+/// Lagged is a hole in seq space. Continuing would silently skip bytes;
+/// fail the stream (emit `terminal.gap`) and let reconnect/rewatch heal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LiveOutputDecision {
+    Forward { seq: u64, data: Vec<u8> },
+    FailGap { last_seq: u64 },
+    Stop,
+}
+
+pub(crate) fn decide_live_output(
+    received: Result<crate::pty::manager::TerminalOutputChunk, broadcast::error::RecvError>,
+    current_seq: u64,
+) -> LiveOutputDecision {
+    match received {
+        Ok(chunk) => LiveOutputDecision::Forward {
+            seq: chunk.seq,
+            data: chunk.data,
+        },
+        Err(broadcast::error::RecvError::Lagged(_)) => LiveOutputDecision::FailGap {
+            last_seq: current_seq,
+        },
+        Err(broadcast::error::RecvError::Closed) => LiveOutputDecision::Stop,
+    }
+}
+
+fn requested_stream_last_seq(params: &Value) -> u64 {
+    params.get("lastSeq").and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn deliver_client_output_frame(
+    streams: &mut HashMap<String, StreamSlot>,
+    frame: OutputFrame,
+) -> Result<(), OutputFrame> {
+    let Some(slot) = streams.get_mut(&frame.terminal_id) else {
+        return Ok(());
+    };
+    let seq = frame.seq;
+    match slot.sender.try_send(frame) {
+        Ok(()) => {
+            if seq > slot.last_seq {
+                slot.last_seq = seq;
+            }
+            Ok(())
+        }
+        Err(
+            mpsc::error::TrySendError::Full(rejected) | mpsc::error::TrySendError::Closed(rejected),
+        ) => {
+            streams.remove(&rejected.terminal_id);
+            Err(rejected)
+        }
+    }
+}
+
 async fn begin_output_stream(
     pty: &Arc<PtyManager>,
     writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
@@ -811,16 +866,29 @@ async fn start_replay_forwarder(
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            let message = CoreEvent {
-                                topic: GAP_TOPIC.to_string(),
-                                payload: json!(GapPayload {
-                                    terminal_id: attached_id.clone(),
-                                    last_seq: current_seq,
-                                }),
-                            };
-                            let mut guard = writer.lock().await;
-                            if write_json_frame(&mut *guard, &message).await.is_err() {
-                                break;
+                            match decide_live_output(
+                                Err(broadcast::error::RecvError::Lagged(0)),
+                                current_seq,
+                            ) {
+                                LiveOutputDecision::FailGap { last_seq } => {
+                                    log::warn!(
+                                        target: "se_manager::core",
+                                        "operation=terminal_output_lag stable_code=STREAM_GAP terminal_id={} last_seq={}",
+                                        attached_id,
+                                        last_seq
+                                    );
+                                    let message = CoreEvent {
+                                        topic: GAP_TOPIC.to_string(),
+                                        payload: json!(GapPayload {
+                                            terminal_id: attached_id.clone(),
+                                            last_seq,
+                                        }),
+                                    };
+                                    let mut guard = writer.lock().await;
+                                    let _ = write_json_frame(&mut *guard, &message).await;
+                                    break;
+                                }
+                                _ => break,
                             }
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
@@ -1129,12 +1197,13 @@ impl TerminalCoreClient {
         params: Value,
         terminal_id: &str,
     ) -> Result<TerminalAttachSession, CoreError> {
-        let (tx, rx) = mpsc::channel(256);
+        let last_seq = requested_stream_last_seq(&params);
+        let (tx, rx) = mpsc::channel(STREAM_OUTPUT_CAPACITY);
         self.inner.streams.lock().insert(
             terminal_id.to_string(),
             StreamSlot {
                 sender: tx,
-                last_seq: 0,
+                last_seq,
             },
         );
         let value = match self.rpc(method, params).await {
@@ -1156,33 +1225,41 @@ impl TerminalCoreClient {
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, CoreError> {
-        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().insert(id, tx);
-        let request = CoreRequest {
-            id,
-            method: method.to_string(),
-            params,
-        };
-        {
-            let mut writer = self.inner.writer.lock().await;
-            if let Err(error) = write_json_frame(&mut *writer, &request).await {
-                self.inner.pending.lock().remove(&id);
-                return Err(error);
-            }
-        }
-        let response = tokio::time::timeout(RPC_TIMEOUT, rx)
-            .await
-            .map_err(|_| CoreError::Io("core RPC timed out".into()))?
-            .map_err(|_| CoreError::Io("core RPC cancelled".into()))?;
-        if let Some(error) = response.error {
-            if error.code == CoreError::Unauthorized.code() {
-                return Err(CoreError::Unauthorized);
-            }
-            return Err(CoreError::InvalidRequest(error.message));
-        }
-        Ok(response.result.unwrap_or(Value::Null))
+        client_rpc(&self.inner, method, params).await
     }
+}
+
+async fn client_rpc(
+    inner: &Arc<ClientInner>,
+    method: &str,
+    params: Value,
+) -> Result<Value, CoreError> {
+    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
+    let (tx, rx) = oneshot::channel();
+    inner.pending.lock().insert(id, tx);
+    let request = CoreRequest {
+        id,
+        method: method.to_string(),
+        params,
+    };
+    {
+        let mut writer = inner.writer.lock().await;
+        if let Err(error) = write_json_frame(&mut *writer, &request).await {
+            inner.pending.lock().remove(&id);
+            return Err(error);
+        }
+    }
+    let response = tokio::time::timeout(RPC_TIMEOUT, rx)
+        .await
+        .map_err(|_| CoreError::Io("core RPC timed out".into()))?
+        .map_err(|_| CoreError::Io("core RPC cancelled".into()))?;
+    if let Some(error) = response.error {
+        if error.code == CoreError::Unauthorized.code() {
+            return Err(CoreError::Unauthorized);
+        }
+        return Err(CoreError::InvalidRequest(error.message));
+    }
+    Ok(response.result.unwrap_or(Value::Null))
 }
 
 async fn open_terminal_stream(
@@ -1234,17 +1311,17 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
         };
         if is_output_frame(&payload) {
             if let Ok(frame) = decode_output_frame(&payload) {
-                let tx = {
+                let rejected = {
                     let mut streams = inner.streams.lock();
-                    streams.get_mut(&frame.terminal_id).map(|slot| {
-                        if frame.seq > slot.last_seq {
-                            slot.last_seq = frame.seq;
-                        }
-                        slot.sender.clone()
-                    })
+                    deliver_client_output_frame(&mut streams, frame).err()
                 };
-                if let Some(tx) = tx {
-                    let _ = tx.send(frame).await;
+                if let Some(rejected) = rejected {
+                    log::warn!(
+                        target: "se_manager::core",
+                        "operation=terminal_output_backpressure stable_code=STREAM_SLOT_FULL terminal_id={} seq={}",
+                        rejected.terminal_id,
+                        rejected.seq
+                    );
                 }
             }
             continue;
@@ -1256,6 +1333,26 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
             continue;
         }
         if let Ok(event) = serde_json::from_slice::<CoreEvent>(&payload) {
+            if event.topic == GAP_TOPIC {
+                if let Ok(gap) = serde_json::from_value::<GapPayload>(event.payload) {
+                    let last_seq = inner
+                        .streams
+                        .lock()
+                        .get(&gap.terminal_id)
+                        .map(|slot| slot.last_seq)
+                        .unwrap_or(gap.last_seq);
+                    let inner = Arc::clone(&inner);
+                    tokio::spawn(async move {
+                        let _ = client_rpc(
+                            &inner,
+                            METHOD_WATCH,
+                            json!({ "terminalId": gap.terminal_id, "lastSeq": last_seq }),
+                        )
+                        .await;
+                    });
+                }
+                continue;
+            }
             if event.topic == EVENT_TOPIC {
                 if let Ok(terminal_event) = serde_json::from_value::<TerminalEvent>(event.payload) {
                     match &terminal_event {
@@ -1623,6 +1720,132 @@ mod tests {
         assert!(
             resumed.contains("TERMUL_REWATCH_TWO"),
             "rewatch must resume output on the existing stream: {resumed:?}"
+        );
+
+        client.shutdown().await.expect("shutdown");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    #[test]
+    fn lagged_output_fails_the_stream_instead_of_continuing() {
+        assert_eq!(
+            decide_live_output(Err(broadcast::error::RecvError::Lagged(4)), 10),
+            LiveOutputDecision::FailGap { last_seq: 10 }
+        );
+        assert_eq!(
+            decide_live_output(Err(broadcast::error::RecvError::Closed), 10),
+            LiveOutputDecision::Stop
+        );
+    }
+
+    #[test]
+    fn stream_slot_initial_last_seq_comes_from_attach_cursor() {
+        assert_eq!(
+            requested_stream_last_seq(&json!({ "terminalId": "t", "lastSeq": 42u64 })),
+            42
+        );
+        assert_eq!(requested_stream_last_seq(&json!({ "terminalId": "t" })), 0);
+    }
+
+    #[tokio::test]
+    async fn full_output_slot_fails_closed_without_advancing_last_seq() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut streams = HashMap::new();
+        streams.insert(
+            "t1".to_string(),
+            StreamSlot {
+                sender: tx,
+                last_seq: 7,
+            },
+        );
+        let first = OutputFrame {
+            kind: OutputKind::Live,
+            terminal_id: "t1".to_string(),
+            seq: 8,
+            data: vec![1],
+        };
+        let second = OutputFrame {
+            kind: OutputKind::Live,
+            terminal_id: "t1".to_string(),
+            seq: 9,
+            data: vec![2],
+        };
+        assert!(deliver_client_output_frame(&mut streams, first).is_ok());
+        assert_eq!(streams.get("t1").map(|slot| slot.last_seq), Some(8));
+        let rejected = deliver_client_output_frame(&mut streams, second).unwrap_err();
+        assert_eq!(rejected.seq, 9);
+        assert!(
+            !streams.contains_key("t1"),
+            "a full slot must fail closed so the multiplexed reader can continue"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_initializes_stream_slot_from_requested_last_seq() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server =
+            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+
+        let client = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+        let _session = client
+            .attach(&terminal_id, &spawned.claim, 99)
+            .await
+            .expect("attach from cursor 99");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let last_seq = client
+            .inner
+            .streams
+            .lock()
+            .get(&terminal_id)
+            .map(|slot| slot.last_seq);
+        assert_eq!(
+            last_seq,
+            Some(99),
+            "StreamSlot must start at the attach cursor, not 0"
+        );
+
+        client.shutdown().await.expect("shutdown");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn full_output_slot_does_not_hol_block_other_rpc() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server =
+            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+
+        let client = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+        let _session = client
+            .attach(&terminal_id, &spawned.claim, 0)
+            .await
+            .expect("attach");
+
+        for index in 0..(STREAM_OUTPUT_CAPACITY as u32 + 40) {
+            client
+                .write(&terminal_id, &format!("printf '%s\\n' '{index}'\n"))
+                .await
+                .expect("write to fill the output slot");
+        }
+
+        let listed = tokio::time::timeout(std::time::Duration::from_secs(5), client.list())
+            .await
+            .expect("list must not HOL-block behind a full output slot")
+            .expect("list");
+        assert!(
+            listed.iter().any(|item| item.id == terminal_id),
+            "multiplexed reader must keep serving RPC after one stream backs up"
         );
 
         client.shutdown().await.expect("shutdown");

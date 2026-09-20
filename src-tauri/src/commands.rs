@@ -177,6 +177,13 @@ fn ipc_from_core<T>(result: Result<T, crate::core::CoreError>) -> IpcResult<T> {
     }
 }
 
+fn ipc_from_resume_attach<T>(grant: T, attach: Result<(), crate::core::CoreError>) -> IpcResult<T> {
+    match attach {
+        Ok(()) => IpcResult::success(grant),
+        Err(error) => ipc_from_core(Err(error)),
+    }
+}
+
 async fn install_core_output_forwarder(
     terminal_id: String,
     mut output: tokio::sync::mpsc::Receiver<crate::core::OutputFrame>,
@@ -562,6 +569,48 @@ async fn terminal_spawn_via_core(
     IpcResult::success(spawned)
 }
 
+/// Core-backed remote spawn. Durable SessionWorkspace refs are added only when
+/// the GUI still holds an in-process workspace service; Core-owned conversations
+/// keep the PTY tracked by `SpawnOptions.conversation_id` inside Terminal Core.
+pub(crate) async fn terminal_spawn_intent_via_core(
+    intent: TerminalSpawnIntentV1,
+    conversation: &crate::conversation::ConversationRecordV2,
+    client: &crate::core::TerminalCoreClient,
+    workspace: Option<&Arc<crate::conversation::SessionWorkspaceService>>,
+) -> IpcResult<SpawnedTerminal> {
+    let options = match intent.into_trusted_options(conversation) {
+        Ok(options) => options,
+        Err(error) if error.ends_with("scope is unauthorized") => {
+            return IpcResult::error("Unauthorized", "UNAUTHORIZED")
+        }
+        Err(error) => return IpcResult::error(error, "SPAWN_FAILED"),
+    };
+    terminal_spawn_resource_via_core(options, client, workspace).await
+}
+
+pub(crate) async fn terminal_spawn_resource_via_core(
+    options: SpawnOptions,
+    client: &crate::core::TerminalCoreClient,
+    workspace: Option<&Arc<crate::conversation::SessionWorkspaceService>>,
+) -> IpcResult<SpawnedTerminal> {
+    match workspace {
+        Some(workspace) => terminal_spawn_via_core(options, None, client, workspace).await,
+        None => match client.spawn(options).await {
+            Ok(spawned) => IpcResult::success(spawned),
+            Err(crate::core::CoreError::Unauthorized) => {
+                IpcResult::error("Unauthorized", "UNAUTHORIZED")
+            }
+            Err(error) => IpcResult::error(
+                match error {
+                    crate::core::CoreError::InvalidRequest(detail) if !detail.is_empty() => detail,
+                    other => other.to_string(),
+                },
+                "SPAWN_FAILED",
+            ),
+        },
+    }
+}
+
 /// Remote-only spawn path. The wire payload is already narrowed to
 /// [`TerminalSpawnIntentV1`]; `PtyManager` derives every executable, shell,
 /// environment, and cwd value from the host-owned Conversation record.
@@ -752,6 +801,27 @@ mod forwarder_teardown_tests {
     }
 }
 
+#[cfg(test)]
+mod resume_attach_error_tests {
+    use super::{ipc_from_resume_attach, IpcResult};
+
+    #[test]
+    fn resume_attach_error_is_not_success() {
+        let result: IpcResult<&str> =
+            ipc_from_resume_attach("grant", Err(crate::core::CoreError::Unauthorized));
+        assert!(!result.success);
+        assert_eq!(result.data, None);
+        assert_eq!(result.code.as_deref(), Some("UNAUTHORIZED"));
+    }
+
+    #[test]
+    fn resume_attach_ok_returns_grant() {
+        let result = ipc_from_resume_attach("grant", Ok(()));
+        assert!(result.success);
+        assert_eq!(result.data, Some("grant"));
+    }
+}
+
 /// Why a passive terminal reference could not be resumed.
 ///
 /// [`ClaimError`] stays collapsed for every credential path — no response shape
@@ -887,28 +957,31 @@ pub async fn terminal_resume(
             }
             Err(_) => return Ok(IpcResult::error("Terminal is gone", "TERMINAL_GONE")),
         };
-        match client
-            .attach(&request.terminal_id, &grant.claim, request.last_seq)
-            .await
-        {
-            Ok(session) => {
-                install_core_output_forwarder(
-                    request.terminal_id.clone(),
-                    session.output,
-                    on_data,
-                    "terminal-resume",
-                )
-                .await;
-            }
-            Err(error) => {
-                log::warn!(
-                    "[terminal-resume] core replay attach failed terminal_id={} code={}",
-                    request.terminal_id,
-                    error.code()
-                );
-            }
-        }
-        return Ok(IpcResult::success(grant));
+        return Ok(
+            match client
+                .attach(&request.terminal_id, &grant.claim, request.last_seq)
+                .await
+            {
+                Ok(session) => {
+                    install_core_output_forwarder(
+                        request.terminal_id.clone(),
+                        session.output,
+                        on_data,
+                        "terminal-resume",
+                    )
+                    .await;
+                    ipc_from_resume_attach(grant, Ok(()))
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[terminal-resume] core replay attach failed terminal_id={} code={}",
+                        request.terminal_id,
+                        error.code()
+                    );
+                    ipc_from_resume_attach(grant, Err(error))
+                }
+            },
+        );
     }
     let pty_manager = require_in_process_pty(terminal.inner())?;
     let (grant, replay) =
@@ -924,11 +997,16 @@ pub async fn terminal_resume(
             }
         };
 
-    // Rotation invalidates any predecessor forwarder. Abort the local tracked
-    // handle immediately rather than waiting for its generation-check tick.
-    if let Some((_, forwarder)) = lock_forwarders().remove(&request.terminal_id) {
-        forwarder.abort();
-    }
+    let token = ATTACH_FORWARDER_TOKENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let replacing_view = {
+        let mut forwarders = lock_forwarders();
+        let replacing = forwarders.contains_key(&request.terminal_id);
+        if let Some((_, previous)) = forwarders.remove(&request.terminal_id) {
+            previous.abort();
+        }
+        replacing
+    };
+    let mut replay_delivered = true;
     for chunk in &replay.chunks {
         if on_data.send(Response::new(chunk.data.clone())).is_err() {
             log::warn!(
@@ -938,8 +1016,22 @@ pub async fn terminal_resume(
                 grant.terminal.latest_seq,
                 grant.terminal.gap
             );
+            replay_delivered = false;
             break;
         }
+    }
+    if replay_delivered {
+        register_desktop_live_forwarder(
+            request.terminal_id.clone(),
+            on_data,
+            replay.receiver,
+            replay.claim_generation,
+            Arc::clone(&pty_manager),
+            "terminal-resume",
+            token,
+            replacing_view,
+        )
+        .await;
     }
     log::info!(
         "[terminal-resume] desktop grant delivered conversation_id={:?} terminal_id={} latest_seq={} gap={}",
@@ -1138,16 +1230,45 @@ async fn install_desktop_output_forwarder(
         }
     }
 
+    register_desktop_live_forwarder(
+        terminal_id.clone(),
+        on_data,
+        replay.receiver,
+        generation,
+        pty_manager,
+        log_label,
+        token,
+        replacing_view,
+    )
+    .await;
+    log::info!(
+        "[{log_label}] attached terminal_id={} latest_seq={} gap={}",
+        terminal_id,
+        result.latest_seq,
+        result.gap
+    );
+    IpcResult::success(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn register_desktop_live_forwarder(
+    terminal_id: String,
+    on_data: Channel<Response>,
+    mut receiver: tokio::sync::broadcast::Receiver<crate::pty::manager::TerminalOutputChunk>,
+    generation: Option<u64>,
+    pty_manager: Arc<PtyManager>,
+    log_label: &'static str,
+    token: u64,
+    replacing_view: bool,
+) {
     let pty = Arc::clone(&pty_manager);
     let forwarder_id = terminal_id.clone();
     let handle = tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(
             ATTACH_FORWARDER_GENERATION_CHECK_MS,
         ));
-        let mut receiver = replay.receiver;
+        let mut current_seq = 0;
         loop {
-            // Teardown on rotate/revoke (generation bump) or kill/reap
-            // (record gone). Checked every tick AND after every chunk.
             if forwarder_should_terminate(generation, pty.claim_generation(&forwarder_id)) {
                 log::info!(
                     "[{log_label}] forwarder terminating (claim invalidated) terminal_id={forwarder_id}"
@@ -1156,27 +1277,25 @@ async fn install_desktop_output_forwarder(
             }
             tokio::select! {
                 received = receiver.recv() => {
-                    match received {
-                        Ok(chunk) => {
-                            if on_data.send(Response::new(chunk.data)).is_err() {
-                                break; // renderer channel gone
+                    match crate::core::terminal::decide_live_output(received, current_seq) {
+                        crate::core::terminal::LiveOutputDecision::Forward { seq, data } => {
+                            current_seq = seq;
+                            if on_data.send(Response::new(data)).is_err() {
+                                break;
                             }
                         }
-                        // Desktop's raw-bytes channel has no gap framing
-                        // (deferred parity decision) — keep streaming.
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        crate::core::terminal::LiveOutputDecision::FailGap { last_seq } => {
                             log::warn!(
-                                "[{log_label}] output receiver lagged by {skipped} for {forwarder_id}"
+                                "[{log_label}] output receiver lagged terminal_id={forwarder_id} last_seq={last_seq}; failing stream"
                             );
+                            break;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        crate::core::terminal::LiveOutputDecision::Stop => break,
                     }
                 }
                 _ = tick.tick() => {}
             }
         }
-        // Self-deregister only if this forwarder is still the tracked one (a
-        // later re-attach may have replaced the entry already).
         let mut forwarders = lock_forwarders();
         if let Some((tracked_token, _)) = forwarders.get(&forwarder_id) {
             if *tracked_token == token {
@@ -1188,10 +1307,6 @@ async fn install_desktop_output_forwarder(
 
     if !handle.is_finished() {
         let mut forwarders = lock_forwarders();
-        // A concurrent attach may have raced — keep this (latest) forwarder
-        // and abort any rival: exactly one survives, last attach wins. A
-        // forwarder that already terminated (e.g. a generation bump raced the
-        // spawn) is never registered, so no dead entry lingers in the map.
         if let Some((prev_token, prev_abort)) =
             forwarders.insert(terminal_id.clone(), (token, handle.abort_handle()))
         {
@@ -1204,13 +1319,6 @@ async fn install_desktop_output_forwarder(
     if !replacing_view {
         pty_manager.note_view_opened(&terminal_id);
     }
-    log::info!(
-        "[{log_label}] attached terminal_id={} latest_seq={} gap={}",
-        terminal_id,
-        result.latest_seq,
-        result.gap
-    );
-    IpcResult::success(result)
 }
 
 /// Rotate a terminal's claim credential (CAP-3).
@@ -1400,6 +1508,20 @@ async fn terminal_terminate_via_core(
     match client.terminate(terminal_id).await {
         Ok(()) => IpcResult::success(()),
         Err(error) => ipc_from_core(Err(error)),
+    }
+}
+
+pub(crate) async fn terminal_terminate_via_core_optional_workspace(
+    terminal_id: &str,
+    client: &crate::core::TerminalCoreClient,
+    workspace: Option<&Arc<crate::conversation::SessionWorkspaceService>>,
+) -> IpcResult<()> {
+    match workspace {
+        Some(workspace) => terminal_terminate_via_core(terminal_id, client, workspace).await,
+        None => match client.terminate(terminal_id).await {
+            Ok(()) => IpcResult::success(()),
+            Err(error) => ipc_from_core(Err(error)),
+        },
     }
 }
 

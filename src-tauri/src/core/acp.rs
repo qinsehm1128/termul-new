@@ -153,6 +153,9 @@ pub const METHOD_MEMORY_MCP_INVOCATION: &str = "memoryMcpInvocation";
 pub const METHOD_MEMORY_UNIVERSAL_MCP_INVOCATION: &str = "memoryUniversalMcpInvocation";
 
 pub const ACP_EVENT_TOPIC: &str = "acp.event";
+/// Additive GUI/web resync signal. Payload is `{ connected, reason?, watermark? }`.
+/// Gap detection uses this instead of silently skipping lagged events.
+pub const ACP_CONNECTION_CHANGED_EVENT: &str = "acp:connection_changed";
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 /// `sendPrompt` resolves when the whole agent turn completes; turns routinely
 /// run minutes, so it gets its own budget instead of the control-plane one.
@@ -161,9 +164,9 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 /// Event envelope crossing the Core boundary. `data` is the verbatim
 /// renderer-facing payload; `seq` is a monotonic informational watermark.
-/// Gap detection is not implemented on the GUI client — `connection_changed`
-/// is the resync signal. Per-session durable replay stays owned by the relay
-/// inside the Core.
+/// Lagged live delivery and Core reconnect emit `acp:connection_changed` so
+/// clients fail closed and refresh from durable history. Per-session durable
+/// replay stays owned by the relay inside the Core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpCoreEvent {
@@ -200,10 +203,38 @@ impl SharedEvents {
             payload: serde_json::to_value(&envelope).unwrap_or(Value::Null),
         };
         if let Some(tx) = self.sender() {
-            // Lagged/empty receiver sets are expected: the GUI reconnects and
-            // resyncs from the watermark, and durable replay lives in the relay.
+            // Send is best-effort: a GUI with no live subscriber is not an
+            // event failure. Receivers that lag must NOT continue silently —
+            // the connection forwarder emits `acp:connection_changed`.
             let _ = tx.send(frame);
         }
+    }
+}
+
+pub fn acp_connection_changed_envelope(
+    connected: bool,
+    reason: &str,
+    watermark: u64,
+) -> AcpCoreEvent {
+    AcpCoreEvent {
+        seq: watermark,
+        type_: ACP_CONNECTION_CHANGED_EVENT.to_string(),
+        sid: None,
+        data: json!({
+            "connected": connected,
+            "reason": reason,
+            "watermark": watermark,
+        }),
+    }
+}
+
+fn acp_connection_changed_frame(connected: bool, reason: &str, watermark: u64) -> CoreEvent {
+    CoreEvent {
+        topic: ACP_EVENT_TOPIC.to_string(),
+        payload: serde_json::to_value(acp_connection_changed_envelope(
+            connected, reason, watermark,
+        ))
+        .unwrap_or(Value::Null),
     }
 }
 
@@ -246,6 +277,9 @@ struct AcpCoreState {
     scheduled_tasks: Arc<ScheduledTaskService>,
     memory: Arc<MemoryIndexService>,
     events: Arc<SharedEvents>,
+    /// Core-owned fence. The process-global `HostAdmission` is the GUI/host
+    /// process and is never closed here, so Core must not consult it.
+    admission: crate::host_admission::HostAdmission,
     shutdown: watch::Sender<bool>,
 }
 
@@ -480,11 +514,13 @@ fn compose_acp_core(
         scheduled_tasks,
         memory,
         events: shared,
+        admission: crate::host_admission::HostAdmission::new(),
         shutdown,
     })
 }
 
 async fn shutdown_acp_core(state: &AcpCoreState) -> Result<(), CoreError> {
+    state.admission.close();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     state.manager.stop_producers().await.map_err(invalid)?;
     let flush = state
@@ -524,6 +560,7 @@ async fn handle_connection(
     if let Some(events) = state.events.sender() {
         let mut events = events.subscribe();
         let writer = Arc::clone(&writer);
+        let seq = Arc::clone(&state.events);
         tokio::spawn(async move {
             loop {
                 match events.recv().await {
@@ -533,7 +570,22 @@ async fn handle_connection(
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        let watermark = seq.seq.load(Ordering::Relaxed);
+                        log::warn!(
+                            target: "se_manager::core",
+                            "operation=acp_event_forwarder stable_code=LAGGED skipped={skipped} watermark={watermark}"
+                        );
+                        let mut writer = writer.lock().await;
+                        let lost = acp_connection_changed_frame(false, "lagged", watermark);
+                        if write_json_frame(&mut *writer, &lost).await.is_err() {
+                            break;
+                        }
+                        let resync = acp_connection_changed_frame(true, "lagged", watermark);
+                        if write_json_frame(&mut *writer, &resync).await.is_err() {
+                            break;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -877,10 +929,13 @@ fn parse_conversation_id_component(raw: &str) -> Result<ConversationId, CoreErro
     ConversationId::parse_path_component(raw).map_err(|error| invalid(error.to_string()))
 }
 
-fn require_core_host_admission() -> Result<(), CoreError> {
-    crate::host_admission::HostAdmission::global()
-        .check()
-        .map_err(|_| invalid("host is shutting down"))
+fn require_core_host_admission(state: &AcpCoreState) -> Result<(), CoreError> {
+    state.admission.check().map_err(|_| {
+        invalid(format!(
+            "{}:host is shutting down",
+            crate::host_admission::HOST_SHUTTING_DOWN
+        ))
+    })
 }
 
 fn conversation_application_err(
@@ -1440,7 +1495,10 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 .map_err(invalid)?;
             Ok(Value::Null)
         }
-        METHOD_SHUTDOWN => Ok(Value::Null),
+        METHOD_SHUTDOWN => {
+            state.admission.close();
+            Ok(Value::Null)
+        }
         METHOD_CONVERSATION_HOST_STATUS => {
             let outcome = state
                 .application
@@ -1450,7 +1508,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
         }
         METHOD_CONVERSATION_LIST => to_json(state.application.list_conversations()),
         METHOD_CONVERSATION_OPEN => {
-            require_core_host_admission()?;
+            require_core_host_admission(state)?;
             let params: ConversationIdOnlyParams = parse_params(request)?;
             let conversation_id = parse_conversation_id_component(&params.conversation_id)?;
             let outcome = state
@@ -1508,7 +1566,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             to_json(outcome)
         }
         METHOD_CONVERSATION_ATTACH_PROJECT => {
-            require_core_host_admission()?;
+            require_core_host_admission(state)?;
             let params: ConversationAttachProjectParams = parse_params(request)?;
             let conversation_id = parse_conversation_id_component(&params.conversation_id)?;
             let attachment: ProjectAttachment = payload_from_value(params.attachment)?;
@@ -1520,7 +1578,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             to_json(outcome)
         }
         METHOD_CONVERSATION_DETACH_PROJECT => {
-            require_core_host_admission()?;
+            require_core_host_admission(state)?;
             let params: ConversationRevisionParams = parse_params(request)?;
             let conversation_id = parse_conversation_id_component(&params.conversation_id)?;
             let outcome = state
@@ -1531,7 +1589,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             to_json(outcome)
         }
         METHOD_CONVERSATION_UPDATE_EXECUTION_TARGET => {
-            require_core_host_admission()?;
+            require_core_host_admission(state)?;
             let params: ConversationUpdateExecutionTargetParams = parse_params(request)?;
             let conversation_id = parse_conversation_id_component(&params.conversation_id)?;
             let execution_target: ExecutionTarget = payload_from_value(params.execution_target)?;
@@ -1593,7 +1651,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             to_json(outcome)
         }
         METHOD_CONVERSATION_DELETE => {
-            require_core_host_admission()?;
+            require_core_host_admission(state)?;
             let params: ConversationDeleteParams = parse_params(request)?;
             let conversation_id = parse_conversation_id_component(&params.conversation_id)?;
             let workspace_cwd = state
@@ -1693,7 +1751,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             to_json(outcome)
         }
         METHOD_CONVERSATION_WRITE_WORKSPACE => {
-            require_core_host_admission()?;
+            require_core_host_admission(state)?;
             let params: ConversationWriteWorkspaceParams = parse_params(request)?;
             let conversation_id = parse_conversation_id(&params.conversation_id)?;
             let workspace = serde_json::from_value(params.workspace)
@@ -2068,10 +2126,16 @@ impl AcpCoreClient {
 
     /// Re-handshake against `endpoint` and swap the live stream. Pending RPCs
     /// and the event broadcast stay on the same inner Arc so GUI mirror tasks
-    /// keep receiving after a Core restart.
+    /// keep receiving after a Core restart. Live events missed during the
+    /// swap are not replayed on this channel — subscribers get
+    /// `acp:connection_changed` and must refresh from durable history.
     pub async fn reconnect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         let _guard = self.inner.reconnect.lock().await;
         let (reader, writer) = open_acp_stream(endpoint).await?;
+        let _ = self
+            .inner
+            .events
+            .send(acp_connection_changed_envelope(false, "reconnect", 0));
         {
             let mut writer_guard = self.inner.writer.lock().await;
             if let Some(handle) = self.inner.reader.lock().take() {
@@ -2081,6 +2145,12 @@ impl AcpCoreClient {
             *writer_guard = writer;
         }
         spawn_acp_read_loop(&self.inner, reader);
+        let watermark = self.event_watermark().await.unwrap_or(0);
+        let _ = self.inner.events.send(acp_connection_changed_envelope(
+            true,
+            "reconnect",
+            watermark,
+        ));
         Ok(())
     }
 
@@ -2274,6 +2344,39 @@ mod tests {
         assert!(
             !source.contains(&forbidden),
             "ACP Core must stay independent of the GUI runtime"
+        );
+    }
+
+    #[test]
+    fn acp_core_does_not_consult_the_process_global_host_admission() {
+        let source = include_str!("acp.rs");
+        let production = source.split("mod tests").next().expect("tests module");
+        assert!(
+            !production.contains("HostAdmission::global()"),
+            "ACP Core must own its admission fence; the process-global fence is the GUI host"
+        );
+        assert!(production.contains("state.admission.check()"));
+        assert!(production.contains("admission: crate::host_admission::HostAdmission::new()"));
+    }
+
+    #[test]
+    fn connection_changed_envelope_is_additive_and_named_for_the_renderer() {
+        let envelope = acp_connection_changed_envelope(false, "lagged", 7);
+        assert_eq!(envelope.type_, ACP_CONNECTION_CHANGED_EVENT);
+        assert_eq!(envelope.seq, 7);
+        assert_eq!(envelope.data["connected"], false);
+        assert_eq!(envelope.data["reason"], "lagged");
+        assert_eq!(envelope.data["watermark"], 7);
+    }
+
+    #[test]
+    fn core_owned_admission_rejects_after_close() {
+        let admission = crate::host_admission::HostAdmission::new();
+        assert!(admission.check().is_ok());
+        admission.close();
+        assert_eq!(
+            admission.check(),
+            Err(crate::host_admission::HOST_SHUTTING_DOWN)
         );
     }
 
@@ -2493,6 +2596,7 @@ mod tests {
         let server =
             tokio::spawn(async move { run_acp_core_with_roots(state_root, workspace_root).await });
 
+        let mut events = client.subscribe_events();
         wait_for_reconnect(&client, &endpoint).await;
         let health = client.health().await.expect("health after reconnect");
         assert_eq!(health["role"], "acp-core");
@@ -2501,6 +2605,26 @@ mod tests {
             .event_watermark()
             .await
             .expect("watermark after reconnect");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let mut saw_reconnect = false;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
+                Ok(Ok(envelope)) if envelope.type_ == ACP_CONNECTION_CHANGED_EVENT => {
+                    if envelope.data.get("connected") == Some(&json!(true))
+                        && envelope.data.get("reason") == Some(&json!("reconnect"))
+                    {
+                        saw_reconnect = true;
+                        break;
+                    }
+                }
+                Ok(Ok(_)) => continue,
+                _ => continue,
+            }
+        }
+        assert!(
+            saw_reconnect,
+            "reconnect must emit acp:connection_changed rather than continuing the live stream silently"
+        );
 
         client.shutdown().await.expect("shutdown second server");
         let _ = tokio::time::timeout(Duration::from_secs(10), server).await;

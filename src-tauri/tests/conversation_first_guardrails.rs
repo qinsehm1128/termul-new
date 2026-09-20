@@ -1338,8 +1338,10 @@ async fn serve_router() {}
     let mut findings = Vec::new();
     check_shared_live_teardown(&[host], &mut findings);
     assert!(
-        findings.iter().any(|finding| finding.rule == "desktop-shared-live-ownership"
-            && finding.message.contains("teardown")),
+        findings
+            .iter()
+            .any(|finding| finding.rule == "desktop-shared-live-ownership"
+                && finding.message.contains("teardown")),
         "method-delegated teardown must be rejected: {findings:?}"
     );
 }

@@ -608,7 +608,7 @@ pub enum TerminalCwdSource {
 }
 
 impl TerminalSpawnIntentV1 {
-    fn into_trusted_options(
+    pub(crate) fn into_trusted_options(
         self,
         conversation: &ConversationRecordV2,
     ) -> Result<SpawnOptions, String> {

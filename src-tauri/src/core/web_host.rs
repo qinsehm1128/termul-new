@@ -10,16 +10,17 @@
 //!   every relay call site in `web/ws.rs`).
 
 use super::acp::{
-    AcpCoreClient, METHOD_ANSWER_QUESTION, METHOD_AUTHENTICATE, METHOD_CANCEL_PROMPT,
-    METHOD_CLOSE_SESSION, METHOD_COMPOSER_CONTROLS, METHOD_CONVERSATION_ID_FOR_SESSION,
-    METHOD_DISPOSE_EPHEMERAL_SESSION, METHOD_HISTORY_CURSOR, METHOD_HISTORY_GET,
-    METHOD_HISTORY_GET_PAGE, METHOD_HISTORY_LIST, METHOD_HISTORY_OPEN, METHOD_IS_EPHEMERAL_SESSION,
-    METHOD_IS_TURN_ACTIVE, METHOD_LIST_RUNNING_NAMESPACES, METHOD_LIST_SESSIONS,
-    METHOD_LOAD_SESSION, METHOD_NEW_SESSION, METHOD_OWNS_SESSION, METHOD_PERMISSION_INFO,
-    METHOD_QUESTION_INFO, METHOD_REGISTER_CONVERSATION_BINDING, METHOD_REGISTER_DISCOVERED_SESSION,
-    METHOD_RESPOND_PERMISSION, METHOD_RESUME_SESSION, METHOD_RETIRE_SESSION, METHOD_SEND_PROMPT,
-    METHOD_SET_CONFIG_OPTION, METHOD_SET_MODE, METHOD_SET_MODEL, METHOD_SET_PERMISSION_POLICY,
-    METHOD_SPAWN_AGENT, METHOD_STABLE_AGENT_NAMESPACE, METHOD_WAIT_TURN_IDLE,
+    AcpCoreClient, ACP_CONNECTION_CHANGED_EVENT, METHOD_ANSWER_QUESTION, METHOD_AUTHENTICATE,
+    METHOD_CANCEL_PROMPT, METHOD_CLOSE_SESSION, METHOD_COMPOSER_CONTROLS,
+    METHOD_CONVERSATION_ID_FOR_SESSION, METHOD_DISPOSE_EPHEMERAL_SESSION, METHOD_HISTORY_CURSOR,
+    METHOD_HISTORY_GET, METHOD_HISTORY_GET_PAGE, METHOD_HISTORY_LIST, METHOD_HISTORY_OPEN,
+    METHOD_IS_EPHEMERAL_SESSION, METHOD_IS_TURN_ACTIVE, METHOD_LIST_RUNNING_NAMESPACES,
+    METHOD_LIST_SESSIONS, METHOD_LOAD_SESSION, METHOD_NEW_SESSION, METHOD_OWNS_SESSION,
+    METHOD_PERMISSION_INFO, METHOD_QUESTION_INFO, METHOD_REGISTER_CONVERSATION_BINDING,
+    METHOD_REGISTER_DISCOVERED_SESSION, METHOD_RESPOND_PERMISSION, METHOD_RESUME_SESSION,
+    METHOD_RETIRE_SESSION, METHOD_SEND_PROMPT, METHOD_SET_CONFIG_OPTION, METHOD_SET_MODE,
+    METHOD_SET_MODEL, METHOD_SET_PERMISSION_POLICY, METHOD_SPAWN_AGENT,
+    METHOD_STABLE_AGENT_NAMESPACE, METHOD_WAIT_TURN_IDLE,
 };
 use super::handles::AcpServiceHandle;
 use super::ipc::CoreError;
@@ -282,7 +283,14 @@ impl CoreRelayHost {
                             },
                         );
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        log::warn!(
+                            target: "se_manager::core",
+                            "operation=acp_relay_host stable_code=LAGGED skipped={skipped}"
+                        );
+                        emit_live_connection_resync(&relay, false, "lagged");
+                        emit_live_connection_resync(&relay, true, "lagged");
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -365,8 +373,23 @@ fn intern_event_type(value: &str) -> &'static str {
         EVENT_AGENT_DISCONNECTED => EVENT_AGENT_DISCONNECTED,
         EVENT_SESSION_INFO_UPDATE => EVENT_SESSION_INFO_UPDATE,
         EVENT_USAGE_UPDATE => EVENT_USAGE_UPDATE,
+        ACP_CONNECTION_CHANGED_EVENT => ACP_CONNECTION_CHANGED_EVENT,
         other => intern_unknown_event_type(other),
     }
+}
+
+fn emit_live_connection_resync(relay: &WsRelaySink, connected: bool, reason: &str) {
+    let _ = EventSink::emit(
+        relay,
+        &AcpEvent {
+            sid: None,
+            type_: intern_event_type(ACP_CONNECTION_CHANGED_EVENT),
+            payload: json!({
+                "connected": connected,
+                "reason": reason,
+            }),
+        },
+    );
 }
 
 fn intern_unknown_event_type(value: &str) -> &'static str {

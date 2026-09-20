@@ -1004,60 +1004,46 @@ async function restoreFromLayout(
           normalizedShell
         )
         if (liveMatch) {
-          // Replay from 0: the Core's 256 KiB buffer is the single painter for
-          // the GUI-downtime transcript (RV-202). The persisted snapshot is
-          // deliberately NOT applied on top of it.
-          const resumeResult = await terminalApi.resume({
-            terminalId: liveMatch.id,
-            lastSeq: 0
-          })
-          if (
-            resumeResult.success &&
-            resumeResult.data.terminal.id === liveMatch.id &&
-            resumeResult.data.claim
-          ) {
-            if (isCancelled()) {
-              debugLog(
-                'restoreFromLayout',
-                `CANCELLED [${terminalCallId}] after live PTY adopt; leaving Core PTY intact`,
-                { ptyId: liveMatch.id }
-              )
-              continue
-            }
-            claimedLiveIds.add(liveMatch.id)
-            idMap.set(persistedTerminal.id, newId)
-            newTerminals.push({
-              id: newId,
-              name: persistedTerminal.name,
-              projectId,
-              shell: normalizedShell,
-              cwd: persistedTerminal.cwd,
-              output: [],
-              healthStatus: 'running',
-              viewState: 'visible',
-              ptyId: liveMatch.id,
-              adopted: true,
-              claim: resumeResult.data.claim,
-              ...(persistedTerminal.modes ? { pendingModes: persistedTerminal.modes } : {}),
-              ...(isAgentTerminal
-                ? {
-                    kind: 'agent' as const,
-                    agentId: persistedTerminal.agentId,
-                    agentName: persistedTerminal.agentName,
-                    agentProgram: persistedTerminal.agentProgram,
-                    agentArgs: persistedTerminal.agentArgs
-                  }
-                : {})
-            })
-            debugLog('restoreFromLayout', `Adopted live PTY [${terminalCallId}]`, {
-              ptyId: liveMatch.id
-            })
+          // Adopt identity only. Resume/watch here would start Core replay
+          // before ConnectedTerminal binds the primary writer, and the bytes
+          // would never reach xterm. The mounted pane watches from seq 0 so
+          // the 256 KiB ring is the single painter (RV-202); the persisted
+          // snapshot is deliberately NOT applied on top of it.
+          if (isCancelled()) {
+            debugLog(
+              'restoreFromLayout',
+              `CANCELLED [${terminalCallId}] after live PTY adopt; leaving Core PTY intact`,
+              { ptyId: liveMatch.id }
+            )
             continue
           }
-          debugLog('restoreFromLayout', `Live PTY resume failed, spawning [${terminalCallId}]`, {
+          claimedLiveIds.add(liveMatch.id)
+          idMap.set(persistedTerminal.id, newId)
+          newTerminals.push({
+            id: newId,
+            name: persistedTerminal.name,
+            projectId,
+            shell: normalizedShell,
+            cwd: persistedTerminal.cwd,
+            output: [],
+            viewState: 'visible',
             ptyId: liveMatch.id,
-            error: resumeResult.success ? 'invalid grant' : resumeResult.error
+            adopted: true,
+            ...(persistedTerminal.modes ? { pendingModes: persistedTerminal.modes } : {}),
+            ...(isAgentTerminal
+              ? {
+                  kind: 'agent' as const,
+                  agentId: persistedTerminal.agentId,
+                  agentName: persistedTerminal.agentName,
+                  agentProgram: persistedTerminal.agentProgram,
+                  agentArgs: persistedTerminal.agentArgs
+                }
+              : {})
           })
+          debugLog('restoreFromLayout', `Adopted live PTY [${terminalCallId}]`, {
+            ptyId: liveMatch.id
+          })
+          continue
         }
 
         // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking

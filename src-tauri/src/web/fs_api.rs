@@ -220,6 +220,24 @@ pub(super) fn check_local_only<T>(provenance: IngressProvenance) -> Option<IpcBo
     }
 }
 
+/// Remote filesystem reads stay inside the active/registered project roots.
+/// Local operator access retains the desktop directory-picker breadth.
+pub(super) fn check_project_boundary<T>(
+    state: &AppState,
+    provenance: IngressProvenance,
+    resolved: &Path,
+) -> Option<IpcBody<T>> {
+    if provenance.allows_local_operator_mutation() {
+        return None;
+    }
+    let project_root = state.project_root.read();
+    crate::web::git_api::ensure_within_project_boundary::<T>(
+        resolved,
+        &project_root,
+        &state.registry,
+    )
+}
+
 /// Return the file extension (including the leading dot) or `None` for files
 /// without one. Matches `getExtension` in `tauri-filesystem-api.ts` exactly:
 /// for a leading-dot file like `.gitignore` the dot is at index 0, and the
@@ -493,7 +511,11 @@ pub async fn write(
 /// `{ success: true, data: DirectoryEntry[] }` or
 /// `{ success: false, error, code: "READ_ERROR" }` (missing dir = failure;
 /// the renderer's empty-check already treats missing as empty).
-pub async fn ls(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> impl IntoResponse {
+pub async fn ls(
+    State(state): State<AppState>,
+    axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    Query(q): Query<PathQuery>,
+) -> impl IntoResponse {
     let path = match resolve_request_path(Path::new(&q.path)) {
         Ok(safe) => safe,
         Err((msg, code)) => {
@@ -503,6 +525,11 @@ pub async fn ls(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> i
             );
         }
     };
+    if let Some(forbidden) =
+        check_project_boundary::<Vec<DirectoryEntryDto>>(&state, provenance, &path)
+    {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let entries = tokio::task::spawn_blocking(move || list_dir(&path))
         .await
         .map_err(|e| format!("ls task failed: {e}"));
@@ -521,7 +548,8 @@ pub async fn ls(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> i
 /// Returns directories only is a renderer-side concern; the server returns all
 /// entries and the picker filters as needed.
 pub async fn browse(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    axum::Extension(provenance): axum::Extension<IngressProvenance>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
     let path = match resolve_request_path(Path::new(&q.path)) {
@@ -533,6 +561,11 @@ pub async fn browse(
             );
         }
     };
+    if let Some(forbidden) =
+        check_project_boundary::<Vec<DirectoryEntryDto>>(&state, provenance, &path)
+    {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let entries = tokio::task::spawn_blocking(move || list_dir(&path))
         .await
         .map_err(|e| format!("browse task failed: {e}"));
@@ -561,7 +594,11 @@ pub async fn browse(
 /// via `ensure_within_project_boundary`). A read route: intentionally NOT
 /// loopback-guarded, so desktop-hosted LAN clients can open files in the
 /// editor; mutations stay loopback-only (`delete`/`rename`/`copy`).
-pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> impl IntoResponse {
+pub async fn read(
+    State(state): State<AppState>,
+    axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    Query(q): Query<PathQuery>,
+) -> impl IntoResponse {
     let path = match resolve_request_path(Path::new(&q.path)) {
         Ok(safe) => safe,
         Err((msg, code)) => {
@@ -571,6 +608,9 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
             );
         }
     };
+    if let Some(forbidden) = check_project_boundary::<FileContentDto>(&state, provenance, &path) {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let result =
         tokio::task::spawn_blocking(move || -> Result<FileContentDto, (String, &'static str)> {
             let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;

@@ -6218,6 +6218,90 @@ describe('acp-store', () => {
 
     teardown()
   })
+
+  it('marks live sessions closed on ACP event-gap and reopens from durable history', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    _setAcpTransportForTests({
+      setReconnectListener: vi.fn(),
+      setReconnectPriorityProvider: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+    useAcpStore.setState({
+      sessions: {
+        's-live': {
+          id: 's-live',
+          agentId: 'agent-1',
+          cwd: '/w',
+          projectId: 'p1',
+          status: 'active',
+          title: 'Live',
+          activeTurn: true,
+          openTurnId: 't1',
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      },
+      messages: {
+        's-live': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'keep me' }],
+            streaming: false,
+            timestamp: 0
+          }
+        ]
+      }
+    })
+    setCachedSessionPayload('s-live', {
+      metadata: {
+        id: 's-live',
+        agentId: 'agent-1',
+        title: 'Live',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'keep me' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+
+    listeners.get('acp:connection_changed')?.({ connected: false })
+    expect(useAcpStore.getState().connectionDegraded).toBe(true)
+    expect(useAcpStore.getState().sessions['s-live'].status).toBe('closed')
+    expect(useAcpStore.getState().sessions['s-live'].activeTurn).toBe(false)
+    expect(useAcpStore.getState().messages['s-live']).toHaveLength(1)
+
+    listeners.get('acp:connection_changed')?.({ connected: true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(useAcpStore.getState().connectionDegraded).toBe(false)
+    expect(loadSessionIndex).toHaveBeenCalled()
+    expect(loadSessionPayload).toHaveBeenCalledWith(
+      's-live',
+      expect.objectContaining({ onPage: expect.any(Function) })
+    )
+
+    teardown()
+  })
 })
 
 describe('acp-store multi-project isolation', () => {

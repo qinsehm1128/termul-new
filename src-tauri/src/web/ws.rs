@@ -1688,6 +1688,12 @@ async fn handle_request_with_conversation(
         // `config_options_update`, …) flow back automatically through the
         // existing `fan_out` → `WsRelaySink::emit` → WS frame → store pipeline.
         "create_session" => {
+            if let Err(denial) = operation_policy::authorize_local_only(
+                authority.ingress_provenance(),
+                operation_policy::LocalOnlyOperation::CreateSession,
+            ) {
+                return WsReply::err_with_code(id, denial.code, denial.message);
+            }
             handle_create_session(
                 id,
                 &req.payload,
@@ -1849,7 +1855,15 @@ async fn handle_request_with_conversation(
             )
             .await
         }
-        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, current_agent).await,
+        "spawn_agent" => {
+            if let Err(denial) = operation_policy::authorize_local_only(
+                authority.ingress_provenance(),
+                operation_policy::LocalOnlyOperation::SpawnAgent,
+            ) {
+                return WsReply::err_with_code(id, denial.code, denial.message);
+            }
+            handle_spawn_agent(id, &req.payload, acp, current_agent).await
+        }
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
         // resolved `SupportedAcpAgentStatus`. The web client never probes
@@ -1889,12 +1903,28 @@ async fn handle_request_with_conversation(
         // routes its `persistenceApi` through these (replacing the per-browser
         // localStorage stub) so settings / layout / command history / SSH
         // profiles survive browser switches + server restarts.
-        "store_read" => handle_store_read(id, &req.payload, store).await,
-        "store_write" => handle_store_write(id, &req.payload, store).await,
-        "store_delete" => handle_store_delete(id, &req.payload, store).await,
+        "store_read" | "store_write" | "store_delete" => {
+            if let Err(denial) = operation_policy::authorize_local_only(
+                authority.ingress_provenance(),
+                operation_policy::LocalOnlyOperation::StoreAccess,
+            ) {
+                return WsReply::err_with_code(id, denial.code, denial.message);
+            }
+            match req.type_.as_str() {
+                "store_read" => handle_store_read(id, &req.payload, store).await,
+                "store_write" => handle_store_write(id, &req.payload, store).await,
+                _ => handle_store_delete(id, &req.payload, store).await,
+            }
+        }
         "list_cli_sessions" => handle_list_cli_sessions(id, &req.payload, registry).await,
         "resolve_cli_sessions" => handle_resolve_cli_sessions(id, &req.payload).await,
         "kill_agent" => {
+            if let Err(denial) = operation_policy::authorize_local_only(
+                authority.ingress_provenance(),
+                operation_policy::LocalOnlyOperation::KillAgent,
+            ) {
+                return WsReply::err_with_code(id, denial.code, denial.message);
+            }
             handle_kill_agent(
                 id,
                 &req.payload,
@@ -1906,7 +1936,15 @@ async fn handle_request_with_conversation(
             .await
         }
         "list_agents" => handle_list_agents(id, acp).await,
-        "set_permission_policy" => handle_set_permission_policy(id, &req.payload, acp).await,
+        "set_permission_policy" => {
+            if let Err(denial) = operation_policy::authorize_local_only(
+                authority.ingress_provenance(),
+                operation_policy::LocalOnlyOperation::PermissionPolicy,
+            ) {
+                return WsReply::err_with_code(id, denial.code, denial.message);
+            }
+            handle_set_permission_policy(id, &req.payload, acp).await
+        }
         // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.
         // `pi_terminal_login`). Distinct from the WS connection `authenticate`
         // token gate — this runs the method on the host where the agent lives.
