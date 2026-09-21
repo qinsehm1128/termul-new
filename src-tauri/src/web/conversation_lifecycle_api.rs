@@ -16,6 +16,11 @@ use crate::conversation::{
     ConversationApplicationService, ConversationId, ConversationLifecycleOutcome,
     PrepareConversationRequest,
 };
+use crate::core::acp::{
+    METHOD_CONVERSATION_DELETE, METHOD_CONVERSATION_DETACH_BINDING,
+    METHOD_CONVERSATION_REBIND_BINDING, METHOD_CONVERSATION_REPLACE_BINDING,
+    METHOD_CONVERSATION_SUSPEND_BINDING,
+};
 use crate::web::auth::{status_for_code, RemoteAccessAuthority, RemoteCapability, RemotePrincipal};
 use crate::web::fs_api::IpcBody;
 use crate::web::sink::AcpEvent;
@@ -130,6 +135,20 @@ pub async fn replace(
         Ok(value) => value,
         Err(error) => return validation(error.to_string()),
     };
+    if state.acp.is_core_backed() {
+        return respond_core(
+            &state,
+            conversation_id,
+            METHOD_CONVERSATION_REPLACE_BINDING,
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": request.expected_revision,
+                "request": request.request,
+                "targetRuntimeAgentId": request.target_runtime_agent_id,
+            }),
+        )
+        .await;
+    }
     let service = match application(&state) {
         Ok(service) => service,
         Err((code, detail)) => return failure(code, detail),
@@ -177,6 +196,20 @@ async fn mutate_revision(
         Ok(value) => value,
         Err(error) => return validation(error.to_string()),
     };
+    if state.acp.is_core_backed() {
+        let method = core_method(mutation);
+        return respond_core(
+            &state,
+            conversation_id,
+            method,
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "expectedRevision": request.expected_revision,
+                "removeWorkspace": request.remove_workspace,
+            }),
+        )
+        .await;
+    }
     let service = match application(&state) {
         Ok(service) => service,
         Err((code, detail)) => return failure(code, detail),
@@ -240,6 +273,66 @@ async fn mutate_revision(
         }
     }
     respond(&state, conversation_id, current_session_id, result).await
+}
+
+async fn respond_core(
+    state: &AppState,
+    conversation_id: ConversationId,
+    method: &str,
+    params: serde_json::Value,
+) -> (StatusCode, Json<IpcBody<ConversationLifecycleOutcome>>) {
+    let value = match state.acp.conversation_request(method, params).await {
+        Ok(value) => value,
+        Err(error) => {
+            let (code, detail) = split_core_error(&error);
+            return failure(code, detail);
+        }
+    };
+    let outcome: ConversationLifecycleOutcome = match serde_json::from_value(value.clone()) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return failure(
+                "ACP_CORE".to_string(),
+                format!("invalid Core lifecycle response: {error}"),
+            )
+        }
+    };
+    if let Err(error) = state.relay.emit(&AcpEvent {
+        sid: None,
+        type_: "conversation_lifecycle",
+        payload: value,
+    }) {
+        warn!(
+            target: "se_manager::web::conversation_lifecycle_api",
+            conversation_id = %conversation_id,
+            code = error.code,
+            method,
+            "Core conversation lifecycle committed but live delivery degraded"
+        );
+        return failure(
+            error.code.to_string(),
+            "conversation lifecycle event delivery degraded".to_string(),
+        );
+    }
+    (StatusCode::OK, Json(IpcBody::ok(outcome)))
+}
+
+fn split_core_error(error: &str) -> (String, String) {
+    match error.split_once(':') {
+        Some((code, detail)) if !code.trim().is_empty() => {
+            (code.trim().to_string(), detail.trim().to_string())
+        }
+        _ => ("ACP_CORE".to_string(), error.to_string()),
+    }
+}
+
+fn core_method(mutation: Mutation) -> &'static str {
+    match mutation {
+        Mutation::Detach => METHOD_CONVERSATION_DETACH_BINDING,
+        Mutation::Rebind => METHOD_CONVERSATION_REBIND_BINDING,
+        Mutation::Suspend => METHOD_CONVERSATION_SUSPEND_BINDING,
+        Mutation::Delete => METHOD_CONVERSATION_DELETE,
+    }
 }
 
 fn application(
@@ -377,6 +470,34 @@ mod tests {
     use uuid::Uuid;
 
     const ID: &str = "018f7a1c-1b4d-7c8a-9f01-0123456789ab";
+
+    #[test]
+    fn core_lifecycle_methods_and_errors_keep_stable_codes() {
+        assert_eq!(
+            core_method(Mutation::Detach),
+            METHOD_CONVERSATION_DETACH_BINDING
+        );
+        assert_eq!(
+            core_method(Mutation::Rebind),
+            METHOD_CONVERSATION_REBIND_BINDING
+        );
+        assert_eq!(
+            core_method(Mutation::Suspend),
+            METHOD_CONVERSATION_SUSPEND_BINDING
+        );
+        assert_eq!(core_method(Mutation::Delete), METHOD_CONVERSATION_DELETE);
+        assert_eq!(
+            split_core_error("CONVERSATION_REVISION_CONFLICT: stale revision"),
+            (
+                "CONVERSATION_REVISION_CONFLICT".to_string(),
+                "stale revision".to_string()
+            )
+        );
+        assert_eq!(
+            split_core_error("transport unavailable"),
+            ("ACP_CORE".to_string(), "transport unavailable".to_string())
+        );
+    }
 
     async fn state() -> (
         tempfile::TempDir,
