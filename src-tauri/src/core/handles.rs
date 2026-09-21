@@ -13,15 +13,62 @@ use super::acp::AcpCoreClient;
 use super::ipc::{CoreError, CoreErrorPayload, CoreRequest, CoreResponse};
 use super::terminal::TerminalCoreClient;
 use crate::acp::AcpManager;
+use crate::conversation::ConversationId;
 use crate::pty::PtyManager;
 use async_trait::async_trait;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Weak};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalConversationObservation {
+    pub conversation_id: ConversationId,
+    pub live_terminal_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalTerminationOutcome {
+    Terminated,
+    AlreadyGone,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalConversationTermination {
+    pub conversation_id: ConversationId,
+    pub terminal_id: String,
+    pub operation_id: String,
+    pub outcome: TerminalTerminationOutcome,
+}
 
 #[async_trait]
 pub trait TerminalRuntimeHandle: Send + Sync {
     async fn write(&self, terminal_id: &str, data: &str) -> Result<(), CoreError>;
     async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError>;
     async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError>;
+    async fn observe_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_ids: &[String],
+    ) -> Result<TerminalConversationObservation, CoreError> {
+        let _ = (conversation_id, terminal_ids);
+        Err(CoreError::InvalidRequest(
+            "conversation terminal observation is unavailable".into(),
+        ))
+    }
+    async fn terminate_for_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+        operation_id: &str,
+    ) -> Result<TerminalConversationTermination, CoreError> {
+        let _ = (conversation_id, terminal_id, operation_id);
+        Err(CoreError::InvalidRequest(
+            "conversation-scoped terminal termination is unavailable".into(),
+        ))
+    }
     fn is_live(&self, terminal_id: &str) -> bool;
     /// Whether `is_live` is a real observation. Detached ACP Core runtimes
     /// cannot see Terminal Core PTYs, so callers must fail closed instead of
@@ -129,6 +176,72 @@ impl TerminalRuntimeHandle for InProcessTerminalRuntime {
             .map_err(|error| CoreError::InvalidRequest(error.to_string()))
     }
 
+    async fn observe_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_ids: &[String],
+    ) -> Result<TerminalConversationObservation, CoreError> {
+        let manager = self.manager()?;
+        let ids = if terminal_ids.is_empty() {
+            manager
+                .get_all()
+                .into_iter()
+                .filter(|instance| {
+                    instance.workspace_ref_tracked
+                        && instance.conversation_matches(conversation_id)
+                        && instance.is_active()
+                })
+                .map(|instance| instance.id.clone())
+                .collect()
+        } else {
+            terminal_ids
+                .iter()
+                .filter(|terminal_id| {
+                    manager.get(terminal_id).is_some_and(|instance| {
+                        instance.workspace_ref_tracked
+                            && instance.conversation_matches(conversation_id)
+                            && instance.is_active()
+                    })
+                })
+                .cloned()
+                .collect()
+        };
+        Ok(TerminalConversationObservation {
+            conversation_id,
+            live_terminal_ids: ids,
+        })
+    }
+
+    async fn terminate_for_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+        operation_id: &str,
+    ) -> Result<TerminalConversationTermination, CoreError> {
+        let manager = self.manager()?;
+        let Some(instance) = manager.get(terminal_id) else {
+            return Ok(TerminalConversationTermination {
+                conversation_id,
+                terminal_id: terminal_id.to_string(),
+                operation_id: operation_id.to_string(),
+                outcome: TerminalTerminationOutcome::AlreadyGone,
+            });
+        };
+        if !instance.workspace_ref_tracked || !instance.conversation_matches(conversation_id) {
+            return Err(CoreError::Unauthorized);
+        }
+        manager
+            .terminate(terminal_id)
+            .await
+            .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
+        Ok(TerminalConversationTermination {
+            conversation_id,
+            terminal_id: terminal_id.to_string(),
+            operation_id: operation_id.to_string(),
+            outcome: TerminalTerminationOutcome::Terminated,
+        })
+    }
+
     fn is_live(&self, terminal_id: &str) -> bool {
         self.manager()
             .ok()
@@ -204,6 +317,72 @@ impl TerminalServiceHandle {
 
     pub fn owns_core_process(&self) -> bool {
         self.core.is_some() && self.in_process.is_none()
+    }
+}
+
+#[derive(Clone)]
+pub struct SwitchableTerminalRuntime {
+    current: Arc<RwLock<Arc<dyn TerminalRuntimeHandle>>>,
+}
+
+impl SwitchableTerminalRuntime {
+    pub fn new(initial: Arc<dyn TerminalRuntimeHandle>) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(initial)),
+        }
+    }
+
+    pub fn replace(&self, runtime: Arc<dyn TerminalRuntimeHandle>) {
+        *self.current.write() = runtime;
+    }
+}
+
+#[async_trait]
+impl TerminalRuntimeHandle for SwitchableTerminalRuntime {
+    async fn write(&self, terminal_id: &str, data: &str) -> Result<(), CoreError> {
+        let runtime = Arc::clone(&self.current.read());
+        runtime.write(terminal_id, data).await
+    }
+
+    async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError> {
+        let runtime = Arc::clone(&self.current.read());
+        runtime.resize(terminal_id, cols, rows).await
+    }
+
+    async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError> {
+        let runtime = Arc::clone(&self.current.read());
+        runtime.terminate(terminal_id).await
+    }
+
+    async fn observe_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_ids: &[String],
+    ) -> Result<TerminalConversationObservation, CoreError> {
+        let runtime = Arc::clone(&self.current.read());
+        runtime
+            .observe_conversation(conversation_id, terminal_ids)
+            .await
+    }
+
+    async fn terminate_for_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+        operation_id: &str,
+    ) -> Result<TerminalConversationTermination, CoreError> {
+        let runtime = Arc::clone(&self.current.read());
+        runtime
+            .terminate_for_conversation(conversation_id, terminal_id, operation_id)
+            .await
+    }
+
+    fn is_live(&self, terminal_id: &str) -> bool {
+        self.current.read().is_live(terminal_id)
+    }
+
+    fn observes_live_terminals(&self) -> bool {
+        self.current.read().observes_live_terminals()
     }
 }
 
@@ -339,6 +518,58 @@ impl From<Arc<AcpManager>> for AcpServiceHandle {
 pub struct CoreServices {
     pub terminal: TerminalServiceHandle,
     pub acp: AcpServiceHandle,
+}
+
+#[cfg(test)]
+mod switchable_tests {
+    use super::*;
+
+    struct StaticRuntime {
+        observed: bool,
+    }
+
+    #[async_trait]
+    impl TerminalRuntimeHandle for StaticRuntime {
+        async fn write(&self, _terminal_id: &str, _data: &str) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn resize(
+            &self,
+            _terminal_id: &str,
+            _cols: u16,
+            _rows: u16,
+        ) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn terminate(&self, _terminal_id: &str) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        fn is_live(&self, _terminal_id: &str) -> bool {
+            self.observed
+        }
+
+        fn observes_live_terminals(&self) -> bool {
+            self.observed
+        }
+    }
+
+    #[tokio::test]
+    async fn switchable_runtime_replaces_detached_observation_atomically() {
+        let detached = Arc::new(DetachedTerminalRuntime);
+        let switchable = SwitchableTerminalRuntime::new(detached);
+        assert!(!switchable.observes_live_terminals());
+        assert!(switchable
+            .observe_conversation(ConversationId::new_v4(), &[])
+            .await
+            .is_err());
+
+        switchable.replace(Arc::new(StaticRuntime { observed: true }));
+        assert!(switchable.observes_live_terminals());
+        assert!(switchable.is_live("terminal-1"));
+    }
 }
 
 impl CoreServices {

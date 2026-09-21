@@ -2,9 +2,11 @@
 //!
 //! Renderer view close is deliberately absent from this host service. Every mutation compares the
 //! caller's expected revision with canonical `ConversationRecordV2.lastSeq` while holding the
-//! repository's per-Conversation lock. Explicit delete first releases live agent bindings and
-//! terminates conversation-scoped PTYs; remaining live terminals still block delete. Successful
-//! delete physically removes the Conversation — it is not archived.
+//! repository's per-Conversation lock. Explicit delete observes declared conversation terminal
+//! resources through the owning runtime, terminates them with scoped idempotent operations, and
+//! re-observes before releasing bindings or purging. Unknown, unavailable, mismatched, or still
+//! live terminals block delete; successful delete physically removes the Conversation — it is not
+//! archived.
 //!
 //! Title, attach, detach, target, and binding mutations consume the repository's in-lock
 //! canonical sequence allocator (`append_event` / `append_event_locked`) and never open a second
@@ -246,6 +248,34 @@ pub trait TerminalResourceInspector: Send + Sync {
     fn observes_live_terminals(&self) -> bool {
         true
     }
+    fn observe_conversation<'a>(
+        &'a self,
+        conversation_id: ConversationId,
+        terminal_ids: &'a [String],
+    ) -> ProviderFuture<'a, std::result::Result<Vec<String>, String>> {
+        Box::pin(async move {
+            if !self.observes_live_terminals() {
+                return Err("terminal liveness observation is unavailable".to_string());
+            }
+            let _ = conversation_id;
+            Ok(terminal_ids
+                .iter()
+                .filter(|terminal_id| self.is_live(terminal_id))
+                .cloned()
+                .collect())
+        })
+    }
+    fn terminate_for_conversation<'a>(
+        &'a self,
+        conversation_id: ConversationId,
+        terminal_id: &'a str,
+        operation_id: &'a str,
+    ) -> ProviderFuture<'a, std::result::Result<(), String>> {
+        Box::pin(async move {
+            let _ = (conversation_id, operation_id);
+            self.terminate(terminal_id).await
+        })
+    }
     fn terminate<'a>(
         &'a self,
         terminal_id: &'a str,
@@ -260,6 +290,57 @@ pub trait TerminalResourceInspector: Send + Sync {
 impl TerminalResourceInspector for PtyManager {
     fn is_live(&self, terminal_id: &str) -> bool {
         self.get(terminal_id).is_some()
+    }
+
+    fn observe_conversation<'a>(
+        &'a self,
+        conversation_id: ConversationId,
+        terminal_ids: &'a [String],
+    ) -> ProviderFuture<'a, std::result::Result<Vec<String>, String>> {
+        Box::pin(async move {
+            let mut live = Vec::new();
+            for terminal_id in terminal_ids {
+                let Some(instance) = self.get(terminal_id) else {
+                    continue;
+                };
+                if !instance.workspace_ref_tracked
+                    || !instance.conversation_matches(conversation_id)
+                {
+                    return Err(format!("terminal scope mismatch for {terminal_id}"));
+                }
+                if instance.is_active() {
+                    live.push(terminal_id.clone());
+                }
+            }
+            Ok(live)
+        })
+    }
+
+    fn terminate_for_conversation<'a>(
+        &'a self,
+        conversation_id: ConversationId,
+        terminal_id: &'a str,
+        operation_id: &'a str,
+    ) -> ProviderFuture<'a, std::result::Result<(), String>> {
+        Box::pin(async move {
+            let Some(instance) = self.get(terminal_id) else {
+                return Ok(());
+            };
+            if !instance.workspace_ref_tracked || !instance.conversation_matches(conversation_id) {
+                return Err(format!("terminal scope mismatch for {terminal_id}"));
+            }
+            let _ = operation_id;
+            self.terminate(terminal_id)
+                .await
+                .map(|_| ())
+                .map_err(|failure| {
+                    format!(
+                        "terminal_id={} cleanup_stage={}",
+                        failure.terminal_id,
+                        failure.stage.as_str()
+                    )
+                })
+        })
     }
 
     fn terminate<'a>(
@@ -288,6 +369,35 @@ impl TerminalResourceInspector for crate::core::TerminalServiceHandle {
 
     fn observes_live_terminals(&self) -> bool {
         self.runtime().observes_live_terminals()
+    }
+
+    fn observe_conversation<'a>(
+        &'a self,
+        conversation_id: ConversationId,
+        terminal_ids: &'a [String],
+    ) -> ProviderFuture<'a, std::result::Result<Vec<String>, String>> {
+        Box::pin(async move {
+            self.runtime()
+                .observe_conversation(conversation_id, terminal_ids)
+                .await
+                .map(|observation| observation.live_terminal_ids)
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn terminate_for_conversation<'a>(
+        &'a self,
+        conversation_id: ConversationId,
+        terminal_id: &'a str,
+        operation_id: &'a str,
+    ) -> ProviderFuture<'a, std::result::Result<(), String>> {
+        Box::pin(async move {
+            self.runtime()
+                .terminate_for_conversation(conversation_id, terminal_id, operation_id)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
     }
 
     fn terminate<'a>(
@@ -445,23 +555,8 @@ impl ConversationLifecycleService {
                 "suspend requires the current active binding",
             ));
         }
-        let unobservable_terminals = self.unobservable_terminal_resource_ids(conversation_id)?;
-        if !unobservable_terminals.is_empty() {
-            log::warn!(
-                "[conversation-lifecycle] suspend blocked conversation_id={} unobservable_terminal_count={}",
-                conversation_id,
-                unobservable_terminals.len()
-            );
-            return Err(lifecycle_error(
-                ConversationLifecycleErrorCode::ConversationLiveResources,
-                "suspend_binding",
-                Some(conversation_id),
-                format!(
-                    "ACP Core cannot observe conversation terminals {:?}; suspend is fail-closed until Terminal Core is linked",
-                    unobservable_terminals
-                ),
-            ));
-        }
+        self.observe_terminal_resource_ids(conversation_id, "suspend_binding")
+            .await?;
         if let Err(source) = self.provider.suspend(&binding).await {
             let code = match source.kind {
                 AgentLifecycleProviderErrorKind::Unsupported => {
@@ -618,6 +713,55 @@ impl ConversationLifecycleService {
             .map_err(map_repository_error)?;
         let _guard = self.repository.lifecycle_lock(conversation_id).await;
         let record = self.expected(conversation_id, expected_revision, "delete_conversation")?;
+        let terminal_ids = self.terminal_resource_ids(conversation_id)?;
+        if !terminal_ids.is_empty() {
+            if let Err(error) = self
+                .terminals
+                .observe_conversation(conversation_id, &terminal_ids)
+                .await
+            {
+                return Ok(self.terminal_blocked(
+                    conversation_id,
+                    record.last_seq,
+                    terminal_ids,
+                    format!("terminal observation failed before delete: {error}"),
+                ));
+            }
+            let failed = self
+                .terminate_live_resources_for_delete(conversation_id, &terminal_ids)
+                .await;
+            if !failed.is_empty() {
+                return Ok(self.terminal_blocked(
+                    conversation_id,
+                    record.last_seq,
+                    failed,
+                    "one or more conversation terminals could not be terminated",
+                ));
+            }
+            let remaining = match self
+                .terminals
+                .observe_conversation(conversation_id, &terminal_ids)
+                .await
+            {
+                Ok(remaining) => remaining,
+                Err(error) => {
+                    return Ok(self.terminal_blocked(
+                        conversation_id,
+                        record.last_seq,
+                        terminal_ids,
+                        format!("terminal observation failed after cleanup: {error}"),
+                    ));
+                }
+            };
+            if !remaining.is_empty() {
+                return Ok(self.terminal_blocked(
+                    conversation_id,
+                    record.last_seq,
+                    remaining,
+                    "conversation terminals remain live after cleanup",
+                ));
+            }
+        }
         self.release_live_resources_for_delete(&permit, conversation_id)
             .await?;
         let blockers = self.delete_blockers(conversation_id)?;
@@ -756,25 +900,38 @@ impl ConversationLifecycleService {
             }
         }
 
-        for terminal_id in self.live_terminal_resource_ids(conversation_id)? {
-            match self.terminals.terminate(&terminal_id).await {
-                Ok(()) => {
-                    log::info!(
-                        "[conversation-lifecycle] delete terminated terminal_id={} conversation_id={}",
-                        terminal_id,
-                        conversation_id
-                    );
-                }
-                Err(detail) => {
+        Ok(())
+    }
+
+    async fn terminate_live_resources_for_delete(
+        &self,
+        conversation_id: ConversationId,
+        terminal_ids: &[String],
+    ) -> Vec<String> {
+        let mut failed = Vec::new();
+        for terminal_id in terminal_ids {
+            let operation_id = format!("conversation-delete:{conversation_id}:{terminal_id}");
+            match self
+                .terminals
+                .terminate_for_conversation(conversation_id, terminal_id, &operation_id)
+                .await
+            {
+                Ok(()) => log::info!(
+                    "[conversation-lifecycle] delete terminated terminal_id={} conversation_id={}",
+                    terminal_id,
+                    conversation_id
+                ),
+                Err(_detail) => {
                     log::warn!(
-                        "[conversation-lifecycle] delete terminal terminate failed conversation_id={} detail={}",
+                        "[conversation-lifecycle] delete terminal terminate failed conversation_id={} terminal_id={} code=TERMINAL_CLEANUP_FAILED",
                         conversation_id,
-                        detail
+                        terminal_id
                     );
+                    failed.push(terminal_id.clone());
                 }
             }
         }
-        Ok(())
+        failed
     }
 
     fn delete_blockers(
@@ -797,17 +954,36 @@ impl ConversationLifecycleService {
                 });
             }
         }
-        let terminal_ids = self.live_terminal_resource_ids(conversation_id)?;
-        if !terminal_ids.is_empty() {
-            blockers.push(ConversationDeleteBlocker::TerminalResources {
-                count: terminal_ids.len(),
-                ids: terminal_ids,
-            });
-        }
         Ok(blockers)
     }
 
-    fn live_terminal_resource_ids(&self, conversation_id: ConversationId) -> Result<Vec<String>> {
+    fn terminal_blocked(
+        &self,
+        conversation_id: ConversationId,
+        revision: u64,
+        mut ids: Vec<String>,
+        detail: impl Into<String>,
+    ) -> ConversationLifecycleOutcome {
+        ids.sort();
+        ids.dedup();
+        log::warn!(
+            "[conversation-lifecycle] delete blocked conversation_id={} code=CONVERSATION_LIVE_RESOURCES detail={}",
+            conversation_id,
+            detail.into()
+        );
+        ConversationLifecycleOutcome::Blocked {
+            action: ConversationLifecycleAction::DeleteConversation,
+            conversation_id,
+            revision,
+            code: ConversationLifecycleErrorCode::ConversationLiveResources,
+            blockers: vec![ConversationDeleteBlocker::TerminalResources {
+                count: ids.len(),
+                ids,
+            }],
+        }
+    }
+
+    fn terminal_resource_ids(&self, conversation_id: ConversationId) -> Result<Vec<String>> {
         let Some(bytes) = self
             .repository
             .read_workspace_bytes(conversation_id)
@@ -833,14 +1009,11 @@ impl ConversationLifecycleService {
                 "workspace.json identity/schema is invalid",
             ));
         }
-        let observes = self.terminals.observes_live_terminals();
         let mut ids = workspace
             .resources
             .into_iter()
             .filter_map(|resource| match resource {
-                SessionWorkspaceResourceDescriptor::Terminal { terminal_id, .. }
-                    if !observes || self.terminals.is_live(&terminal_id) =>
-                {
+                SessionWorkspaceResourceDescriptor::Terminal { terminal_id, .. } => {
                     Some(terminal_id)
                 }
                 _ => None,
@@ -851,14 +1024,37 @@ impl ConversationLifecycleService {
         Ok(ids)
     }
 
-    fn unobservable_terminal_resource_ids(
+    async fn observe_terminal_resource_ids(
         &self,
         conversation_id: ConversationId,
+        operation: &'static str,
     ) -> Result<Vec<String>> {
-        if self.terminals.observes_live_terminals() {
+        let ids = self.terminal_resource_ids(conversation_id)?;
+        if ids.is_empty() {
             return Ok(Vec::new());
         }
-        self.live_terminal_resource_ids(conversation_id)
+        if !self.terminals.observes_live_terminals() {
+            return Err(lifecycle_error(
+                ConversationLifecycleErrorCode::ConversationLiveResources,
+                operation,
+                Some(conversation_id),
+                format!(
+                    "ACP Core cannot observe conversation terminals {:?}; operation is fail-closed until Terminal Core is linked",
+                    ids
+                ),
+            ));
+        }
+        self.terminals
+            .observe_conversation(conversation_id, &ids)
+            .await
+            .map_err(|detail| {
+                lifecycle_error(
+                    ConversationLifecycleErrorCode::ConversationRecoveryRequired,
+                    operation,
+                    Some(conversation_id),
+                    format!("conversation terminal observation failed: {detail}"),
+                )
+            })
     }
 }
 
@@ -1721,7 +1917,7 @@ mod tests {
                 .lifecycle_state,
             ConversationLifecycleState::Ready
         );
-        assert_eq!(fixture.provider.suspend_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.provider.suspend_calls.load(Ordering::SeqCst), 0);
     }
 
     async fn write_terminal_workspace(fixture: &Fixture, terminal_id: &str) {

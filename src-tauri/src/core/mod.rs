@@ -18,7 +18,9 @@ pub use acp::{
 };
 pub use handles::{
     AcpRuntimeHandle, AcpServiceHandle, CoreServices, DetachedTerminalRuntime, InProcessAcpRuntime,
-    InProcessTerminalRuntime, TerminalRuntimeHandle, TerminalServiceHandle,
+    InProcessTerminalRuntime, SwitchableTerminalRuntime, TerminalConversationObservation,
+    TerminalConversationTermination, TerminalRuntimeHandle, TerminalServiceHandle,
+    TerminalTerminationOutcome,
 };
 pub use ipc::{
     negotiate_protocol, prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket,

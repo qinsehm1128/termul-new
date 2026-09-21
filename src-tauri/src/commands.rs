@@ -7107,7 +7107,15 @@ pub async fn conversation_delete(
         expected_revision,
     )
     .await;
-    if outcome.success {
+    if outcome.success
+        && matches!(
+            outcome.data.as_ref(),
+            Some(crate::conversation::ConversationLifecycleOutcome::Updated {
+                lifecycle_state: crate::conversation::ConversationLifecycleState::Deleted,
+                ..
+            })
+        )
+    {
         if remove_workspace == Some(true) {
             if let Some(path) = workspace_cwd.filter(|path| !path.trim().is_empty()) {
                 // User-confirmed recursive removal of the Conversation workspace

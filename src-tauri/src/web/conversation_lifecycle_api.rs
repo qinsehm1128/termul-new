@@ -261,7 +261,16 @@ async fn mutate_revision(
                 .await
         }
     };
-    if matches!(mutation, Mutation::Delete) && request.remove_workspace && result.is_ok() {
+    if matches!(mutation, Mutation::Delete)
+        && request.remove_workspace
+        && matches!(
+            &result,
+            Ok(ConversationLifecycleOutcome::Updated {
+                lifecycle_state: crate::conversation::ConversationLifecycleState::Deleted,
+                ..
+            })
+        )
+    {
         if let Some(path) = workspace_cwd.filter(|path| !path.trim().is_empty()) {
             if let Err(error) = std::fs::remove_dir_all(&path) {
                 log::warn!(

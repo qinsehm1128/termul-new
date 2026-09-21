@@ -15,11 +15,16 @@
 //!   renderer contract is byte-identical.
 //! - No GUI-runtime dependency in this module (structural test below).
 
+use super::handles::{
+    DetachedTerminalRuntime, SwitchableTerminalRuntime, TerminalRuntimeHandle,
+    TerminalServiceHandle,
+};
 use super::ipc::{
     prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket, validate_hello,
     write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload, CoreEvent, CoreHello, CoreRequest,
     CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
+use super::terminal::TerminalCoreClient;
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
 use crate::acp::config::{AgentConfig, AgentId, PermissionPolicy, SessionId};
 use crate::acp::manager::{
@@ -267,6 +272,71 @@ impl EventSink for CoreIpcEventSink {
     }
 }
 
+fn spawn_terminal_link_supervisor(
+    runtime: Arc<SwitchableTerminalRuntime>,
+    endpoint: CoreEndpoint,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    tokio::spawn(async move {
+        let mut client: Option<Arc<TerminalCoreClient>> = None;
+        let mut retry = tokio::time::interval(Duration::from_millis(500));
+        retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = retry.tick() => {
+                    let connected = client
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.observes_live_terminals());
+                    if connected {
+                        continue;
+                    }
+                    runtime.replace(Arc::new(DetachedTerminalRuntime));
+                    let result = match client.as_ref() {
+                        Some(candidate) => candidate
+                            .reconnect(&endpoint)
+                            .await
+                            .map(|_| Arc::clone(candidate)),
+                        None => TerminalCoreClient::connect(&endpoint).await.map(Arc::new),
+                    };
+                    match result {
+                        Ok(candidate) => match candidate.list().await {
+                            Ok(_) => {
+                                client = Some(candidate.clone());
+                                runtime.replace(candidate);
+                                log::info!(
+                                    target: "se_manager::core",
+                                    "operation=acp_terminal_link stable_code=READY"
+                                );
+                            }
+                            Err(error) => {
+                                client = None;
+                                log::debug!(
+                                    target: "se_manager::core",
+                                    "operation=acp_terminal_link stable_code=VALIDATION_FAILED code={}",
+                                    error.code()
+                                );
+                            }
+                        },
+                        Err(error) => {
+                            log::debug!(
+                                target: "se_manager::core",
+                                "operation=acp_terminal_link stable_code=UNAVAILABLE code={}",
+                                error.code()
+                            );
+                        }
+                    }
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+        runtime.replace(Arc::new(DetachedTerminalRuntime));
+    });
+}
+
 struct AcpCoreState {
     manager: Arc<AcpManager>,
     relay: Arc<WsRelaySink>,
@@ -443,12 +513,13 @@ fn compose_acp_core(
         Arc::clone(&bootstrap.creation),
         Arc::clone(&bootstrap.persistence_adapter),
     ));
-    // The Core has no in-process PTY manager. The detached runtime keeps the
-    // terminal seams honest (nothing is live from the Core's viewpoint) until
-    // a Terminal-Core-linking runtime replaces it.
-    manager.set_terminal_service(super::handles::TerminalServiceHandle::from_runtime(
-        Arc::new(super::handles::DetachedTerminalRuntime),
-    ));
+    // Keep one stable runtime object in the lifecycle service while its inner
+    // Terminal Core client is swapped on late startup/reconnect.
+    let terminal_runtime = Arc::new(SwitchableTerminalRuntime::new(Arc::new(
+        DetachedTerminalRuntime,
+    )));
+    let terminal_service = TerminalServiceHandle::from_runtime(terminal_runtime.clone());
+    manager.set_terminal_service(terminal_service.clone());
 
     let runtime_handle = tokio::runtime::Handle::current();
     let rendezvous = Arc::new(PermissionRendezvous::with_handle_and_policy(
@@ -470,9 +541,7 @@ fn compose_acp_core(
         .attach_lifecycle(
             crate::conversation::ConversationLifecycleService::from_terminal(
                 Arc::clone(&manager),
-                super::handles::TerminalServiceHandle::from_runtime(Arc::new(
-                    super::handles::DetachedTerminalRuntime,
-                )),
+                terminal_service.clone(),
             )
             .map_err(|error| invalid(error.to_string()))?,
         )
@@ -500,6 +569,9 @@ fn compose_acp_core(
     );
     manager.set_scheduled_tasks(&scheduled_tasks);
     scheduled_tasks.start_on(&runtime_handle);
+
+    let terminal_endpoint = CoreEndpoint::for_profile(&state_root, CoreRole::TerminalCore);
+    spawn_terminal_link_supervisor(terminal_runtime, terminal_endpoint, shutdown.subscribe());
 
     let memory = Arc::new(MemoryIndexService::new(state_root));
     manager.set_memory_index(&memory);
@@ -1115,11 +1187,12 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             let result = if let Some(conversation_id) =
                 manager.conversation_id_for_current_session(&params.session_id.0)
             {
+                let terminal_runtime = manager
+                    .terminal_runtime()
+                    .ok_or_else(|| invalid("acp core terminal runtime is not configured"))?;
                 let service = crate::conversation::ConversationLifecycleService::from_terminal(
                     Arc::clone(manager),
-                    super::handles::TerminalServiceHandle::from_runtime(Arc::new(
-                        super::handles::DetachedTerminalRuntime,
-                    )),
+                    TerminalServiceHandle::from_runtime(terminal_runtime),
                 )
                 .map_err(|error| invalid(error.to_string()))?;
                 let expected_revision = state
@@ -2500,6 +2573,62 @@ mod tests {
         assert_eq!(envelope.seq, 2);
         assert_eq!(envelope.type_, "acp:agent_spawned");
         assert_eq!(shared.seq.load(Ordering::Relaxed), 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn acp_terminal_link_attaches_late_and_recovers_after_restart() {
+        use super::super::terminal::run_terminal_core_on_endpoint;
+
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let runtime = Arc::new(SwitchableTerminalRuntime::new(Arc::new(
+            DetachedTerminalRuntime,
+        )));
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        spawn_terminal_link_supervisor(runtime.clone(), endpoint.clone(), shutdown_rx);
+        assert!(!runtime.observes_live_terminals());
+
+        let server_endpoint = endpoint.clone();
+        let mut server =
+            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !runtime.observes_live_terminals() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "late Terminal Core link did not connect"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let control = TerminalCoreClient::connect(&endpoint)
+            .await
+            .expect("control client connects before shutdown");
+        control.shutdown().await.expect("shutdown Terminal Core");
+        let _ = tokio::time::timeout(Duration::from_secs(5), &mut server).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while runtime.observes_live_terminals() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "link remained live after Terminal Core disconnect"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let server_endpoint = endpoint.clone();
+        server = tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !runtime.observes_live_terminals() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Terminal Core link did not recover"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        shutdown.send(true).unwrap();
+        server.abort();
+        let _ = server.await;
     }
 
     #[cfg(unix)]

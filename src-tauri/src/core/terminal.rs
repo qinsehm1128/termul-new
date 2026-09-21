@@ -4,7 +4,10 @@
 //! shared-live talk to it over bounded framed messages; standalone keeps
 //! in-process ownership through [`super::handles`].
 
-use super::handles::TerminalRuntimeHandle;
+use super::handles::{
+    TerminalConversationObservation, TerminalConversationTermination, TerminalRuntimeHandle,
+    TerminalTerminationOutcome,
+};
 use super::ipc::{
     prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket, validate_hello,
     write_frame, write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload, CoreEvent, CoreHello,
@@ -26,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -53,6 +56,8 @@ pub const METHOD_SHUTDOWN: &str = "shutdown";
 pub const METHOD_CLOSE_VIEW: &str = "close_view";
 pub const METHOD_SET_DISPLAY_MODE: &str = "set_display_mode";
 pub const METHOD_SET_PROTECTED: &str = "set_protected";
+pub const METHOD_OBSERVE_CONVERSATION: &str = "observeConversation";
+pub const METHOD_TERMINATE_FOR_CONVERSATION: &str = "terminateForConversation";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputKind {
@@ -90,6 +95,22 @@ pub struct TerminalStatus {
     pub lifecycle: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claim_generation: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationTerminalParams {
+    conversation_id: ConversationId,
+    #[serde(default)]
+    terminal_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationTerminalTerminateParams {
+    conversation_id: ConversationId,
+    terminal_id: String,
+    operation_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -466,12 +487,21 @@ async fn handle_connection(
         }
     });
 
+    let mut shutdown_rx = state.shutdown.subscribe();
     let result = async {
         loop {
-            let payload = match read_frame(&mut reader).await {
-                Ok(payload) => payload,
-                Err(CoreError::Io(_)) => break,
-                Err(error) => return Err(error),
+            let payload = tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+                payload = read_frame(&mut reader) => match payload {
+                    Ok(payload) => payload,
+                    Err(CoreError::Io(_)) => break,
+                    Err(error) => return Err(error),
+                },
             };
             if is_output_frame(&payload) {
                 continue;
@@ -596,6 +626,80 @@ async fn handle_method(
                 .await
                 .map_err(invalid)?;
             Ok(Value::Null)
+        }
+        METHOD_OBSERVE_CONVERSATION => {
+            let params: ConversationTerminalParams = serde_json::from_value(request.params.clone())
+                .map_err(|error| invalid(error.to_string()))?;
+            let live_terminal_ids = if params.terminal_ids.is_empty() {
+                pty.get_all()
+                    .into_iter()
+                    .filter(|instance| {
+                        instance.workspace_ref_tracked
+                            && instance.conversation_matches(params.conversation_id)
+                            && instance.is_active()
+                    })
+                    .map(|instance| instance.id.clone())
+                    .collect()
+            } else {
+                let mut live_terminal_ids = Vec::new();
+                for terminal_id in &params.terminal_ids {
+                    let Some(instance) = pty.get(terminal_id) else {
+                        continue;
+                    };
+                    if !instance.workspace_ref_tracked
+                        || !instance.conversation_matches(params.conversation_id)
+                    {
+                        return Err(unauthorized());
+                    }
+                    if instance.is_active() {
+                        live_terminal_ids.push(terminal_id.clone());
+                    }
+                }
+                live_terminal_ids
+            };
+            serde_json::to_value(TerminalConversationObservation {
+                conversation_id: params.conversation_id,
+                live_terminal_ids,
+            })
+            .map_err(|error| invalid(error.to_string()))
+        }
+        METHOD_TERMINATE_FOR_CONVERSATION => {
+            let params: ConversationTerminalTerminateParams =
+                serde_json::from_value(request.params.clone())
+                    .map_err(|error| invalid(error.to_string()))?;
+            let Some(instance) = pty.get(&params.terminal_id) else {
+                return serde_json::to_value(TerminalConversationTermination {
+                    conversation_id: params.conversation_id,
+                    terminal_id: params.terminal_id,
+                    operation_id: params.operation_id,
+                    outcome: TerminalTerminationOutcome::AlreadyGone,
+                })
+                .map_err(|error| invalid(error.to_string()));
+            };
+            if !instance.workspace_ref_tracked
+                || !instance.conversation_matches(params.conversation_id)
+            {
+                return Err(unauthorized());
+            }
+            if !instance.is_active() {
+                return serde_json::to_value(TerminalConversationTermination {
+                    conversation_id: params.conversation_id,
+                    terminal_id: params.terminal_id,
+                    operation_id: params.operation_id,
+                    outcome: TerminalTerminationOutcome::AlreadyGone,
+                })
+                .map_err(|error| invalid(error.to_string()));
+            }
+            pty.terminate(&params.terminal_id)
+                .await
+                .map_err(|error| invalid(error.to_string()))?;
+            serde_json::to_value(TerminalConversationTermination {
+                conversation_id: params.conversation_id,
+                terminal_id: params.terminal_id,
+                operation_id: params.operation_id,
+                outcome: TerminalTerminationOutcome::Terminated,
+            })
+            .map_err(|error| invalid(error.to_string()))
         }
         METHOD_TERMINATE => {
             let params: TerminalIdParams = serde_json::from_value(request.params.clone())
@@ -924,6 +1028,7 @@ struct ClientInner {
     events: broadcast::Sender<TerminalEvent>,
     reader: Mutex<Option<tokio::task::JoinHandle<()>>>,
     reconnect: tokio::sync::Mutex<()>,
+    connected: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -944,6 +1049,7 @@ impl TerminalCoreClient {
             events,
             reader: Mutex::new(None),
             reconnect: tokio::sync::Mutex::new(()),
+            connected: AtomicBool::new(true),
         });
         spawn_terminal_read_loop(&inner, reader);
         let client = Self { inner };
@@ -976,6 +1082,7 @@ impl TerminalCoreClient {
             *writer_guard = writer;
         }
         spawn_terminal_read_loop(&self.inner, reader);
+        self.inner.connected.store(true, Ordering::Release);
 
         let listed = self.list().await.unwrap_or_default();
         let active: HashSet<String> = listed
@@ -1193,6 +1300,50 @@ impl TerminalCoreClient {
         result
     }
 
+    pub async fn observe_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_ids: &[String],
+    ) -> Result<TerminalConversationObservation, CoreError> {
+        let value = self
+            .rpc(
+                METHOD_OBSERVE_CONVERSATION,
+                json!({
+                    "conversationId": conversation_id,
+                    "terminalIds": terminal_ids,
+                }),
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|error| invalid(error.to_string()))
+    }
+
+    pub async fn terminate_for_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+        operation_id: &str,
+    ) -> Result<TerminalConversationTermination, CoreError> {
+        let value = self
+            .rpc(
+                METHOD_TERMINATE_FOR_CONVERSATION,
+                json!({
+                    "conversationId": conversation_id,
+                    "terminalId": terminal_id,
+                    "operationId": operation_id,
+                }),
+            )
+            .await?;
+        let result: TerminalConversationTermination =
+            serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
+        if matches!(
+            result.outcome,
+            TerminalTerminationOutcome::Terminated | TerminalTerminationOutcome::AlreadyGone
+        ) {
+            self.inner.live.lock().remove(terminal_id);
+        }
+        Ok(result)
+    }
+
     async fn open_stream(
         &self,
         method: &str,
@@ -1374,6 +1525,7 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
         }
     }
     fail_stale_pending(&inner);
+    inner.connected.store(false, Ordering::Release);
     // A broken Core transport invalidates cached liveness. Keep stream slots
     // so the reconnect handshake can explicitly re-watch them from last_seq;
     // ordinary authorization still fails closed while the transport is down.
@@ -1402,8 +1554,35 @@ impl TerminalRuntimeHandle for TerminalCoreClient {
         TerminalCoreClient::terminate(self, terminal_id).await
     }
 
+    async fn observe_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_ids: &[String],
+    ) -> Result<TerminalConversationObservation, CoreError> {
+        TerminalCoreClient::observe_conversation(self, conversation_id, terminal_ids).await
+    }
+
+    async fn terminate_for_conversation(
+        &self,
+        conversation_id: ConversationId,
+        terminal_id: &str,
+        operation_id: &str,
+    ) -> Result<TerminalConversationTermination, CoreError> {
+        TerminalCoreClient::terminate_for_conversation(
+            self,
+            conversation_id,
+            terminal_id,
+            operation_id,
+        )
+        .await
+    }
+
     fn is_live(&self, terminal_id: &str) -> bool {
-        self.inner.live.lock().contains(terminal_id)
+        self.inner.connected.load(Ordering::Acquire) && self.inner.live.lock().contains(terminal_id)
+    }
+
+    fn observes_live_terminals(&self) -> bool {
+        self.inner.connected.load(Ordering::Acquire)
     }
 }
 
@@ -1437,6 +1616,22 @@ mod tests {
     #[test]
     fn scrollback_cap_is_256_kib() {
         assert_eq!(SCROLLBACK_CAP, 256 * 1024);
+    }
+
+    #[test]
+    fn scoped_terminal_lifecycle_contract_uses_camel_case_and_idempotent_outcomes() {
+        let conversation_id = ConversationId::new_v4();
+        let termination = TerminalConversationTermination {
+            conversation_id,
+            terminal_id: "terminal-1".to_string(),
+            operation_id: "op-1".to_string(),
+            outcome: TerminalTerminationOutcome::AlreadyGone,
+        };
+        let value = serde_json::to_value(&termination).unwrap();
+        assert_eq!(value["conversationId"], conversation_id.to_string());
+        assert_eq!(value["terminalId"], "terminal-1");
+        assert_eq!(value["operationId"], "op-1");
+        assert_eq!(value["outcome"], "alreadyGone");
     }
 
     #[cfg(unix)]
