@@ -27,9 +27,9 @@ use crate::conversation::session_workspace::{
 };
 use crate::conversation::write_authority::{ConversationMutation, ConversationWriter};
 use crate::conversation::{
-    AgentSessionBinding, CompatibilityError, ConversationId, ConversationReader,
-    ConversationRecordV2, CreationPartition, ExecutionTarget, PrepareConversationRequest,
-    ProjectAttachment,
+    AgentSessionBinding, CompatibilityError, ConversationErrorCode, ConversationId,
+    ConversationReader, ConversationRecordV2, CreationPartition, ExecutionTarget,
+    PrepareConversationRequest, ProjectAttachment,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -906,6 +906,28 @@ impl ConversationApplicationService {
         result
     }
 
+    pub async fn recover_lost_conversation_terminals(
+        &self,
+    ) -> Result<Vec<ConversationLifecycleOutcome>> {
+        let started = Instant::now();
+        let result = async {
+            self.lifecycle()?
+                .recover_lost_conversation_terminals()
+                .await
+                .map_err(map_lifecycle_error)
+        }
+        .await;
+        log_result(
+            "recover_lost_conversation_terminals",
+            None,
+            self.host_kind,
+            None,
+            started,
+            &result,
+        );
+        result
+    }
+
     pub async fn delete_conversation(
         &self,
         conversation_id: ConversationId,
@@ -929,6 +951,20 @@ impl ConversationApplicationService {
             &result,
         );
         result
+    }
+
+    /// Binding lookup used by delete transports. Already-purged Conversations
+    /// are treated as having no session to retire so repeated operation IDs can
+    /// converge after confirmed cleanup.
+    pub fn current_session_id_for_delete(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<Option<String>> {
+        match self.writer.repository().current_binding(conversation_id) {
+            Ok(binding) => Ok(binding.map(|binding| binding.agent_session_id)),
+            Err(error) if error.code == ConversationErrorCode::ConversationNotFound => Ok(None),
+            Err(error) => Err(map_repository_error(error)),
+        }
     }
 
     /// Rename a Conversation (LocalAlias title precedence).

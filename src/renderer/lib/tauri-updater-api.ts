@@ -1,6 +1,9 @@
 import type { IpcResult } from '@shared/types/ipc.types'
 import {
   type DownloadProgress,
+  legacyUpdateComponentPolicy,
+  type PendingUpdatePlan,
+  parseUpdateComponentPolicy,
   type UpdateInfo,
   UpdaterErrorCodes,
   type UpdateState
@@ -13,6 +16,11 @@ import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updat
 import { runtimeT } from '@/i18n/runtime'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
+import {
+  createPendingUpdatePlan,
+  loadPendingUpdatePlan,
+  savePendingUpdatePlan
+} from './tauri-update-plan-api'
 
 // Stable signed-manifest alias published alongside `latest-stable.json` so the
 // Tauri updater plugin's build-time `endpoints` config (which cannot be
@@ -81,6 +89,7 @@ let autoUpdateEnabled = true
 let lastCheckedAt: string | null = null
 let downloadedVersion: string | null = null
 let preparedUpdateVersion: string | null = null
+let pendingComponentPolicy: UpdateInfo['componentPolicy']
 let isManualUpdateMode = false
 
 export interface TauriUpdaterEventHandlers {
@@ -204,6 +213,7 @@ export function mapTauriUpdateToInfo(update: Update): UpdateInfo {
     version: update.version,
     releaseDate: update.date ?? new Date().toISOString(),
     releaseNotes: update.body ?? undefined,
+    componentPolicy: legacyUpdateComponentPolicy(update.version),
     isSecurityUpdate: false
   }
 }
@@ -360,6 +370,7 @@ function mapGitHubReleaseToInfo(release: GitHubRelease): UpdateInfo {
     version,
     releaseDate: release.published_at ?? new Date().toISOString(),
     releaseNotes: release.body ?? undefined,
+    componentPolicy: legacyUpdateComponentPolicy(version),
     isSecurityUpdate: false,
     downloadUrl: release.html_url
   }
@@ -401,6 +412,9 @@ interface ChannelManifest {
   version?: string
   notes?: string
   pub_date?: string
+  termul?: {
+    componentPolicy?: unknown
+  }
   platforms?: Record<string, unknown>
 }
 
@@ -418,6 +432,21 @@ async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelMani
     throw new Error('Channel manifest `version` is not a string')
   }
   return manifest
+}
+
+async function getStableComponentPolicy(version: string): Promise<UpdateInfo['componentPolicy']> {
+  let manifest: ChannelManifest
+  try {
+    manifest = await fetchChannelManifest('stable')
+  } catch {
+    return legacyUpdateComponentPolicy(version)
+  }
+
+  if (normalizeVersion(manifest.version ?? '') !== version) {
+    return legacyUpdateComponentPolicy(version)
+  }
+
+  return parseUpdateComponentPolicy(manifest.termul?.componentPolicy, version)
 }
 
 /**
@@ -452,6 +481,10 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
         // just-published). Omit when the manifest lacks pub_date.
         releaseDate: manifest.pub_date,
         releaseNotes: manifest.notes ?? undefined,
+        componentPolicy: parseUpdateComponentPolicy(
+          manifest.termul?.componentPolicy,
+          latestVersion
+        ),
         isSecurityUpdate: false,
         downloadUrl: getChannelReleasePageUrl(channel)
       }
@@ -459,6 +492,7 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
   }
 
   pendingTauriUpdate = null
+  pendingComponentPolicy = updateInfo?.componentPolicy
   isManualUpdateMode = updateInfo !== null
   manualUpdateInfo = updateInfo
   downloadedVersion = null
@@ -476,6 +510,7 @@ export async function checkForUpdates(
     try {
       const update = await checkAurUpdate()
       pendingAurUpdate = update
+      pendingComponentPolicy = update?.componentPolicy
       lastCheckedAt = new Date().toISOString()
       return update
     } catch (error) {
@@ -496,6 +531,7 @@ export async function checkForUpdates(
   try {
     const update = await check()
     pendingTauriUpdate = update
+    pendingComponentPolicy = update ? await getStableComponentPolicy(update.version) : undefined
     isManualUpdateMode = false
     manualUpdateInfo = null
     downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
@@ -509,7 +545,11 @@ export async function checkForUpdates(
     preparedUpdateVersion =
       update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
     lastCheckedAt = new Date().toISOString()
-    return update ? mapTauriUpdateToInfo(update) : null
+    if (!update) return null
+    return {
+      ...mapTauriUpdateToInfo(update),
+      componentPolicy: pendingComponentPolicy
+    }
   } catch (error) {
     lastCheckedAt = new Date().toISOString()
 
@@ -524,6 +564,7 @@ export async function checkForUpdates(
         if (fallback) {
           isManualUpdateMode = true
           manualUpdateInfo = fallback
+          pendingComponentPolicy = fallback?.componentPolicy
           pendingTauriUpdate = null
           return fallback
         }
@@ -702,13 +743,34 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
     }
   }
 
+  let pendingPlanForFailure: PendingUpdatePlan | null = null
   try {
+    const componentPolicy =
+      pendingComponentPolicy ?? legacyUpdateComponentPolicy(pendingTauriUpdate.version)
+    const plan = createPendingUpdatePlan(pendingTauriUpdate.version, componentPolicy)
+    pendingPlanForFailure = plan
+    const planResult = await savePendingUpdatePlan(plan)
+    if (!planResult.success) {
+      return {
+        success: false,
+        error: planResult.error ?? 'Failed to persist update plan',
+        code: 'UPDATE_PLAN_ERROR'
+      }
+    }
+
     // Apply the already-downloaded package, then restart into the new version.
     // Split from download so the app is never force-restarted during download.
     await downloadedUpdate.install()
     await relaunch()
     return { success: true, data: undefined }
   } catch (error) {
+    if (pendingPlanForFailure) {
+      await savePendingUpdatePlan({
+        ...pendingPlanForFailure,
+        status: 'failed',
+        lastError: getErrorMessage(error, 'Update installation failed')
+      })
+    }
     return {
       success: false,
       error: getErrorMessage(
@@ -725,6 +787,7 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
 }
 
 export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
+  const pendingPlan = await loadPendingUpdatePlan()
   const updateAvailable = isAurUpdateMode()
     ? pendingAurUpdate !== null
     : pendingTauriUpdate !== null || isManualUpdateMode
@@ -748,6 +811,10 @@ export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
       downloadProgress: null,
       error: null,
       lastChecked: lastCheckedAt,
+      componentPolicy:
+        pendingComponentPolicy ??
+        (pendingPlan.success ? pendingPlan.data?.componentPolicy : undefined),
+      pendingUpdatePlan: pendingPlan.success ? pendingPlan.data : null,
       isManualUpdateMode: !isAurUpdateMode() && isManualUpdateMode
     }
   }
@@ -791,6 +858,7 @@ export async function clearPendingUpdate(): Promise<void> {
   manualUpdateInfo = null
   downloadedVersion = null
   preparedUpdateVersion = null
+  pendingComponentPolicy = undefined
   isManualUpdateMode = false
 }
 
@@ -801,6 +869,7 @@ export function _resetUpdaterStateForTesting(): void {
   manualUpdateInfo = null
   downloadedVersion = null
   preparedUpdateVersion = null
+  pendingComponentPolicy = undefined
   lastCheckedAt = null
   autoUpdateEnabled = true
   isManualUpdateMode = false

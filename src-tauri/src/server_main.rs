@@ -364,7 +364,15 @@ fn main() -> ExitCode {
                 Arc::clone(&acp),
                 Arc::clone(&pty),
             ) {
-                Ok(service) => service,
+                Ok(service) => match se_manager_lib::conversation::LifecycleOperationJournal::open(
+                    cfg.service_account_state_dir(),
+                ) {
+                    Ok(journal) => service.with_journal(std::sync::Arc::new(journal)),
+                    Err(error) => {
+                        error!(error = %error, "Conversation lifecycle journal open failed");
+                        service
+                    }
+                },
                 Err(error) => {
                     error!(
                         code = error.code.as_str(),

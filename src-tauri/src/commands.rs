@@ -2909,10 +2909,20 @@ pub(crate) fn resolve_rg_path() -> (String, String) {
         candidates.push(cwd.join("bin").join(binary));
     }
 
+    // Tauri dev can change the process working directory before invoking the
+    // command, so do not rely on cwd to find the checked-in sidecar.
+    #[cfg(debug_assertions)]
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bin")
+            .join(binary),
+    );
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.push(exe_dir.join(binary));
             candidates.push(exe_dir.join("../Resources").join(binary));
+            candidates.push(exe_dir.join("../Resources/bin").join(binary));
             candidates.push(exe_dir.join("../lib").join(binary));
         }
     }
@@ -7001,18 +7011,9 @@ async fn conversation_delete_with_retirement(
     if let Err(error) = require_host_admission() {
         return error;
     }
-    let current_session_id = match service
-        .writer()
-        .repository()
-        .current_binding(conversation_id)
-    {
-        Ok(binding) => binding.map(|binding| binding.agent_session_id),
-        Err(_) => {
-            return IpcResult::error(
-                "failed to resolve Conversation binding before delete",
-                "CONVERSATION_RECOVERY_REQUIRED",
-            )
-        }
+    let current_session_id = match service.current_session_id_for_delete(conversation_id) {
+        Ok(session_id) => session_id,
+        Err(error) => return conversation_application_failure(error),
     };
     match service
         .delete_conversation(conversation_id, expected_revision)
@@ -7414,6 +7415,24 @@ mod tests {
         assert!(result.data.is_none());
         assert_eq!(result.error, Some("test error".to_string()));
         assert_eq!(result.code, Some("TEST_ERROR".to_string()));
+    }
+
+    #[test]
+    fn resolve_rg_path_finds_manifest_sidecar_in_development() {
+        if std::env::var_os("SE_RG_PATH").is_some() {
+            return;
+        }
+
+        let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bin")
+            .join(rg_sidecar_name());
+        if !expected.is_file() {
+            return;
+        }
+
+        let (path, source) = resolve_rg_path();
+        assert_eq!(source, "sidecar");
+        assert_eq!(PathBuf::from(path), expected);
     }
 
     #[tokio::test]

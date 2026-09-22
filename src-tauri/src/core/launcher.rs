@@ -5,8 +5,8 @@
 //! and ACP service handlers are layered on top of this role server later.
 
 use super::ipc::{
-    prepare_runtime_dir, read_json_frame, write_json_frame, CoreEndpoint, CoreError, CoreHello,
-    CoreHelloAck, CoreRequest, CoreRole, CURRENT_PROTOCOL_VERSION,
+    component_build_id, prepare_runtime_dir, read_json_frame, write_json_frame, CoreEndpoint,
+    CoreError, CoreHello, CoreHelloAck, CoreRequest, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
 use super::transport::connect_core;
 use std::collections::HashMap;
@@ -23,6 +23,10 @@ pub struct CoreProcess {
     pub endpoint: CoreEndpoint,
     pub pid: u32,
     pub reused: bool,
+    pub remote_build_id: Option<String>,
+    pub remote_capabilities: Vec<String>,
+    pub active_resources: u32,
+    pub reconciliation_deferred: bool,
     child: Option<Child>,
 }
 
@@ -49,6 +53,103 @@ impl CoreLaunchConfig {
             ready_timeout: Duration::from_secs(5),
         })
     }
+}
+
+#[derive(Debug, Clone)]
+struct CoreUpdateDirective {
+    enforce_identity: bool,
+    expected_build_id: Option<String>,
+    defer_terminal_replacement: bool,
+    unsupported: bool,
+}
+
+fn update_directives() -> &'static Mutex<HashMap<CoreRole, CoreUpdateDirective>> {
+    static DIRECTIVES: OnceLock<Mutex<HashMap<CoreRole, CoreUpdateDirective>>> = OnceLock::new();
+    DIRECTIVES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Installs the validated component policy for the current process. The
+/// renderer remains the durable authority; this in-memory projection lets the
+/// launcher apply the same policy during startup and supervisor retries.
+pub fn configure_update_policy(policy: Option<&serde_json::Value>) {
+    let mut directives = update_directives()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    directives.clear();
+    let Some(components) = policy.and_then(|value| value.get("components")) else {
+        for role in [CoreRole::AcpCore, CoreRole::TerminalCore] {
+            directives.insert(
+                role,
+                CoreUpdateDirective {
+                    enforce_identity: true,
+                    expected_build_id: None,
+                    defer_terminal_replacement: false,
+                    unsupported: true,
+                },
+            );
+        }
+        return;
+    };
+    let legacy_metadata = policy
+        .and_then(|value| value.get("metadataState"))
+        .and_then(serde_json::Value::as_str)
+        == Some("legacy");
+    for (component, role) in [
+        ("acpCore", CoreRole::AcpCore),
+        ("terminalCore", CoreRole::TerminalCore),
+    ] {
+        let Some(entry) = components.get(component) else {
+            directives.insert(
+                role,
+                CoreUpdateDirective {
+                    enforce_identity: true,
+                    expected_build_id: None,
+                    defer_terminal_replacement: false,
+                    unsupported: true,
+                },
+            );
+            continue;
+        };
+        let action = entry.get("action").and_then(serde_json::Value::as_str);
+        let build_id = if legacy_metadata {
+            Some(component_build_id(role))
+        } else {
+            entry
+                .get("buildId")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        };
+        if matches!(action, Some("preserve")) {
+            continue;
+        }
+        let unsupported = !matches!(
+            action,
+            Some("restart") | Some("defer-if-active") | Some("unsupported")
+        );
+        directives.insert(
+            role,
+            CoreUpdateDirective {
+                enforce_identity: true,
+                expected_build_id: build_id,
+                defer_terminal_replacement: role == CoreRole::TerminalCore
+                    && matches!(action, Some("defer-if-active")),
+                unsupported: unsupported || matches!(action, Some("unsupported")),
+            },
+        );
+    }
+}
+
+pub fn update_reconciliation_pending(role: CoreRole) -> bool {
+    configured_update_directive(role).is_some()
+}
+
+fn configured_update_directive(role: CoreRole) -> Option<CoreUpdateDirective> {
+    update_directives()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&role)
+        .cloned()
 }
 
 fn role_locks() -> &'static Mutex<HashMap<CoreRole, Arc<tokio::sync::Mutex<()>>>> {
@@ -88,6 +189,29 @@ pub(crate) enum EndpointPresence {
     Absent,
     LiveCompatible(CoreHelloAck),
     LiveIncompatible(CoreError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreIdentityState {
+    Current,
+    Legacy,
+    Stale,
+}
+
+pub fn classify_core_identity(ack: &CoreHelloAck, role: CoreRole) -> CoreIdentityState {
+    match ack.component_build_id.as_deref() {
+        None => CoreIdentityState::Legacy,
+        Some(build_id) if build_id == component_build_id(role) => CoreIdentityState::Current,
+        Some(_) => CoreIdentityState::Stale,
+    }
+}
+
+pub fn terminal_replacement_is_safe(active_resources: u32) -> bool {
+    active_resources == 0
+}
+
+fn core_identity_matches_expected(ack: &CoreHelloAck, expected_build_id: Option<&str>) -> bool {
+    expected_build_id.is_some_and(|expected| ack.component_build_id.as_deref() == Some(expected))
 }
 
 impl EndpointPresence {
@@ -341,19 +465,77 @@ pub async fn ensure_core(
     let _guard = lock.lock().await;
 
     match probe_endpoint_presence(&endpoint, role).await {
-        EndpointPresence::LiveCompatible(_) => {
-            log::info!(
-                target: "se_manager::core",
-                "operation=core_adopt role={} stable_code=ADOPTED",
-                role.endpoint_name()
-            );
-            return Ok(CoreProcess {
-                role,
-                endpoint,
-                pid: 0,
-                reused: true,
-                child: None,
-            });
+        EndpointPresence::LiveCompatible(ack) => {
+            let directive = configured_update_directive(role);
+            let expected_build_id = directive
+                .as_ref()
+                .and_then(|value| value.expected_build_id.as_deref());
+            let enforce_identity = directive
+                .as_ref()
+                .is_some_and(|value| value.enforce_identity);
+            let identity_matches =
+                !enforce_identity || core_identity_matches_expected(&ack, expected_build_id);
+            let defer_terminal_replacement = directive
+                .as_ref()
+                .is_some_and(|value| value.defer_terminal_replacement);
+            if directive.as_ref().is_some_and(|value| value.unsupported) {
+                log::error!(
+                    target: "se_manager::core",
+                    "operation=core_reconcile role={} stable_code=UNSUPPORTED_COMPONENT",
+                    role.endpoint_name()
+                );
+                return Err(CoreError::UnsupportedPlatform);
+            }
+            if !identity_matches {
+                if role == CoreRole::TerminalCore
+                    && defer_terminal_replacement
+                    && !terminal_replacement_is_safe(ack.active_resources)
+                {
+                    log::warn!(
+                        target: "se_manager::core",
+                        "operation=core_reconcile role={} stable_code=REPLACEMENT_DEFERRED active_resources={}",
+                        role.endpoint_name(),
+                        ack.active_resources
+                    );
+                    return Ok(CoreProcess {
+                        role,
+                        endpoint,
+                        pid: 0,
+                        reused: true,
+                        remote_build_id: ack.component_build_id,
+                        remote_capabilities: ack.capabilities,
+                        active_resources: ack.active_resources,
+                        reconciliation_deferred: true,
+                        child: None,
+                    });
+                }
+                if !replace_incompatible_core(&endpoint, role)
+                    .await
+                    .allows_unlink_and_spawn()
+                {
+                    return Err(CoreError::Io(format!(
+                        "stale {} is still live; refusing to unlink and spawn a second core",
+                        role.endpoint_name()
+                    )));
+                }
+            } else {
+                log::info!(
+                    target: "se_manager::core",
+                    "operation=core_adopt role={} stable_code=ADOPTED",
+                    role.endpoint_name()
+                );
+                return Ok(CoreProcess {
+                    role,
+                    endpoint,
+                    pid: 0,
+                    reused: true,
+                    remote_build_id: ack.component_build_id,
+                    remote_capabilities: ack.capabilities,
+                    active_resources: ack.active_resources,
+                    reconciliation_deferred: false,
+                    child: None,
+                });
+            }
         }
         EndpointPresence::LiveIncompatible(_) => {
             log::error!(
@@ -425,7 +607,7 @@ pub async fn ensure_core(
 
     let deadline = tokio::time::Instant::now() + config.ready_timeout;
     loop {
-        if probe_endpoint(&endpoint, role).await.is_ok() {
+        if let Ok(ack) = probe_endpoint(&endpoint, role).await {
             log::info!(
                 target: "se_manager::core",
                 "operation=core_ready role={} stable_code=READY pid={pid}",
@@ -436,6 +618,10 @@ pub async fn ensure_core(
                 endpoint,
                 pid,
                 reused: false,
+                remote_build_id: ack.component_build_id,
+                remote_capabilities: ack.capabilities,
+                active_resources: ack.active_resources,
+                reconciliation_deferred: false,
                 child: None,
             });
         }
@@ -541,10 +727,59 @@ mod tests {
         assert!(may_unlink_owned_socket(false));
     }
 
+    #[test]
+    fn core_identity_classifies_legacy_and_current_acknowledgements() {
+        let legacy = compatible_ack();
+        assert_eq!(
+            classify_core_identity(&legacy, CoreRole::AcpCore),
+            CoreIdentityState::Legacy
+        );
+
+        let mut current = legacy;
+        current.component_build_id = Some(component_build_id(CoreRole::AcpCore));
+        assert_eq!(
+            classify_core_identity(&current, CoreRole::AcpCore),
+            CoreIdentityState::Current
+        );
+
+        current.component_build_id = Some("stale-build".to_string());
+        assert_eq!(
+            classify_core_identity(&current, CoreRole::AcpCore),
+            CoreIdentityState::Stale
+        );
+    }
+
+    #[test]
+    fn terminal_replacement_is_safe_only_when_no_resources_are_active() {
+        assert!(terminal_replacement_is_safe(0));
+        assert!(!terminal_replacement_is_safe(1));
+    }
+
+    #[test]
+    fn update_policy_only_enforces_components_that_need_reconciliation() {
+        let policy = serde_json::json!({
+            "metadataState": "declared",
+            "components": {
+                "renderer": { "action": "preserve", "buildId": "renderer" },
+                "guiNative": { "action": "preserve", "buildId": "gui" },
+                "acpCore": { "action": "restart", "buildId": "acp-next" },
+                "terminalCore": { "action": "defer-if-active", "buildId": "terminal-next" }
+            }
+        });
+        configure_update_policy(Some(&policy));
+        assert!(update_reconciliation_pending(CoreRole::AcpCore));
+        assert!(update_reconciliation_pending(CoreRole::TerminalCore));
+        assert!(!update_reconciliation_pending(CoreRole::Gui));
+        configure_update_policy(None);
+    }
+
     fn compatible_ack() -> CoreHelloAck {
         CoreHelloAck {
             role: CoreRole::AcpCore,
             protocol_version: CURRENT_PROTOCOL_VERSION,
+            component_build_id: None,
+            capabilities: Vec::new(),
+            active_resources: 0,
         }
     }
 

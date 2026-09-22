@@ -1,8 +1,137 @@
 import type { IpcResult } from './ipc.types'
 
+export const UPDATE_COMPONENTS = ['renderer', 'guiNative', 'acpCore', 'terminalCore'] as const
+
+export type UpdateComponent = (typeof UPDATE_COMPONENTS)[number]
+
+export type UpdateComponentAction = 'preserve' | 'restart' | 'defer-if-active' | 'unsupported'
+
+export interface UpdateComponentPolicyEntry {
+  buildId: string
+  action: UpdateComponentAction
+}
+
+export interface UpdateComponentPolicy {
+  schemaVersion: 1
+  targetVersion: string
+  metadataState: 'declared' | 'legacy'
+  components: Record<UpdateComponent, UpdateComponentPolicyEntry>
+}
+
+export type PendingUpdatePlanStatus =
+  | 'prepared'
+  | 'reconciling'
+  | 'deferred'
+  | 'completed'
+  | 'failed'
+
+export interface PendingUpdatePlan {
+  schemaVersion: 1
+  targetVersion: string
+  componentPolicy: UpdateComponentPolicy
+  status: PendingUpdatePlanStatus
+  currentComponentBuildIds: Partial<Record<UpdateComponent, string>>
+  requiredActions: UpdateComponent[]
+  deferredComponents: UpdateComponent[]
+  createdAt: string
+  updatedAt: string
+  lastError?: string
+}
+
+export function legacyUpdateComponentPolicy(version: string): UpdateComponentPolicy {
+  const components = Object.fromEntries(
+    UPDATE_COMPONENTS.map((component) => [
+      component,
+      {
+        buildId: `legacy:${version}:${component}`,
+        action: component === 'terminalCore' ? 'defer-if-active' : 'restart'
+      }
+    ])
+  ) as Record<UpdateComponent, UpdateComponentPolicyEntry>
+
+  return {
+    schemaVersion: 1,
+    targetVersion: version,
+    metadataState: 'legacy',
+    components
+  }
+}
+
+export function parseUpdateComponentPolicy(value: unknown, version: string): UpdateComponentPolicy {
+  if (value === undefined) return legacyUpdateComponentPolicy(version)
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Update component policy must be an object')
+  }
+
+  const candidate = value as {
+    schemaVersion?: unknown
+    targetVersion?: unknown
+    metadataState?: unknown
+    components?: unknown
+  }
+  if (candidate.schemaVersion !== 1) {
+    throw new Error('Update component policy schemaVersion must be 1')
+  }
+  if (candidate.targetVersion !== version) {
+    throw new Error('Update component policy targetVersion does not match the update version')
+  }
+  if (candidate.metadataState !== 'declared' && candidate.metadataState !== 'legacy') {
+    throw new Error('Update component policy metadataState is invalid')
+  }
+  if (
+    typeof candidate.components !== 'object' ||
+    candidate.components === null ||
+    Array.isArray(candidate.components)
+  ) {
+    throw new Error('Update component policy components must be an object')
+  }
+
+  const componentRecord = candidate.components as Record<string, unknown>
+  const keys = Object.keys(componentRecord).sort()
+  const expectedKeys = [...UPDATE_COMPONENTS].sort()
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new Error('Update component policy components are incomplete or contain unknown entries')
+  }
+
+  const components = {} as Record<UpdateComponent, UpdateComponentPolicyEntry>
+  for (const component of UPDATE_COMPONENTS) {
+    const entry = componentRecord[component]
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new Error(`Update component policy entry is invalid: ${component}`)
+    }
+    const candidateEntry = entry as { buildId?: unknown; action?: unknown }
+    if (typeof candidateEntry.buildId !== 'string' || candidateEntry.buildId.trim() === '') {
+      throw new Error(`Update component policy buildId is invalid: ${component}`)
+    }
+    if (
+      candidateEntry.action !== 'preserve' &&
+      candidateEntry.action !== 'restart' &&
+      candidateEntry.action !== 'defer-if-active' &&
+      candidateEntry.action !== 'unsupported'
+    ) {
+      throw new Error(`Update component policy action is invalid: ${component}`)
+    }
+    components[component] = {
+      buildId: candidateEntry.buildId.trim(),
+      action: candidateEntry.action
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    targetVersion: version,
+    metadataState: candidate.metadataState,
+    components
+  }
+}
+
 // Updater information for available updates
 export interface UpdateInfo {
   version: string
+  componentPolicy?: UpdateComponentPolicy
   // Optional: channel manifests may omit `pub_date`; producers must NOT
   // fabricate a "now" timestamp for a stale manifest (which would make it look
   // just-published). Stable/AUR producers always set it from real metadata.
@@ -22,6 +151,8 @@ export interface UpdateState {
   downloadProgress: DownloadProgress | null
   error: string | null
   lastChecked: string | null // ISO timestamp
+  componentPolicy?: UpdateComponentPolicy
+  pendingUpdatePlan?: PendingUpdatePlan | null
   isManualUpdateMode?: boolean
 }
 

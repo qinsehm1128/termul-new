@@ -3282,19 +3282,9 @@ async fn handle_conversation_lifecycle_with_service(
         unreachable!();
     };
     let current_session_id = if matches!(mutation, ConversationWsMutation::Delete) {
-        match service
-            .writer()
-            .repository()
-            .current_binding(conversation_id)
-        {
-            Ok(binding) => binding.map(|binding| binding.agent_session_id),
-            Err(_) => {
-                return WsReply::err_with_code(
-                    id,
-                    "CONVERSATION_RECOVERY_REQUIRED",
-                    "failed to resolve Conversation binding before delete",
-                )
-            }
+        match service.current_session_id_for_delete(conversation_id) {
+            Ok(session_id) => session_id,
+            Err(error) => return WsReply::err_with_code(id, error.code, error.detail),
         }
     } else {
         None

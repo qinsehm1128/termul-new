@@ -171,6 +171,16 @@ impl HostConversationRoots {
     pub fn private_conversation_root(&self) -> PathBuf {
         self.state_root.join("conversations").join("v2")
     }
+
+    /// ACP-local operational journal root under the existing profile/state tree.
+    ///
+    /// This is not Conversation business storage. Canonical records remain under
+    /// [`Self::private_conversation_root`]; the journal records in-flight
+    /// cross-Core lifecycle operations only.
+    #[must_use]
+    pub fn lifecycle_journal_root(&self) -> PathBuf {
+        super::lifecycle_journal::lifecycle_journal_root_for(&self.state_root)
+    }
 }
 
 /// The pre-rename sibling of `workspace_base` — `~/Documents/<old display

@@ -1,4 +1,9 @@
-import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
+import type {
+  DownloadProgress,
+  PendingUpdatePlan,
+  UpdateInfo,
+  UpdateState
+} from '@shared/types/updater.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { runtimeT } from '@/i18n/runtime'
@@ -69,6 +74,8 @@ export interface UpdaterStoreState {
   hasActiveTerminals: boolean
   isManualUpdateMode: boolean
   updateChannel: UpdateChannel
+  componentPolicy: UpdateInfo['componentPolicy'] | null
+  pendingUpdatePlan: PendingUpdatePlan | null
 
   // Actions
   checkForUpdates: () => Promise<void>
@@ -111,6 +118,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   hasActiveTerminals: false,
   isManualUpdateMode: false,
   updateChannel: 'stable',
+  componentPolicy: null,
+  pendingUpdatePlan: null,
 
   /**
    * Check for available updates via the Tauri updater plugin
@@ -136,6 +145,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
           version: null,
           downloadProgress: 0,
           releaseNotes: null,
+          componentPolicy: null,
           error: null,
           lastChecked: checkedAt
         })
@@ -152,6 +162,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
           downloaded: false,
           version: updateInfo.version,
           releaseNotes: updateInfo.releaseNotes ?? null,
+          componentPolicy: updateInfo.componentPolicy ?? null,
           downloadProgress: 0,
           error: null,
           lastChecked: checkedAt
@@ -169,6 +180,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         downloaded: false,
         version: updateInfo.version,
         releaseNotes: updateInfo.releaseNotes ?? null,
+        componentPolicy: updateInfo.componentPolicy ?? null,
         downloadProgress: 0,
         error: null,
         lastChecked: checkedAt,
@@ -566,6 +578,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       downloaded: false,
       downloadProgress: 0,
       releaseNotes: info.releaseNotes ?? null,
+      componentPolicy: info.componentPolicy ?? null,
       error: null
     })
   },
@@ -580,6 +593,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       downloaded: true,
       downloadProgress: 100,
       releaseNotes: info.releaseNotes ?? null,
+      componentPolicy: info.componentPolicy ?? null,
       isDownloading: false,
       error: null
     })
@@ -619,6 +633,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       lastChecked: state.lastChecked ? new Date(state.lastChecked) : null,
       autoUpdateEnabled: current.autoUpdateEnabled,
       releaseNotes: null,
+      componentPolicy: state.componentPolicy ?? null,
+      pendingUpdatePlan: state.pendingUpdatePlan ?? null,
       hasActiveTerminals: hasActiveTerminalSessions(),
       isManualUpdateMode: state.isManualUpdateMode ?? false
     }))
@@ -699,6 +715,14 @@ export function useUpdateChannel(): UpdateChannel {
   return useUpdaterStore((state) => state.updateChannel)
 }
 
+export function useUpdateComponentPolicy(): UpdateInfo['componentPolicy'] | null {
+  return useUpdaterStore((state) => state.componentPolicy)
+}
+
+export function usePendingUpdatePlan(): PendingUpdatePlan | null {
+  return useUpdaterStore((state) => state.pendingUpdatePlan)
+}
+
 /**
  * Selector: Get skipped version
  */
@@ -725,7 +749,9 @@ export function useUpdaterState() {
       releaseNotes: state.releaseNotes,
       hasActiveTerminals: state.hasActiveTerminals,
       isManualUpdateMode: state.isManualUpdateMode,
-      updateChannel: state.updateChannel
+      updateChannel: state.updateChannel,
+      componentPolicy: state.componentPolicy,
+      pendingUpdatePlan: state.pendingUpdatePlan
     }))
   )
 }

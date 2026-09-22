@@ -46,6 +46,70 @@ function assertStringArray(value, description) {
   }
 }
 
+const updateComponents = ['renderer', 'guiNative', 'acpCore', 'terminalCore']
+const updateActions = ['preserve', 'restart', 'defer-if-active', 'unsupported']
+
+function legacyComponentPolicy(version) {
+  return {
+    schemaVersion: 1,
+    targetVersion: version,
+    metadataState: 'legacy',
+    components: Object.fromEntries(
+      updateComponents.map((component) => [
+        component,
+        {
+          buildId: `legacy:${version}:${component}`,
+          action: component === 'terminalCore' ? 'defer-if-active' : 'restart'
+        }
+      ])
+    )
+  }
+}
+
+function normalizeComponentPolicy(value, version) {
+  if (value === undefined) return legacyComponentPolicy(version)
+  assertPlainObject(value, 'termul.componentPolicy')
+  if (value.schemaVersion !== 1) {
+    throw new Error('termul.componentPolicy schemaVersion must be 1')
+  }
+  if (value.targetVersion !== version) {
+    throw new Error(
+      `termul.componentPolicy targetVersion mismatch: ${String(value.targetVersion)}, expected ${version}`
+    )
+  }
+  if (value.metadataState !== 'declared' && value.metadataState !== 'legacy') {
+    throw new Error('termul.componentPolicy metadataState must be declared or legacy')
+  }
+  assertPlainObject(value.components, 'termul.componentPolicy components')
+  const actualComponents = Object.keys(value.components).sort()
+  const expectedComponents = [...updateComponents].sort()
+  if (JSON.stringify(actualComponents) !== JSON.stringify(expectedComponents)) {
+    throw new Error(
+      `termul.componentPolicy components must be exactly: ${updateComponents.join(', ')}`
+    )
+  }
+
+  const components = {}
+  for (const component of updateComponents) {
+    const entry = value.components[component]
+    assertPlainObject(entry, `termul.componentPolicy component ${component}`)
+    assertNonEmptyString(entry.buildId, `termul.componentPolicy component ${component} buildId`)
+    if (!updateActions.includes(entry.action)) {
+      throw new Error(
+        `termul.componentPolicy component ${component} action must be one of: ${updateActions.join(', ')}`
+      )
+    }
+    components[component] = { buildId: entry.buildId.trim(), action: entry.action }
+  }
+
+  return {
+    schemaVersion: 1,
+    targetVersion: version,
+    metadataState: value.metadataState,
+    components
+  }
+}
+
 function releaseUrlAssetName(url, tag, description) {
   let parsed
   try {
@@ -93,7 +157,8 @@ export async function mergeUpdaterManifests({
   notes,
   pubDate,
   channel = 'stable',
-  tag
+  tag,
+  componentPolicy
 }) {
   assertNonEmptyString(version, 'version')
   assertNonEmptyString(pubDate, 'pub_date')
@@ -155,14 +220,20 @@ export async function mergeUpdaterManifests({
     throw new Error(`Missing required updater platforms: ${missing.join(', ')}`)
   }
 
-  const output = { version, notes, pub_date: pubDate, platforms }
+  const output = {
+    version,
+    notes,
+    pub_date: pubDate,
+    termul: { componentPolicy: normalizeComponentPolicy(componentPolicy, version) },
+    platforms
+  }
   await writeFile(outputPath, `${JSON.stringify(output, null, 2)}\n`)
   return output
 }
 
 async function runCli() {
   const argv = process.argv.slice(2)
-  const options = { channel: undefined, tag: undefined }
+  const options = { channel: undefined, tag: undefined, componentPolicyPath: undefined }
   const positional = []
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -172,6 +243,9 @@ async function runCli() {
     } else if (arg === '--tag') {
       options.tag = argv[index + 1]
       index += 1
+    } else if (arg === '--component-policy') {
+      options.componentPolicyPath = argv[index + 1]
+      index += 1
     } else {
       positional.push(arg)
     }
@@ -180,9 +254,12 @@ async function runCli() {
   const [outputPath, version, notesPath, pubDate, ...inputPaths] = positional
   if (!outputPath || !version || !notesPath || !pubDate || inputPaths.length === 0) {
     throw new Error(
-      'Usage: merge-updater-manifests.mjs [--channel <stable|insider|nightly>] [--tag <tag>] <output> <version> <notes-file> <pub-date> <manifest> [manifest...]'
+      'Usage: merge-updater-manifests.mjs [--channel <stable|insider|nightly>] [--tag <tag>] [--component-policy <json>] <output> <version> <notes-file> <pub-date> <manifest> [manifest...]'
     )
   }
+  const componentPolicy = options.componentPolicyPath
+    ? JSON.parse(await readFile(options.componentPolicyPath, 'utf8'))
+    : undefined
   await mergeUpdaterManifests({
     inputPaths,
     outputPath,
@@ -190,7 +267,8 @@ async function runCli() {
     notes: await readFile(notesPath, 'utf8'),
     pubDate,
     channel: options.channel,
-    tag: options.tag
+    tag: options.tag,
+    componentPolicy
   })
 }
 

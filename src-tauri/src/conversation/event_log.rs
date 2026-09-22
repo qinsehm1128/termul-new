@@ -1845,13 +1845,16 @@ fn apply_binding_event(
             )?;
         }
         ConversationEventType::BindingSuspended => {
-            apply_same_binding_transition(
+            apply_same_binding_transition_from_states(
                 materialized,
                 record,
                 path,
-                AgentSessionBindingState::Active,
+                &[
+                    AgentSessionBindingState::Active,
+                    AgentSessionBindingState::Detached,
+                ],
                 AgentSessionBindingState::Suspended,
-                "binding_suspended requires the current active opaque binding",
+                "binding_suspended requires the current active or detached opaque binding",
             )?;
         }
         ConversationEventType::BindingReplaced => {
@@ -1929,6 +1932,24 @@ fn apply_same_binding_transition(
     next_state: AgentSessionBindingState,
     failure_detail: &str,
 ) -> Result<()> {
+    apply_same_binding_transition_from_states(
+        materialized,
+        record,
+        path,
+        std::slice::from_ref(&previous_state),
+        next_state,
+        failure_detail,
+    )
+}
+
+fn apply_same_binding_transition_from_states(
+    materialized: &mut BindingMaterialization,
+    record: &ConversationEventRecordV2,
+    path: &Path,
+    previous_states: &[AgentSessionBindingState],
+    next_state: AgentSessionBindingState,
+    failure_detail: &str,
+) -> Result<()> {
     let payload = binding_payload(record, record.conversation_id, path)?;
     validate_binding(&payload.binding, next_state, record, path)?;
     let existing = materialized.current.as_ref().ok_or_else(|| {
@@ -1939,7 +1960,9 @@ fn apply_same_binding_transition(
             "binding transition requires a current binding",
         )
     })?;
-    if existing.state != previous_state || !same_opaque_binding(existing, &payload.binding) {
+    if !previous_states.contains(&existing.state)
+        || !same_opaque_binding(existing, &payload.binding)
+    {
         return Err(history_error(
             record.conversation_id,
             path,

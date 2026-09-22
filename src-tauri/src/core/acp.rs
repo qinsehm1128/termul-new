@@ -20,9 +20,9 @@ use super::handles::{
     TerminalServiceHandle,
 };
 use super::ipc::{
-    prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket, validate_hello,
-    write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload, CoreEvent, CoreHello, CoreRequest,
-    CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION,
+    prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket,
+    validate_hello_with_runtime, write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload,
+    CoreEvent, CoreHello, CoreRequest, CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
 use super::terminal::TerminalCoreClient;
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
@@ -35,8 +35,8 @@ use crate::conversation::{
     ConversationApplicationService, ConversationBackend, ConversationBootstrap,
     ConversationCreationService, ConversationId, ConversationLifecycleAction,
     ConversationLifecycleOutcome, ConversationPersistenceAdapter, ExecutionTarget,
-    HostConversationRoots, MigrationHostMode, PrepareConversationRequest, ProjectAttachment,
-    SessionWorkspaceService,
+    HostConversationRoots, LifecycleOperationJournal, MigrationHostMode,
+    PrepareConversationRequest, ProjectAttachment, SessionWorkspaceService,
 };
 use crate::memory_index::commands::{
     throttled, MemoryIndexBuildArgs, MemoryIndexListArgs, MemoryIndexScopeArgs,
@@ -276,6 +276,7 @@ fn spawn_terminal_link_supervisor(
     runtime: Arc<SwitchableTerminalRuntime>,
     endpoint: CoreEndpoint,
     mut shutdown: watch::Receiver<bool>,
+    recovery: Option<Arc<ConversationApplicationService>>,
 ) {
     tokio::spawn(async move {
         let mut client: Option<Arc<TerminalCoreClient>> = None;
@@ -307,6 +308,25 @@ fn spawn_terminal_link_supervisor(
                                     target: "se_manager::core",
                                     "operation=acp_terminal_link stable_code=READY"
                                 );
+                                if let Some(recovery) = recovery.as_ref() {
+                                    match recovery.recover_lost_conversation_terminals().await {
+                                        Ok(outcomes) => {
+                                            log::info!(
+                                                target: "se_manager::core",
+                                                "operation=acp_terminal_recreate stable_code=READY recovered={}",
+                                                outcomes.len()
+                                            );
+                                        }
+                                        Err(error) => {
+                                            log::warn!(
+                                                target: "se_manager::core",
+                                                "operation=acp_terminal_recreate stable_code={} detail={}",
+                                                error.code,
+                                                error.detail
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             Err(error) => {
                                 client = None;
@@ -491,6 +511,49 @@ fn compose_acp_core(
         bootstrap.recovery_item_count
     );
 
+    // Operational journal only: Conversation repository/workspace remain the
+    // business authorities. Corrupt records are diagnosed and never auto-purged.
+    let canonical_state_root =
+        std::fs::canonicalize(&state_root).unwrap_or_else(|_| state_root.clone());
+    let lifecycle_journal = Arc::new(
+        LifecycleOperationJournal::open(&canonical_state_root)
+            .map_err(|error| invalid(format!("lifecycle journal open failed: {error}")))?,
+    );
+    let journal_scan = lifecycle_journal
+        .scan_startup()
+        .map_err(|error| invalid(format!("lifecycle journal scan failed: {error}")))?;
+    log::info!(
+        target: "se_manager::core",
+        "operation=acp_lifecycle_journal_scan stable_code=READY incomplete={} diagnostic_count={}",
+        journal_scan.incomplete.len(),
+        journal_scan.diagnostics.len()
+    );
+    for diagnostic in &journal_scan.diagnostics {
+        log::error!(
+            target: "se_manager::core",
+            "operation=acp_lifecycle_journal_scan stable_code={} operation_id={} detail={}",
+            diagnostic.code.as_str(),
+            diagnostic
+                .operation_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            diagnostic.detail
+        );
+    }
+    for record in &journal_scan.incomplete {
+        log::warn!(
+            target: "se_manager::core",
+            "operation=acp_lifecycle_journal_scan stable_code=LIFECYCLE_OPERATION_INCOMPLETE operation_id={} conversation_id={} kind={} phase={} status={} attempts={} captured_terminal_count={}",
+            record.operation_id,
+            record.conversation_id,
+            record.kind.as_str(),
+            record.phase.as_str(),
+            record.status.as_str(),
+            record.attempts,
+            record.captured_terminal_scope.terminal_ids.len()
+        );
+    }
+
     let shared = Arc::new(SharedEvents::default());
     let ipc_sink = CoreIpcEventSink::install(&shared);
 
@@ -543,16 +606,15 @@ fn compose_acp_core(
                 Arc::clone(&manager),
                 terminal_service.clone(),
             )
-            .map_err(|error| invalid(error.to_string()))?,
+            .map_err(|error| invalid(error.to_string()))?
+            .with_journal(Arc::clone(&lifecycle_journal)),
         )
         .map_err(|error| invalid(error.to_string()))?;
 
     // DurableFileSystem rejects symlink path components (`/var` -> `/private/var` on
     // macOS). Canonicalize the existing state root before joining so tempfile-backed
     // tests and real profile dirs both open the store.
-    let scheduled_state_root =
-        std::fs::canonicalize(&state_root).unwrap_or_else(|_| state_root.clone());
-    let scheduled_task_root = scheduled_state_root.join("scheduled-tasks").join("v1");
+    let scheduled_task_root = canonical_state_root.join("scheduled-tasks").join("v1");
     let scheduled_task_store = Arc::new(
         crate::scheduled_tasks::ScheduledTaskStore::open_with_legacy_root(
             scheduled_task_root.join("catalog"),
@@ -571,7 +633,12 @@ fn compose_acp_core(
     scheduled_tasks.start_on(&runtime_handle);
 
     let terminal_endpoint = CoreEndpoint::for_profile(&state_root, CoreRole::TerminalCore);
-    spawn_terminal_link_supervisor(terminal_runtime, terminal_endpoint, shutdown.subscribe());
+    spawn_terminal_link_supervisor(
+        terminal_runtime,
+        terminal_endpoint,
+        shutdown.subscribe(),
+        Some(Arc::clone(&bootstrap.application)),
+    );
 
     let memory = Arc::new(MemoryIndexService::new(state_root));
     manager.set_memory_index(&memory);
@@ -620,7 +687,8 @@ async fn handle_connection(
 ) -> Result<(), CoreError> {
     let mut stream = stream;
     let hello: CoreHello = read_json_frame(&mut stream).await?;
-    let ack = validate_hello(&hello, CoreRole::AcpCore)?;
+    let active_resources = u32::try_from(state.manager.list_agents().len()).unwrap_or(u32::MAX);
+    let ack = validate_hello_with_runtime(&hello, CoreRole::AcpCore, active_resources)?;
     write_json_frame(&mut stream, &ack).await?;
 
     let (mut reader, writer) = stream.into_split();
@@ -1732,19 +1800,10 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 .get_conversation(conversation_id)
                 .ok()
                 .map(|record| record.workspace_cwd);
-            let current_session_id = match state
+            let current_session_id = state
                 .application
-                .writer()
-                .repository()
-                .current_binding(conversation_id)
-            {
-                Ok(binding) => binding.map(|binding| binding.agent_session_id),
-                Err(_) => {
-                    return Err(invalid(
-                        "CONVERSATION_RECOVERY_REQUIRED:failed to resolve Conversation binding before delete",
-                    ))
-                }
-            };
+                .current_session_id_for_delete(conversation_id)
+                .map_err(conversation_application_err)?;
             let outcome = state
                 .application
                 .delete_conversation(conversation_id, params.expected_revision)
@@ -2586,7 +2645,7 @@ mod tests {
             DetachedTerminalRuntime,
         )));
         let (shutdown, shutdown_rx) = watch::channel(false);
-        spawn_terminal_link_supervisor(runtime.clone(), endpoint.clone(), shutdown_rx);
+        spawn_terminal_link_supervisor(runtime.clone(), endpoint.clone(), shutdown_rx, None);
         assert!(!runtime.observes_live_terminals());
 
         let server_endpoint = endpoint.clone();

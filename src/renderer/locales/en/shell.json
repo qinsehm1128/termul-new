@@ -283,6 +283,22 @@
     "aurAvailable": "A new version is available. Update with yay.",
     "manualChannel": "A new {{channel}} build is available. Open the download page to install it manually.",
     "downloadAvailable": "A new version is available for download.",
+    "componentImpact": {
+      "renderer": "Renderer",
+      "guiNative": "Desktop runtime",
+      "acpCore": "ACP Core",
+      "terminalCore": "Terminal Core",
+      "restart": "will restart or reconnect",
+      "deferIfActive": "will wait until active terminals are idle",
+      "unsupported": "is not supported on this platform",
+      "unavailable": "Component metadata is unavailable; Core compatibility will be checked conservatively."
+    },
+    "reconciliation": {
+      "deferred": "Terminal Core is waiting for active terminals to finish.",
+      "failed": "Update reconciliation failed. Retry after checking the app state.",
+      "reconciling": "Update components are reconnecting in the background.",
+      "completed": "All update components are current."
+    },
     "useYay": "Use yay",
     "downloadPage": "Open Download Page",
     "download": "Download",
@@ -301,6 +317,10 @@
     "unexpectedInstall": "Unexpected error during install",
     "downloading": "Downloading update {{version}}...",
     "complete": "{{progress}}% complete",
+    "status": "Update status",
+    "impact": "Update impact",
+    "pendingPlan": "Pending component migration",
+    "retryReconciliation": "Retry reconciliation",
     "skipped": "Skipped version {{version}}",
     "skippedDescription": "You will not be notified about this version again.",
     "reminderSet": "Reminder set",

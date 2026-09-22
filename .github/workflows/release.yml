@@ -617,8 +617,22 @@ jobs:
           fi
 
           PUB_DATE="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          cat > component-policy.json <<EOF
+          {
+            "schemaVersion": 1,
+            "targetVersion": "${VERSION}",
+            "metadataState": "declared",
+            "components": {
+              "renderer": { "buildId": "${VERSION}:renderer", "action": "restart" },
+              "guiNative": { "buildId": "${VERSION}:gui", "action": "restart" },
+              "acpCore": { "buildId": "${VERSION}:acp-core", "action": "restart" },
+              "terminalCore": { "buildId": "${VERSION}:terminal-core", "action": "defer-if-active" }
+            }
+          }
+          EOF
           node scripts/release/merge-updater-manifests.mjs \
             --channel "$CHANNEL" \
+            --component-policy component-policy.json \
             "$MANIFEST_NAME" "$VERSION" release-notes.md "$PUB_DATE" "${manifests[@]}"
 
           # Stable publishes a `latest.json` alias so the Tauri updater plugin's

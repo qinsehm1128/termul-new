@@ -13,7 +13,8 @@ use super::acp::AcpCoreClient;
 use super::ipc::{CoreError, CoreErrorPayload, CoreRequest, CoreResponse};
 use super::terminal::TerminalCoreClient;
 use crate::acp::AcpManager;
-use crate::conversation::ConversationId;
+use crate::conversation::{ConversationId, ConversationRecordV2};
+use crate::pty::manager::TerminalSpawnIntentV1;
 use crate::pty::PtyManager;
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -69,12 +70,30 @@ pub trait TerminalRuntimeHandle: Send + Sync {
             "conversation-scoped terminal termination is unavailable".into(),
         ))
     }
+    async fn spawn_for_conversation(
+        &self,
+        intent: TerminalSpawnIntentV1,
+        conversation: &ConversationRecordV2,
+    ) -> Result<String, CoreError> {
+        let _ = (intent, conversation);
+        Err(CoreError::InvalidRequest(
+            "conversation terminal spawn is unavailable".into(),
+        ))
+    }
     fn is_live(&self, terminal_id: &str) -> bool;
     /// Whether `is_live` is a real observation. Detached ACP Core runtimes
     /// cannot see Terminal Core PTYs, so callers must fail closed instead of
     /// treating every id as dead.
     fn observes_live_terminals(&self) -> bool {
         true
+    }
+}
+
+fn map_spawn_scope_error(error: String) -> CoreError {
+    if error.ends_with("scope is unauthorized") {
+        CoreError::Unauthorized
+    } else {
+        CoreError::InvalidRequest(error)
     }
 }
 
@@ -242,6 +261,19 @@ impl TerminalRuntimeHandle for InProcessTerminalRuntime {
         })
     }
 
+    async fn spawn_for_conversation(
+        &self,
+        intent: TerminalSpawnIntentV1,
+        conversation: &ConversationRecordV2,
+    ) -> Result<String, CoreError> {
+        let spawned = self
+            .manager()?
+            .spawn_for_conversation(intent, conversation, None)
+            .await
+            .map_err(map_spawn_scope_error)?;
+        Ok(spawned.info.id)
+    }
+
     fn is_live(&self, terminal_id: &str) -> bool {
         self.manager()
             .ok()
@@ -375,6 +407,15 @@ impl TerminalRuntimeHandle for SwitchableTerminalRuntime {
         runtime
             .terminate_for_conversation(conversation_id, terminal_id, operation_id)
             .await
+    }
+
+    async fn spawn_for_conversation(
+        &self,
+        intent: TerminalSpawnIntentV1,
+        conversation: &ConversationRecordV2,
+    ) -> Result<String, CoreError> {
+        let runtime = Arc::clone(&self.current.read());
+        runtime.spawn_for_conversation(intent, conversation).await
     }
 
     fn is_live(&self, terminal_id: &str) -> bool {

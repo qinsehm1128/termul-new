@@ -223,18 +223,9 @@ async fn mutate_revision(
         None
     };
     let current_session_id = if matches!(mutation, Mutation::Delete) {
-        match service
-            .writer()
-            .repository()
-            .current_binding(conversation_id)
-        {
-            Ok(binding) => binding.map(|binding| binding.agent_session_id),
-            Err(_) => {
-                return failure(
-                    "CONVERSATION_RECOVERY_REQUIRED".to_string(),
-                    "failed to resolve Conversation binding before delete".to_string(),
-                )
-            }
+        match service.current_session_id_for_delete(conversation_id) {
+            Ok(session_id) => session_id,
+            Err(error) => return failure(error.code, error.detail),
         }
     } else {
         None

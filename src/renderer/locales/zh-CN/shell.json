@@ -262,6 +262,22 @@
     "aurAvailable": "有新版本可用。请使用 yay 更新。",
     "manualChannel": "有新的 {{channel}} 构建可用。请打开下载页面手动安装。",
     "downloadAvailable": "有新版本可供下载。",
+    "componentImpact": {
+      "renderer": "渲染器",
+      "guiNative": "桌面运行时",
+      "acpCore": "ACP Core",
+      "terminalCore": "终端 Core",
+      "restart": "将重启或重新连接",
+      "deferIfActive": "将在活跃终端空闲后更新",
+      "unsupported": "当前平台不支持更新",
+      "unavailable": "缺少组件元数据；Core 兼容性将以保守方式检查。"
+    },
+    "reconciliation": {
+      "deferred": "终端 Core 正在等待活跃终端结束。",
+      "failed": "更新组件协调失败。请检查应用状态后重试。",
+      "reconciling": "更新组件正在后台重新连接。",
+      "completed": "所有更新组件均已完成协调。"
+    },
     "useYay": "使用 yay",
     "downloadPage": "打开下载页面",
     "download": "下载",
@@ -280,6 +296,10 @@
     "unexpectedInstall": "安装时发生意外错误",
     "downloading": "正在下载更新 {{version}}...",
     "complete": "已完成 {{progress}}%",
+    "status": "更新状态",
+    "impact": "更新影响",
+    "pendingPlan": "待处理的组件迁移",
+    "retryReconciliation": "重试组件协调",
     "skipped": "已跳过版本 {{version}}",
     "skippedDescription": "将不再通知此版本。",
     "reminderSet": "提醒已设置",

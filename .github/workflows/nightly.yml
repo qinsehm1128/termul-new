@@ -441,9 +441,23 @@ jobs:
           manifests+=("release-inputs/nightly-standalone-server/server-manifest.json")
 
           PUB_DATE="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          cat > component-policy.json <<EOF
+          {
+            "schemaVersion": 1,
+            "targetVersion": "${VERSION}",
+            "metadataState": "declared",
+            "components": {
+              "renderer": { "buildId": "${VERSION}:renderer", "action": "restart" },
+              "guiNative": { "buildId": "${VERSION}:gui", "action": "restart" },
+              "acpCore": { "buildId": "${VERSION}:acp-core", "action": "restart" },
+              "terminalCore": { "buildId": "${VERSION}:terminal-core", "action": "defer-if-active" }
+            }
+          }
+          EOF
           node scripts/release/merge-updater-manifests.mjs \
             --channel nightly \
             --tag nightly \
+            --component-policy component-policy.json \
             latest-nightly.json "$VERSION" release-notes.md "$PUB_DATE" "${manifests[@]}"
 
           release_file_count=0

@@ -5,6 +5,7 @@ import { i18n } from '@/i18n'
 import { confirm } from '@/lib/tauri-dialog'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import { getUpdateComponentImpact } from '@/lib/updater-status'
 import {
   updaterStore,
   useDownloadProgress,
@@ -40,6 +41,24 @@ function setReminderForTomorrow(): void {
   localStorage.setItem(UPDATE_REMINDER_KEY, now.toISOString())
 }
 
+function formatComponentImpact(): string {
+  const impact = getUpdateComponentImpact(updaterStore.getState().componentPolicy)
+  if (!impact.length) return i18n.t('updates.componentImpact.unavailable', { ns: 'shell' })
+
+  return impact
+    .map(({ component, action }) => {
+      const actionKey = action === 'defer-if-active' ? 'deferIfActive' : action
+      return [
+        i18n.t(`updates.componentImpact.${component}`, { ns: 'shell' }),
+        i18n.t(`updates.componentImpact.${actionKey}` as string, {
+          ns: 'shell',
+          defaultValue: actionKey
+        })
+      ].join(' ')
+    })
+    .join(' · ')
+}
+
 /**
  * Show a toast notification for available update
  */
@@ -48,6 +67,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
   const channel = updaterStore.getState().updateChannel
   const channelPrefix =
     channel === 'stable' ? '' : i18n.t(`updates.channels.${channel}`, { ns: 'shell' })
+  const impactDescription = formatComponentImpact()
   const title = i18n.t('updates.available', {
     ns: 'shell',
     channel: channelPrefix,
@@ -56,19 +76,22 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
 
   toast.success(title.trim(), {
     duration: 30000,
-    description: releaseNotes
-      ? i18n.t('updates.whatsNew', {
-          ns: 'shell',
-          notes: `${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '...' : ''}`
-        })
-      : isAur
-        ? i18n.t('updates.aurAvailable', { ns: 'shell' })
-        : channel !== 'stable'
-          ? i18n.t('updates.manualChannel', {
-              ns: 'shell',
-              channel
-            })
-          : i18n.t('updates.downloadAvailable', { ns: 'shell' }),
+    description: [
+      releaseNotes
+        ? i18n.t('updates.whatsNew', {
+            ns: 'shell',
+            notes: `${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '...' : ''}`
+          })
+        : isAur
+          ? i18n.t('updates.aurAvailable', { ns: 'shell' })
+          : channel !== 'stable'
+            ? i18n.t('updates.manualChannel', {
+                ns: 'shell',
+                channel
+              })
+            : i18n.t('updates.downloadAvailable', { ns: 'shell' }),
+      `${i18n.t('updates.impact', { ns: 'shell' })}: ${impactDescription}`
+    ].join('\n'),
     action: {
       label: (
         <div className="flex items-center gap-2">
@@ -127,9 +150,13 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
  * Show a toast notification when update is downloaded
  */
 export function showUpdateDownloadedToast(version: string): void {
+  const impactDescription = formatComponentImpact()
   toast.success(i18n.t('updates.ready', { ns: 'shell' }), {
     duration: 30000,
-    description: i18n.t('updates.downloaded', { ns: 'shell', version }),
+    description: [
+      i18n.t('updates.downloaded', { ns: 'shell', version }),
+      `${i18n.t('updates.impact', { ns: 'shell' })}: ${impactDescription}`
+    ].join('\n'),
     action: {
       label: (
         <div className="flex items-center gap-2">

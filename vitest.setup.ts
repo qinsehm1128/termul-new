@@ -176,7 +176,15 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
 }))
 
 vi.mock('@tauri-apps/plugin-store', () => ({
-  createStore: vi.fn()
+  createStore: vi.fn(),
+  Store: {
+    load: vi.fn(async () => ({
+      get: vi.fn(),
+      set: vi.fn(),
+      delete: vi.fn(),
+      save: vi.fn()
+    }))
+  }
 }))
 
 vi.mock('@tauri-apps/plugin-os', () => ({

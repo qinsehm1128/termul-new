@@ -71,6 +71,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_store::StoreExt;
 
 #[cfg(not(target_os = "linux"))]
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -1479,6 +1480,186 @@ const LAST_RESORT_PTY_CLEANUP_DEADLINE: std::time::Duration = std::time::Duratio
 /// with the PTY reap that follows.
 const LAST_RESORT_ACP_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_millis(800);
 
+fn pending_update_plan(app_handle: &tauri::AppHandle) -> Option<serde_json::Value> {
+    let store = app_handle.store("update-plan.json").ok()?;
+    store.get("pending_update_plan")
+}
+
+fn clear_pending_update_plan(app_handle: &tauri::AppHandle) {
+    let Ok(store) = app_handle.store("update-plan.json") else {
+        return;
+    };
+    store.delete("pending_update_plan");
+    if let Err(error) = store.save() {
+        log::warn!(
+            target: "se_manager::core",
+            "operation=update_plan_clear stable_code=STORE_SAVE_FAILED detail={}",
+            error
+        );
+    }
+}
+
+fn record_pending_component_identity(
+    app_handle: &tauri::AppHandle,
+    component: &str,
+    build_id: Option<&str>,
+) {
+    let Some(build_id) = build_id else {
+        return;
+    };
+    let Some(mut plan) = pending_update_plan(app_handle) else {
+        return;
+    };
+    let Some(current) = plan
+        .get_mut("currentComponentBuildIds")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    current.insert(
+        component.to_string(),
+        serde_json::Value::String(build_id.to_string()),
+    );
+    if let Some(object) = plan.as_object_mut() {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("reconciling".to_string()),
+        );
+        object.insert(
+            "updatedAt".to_string(),
+            serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+        );
+    }
+    let Ok(store) = app_handle.store("update-plan.json") else {
+        return;
+    };
+    store.set("pending_update_plan", plan);
+    let _ = store.save();
+}
+
+fn mark_pending_update_deferred(
+    app_handle: &tauri::AppHandle,
+    component: &str,
+    build_id: Option<&str>,
+) {
+    let Some(mut plan) = pending_update_plan(app_handle) else {
+        return;
+    };
+    let deferred = plan
+        .get_mut("deferredComponents")
+        .and_then(serde_json::Value::as_array_mut);
+    if let Some(deferred) = deferred {
+        if !deferred
+            .iter()
+            .any(|value| value.as_str() == Some(component))
+        {
+            deferred.push(serde_json::Value::String(component.to_string()));
+        }
+    }
+    if let Some(build_id) = build_id {
+        if let Some(current) = plan
+            .get_mut("currentComponentBuildIds")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            current.insert(
+                component.to_string(),
+                serde_json::Value::String(build_id.to_string()),
+            );
+        }
+    }
+    if let Some(object) = plan.as_object_mut() {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("deferred".to_string()),
+        );
+        object.insert(
+            "updatedAt".to_string(),
+            serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+        );
+    }
+    let Ok(store) = app_handle.store("update-plan.json") else {
+        return;
+    };
+    store.set("pending_update_plan", plan);
+    if let Err(error) = store.save() {
+        log::warn!(
+            target: "se_manager::core",
+            "operation=update_plan_deferred stable_code=STORE_SAVE_FAILED detail={}",
+            error
+        );
+    }
+}
+
+fn configure_pending_core_update_policy(app_handle: &tauri::AppHandle) {
+    let policy =
+        pending_update_plan(app_handle).and_then(|plan| plan.get("componentPolicy").cloned());
+    crate::core::launcher::configure_update_policy(policy.as_ref());
+}
+
+#[cfg(unix)]
+fn finalize_pending_core_update_plan(app_handle: &tauri::AppHandle, profile_root: &Path) {
+    let Some(plan) = pending_update_plan(app_handle) else {
+        return;
+    };
+    let Some(policy) = plan.get("componentPolicy") else {
+        return;
+    };
+    let Some(components) = policy.get("components") else {
+        return;
+    };
+    let legacy_metadata = policy
+        .get("metadataState")
+        .and_then(serde_json::Value::as_str)
+        == Some("legacy");
+    let checks = [
+        ("acpCore", crate::core::CoreRole::AcpCore),
+        ("terminalCore", crate::core::CoreRole::TerminalCore),
+    ];
+    let complete = tauri::async_runtime::block_on(async {
+        for (name, role) in checks {
+            let Some(entry) = components.get(name) else {
+                return false;
+            };
+            let action = entry.get("action").and_then(serde_json::Value::as_str);
+            if action == Some("preserve") {
+                continue;
+            }
+            if action == Some("unsupported") {
+                return false;
+            }
+            let expected = entry.get("buildId").and_then(serde_json::Value::as_str);
+            if !legacy_metadata && expected.is_none() {
+                return false;
+            }
+            let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
+            let Ok(ack) = crate::core::launcher::probe_endpoint(&endpoint, role).await else {
+                return false;
+            };
+            record_pending_component_identity(app_handle, name, ack.component_build_id.as_deref());
+            let identity_matches = if legacy_metadata {
+                crate::core::classify_core_identity(&ack, role)
+                    == crate::core::CoreIdentityState::Current
+            } else {
+                ack.component_build_id.as_deref() == expected
+            };
+            if !identity_matches
+                || (role == crate::core::CoreRole::TerminalCore && ack.active_resources != 0)
+            {
+                return false;
+            }
+        }
+        true
+    });
+    if complete {
+        clear_pending_update_plan(app_handle);
+        crate::core::launcher::configure_update_policy(None);
+        log::info!(
+            target: "se_manager::core",
+            "operation=update_plan_reconcile stable_code=COMPLETED"
+        );
+    }
+}
+
 fn refuse_in_process_fallback(operation: &str, error: &crate::core::CoreError) -> String {
     log::error!(
         target: "se_manager::core",
@@ -1738,6 +1919,35 @@ async fn supervise_one_core(
     if !supervised {
         return;
     }
+
+    if crate::core::launcher::update_reconciliation_pending(role) {
+        let Ok(config) = crate::core::CoreLaunchConfig::for_current_executable(profile_root) else {
+            return;
+        };
+        let Ok(process) = crate::core::ensure_core(role, &config).await else {
+            return;
+        };
+        if process.reconciliation_deferred {
+            mark_pending_update_deferred(
+                app_handle,
+                "terminalCore",
+                process.remote_build_id.as_deref(),
+            );
+            finalize_pending_core_update_plan(app_handle, profile_root);
+            return;
+        }
+        if process.reused {
+            finalize_pending_core_update_plan(app_handle, profile_root);
+            return;
+        }
+        if restart_and_reconnect(app_handle, profile_root, role).await {
+            finalize_pending_core_update_plan(app_handle, profile_root);
+            *ready = true;
+            *consecutive_misses = 0;
+        }
+        return;
+    }
+
     let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
     if crate::core::launcher::probe_endpoint(&endpoint, role)
         .await
@@ -1766,6 +1976,7 @@ async fn supervise_one_core(
     }
     *ready = false;
     if restart_and_reconnect(app_handle, profile_root, role).await {
+        finalize_pending_core_update_plan(app_handle, profile_root);
         match role {
             crate::core::CoreRole::AcpCore => {
                 let _ = app_handle.emit(
@@ -1958,6 +2169,7 @@ pub fn run() {
                     "CONVERSATION_ROOT_INVALID: no document or home directory is available"
                         .to_string()
                 })?;
+            configure_pending_core_update_policy(&handle);
             let acp_core_handle = desktop_acp_service(
                 &app_data_dir,
                 &conversation_workspace_base,
@@ -2050,6 +2262,8 @@ pub fn run() {
             )?;
             app.manage(pty_manager.clone());
             app.manage(terminal_handle.clone());
+            #[cfg(unix)]
+            finalize_pending_core_update_plan(&handle, &app_data_dir);
 
             // Create Browser Tab Manager
             let browser_tab_manager =
@@ -2254,15 +2468,27 @@ pub fn run() {
                 ));
                 acp_manager.set_terminal_service(terminal_handle.clone());
                 let acp_handle = crate::core::AcpServiceHandle::in_process(Arc::clone(&acp_manager));
+                let lifecycle =
+                    crate::conversation::ConversationLifecycleService::from_terminal(
+                        Arc::clone(&acp_manager),
+                        terminal_handle.clone(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                let lifecycle = match crate::conversation::LifecycleOperationJournal::open(
+                    &app_data_dir,
+                ) {
+                    Ok(journal) => lifecycle.with_journal(std::sync::Arc::new(journal)),
+                    Err(error) => {
+                        log::error!(
+                            "[conversation-lifecycle] journal open failed path={} error={error}",
+                            app_data_dir.display()
+                        );
+                        lifecycle
+                    }
+                };
                 conversation_bootstrap
                     .application
-                    .attach_lifecycle(
-                        crate::conversation::ConversationLifecycleService::from_terminal(
-                            Arc::clone(&acp_manager),
-                            terminal_handle.clone(),
-                        )
-                        .map_err(|error| error.to_string())?,
-                    )
+                    .attach_lifecycle(lifecycle)
                     .map_err(|error| error.to_string())?;
                 // Attach the server-side permission rendezvous so a phone can
                 // respond to `acp:permission_request` over WS. The desktop renderer

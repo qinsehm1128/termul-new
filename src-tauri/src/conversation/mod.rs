@@ -8,6 +8,7 @@ pub mod creation;
 pub mod durable_fs;
 pub mod event_log;
 pub mod lifecycle;
+pub mod lifecycle_journal;
 pub mod locator;
 pub mod migration;
 pub mod ordered_persistence;
@@ -80,6 +81,19 @@ pub use lifecycle::{
     ConversationDeleteBlocker, ConversationLifecycleAction, ConversationLifecycleError,
     ConversationLifecycleErrorCode, ConversationLifecycleOutcome, ConversationLifecycleService,
     TerminalResourceInspector,
+};
+pub use lifecycle_journal::{
+    deterministic_operation_id, deterministic_recreate_operation_id, lifecycle_journal_root_for,
+    operations_dir_for, CapturedTerminalScopeV1, DurableTerminalCwdSource,
+    DurableTerminalSpawnIntentV1, LifecycleJournalDiagnostic, LifecycleJournalError,
+    LifecycleJournalErrorCode, LifecycleJournalStartupScan, LifecycleOperationJournal,
+    LifecycleOperationKind, LifecycleOperationPhase, LifecycleOperationRecordV1,
+    LifecycleOperationStatus, TerminalEnvironmentPolicyV1, TerminalKindPolicyV1,
+    TerminalProgramPolicyV1, TerminalRecoveryState, CAPTURED_TERMINAL_SCOPE_SCHEMA_VERSION,
+    DURABLE_TERMINAL_SPAWN_INTENT_SCHEMA_VERSION, LIFECYCLE_JOURNAL_OPERATIONS_DIR,
+    LIFECYCLE_JOURNAL_ROOT_DIR, LIFECYCLE_JOURNAL_VERSION_DIR, LIFECYCLE_OPERATION_ID_NAMESPACE,
+    LIFECYCLE_OPERATION_JOURNAL_SCHEMA_VERSION, MAX_LIFECYCLE_JOURNAL_OPERATIONS,
+    MAX_LIFECYCLE_JOURNAL_RECORD_BYTES,
 };
 pub use locator::{
     bounded_scan, BoundedScan, ConversationLocator, LocatedConversation, LocatorError,

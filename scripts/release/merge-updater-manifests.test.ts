@@ -85,7 +85,76 @@ describe('mergeUpdaterManifests', () => {
     })
 
     expect(Object.keys(merged.platforms).sort()).toEqual([...requiredPlatformKeys].sort())
+    expect(merged.termul.componentPolicy.metadataState).toBe('legacy')
     expect(JSON.parse(await readFile(outputPath, 'utf8'))).toEqual(merged)
+  })
+
+  test('preserves a declared component policy for the target release', async () => {
+    const dir = await fixtureDir()
+    const input = join(dir, 'manifest.json')
+    await writeManifest(input, completePlatforms(), version, completeAssetNames())
+    const componentPolicy = {
+      schemaVersion: 1,
+      targetVersion: version,
+      metadataState: 'declared',
+      components: {
+        renderer: { buildId: 'renderer-abc', action: 'restart' },
+        guiNative: { buildId: 'gui-abc', action: 'restart' },
+        acpCore: { buildId: 'acp-old', action: 'preserve' },
+        terminalCore: { buildId: 'terminal-old', action: 'defer-if-active' }
+      }
+    }
+
+    const merged = await mergeUpdaterManifests({
+      inputPaths: [input],
+      outputPath: join(dir, 'latest.json'),
+      version,
+      notes: 'notes',
+      pubDate: '2026-01-01T00:00:00.000Z',
+      componentPolicy
+    })
+
+    expect(merged.termul.componentPolicy).toEqual(componentPolicy)
+  })
+
+  test.each([
+    [
+      'wrong target version',
+      { targetVersion: '9.9.9', components: undefined },
+      'targetVersion mismatch'
+    ],
+    [
+      'unknown action',
+      { targetVersion: version, components: { renderer: { buildId: 'x', action: 'unknown' } } },
+      'action must be one of'
+    ]
+  ])('rejects malformed component policy: %s', async (_name, patch, error) => {
+    const dir = await fixtureDir()
+    const input = join(dir, 'manifest.json')
+    await writeManifest(input, completePlatforms(), version, completeAssetNames())
+    const componentPolicy = {
+      schemaVersion: 1,
+      metadataState: 'declared',
+      components: {
+        renderer: { buildId: 'renderer-abc', action: 'restart' },
+        guiNative: { buildId: 'gui-abc', action: 'restart' },
+        acpCore: { buildId: 'acp-old', action: 'preserve' },
+        terminalCore: { buildId: 'terminal-old', action: 'defer-if-active' },
+        ...(patch.components && typeof patch.components === 'object' ? patch.components : {})
+      },
+      targetVersion: patch.targetVersion ?? version
+    }
+
+    await expect(
+      mergeUpdaterManifests({
+        inputPaths: [input],
+        outputPath: join(dir, 'latest.json'),
+        version,
+        notes: 'notes',
+        pubDate: '2026-01-01T00:00:00.000Z',
+        componentPolicy
+      })
+    ).rejects.toThrow(error)
   })
 
   /**

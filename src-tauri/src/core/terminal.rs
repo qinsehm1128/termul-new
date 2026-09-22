@@ -9,15 +9,17 @@ use super::handles::{
     TerminalTerminationOutcome,
 };
 use super::ipc::{
-    prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket, validate_hello,
-    write_frame, write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload, CoreEvent, CoreHello,
-    CoreRequest, CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION,
+    prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket,
+    validate_hello_with_runtime, write_frame, write_json_frame, CoreEndpoint, CoreError,
+    CoreErrorPayload, CoreEvent, CoreHello, CoreRequest, CoreResponse, CoreRole,
+    CURRENT_PROTOCOL_VERSION,
 };
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
-use crate::conversation::ConversationId;
+use crate::conversation::{ConversationId, ConversationRecordV2};
 use crate::pty::claims::RotatedClaim;
 use crate::pty::manager::{
     SpawnedTerminal, TerminalAttachResult, TerminalResumeGrant, TerminalResumeRequest,
+    TerminalSpawnIntentV1,
 };
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::trackers::{
@@ -455,7 +457,8 @@ async fn handle_connection(
 
     let mut stream = stream;
     let hello: CoreHello = read_json_frame(&mut stream).await?;
-    let ack = validate_hello(&hello, CoreRole::TerminalCore)?;
+    let active_resources = u32::try_from(state.pty.get_count()).unwrap_or(u32::MAX);
+    let ack = validate_hello_with_runtime(&hello, CoreRole::TerminalCore, active_resources)?;
     write_json_frame(&mut stream, &ack).await?;
 
     let (mut reader, writer) = stream.into_split();
@@ -1575,6 +1578,22 @@ impl TerminalRuntimeHandle for TerminalCoreClient {
             operation_id,
         )
         .await
+    }
+
+    async fn spawn_for_conversation(
+        &self,
+        intent: TerminalSpawnIntentV1,
+        conversation: &ConversationRecordV2,
+    ) -> Result<String, CoreError> {
+        let options = intent.into_trusted_options(conversation).map_err(|error| {
+            if error.ends_with("scope is unauthorized") {
+                CoreError::Unauthorized
+            } else {
+                invalid(error)
+            }
+        })?;
+        let spawned = TerminalCoreClient::spawn(self, options).await?;
+        Ok(spawned.info.id)
     }
 
     fn is_live(&self, terminal_id: &str) -> bool {

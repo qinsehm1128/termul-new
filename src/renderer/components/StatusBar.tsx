@@ -1,4 +1,13 @@
-import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from 'lucide-react'
+import {
+  AlertTriangle,
+  Bell,
+  Download,
+  FileQuestion,
+  Folder,
+  Pencil,
+  Plus,
+  Server
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
@@ -14,7 +23,7 @@ import {
   useShowWorkingDirectory
 } from '@/stores/context-bar-settings-store'
 import { useActiveTerminal } from '@/stores/terminal-store'
-import { useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
+import { usePendingUpdatePlan, useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
 import type { Project } from '@/types/project'
 
 interface StatusBarProps {
@@ -36,6 +45,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   // Updater state
   const updateDownloaded = useUpdateDownloaded()
   const updateVersion = useUpdateVersion()
+  const pendingUpdatePlan = usePendingUpdatePlan()
 
   // Display terminal CWD if available, otherwise fall back to project path
   const displayPath = activeTerminal?.cwd || project?.path
@@ -133,6 +143,17 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
                 ? t('statusBar.lastCommandSucceeded')
                 : t('statusBar.lastCommandFailed', { code: lastExitCode })}
             </TooltipContent>
+          </Tooltip>
+        )}
+
+        {pendingUpdatePlan?.status === 'deferred' && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center">
+                <StatusItem icon={<AlertTriangle size={14} />} className="text-warning" />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t('updates.reconciliation.deferred')}</TooltipContent>
           </Tooltip>
         )}
 

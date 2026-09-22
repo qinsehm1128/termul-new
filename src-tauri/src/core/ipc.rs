@@ -173,6 +173,40 @@ pub struct CoreHello {
 pub struct CoreHelloAck {
     pub role: CoreRole,
     pub protocol_version: u16,
+    /// Optional so a new GUI can still inspect a Core built before component
+    /// identities were added to the local protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_build_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub active_resources: u32,
+}
+
+pub fn component_build_id(role: CoreRole) -> String {
+    let configured = match role {
+        CoreRole::Gui => option_env!("TERMUL_GUI_BUILD_ID"),
+        CoreRole::TerminalCore => option_env!("TERMUL_TERMINAL_CORE_BUILD_ID"),
+        CoreRole::AcpCore => option_env!("TERMUL_ACP_CORE_BUILD_ID"),
+    };
+    configured
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{}:{}", env!("CARGO_PKG_VERSION"), role.endpoint_name()))
+}
+
+pub fn component_capabilities(role: CoreRole) -> Vec<String> {
+    match role {
+        CoreRole::Gui => vec!["gui-client".to_string()],
+        CoreRole::TerminalCore => vec![
+            "terminal-stream-replay".to_string(),
+            "terminal-active-resource-count".to_string(),
+        ],
+        CoreRole::AcpCore => vec![
+            "acp-event-replay".to_string(),
+            "acp-active-resource-count".to_string(),
+            "acp-single-writer".to_string(),
+        ],
+    }
 }
 
 pub fn negotiate_protocol(offered: &[u16]) -> Result<u16, CoreError> {
@@ -189,6 +223,14 @@ pub fn validate_hello(
     hello: &CoreHello,
     expected_role: CoreRole,
 ) -> Result<CoreHelloAck, CoreError> {
+    validate_hello_with_runtime(hello, expected_role, 0)
+}
+
+pub fn validate_hello_with_runtime(
+    hello: &CoreHello,
+    expected_role: CoreRole,
+    active_resources: u32,
+) -> Result<CoreHelloAck, CoreError> {
     if hello.role != expected_role {
         return Err(CoreError::Unauthorized);
     }
@@ -196,6 +238,9 @@ pub fn validate_hello(
     Ok(CoreHelloAck {
         role: expected_role,
         protocol_version: negotiate_protocol(&hello.protocol_versions)?,
+        component_build_id: Some(component_build_id(expected_role)),
+        capabilities: component_capabilities(expected_role),
+        active_resources,
     })
 }
 
@@ -381,6 +426,34 @@ mod tests {
             Err(CoreError::Unauthorized)
         );
         assert_eq!(CoreError::Unauthorized.client_message(), "unauthorized");
+    }
+
+    #[test]
+    fn legacy_ack_deserializes_without_component_identity() {
+        let ack: CoreHelloAck = serde_json::from_value(serde_json::json!({
+            "role": "acp-core",
+            "protocolVersion": CURRENT_PROTOCOL_VERSION
+        }))
+        .unwrap();
+        assert_eq!(ack.role, CoreRole::AcpCore);
+        assert_eq!(ack.component_build_id, None);
+        assert!(ack.capabilities.is_empty());
+        assert_eq!(ack.active_resources, 0);
+    }
+
+    #[test]
+    fn runtime_ack_exposes_identity_capabilities_and_active_resources() {
+        let hello = CoreHello {
+            role: CoreRole::TerminalCore,
+            protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+            client_name: "test".to_string(),
+        };
+        let ack = validate_hello_with_runtime(&hello, CoreRole::TerminalCore, 3).unwrap();
+        assert!(ack.component_build_id.is_some());
+        assert!(ack
+            .capabilities
+            .contains(&"terminal-active-resource-count".to_string()));
+        assert_eq!(ack.active_resources, 3);
     }
 
     #[test]

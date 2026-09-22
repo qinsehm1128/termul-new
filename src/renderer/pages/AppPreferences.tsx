@@ -52,6 +52,7 @@ import { isSettingsCategoryAvailable } from '@/lib/settings-categories'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import { getPendingUpdateStatus, getUpdateComponentImpact } from '@/lib/updater-status'
 import { cn } from '@/lib/utils'
 import {
   useAcpFirstPromptWarmup,
@@ -344,6 +345,7 @@ const TERMINAL_RENDERER_TRANSLATION_KEYS = {
 export default function AppPreferences(): React.JSX.Element {
   const navigate = useNavigate()
   const { t: tSettings } = useTranslation('settings')
+  const { t: tShell } = useTranslation('shell')
   const { t: tCommon } = useTranslation('common')
   const isAurUpdater = isAurUpdateMode()
   // The privacy section reports macOS TCC grants and has no counterpart on
@@ -436,7 +438,9 @@ export default function AppPreferences(): React.JSX.Element {
     skippedVersion,
     error: updateError,
     isManualUpdateMode,
-    updateChannel
+    updateChannel,
+    componentPolicy,
+    pendingUpdatePlan
   } = useUpdaterState()
   const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
     useUpdaterActions()
@@ -1661,6 +1665,64 @@ export default function AppPreferences(): React.JSX.Element {
                   </div>
                 )}
 
+                {updateAvailable && version && (
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      {tShell('updates.impact')}
+                    </label>
+                    <div className="rounded-md bg-secondary/25 px-3 py-2.5 text-xs text-muted-foreground space-y-1">
+                      {getUpdateComponentImpact(componentPolicy).length === 0 ? (
+                        <div>{tShell('updates.componentImpact.unavailable')}</div>
+                      ) : (
+                        getUpdateComponentImpact(componentPolicy).map(({ component, action }) => (
+                          <div key={component}>
+                            <span className="font-medium text-foreground">
+                              {tShell(`updates.componentImpact.${component}`)}
+                            </span>{' '}
+                            {tShell(
+                              `updates.componentImpact.${action === 'defer-if-active' ? 'deferIfActive' : action}`,
+                              { defaultValue: action }
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {pendingUpdatePlan && getPendingUpdateStatus(pendingUpdatePlan) && (
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      {tShell('updates.pendingPlan')}
+                    </label>
+                    <div
+                      className={cn(
+                        'rounded-md border px-3 py-2.5 text-xs',
+                        pendingUpdatePlan.status === 'failed'
+                          ? 'border-red-500/20 bg-red-500/10 text-foreground'
+                          : 'border-amber-500/20 bg-amber-500/10 text-foreground'
+                      )}
+                    >
+                      {pendingUpdatePlan.status === 'deferred'
+                        ? tShell('updates.reconciliation.deferred')
+                        : pendingUpdatePlan.status === 'failed'
+                          ? (pendingUpdatePlan.lastError ?? tShell('updates.reconciliation.failed'))
+                          : tShell(`updates.reconciliation.${pendingUpdatePlan.status}`, {
+                              defaultValue: pendingUpdatePlan.status
+                            })}
+                      {pendingUpdatePlan.status === 'deferred' && (
+                        <button
+                          type="button"
+                          onClick={checkForUpdates}
+                          className="ml-2 underline underline-offset-2"
+                        >
+                          {tShell('updates.retryReconciliation')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Update Error */}
                 {updateError && (
                   <div>
@@ -1683,6 +1745,7 @@ export default function AppPreferences(): React.JSX.Element {
                   </label>
                   <div className="flex items-center gap-2">
                     <button
+                      type="button"
                       onClick={checkForUpdates}
                       disabled={isChecking}
                       className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-sm text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-primary/50"
@@ -1692,6 +1755,7 @@ export default function AppPreferences(): React.JSX.Element {
                     </button>
                     {updateAvailable && isManualUpdateMode && (
                       <button
+                        type="button"
                         onClick={installAndRestart}
                         className="inline-flex h-8 items-center gap-2 rounded-md bg-amber-500 px-3 text-sm text-white transition-colors duration-150 hover:bg-amber-500/90"
                       >
@@ -1724,6 +1788,7 @@ export default function AppPreferences(): React.JSX.Element {
                       </div>
                     </div>
                     <button
+                      type="button"
                       onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
                       className={cn(
                         'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',

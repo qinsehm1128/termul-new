@@ -1,3 +1,4 @@
+import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
 import type { DownloadEvent } from '@tauri-apps/plugin-updater'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -127,6 +128,7 @@ describe('tauri-updater-api', () => {
         version: '2.0.0',
         releaseDate: '2026-03-01T00:00:00.000Z',
         releaseNotes: 'release notes',
+        componentPolicy: legacyUpdateComponentPolicy('2.0.0'),
         isSecurityUpdate: false
       })
     })
@@ -155,6 +157,7 @@ describe('tauri-updater-api', () => {
         version: '0.3.4',
         releaseDate: '2026-05-01T15:13:12Z',
         releaseNotes: 'release notes',
+        componentPolicy: legacyUpdateComponentPolicy('0.3.4'),
         isSecurityUpdate: false,
         downloadUrl: 'https://github.com/qinsehm1128/termul-new/releases/tag/v0.3.4'
       })
@@ -402,6 +405,7 @@ describe('tauri-updater-api', () => {
         version: '3.0.0',
         releaseDate: '2026-03-01T12:00:00.000Z',
         releaseNotes: 'notes',
+        componentPolicy: legacyUpdateComponentPolicy('3.0.0'),
         isSecurityUpdate: false
       })
     })

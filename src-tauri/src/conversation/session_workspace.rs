@@ -302,6 +302,172 @@ impl SessionWorkspaceService {
             .await
     }
 
+    /// Atomically replace a passive terminal reference after host-owned recreation.
+    /// Topology leaf ids are updated in the same workspace write. Claims, env, and
+    /// raw cwd are never persisted.
+    pub async fn replace_terminal_ref(
+        &self,
+        conversation_id: ConversationId,
+        previous_terminal_id: &str,
+        replacement_terminal_id: &str,
+    ) -> Result<SessionWorkspaceWriteOutcome> {
+        if previous_terminal_id.trim().is_empty() || replacement_terminal_id.trim().is_empty() {
+            return Err(error(
+                SessionWorkspaceErrorCode::ValidationError,
+                "terminal_ref_replace",
+                Some(conversation_id),
+                "terminal ids must not be blank",
+            ));
+        }
+        self.writer
+            .authorize(conversation_id, ConversationMutation::TerminalRefAdd)
+            .map(|_| ())
+            .map_err(|source| repository_error("terminal_ref_replace", conversation_id, source))?;
+        let lock = self.repository.workspace_lock(conversation_id);
+        let _guard = lock.lock().await;
+        let current_bytes = self
+            .repository
+            .read_workspace_bytes(conversation_id)
+            .map_err(|source| repository_error("terminal_ref_replace", conversation_id, source))?;
+        let mut workspace = match current_bytes.as_deref() {
+            Some(bytes) => decode_workspace(bytes, conversation_id).map_err(|reason| {
+                error(
+                    SessionWorkspaceErrorCode::ConversationRecoveryRequired,
+                    "terminal_ref_replace",
+                    Some(conversation_id),
+                    reason.reason_code(),
+                )
+            })?,
+            None => {
+                return Err(error(
+                    SessionWorkspaceErrorCode::ConversationRecoveryRequired,
+                    "terminal_ref_replace",
+                    Some(conversation_id),
+                    "workspace.json is missing; terminal recreation cannot guess a layout",
+                ));
+            }
+        };
+        if workspace.conversation_id != conversation_id {
+            return Err(error(
+                SessionWorkspaceErrorCode::ConversationRecoveryRequired,
+                "terminal_ref_replace",
+                Some(conversation_id),
+                "workspace.json identity is invalid",
+            ));
+        }
+
+        let previous_pos = workspace.resources.iter().position(|resource| {
+            matches!(
+                resource,
+                SessionWorkspaceResourceDescriptor::Terminal {
+                    terminal_id: existing,
+                    ..
+                } if existing == previous_terminal_id
+            )
+        });
+        let replacement_pos = workspace.resources.iter().position(|resource| {
+            matches!(
+                resource,
+                SessionWorkspaceResourceDescriptor::Terminal {
+                    terminal_id: existing,
+                    ..
+                } if existing == replacement_terminal_id
+            )
+        });
+
+        let already_replaced = previous_pos.is_none() && replacement_pos.is_some()
+            || previous_terminal_id == replacement_terminal_id;
+        if already_replaced {
+            if let Some(topology) = workspace.topology.as_mut() {
+                replace_terminal_id_in_topology(
+                    topology,
+                    previous_terminal_id,
+                    replacement_terminal_id,
+                );
+            }
+            return Ok(SessionWorkspaceWriteOutcome::Updated {
+                revision: workspace.revision,
+                updated_at_utc: workspace.updated_at_utc.clone(),
+            });
+        }
+        if previous_pos.is_none() && replacement_pos.is_none() {
+            return Err(error(
+                SessionWorkspaceErrorCode::ConversationRecoveryRequired,
+                "terminal_ref_replace",
+                Some(conversation_id),
+                "neither previous nor replacement terminal ref is present",
+            ));
+        }
+
+        if previous_pos.is_some() && replacement_pos.is_some() {
+            workspace.resources.retain(|resource| {
+                !matches!(
+                    resource,
+                    SessionWorkspaceResourceDescriptor::Terminal {
+                        terminal_id: existing,
+                        conversation_id: resource_conversation_id,
+                        ..
+                    } if existing == previous_terminal_id && *resource_conversation_id == conversation_id
+                )
+            });
+        } else if let Some(index) = previous_pos {
+            if let SessionWorkspaceResourceDescriptor::Terminal {
+                terminal_id,
+                conversation_id: resource_conversation_id,
+                ..
+            } = &mut workspace.resources[index]
+            {
+                if *resource_conversation_id != conversation_id {
+                    return Err(error(
+                        SessionWorkspaceErrorCode::ConversationRecoveryRequired,
+                        "terminal_ref_replace",
+                        Some(conversation_id),
+                        "terminal ref conversation scope is mismatched",
+                    ));
+                }
+                *terminal_id = replacement_terminal_id.to_string();
+            }
+        }
+        if let Some(topology) = workspace.topology.as_mut() {
+            replace_terminal_id_in_topology(
+                topology,
+                previous_terminal_id,
+                replacement_terminal_id,
+            );
+        }
+
+        workspace.revision += 1;
+        workspace.updated_at_utc = format_created_at_utc(&Utc::now());
+        workspace.update_identity = Some("host:terminalResource".to_string());
+        let mut bytes = serde_json::to_vec_pretty(&workspace).map_err(|source| {
+            error(
+                SessionWorkspaceErrorCode::ValidationError,
+                "terminal_ref_replace",
+                Some(conversation_id),
+                source.to_string(),
+            )
+        })?;
+        bytes.push(b'\n');
+        self.writer
+            .replace_workspace_bytes(
+                conversation_id,
+                &bytes,
+                ConversationMutation::TerminalRefAdd,
+            )
+            .map_err(|source| repository_error("terminal_ref_replace", conversation_id, source))?;
+        log::info!(
+            "[session-workspace] terminal-ref action=replace conversation_id={} previous_terminal_id={} replacement_terminal_id={} revision={}",
+            conversation_id,
+            previous_terminal_id,
+            replacement_terminal_id,
+            workspace.revision
+        );
+        Ok(SessionWorkspaceWriteOutcome::Updated {
+            revision: workspace.revision,
+            updated_at_utc: workspace.updated_at_utc,
+        })
+    }
+
     /// Remove the passive reference after explicit PTY termination succeeds.
     /// View close/detach paths must never call this method.
     pub async fn remove_terminal_ref(
@@ -1519,6 +1685,46 @@ impl WorkspaceDecodeFailure {
     }
 }
 
+fn replace_terminal_id_in_topology(
+    node: &mut SessionWorkspacePaneNode,
+    previous_terminal_id: &str,
+    replacement_terminal_id: &str,
+) {
+    match node {
+        SessionWorkspacePaneNode::Split(split) => {
+            for child in &mut split.children {
+                replace_terminal_id_in_topology(
+                    child,
+                    previous_terminal_id,
+                    replacement_terminal_id,
+                );
+            }
+        }
+        SessionWorkspacePaneNode::Leaf(leaf) => {
+            let mut seen = Vec::new();
+            leaf.terminal_ids = leaf
+                .terminal_ids
+                .iter()
+                .map(|terminal_id| {
+                    if terminal_id == previous_terminal_id {
+                        replacement_terminal_id.to_string()
+                    } else {
+                        terminal_id.clone()
+                    }
+                })
+                .filter(|terminal_id| {
+                    if seen.iter().any(|existing| existing == terminal_id) {
+                        false
+                    } else {
+                        seen.push(terminal_id.clone());
+                        true
+                    }
+                })
+                .collect();
+        }
+    }
+}
+
 fn decode_workspace(
     bytes: &[u8],
     conversation_id: ConversationId,
@@ -2040,6 +2246,64 @@ mod tests {
             SessionWorkspaceResourceDescriptor::Terminal { terminal_id, .. }
                 if terminal_id == "pty-one"
         )));
+    }
+
+    #[tokio::test]
+    async fn replace_terminal_ref_swaps_resource_and_topology_atomically() {
+        let (_temp, _repository, service) = fixture().await;
+        let id = ConversationId::parse(ID).unwrap();
+        service.add_terminal_ref(id, "pty-old").await.unwrap();
+        let SessionWorkspaceLoadOutcome::Loaded { mut workspace } = service.load(id).await.unwrap()
+        else {
+            panic!("workspace loaded");
+        };
+        workspace.topology = Some(SessionWorkspacePaneNode::Leaf(SessionWorkspaceLeafNode {
+            id: "pane-1".to_string(),
+            terminal_ids: vec!["pty-old".to_string()],
+            editor_ids: Vec::new(),
+            active_tab_id: None,
+        }));
+        let based_revision = workspace.revision;
+        service
+            .write(id, Some(based_revision), *workspace)
+            .await
+            .unwrap();
+
+        let replaced = service
+            .replace_terminal_ref(id, "pty-old", "pty-new")
+            .await
+            .unwrap();
+        assert!(matches!(
+            replaced,
+            SessionWorkspaceWriteOutcome::Updated { revision, .. } if revision >= 2
+        ));
+        let SessionWorkspaceLoadOutcome::Loaded { workspace } = service.load(id).await.unwrap()
+        else {
+            panic!("workspace loaded");
+        };
+        assert!(workspace.resources.iter().any(|resource| matches!(
+            resource,
+            SessionWorkspaceResourceDescriptor::Terminal { terminal_id, .. }
+                if terminal_id == "pty-new"
+        )));
+        assert!(!workspace.resources.iter().any(|resource| matches!(
+            resource,
+            SessionWorkspaceResourceDescriptor::Terminal { terminal_id, .. }
+                if terminal_id == "pty-old"
+        )));
+        assert!(matches!(
+            workspace.topology,
+            Some(SessionWorkspacePaneNode::Leaf(leaf)) if leaf.terminal_ids == ["pty-new"]
+        ));
+
+        let idempotent = service
+            .replace_terminal_ref(id, "pty-old", "pty-new")
+            .await
+            .unwrap();
+        assert!(matches!(
+            idempotent,
+            SessionWorkspaceWriteOutcome::Updated { .. }
+        ));
     }
 
     #[tokio::test]

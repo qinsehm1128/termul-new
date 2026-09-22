@@ -133,7 +133,7 @@ url = "2.5"
 if-addrs = "0.13"
 
 # UUID generation
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 # SSH linkage is selected per target below: macOS vendors OpenSSL for portable
 # app bundles, while Windows/Linux retain the system/default behavior.

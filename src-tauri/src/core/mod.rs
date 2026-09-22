@@ -23,13 +23,14 @@ pub use handles::{
     TerminalTerminationOutcome,
 };
 pub use ipc::{
-    negotiate_protocol, prepare_runtime_dir, read_frame, read_json_frame, remove_stale_socket,
-    validate_hello, write_frame, write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload,
-    CoreEvent, CoreHello, CoreHelloAck, CoreRequest, CoreResponse, CoreRole,
-    CURRENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
+    component_build_id, component_capabilities, negotiate_protocol, prepare_runtime_dir,
+    read_frame, read_json_frame, remove_stale_socket, validate_hello, validate_hello_with_runtime,
+    write_frame, write_json_frame, CoreEndpoint, CoreError, CoreErrorPayload, CoreEvent, CoreHello,
+    CoreHelloAck, CoreRequest, CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 pub use launcher::{
-    ensure_core, profile_root_from_env, run_core_process, CoreLaunchConfig, CoreProcess,
+    classify_core_identity, ensure_core, profile_root_from_env, run_core_process,
+    terminal_replacement_is_safe, CoreIdentityState, CoreLaunchConfig, CoreProcess,
 };
 pub use terminal::{
     run_terminal_core, OutputFrame, OutputKind, TerminalAttachSession, TerminalCoreClient,
