@@ -62,6 +62,7 @@ final class WorkspaceSession {
     var isWideLayout = false
     private(set) var isBackgrounded = false
     private var isStarting = false
+    private var reconnectTask: Task<Void, Never>?
     private var startEpoch = 0
     private let notificationSettings: AppSettings?
 
@@ -176,6 +177,8 @@ final class WorkspaceSession {
     func stop() {
         startEpoch += 1
         isStarting = false
+        reconnectTask?.cancel()
+        reconnectTask = nil
         acp.stop()
         terminalSocket.stop()
     }
@@ -187,6 +190,30 @@ final class WorkspaceSession {
             // Cached grid can match while the host PTY changed in background;
             // re-assert equal dims to converge after resume.
             terminals.scheduleRefit(force: true)
+            reconnectIfNeeded()
+        }
+    }
+
+    private func reconnectIfNeeded() {
+        let acpFailed: Bool
+        if case .failed = acp.state {
+            acpFailed = true
+        } else {
+            acpFailed = false
+        }
+        let terminalFailed = workspace != .home && !terminalSocket.isConnected
+        let phaseFailed: Bool
+        if case .failed = phase {
+            phaseFailed = true
+        } else {
+            phaseFailed = false
+        }
+        guard acpFailed || terminalFailed || phaseFailed else { return }
+        guard reconnectTask == nil else { return }
+        HostLog.session.info("Foreground reconnect scheduled")
+        reconnectTask = Task { @MainActor [weak self] in
+            defer { self?.reconnectTask = nil }
+            await self?.start()
         }
     }
 

@@ -212,13 +212,24 @@ final class TerminalSocket {
         isConnected = false
     }
 
-    private func request<T: Decodable>(_ type: String, payload: [String: Any], as _: T.Type) async throws -> T {
+    private func request<T: Decodable>(
+        _ type: String,
+        payload: [String: Any],
+        as _: T.Type,
+        timeoutSeconds: Double = 20
+    ) async throws -> T {
         requestSerial += 1
         let id = "term-\(requestSerial)"
         let body: [String: Any] = ["id": id, "type": type, "payload": payload]
         let data = try WireJSON.data(from: body)
         let reply = try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                guard let self, let waiting = self.pending.removeValue(forKey: id) else { return }
+                HostLog.session.error("Terminal request timed out type=\(type, privacy: .public)")
+                waiting.resume(throwing: HostError.network(String(localized: "The terminal host did not respond. Try again.")))
+            }
             guard let task else {
                 pending.removeValue(forKey: id)?.resume(
                     throwing: HostError.network(String(localized: "Disconnected from the host."))

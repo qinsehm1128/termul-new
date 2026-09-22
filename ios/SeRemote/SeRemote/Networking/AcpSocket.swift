@@ -11,11 +11,11 @@ struct AcpAuthenticateReply: Decodable, Sendable {
 }
 
 struct AcpRuntimePolicy: Decodable, Sendable {
-    var turnTimeoutMs: Double?
-    var promptInactivityTimeoutMs: Double?
-    var permissionReconnectGraceMs: Double?
-    var pingIntervalMs: Double?
-    var pongTimeoutMs: Double?
+    var turnTimeoutMs: Double? = nil
+    var promptInactivityTimeoutMs: Double? = nil
+    var permissionReconnectGraceMs: Double? = nil
+    var pingIntervalMs: Double? = nil
+    var pongTimeoutMs: Double? = nil
 }
 
 @MainActor
@@ -37,6 +37,7 @@ final class AcpSocket {
     private var task: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
+    private var runtimePolicy = AcpRuntimePolicy()
     private var pending: [String: CheckedContinuation<Data, Error>] = [:]
     private var requestSerial = 0
     private var origin: URL?
@@ -46,6 +47,7 @@ final class AcpSocket {
         stop()
         self.origin = origin
         state = .connecting
+        runtimePolicy = AcpRuntimePolicy()
         guard let token = credentials.bearer, !token.isEmpty else {
             throw HostError.unexpected(String(localized: "This access link is missing its token. Scan the QR again."))
         }
@@ -67,6 +69,7 @@ final class AcpSocket {
             let data = try await request("authenticate", payload: ["token": token])
             if let reply = try? JSONDecoder().decode(AcpAuthenticateReply.self, from: data) {
                 historyMode = reply.historyMode ?? "live_only"
+                runtimePolicy = reply.runtimePolicy ?? AcpRuntimePolicy()
             }
             state = .connected
             startHeartbeat()
@@ -154,11 +157,21 @@ final class AcpSocket {
 
     private func startHeartbeat() {
         heartbeat?.cancel()
+        let interval = max(5, min((runtimePolicy.pingIntervalMs ?? 30_000) / 1_000, 300))
+        let timeout = max(2, min((runtimePolicy.pongTimeoutMs ?? 45_000) / 1_000, 120))
         heartbeat = Task { [weak self] in
             while let self, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { return }
-                _ = try? await self.request("ping")
+                do {
+                    _ = try await self.request("ping", timeoutSeconds: timeout)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    HostLog.session.error("ACP heartbeat failed: \(error.localizedDescription, privacy: .public)")
+                    state = .failed(error.localizedDescription)
+                    stop()
+                    return
+                }
             }
         }
     }
