@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
   readonly PACKAGE_VERSION: string
   readonly VITE_SE_UPDATE_MODE?: 'tauri' | 'aur'
+  readonly VITE_SE_CANARY?: '0' | '1'
+  readonly VITE_APP_VERSION_OVERRIDE?: string
   /** Set `true` by `vite.config.web.ts` for the browser/headless client build. */
   readonly SE_WEB?: boolean
   /**

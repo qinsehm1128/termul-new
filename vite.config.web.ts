@@ -68,6 +68,8 @@ function tauriStubFallback(): Plugin {
  * to thin browser stubs so Rollup never embeds real Tauri package code.
  * Desktop builds (`vite.config.tauri.ts`) are NOT aliased.
  */
+const appVersion = process.env.VITE_APP_VERSION_OVERRIDE || pkg.version
+
 export default defineConfig({
   root: './',
   base: '/',
@@ -102,7 +104,7 @@ export default defineConfig({
   },
 
   define: {
-    'import.meta.env.PACKAGE_VERSION': JSON.stringify(pkg.version),
+    'import.meta.env.PACKAGE_VERSION': JSON.stringify(appVersion),
     // Feature-gate signal for Story 1.5+ (desktop-only path exclusion).
     'import.meta.env.SE_WEB': JSON.stringify(true),
     // CAP-3: build-time app version for `getCurrentAppVersion()` web branch
@@ -110,7 +112,11 @@ export default defineConfig({
     // the web client has no Tauri runtime, so inject the package version as a
     // string literal here. Tests run under Vitest (not this config) and read
     // `undefined`, which the facade downgrades to `'0.0.0'`.
-    'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version)
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
+    'import.meta.env.VITE_SE_CANARY': JSON.stringify(
+      process.env.VITE_SE_CANARY === '1' ? '1' : '0'
+    ),
+    __SE_CANARY_BUILD__: JSON.stringify(process.env.VITE_SE_CANARY === '1')
   },
 
   build: {

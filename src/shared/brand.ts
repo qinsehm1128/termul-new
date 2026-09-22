@@ -185,6 +185,31 @@ const DEFAULT_CANONICAL: BrandCanonical = {
   iosCacheDir: 'TermulRemote'
 } as const
 
+const CANARY_CANONICAL: BrandCanonical = {
+  ...DEFAULT_CANONICAL,
+  displayName: 'Se Canary',
+  displayNameFull: 'Se Manager Canary',
+  bundleId: 'com.se-manager.app.canary',
+  bundleIdDev: 'com.se-manager.app.canary.dev',
+  deepLinkScheme: 'termul-canary',
+  logFileName: 'se-manager-canary',
+  keychainService: 'com.se-manager.app.canary',
+  keychainSshService: 'com.se-manager.canary.ssh',
+  keychainPairingService: 'com.se-manager.canary.remote.pairing',
+  mcpServerName: 'se-manager-canary',
+  skillName: 'se-manager-canary-scheduled-tasks',
+  skillMarker: '<!-- managed-by-se-manager-canary:se-manager-canary-scheduled-tasks -->',
+  frpProxyName: 'se-manager-canary',
+  stateDir: 'se-manager-canary',
+  storagePrefix: 'se-canary-store:',
+  storageKeyPrefix: 'se-canary:',
+  workspaceDir: '.se-manager-canary',
+  wsSubprotocol: 'se-canary-terminal-v2.binary',
+  domGlobalPrefix: '__se_canary',
+  eventPrefix: 'se-canary:',
+  cssVarPrefix: '--se-canary-'
+} as const
+
 let override: Partial<BrandCanonical> | null = null
 
 /**
@@ -193,8 +218,13 @@ let override: Partial<BrandCanonical> | null = null
  * Always call this rather than capturing a field at module scope — a value
  * captured into a top-level `const` freezes before a test can override it.
  */
+export function isCanaryBuild(): boolean {
+  return typeof __SE_CANARY_BUILD__ !== 'undefined' && __SE_CANARY_BUILD__
+}
+
 export function brandCanonical(): BrandCanonical {
-  return override ? { ...DEFAULT_CANONICAL, ...override } : DEFAULT_CANONICAL
+  const base = isCanaryBuild() ? CANARY_CANONICAL : DEFAULT_CANONICAL
+  return override ? { ...base, ...override } : base
 }
 
 /**

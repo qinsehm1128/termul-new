@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Se Manager Canary",
+  "identifier": "com.se-manager.app.canary",
+  "plugins": {
+    "updater": {
+      "pubkey": "__CANARY_SIGNING_PUBLIC_KEY_REQUIRED__",
+      "endpoints": [
+        "https://github.com/qinsehm1128/termul-new/releases/download/canary/latest-canary.json"
+      ]
+    }
+  },
+  "bundle": {
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

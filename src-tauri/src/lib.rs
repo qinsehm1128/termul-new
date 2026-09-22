@@ -2124,7 +2124,9 @@ pub fn run() {
             // empty, turning every previously trusted host into an unknown one
             // that accept-new would re-trust. Run synchronously on the setup
             // thread — `brand::canonical()` is thread-local (FORBID-07).
-            crate::ssh::known_hosts_migration::run_at_startup();
+            if !crate::brand::is_canary_build() {
+                crate::ssh::known_hosts_migration::run_at_startup();
+            }
 
             // WebView storage does not always ride along with app_data_dir
             // (M-05). Windows keeps `EBWebView` under %LOCALAPPDATA%, outside
@@ -2132,7 +2134,9 @@ pub fn run() {
             // this extra pass; Linux's webview directory is already inside
             // app_data_dir and macOS cannot be migrated by copying at all —
             // both are no-ops here. Same setup thread, same reason (FORBID-07).
-            crate::webview_storage_handoff::run_at_startup(&handle);
+            if !crate::brand::is_canary_build() {
+                crate::webview_storage_handoff::run_at_startup(&handle);
+            }
 
             // Conversation admission is the first app-managed storage/resource boundary.
             let app_data_dir = handle

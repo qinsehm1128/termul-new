@@ -190,6 +190,29 @@ pub const DEFAULT_CANONICAL: BrandCanonical = BrandCanonical {
     storage_key_prefix: "se:",
 };
 
+pub const CANARY_CANONICAL: BrandCanonical = BrandCanonical {
+    display_name: "Se Canary",
+    display_name_full: "Se Manager Canary",
+    bundle_id: "com.se-manager.app.canary",
+    bundle_id_dev: "com.se-manager.app.canary.dev",
+    log_file_name: "se-manager-canary",
+    keychain_service: "com.se-manager.app.canary",
+    keychain_ssh_service: "com.se-manager.canary.ssh",
+    keychain_pairing_service: "com.se-manager.canary.remote.pairing",
+    mcp_server_name: "se-manager-canary",
+    skill_name: "se-manager-canary-scheduled-tasks",
+    skill_marker: "<!-- managed-by-se-manager-canary:se-manager-canary-scheduled-tasks -->",
+    frp_proxy_name: "se-manager-canary",
+    state_dir: "se-manager-canary",
+    ws_subprotocol: "se-canary-terminal-v2.binary",
+    dom_global_prefix: "__se_canary",
+    deep_link_scheme: "termul-canary",
+    storage_prefix: "se-canary-store:",
+    storage_key_prefix: "se-canary:",
+    workspace_dir: ".se-manager-canary",
+    ..DEFAULT_CANONICAL
+};
+
 thread_local! {
     /// Per-thread override. Cargo runs tests in parallel threads inside one
     /// process, so a *process*-global seam would leak one test's injected value
@@ -201,8 +224,17 @@ thread_local! {
 ///
 /// Always call this rather than caching the result in a `static` — a cached
 /// value freezes before a test can override it.
+pub fn is_canary_build() -> bool {
+    option_env!("SE_CANARY_BUILD") == Some("1")
+}
+
 pub fn canonical() -> BrandCanonical {
-    THREAD_OVERRIDE.with(Cell::get).unwrap_or(DEFAULT_CANONICAL)
+    let base = if is_canary_build() {
+        CANARY_CANONICAL
+    } else {
+        DEFAULT_CANONICAL
+    };
+    THREAD_OVERRIDE.with(|value| value.get().unwrap_or(base))
 }
 
 /// Test seam: force canonical values on **this thread** until the guard drops.

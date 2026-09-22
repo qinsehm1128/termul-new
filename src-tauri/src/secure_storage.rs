@@ -100,6 +100,10 @@ pub fn keyring_get(key: &str) -> Result<Option<String>, String> {
         return Ok(Some(value));
     }
 
+    if brand::is_canary_build() {
+        return Ok(None);
+    }
+
     let legacy = brand::LEGACY.keychain_service;
     if legacy == canonical {
         return Ok(None);
@@ -157,9 +161,11 @@ pub fn keyring_delete(key: &str) -> Result<(), String> {
 
     backend.delete(canonical, key).map_err(describe_delete)?;
 
-    let legacy = brand::LEGACY.keychain_service;
-    if legacy != canonical {
-        backend.delete(legacy, key).map_err(describe_delete)?;
+    if !brand::is_canary_build() {
+        let legacy = brand::LEGACY.keychain_service;
+        if legacy != canonical {
+            backend.delete(legacy, key).map_err(describe_delete)?;
+        }
     }
     Ok(())
 }

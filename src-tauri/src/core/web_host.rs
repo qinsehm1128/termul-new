@@ -270,7 +270,7 @@ pub struct CoreRelayHost;
 impl CoreRelayHost {
     pub fn start(client: Arc<AcpCoreClient>, relay: Arc<WsRelaySink>) {
         let mut events = client.subscribe_events();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             loop {
                 match events.recv().await {
                     Ok(envelope) => {

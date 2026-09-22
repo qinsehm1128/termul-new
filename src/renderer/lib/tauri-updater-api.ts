@@ -22,13 +22,19 @@ import {
   savePendingUpdatePlan
 } from './tauri-update-plan-api'
 
+const IS_CANARY_BUILD = import.meta.env.VITE_SE_CANARY === '1'
+const CANARY_UPDATE_MANIFEST_URL =
+  'https://github.com/qinsehm1128/termul-new/releases/download/canary/latest-canary.json'
+const CANARY_RELEASE_PAGE_URL = 'https://github.com/qinsehm1128/termul-new/releases/tag/canary'
 // Stable signed-manifest alias published alongside `latest-stable.json` so the
 // Tauri updater plugin's build-time `endpoints` config (which cannot be
 // overridden per check from the renderer) keeps resolving for stable users.
-const STABLE_UPDATE_MANIFEST_URL =
-  'https://github.com/qinsehm1128/termul-new/releases/latest/download/latest.json'
-const UPSTREAM_LATEST_RELEASE_URL =
-  'https://api.github.com/repos/qinsehm1128/termul-new/releases/latest'
+const STABLE_UPDATE_MANIFEST_URL = IS_CANARY_BUILD
+  ? CANARY_UPDATE_MANIFEST_URL
+  : 'https://github.com/qinsehm1128/termul-new/releases/latest/download/latest.json'
+const UPSTREAM_LATEST_RELEASE_URL = IS_CANARY_BUILD
+  ? 'https://api.github.com/repos/qinsehm1128/termul-new/releases/tags/canary'
+  : 'https://api.github.com/repos/qinsehm1128/termul-new/releases/latest'
 const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
 
 /**
@@ -47,14 +53,18 @@ export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'stable'
 // (src-tauri/src/server_update.rs); this constant is now only the error-message
 // + release-page source. Keep them in sync when editing.
 const CHANNEL_MANIFEST_URLS: Record<UpdateChannel, string> = {
-  stable: 'https://github.com/qinsehm1128/termul-new/releases/latest/download/latest-stable.json',
+  stable: IS_CANARY_BUILD
+    ? CANARY_UPDATE_MANIFEST_URL
+    : 'https://github.com/qinsehm1128/termul-new/releases/latest/download/latest-stable.json',
   insider:
     'https://github.com/qinsehm1128/termul-new/releases/download/insider/latest-insider.json',
   nightly: 'https://github.com/qinsehm1128/termul-new/releases/download/nightly/latest-nightly.json'
 }
 
 const CHANNEL_RELEASE_PAGE_URLS: Record<UpdateChannel, string> = {
-  stable: 'https://github.com/qinsehm1128/termul-new/releases/latest',
+  stable: IS_CANARY_BUILD
+    ? CANARY_RELEASE_PAGE_URL
+    : 'https://github.com/qinsehm1128/termul-new/releases/latest',
   insider: 'https://github.com/qinsehm1128/termul-new/releases/tag/insider',
   nightly: 'https://github.com/qinsehm1128/termul-new/releases/tag/nightly'
 }

@@ -102,29 +102,38 @@ impl HostConversationRoots {
     /// runs on the caller's thread — the Tauri `setup` thread in production.
     #[must_use]
     pub fn desktop(state_root: PathBuf, workspace_base: PathBuf) -> Self {
-        let legacy_appdata_roots = crate::legacy_appdata::legacy_appdata_roots(&state_root);
-        if let Some(source) = crate::legacy_appdata::matching_legacy_root(&state_root) {
-            match crate::legacy_appdata::carry_forward(&source, &state_root) {
-                Ok(report) if report.is_noop() => {}
-                Ok(report) => log::info!(
-                    "[legacy-appdata] carried the pre-rename app data root forward from {} copied={} already_present={} skipped_links={}",
-                    source.display(),
-                    report.copied,
-                    report.already_present,
-                    report.skipped_links
-                ),
-                // Non-fatal by design: the legacy tree is still on disk and is
-                // still declared below, so a failed copy costs "the merge has
-                // more to do", never data. Refusing to launch would not make
-                // the user's data any more reachable.
-                Err(error) => log::error!(
-                    "[legacy-appdata] could not carry {} forward into {}: {error}",
-                    source.display(),
-                    state_root.display()
-                ),
+        let (legacy_appdata_roots, legacy_workspace_bases) = if crate::brand::is_canary_build() {
+            // Canary is a parallel install, not a rename/migration target. It
+            // must never inspect or copy production conversation roots.
+            (Vec::new(), Vec::new())
+        } else {
+            let legacy_appdata_roots = crate::legacy_appdata::legacy_appdata_roots(&state_root);
+            if let Some(source) = crate::legacy_appdata::matching_legacy_root(&state_root) {
+                match crate::legacy_appdata::carry_forward(&source, &state_root) {
+                    Ok(report) if report.is_noop() => {}
+                    Ok(report) => log::info!(
+                        "[legacy-appdata] carried the pre-rename app data root forward from {} copied={} already_present={} skipped_links={}",
+                        source.display(),
+                        report.copied,
+                        report.already_present,
+                        report.skipped_links
+                    ),
+                    // Non-fatal by design: the legacy tree is still on disk and is
+                    // still declared below, so a failed copy costs "the merge has
+                    // more to do", never data. Refusing to launch would not make
+                    // the user's data any more reachable.
+                    Err(error) => log::error!(
+                        "[legacy-appdata] could not carry {} forward into {}: {error}",
+                        source.display(),
+                        state_root.display()
+                    ),
+                }
             }
-        }
-        let legacy_workspace_bases = legacy_workspace_base(&workspace_base).into_iter().collect();
+            (
+                legacy_appdata_roots,
+                legacy_workspace_base(&workspace_base).into_iter().collect(),
+            )
+        };
         Self {
             state_root,
             workspace_base,

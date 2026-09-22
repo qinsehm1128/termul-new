@@ -30,6 +30,7 @@ function resolveDevPort(): number {
   return parsed
 }
 const devPort = resolveDevPort()
+const appVersion = process.env.VITE_APP_VERSION_OVERRIDE || pkg.version
 // Keep the HMR port within range even at the boundary.
 const hmrPort = devPort < 65535 ? devPort + 1 : devPort - 1
 
@@ -49,7 +50,12 @@ export default defineConfig({
   },
 
   define: {
-    'import.meta.env.PACKAGE_VERSION': JSON.stringify(pkg.version)
+    'import.meta.env.PACKAGE_VERSION': JSON.stringify(appVersion),
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
+    'import.meta.env.VITE_SE_CANARY': JSON.stringify(
+      process.env.VITE_SE_CANARY === '1' ? '1' : '0'
+    ),
+    __SE_CANARY_BUILD__: JSON.stringify(process.env.VITE_SE_CANARY === '1')
   },
 
   // Vite dev server config for Tauri
