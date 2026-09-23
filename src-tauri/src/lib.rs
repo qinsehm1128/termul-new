@@ -2202,6 +2202,9 @@ pub fn run() {
                 // below resolves this same core; no second writer task set is admitted.
                 app.manage(Arc::clone(&conversation_bootstrap.ordered_persistence));
                 app.manage(Arc::clone(&conversation_bootstrap.workspace));
+                app.manage(Option::<Arc<crate::conversation::SessionWorkspaceService>>::Some(
+                    Arc::clone(&conversation_bootstrap.workspace),
+                ));
                 app.manage(Arc::clone(&conversation_bootstrap.application));
                 let conversation_migration_control = Arc::new(
                     crate::conversation::ConversationMigrationControlService::new(&app_data_dir)
@@ -2576,6 +2579,7 @@ pub fn run() {
                 )));
             } else if let Some(acp_core_handle) = acp_core_handle {
                 app.manage(acp_core_handle.clone());
+                app.manage(Option::<Arc<crate::conversation::SessionWorkspaceService>>::None);
                 app.manage(commands::HostConversationStore(None));
                 app.manage(commands::HostConversationCreation(None));
                 app.manage(crate::scheduled_tasks::commands::HostScheduledTasks(None));

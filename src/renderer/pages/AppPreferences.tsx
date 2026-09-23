@@ -50,7 +50,9 @@ import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
 import { isMac } from '@/lib/platform'
 import { isSettingsCategoryAvailable } from '@/lib/settings-categories'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
+import { confirm } from '@/lib/tauri-dialog'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { getPendingUpdateStatus, getUpdateComponentImpact } from '@/lib/updater-status'
 import { cn } from '@/lib/utils'
@@ -432,6 +434,7 @@ export default function AppPreferences(): React.JSX.Element {
   const {
     isChecking,
     updateAvailable,
+    downloaded,
     version,
     lastChecked,
     autoUpdateEnabled,
@@ -444,6 +447,32 @@ export default function AppPreferences(): React.JSX.Element {
   } = useUpdaterState()
   const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
     useUpdaterActions()
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
+
+  const handleSafeInstallAndRestart = async (): Promise<void> => {
+    if (!downloaded || isInstallingUpdate) return
+
+    const activeTerminals = hasActiveTerminalSessions()
+    const confirmed = await confirm(
+      activeTerminals
+        ? tShell('updates.safeInstallWithTerminals', { version })
+        : tShell('updates.safeInstallWithoutTerminals', { version }),
+      {
+        title: tShell('updates.safeInstallTitle'),
+        kind: 'warning',
+        okLabel: tShell('updates.safeInstallRestart'),
+        cancelLabel: tShell('updates.notNow')
+      }
+    )
+    if (!confirmed) return
+
+    setIsInstallingUpdate(true)
+    try {
+      await installAndRestart()
+    } finally {
+      setIsInstallingUpdate(false)
+    }
+  }
 
   // Load available shells
   useEffect(() => {
@@ -1763,7 +1792,26 @@ export default function AppPreferences(): React.JSX.Element {
                         {tSettings('updates.openDownloadPage')}
                       </button>
                     )}
+                    {downloaded && !isManualUpdateMode && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSafeInstallAndRestart()}
+                        disabled={isInstallingUpdate}
+                        className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-sm text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-primary/50"
+                      >
+                        <RotateCcw
+                          size={16}
+                          className={isInstallingUpdate ? 'animate-spin' : undefined}
+                        />
+                        {tShell('updates.safeInstallRestart')}
+                      </button>
+                    )}
                   </div>
+                  {downloaded && !isManualUpdateMode && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {tShell('updates.safeRestartHint')}
+                    </p>
+                  )}
                   {lastChecked && (
                     <p className="text-xs text-muted-foreground mt-1">
                       {tSettings('updates.lastChecked', {

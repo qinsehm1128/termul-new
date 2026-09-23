@@ -438,15 +438,18 @@ pub async fn terminal_spawn(
     options: SpawnOptions,
     on_data: Channel<Response>,
     terminal: State<'_, crate::core::TerminalServiceHandle>,
-    workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
+    workspace: State<'_, Option<Arc<crate::conversation::SessionWorkspaceService>>>,
 ) -> Result<IpcResult<SpawnedTerminal>, String> {
     if let Some(client) = terminal.core_client() {
         return Ok(
-            terminal_spawn_via_core(options, Some(on_data), &client, workspace.inner()).await,
+            terminal_spawn_via_core(options, Some(on_data), &client, workspace.as_ref()).await,
         );
     }
+    let Some(workspace) = workspace.as_ref() else {
+        return Err("Session workspace service is unavailable".to_string());
+    };
     let pty_manager = require_in_process_pty(terminal.inner())?;
-    Ok(terminal_spawn_resource(options, Some(on_data), &pty_manager, workspace.inner()).await)
+    Ok(terminal_spawn_resource(options, Some(on_data), &pty_manager, workspace).await)
 }
 
 /// Host-owned construction of project-scope spawn options from a remote
@@ -511,7 +514,7 @@ async fn terminal_spawn_via_core(
     options: SpawnOptions,
     on_data: Option<Channel<Response>>,
     client: &crate::core::TerminalCoreClient,
-    workspace: &Arc<crate::conversation::SessionWorkspaceService>,
+    workspace: Option<&Arc<crate::conversation::SessionWorkspaceService>>,
 ) -> IpcResult<SpawnedTerminal> {
     if let Err(error) = require_host_admission() {
         return error;
@@ -520,8 +523,8 @@ async fn terminal_spawn_via_core(
     let conversation_id = if is_scope_less {
         None
     } else {
-        match options.conversation_id {
-            Some(conversation_id) => {
+        match (workspace, options.conversation_id) {
+            (Some(workspace), Some(conversation_id)) => {
                 if let Err(error) = workspace.ensure_terminal_ref_writable(conversation_id, true) {
                     log::warn!(
                         "[terminal-command] durable spawn admission rejected conversation_id={} code={}",
@@ -532,7 +535,7 @@ async fn terminal_spawn_via_core(
                 }
                 Some(conversation_id)
             }
-            None => None,
+            _ => None,
         }
     };
     let spawned = match client.spawn(options).await {
@@ -550,7 +553,7 @@ async fn terminal_spawn_via_core(
             )
         }
     };
-    let spawned = if let Some(conversation_id) = conversation_id {
+    let spawned = if let (Some(workspace), Some(conversation_id)) = (workspace, conversation_id) {
         if let Err(primary) = workspace
             .add_terminal_ref(conversation_id, &spawned.info.id)
             .await
@@ -619,22 +622,7 @@ pub(crate) async fn terminal_spawn_resource_via_core(
     client: &crate::core::TerminalCoreClient,
     workspace: Option<&Arc<crate::conversation::SessionWorkspaceService>>,
 ) -> IpcResult<SpawnedTerminal> {
-    match workspace {
-        Some(workspace) => terminal_spawn_via_core(options, None, client, workspace).await,
-        None => match client.spawn(options).await {
-            Ok(spawned) => IpcResult::success(spawned),
-            Err(crate::core::CoreError::Unauthorized) => {
-                IpcResult::error("Unauthorized", "UNAUTHORIZED")
-            }
-            Err(error) => IpcResult::error(
-                match error {
-                    crate::core::CoreError::InvalidRequest(detail) if !detail.is_empty() => detail,
-                    other => other.to_string(),
-                },
-                "SPAWN_FAILED",
-            ),
-        },
-    }
+    terminal_spawn_via_core(options, None, client, workspace).await
 }
 
 /// Remote-only spawn path. The wire payload is already narrowed to
@@ -973,7 +961,7 @@ pub async fn terminal_resume(
     request: TerminalResumeRequest,
     on_data: Channel<Response>,
     terminal: State<'_, crate::core::TerminalServiceHandle>,
-    workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
+    workspace: State<'_, Option<Arc<crate::conversation::SessionWorkspaceService>>>,
 ) -> Result<IpcResult<TerminalResumeGrant>, String> {
     if let Some(client) = terminal.core_client() {
         let grant = match client.resume(request.clone()).await {
@@ -1009,9 +997,12 @@ pub async fn terminal_resume(
             },
         );
     }
+    let Some(workspace) = workspace.as_ref() else {
+        return Err("Session workspace service is unavailable".to_string());
+    };
     let pty_manager = require_in_process_pty(terminal.inner())?;
     let (grant, replay) =
-        match terminal_resume_resource(&request, &pty_manager, workspace.inner()).await {
+        match terminal_resume_resource(&request, &pty_manager, workspace).await {
             Ok(value) => value,
             // Distinct on purpose: the renderer retires a record it can never
             // revive, and keeps the retryable placeholder for everything else.
@@ -1511,13 +1502,19 @@ pub async fn terminal_close_view(
 pub async fn terminal_terminate(
     terminal_id: String,
     terminal: State<'_, crate::core::TerminalServiceHandle>,
-    workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
+    workspace: State<'_, Option<Arc<crate::conversation::SessionWorkspaceService>>>,
 ) -> Result<IpcResult<()>, String> {
     if let Some(client) = terminal.core_client() {
-        return Ok(terminal_terminate_via_core(&terminal_id, &client, workspace.inner()).await);
+        return Ok(
+            terminal_terminate_via_core_optional_workspace(&terminal_id, &client, workspace.as_ref())
+                .await,
+        );
     }
+    let Some(workspace) = workspace.as_ref() else {
+        return Err("Session workspace service is unavailable".to_string());
+    };
     let pty_manager = require_in_process_pty(terminal.inner())?;
-    Ok(terminal_terminate_resource(&terminal_id, &pty_manager, workspace.inner()).await)
+    Ok(terminal_terminate_resource(&terminal_id, &pty_manager, workspace).await)
 }
 
 async fn terminal_terminate_via_core(
@@ -1703,7 +1700,7 @@ async fn terminate_workspace_scope(
 pub async fn terminal_kill(
     terminal_id: String,
     terminal: State<'_, crate::core::TerminalServiceHandle>,
-    workspace: State<'_, Arc<crate::conversation::SessionWorkspaceService>>,
+    workspace: State<'_, Option<Arc<crate::conversation::SessionWorkspaceService>>>,
 ) -> Result<IpcResult<()>, String> {
     terminal_terminate(terminal_id, terminal, workspace).await
 }
@@ -2921,6 +2918,11 @@ pub(crate) fn resolve_rg_path() -> (String, String) {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.push(exe_dir.join(binary));
+            #[cfg(target_os = "macos")]
+            // Tauri bundles macOS externalBin entries under their logical
+            // basename (`Contents/MacOS/rg`), while development keeps the
+            // target-suffixed sidecar name.
+            candidates.push(exe_dir.join("rg"));
             candidates.push(exe_dir.join("../Resources").join(binary));
             candidates.push(exe_dir.join("../Resources/bin").join(binary));
             candidates.push(exe_dir.join("../lib").join(binary));

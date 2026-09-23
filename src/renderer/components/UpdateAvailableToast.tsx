@@ -161,7 +161,7 @@ export function showUpdateDownloadedToast(version: string): void {
       label: (
         <div className="flex items-center gap-2">
           <Download size={14} />
-          <span>{i18n.t('updates.installRestart', { ns: 'shell' })}</span>
+          <span>{i18n.t('updates.safeInstallRestart', { ns: 'shell' })}</span>
         </div>
       ),
       onClick: async () => {
@@ -169,12 +169,12 @@ export function showUpdateDownloadedToast(version: string): void {
           const hasActiveTerminals = hasActiveTerminalSessions()
           const confirmed = await confirm(
             hasActiveTerminals
-              ? i18n.t('updates.installWithTerminals', { ns: 'shell', version })
-              : i18n.t('updates.installWithoutTerminals', { ns: 'shell', version }),
+              ? i18n.t('updates.safeInstallWithTerminals', { ns: 'shell', version })
+              : i18n.t('updates.safeInstallWithoutTerminals', { ns: 'shell', version }),
             {
-              title: i18n.t('updates.installTitle', { ns: 'shell' }),
+              title: i18n.t('updates.safeInstallTitle', { ns: 'shell' }),
               kind: 'warning',
-              okLabel: i18n.t('updates.installRestart', { ns: 'shell' }),
+              okLabel: i18n.t('updates.safeInstallRestart', { ns: 'shell' }),
               cancelLabel: i18n.t('updates.notNow', { ns: 'shell' })
             }
           )

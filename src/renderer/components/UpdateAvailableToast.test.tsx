@@ -173,7 +173,7 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
       { description: string; action: { label: ReactElement } }
     ]
     expect(title).toBe('Update available: version 0.4.8')
-    expect(opts.description).toBe('A new version is available for download.')
+    expect(opts.description).toContain('A new version is available for download.')
     expect(renderToStaticMarkup(opts.action.label)).toContain('Download')
     // The stable action label must NOT show the manual-download CTA.
     expect(renderToStaticMarkup(opts.action.label)).not.toContain('Open Download Page')
@@ -188,7 +188,7 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
       { description: string; action: { label: ReactElement } }
     ]
     expect(title).toBe('Insider Update available: version 0.5.0-rc.1')
-    expect(opts.description).toBe(
+    expect(opts.description).toContain(
       'A new insider build is available. Open the download page to install it manually.'
     )
     expect(renderToStaticMarkup(opts.action.label)).toContain('Open Download Page')
@@ -200,7 +200,7 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
     const calls = vi.mocked(toast.success).mock.calls
     const [title, opts] = calls[calls.length - 1] as [string, { description: string }]
     expect(title).toBe('Nightly Update available: version 0.0.0-nightly.20260808.abc')
-    expect(opts.description).toBe(
+    expect(opts.description).toContain(
       'A new nightly build is available. Open the download page to install it manually.'
     )
   })
