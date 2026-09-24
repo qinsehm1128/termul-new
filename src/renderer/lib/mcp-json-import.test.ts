@@ -169,6 +169,39 @@ describe('parseMcpJsonImport', () => {
     expect(parseMcpJsonImport('[]')).toEqual({ servers: [], errors: [] })
   })
 
+  it('prefers the rich servers inventory and preserves autoStart plus inline credentials', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        version: '1.0.0',
+        servers: [
+          {
+            name: 'remote',
+            command: '',
+            args: [],
+            env: { Authorization: 'Bearer inline-secret' },
+            serverType: 'remote-streamable',
+            remoteUrl: 'https://mcp.test/mcp',
+            autoStart: false
+          }
+        ],
+        mcpServers: {
+          remote: { command: 'mcp-proxy', args: ['https://wrong.test/mcp'] }
+        }
+      })
+    )
+
+    expect(errors).toEqual([])
+    expect(servers).toEqual([
+      {
+        type: 'http',
+        name: 'remote',
+        url: 'https://mcp.test/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer inline-secret' }],
+        enabled: false
+      }
+    ])
+  })
+
   it('accepts Qin/tauri-mcp-router mcpServers entries and maps remoteUrl', () => {
     const { servers, errors } = parseMcpJsonImport(
       JSON.stringify({
@@ -282,7 +315,7 @@ describe('parseMcpJsonImport', () => {
     )
     expect(errors).toEqual([])
     expect(servers).toEqual([
-      { type: 'stdio', name: 'One', command: 'node' },
+      { type: 'stdio', name: 'One', command: 'node', enabled: false },
       {
         type: 'http',
         name: 'Two',

@@ -128,7 +128,7 @@ export function prepareMcpJsonImport(
     let id = makeId()
     while (usedIds.has(id)) id = makeId()
     usedIds.add(id)
-    servers.push({ ...server, id, enabled: true } as StoredMcpServer)
+    servers.push({ ...server, id, enabled: server.enabled ?? true } as StoredMcpServer)
   }
 
   return { servers, errors: parsed.errors, skipped }

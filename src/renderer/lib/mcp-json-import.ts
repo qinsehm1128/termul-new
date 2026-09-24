@@ -2,8 +2,13 @@ import { runtimeT } from '@/i18n/runtime'
 import type { McpEnvVar, McpServerConfig } from '@/lib/acp-api'
 import { validateMcpServer } from '@/lib/acp-mcp-persistence'
 
+export type ImportedMcpServer = McpServerConfig & {
+  /** Preserve Qin/router autoStart and canonical enabled state on import. */
+  enabled?: boolean
+}
+
 export interface McpJsonImportResult {
-  servers: McpServerConfig[]
+  servers: ImportedMcpServer[]
   errors: string[]
 }
 
@@ -228,7 +233,13 @@ function buildServer(
   raw: Record<string, unknown>,
   name: string,
   env: McpEnvVar[] | undefined
-): Partial<McpServerConfig> | null {
+): Partial<ImportedMcpServer> | null {
+  const enabled =
+    typeof raw.enabled === 'boolean'
+      ? raw.enabled
+      : typeof raw.autoStart === 'boolean'
+        ? raw.autoStart
+        : undefined
   const args = normalizeArgs(raw.args)
   if (raw.args !== undefined && args === undefined) return null
 
@@ -247,7 +258,8 @@ function buildServer(
       name,
       ...(command ? { command } : {}),
       ...(args && args.length > 0 ? { args } : {}),
-      ...(env && env.length > 0 ? { env } : {})
+      ...(env && env.length > 0 ? { env } : {}),
+      ...(enabled === undefined ? {} : { enabled })
     }
   }
 
@@ -258,8 +270,9 @@ function buildServer(
     return {
       type,
       name,
-      ...(env && env.length > 0 ? { headers: env } : {})
-    } as Partial<McpServerConfig>
+      ...(env && env.length > 0 ? { headers: env } : {}),
+      ...(enabled === undefined ? {} : { enabled })
+    } as Partial<ImportedMcpServer>
   }
 
   const remoteHeaders = collectRemoteHeaders(raw, env)
@@ -268,8 +281,9 @@ function buildServer(
     type,
     name,
     ...(remoteUrl ? { url: remoteUrl } : {}),
-    ...(remoteHeaders.headers ? { headers: remoteHeaders.headers } : {})
-  } as Partial<McpServerConfig>
+    ...(remoteHeaders.headers ? { headers: remoteHeaders.headers } : {}),
+    ...(enabled === undefined ? {} : { enabled })
+  } as Partial<ImportedMcpServer>
 }
 
 function entriesFromWrapper(value: unknown): ImportEntry[] | null {
@@ -319,15 +333,10 @@ function extractEntries(parsed: unknown): { entries: ImportEntry[]; error?: stri
     return { entries: entriesFromArray(parsed.upstreams) }
   }
 
-  if (hasOwn(parsed, 'mcpServers')) {
-    const entries = entriesFromWrapper(parsed.mcpServers)
-    if (entries) return { entries }
-    return {
-      entries: [],
-      error: runtimeT('mcp', 'import.serversObject', 'Invalid JSON: "mcpServers" must be an object')
-    }
-  }
-
+  // Qin/router exports may contain both a rich `servers` inventory and a
+  // compatibility `mcpServers` map. Prefer the rich inventory so transport
+  // type, remoteUrl, env, and other canonical fields are not downgraded by the
+  // derived compatibility map.
   if (hasOwn(parsed, 'servers')) {
     if (Array.isArray(parsed.servers)) return { entries: entriesFromArray(parsed.servers) }
     const entries = entriesFromWrapper(parsed.servers)
@@ -339,6 +348,15 @@ function extractEntries(parsed: unknown): { entries: ImportEntry[]; error?: stri
         'import.serversShape',
         'Invalid JSON: "servers" must be an object or array'
       )
+    }
+  }
+
+  if (hasOwn(parsed, 'mcpServers')) {
+    const entries = entriesFromWrapper(parsed.mcpServers)
+    if (entries) return { entries }
+    return {
+      entries: [],
+      error: runtimeT('mcp', 'import.serversObject', 'Invalid JSON: "mcpServers" must be an object')
     }
   }
 
@@ -357,7 +375,7 @@ function entryDisplayName(keyName: string, raw: unknown): string {
  * Accepted shapes include Claude `mcpServers`, Qin/tauri-mcp-router `servers`
  * maps or arrays, a top-level server array, the canonical control-plane object,
  * and a bare single-server object. Unknown fields are dropped. Env/header maps
- * become `[{name, value}]` pairs and explicit secret references are omitted
+ * become `[{name, value}]` pairs, inline credentials are preserved, and explicit secret references are omitted
  * because the renderer cannot resolve references without the host authority.
  * Each server is validated via `validateMcpServer`; invalid and duplicate
  * entries are reported per-server while valid entries still import.

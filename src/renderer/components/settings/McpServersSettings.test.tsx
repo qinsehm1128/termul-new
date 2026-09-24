@@ -87,6 +87,42 @@ describe('McpServersSettings', () => {
     )
   })
 
+  it('preserves Qin/router autoStart false as a disabled imported server', async () => {
+    render(<McpServersSettings />)
+    const input = screen.getByLabelText('Import JSON')
+    const file = new File(
+      [
+        JSON.stringify({
+          servers: [
+            {
+              name: 'disabled-remote',
+              serverType: 'remote-streamable',
+              remoteUrl: 'https://remote.test/mcp',
+              autoStart: false,
+              env: { Authorization: 'Bearer inline-secret' }
+            }
+          ],
+          mcpServers: {
+            'disabled-remote': { command: 'mcp-proxy', args: ['https://wrong.test/mcp'] }
+          }
+        })
+      ],
+      'mcp.json',
+      { type: 'application/json' }
+    )
+
+    fireEvent.change(input, { target: { files: [file] } })
+    await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+    expect(importMcpServers).toHaveBeenCalledWith([
+      expect.objectContaining({
+        name: 'disabled-remote',
+        url: 'https://remote.test/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer inline-secret' }],
+        enabled: false
+      })
+    ])
+  })
+
   it('adds a bare server object through the JSON editor with a fresh id', async () => {
     render(<McpServersSettings />)
     openAddDialog()

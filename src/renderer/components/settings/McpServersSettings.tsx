@@ -155,7 +155,7 @@ export function McpServersSettings(): React.JSX.Element {
     const batch = parsedServers.map((parsed) => ({
       ...parsed,
       id: randomUUID(),
-      enabled: true
+      enabled: parsed.enabled ?? true
     }))
     try {
       await importMcpServers(batch)

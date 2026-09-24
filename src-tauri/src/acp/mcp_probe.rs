@@ -337,6 +337,10 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     drive_running(running).await
 }
 
+fn is_transport_managed_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("accept")
+}
+
 async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
     let url = match server.url.as_deref() {
         Some(u) if !u.trim().is_empty() => u,
@@ -346,6 +350,18 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
     if !server.headers.is_empty() {
         let mut headers = HashMap::new();
         for pair in &server.headers {
+            // rmcp owns Accept negotiation. Keep imported values persisted, but
+            // omit this transport-managed header from the wire request to avoid
+            // ReservedHeaderConflict("accept").
+            if is_transport_managed_header(&pair.name) {
+                tracing::debug!(
+                    server = %server.name,
+                    transport,
+                    header = %pair.name,
+                    "skipping transport-managed MCP header"
+                );
+                continue;
+            }
             // reqwest re-exports `http::HeaderName`/`HeaderValue` (the project
             // already depends on reqwest); avoids a direct `http` dep here.
             if let (Ok(name), Ok(value)) = (
@@ -534,6 +550,14 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skips_only_transport_managed_headers() {
+        assert!(is_transport_managed_header("Accept"));
+        assert!(is_transport_managed_header("accept"));
+        assert!(!is_transport_managed_header("Authorization"));
+        assert!(!is_transport_managed_header("X-Workspace"));
     }
 
     #[tokio::test]
