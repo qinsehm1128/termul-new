@@ -270,10 +270,10 @@ async function copyDirectory(src: string, dest: string): Promise<void> {
     const destPath = `${dest}/${entry.name}`
 
     if (entry.isDirectory ?? false) {
-      // It's a directory
       await copyDirectory(srcPath, destPath)
-    } else {
-      // It's a file
+    } else if (entry.isFile ?? false) {
+      // Unix sockets and other special nodes (for example Core IPC sockets)
+      // are runtime endpoints, not backup data. Tauri's copyFile rejects them.
       await copyFile(srcPath, destPath)
     }
   }
@@ -310,10 +310,9 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
       const destPath = `${backupPath}/${entry.name}`
 
       if (entry.isDirectory ?? false) {
-        // It's a directory
         await copyDirectory(srcPath, destPath)
-      } else {
-        // It's a file
+      } else if (entry.isFile ?? false) {
+        // Runtime sockets and other special nodes are intentionally omitted.
         await copyFile(srcPath, destPath)
       }
     }

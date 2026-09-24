@@ -95,12 +95,13 @@ describe('tauri-backup-api createBackup directory skipping', () => {
     }
   })
 
-  it('skips the backups and versions directories but copies other content', async () => {
+  it('skips backup/version directories and special runtime nodes', async () => {
     const topLevel: DirEntry[] = [
       dir('backups'),
       dir('versions'),
       dir('projects'),
-      file('settings.json')
+      file('settings.json'),
+      { name: 'acp-core.sock', isDirectory: false, isFile: false, isSymlink: false } as DirEntry
     ]
 
     // First readDir call enumerates the userData root; subsequent calls (size
@@ -130,5 +131,6 @@ describe('tauri-backup-api createBackup directory skipping', () => {
     const copySrcPaths = vi.mocked(copyFile).mock.calls.map((c) => String(c[0]))
     expect(copySrcPaths.some((p) => p.includes('/appdata/versions'))).toBe(false)
     expect(copySrcPaths.some((p) => p.includes('/appdata/backups'))).toBe(false)
+    expect(copySrcPaths.some((p) => p.includes('acp-core.sock'))).toBe(false)
   })
 })
