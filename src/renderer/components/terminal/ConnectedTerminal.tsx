@@ -78,6 +78,7 @@ import { attachPixelSmoothScroll, type PixelSmoothScrollHandle } from './termina
 import { ensureTerminalUnicode11 } from './terminal-unicode'
 import {
   clearWebglRenderModel,
+  createWebglModelRebuildDetector,
   createWebglScrollRepair,
   restoreVisibleTerminalSurface,
   type WebglScrollRepair
@@ -615,6 +616,9 @@ function ConnectedTerminalComponent({
   const loadWebglAddonRef = useRef<((term: Terminal, isRecovery?: boolean) => void) | null>(null)
   const webglContextLostRef = useRef<boolean>(false)
   const webglScrollRepairRef = useRef<WebglScrollRepair | null>(null)
+  const webglWriteParsedDisposableRef = useRef<IDisposable | null>(null)
+  const webglSkipNextParsedRepairRef = useRef(false)
+  const webglModelRebuildDetectorRef = useRef(createWebglModelRebuildDetector())
   const pixelScrollRef = useRef<PixelSmoothScrollHandle | null>(null)
   const needsSurfaceRestoreRef = useRef(!isVisible)
   // Single-flight guard for performTerminalRecovery. On a window restore both
@@ -961,9 +965,10 @@ function ConnectedTerminalComponent({
    * from silently skipping it — only the live-output path used to call it, and
    * all seven restore/replay writes did not.
    *
-   * The repair is armed from xterm's write callback rather than straight after
-   * `write()`: parsing is asynchronous, so repainting immediately would rebuild
-   * the model from the pre-write buffer and leave the same staleness behind.
+   * Append-only repairs are armed from xterm's once-per-frame `onWriteParsed`
+   * event rather than straight after `write()`. In-place redraws use the write
+   * callback after parsing so their model rebuild cannot observe the pre-write
+   * buffer.
    *
    * D-3: whatever runs in that callback must contain its own failures. xterm's
    * `_innerWrite` invokes it as a bare `cb()` with no exception guard, so a
@@ -974,8 +979,22 @@ function ConnectedTerminalComponent({
    */
   const writeToTerminal = useCallback(
     (terminal: Pick<Terminal, 'write'>, data: string | Uint8Array): void => {
+      // xterm.js exposes onWriteParsed as a once-per-frame signal. Track the
+      // expensive model-invalidating cases here, then let that event coalesce
+      // all writes from the same frame into one repair.
+      const chunkMayRequireModelRebuild = webglModelRebuildDetectorRef.current.scan(data)
       terminal.write(data, () => {
-        webglScrollRepairRef.current?.onWrite()
+        const requiresModelRebuild =
+          chunkMayRequireModelRebuild || webglModelRebuildDetectorRef.current.flush()
+        if (requiresModelRebuild) webglSkipNextParsedRepairRef.current = true
+        // In-place redraws must rebuild after this chunk is parsed. Ordinary
+        // append-only output is coalesced by onWriteParsed once per frame.
+        if (requiresModelRebuild) {
+          webglScrollRepairRef.current?.onWrite(true)
+        } else if (!webglWriteParsedDisposableRef.current) {
+          // Compatibility fallback for older test/runtime shims.
+          webglScrollRepairRef.current?.onWrite(false)
+        }
       })
     },
     []
@@ -1437,6 +1456,16 @@ function ConnectedTerminalComponent({
       }
     })
     webglScrollRepairRef.current = scrollRepair
+    webglWriteParsedDisposableRef.current =
+      (
+        terminal as Terminal & { onWriteParsed?: (listener: () => void) => IDisposable }
+      ).onWriteParsed?.(() => {
+        if (webglSkipNextParsedRepairRef.current) {
+          webglSkipNextParsedRepairRef.current = false
+          return
+        }
+        scrollRepair.onWrite(false)
+      }) ?? null
     const scrollDisposable = terminal.onScroll(() => {
       scrollRepair.onScroll()
     })
@@ -2164,6 +2193,10 @@ function ConnectedTerminalComponent({
       pixelScroll.dispose()
       pixelScrollRef.current = null
       scrollDisposable.dispose()
+      webglWriteParsedDisposableRef.current?.dispose()
+      webglWriteParsedDisposableRef.current = null
+      webglSkipNextParsedRepairRef.current = false
+      webglModelRebuildDetectorRef.current.reset()
       webglScrollRepairRef.current?.dispose()
       webglScrollRepairRef.current = null
       dataDisposable.dispose()

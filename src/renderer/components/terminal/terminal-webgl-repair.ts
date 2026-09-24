@@ -38,6 +38,86 @@ export function clearWebglRenderModel(terminal: object, isWebglActive: boolean):
   renderService?.clear?.()
 }
 
+type WebglControlState = 'none' | 'escape' | 'csi'
+
+export interface WebglModelRebuildDetector {
+  scan: (data: string | Uint8Array) => boolean
+  flush: () => boolean
+  reset: () => void
+}
+
+/**
+ * Return whether a PTY chunk can redraw existing cells rather than only append
+ * rows. The detector retains the tiny amount of ANSI state needed when PTY
+ * read boundaries split an ESC/CSI sequence across chunks.
+ */
+export function createWebglModelRebuildDetector(): WebglModelRebuildDetector {
+  let state: WebglControlState = 'none'
+  let pendingCarriageReturn = false
+
+  return {
+    scan(data: string | Uint8Array): boolean {
+      let rebuild = false
+      for (let index = 0; index < data.length; index += 1) {
+        const byte = typeof data === 'string' ? data.charCodeAt(index) : data[index]
+        const next = typeof data === 'string' ? data.charCodeAt(index + 1) : data[index + 1]
+
+        if (pendingCarriageReturn) {
+          pendingCarriageReturn = false
+          if (byte !== 0x0a) rebuild = true
+        }
+        if (byte === 0x08) rebuild = true
+        if (byte === 0x0d) {
+          if (index + 1 < data.length) {
+            if (next !== 0x0a) rebuild = true
+          } else {
+            pendingCarriageReturn = true
+          }
+        }
+
+        if (state === 'escape') {
+          if (byte === 0x5b) {
+            state = 'csi'
+            continue
+          }
+          state = byte === 0x1b ? 'escape' : 'none'
+          // Non-CSI ESC controls are uncommon but may redraw the screen; be
+          // conservative rather than allowing a stale model through.
+          rebuild = true
+          continue
+        }
+
+        if (state === 'csi') {
+          if (byte >= 0x40 && byte <= 0x7e) {
+            state = 'none'
+            // SGR/style changes do not invalidate existing cell positions.
+            if (byte !== 0x6d) rebuild = true
+          }
+          continue
+        }
+
+        if (byte === 0x1b) state = 'escape'
+      }
+      return rebuild
+    },
+    flush(): boolean {
+      const rebuild = pendingCarriageReturn
+      pendingCarriageReturn = false
+      return rebuild
+    },
+    reset(): void {
+      state = 'none'
+      pendingCarriageReturn = false
+    }
+  }
+}
+
+/** Stateless convenience for complete chunks and unit callers. */
+export function requiresWebglModelRebuild(data: string | Uint8Array): boolean {
+  const detector = createWebglModelRebuildDetector()
+  return detector.scan(data) || detector.flush()
+}
+
 export interface WebglScrollRepair {
   /** Atlas pages changed — refresh after the current burst, never clear the atlas. */
   markAtlasDirty: () => void
@@ -45,10 +125,11 @@ export interface WebglScrollRepair {
   onScroll: () => void
   /**
    * PTY/ZLE in-place redraws update the cell buffer but often leave the
-   * previous WebGL row. Same idle refresh as scroll.
+   * previous WebGL row. Append-only output only needs a refresh; callers pass
+   * true when the chunk can invalidate the WebGL cell model.
    */
-  onWrite: () => void
-  repairNow: () => void
+  onWrite: (requiresModelRebuild?: boolean) => void
+  repairNow: (requiresModelRebuild?: boolean) => void
   dispose: () => void
 }
 
@@ -69,6 +150,7 @@ export function createWebglScrollRepair(args: {
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   let maxWaitTimer: ReturnType<typeof setTimeout> | null = null
   let trailingPending = false
+  let rebuildPending = false
   const idleMs = args.idleMs ?? WEBGL_SCROLL_REPAIR_IDLE_MS
   const maxWaitMs = args.maxWaitMs ?? WEBGL_SCROLL_REPAIR_MAX_WAIT_MS
 
@@ -82,10 +164,10 @@ export function createWebglScrollRepair(args: {
     })
   }
 
-  const repairNow = (): void => {
+  const repairNow = (requiresModelRebuild = true): void => {
     const terminal = args.getTerminal()
     if (!terminal) return
-    if (args.rebuildSurface) {
+    if (requiresModelRebuild && args.rebuildSurface) {
       try {
         args.rebuildSurface(terminal)
       } catch (error) {
@@ -113,7 +195,9 @@ export function createWebglScrollRepair(args: {
   const flush = (): void => {
     clearTimers()
     trailingPending = false
-    repairNow()
+    const requiresModelRebuild = rebuildPending
+    rebuildPending = false
+    repairNow(requiresModelRebuild)
   }
 
   const onIdle = (): void => {
@@ -149,9 +233,12 @@ export function createWebglScrollRepair(args: {
    * events never produce N repairs.
    * See .workflow/sessions/20260824-ralph-termul-leftover-glyphs/dod-amendment-01.md
    */
-  const scheduleIdleRepair = (): void => {
+  const scheduleIdleRepair = (requiresModelRebuild: boolean): void => {
+    if (requiresModelRebuild) rebuildPending = true
     if (idleTimer === null && maxWaitTimer === null && !trailingPending) {
-      repairNow()
+      const rebuild = rebuildPending
+      rebuildPending = false
+      repairNow(rebuild)
       idleTimer = setTimeout(onIdle, idleMs)
       maxWaitTimer = setTimeout(onMaxWait, maxWaitMs)
       return
@@ -180,6 +267,7 @@ export function createWebglScrollRepair(args: {
    */
   const scheduleTrailingRepair = (): void => {
     trailingPending = true
+    rebuildPending = true
     if (idleTimer !== null) clearTimeout(idleTimer)
     idleTimer = setTimeout(onIdle, idleMs)
     // Deliberately does not arm `maxWaitTimer`: a mid-burst flush is exactly
@@ -189,21 +277,22 @@ export function createWebglScrollRepair(args: {
 
   return {
     markAtlasDirty(): void {
-      scheduleIdleRepair()
+      scheduleIdleRepair(true)
     },
     noteAtlasMerged(): void {
-      scheduleIdleRepair()
+      scheduleIdleRepair(true)
     },
     onScroll(): void {
       scheduleTrailingRepair()
     },
-    onWrite(): void {
-      scheduleIdleRepair()
+    onWrite(requiresModelRebuild = true): void {
+      scheduleIdleRepair(requiresModelRebuild)
     },
     repairNow,
     dispose(): void {
       clearTimers()
       trailingPending = false
+      rebuildPending = false
     }
   }
 }

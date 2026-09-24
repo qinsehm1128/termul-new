@@ -31,6 +31,7 @@ export interface XtermTerminalMockHandles {
   dataCallback: ((data: string) => void) | null
   resizeCallback: ((dims: { cols: number; rows: number }) => void) | null
   scrollCallback: (() => void) | null
+  writeParsedListeners: Set<() => void>
   linkProviders: XtermTerminalMockLinkProvider[]
   /**
    * Chunks handed to `write` whose parse callback has not fired yet — the
@@ -74,6 +75,14 @@ function buildInstance(handles: XtermTerminalMockHandles) {
       handles.scrollCallback = cb
       return { dispose: vi.fn() }
     }),
+    onWriteParsed: vi.fn<(_cb: () => void) => { dispose: () => void }>((cb) => {
+      handles.writeParsedListeners.add(cb)
+      return {
+        dispose: vi.fn(() => {
+          handles.writeParsedListeners.delete(cb)
+        })
+      }
+    }),
     attachCustomKeyEventHandler: vi.fn(),
     hasSelection: vi.fn(() => false),
     getSelection: vi.fn(() => ''),
@@ -90,6 +99,7 @@ function buildInstance(handles: XtermTerminalMockHandles) {
       setTimeout(() => {
         handles.pendingWrites -= 1
         callback?.()
+        for (const listener of handles.writeParsedListeners) listener()
       }, 0)
     }),
     clear: vi.fn(),
@@ -149,6 +159,7 @@ export function createXtermTerminalMock(): XtermTerminalMock {
     dataCallback: null,
     resizeCallback: null,
     scrollCallback: null,
+    writeParsedListeners: new Set(),
     linkProviders: [],
     pendingWrites: 0,
     refreshPendingWrites: []
@@ -166,6 +177,7 @@ export function createXtermTerminalMock(): XtermTerminalMock {
     onResize = instance.onResize
     onSelectionChange = instance.onSelectionChange
     onScroll = instance.onScroll
+    onWriteParsed = instance.onWriteParsed
     attachCustomKeyEventHandler = instance.attachCustomKeyEventHandler
     hasSelection = instance.hasSelection
     getSelection = instance.getSelection

@@ -3039,7 +3039,9 @@ describe('ConnectedTerminal', () => {
       })
 
       mockTerminalInstance._core._renderService.clear.mockClear()
-      capturedDataCallback?.('terminal-123', new TextEncoder().encode('output'))
+      // Append-only output must not rebuild the WebGL model. In-place redraw
+      // controls (the workload this repair protects) still must.
+      capturedDataCallback?.('terminal-123', new TextEncoder().encode('\r\u001b[2K\u001b[1G'))
 
       await vi.waitFor(() => {
         expect(mockTerminalInstance._core._renderService.clear).toHaveBeenCalled()

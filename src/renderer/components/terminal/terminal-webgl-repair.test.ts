@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { logFrontendError } from '@/lib/log-api'
 import {
   clearWebglRenderModel,
+  createWebglModelRebuildDetector,
   createWebglScrollRepair,
+  requiresWebglModelRebuild,
   restoreVisibleTerminalSurface,
   WEBGL_SCROLL_REPAIR_IDLE_MS,
   WEBGL_SCROLL_REPAIR_MAX_WAIT_MS
@@ -11,6 +13,40 @@ import {
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
+
+describe('requiresWebglModelRebuild', () => {
+  it('does not rebuild for ordinary Cargo-style append-only output', () => {
+    expect(requiresWebglModelRebuild('warning: unused variable\n')).toBe(false)
+    expect(requiresWebglModelRebuild('\u001b[33mwarning\u001b[0m: unused variable\n')).toBe(false)
+    expect(requiresWebglModelRebuild('line\r\n')).toBe(false)
+  })
+
+  it('rebuilds for in-place redraw controls', () => {
+    expect(requiresWebglModelRebuild('prompt> value\r')).toBe(true)
+    expect(requiresWebglModelRebuild('\u0008\u0008')).toBe(true)
+    expect(requiresWebglModelRebuild('\u001b[2K\u001b[1G')).toBe(true)
+    expect(requiresWebglModelRebuild(new Uint8Array([0x1b, 0x5b, 0x32, 0x4b]))).toBe(true)
+    expect(requiresWebglModelRebuild(new Uint8Array([0x1b, 0x5b, 0x33, 0x33, 0x6d]))).toBe(false)
+  })
+
+  it('retains CSI state when a PTY chunk splits the escape sequence', () => {
+    const detector = createWebglModelRebuildDetector()
+
+    expect(detector.scan('\u001b')).toBe(false)
+    expect(detector.scan('[2K')).toBe(true)
+
+    detector.reset()
+    expect(detector.scan(new Uint8Array([0x1b, 0x5b]))).toBe(false)
+    expect(detector.scan(new Uint8Array([0x33, 0x33, 0x6d]))).toBe(false)
+
+    detector.reset()
+    expect(detector.scan('\r')).toBe(false)
+    expect(detector.scan('\n')).toBe(false)
+    detector.reset()
+    expect(detector.scan('\r')).toBe(false)
+    expect(detector.scan('x')).toBe(true)
+  })
+})
 
 describe('createWebglScrollRepair', () => {
   afterEach(() => {
@@ -58,6 +94,41 @@ describe('createWebglScrollRepair', () => {
     expect(refresh).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(WEBGL_SCROLL_REPAIR_IDLE_MS)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    repair.dispose()
+  })
+
+  it('refreshes append-only writes without rebuilding the WebGL model', () => {
+    vi.useFakeTimers()
+    const refresh = vi.fn()
+    const rebuildSurface = vi.fn()
+    const repair = createWebglScrollRepair({
+      getTerminal: () => ({ refresh, rows: 24 }),
+      rebuildSurface
+    })
+
+    repair.onWrite(false)
+
+    expect(rebuildSurface).not.toHaveBeenCalled()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    repair.dispose()
+  })
+
+  it('rebuilds after a settled scroll burst', () => {
+    vi.useFakeTimers()
+    const refresh = vi.fn()
+    const rebuildSurface = vi.fn()
+    const repair = createWebglScrollRepair({
+      getTerminal: () => ({ refresh, rows: 24 }),
+      rebuildSurface,
+      idleMs: 10
+    })
+
+    repair.onScroll()
+    expect(rebuildSurface).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(10)
+
+    expect(rebuildSurface).toHaveBeenCalledTimes(1)
     expect(refresh).toHaveBeenCalledTimes(1)
     repair.dispose()
   })
