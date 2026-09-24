@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod builtins;
 pub mod config;
+pub mod desktop;
 pub mod domain;
 pub mod http;
 pub mod process;
@@ -21,6 +22,9 @@ pub use config::{
     McpPersistedTransport, McpRoutingConfig, McpUpstreamConfig, McpUpstreamStatus,
     NameCollisionPolicy, NamedSecret, ParsedControlPlane, BUILTIN_PROJECT_SCOPE,
     BUILTIN_SESSION_MEMORY, MCP_CONTROL_PLANE_SCHEMA_VERSION,
+};
+pub use desktop::{
+    DesktopMcpCoreAvailability, DesktopMcpCoreRuntime, DesktopMcpCoreStatus, MCP_CORE_ENABLED_ENV,
 };
 pub use domain::{
     Aggregate, AggregatedPrompt, AggregatedResource, AggregatedTool, AllowAllTools,

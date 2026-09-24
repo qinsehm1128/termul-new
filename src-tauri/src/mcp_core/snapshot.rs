@@ -15,6 +15,11 @@ use super::{
 };
 
 pub trait McpSecretResolver: Send + Sync {
+    /// Resolve an already-classified secret token.
+    ///
+    /// Existing standalone callers use this method for compatibility. Desktop
+    /// canonical application should call [`Self::resolve_named`] so inline
+    /// values and keychain references remain distinguishable at the boundary.
     fn resolve(
         &self,
         server_id: &str,
@@ -22,6 +27,20 @@ pub trait McpSecretResolver: Send + Sync {
         name: &str,
         value: &str,
     ) -> Result<String, SnapshotError>;
+
+    /// Resolve a persisted named secret without erasing whether it was inline
+    /// or a reference. The default preserves the legacy resolver contract; a
+    /// secure desktop resolver overrides this method to send only `ref` tokens
+    /// to the keychain owner while returning inline values directly.
+    fn resolve_named(
+        &self,
+        server_id: &str,
+        field: &str,
+        secret: &NamedSecret,
+    ) -> Result<String, SnapshotError> {
+        let token = secret.resolver_token().map_err(config_error)?;
+        self.resolve(server_id, field, &secret.name, token)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -53,6 +72,7 @@ pub enum SnapshotError {
         requested: u64,
     },
     ApplyFailed(McpDomainError),
+    Unavailable(String),
 }
 
 impl std::fmt::Display for SnapshotError {
@@ -76,6 +96,7 @@ impl std::fmt::Display for SnapshotError {
                 "MCP snapshot revision {requested} is not newer than {accepted}"
             ),
             Self::ApplyFailed(error) => write!(f, "MCP snapshot apply failed: {error}"),
+            Self::Unavailable(message) => write!(f, "MCP snapshot runtime unavailable: {message}"),
         }
     }
 }
@@ -154,17 +175,17 @@ fn resolve_secrets(
 ) -> Result<BTreeMap<String, RedactedSecret>, SnapshotError> {
     let mut resolved = BTreeMap::new();
     for secret in secrets {
-        let token = secret.resolver_token().map_err(config_error)?;
-        let value = resolver
-            .resolve(server_id, field, &secret.name, token)
-            .map_err(|error| match error {
-                SnapshotError::SecretResolution { .. } => error,
-                other => SnapshotError::SecretResolution {
-                    server_id: server_id.to_owned(),
-                    field: field.to_owned(),
-                    message: other.to_string(),
-                },
-            })?;
+        let value =
+            resolver
+                .resolve_named(server_id, field, secret)
+                .map_err(|error| match error {
+                    SnapshotError::SecretResolution { .. } => error,
+                    other => SnapshotError::SecretResolution {
+                        server_id: server_id.to_owned(),
+                        field: field.to_owned(),
+                        message: other.to_string(),
+                    },
+                })?;
         resolved.insert(secret.name.clone(), RedactedSecret::new(value));
     }
     Ok(resolved)
@@ -261,6 +282,15 @@ impl McpSnapshotController {
         let receipt = self.apply(snapshot).await?;
         self.core.apply_built_in_config(&config.built_ins).await;
         Ok(receipt)
+    }
+
+    /// Reset only the revision fence when the desktop switches canonical
+    /// project scope. The current last-good snapshot remains live until the
+    /// replacement applies successfully, preserving rollback on read/secret/
+    /// connection failure.
+    pub async fn reset_revision_for_project_scope(&self) {
+        let _update = self.update_lock.lock().await;
+        self.state.write().await.accepted_revision = 0;
     }
 
     pub async fn accepted_revision(&self) -> u64 {

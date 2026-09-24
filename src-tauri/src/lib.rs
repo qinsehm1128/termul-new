@@ -2557,6 +2557,25 @@ pub fn run() {
                     memory_index.state_root().display()
                 );
                 app.manage(Arc::clone(&memory_index));
+
+                // MCP Core desktop ownership is an explicit opt-in because
+                // startup has no active project root/secret resolver to apply
+                // `.se-manager/mcp-servers.json` safely.  The holder owns only
+                // its loopback gateway; it never owns PTY/ACP children.  When
+                // enabled and configured, thread the authenticated endpoint
+                // into the same AcpManager that creates future sessions.
+                let desktop_mcp_runtime = Arc::new(tauri::async_runtime::block_on(
+                    crate::mcp_core::DesktopMcpCoreRuntime::start_from_env(
+                        Arc::clone(&memory_index),
+                    ),
+                ));
+                if let Some((endpoint, auth)) = tauri::async_runtime::block_on(
+                    desktop_mcp_runtime.endpoint_auth(),
+                ) {
+                    acp_manager.apply_mcp_router_endpoint(endpoint, auth);
+                }
+                app.manage(desktop_mcp_runtime);
+
                 scheduled_tasks.start_on(tauri::async_runtime::handle().inner());
                 log::info!(
                     "[scheduled-task] boundary=service_started host=desktop root={}",
@@ -2580,6 +2599,14 @@ pub fn run() {
                     Arc::clone(&memory_index),
                 )));
             } else if let Some(acp_core_handle) = acp_core_handle {
+                // The GUI is an ACP Core client in this composition, so there
+                // is no local AcpManager to receive a router endpoint. Keep a
+                // typed, explicit absent state instead of starting an endpoint
+                // that no desktop session owner could consume.
+                app.manage(Arc::new(crate::mcp_core::DesktopMcpCoreRuntime::disabled(
+                    "MCP_CORE_ACP_CORE_OWNER",
+                    "desktop MCP Core router is absent while ACP Core owns session composition",
+                )));
                 app.manage(acp_core_handle.clone());
                 app.manage(Option::<Arc<crate::conversation::SessionWorkspaceService>>::None);
                 app.manage(commands::HostConversationStore(None));
@@ -2638,7 +2665,28 @@ pub fn run() {
                         );
                     });
             }
-            app.manage(project_registry);
+            app.manage(Arc::clone(&project_registry));
+
+            // ProjectRegistry is created after the desktop MCP gateway. Once
+            // it exists, load the canonical active-project document and apply
+            // it asynchronously through the runtime's snapshot boundary.
+            if let Some(mcp_runtime) = handle
+                .try_state::<Arc<crate::mcp_core::DesktopMcpCoreRuntime>>()
+                .map(|state| state.inner().clone())
+            {
+                let project_registry_for_mcp = Arc::clone(&project_registry);
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = mcp_runtime
+                        .refresh_from_project_registry(&project_registry_for_mcp)
+                        .await
+                    {
+                        log::warn!(
+                            target: "se_manager::mcp_core::desktop",
+                            "operation=mcp_snapshot_startup stable_code=MCP_SNAPSHOT_REFRESH_FAILED error_code={error}"
+                        );
+                    }
+                });
+            }
 
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
@@ -3011,6 +3059,7 @@ pub fn run() {
             commands::mcp_get_config,
             commands::mcp_put_config,
             commands::mcp_get_status,
+            commands::mcp_get_runtime_status,
             fs_watcher::fs_watcher_subscribe,
             fs_watcher::fs_watcher_set_roots,
             // Desktop ACP renderer-history storage
@@ -3087,6 +3136,9 @@ pub fn run() {
             let acp_manager = app_handle
                 .try_state::<Arc<AcpManager>>()
                 .map(|state| state.inner().clone());
+            let mcp_runtime = app_handle
+                .try_state::<Arc<crate::mcp_core::DesktopMcpCoreRuntime>>()
+                .map(|state| state.inner().clone());
             let terminal_service = app_handle
                 .try_state::<crate::core::TerminalServiceHandle>()
                 .map(|state| state.inner().clone());
@@ -3098,7 +3150,7 @@ pub fn run() {
                         .try_state::<Arc<pty::PtyManager>>()
                         .map(|state| state.inner().clone())
                 });
-            if acp_manager.is_none() && pty_manager.is_none() {
+            if acp_manager.is_none() && pty_manager.is_none() && mcp_runtime.is_none() {
                 return;
             }
             tauri::async_runtime::block_on(async move {
@@ -3128,6 +3180,24 @@ pub fn run() {
                         Err(_) => log::warn!(
                             "[desktop-exit] shutdown_phase=stop_acp_producers_on_loop_exit stable_code={} result=SIGNALLED_NOT_JOINED",
                             crate::web::ACP_PRODUCER_STOP_FAILED
+                        ),
+                    }
+                }
+                if let Some(mcp_runtime) = mcp_runtime {
+                    match tokio::time::timeout_at(
+                        started + LAST_RESORT_ACP_REAP_DEADLINE,
+                        mcp_runtime.shutdown(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => log::info!(
+                            "[desktop-exit] shutdown_phase=stop_mcp_runtime_on_loop_exit stable_code=OK result=PASS"
+                        ),
+                        Ok(Err(error)) => log::error!(
+                            "[desktop-exit] shutdown_phase=stop_mcp_runtime_on_loop_exit stable_code=MCP_CORE_SHUTDOWN_FAILED result=FAILED error={error}"
+                        ),
+                        Err(_) => log::warn!(
+                            "[desktop-exit] shutdown_phase=stop_mcp_runtime_on_loop_exit stable_code=MCP_CORE_SHUTDOWN_FAILED result=SIGNALLED_NOT_JOINED"
                         ),
                     }
                 }
@@ -3181,6 +3251,9 @@ pub fn run() {
                 .map(|state| state.inner().clone());
             let acp_manager = app_handle
                 .try_state::<Arc<AcpManager>>()
+                .map(|state| state.inner().clone());
+            let mcp_runtime = app_handle
+                .try_state::<Arc<crate::mcp_core::DesktopMcpCoreRuntime>>()
                 .map(|state| state.inner().clone());
             let ws_relay = app_handle
                 .try_state::<Arc<WsRelaySink>>()
@@ -3258,6 +3331,22 @@ pub fn run() {
                     )
                     .await
                 };
+
+                if let Some(mcp_runtime) = mcp_runtime {
+                    match tokio::time::timeout_at(deadline, mcp_runtime.shutdown()).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            log::error!(
+                                "[desktop-exit] shutdown_phase=stop_mcp_runtime stable_code=MCP_CORE_SHUTDOWN_FAILED result=FAILED error={error}"
+                            );
+                        }
+                        Err(_) => {
+                            log::error!(
+                                "[desktop-exit] shutdown_phase=stop_mcp_runtime stable_code=MCP_CORE_SHUTDOWN_FAILED result=TIMEOUT"
+                            );
+                        }
+                    }
+                }
 
                 if let Some(ssh_manager) = ssh_manager {
                     if tokio::time::timeout_at(deadline, ssh_manager.shutdown())
@@ -3414,6 +3503,17 @@ mod tests {
         assert!(branch.contains("owns_core_process"));
         assert!(branch.contains("CORE_OWNED_SKIP"));
         assert!(!branch.contains("kill_all_until"));
+    }
+
+    #[test]
+    fn desktop_mcp_runtime_is_explicitly_opt_in_and_gracefully_owned() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("DesktopMcpCoreRuntime::start_from_env"));
+        assert!(source.contains("apply_mcp_router_endpoint(endpoint, auth)"));
+        assert!(source.contains("DesktopMcpCoreRuntime::disabled"));
+        assert!(source.contains("mcp_runtime.shutdown()"));
+        assert!(source.contains("mcp_get_runtime_status"));
+        assert!(source.contains("MCP_CORE_ACP_CORE_OWNER"));
     }
 
     #[test]

@@ -4941,6 +4941,7 @@ pub async fn remote_sync_projects(
     payload: SyncProjectsPayload,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
+    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<IpcResult<()>, String> {
     let project_count = payload.projects.len();
     let group_count = payload.groups.len();
@@ -4949,6 +4950,19 @@ pub async fn remote_sync_projects(
         payload.groups,
         payload.default_project_id.clone(),
     );
+    // The project mirror is now available/updated; refresh the live desktop
+    // snapshot from the canonical file for the new default project. A failed
+    // refresh is surfaced through typed runtime status while the command still
+    // acknowledges the durable project sync.
+    if let Err(error) = mcp_runtime
+        .refresh_from_project_registry(project_registry.inner())
+        .await
+    {
+        log::warn!(
+            target: "se_manager::remote_sync_projects",
+            "operation=mcp_snapshot_refresh stable_code=MCP_SNAPSHOT_REFRESH_FAILED error_code={error}"
+        );
+    }
     if let Some(relay) = ws_relay.inner().as_ref() {
         crate::web::broadcast_projects_changed(relay, payload.default_project_id.as_deref());
     }
@@ -4975,6 +4989,7 @@ pub async fn set_host_default_project(
     project_id: String,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
+    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<IpcResult<()>, String> {
     // Validate via switch_context (unknown/archived/pathless → NOT_FOUND).
     if project_registry.switch_context(&project_id).is_none() {
@@ -4996,6 +5011,15 @@ pub async fn set_host_default_project(
             "target project became unavailable before commit".to_string(),
             "NOT_FOUND",
         ));
+    }
+    if let Err(error) = mcp_runtime
+        .refresh_from_project_registry(project_registry.inner())
+        .await
+    {
+        log::warn!(
+            target: "se_manager::set_host_default_project",
+            "operation=mcp_snapshot_refresh stable_code=MCP_SNAPSHOT_REFRESH_FAILED error_code={error}"
+        );
     }
     if let Some(relay) = ws_relay.inner().as_ref() {
         crate::web::broadcast_projects_changed(relay, Some(&project_id));
@@ -5071,8 +5095,29 @@ pub async fn remote_sync_chat_history(
 pub async fn remote_sync_mcp_registry(
     registry: serde_json::Value,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<IpcResult<()>, String> {
-    Ok(sync_mcp_registry_to_project_file(project_registry.inner(), registry).await)
+    let written = write_mcp_control_plane(project_registry.inner(), registry).await;
+    if let IpcResult {
+        success: true,
+        data: Some(document),
+        ..
+    } = &written
+    {
+        refresh_live_mcp_snapshot(mcp_runtime.inner(), project_registry.inner(), document).await;
+    }
+    match written {
+        IpcResult { success: true, .. } => Ok(IpcResult::success(())),
+        IpcResult {
+            success: false,
+            error,
+            code,
+            ..
+        } => Ok(IpcResult::error(
+            error.unwrap_or_else(|| "Failed to persist MCP registry".into()),
+            code.unwrap_or_else(|| "MCP_REGISTRY_WRITE_ERROR".into()),
+        )),
+    }
 }
 
 /// Read the project MCP control-plane document without creating it.
@@ -5100,8 +5145,18 @@ pub async fn mcp_get_config(
 pub async fn mcp_put_config(
     config: serde_json::Value,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<IpcResult<serde_json::Value>, String> {
-    Ok(write_mcp_control_plane(project_registry.inner(), config).await)
+    let written = write_mcp_control_plane(project_registry.inner(), config).await;
+    if let IpcResult {
+        success: true,
+        data: Some(document),
+        ..
+    } = &written
+    {
+        refresh_live_mcp_snapshot(mcp_runtime.inner(), project_registry.inner(), document).await;
+    }
+    Ok(written)
 }
 
 /// Redacted desktop MCP status. Missing files return the empty document status.
@@ -5112,7 +5167,18 @@ pub async fn mcp_get_status(
     Ok(load_mcp_status_from_project_file(project_registry.inner()).await)
 }
 
-fn active_mcp_project_root(
+/// Runtime availability for the desktop-owned MCP Core gateway. This is
+/// intentionally separate from `mcp_get_status`, which reports only the
+/// canonical project document. Disabled/failed runtime state is explicit and
+/// never falls back to the user registry.
+#[tauri::command]
+pub async fn mcp_get_runtime_status(
+    runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
+) -> Result<IpcResult<crate::mcp_core::DesktopMcpCoreStatus>, String> {
+    Ok(IpcResult::success(runtime.status().await))
+}
+
+pub(crate) fn active_mcp_project_root(
     project_registry: &crate::web::ProjectRegistry,
 ) -> Result<std::path::PathBuf, IpcResult<()>> {
     match project_registry.default_project_path() {
@@ -5173,6 +5239,7 @@ fn mcp_document_error<T>(
 
 /// Testable core of `remote_sync_mcp_registry`: writes the canonical control-plane
 /// document to `{active_project_root}/<workspace dir>/mcp-servers.json`.
+#[allow(dead_code)]
 pub(crate) async fn sync_mcp_registry_to_project_file(
     project_registry: &crate::web::ProjectRegistry,
     registry: serde_json::Value,
@@ -5188,6 +5255,25 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
             error.unwrap_or_else(|| "Failed to persist MCP registry".into()),
             code.unwrap_or_else(|| "MCP_REGISTRY_WRITE_ERROR".into()),
         ),
+    }
+}
+
+async fn refresh_live_mcp_snapshot(
+    runtime: &crate::mcp_core::DesktopMcpCoreRuntime,
+    project_registry: &crate::web::ProjectRegistry,
+    document: &serde_json::Value,
+) {
+    if runtime
+        .apply_document_for_project_registry(document, project_registry)
+        .await
+        .is_err()
+    {
+        // Detailed failure state is retained in the runtime's redacted status;
+        // never log the document, resolver token, or resolved secret here.
+        log::warn!(
+            target: crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
+            "operation=mcp_snapshot_refresh stable_code=MCP_SNAPSHOT_REFRESH_FAILED"
+        );
     }
 }
 
@@ -8891,14 +8977,16 @@ mod remote_sync_projects_tests {
 #[cfg(test)]
 mod remote_sync_mcp_registry_tests {
     use super::{
-        load_mcp_registry_from_project_file, sync_mcp_registry_to_project_file,
-        write_mcp_control_plane,
+        load_mcp_registry_from_project_file, refresh_live_mcp_snapshot,
+        sync_mcp_registry_to_project_file, write_mcp_control_plane,
     };
+    use crate::mcp_core::{AuthBootstrap, DesktopMcpCoreRuntime, McpHttpGatewayConfig};
+    use crate::memory_index::service::MemoryIndexService;
     use crate::web::mcp_servers_api::registry_path;
     use crate::web::{ProjectRegistry, ProjectSummary};
     use serde_json::json;
     use std::path::Path;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Serializes tests that mutate `SE_PROJECT_ROOT` (process-global env).
@@ -8930,6 +9018,42 @@ mod remote_sync_mcp_registry_tests {
         };
         reg.set(vec![project], Some("p1".to_string()));
         reg
+    }
+
+    #[tokio::test]
+    async fn canonical_write_refreshes_the_live_desktop_snapshot() {
+        let dir = temp_dir("runtime-refresh");
+        let reg = registry_with_default(&dir);
+        let memory = Arc::new(MemoryIndexService::new(dir.join("memory")));
+        let runtime = DesktopMcpCoreRuntime::start_with_config(
+            memory,
+            McpHttpGatewayConfig {
+                bind_address: "127.0.0.1".parse().unwrap(),
+                port: 0,
+                path: "/mcp".into(),
+                generation: 1,
+                auth: AuthBootstrap::new(1, "runtime-token").unwrap(),
+                request_body_limit: 64 * 1024,
+            },
+        )
+        .await;
+        let written = write_mcp_control_plane(
+            &reg,
+            json!({"schemaVersion": 1, "revision": 1, "upstreams": []}),
+        )
+        .await;
+        assert!(written.success, "write failed: {written:?}");
+        refresh_live_mcp_snapshot(
+            &runtime,
+            &reg,
+            written.data.as_ref().expect("canonical document"),
+        )
+        .await;
+        let status = runtime.status().await;
+        assert_eq!(status.snapshot_revision, Some(1));
+        assert!(status.snapshot_diagnostic.is_none());
+        runtime.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
