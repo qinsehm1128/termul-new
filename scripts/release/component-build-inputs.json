@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "sharedFiles": [
+    "src-tauri/Cargo.toml",
+    "src-tauri/Cargo.lock",
+    "src-tauri/build.rs",
+    "src-tauri/src/core/ipc.rs",
+    "src-tauri/src/core/mod.rs",
+    "src-tauri/src/core/transport.rs"
+  ],
+  "components": {
+    "renderer": ["src/renderer", "src/shared", "package.json", "bun.lock"],
+    "guiNative": [
+      "src-tauri/src/lib.rs",
+      "src-tauri/src/main.rs",
+      "src-tauri/tauri.conf.json",
+      "src-tauri/tauri.conf.prod.json"
+    ],
+    "acpCore": [
+      "src-tauri/src/core/acp.rs",
+      "src-tauri/src/core/handles.rs",
+      "src-tauri/src/acp",
+      "src-tauri/src/conversation",
+      "src-tauri/src/memory_index",
+      "src-tauri/src/scheduled_tasks"
+    ],
+    "terminalCore": [
+      "src-tauri/src/core/handles.rs",
+      "src-tauri/src/core/terminal.rs",
+      "src-tauri/src/pty"
+    ]
+  }
+}

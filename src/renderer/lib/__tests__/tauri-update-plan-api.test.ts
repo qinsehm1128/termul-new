@@ -46,6 +46,21 @@ describe('tauri-update-plan-api', () => {
     expect(store.save).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps Core preserve entries in reconciliation because identity still matters', () => {
+    const legacy = legacyUpdateComponentPolicy('2.4.0')
+    const plan = createPendingUpdatePlan('2.4.0', {
+      ...legacy,
+      metadataState: 'declared',
+      components: {
+        ...legacy.components,
+        acpCore: { buildId: 'acp-1', action: 'preserve' }
+      }
+    })
+
+    expect(plan.requiredActions).toContain('acpCore')
+    expect(plan.requiredActions).toContain('terminalCore')
+  })
+
   it('rejects a plan whose policy targets another version', async () => {
     values.set('pending_update_plan', {
       ...createPendingUpdatePlan('2.4.0', legacyUpdateComponentPolicy('2.3.0')),

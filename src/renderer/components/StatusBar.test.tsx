@@ -1,7 +1,10 @@
-import { render, screen } from '@testing-library/react'
+import type { PendingUpdatePlan } from '@shared/types/updater.types'
+import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
+import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
+import { useUpdaterStore } from '@/stores/updater-store'
 import type { Project } from '@/types/project'
 import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import { StatusBar } from './StatusBar'
@@ -88,6 +91,24 @@ const mockApi = {
   }
 }
 
+function pendingPlan(
+  status: PendingUpdatePlan['status'],
+  overrides: Partial<PendingUpdatePlan> = {}
+): PendingUpdatePlan {
+  return {
+    schemaVersion: 1,
+    targetVersion: '1.2.3',
+    componentPolicy: legacyUpdateComponentPolicy('1.2.3'),
+    status,
+    currentComponentBuildIds: { terminalCore: 'live-build-not-for-ui' },
+    requiredActions: ['terminalCore'],
+    deferredComponents: [],
+    createdAt: '2026-08-14T00:00:00.000Z',
+    updatedAt: '2026-08-14T00:00:00.000Z',
+    ...overrides
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('api', mockApi)
   // Reset store to defaults before each test
@@ -95,9 +116,23 @@ beforeEach(() => {
     settings: { ...DEFAULT_CONTEXT_BAR_SETTINGS },
     isLoaded: true
   })
+  useUpdaterStore.setState({
+    pendingUpdatePlan: null,
+    downloaded: false,
+    version: null,
+    updateAvailable: false
+  })
 })
 
 afterEach(() => {
+  act(() => {
+    useUpdaterStore.setState({
+      pendingUpdatePlan: null,
+      downloaded: false,
+      version: null,
+      updateAvailable: false
+    })
+  })
   vi.unstubAllGlobals()
 })
 
@@ -263,6 +298,55 @@ describe('StatusBar', () => {
       renderWithProviders(<StatusBar project={undefined} />)
 
       expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
+    })
+  })
+
+  describe('durable update plan', () => {
+    it('shows reconciling, deferred, failed, and completed without guessing a live build', () => {
+      useUpdaterStore.setState({
+        pendingUpdatePlan: pendingPlan('reconciling')
+      })
+      renderWithProviders(<StatusBar project={mockProject} />)
+      expect(
+        screen.getByRole('status', {
+          name: 'Saved update plan: components are reconnecting. This is not a zero-interruption swap.'
+        })
+      ).toHaveAttribute('data-update-plan-status', 'reconciling')
+
+      act(() => {
+        useUpdaterStore.setState({
+          pendingUpdatePlan: pendingPlan('deferred', { deferredComponents: ['terminalCore'] })
+        })
+      })
+      expect(
+        screen.getByRole('status', {
+          name: 'Saved update plan: replacement of Terminal Core is waiting because a terminal is still active. Restarting the app window does not stop that terminal.'
+        })
+      ).toBeInTheDocument()
+      expect(screen.queryByText('live-build-not-for-ui')).not.toBeInTheDocument()
+
+      act(() => {
+        useUpdaterStore.setState({
+          pendingUpdatePlan: pendingPlan('failed', { lastError: 'reconnect timed out' })
+        })
+      })
+      expect(screen.getByRole('status')).toHaveAccessibleName(
+        'Saved update plan failed. Review the error, then check again. reconnect timed out'
+      )
+
+      act(() => {
+        useUpdaterStore.setState({ pendingUpdatePlan: pendingPlan('completed') })
+      })
+      expect(
+        screen.getByRole('status', {
+          name: 'Saved update plan finished. Matching Cores stayed running and were reconnected.'
+        })
+      ).toHaveAttribute('data-update-plan-status', 'completed')
+
+      act(() => {
+        useUpdaterStore.setState({ pendingUpdatePlan: pendingPlan('prepared') })
+      })
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
     })
   })
 })

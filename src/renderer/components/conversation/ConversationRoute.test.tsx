@@ -289,7 +289,10 @@ describe('ConversationRoute canonical open', () => {
     expect(useConversationStore.getState().activeConversationId).toBe(secondConversationId)
     expect(useAcpStore.getState().activeSessionId).toBe('session-b')
     expect(useWorkspaceStore.getState().root.id).toBe(`binding-workspace-${secondConversationId}`)
-    expect(mockAddAgentChatTab).not.toHaveBeenCalledWith(conversationId, undefined, false)
+    expect(mockAddAgentChatTab.mock.calls).toEqual([
+      [conversationId, undefined, false],
+      [secondConversationId, undefined, false]
+    ])
     expect(mockLoadSessionWorkspace.mock.calls.map(([id]) => id)).toEqual([
       conversationId,
       secondConversationId

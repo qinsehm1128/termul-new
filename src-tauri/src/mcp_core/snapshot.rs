@@ -387,7 +387,7 @@ mod tests {
         let left = build_snapshot(&desktop, 1, &InlineSecretResolver).unwrap();
         let right = build_snapshot(&standalone, 1, &InlineSecretResolver).unwrap();
         assert_eq!(left, right);
-        assert_eq!(format!("{left:?}").contains("secret"), false);
+        assert!(!format!("{left:?}").contains("secret"));
     }
 
     #[test]

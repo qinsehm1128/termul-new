@@ -55,6 +55,28 @@ vi.mock('@/stores/acp-store', () => ({
   useSessionAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' })
 }))
 
+vi.mock('@/stores/mcp-store', () => ({
+  useMcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      config: {
+        upstreams: Array.from({ length: mockMcpCount.current }, (_, i) => ({
+          id: `mcp-${i}`,
+          type: 'stdio',
+          name: `MCP ${i + 1}`,
+          command: 'npx',
+          enabled: true
+        }))
+      },
+      setUpstreamEnabled: mockSetMcpServerEnabled,
+      probeStatus: {} as Record<string, string>,
+      probeError: {} as Record<string, string | undefined>,
+      tools: {} as Record<string, unknown[]>,
+      toolsLoaded: {} as Record<string, boolean>,
+      probing: {} as Record<string, boolean>,
+      loadTools: mockLoadMcpTools
+    })
+}))
+
 type ObserverEntry = { target: Element; contentRect: { width: number } }
 type ObserverCallback = (entries: ObserverEntry[]) => void
 

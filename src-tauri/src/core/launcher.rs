@@ -55,11 +55,18 @@ impl CoreLaunchConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeclaredCoreAction {
+    Preserve,
+    Restart,
+    DeferIfActive,
+    Unsupported,
+}
+
 #[derive(Debug, Clone)]
 struct CoreUpdateDirective {
-    enforce_identity: bool,
+    action: DeclaredCoreAction,
     expected_build_id: Option<String>,
-    defer_terminal_replacement: bool,
     unsupported: bool,
 }
 
@@ -68,30 +75,46 @@ fn update_directives() -> &'static Mutex<HashMap<CoreRole, CoreUpdateDirective>>
     DIRECTIVES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn parse_declared_core_action(action: Option<&str>) -> DeclaredCoreAction {
+    match action {
+        Some("preserve") => DeclaredCoreAction::Preserve,
+        Some("restart") => DeclaredCoreAction::Restart,
+        Some("defer-if-active") => DeclaredCoreAction::DeferIfActive,
+        _ => DeclaredCoreAction::Unsupported,
+    }
+}
+
+fn unsupported_directive(role: CoreRole, legacy_metadata: bool) -> CoreUpdateDirective {
+    CoreUpdateDirective {
+        action: DeclaredCoreAction::Unsupported,
+        expected_build_id: legacy_metadata.then(|| component_build_id(role)),
+        unsupported: true,
+    }
+}
+
 /// Installs the validated component policy for the current process. The
 /// renderer remains the durable authority; this in-memory projection lets the
 /// launcher apply the same policy during startup and supervisor retries.
+///
+/// `None` clears every directive. A missing plan must not become
+/// `UNSUPPORTED_COMPONENT`. A present policy that cannot name a supported
+/// action, or a declared policy with no build id, fails closed instead.
 pub fn configure_update_policy(policy: Option<&serde_json::Value>) {
     let mut directives = update_directives()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     directives.clear();
-    let Some(components) = policy.and_then(|value| value.get("components")) else {
+    let Some(policy) = policy else {
+        return;
+    };
+    let Some(components) = policy.get("components") else {
         for role in [CoreRole::AcpCore, CoreRole::TerminalCore] {
-            directives.insert(
-                role,
-                CoreUpdateDirective {
-                    enforce_identity: true,
-                    expected_build_id: None,
-                    defer_terminal_replacement: false,
-                    unsupported: true,
-                },
-            );
+            directives.insert(role, unsupported_directive(role, false));
         }
         return;
     };
     let legacy_metadata = policy
-        .and_then(|value| value.get("metadataState"))
+        .get("metadataState")
         .and_then(serde_json::Value::as_str)
         == Some("legacy");
     for (component, role) in [
@@ -99,42 +122,29 @@ pub fn configure_update_policy(policy: Option<&serde_json::Value>) {
         ("terminalCore", CoreRole::TerminalCore),
     ] {
         let Some(entry) = components.get(component) else {
-            directives.insert(
-                role,
-                CoreUpdateDirective {
-                    enforce_identity: true,
-                    expected_build_id: None,
-                    defer_terminal_replacement: false,
-                    unsupported: true,
-                },
-            );
+            directives.insert(role, unsupported_directive(role, legacy_metadata));
             continue;
         };
-        let action = entry.get("action").and_then(serde_json::Value::as_str);
-        let build_id = if legacy_metadata {
+        let action =
+            parse_declared_core_action(entry.get("action").and_then(serde_json::Value::as_str));
+        let declared_build_id = entry
+            .get("buildId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned);
+        let expected_build_id = if legacy_metadata {
             Some(component_build_id(role))
         } else {
-            entry
-                .get("buildId")
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_owned)
+            declared_build_id
         };
-        if matches!(action, Some("preserve")) {
-            continue;
-        }
-        let unsupported = !matches!(
-            action,
-            Some("restart") | Some("defer-if-active") | Some("unsupported")
-        );
+        let unsupported = action == DeclaredCoreAction::Unsupported
+            || (!legacy_metadata && expected_build_id.is_none());
         directives.insert(
             role,
             CoreUpdateDirective {
-                enforce_identity: true,
-                expected_build_id: build_id,
-                defer_terminal_replacement: role == CoreRole::TerminalCore
-                    && matches!(action, Some("defer-if-active")),
-                unsupported: unsupported || matches!(action, Some("unsupported")),
+                action,
+                expected_build_id,
+                unsupported,
             },
         );
     }
@@ -212,6 +222,101 @@ pub fn terminal_replacement_is_safe(active_resources: u32) -> bool {
 
 fn core_identity_matches_expected(ack: &CoreHelloAck, expected_build_id: Option<&str>) -> bool {
     expected_build_id.is_some_and(|expected| ack.component_build_id.as_deref() == Some(expected))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiveCoreReconcileDecision {
+    Adopt,
+    Replace,
+    Defer,
+    FailClosed,
+}
+
+/// Identity-aware decision for a live, compatible Core.
+///
+/// No declared action (no plan) adopts. A matching build id always adopts,
+/// including a Terminal Core with active PTYs. Only a mismatched Terminal
+/// Core whose action is `defer-if-active` waits while PTYs are active.
+/// `preserve` still compares identity: a match adopts and a mismatch replaces.
+/// `restart` replaces on mismatch. Unsupported actions fail closed.
+pub(crate) fn decide_live_core_reconciliation(
+    role: CoreRole,
+    action: Option<DeclaredCoreAction>,
+    identity_matches: bool,
+    active_resources: u32,
+) -> LiveCoreReconcileDecision {
+    let Some(action) = action else {
+        return LiveCoreReconcileDecision::Adopt;
+    };
+    if action == DeclaredCoreAction::Unsupported {
+        return LiveCoreReconcileDecision::FailClosed;
+    }
+    if identity_matches {
+        return LiveCoreReconcileDecision::Adopt;
+    }
+    if role == CoreRole::TerminalCore
+        && action == DeclaredCoreAction::DeferIfActive
+        && !terminal_replacement_is_safe(active_resources)
+    {
+        return LiveCoreReconcileDecision::Defer;
+    }
+    LiveCoreReconcileDecision::Replace
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequiredCoreIdentityAssessment {
+    Satisfied,
+    PendingReplacement,
+    Deferred,
+    FailedClosed,
+}
+
+/// Whether one required Core identity may contribute to clearing the plan.
+///
+/// Terminal idleness blocks completion only while that Core is still the one
+/// being replaced (`defer-if-active` + mismatched identity + active PTYs).
+/// A matching Terminal Core is satisfied even when PTYs are active.
+pub(crate) fn assess_required_core_identity(
+    role: CoreRole,
+    action: &str,
+    identity_matches: bool,
+    active_resources: u32,
+) -> RequiredCoreIdentityAssessment {
+    match decide_live_core_reconciliation(
+        role,
+        Some(parse_declared_core_action(Some(action))),
+        identity_matches,
+        active_resources,
+    ) {
+        LiveCoreReconcileDecision::Adopt => RequiredCoreIdentityAssessment::Satisfied,
+        LiveCoreReconcileDecision::Defer => RequiredCoreIdentityAssessment::Deferred,
+        LiveCoreReconcileDecision::Replace => RequiredCoreIdentityAssessment::PendingReplacement,
+        LiveCoreReconcileDecision::FailClosed => RequiredCoreIdentityAssessment::FailedClosed,
+    }
+}
+
+/// The shared plan is cleared only when every required Core identity is
+/// satisfied. One deferred, pending, or failed Core must not complete the other.
+pub(crate) fn required_core_identities_allow_finalization(
+    assessments: &[RequiredCoreIdentityAssessment],
+) -> bool {
+    !assessments.is_empty()
+        && assessments
+            .iter()
+            .all(|assessment| matches!(assessment, RequiredCoreIdentityAssessment::Satisfied))
+}
+
+pub(crate) fn reconciliation_failure_code(error: &CoreError) -> &'static str {
+    match error {
+        CoreError::InvalidRequest(detail) if detail.contains("UNSUPPORTED_COMPONENT") => {
+            "UNSUPPORTED_COMPONENT"
+        }
+        CoreError::Io(detail) if detail.contains("still live") => "SHUTDOWN_FAILED",
+        CoreError::Io(detail) if detail.contains("did not become ready") => "READY_TIMEOUT",
+        CoreError::Io(detail) if detail.contains("spawn") => "SPAWN_FAILED",
+        CoreError::UnsupportedPlatform => "UNSUPPORTED_COMPONENT",
+        _ => "RECONCILE_FAILED",
+    }
 }
 
 impl EndpointPresence {
@@ -464,33 +569,45 @@ pub async fn ensure_core(
     let lock = role_lock(role).await;
     let _guard = lock.lock().await;
 
+    // Unsupported components fail closed before probe, shutdown, unlink, or spawn.
+    if configured_update_directive(role).is_some_and(|directive| directive.unsupported) {
+        log::error!(
+            target: "se_manager::core",
+            "operation=core_reconcile role={} stable_code=UNSUPPORTED_COMPONENT",
+            role.endpoint_name()
+        );
+        return Err(CoreError::InvalidRequest(
+            "UNSUPPORTED_COMPONENT".to_string(),
+        ));
+    }
+
     match probe_endpoint_presence(&endpoint, role).await {
         EndpointPresence::LiveCompatible(ack) => {
             let directive = configured_update_directive(role);
-            let expected_build_id = directive
-                .as_ref()
-                .and_then(|value| value.expected_build_id.as_deref());
-            let enforce_identity = directive
-                .as_ref()
-                .is_some_and(|value| value.enforce_identity);
-            let identity_matches =
-                !enforce_identity || core_identity_matches_expected(&ack, expected_build_id);
-            let defer_terminal_replacement = directive
-                .as_ref()
-                .is_some_and(|value| value.defer_terminal_replacement);
-            if directive.as_ref().is_some_and(|value| value.unsupported) {
-                log::error!(
-                    target: "se_manager::core",
-                    "operation=core_reconcile role={} stable_code=UNSUPPORTED_COMPONENT",
-                    role.endpoint_name()
-                );
-                return Err(CoreError::UnsupportedPlatform);
-            }
-            if !identity_matches {
-                if role == CoreRole::TerminalCore
-                    && defer_terminal_replacement
-                    && !terminal_replacement_is_safe(ack.active_resources)
-                {
+            let identity_matches = match directive.as_ref() {
+                Some(directive) => {
+                    core_identity_matches_expected(&ack, directive.expected_build_id.as_deref())
+                }
+                None => true,
+            };
+            let decision = decide_live_core_reconciliation(
+                role,
+                directive.as_ref().map(|directive| directive.action),
+                identity_matches,
+                ack.active_resources,
+            );
+            match decision {
+                LiveCoreReconcileDecision::FailClosed => {
+                    log::error!(
+                        target: "se_manager::core",
+                        "operation=core_reconcile role={} stable_code=UNSUPPORTED_COMPONENT",
+                        role.endpoint_name()
+                    );
+                    return Err(CoreError::InvalidRequest(
+                        "UNSUPPORTED_COMPONENT".to_string(),
+                    ));
+                }
+                LiveCoreReconcileDecision::Defer => {
                     log::warn!(
                         target: "se_manager::core",
                         "operation=core_reconcile role={} stable_code=REPLACEMENT_DEFERRED active_resources={}",
@@ -509,32 +626,35 @@ pub async fn ensure_core(
                         child: None,
                     });
                 }
-                if !replace_incompatible_core(&endpoint, role)
-                    .await
-                    .allows_unlink_and_spawn()
-                {
-                    return Err(CoreError::Io(format!(
-                        "stale {} is still live; refusing to unlink and spawn a second core",
+                LiveCoreReconcileDecision::Adopt => {
+                    log::info!(
+                        target: "se_manager::core",
+                        "operation=core_adopt role={} stable_code=ADOPTED",
                         role.endpoint_name()
-                    )));
+                    );
+                    return Ok(CoreProcess {
+                        role,
+                        endpoint,
+                        pid: 0,
+                        reused: true,
+                        remote_build_id: ack.component_build_id,
+                        remote_capabilities: ack.capabilities,
+                        active_resources: ack.active_resources,
+                        reconciliation_deferred: false,
+                        child: None,
+                    });
                 }
-            } else {
-                log::info!(
-                    target: "se_manager::core",
-                    "operation=core_adopt role={} stable_code=ADOPTED",
-                    role.endpoint_name()
-                );
-                return Ok(CoreProcess {
-                    role,
-                    endpoint,
-                    pid: 0,
-                    reused: true,
-                    remote_build_id: ack.component_build_id,
-                    remote_capabilities: ack.capabilities,
-                    active_resources: ack.active_resources,
-                    reconciliation_deferred: false,
-                    child: None,
-                });
+                LiveCoreReconcileDecision::Replace => {
+                    if !replace_incompatible_core(&endpoint, role)
+                        .await
+                        .allows_unlink_and_spawn()
+                    {
+                        return Err(CoreError::Io(format!(
+                            "stale {} is still live; refusing to unlink and spawn a second core",
+                            role.endpoint_name()
+                        )));
+                    }
+                }
             }
         }
         EndpointPresence::LiveIncompatible(_) => {
@@ -755,8 +875,23 @@ mod tests {
         assert!(!terminal_replacement_is_safe(1));
     }
 
+    fn lock_update_policy() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct ClearUpdatePolicy;
+
+    impl Drop for ClearUpdatePolicy {
+        fn drop(&mut self) {
+            configure_update_policy(None);
+        }
+    }
+
     #[test]
     fn update_policy_only_enforces_components_that_need_reconciliation() {
+        let _lock = lock_update_policy();
+        let _clear = ClearUpdatePolicy;
         let policy = serde_json::json!({
             "metadataState": "declared",
             "components": {
@@ -770,7 +905,286 @@ mod tests {
         assert!(update_reconciliation_pending(CoreRole::AcpCore));
         assert!(update_reconciliation_pending(CoreRole::TerminalCore));
         assert!(!update_reconciliation_pending(CoreRole::Gui));
+        let terminal = configured_update_directive(CoreRole::TerminalCore).unwrap();
+        assert_eq!(terminal.action, DeclaredCoreAction::DeferIfActive);
+        assert_eq!(terminal.expected_build_id.as_deref(), Some("terminal-next"));
+        assert!(!terminal.unsupported);
+    }
+
+    #[test]
+    fn none_policy_clears_directives_without_unsupported_component() {
+        let _lock = lock_update_policy();
+        let _clear = ClearUpdatePolicy;
+        configure_update_policy(Some(&serde_json::json!({
+            "metadataState": "declared",
+            "components": {
+                "acpCore": { "action": "restart", "buildId": "acp-next" },
+                "terminalCore": { "action": "restart", "buildId": "terminal-next" }
+            }
+        })));
+        assert!(update_reconciliation_pending(CoreRole::AcpCore));
         configure_update_policy(None);
+        assert!(configured_update_directive(CoreRole::AcpCore).is_none());
+        assert!(configured_update_directive(CoreRole::TerminalCore).is_none());
+        assert!(!update_reconciliation_pending(CoreRole::AcpCore));
+        assert!(!update_reconciliation_pending(CoreRole::TerminalCore));
+        assert_eq!(
+            decide_live_core_reconciliation(CoreRole::TerminalCore, None, false, 4),
+            LiveCoreReconcileDecision::Adopt
+        );
+    }
+
+    #[test]
+    fn present_policy_without_components_fails_closed() {
+        let _lock = lock_update_policy();
+        let _clear = ClearUpdatePolicy;
+        configure_update_policy(Some(&serde_json::json!({
+            "metadataState": "declared"
+        })));
+        let directive = configured_update_directive(CoreRole::AcpCore).unwrap();
+        assert!(directive.unsupported);
+        assert_eq!(directive.action, DeclaredCoreAction::Unsupported);
+        assert!(
+            configured_update_directive(CoreRole::TerminalCore)
+                .unwrap()
+                .unsupported
+        );
+    }
+
+    #[test]
+    fn core_preserve_still_compares_identity() {
+        let _lock = lock_update_policy();
+        let _clear = ClearUpdatePolicy;
+        configure_update_policy(Some(&serde_json::json!({
+            "metadataState": "declared",
+            "components": {
+                "acpCore": { "action": "preserve", "buildId": "acp-same" },
+                "terminalCore": { "action": "preserve", "buildId": "terminal-same" }
+            }
+        })));
+        let acp = configured_update_directive(CoreRole::AcpCore).unwrap();
+        assert_eq!(acp.action, DeclaredCoreAction::Preserve);
+        assert_eq!(acp.expected_build_id.as_deref(), Some("acp-same"));
+        assert!(!acp.unsupported);
+        assert!(update_reconciliation_pending(CoreRole::AcpCore));
+        assert!(update_reconciliation_pending(CoreRole::TerminalCore));
+        assert_eq!(
+            decide_live_core_reconciliation(CoreRole::AcpCore, Some(acp.action), true, 2),
+            LiveCoreReconcileDecision::Adopt
+        );
+        assert_eq!(
+            decide_live_core_reconciliation(
+                CoreRole::TerminalCore,
+                Some(DeclaredCoreAction::Preserve),
+                false,
+                5
+            ),
+            LiveCoreReconcileDecision::Replace
+        );
+    }
+
+    #[test]
+    fn declared_policy_reconciliation_matrix() {
+        let cases = [
+            (
+                CoreRole::AcpCore,
+                Some(DeclaredCoreAction::Restart),
+                false,
+                1,
+                LiveCoreReconcileDecision::Replace,
+            ),
+            (
+                CoreRole::AcpCore,
+                Some(DeclaredCoreAction::Restart),
+                true,
+                1,
+                LiveCoreReconcileDecision::Adopt,
+            ),
+            (
+                CoreRole::AcpCore,
+                Some(DeclaredCoreAction::DeferIfActive),
+                false,
+                3,
+                LiveCoreReconcileDecision::Replace,
+            ),
+            (
+                CoreRole::TerminalCore,
+                Some(DeclaredCoreAction::Restart),
+                false,
+                4,
+                LiveCoreReconcileDecision::Replace,
+            ),
+            (
+                CoreRole::TerminalCore,
+                Some(DeclaredCoreAction::DeferIfActive),
+                true,
+                4,
+                LiveCoreReconcileDecision::Adopt,
+            ),
+            (
+                CoreRole::TerminalCore,
+                Some(DeclaredCoreAction::DeferIfActive),
+                false,
+                4,
+                LiveCoreReconcileDecision::Defer,
+            ),
+            (
+                CoreRole::TerminalCore,
+                Some(DeclaredCoreAction::DeferIfActive),
+                false,
+                0,
+                LiveCoreReconcileDecision::Replace,
+            ),
+            (
+                CoreRole::TerminalCore,
+                Some(DeclaredCoreAction::Preserve),
+                true,
+                2,
+                LiveCoreReconcileDecision::Adopt,
+            ),
+            (
+                CoreRole::AcpCore,
+                Some(DeclaredCoreAction::Unsupported),
+                true,
+                0,
+                LiveCoreReconcileDecision::FailClosed,
+            ),
+            (
+                CoreRole::TerminalCore,
+                None,
+                false,
+                9,
+                LiveCoreReconcileDecision::Adopt,
+            ),
+        ];
+        for (role, action, identity_matches, active_resources, expected) in cases {
+            assert_eq!(
+                decide_live_core_reconciliation(
+                    role,
+                    action,
+                    identity_matches,
+                    active_resources
+                ),
+                expected,
+                "role={role:?} action={action:?} match={identity_matches} active={active_resources}"
+            );
+        }
+    }
+
+    #[test]
+    fn finalization_requires_every_core_identity_and_not_terminal_idle_after_adopt() {
+        let satisfied =
+            assess_required_core_identity(CoreRole::TerminalCore, "defer-if-active", true, 3);
+        assert_eq!(satisfied, RequiredCoreIdentityAssessment::Satisfied);
+        assert_eq!(
+            assess_required_core_identity(CoreRole::TerminalCore, "preserve", true, 6),
+            RequiredCoreIdentityAssessment::Satisfied
+        );
+        assert_eq!(
+            assess_required_core_identity(CoreRole::AcpCore, "restart", true, 0),
+            RequiredCoreIdentityAssessment::Satisfied
+        );
+        let deferred =
+            assess_required_core_identity(CoreRole::TerminalCore, "defer-if-active", false, 2);
+        assert_eq!(deferred, RequiredCoreIdentityAssessment::Deferred);
+        let pending =
+            assess_required_core_identity(CoreRole::TerminalCore, "defer-if-active", false, 0);
+        assert_eq!(pending, RequiredCoreIdentityAssessment::PendingReplacement);
+        assert_eq!(
+            assess_required_core_identity(CoreRole::AcpCore, "restart", false, 0),
+            RequiredCoreIdentityAssessment::PendingReplacement
+        );
+        assert_eq!(
+            assess_required_core_identity(CoreRole::AcpCore, "preserve", false, 1),
+            RequiredCoreIdentityAssessment::PendingReplacement
+        );
+        let failed = assess_required_core_identity(CoreRole::AcpCore, "unsupported", true, 0);
+        assert_eq!(failed, RequiredCoreIdentityAssessment::FailedClosed);
+
+        assert!(required_core_identities_allow_finalization(&[
+            satisfied, satisfied
+        ]));
+        assert!(!required_core_identities_allow_finalization(&[
+            satisfied, deferred
+        ]));
+        assert!(!required_core_identities_allow_finalization(&[
+            satisfied, pending
+        ]));
+        assert!(!required_core_identities_allow_finalization(&[
+            failed, satisfied
+        ]));
+        assert!(!required_core_identities_allow_finalization(&[]));
+    }
+
+    #[test]
+    fn reconciliation_failure_codes_stay_retryable_and_specific() {
+        assert_eq!(
+            reconciliation_failure_code(&CoreError::InvalidRequest("UNSUPPORTED_COMPONENT".into())),
+            "UNSUPPORTED_COMPONENT"
+        );
+        assert_eq!(
+            reconciliation_failure_code(&CoreError::Io(
+                "stale terminal-core is still live; refusing to unlink and spawn a second core"
+                    .into()
+            )),
+            "SHUTDOWN_FAILED"
+        );
+        assert_eq!(
+            reconciliation_failure_code(&CoreError::Io("spawn terminal-core: denied".into())),
+            "SPAWN_FAILED"
+        );
+        assert_eq!(
+            reconciliation_failure_code(&CoreError::Io(
+                "terminal-core did not become ready within 5s".into()
+            )),
+            "READY_TIMEOUT"
+        );
+        assert_eq!(
+            reconciliation_failure_code(&CoreError::Io("core IPC unavailable".into())),
+            "RECONCILE_FAILED"
+        );
+    }
+
+    #[test]
+    fn unsupported_policy_fails_closed_before_unlink_or_spawn() {
+        let source = include_str!("launcher.rs");
+        let start = source
+            .find("pub async fn ensure_core(")
+            .expect("ensure_core");
+        let end = source[start..]
+            .find("pub fn profile_root_from_env")
+            .map(|offset| start + offset)
+            .expect("ensure_core boundary");
+        let body = &source[start..end];
+        let unsupported = body
+            .find("UNSUPPORTED_COMPONENT")
+            .expect("unsupported fail-closed");
+        let unlink = body
+            .find("remove_stale_socket")
+            .expect("stale socket unlink");
+        assert!(
+            unsupported < unlink,
+            "unsupported reconciliation must return before unlink and spawn"
+        );
+        let policy_start = source
+            .find("pub fn configure_update_policy")
+            .expect("configure_update_policy");
+        let policy_end = source[policy_start..]
+            .find("pub fn update_reconciliation_pending")
+            .map(|offset| policy_start + offset)
+            .expect("policy boundary");
+        let policy = &source[policy_start..policy_end];
+        let none_branch = policy
+            .find("let Some(policy) = policy else")
+            .expect("none branch");
+        let none_return = policy[none_branch..]
+            .find("return;")
+            .map(|offset| none_branch + offset)
+            .expect("none return");
+        assert!(
+            !policy[none_branch..none_return].contains("unsupported: true"),
+            "configure_update_policy(None) must clear directives without UNSUPPORTED_COMPONENT"
+        );
     }
 
     fn compatible_ack() -> CoreHelloAck {

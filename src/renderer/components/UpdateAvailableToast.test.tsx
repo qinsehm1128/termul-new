@@ -6,6 +6,8 @@
  * doing nothing visible. Success paths must NOT show an error toast.
  */
 
+import type { UpdateComponentPolicy } from '@shared/types/updater.types'
+import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -25,6 +27,26 @@ const downloadUpdate = vi.fn(async () => {})
 const installAndRestart = vi.fn(async () => {})
 let storeError: string | null = null
 let storeChannel: UpdateChannel = 'stable'
+let storePolicy: UpdateComponentPolicy | null = null
+
+function policyWith(
+  actions: Partial<
+    Record<
+      keyof UpdateComponentPolicy['components'],
+      UpdateComponentPolicy['components']['renderer']['action']
+    >
+  >
+): UpdateComponentPolicy {
+  const base = legacyUpdateComponentPolicy('1.2.3')
+  const components = { ...base.components }
+  for (const [component, action] of Object.entries(actions) as [
+    keyof UpdateComponentPolicy['components'],
+    UpdateComponentPolicy['components']['renderer']['action']
+  ][]) {
+    components[component] = { buildId: `build-${component}`, action }
+  }
+  return { ...base, metadataState: 'declared', components }
+}
 
 vi.mock('@/stores/updater-store', () => ({
   updaterStore: {
@@ -35,7 +57,8 @@ vi.mock('@/stores/updater-store', () => ({
       downloadUpdate,
       installAndRestart,
       error: storeError,
-      updateChannel: storeChannel
+      updateChannel: storeChannel,
+      componentPolicy: storePolicy
     })
   },
   // Hooks are unused by the functions under test but imported by the module.
@@ -62,6 +85,7 @@ vi.mock('@/lib/tauri-safe-update', () => ({
 }))
 
 import { toast } from 'sonner'
+import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { showUpdateDownloadedToast, showUpdateToast } from './UpdateAvailableToast'
 
 type ToastAction = { onClick: () => void | Promise<void> }
@@ -77,10 +101,12 @@ describe('UpdateAvailableToast error surfacing', () => {
     vi.clearAllMocks()
     storeError = null
     storeChannel = 'stable'
+    storePolicy = null
     downloadUpdate.mockResolvedValue(undefined)
     installAndRestart.mockResolvedValue(undefined)
-    confirmMock.mockResolvedValue(true)
+    confirmMock.mockResolvedValue(false)
     hasActiveTerminalSessions.mockReturnValue(false)
+    vi.mocked(isAurUpdateMode).mockReturnValue(false)
   })
 
   it('does not show an error toast when download succeeds', async () => {
@@ -108,6 +134,7 @@ describe('UpdateAvailableToast error surfacing', () => {
   })
 
   it('shows an error toast when install/restart fails (store error set)', async () => {
+    confirmMock.mockResolvedValue(true)
     storeError = 'relaunch failed'
     showUpdateDownloadedToast('0.3.8')
     const action = lastToastAction(vi.mocked(toast.success))
@@ -123,6 +150,7 @@ describe('UpdateAvailableToast error surfacing', () => {
   })
 
   it('does not show an error toast when install/restart succeeds', async () => {
+    confirmMock.mockResolvedValue(true)
     showUpdateDownloadedToast('0.3.8')
     const action = lastToastAction(vi.mocked(toast.success))
 
@@ -145,16 +173,96 @@ describe('UpdateAvailableToast error surfacing', () => {
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
   })
 
-  it('warns about active terminal sessions in the confirmation dialog', async () => {
+  it('does not treat active terminals as a Core defer when metadata is missing', async () => {
     hasActiveTerminalSessions.mockReturnValue(true)
+    confirmMock.mockResolvedValue(false)
     showUpdateDownloadedToast('0.3.8')
     const action = lastToastAction(vi.mocked(toast.success))
 
     await action.onClick()
 
-    expect(confirmMock).toHaveBeenCalledTimes(1)
-    const message = confirmMock.mock.calls[0][0]
-    expect(message).toContain('terminal sessions')
+    const message = confirmMock.mock.calls[0][0] as string
+    expect(message).toContain('The app window always restarts.')
+    expect(message).toContain(
+      'Restarting the app window itself does not stop terminals owned by Terminal Core.'
+    )
+    expect(message).toContain('Component metadata is unavailable')
+    expect(message).not.toContain('Replacement waits while a terminal is active.')
+    expect(message).not.toContain('terminal sessions will be closed')
+    expect(installAndRestart).not.toHaveBeenCalled()
+  })
+
+  it('keeps a matching Core connected and defers only a mismatched active Terminal', async () => {
+    hasActiveTerminalSessions.mockReturnValue(true)
+    storePolicy = policyWith({
+      renderer: 'restart',
+      guiNative: 'restart',
+      acpCore: 'preserve',
+      terminalCore: 'preserve'
+    })
+    showUpdateDownloadedToast('1.2.3')
+    let action = lastToastAction(vi.mocked(toast.success))
+    await action.onClick()
+
+    const matching = confirmMock.mock.calls[0][0] as string
+    expect(matching).toContain(
+      'Kept and reconnected because the build matches: ACP Core, Terminal Core.'
+    )
+    expect(matching).not.toContain('Replacement waits while a terminal is active.')
+    expect(matching).toContain('This is not a zero-interruption swap.')
+    expect(installAndRestart).not.toHaveBeenCalled()
+
+    confirmMock.mockClear()
+    storePolicy = policyWith({
+      acpCore: 'preserve',
+      terminalCore: 'defer-if-active'
+    })
+    showUpdateDownloadedToast('1.2.3')
+    action = lastToastAction(vi.mocked(toast.success))
+    await action.onClick()
+
+    const deferred = confirmMock.mock.calls[0][0] as string
+    expect(deferred).toContain(
+      'Terminal Core build identity is checked. If it differs, replacement waits while a terminal is active.'
+    )
+    expect(deferred).toContain('Kept and reconnected because the build matches: ACP Core.')
+    expect(deferred).not.toContain('No terminal is active')
+  })
+
+  it('replaces an idle mismatched Terminal instead of deferring it', async () => {
+    hasActiveTerminalSessions.mockReturnValue(false)
+    storePolicy = policyWith({ terminalCore: 'defer-if-active', acpCore: 'restart' })
+    showUpdateDownloadedToast('1.2.3')
+    const action = lastToastAction(vi.mocked(toast.success))
+
+    await action.onClick()
+
+    const message = confirmMock.mock.calls[0][0] as string
+    expect(message).toContain('no terminal is active, so it can be replaced')
+    expect(message).toContain(
+      'Build identity is checked for ACP Core. A Core is replaced only if its identity differs'
+    )
+    expect(message).not.toContain('Replacement waits while a terminal is active.')
+  })
+
+  it('filters preserve out of the impact lines and does not promise a zero-interruption swap', () => {
+    storePolicy = policyWith({
+      renderer: 'restart',
+      guiNative: 'preserve',
+      acpCore: 'preserve',
+      terminalCore: 'restart'
+    })
+    showUpdateToast('1.2.3')
+    const calls = vi.mocked(toast.success).mock.calls
+    const description = (calls[calls.length - 1][1] as { description: string }).description
+
+    expect(description).toContain('The app window always restarts.')
+    expect(description).toContain('Kept and reconnected because the build matches: ACP Core.')
+    expect(description).toContain('Renderer restarts with the app window.')
+    expect(description).toContain('Terminal Core is checked by build identity')
+    expect(description).not.toContain('Desktop runtime restarts')
+    expect(description).not.toContain('build-acpCore')
+    expect(description).toContain('not a zero-interruption swap')
   })
 })
 
@@ -163,6 +271,8 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
     vi.clearAllMocks()
     storeChannel = 'stable'
     storeError = null
+    storePolicy = null
+    vi.mocked(isAurUpdateMode).mockReturnValue(false)
   })
 
   it('uses the stable title, description, and Download action label by default', () => {
@@ -203,5 +313,25 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
     expect(opts.description).toContain(
       'A new nightly build is available. Open the download page to install it manually.'
     )
+  })
+
+  it('keeps the AUR instruction and yay action unchanged', async () => {
+    vi.mocked(isAurUpdateMode).mockReturnValue(true)
+    showUpdateToast('1.2.3')
+
+    const calls = vi.mocked(toast.success).mock.calls
+    const [, opts] = calls[calls.length - 1] as [
+      string,
+      { description: string; action: { label: ReactElement; onClick: () => Promise<void> } }
+    ]
+    expect(opts.description).toContain('A new version is available. Update with yay.')
+    expect(renderToStaticMarkup(opts.action.label)).toContain('Use yay')
+    expect(opts.description).not.toContain('Open the download page')
+
+    await opts.action.onClick()
+    expect(vi.mocked(toast.info)).toHaveBeenCalledWith('Run in terminal', {
+      description: 'yay -S termul-manager'
+    })
+    expect(downloadUpdate).not.toHaveBeenCalled()
   })
 })

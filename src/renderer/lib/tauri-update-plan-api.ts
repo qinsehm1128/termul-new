@@ -31,6 +31,35 @@ function errorResult<T>(error: unknown, fallback: string): IpcResult<T> {
   }
 }
 
+function requiresComponentReconciliation(
+  component: UpdateComponent,
+  action: UpdateComponentPolicy['components'][UpdateComponent]['action']
+): boolean {
+  // Core `preserve` remains identity-aware: it means adopt when the build ID
+  // matches and reconcile when it does not. Renderer/native preserve keeps its
+  // historical no-op meaning.
+  return action !== 'preserve' || component === 'acpCore' || component === 'terminalCore'
+}
+
+function isComponent(value: unknown): value is UpdateComponent {
+  return UPDATE_COMPONENTS.includes(value as UpdateComponent)
+}
+
+function hasValidActionMetadata(plan: PendingUpdatePlan): boolean {
+  return (
+    Array.isArray(plan.requiredActions) &&
+    Array.isArray(plan.deferredComponents) &&
+    plan.requiredActions.every(isComponent) &&
+    plan.deferredComponents.every(isComponent) &&
+    typeof plan.currentComponentBuildIds === 'object' &&
+    plan.currentComponentBuildIds !== null &&
+    !Array.isArray(plan.currentComponentBuildIds) &&
+    Object.values(plan.currentComponentBuildIds).every(
+      (buildId) => typeof buildId === 'string' && buildId.trim() !== ''
+    )
+  )
+}
+
 export function createPendingUpdatePlan(
   targetVersion: string,
   componentPolicy: UpdateComponentPolicy
@@ -42,8 +71,8 @@ export function createPendingUpdatePlan(
     componentPolicy,
     status: 'prepared',
     currentComponentBuildIds: {},
-    requiredActions: UPDATE_COMPONENTS.filter(
-      (component) => componentPolicy.components[component].action !== 'preserve'
+    requiredActions: UPDATE_COMPONENTS.filter((component) =>
+      requiresComponentReconciliation(component, componentPolicy.components[component].action)
     ),
     deferredComponents: [],
     createdAt: now,
@@ -69,22 +98,10 @@ export async function loadPendingUpdatePlan(): Promise<IpcResult<PendingUpdatePl
     } catch (error) {
       return errorResult(error, 'Pending update plan component policy is invalid')
     }
-    if (
-      typeof plan.currentComponentBuildIds !== 'object' ||
-      plan.currentComponentBuildIds === null ||
-      Array.isArray(plan.currentComponentBuildIds) ||
-      !Array.isArray(plan.requiredActions)
-    ) {
+    if (!hasValidActionMetadata(plan)) {
       return {
         success: false,
         error: 'Pending update plan action metadata is invalid',
-        code: 'UPDATE_PLAN_INVALID'
-      }
-    }
-    if (!Array.isArray(plan.deferredComponents)) {
-      return {
-        success: false,
-        error: 'Pending update plan deferred components are invalid',
         code: 'UPDATE_PLAN_INVALID'
       }
     }
@@ -99,21 +116,6 @@ export async function loadPendingUpdatePlan(): Promise<IpcResult<PendingUpdatePl
       return {
         success: false,
         error: 'Pending update plan status is invalid',
-        code: 'UPDATE_PLAN_INVALID'
-      }
-    }
-    const isComponent = (value: unknown): value is UpdateComponent =>
-      UPDATE_COMPONENTS.includes(value as UpdateComponent)
-    if (
-      plan.requiredActions.some((component) => !isComponent(component)) ||
-      plan.deferredComponents.some((component) => !isComponent(component)) ||
-      Object.values(plan.currentComponentBuildIds).some(
-        (buildId) => typeof buildId !== 'string' || buildId.trim() === ''
-      )
-    ) {
-      return {
-        success: false,
-        error: 'Pending update plan action metadata is invalid',
         code: 'UPDATE_PLAN_INVALID'
       }
     }
@@ -136,14 +138,7 @@ export async function savePendingUpdatePlan(plan: PendingUpdatePlan): Promise<Ip
   try {
     const store = await getPlanStore()
     const policy = parseUpdateComponentPolicy(plan.componentPolicy, plan.targetVersion)
-    if (
-      plan.schemaVersion !== 1 ||
-      !Array.isArray(plan.requiredActions) ||
-      !Array.isArray(plan.deferredComponents) ||
-      typeof plan.currentComponentBuildIds !== 'object' ||
-      plan.currentComponentBuildIds === null ||
-      Array.isArray(plan.currentComponentBuildIds)
-    ) {
+    if (plan.schemaVersion !== 1 || !hasValidActionMetadata(plan)) {
       return {
         success: false,
         error: 'Pending update plan action metadata is invalid',

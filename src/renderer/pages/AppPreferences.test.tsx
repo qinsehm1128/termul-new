@@ -1,7 +1,15 @@
 import { brandCanonical, LEGACY } from '@shared/brand'
+import type {
+  PendingUpdatePlan,
+  UpdateComponent,
+  UpdateComponentAction,
+  UpdateComponentPolicy
+} from '@shared/types/updater.types'
+import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { DEFAULT_APP_SETTINGS, type TerminalUrlOpenMode } from '@/types/settings'
 import AppPreferences from './AppPreferences'
@@ -64,28 +72,44 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+const { updaterFixture, updaterActions, isAurUpdateMode, hasActiveTerminalSessions } = vi.hoisted(
+  () => ({
+    updaterFixture: {
+      isChecking: false,
+      updateAvailable: false,
+      downloaded: false,
+      version: '0.4.8' as string | null,
+      lastChecked: null as Date | null,
+      autoUpdateEnabled: false,
+      skippedVersion: null as string | null,
+      error: null as string | null,
+      isManualUpdateMode: false,
+      updateChannel: 'stable' as const,
+      componentPolicy: null as UpdateComponentPolicy | null,
+      pendingUpdatePlan: null as PendingUpdatePlan | null
+    },
+    updaterActions: {
+      checkForUpdates: vi.fn(),
+      installAndRestart: vi.fn(),
+      setAutoUpdateEnabled: vi.fn(),
+      setUpdateChannel: vi.fn()
+    },
+    isAurUpdateMode: vi.fn(() => false),
+    hasActiveTerminalSessions: vi.fn(() => false)
+  })
+)
+
 vi.mock('@/lib/tauri-updater-api', () => ({
-  isAurUpdateMode: () => false
+  isAurUpdateMode: () => isAurUpdateMode()
+}))
+
+vi.mock('@/lib/tauri-safe-update', () => ({
+  hasActiveTerminalSessions: () => hasActiveTerminalSessions()
 }))
 
 vi.mock('@/stores/updater-store', () => ({
-  useUpdaterState: () => ({
-    isChecking: false,
-    updateAvailable: false,
-    version: '0.4.8',
-    lastChecked: null,
-    autoUpdateEnabled: false,
-    skippedVersion: null,
-    error: null,
-    isManualUpdateMode: false,
-    updateChannel: 'stable'
-  }),
-  useUpdaterActions: () => ({
-    checkForUpdates: vi.fn(),
-    installAndRestart: vi.fn(),
-    setAutoUpdateEnabled: vi.fn(),
-    setUpdateChannel: vi.fn()
-  })
+  useUpdaterState: () => updaterFixture,
+  useUpdaterActions: () => updaterActions
 }))
 
 vi.mock('@/stores/keyboard-shortcuts-store', () => ({
@@ -121,10 +145,59 @@ function renderPage(): ReturnType<typeof render> {
   )
 }
 
+function policyWith(
+  actions: Partial<Record<UpdateComponent, UpdateComponentAction>>
+): UpdateComponentPolicy {
+  const base = legacyUpdateComponentPolicy('1.2.3')
+  const components = { ...base.components }
+  for (const component of Object.keys(actions) as UpdateComponent[]) {
+    const action = actions[component]
+    if (!action) continue
+    components[component] = { buildId: `build-${component}`, action }
+  }
+  return { ...base, metadataState: 'declared', components }
+}
+
+function pendingPlan(
+  status: PendingUpdatePlan['status'],
+  overrides: Partial<PendingUpdatePlan> = {}
+): PendingUpdatePlan {
+  return {
+    schemaVersion: 1,
+    targetVersion: '1.2.3',
+    componentPolicy: legacyUpdateComponentPolicy('1.2.3'),
+    status,
+    currentComponentBuildIds: { acpCore: 'live-build-not-for-ui' },
+    requiredActions: ['acpCore'],
+    deferredComponents: [],
+    createdAt: '2026-08-14T00:00:00.000Z',
+    updatedAt: '2026-08-14T00:00:00.000Z',
+    ...overrides
+  }
+}
+
 describe('AppPreferences settings controls', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    isAurUpdateMode.mockReturnValue(false)
+    hasActiveTerminalSessions.mockReturnValue(false)
+    vi.mocked(confirm).mockResolvedValue(false)
+    updaterFixture.isChecking = false
+    updaterFixture.updateAvailable = false
+    updaterFixture.downloaded = false
+    updaterFixture.version = '0.4.8'
+    updaterFixture.lastChecked = null
+    updaterFixture.autoUpdateEnabled = false
+    updaterFixture.skippedVersion = null
+    updaterFixture.error = null
+    updaterFixture.isManualUpdateMode = false
+    updaterFixture.componentPolicy = null
+    updaterFixture.pendingUpdatePlan = null
     useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+  })
+
+  afterEach(() => {
+    vi.mocked(confirm).mockReset()
   })
 
   it('toggling the auto-save switch writes editorAutoSave (with correct negation)', async () => {
@@ -226,5 +299,150 @@ describe('AppPreferences settings controls', () => {
       expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(true)
     })
     expect(mockWriteDebounced).toHaveBeenCalled()
+  })
+
+  it('explains a preserved Core as reconnect and still restarts the GUI', () => {
+    updaterFixture.updateAvailable = true
+    updaterFixture.version = '1.2.3'
+    updaterFixture.componentPolicy = policyWith({
+      renderer: 'restart',
+      guiNative: 'restart',
+      acpCore: 'preserve',
+      terminalCore: 'preserve'
+    })
+
+    renderPage()
+
+    expect(screen.getByText(/The app window always restarts/)).toBeInTheDocument()
+    expect(
+      screen.getByText('Kept and reconnected because the build matches: ACP Core, Terminal Core.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/ACP Core does not match/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Terminal Core does not match/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Renderer restarts with the app window/)).toBeInTheDocument()
+  })
+
+  it('confirms active matching Cores separately from an active mismatched Terminal defer', async () => {
+    updaterFixture.downloaded = true
+    updaterFixture.version = '1.2.3'
+    hasActiveTerminalSessions.mockReturnValue(true)
+    updaterFixture.componentPolicy = policyWith({
+      acpCore: 'preserve',
+      terminalCore: 'preserve'
+    })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Safe Install & Restart' }))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    const matchingMessage = vi.mocked(confirm).mock.calls[0]?.[0] as string
+    expect(matchingMessage).toContain('The app window always restarts.')
+    expect(matchingMessage).toContain(
+      'Restarting the app window itself does not stop terminals owned by Terminal Core.'
+    )
+    expect(matchingMessage).toContain(
+      'Kept and reconnected because the build matches: ACP Core, Terminal Core.'
+    )
+    expect(matchingMessage).toContain('This is not a zero-interruption swap.')
+    expect(matchingMessage).not.toContain('Replacement waits while a terminal is active.')
+    expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+
+    vi.mocked(confirm).mockClear()
+    updaterFixture.componentPolicy = policyWith({
+      acpCore: 'preserve',
+      terminalCore: 'defer-if-active'
+    })
+    renderPage()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Safe Install & Restart' }).at(-1)!)
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    const deferredMessage = vi.mocked(confirm).mock.calls[0]?.[0] as string
+    expect(deferredMessage).toContain(
+      'Terminal Core build identity is checked. If it differs, replacement waits while a terminal is active.'
+    )
+    expect(deferredMessage).toContain('Kept and reconnected because the build matches: ACP Core.')
+    expect(deferredMessage).not.toContain('No terminal is active')
+    expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+  })
+
+  it('shows durable plan states, the failed error, and a check that does not install', () => {
+    updaterFixture.pendingUpdatePlan = pendingPlan('failed', { lastError: 'reconnect timed out' })
+    const view = renderPage()
+
+    expect(
+      screen.getByText('Saved update plan failed. Review the error, then check again.')
+    ).toBeInTheDocument()
+    expect(screen.getByText('reconnect timed out')).toBeInTheDocument()
+    expect(screen.queryByText('live-build-not-for-ui')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    expect(updaterActions.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+
+    updaterFixture.pendingUpdatePlan = pendingPlan('reconciling')
+    view.rerender(
+      <MemoryRouter>
+        <AppPreferences />
+      </MemoryRouter>
+    )
+    expect(
+      screen.getByText(
+        'Saved update plan: components are reconnecting. This is not a zero-interruption swap.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument()
+
+    updaterFixture.pendingUpdatePlan = pendingPlan('deferred', {
+      deferredComponents: ['terminalCore']
+    })
+    view.rerender(
+      <MemoryRouter>
+        <AppPreferences />
+      </MemoryRouter>
+    )
+    expect(
+      screen.getByText(
+        'Saved update plan: replacement of Terminal Core is waiting because a terminal is still active. Restarting the app window does not stop that terminal.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
+
+    updaterFixture.pendingUpdatePlan = pendingPlan('completed')
+    view.rerender(
+      <MemoryRouter>
+        <AppPreferences />
+      </MemoryRouter>
+    )
+    expect(
+      screen.getByText(
+        'Saved update plan finished. Matching Cores stayed running and were reconnected.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument()
+
+    updaterFixture.pendingUpdatePlan = pendingPlan('prepared')
+    view.rerender(
+      <MemoryRouter>
+        <AppPreferences />
+      </MemoryRouter>
+    )
+    expect(screen.queryByText('Pending component migration')).not.toBeInTheDocument()
+  })
+
+  it('keeps the AUR and manual update instructions unchanged', () => {
+    updaterFixture.updateAvailable = true
+    updaterFixture.version = '1.2.3'
+    isAurUpdateMode.mockReturnValue(true)
+    renderPage()
+
+    expect(screen.getByText('Update through AUR with: yay -S se-manager')).toBeInTheDocument()
+    expect(screen.queryByText('Release Channel')).not.toBeInTheDocument()
+
+    isAurUpdateMode.mockReturnValue(false)
+    updaterFixture.isManualUpdateMode = true
+    renderPage()
+    expect(
+      screen.getByText(
+        'Automatic update is unavailable. Please download and install the latest version manually.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Download Page' })).toBeInTheDocument()
   })
 })

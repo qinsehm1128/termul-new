@@ -127,6 +127,24 @@ describe('mergeUpdaterManifests', () => {
       'unknown action',
       { targetVersion: version, components: { renderer: { buildId: 'x', action: 'unknown' } } },
       'action must be one of'
+    ],
+    [
+      'version-derived ACP id',
+      {
+        targetVersion: version,
+        components: { acpCore: { buildId: `${version}:acp-core`, action: 'restart' } }
+      },
+      'version-derived component buildId: acpCore'
+    ],
+    [
+      'version-derived Terminal id',
+      {
+        targetVersion: version,
+        components: {
+          terminalCore: { buildId: `${version}:terminal-core`, action: 'defer-if-active' }
+        }
+      },
+      'version-derived component buildId: terminalCore'
     ]
   ])('rejects malformed component policy: %s', async (_name, patch, error) => {
     const dir = await fixtureDir()

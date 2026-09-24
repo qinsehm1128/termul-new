@@ -48,6 +48,7 @@ function assertStringArray(value, description) {
 
 const updateComponents = ['renderer', 'guiNative', 'acpCore', 'terminalCore']
 const updateActions = ['preserve', 'restart', 'defer-if-active', 'unsupported']
+const versionDerivedBuildId = /:(?:acp-core|terminal-core|renderer|gui)$/
 
 function legacyComponentPolicy(version) {
   return {
@@ -94,6 +95,9 @@ function normalizeComponentPolicy(value, version) {
     const entry = value.components[component]
     assertPlainObject(entry, `termul.componentPolicy component ${component}`)
     assertNonEmptyString(entry.buildId, `termul.componentPolicy component ${component} buildId`)
+    if (value.metadataState === 'declared' && versionDerivedBuildId.test(entry.buildId.trim())) {
+      throw new Error(`version-derived component buildId: ${component}`)
+    }
     if (!updateActions.includes(entry.action)) {
       throw new Error(
         `termul.componentPolicy component ${component} action must be one of: ${updateActions.join(', ')}`

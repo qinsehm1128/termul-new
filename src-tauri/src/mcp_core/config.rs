@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(first.revision, 0);
         assert_eq!(first.upstreams.len(), 2);
         assert_eq!(first.upstreams[0].name, "Files");
-        assert_eq!(first.upstreams[1].enabled, false);
+        assert!(!first.upstreams[1].enabled);
         assert!(first
             .built_ins
             .iter()

@@ -177,12 +177,21 @@ function frozenInventory(): string[] {
     .filter((line) => line.trim() !== '')
 }
 
-/** The frozen inventory re-prefixed to `prefix` — the post-rename expectation. */
+/**
+ * Names added after the frozen inventory was captured.
+ *
+ * Keep the historical fixture immutable; new names belong in this explicit delta
+ * so the parity check continues to require an exact, reviewable inventory.
+ */
+const POST_FREEZE_ENV_SUFFIXES = ['CANARY', 'CANARY_BUILD', 'CANARY_BUILD__', 'SKILLS_TEST_ROOT']
+
+/** The frozen inventory plus reviewed post-freeze additions at `prefix`. */
 function inventoryAt(prefix: string): string[] {
   const legacyPrefix = LEGACY.envPrefix
-  return frozenInventory()
-    .map((name) => name.split(legacyPrefix).join(prefix))
-    .sort()
+  return [
+    ...frozenInventory().map((name) => name.split(legacyPrefix).join(prefix)),
+    ...POST_FREEZE_ENV_SUFFIXES.map((suffix) => `${prefix}${suffix}`)
+  ].sort()
 }
 
 const sorted = (names: Iterable<string>): string[] => [...names].sort()

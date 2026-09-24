@@ -51,7 +51,12 @@ import { confirm } from '@/lib/tauri-dialog'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
-import { getPendingUpdateStatus, getUpdateComponentImpact } from '@/lib/updater-status'
+import {
+  buildUpdateInstallConfirmation,
+  getUpdateImpactLines,
+  presentPendingUpdate,
+  translateUpdateCopy
+} from '@/lib/updater-status'
 import { cn } from '@/lib/utils'
 import {
   useAcpFirstPromptWarmup,
@@ -438,15 +443,19 @@ export default function AppPreferences(): React.JSX.Element {
   const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
     useUpdaterActions()
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
+  const pendingUpdate = presentPendingUpdate(pendingUpdatePlan, translateUpdateCopy)
 
   const handleSafeInstallAndRestart = async (): Promise<void> => {
     if (!downloaded || isInstallingUpdate) return
 
     const activeTerminals = hasActiveTerminalSessions()
     const confirmed = await confirm(
-      activeTerminals
-        ? tShell('updates.safeInstallWithTerminals', { version })
-        : tShell('updates.safeInstallWithoutTerminals', { version }),
+      buildUpdateInstallConfirmation({
+        policy: componentPolicy,
+        hasActiveTerminalSessions: activeTerminals,
+        version: version ?? '',
+        translate: translateUpdateCopy
+      }),
       {
         title: tShell('updates.safeInstallTitle'),
         kind: 'warning',
@@ -1670,52 +1679,43 @@ export default function AppPreferences(): React.JSX.Element {
                       {tShell('updates.impact')}
                     </label>
                     <div className="rounded-md bg-secondary/25 px-3 py-2.5 text-xs text-muted-foreground space-y-1">
-                      {getUpdateComponentImpact(componentPolicy).length === 0 ? (
-                        <div>{tShell('updates.componentImpact.unavailable')}</div>
-                      ) : (
-                        getUpdateComponentImpact(componentPolicy).map(({ component, action }) => (
-                          <div key={component}>
-                            <span className="font-medium text-foreground">
-                              {tShell(`updates.componentImpact.${component}`)}
-                            </span>{' '}
-                            {tShell(
-                              `updates.componentImpact.${action === 'defer-if-active' ? 'deferIfActive' : action}`,
-                              { defaultValue: action }
-                            )}
-                          </div>
-                        ))
-                      )}
+                      {getUpdateImpactLines(componentPolicy, translateUpdateCopy).map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {pendingUpdatePlan && getPendingUpdateStatus(pendingUpdatePlan) && (
+                {pendingUpdate && (
                   <div>
                     <label className="block text-sm font-medium text-secondary-foreground mb-2">
                       {tShell('updates.pendingPlan')}
                     </label>
                     <div
                       className={cn(
-                        'rounded-md border px-3 py-2.5 text-xs',
-                        pendingUpdatePlan.status === 'failed'
-                          ? 'border-red-500/20 bg-red-500/10 text-foreground'
-                          : 'border-amber-500/20 bg-amber-500/10 text-foreground'
+                        'rounded-md border px-3 py-2.5 text-xs text-foreground',
+                        pendingUpdate.tone === 'danger'
+                          ? 'border-red-500/20 bg-red-500/10'
+                          : pendingUpdate.tone === 'success'
+                            ? 'border-green-500/20 bg-green-500/10'
+                            : pendingUpdate.tone === 'progress'
+                              ? 'border-primary/20 bg-primary/5'
+                              : 'border-amber-500/20 bg-amber-500/10'
                       )}
+                      role="status"
+                      aria-label={pendingUpdate.label}
                     >
-                      {pendingUpdatePlan.status === 'deferred'
-                        ? tShell('updates.reconciliation.deferred')
-                        : pendingUpdatePlan.status === 'failed'
-                          ? (pendingUpdatePlan.lastError ?? tShell('updates.reconciliation.failed'))
-                          : tShell(`updates.reconciliation.${pendingUpdatePlan.status}`, {
-                              defaultValue: pendingUpdatePlan.status
-                            })}
-                      {pendingUpdatePlan.status === 'deferred' && (
+                      <p>{pendingUpdate.summary}</p>
+                      {pendingUpdate.lastError && (
+                        <p className="mt-1 break-words">{pendingUpdate.lastError}</p>
+                      )}
+                      {pendingUpdate.offerRetry && (
                         <button
                           type="button"
                           onClick={checkForUpdates}
-                          className="ml-2 underline underline-offset-2"
+                          className="mt-2 underline underline-offset-2"
                         >
-                          {tShell('updates.retryReconciliation')}
+                          {tShell('updates.retryCheck')}
                         </button>
                       )}
                     </div>

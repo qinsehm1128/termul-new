@@ -2304,12 +2304,20 @@ mod tests {
     }
 
     async fn fixture() -> Fixture {
+        fixture_with_catalog_flush_suppressed(false).await
+    }
+
+    async fn fixture_with_catalog_flush_suppressed(suppress_auto_catalog_flush: bool) -> Fixture {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().canonicalize().unwrap();
         let private = base.join("private");
         let visible = base.join("visible");
         std::fs::create_dir_all(&visible).unwrap();
         let (repository, _) = ConversationRepository::open(private.clone()).unwrap();
+        // Set suppression before the first mutation so no debounce task exists to race the test.
+        if suppress_auto_catalog_flush {
+            repository.suppress_auto_catalog_flush_for_test();
+        }
         let writer = ConversationWriter::for_test(Arc::clone(&repository));
         let id = ConversationId::parse(ID).unwrap();
         let created_at = parse_created_at_utc("2026-08-15T09:45:15.123Z").unwrap();
@@ -2522,11 +2530,7 @@ mod tests {
 
     #[tokio::test]
     async fn completed_mutation_admits_catalog_generation_before_failed_barrier_retry() {
-        let fixture = fixture().await;
-        // Isolate the injected failure budget from the background debounce
-        // loop: only this test's explicit flush competes for
-        // `fail_next_catalog_writes(1)`.
-        fixture.repository.suppress_auto_catalog_flush_for_test();
+        let fixture = fixture_with_catalog_flush_suppressed(true).await;
         fixture
             .repository
             .flush_catalog_until(tokio::time::Instant::now() + std::time::Duration::from_secs(2))

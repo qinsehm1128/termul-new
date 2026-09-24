@@ -5,7 +5,11 @@ import { i18n } from '@/i18n'
 import { confirm } from '@/lib/tauri-dialog'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
-import { getUpdateComponentImpact } from '@/lib/updater-status'
+import {
+  buildUpdateInstallConfirmation,
+  getUpdateImpactLines,
+  translateUpdateCopy
+} from '@/lib/updater-status'
 import {
   updaterStore,
   useDownloadProgress,
@@ -42,21 +46,27 @@ function setReminderForTomorrow(): void {
 }
 
 function formatComponentImpact(): string {
-  const impact = getUpdateComponentImpact(updaterStore.getState().componentPolicy)
-  if (!impact.length) return i18n.t('updates.componentImpact.unavailable', { ns: 'shell' })
+  return [
+    i18n.t('updates.impact', { ns: 'shell' }),
+    ...getUpdateImpactLines(updaterStore.getState().componentPolicy, translateUpdateCopy)
+  ].join('\n')
+}
 
-  return impact
-    .map(({ component, action }) => {
-      const actionKey = action === 'defer-if-active' ? 'deferIfActive' : action
-      return [
-        i18n.t(`updates.componentImpact.${component}`, { ns: 'shell' }),
-        i18n.t(`updates.componentImpact.${actionKey}` as string, {
-          ns: 'shell',
-          defaultValue: actionKey
-        })
-      ].join(' ')
-    })
-    .join(' · ')
+function confirmUpdateInstall(version: string, hasActiveTerminals: boolean): Promise<boolean> {
+  return confirm(
+    buildUpdateInstallConfirmation({
+      policy: updaterStore.getState().componentPolicy,
+      hasActiveTerminalSessions: hasActiveTerminals,
+      version,
+      translate: translateUpdateCopy
+    }),
+    {
+      title: i18n.t('updates.safeInstallTitle', { ns: 'shell' }),
+      kind: 'warning',
+      okLabel: i18n.t('updates.safeInstallRestart', { ns: 'shell' }),
+      cancelLabel: i18n.t('updates.notNow', { ns: 'shell' })
+    }
+  )
 }
 
 /**
@@ -90,7 +100,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
                 channel
               })
             : i18n.t('updates.downloadAvailable', { ns: 'shell' }),
-      `${i18n.t('updates.impact', { ns: 'shell' })}: ${impactDescription}`
+      impactDescription
     ].join('\n'),
     action: {
       label: (
@@ -153,10 +163,9 @@ export function showUpdateDownloadedToast(version: string): void {
   const impactDescription = formatComponentImpact()
   toast.success(i18n.t('updates.ready', { ns: 'shell' }), {
     duration: 30000,
-    description: [
-      i18n.t('updates.downloaded', { ns: 'shell', version }),
-      `${i18n.t('updates.impact', { ns: 'shell' })}: ${impactDescription}`
-    ].join('\n'),
+    description: [i18n.t('updates.downloaded', { ns: 'shell', version }), impactDescription].join(
+      '\n'
+    ),
     action: {
       label: (
         <div className="flex items-center gap-2">
@@ -167,17 +176,7 @@ export function showUpdateDownloadedToast(version: string): void {
       onClick: async () => {
         try {
           const hasActiveTerminals = hasActiveTerminalSessions()
-          const confirmed = await confirm(
-            hasActiveTerminals
-              ? i18n.t('updates.safeInstallWithTerminals', { ns: 'shell', version })
-              : i18n.t('updates.safeInstallWithoutTerminals', { ns: 'shell', version }),
-            {
-              title: i18n.t('updates.safeInstallTitle', { ns: 'shell' }),
-              kind: 'warning',
-              okLabel: i18n.t('updates.safeInstallRestart', { ns: 'shell' }),
-              cancelLabel: i18n.t('updates.notNow', { ns: 'shell' })
-            }
-          )
+          const confirmed = await confirmUpdateInstall(version, hasActiveTerminals)
           if (!confirmed) return
 
           const { installAndRestart } = updaterStore.getState()

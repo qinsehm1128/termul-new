@@ -133,6 +133,7 @@ describe('ActivityRail', () => {
 
     const projectActions = screen.getByRole('group', { name: 'Project workspace and tools' })
     const conversationActions = screen.getByRole('group', { name: 'Conversation workspace' })
+    const tools = screen.getByRole('group', { name: 'Tools' })
 
     expect(within(projectActions).getByRole('button', { name: 'Open projects' })).toBeVisible()
     expect(
@@ -143,11 +144,12 @@ describe('ActivityRail', () => {
         name: 'Open the conversations area'
       })
     ).toBeVisible()
-    expect(
-      within(conversationActions).getByRole('button', { name: 'Open scheduled tasks' })
-    ).toBeVisible()
+    expect(within(tools).getByRole('button', { name: 'Open scheduled tasks' })).toBeVisible()
     expect(
       within(projectActions).queryByRole('button', { name: 'Open scheduled tasks' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(conversationActions).queryByRole('button', { name: 'Open scheduled tasks' })
     ).not.toBeInTheDocument()
     expect(
       projectActions.compareDocumentPosition(conversationActions) & Node.DOCUMENT_POSITION_FOLLOWING

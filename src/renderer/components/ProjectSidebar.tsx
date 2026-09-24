@@ -165,9 +165,13 @@ export function ProjectSidebar({
   const [appVersion, setAppVersion] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
-    void getCurrentAppVersion().then((version) => {
-      if (!cancelled) setAppVersion(version)
-    })
+    void getCurrentAppVersion()
+      .then((version) => {
+        if (!cancelled) setAppVersion(version)
+      })
+      .catch(() => {
+        // Version metadata is optional; keep the branded footer on lookup failure.
+      })
     return () => {
       cancelled = true
     }

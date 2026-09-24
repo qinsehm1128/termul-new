@@ -185,9 +185,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     const mark = screen.getByRole('img', { name: 'Se' })
     expect(mark).toHaveClass('animate-pulse')
     expect(mark).toHaveClass('motion-reduce:animate-none')
-    expect(
-      screen.getByRole('status', { name: 'Restoring chat' }).querySelectorAll('svg')
-    ).toHaveLength(1)
+    expect(mark).toHaveAttribute('src', '/se-mark.png')
   })
 
   it('marks the live chat pane root as a pane-scoped @container (Story 5.1)', () => {

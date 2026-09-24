@@ -1523,10 +1523,15 @@ fn record_pending_component_identity(
         serde_json::Value::String(build_id.to_string()),
     );
     if let Some(object) = plan.as_object_mut() {
-        object.insert(
-            "status".to_string(),
-            serde_json::Value::String("reconciling".to_string()),
-        );
+        let status = object.get("status").and_then(serde_json::Value::as_str);
+        // Identity observations must not hide a deferred Terminal Core or a
+        // failed sibling. `completed` is not a stored status; the plan is deleted.
+        if !matches!(status, Some("failed") | Some("deferred")) {
+            object.insert(
+                "status".to_string(),
+                serde_json::Value::String("reconciling".to_string()),
+            );
+        }
         object.insert(
             "updatedAt".to_string(),
             serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
@@ -1570,10 +1575,21 @@ fn mark_pending_update_deferred(
         }
     }
     if let Some(object) = plan.as_object_mut() {
-        object.insert(
-            "status".to_string(),
-            serde_json::Value::String("deferred".to_string()),
-        );
+        let prefix = format!("{component}: ");
+        let own_error = object
+            .get("lastError")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|error| error.starts_with(&prefix));
+        if own_error {
+            object.remove("lastError");
+        }
+        // Another component's failure stays visible. Deferral must not mark it done.
+        if object.get("lastError").is_none() {
+            object.insert(
+                "status".to_string(),
+                serde_json::Value::String("deferred".to_string()),
+            );
+        }
         object.insert(
             "updatedAt".to_string(),
             serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
@@ -1589,6 +1605,125 @@ fn mark_pending_update_deferred(
             "operation=update_plan_deferred stable_code=STORE_SAVE_FAILED detail={}",
             error
         );
+    }
+}
+
+fn mark_pending_update_failed(app_handle: &tauri::AppHandle, component: &str, stable_code: &str) {
+    let Some(mut plan) = pending_update_plan(app_handle) else {
+        return;
+    };
+    let Some(object) = plan.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "status".to_string(),
+        serde_json::Value::String("failed".to_string()),
+    );
+    object.insert(
+        "lastError".to_string(),
+        serde_json::Value::String(format!("{component}: {stable_code}")),
+    );
+    object.insert(
+        "updatedAt".to_string(),
+        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+    );
+    let Ok(store) = app_handle.store("update-plan.json") else {
+        return;
+    };
+    store.set("pending_update_plan", plan);
+    if let Err(error) = store.save() {
+        log::warn!(
+            target: "se_manager::core",
+            "operation=update_plan_failed stable_code=STORE_SAVE_FAILED detail={}",
+            error
+        );
+        return;
+    }
+    log::error!(
+        target: "se_manager::core",
+        "operation=update_plan_failed component={component} stable_code={stable_code}"
+    );
+}
+
+/// Drops this component's failure or deferral after a successful reconcile step.
+/// The other component's `lastError` and `deferredComponents` entry stay put.
+fn note_component_reconciled(app_handle: &tauri::AppHandle, component: &str) {
+    let Some(mut plan) = pending_update_plan(app_handle) else {
+        return;
+    };
+    let Some(object) = plan.as_object_mut() else {
+        return;
+    };
+    let prefix = format!("{component}: ");
+    let cleared_error = object
+        .get("lastError")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|error| error.starts_with(&prefix));
+    if cleared_error {
+        object.remove("lastError");
+    }
+    let mut removed_deferral = false;
+    if let Some(deferred) = object
+        .get_mut("deferredComponents")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        let before = deferred.len();
+        deferred.retain(|value| value.as_str() != Some(component));
+        removed_deferral = deferred.len() != before;
+    }
+    if !cleared_error && !removed_deferral {
+        return;
+    }
+    let still_deferred = object
+        .get("deferredComponents")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| !items.is_empty());
+    if object.get("lastError").is_none() {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String(
+                if still_deferred {
+                    "deferred"
+                } else {
+                    "reconciling"
+                }
+                .to_string(),
+            ),
+        );
+    }
+    object.insert(
+        "updatedAt".to_string(),
+        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+    );
+    let Ok(store) = app_handle.store("update-plan.json") else {
+        return;
+    };
+    store.set("pending_update_plan", plan);
+    let _ = store.save();
+}
+
+fn core_update_component_name(role: crate::core::CoreRole) -> &'static str {
+    match role {
+        crate::core::CoreRole::AcpCore => "acpCore",
+        crate::core::CoreRole::TerminalCore => "terminalCore",
+        crate::core::CoreRole::Gui => "guiNative",
+    }
+}
+
+fn required_update_cores(plan: &serde_json::Value) -> Vec<(&'static str, crate::core::CoreRole)> {
+    let cores = [
+        ("acpCore", crate::core::CoreRole::AcpCore),
+        ("terminalCore", crate::core::CoreRole::TerminalCore),
+    ];
+    match plan
+        .get("requiredActions")
+        .and_then(serde_json::Value::as_array)
+    {
+        Some(required) => cores
+            .into_iter()
+            .filter(|(name, _)| required.iter().any(|value| value.as_str() == Some(*name)))
+            .collect(),
+        None => cores.to_vec(),
     }
 }
 
@@ -1613,44 +1748,47 @@ fn finalize_pending_core_update_plan(app_handle: &tauri::AppHandle, profile_root
         .get("metadataState")
         .and_then(serde_json::Value::as_str)
         == Some("legacy");
-    let checks = [
-        ("acpCore", crate::core::CoreRole::AcpCore),
-        ("terminalCore", crate::core::CoreRole::TerminalCore),
-    ];
+    let required = required_update_cores(&plan);
     let complete = tauri::async_runtime::block_on(async {
-        for (name, role) in checks {
+        let mut assessments = Vec::with_capacity(required.len());
+        for (name, role) in required {
             let Some(entry) = components.get(name) else {
-                return false;
-            };
-            let action = entry.get("action").and_then(serde_json::Value::as_str);
-            if action == Some("preserve") {
+                assessments
+                    .push(crate::core::launcher::RequiredCoreIdentityAssessment::FailedClosed);
                 continue;
-            }
-            if action == Some("unsupported") {
-                return false;
-            }
-            let expected = entry.get("buildId").and_then(serde_json::Value::as_str);
-            if !legacy_metadata && expected.is_none() {
-                return false;
-            }
+            };
+            let action = entry
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
             let Ok(ack) = crate::core::launcher::probe_endpoint(&endpoint, role).await else {
-                return false;
+                assessments.push(
+                    crate::core::launcher::RequiredCoreIdentityAssessment::PendingReplacement,
+                );
+                continue;
             };
             record_pending_component_identity(app_handle, name, ack.component_build_id.as_deref());
             let identity_matches = if legacy_metadata {
                 crate::core::classify_core_identity(&ack, role)
                     == crate::core::CoreIdentityState::Current
             } else {
-                ack.component_build_id.as_deref() == expected
+                entry
+                    .get("buildId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|expected| {
+                        !expected.trim().is_empty()
+                            && ack.component_build_id.as_deref() == Some(expected)
+                    })
             };
-            if !identity_matches
-                || (role == crate::core::CoreRole::TerminalCore && ack.active_resources != 0)
-            {
-                return false;
-            }
+            assessments.push(crate::core::launcher::assess_required_core_identity(
+                role,
+                action,
+                identity_matches,
+                ack.active_resources,
+            ));
         }
-        true
+        crate::core::launcher::required_core_identities_allow_finalization(&assessments)
     });
     if complete {
         clear_pending_update_plan(app_handle);
@@ -1691,7 +1829,12 @@ fn desktop_terminal_service(
     #[cfg(unix)]
     {
         match launch_desktop_terminal_core(app_data_dir) {
-            Ok(client) => {
+            Ok((client, deferred, build_id)) => {
+                if deferred {
+                    mark_pending_update_deferred(&app_handle, "terminalCore", build_id.as_deref());
+                } else {
+                    note_component_reconciled(&app_handle, "terminalCore");
+                }
                 let mut events = client.subscribe_events();
                 let mirror = TerminalEventHub::tauri(app_handle);
                 tauri::async_runtime::spawn(async move {
@@ -1710,6 +1853,13 @@ fn desktop_terminal_service(
                 return Ok(crate::core::TerminalServiceHandle::from_core_client(client));
             }
             Err(error) => {
+                let failure_code = crate::core::launcher::reconciliation_failure_code(&error);
+                mark_pending_update_failed(&app_handle, "terminalCore", failure_code);
+                if failure_code == "UNSUPPORTED_COMPONENT" {
+                    return Err(format!(
+                        "desktop_terminal_core reconciliation failed ({failure_code})"
+                    ));
+                }
                 if !core_allows_in_process_fallback(
                     app_data_dir,
                     crate::core::CoreRole::TerminalCore,
@@ -1739,15 +1889,17 @@ fn desktop_terminal_service(
 #[cfg(unix)]
 fn launch_desktop_terminal_core(
     app_data_dir: &Path,
-) -> Result<crate::core::TerminalCoreClient, crate::core::CoreError> {
+) -> Result<(crate::core::TerminalCoreClient, bool, Option<String>), crate::core::CoreError> {
     let config = crate::core::CoreLaunchConfig::for_current_executable(app_data_dir)?;
     tauri::async_runtime::block_on(async {
         let process =
             crate::core::ensure_core(crate::core::CoreRole::TerminalCore, &config).await?;
+        let deferred = process.reconciliation_deferred;
+        let build_id = process.remote_build_id.clone();
         let mut last_error = None;
         for _ in 0..3 {
             match crate::core::TerminalCoreClient::connect(&process.endpoint).await {
-                Ok(client) => return Ok(client),
+                Ok(client) => return Ok((client, deferred, build_id)),
                 Err(error) => {
                     last_error = Some(error);
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1776,6 +1928,7 @@ fn desktop_acp_service(
         }
         match launch_desktop_acp_core(app_data_dir) {
             Ok(client) => {
+                note_component_reconciled(&app_handle, "acpCore");
                 let mut events = client.subscribe_events();
                 tauri::async_runtime::spawn(async move {
                     loop {
@@ -1797,6 +1950,13 @@ fn desktop_acp_service(
                 )));
             }
             Err(error) => {
+                let failure_code = crate::core::launcher::reconciliation_failure_code(&error);
+                mark_pending_update_failed(&app_handle, "acpCore", failure_code);
+                if failure_code == "UNSUPPORTED_COMPONENT" {
+                    return Err(format!(
+                        "desktop_acp_core reconciliation failed ({failure_code})"
+                    ));
+                }
                 if !core_allows_in_process_fallback(app_data_dir, crate::core::CoreRole::AcpCore) {
                     return Err(refuse_in_process_fallback("desktop_acp_core", &error));
                 }
@@ -1922,31 +2082,7 @@ async fn supervise_one_core(
         return;
     }
 
-    if crate::core::launcher::update_reconciliation_pending(role) {
-        let Ok(config) = crate::core::CoreLaunchConfig::for_current_executable(profile_root) else {
-            return;
-        };
-        let Ok(process) = crate::core::ensure_core(role, &config).await else {
-            return;
-        };
-        if process.reconciliation_deferred {
-            mark_pending_update_deferred(
-                app_handle,
-                "terminalCore",
-                process.remote_build_id.as_deref(),
-            );
-            finalize_pending_core_update_plan(app_handle, profile_root);
-            return;
-        }
-        if process.reused {
-            finalize_pending_core_update_plan(app_handle, profile_root);
-            return;
-        }
-        if restart_and_reconnect(app_handle, profile_root, role).await {
-            finalize_pending_core_update_plan(app_handle, profile_root);
-            *ready = true;
-            *consecutive_misses = 0;
-        }
+    if reconcile_pending_core(app_handle, profile_root, role, ready, consecutive_misses).await {
         return;
     }
 
@@ -2017,6 +2153,86 @@ async fn emit_terminal_core_restarted(app_handle: &tauri::AppHandle) {
     );
 }
 
+/// Applies one pending Core identity decision. A deferred Terminal Core is
+/// recorded and left running. A freshly spawned Core is reconnected in place;
+/// this does not call `ensure_core` again, so a failed reconnect cannot spawn
+/// a second peer. Failures persist `failed` / `lastError` and do not clear the
+/// plan or the other component's deferral.
+#[cfg(unix)]
+async fn reconcile_pending_core(
+    app_handle: &tauri::AppHandle,
+    profile_root: &Path,
+    role: crate::core::CoreRole,
+    ready: &mut bool,
+    consecutive_misses: &mut u32,
+) -> bool {
+    if !crate::core::launcher::update_reconciliation_pending(role) {
+        return false;
+    }
+    let component = core_update_component_name(role);
+    let Ok(config) = crate::core::CoreLaunchConfig::for_current_executable(profile_root) else {
+        mark_pending_update_failed(app_handle, component, "RECONCILE_FAILED");
+        return true;
+    };
+    let process = match crate::core::ensure_core(role, &config).await {
+        Ok(process) => process,
+        Err(error) => {
+            mark_pending_update_failed(
+                app_handle,
+                component,
+                crate::core::launcher::reconciliation_failure_code(&error),
+            );
+            return true;
+        }
+    };
+    if process.reconciliation_deferred {
+        mark_pending_update_deferred(app_handle, component, process.remote_build_id.as_deref());
+        return true;
+    }
+    note_component_reconciled(app_handle, component);
+    if process.reused {
+        finalize_pending_core_update_plan(app_handle, profile_root);
+        return true;
+    }
+    if reconnect_supervised_core(app_handle, &process.endpoint, role).await {
+        finalize_pending_core_update_plan(app_handle, profile_root);
+        *ready = true;
+        *consecutive_misses = 0;
+    } else {
+        mark_pending_update_failed(app_handle, component, "RECONNECT_FAILED");
+    }
+    true
+}
+
+#[cfg(unix)]
+async fn reconnect_supervised_core(
+    app_handle: &tauri::AppHandle,
+    endpoint: &crate::core::CoreEndpoint,
+    role: crate::core::CoreRole,
+) -> bool {
+    match role {
+        crate::core::CoreRole::AcpCore => {
+            let Some(client) = app_handle
+                .try_state::<crate::core::AcpServiceHandle>()
+                .and_then(|handle| handle.core_client())
+            else {
+                return false;
+            };
+            client.reconnect(endpoint).await.is_ok()
+        }
+        crate::core::CoreRole::TerminalCore => {
+            let Some(client) = app_handle
+                .try_state::<crate::core::TerminalServiceHandle>()
+                .and_then(|handle| handle.core_client())
+            else {
+                return false;
+            };
+            client.reconnect(endpoint).await.is_ok()
+        }
+        crate::core::CoreRole::Gui => false,
+    }
+}
+
 #[cfg(unix)]
 async fn restart_and_reconnect(
     app_handle: &tauri::AppHandle,
@@ -2029,27 +2245,7 @@ async fn restart_and_reconnect(
     let Ok(process) = crate::core::ensure_core(role, &config).await else {
         return false;
     };
-    match role {
-        crate::core::CoreRole::AcpCore => {
-            let Some(client) = app_handle
-                .try_state::<crate::core::AcpServiceHandle>()
-                .and_then(|handle| handle.core_client())
-            else {
-                return false;
-            };
-            client.reconnect(&process.endpoint).await.is_ok()
-        }
-        crate::core::CoreRole::TerminalCore => {
-            let Some(client) = app_handle
-                .try_state::<crate::core::TerminalServiceHandle>()
-                .and_then(|handle| handle.core_client())
-            else {
-                return false;
-            };
-            client.reconnect(&process.endpoint).await.is_ok()
-        }
-        crate::core::CoreRole::Gui => false,
-    }
+    reconnect_supervised_core(app_handle, &process.endpoint, role).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3574,6 +3770,91 @@ mod tests {
             source.contains("let conversation_bootstrap = if acp_core_handle.is_none()"),
             "GUI ConversationBootstrap is only admitted when no ACP Core handle exists"
         );
+    }
+
+    #[test]
+    fn reconciliation_persists_failures_without_clearing_or_double_spawning() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("async fn reconcile_pending_core(")
+            .expect("reconcile_pending_core");
+        let end = source[start..]
+            .find("async fn reconnect_supervised_core(")
+            .map(|offset| start + offset)
+            .expect("reconnect boundary");
+        let body = &source[start..end];
+        assert!(body.contains("mark_pending_update_failed"));
+        assert!(body.contains("\"RECONNECT_FAILED\""));
+        assert!(body.contains("mark_pending_update_deferred"));
+        assert!(
+            !body.contains("clear_pending_update_plan"),
+            "a single Core failure must not clear the shared plan"
+        );
+        assert!(
+            !body.contains("restart_and_reconnect"),
+            "pending reconciliation must reconnect the core it already ensured"
+        );
+        assert!(!body.contains("remove_stale_socket"));
+        assert!(!body.contains("terminate_owned_core"));
+        assert_eq!(
+            body.matches("ensure_core(").count(),
+            1,
+            "one ensure_core per reconcile tick; reconnect must not spawn another"
+        );
+        let deferred = body.find("reconciliation_deferred").expect("defer branch");
+        let reconnect = body
+            .find("reconnect_supervised_core")
+            .expect("reconnect after spawn");
+        assert!(
+            deferred < reconnect,
+            "an active Terminal mismatch returns before reconnect"
+        );
+        assert!(
+            body[deferred..reconnect].contains("return true;"),
+            "deferred Terminal Core must not fall through into replacement reconnect"
+        );
+        let terminal_fn = source
+            .find("fn desktop_terminal_service(")
+            .expect("desktop_terminal_service");
+        let terminal_end = source[terminal_fn..]
+            .find("fn launch_desktop_terminal_core(")
+            .map(|offset| terminal_fn + offset)
+            .expect("terminal launch boundary");
+        let terminal = &source[terminal_fn..terminal_end];
+        let refuse = terminal
+            .find("refuse_in_process_fallback(\"desktop_terminal_core\"")
+            .expect("live Terminal Core refuses fallback");
+        let fallback = terminal
+            .find("detail=falling_back_in_process")
+            .expect("absent terminal fallback");
+        assert!(refuse < fallback);
+        let unsupported = terminal
+            .find("failure_code == \"UNSUPPORTED_COMPONENT\"")
+            .expect("unsupported Terminal Core update must fail closed");
+        assert!(
+            unsupported < fallback,
+            "unsupported Terminal Core updates must not fall back in process"
+        );
+        let acp_fn = source
+            .find("fn desktop_acp_service(")
+            .expect("desktop_acp_service");
+        let acp_end = source[acp_fn..]
+            .find("fn launch_desktop_acp_core(")
+            .map(|offset| acp_fn + offset)
+            .expect("ACP launch boundary");
+        let acp = &source[acp_fn..acp_end];
+        let acp_unsupported = acp
+            .find("failure_code == \"UNSUPPORTED_COMPONENT\"")
+            .expect("unsupported ACP Core update must fail closed");
+        assert!(
+            acp_unsupported
+                < acp
+                    .find("detail=falling_back_in_process")
+                    .expect("absent ACP Core fallback"),
+            "unsupported ACP Core updates must not fall back in process"
+        );
+        assert!(source.contains("CORE_OWNED_SKIP"));
+        assert!(source.contains("owns_core_process"));
     }
 
     #[test]

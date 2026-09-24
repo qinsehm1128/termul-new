@@ -26,6 +26,10 @@ vi.mock('@/lib/tauri-runtime', async () => {
   return { ...actual, isTauriContext: () => tauriRef.current }
 })
 
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: vi.fn(async () => '0.0.0')
+}))
+
 vi.mock('@/lib/platform', async () => {
   const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
   return {
@@ -471,6 +475,7 @@ vi.mock('@/lib/api', () => ({
 
 beforeEach(() => {
   platformState.isMac = false
+  tauriRef.current = true
   vi.stubGlobal('api', mockApi)
   if (!HTMLElement.prototype.scrollIntoView) {
     HTMLElement.prototype.scrollIntoView = vi.fn()

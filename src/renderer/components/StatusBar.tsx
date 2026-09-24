@@ -1,11 +1,13 @@
 import {
   AlertTriangle,
   Bell,
+  Check,
   Download,
   FileQuestion,
   Folder,
   Pencil,
   Plus,
+  RefreshCw,
   Server
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -15,6 +17,7 @@ import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
 import { getColorClasses } from '@/lib/colors'
+import { presentPendingUpdate, translateUpdateCopy } from '@/lib/updater-status'
 import { cn } from '@/lib/utils'
 import {
   useShowExitCode,
@@ -46,6 +49,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   const updateDownloaded = useUpdateDownloaded()
   const updateVersion = useUpdateVersion()
   const pendingUpdatePlan = usePendingUpdatePlan()
+  const pendingUpdate = presentPendingUpdate(pendingUpdatePlan, translateUpdateCopy)
 
   // Display terminal CWD if available, otherwise fall back to project path
   const displayPath = activeTerminal?.cwd || project?.path
@@ -146,14 +150,40 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
           </Tooltip>
         )}
 
-        {pendingUpdatePlan?.status === 'deferred' && (
+        {pendingUpdate && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="flex items-center">
-                <StatusItem icon={<AlertTriangle size={14} />} className="text-warning" />
+              <div
+                className="flex items-center"
+                role="status"
+                aria-label={pendingUpdate.label}
+                data-update-plan-status={pendingUpdate.status}
+              >
+                <StatusItem
+                  icon={
+                    pendingUpdate.status === 'completed' ? (
+                      <Check size={14} />
+                    ) : pendingUpdate.status === 'reconciling' ? (
+                      <RefreshCw size={14} className="animate-spin" />
+                    ) : (
+                      <AlertTriangle size={14} />
+                    )
+                  }
+                  className={
+                    pendingUpdate.tone === 'danger'
+                      ? 'text-destructive'
+                      : pendingUpdate.tone === 'warning'
+                        ? 'text-warning'
+                        : pendingUpdate.tone === 'success'
+                          ? 'text-success'
+                          : 'text-muted-foreground'
+                  }
+                />
               </div>
             </TooltipTrigger>
-            <TooltipContent side="top">{t('updates.reconciliation.deferred')}</TooltipContent>
+            <TooltipContent side="top" className="max-w-sm">
+              {pendingUpdate.label}
+            </TooltipContent>
           </Tooltip>
         )}
 
