@@ -60,6 +60,18 @@
     "title": "Upstream MCP servers",
     "description": "Enabled servers are aggregated by the project MCP router.",
     "addServer": "Add server",
+    "importExport": {
+      "import": "Import JSON",
+      "export": "Export JSON",
+      "imported_one": "Imported {{count}} MCP server",
+      "imported_other": "Imported {{count}} MCP servers",
+      "skipped_one": "Skipped {{count}} MCP entry",
+      "skipped_other": "Skipped {{count}} MCP entries",
+      "noneFound": "No valid MCP servers found in the file.",
+      "importFailed": "Could not import the MCP file.",
+      "exported": "MCP configuration exported.",
+      "exportFailed": "Could not export the MCP configuration."
+    },
     "storageWarning": "Environment variables and headers are stored in the existing application data store. Prefer $VARIABLE references instead of literal credentials.",
     "emptyTitle": "No MCP servers configured",
     "emptyDescription": "Add a stdio, HTTP, or SSE server.",
@@ -82,7 +94,7 @@
       "editTitle": "Edit MCP server",
       "addTitle": "Add MCP servers",
       "editDescription": "Edit this server as JSON. Unknown fields are dropped on save.",
-      "addDescription": "Paste a Claude Desktop \"mcpServers\" config or a single server object.",
+      "addDescription": "Paste a Claude Desktop, tauri-mcp-router, canonical, or single-server JSON config.",
       "jsonLabel": "MCP JSON",
       "jsonPlaceholder": "Paste an mcpServers configuration or a single server JSON object"
     },
@@ -116,12 +128,15 @@
     "invalidJson": "Invalid JSON: {{message}}",
     "topLevelObject": "Invalid JSON: expected a top-level object",
     "serversObject": "Invalid JSON: \"mcpServers\" must be an object",
+    "serversShape": "Invalid JSON: \"servers\" must be an object or array",
+    "upstreamsArray": "Invalid JSON: \"upstreams\" must be an array",
     "unknown": "<unknown>",
     "unnamed": "<unnamed>",
     "serverObject": "{{name}}: expected a server object",
     "envShape": "{{name}}: env must be an object map or name/value pairs",
     "invalidServer": "{{name}}: invalid server configuration",
-    "validation": "{{name}}: {{errors}}"
+    "validation": "{{name}}: {{errors}}",
+    "duplicate": "{{name}}: duplicate server skipped"
   },
   "memory": {
     "title": "Memory MCP server",

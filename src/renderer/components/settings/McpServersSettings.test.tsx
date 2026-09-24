@@ -63,6 +63,30 @@ describe('McpServersSettings', () => {
     seedStore()
   })
 
+  it('imports a JSON file through the browser file input with fresh ids', async () => {
+    render(<McpServersSettings />)
+    const input = screen.getByLabelText('Import JSON')
+    const file = new File(
+      [JSON.stringify({ servers: { remote: { url: 'https://remote.test/mcp' } } })],
+      'mcp.json',
+      { type: 'application/json' }
+    )
+    fireEvent.change(input, { target: { files: [file] } })
+    await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+    expect(importMcpServers).toHaveBeenCalledWith([
+      expect.objectContaining({
+        type: 'http',
+        name: 'remote',
+        url: 'https://remote.test/mcp',
+        enabled: true
+      })
+    ])
+    expect(importMcpServers.mock.calls[0]?.[0]?.[0]?.id).toMatch(UUID_RE)
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith(expect.stringMatching(/imported 1 mcp server/i))
+    )
+  })
+
   it('adds a bare server object through the JSON editor with a fresh id', async () => {
     render(<McpServersSettings />)
     openAddDialog()

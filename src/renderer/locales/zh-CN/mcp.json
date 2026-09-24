@@ -60,6 +60,18 @@
     "title": "上游 MCP 服务器",
     "description": "已启用的服务器由项目 MCP 路由聚合。",
     "addServer": "添加服务器",
+    "importExport": {
+      "import": "导入 JSON",
+      "export": "导出 JSON",
+      "imported_one": "已导入 {{count}} 个 MCP 服务器",
+      "imported_other": "已导入 {{count}} 个 MCP 服务器",
+      "skipped_one": "已跳过 {{count}} 个 MCP 条目",
+      "skipped_other": "已跳过 {{count}} 个 MCP 条目",
+      "noneFound": "文件中没有找到有效的 MCP 服务器。",
+      "importFailed": "无法导入 MCP 文件。",
+      "exported": "MCP 配置已导出。",
+      "exportFailed": "无法导出 MCP 配置。"
+    },
     "storageWarning": "环境变量和请求头存储在现有应用数据存储中。请优先使用 $VARIABLE 引用，而不是明文凭据。",
     "emptyTitle": "尚未配置 MCP 服务器",
     "emptyDescription": "添加 stdio、HTTP 或 SSE 服务器。",
@@ -82,7 +94,7 @@
       "editTitle": "编辑 MCP 服务器",
       "addTitle": "添加 MCP 服务器",
       "editDescription": "以 JSON 编辑此服务器。保存时会丢弃未知字段。",
-      "addDescription": "粘贴 Claude Desktop 的“mcpServers”配置或单个服务器对象。",
+      "addDescription": "粘贴 Claude Desktop、tauri-mcp-router、规范配置或单个服务器 JSON。",
       "jsonLabel": "MCP JSON",
       "jsonPlaceholder": "粘贴 mcpServers 配置或单个服务器 JSON 对象"
     },
@@ -116,12 +128,15 @@
     "invalidJson": "JSON 无效：{{message}}",
     "topLevelObject": "JSON 无效：应为顶层对象",
     "serversObject": "JSON 无效：“mcpServers”必须是对象",
+    "serversShape": "JSON 无效：“servers”必须是对象或数组",
+    "upstreamsArray": "JSON 无效：“upstreams”必须是数组",
     "unknown": "<未知>",
     "unnamed": "<未命名>",
     "serverObject": "{{name}}：应为服务器对象",
     "envShape": "{{name}}：env 必须是对象映射或名称/值对",
     "invalidServer": "{{name}}：服务器配置无效",
-    "validation": "{{name}}：{{errors}}"
+    "validation": "{{name}}：{{errors}}",
+    "duplicate": "{{name}}：已跳过重复服务器"
   },
   "memory": {
     "title": "记忆库 MCP 服务器",

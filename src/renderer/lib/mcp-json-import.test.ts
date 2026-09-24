@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseMcpJsonImport } from './mcp-json-import'
+import { buildMcpJsonExport, prepareMcpJsonImport } from './mcp-json-transfer'
 
 describe('parseMcpJsonImport', () => {
   it('parses a Claude Desktop wrapper and normalizes the env map to name/value pairs', () => {
@@ -162,5 +163,231 @@ describe('parseMcpJsonImport', () => {
     const { servers, errors } = parseMcpJsonImport('{"mcpServers": []}')
     expect(servers).toEqual([])
     expect(errors).toEqual(['Invalid JSON: "mcpServers" must be an object'])
+  })
+
+  it('accepts an empty top-level array as an empty import', () => {
+    expect(parseMcpJsonImport('[]')).toEqual({ servers: [], errors: [] })
+  })
+
+  it('accepts Qin/tauri-mcp-router mcpServers entries and maps remoteUrl', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        mcpServers: {
+          remote: {
+            remoteUrl: 'https://mcp.test/stream',
+            serverType: 'remote-streamable',
+            bearerToken: 'token-remote',
+            requestOptions: { headers: { 'X-Tenant': 'tenant-a' } }
+          },
+          local: {
+            server_type: 'local',
+            command: 'node',
+            args: ['server.js'],
+            env: { TOKEN: 'secret' }
+          }
+        }
+      })
+    )
+    expect(errors).toEqual([])
+    expect(servers).toEqual([
+      {
+        type: 'http',
+        name: 'remote',
+        url: 'https://mcp.test/stream',
+        headers: [
+          { name: 'X-Tenant', value: 'tenant-a' },
+          { name: 'Authorization', value: 'Bearer token-remote' }
+        ]
+      },
+      {
+        type: 'stdio',
+        name: 'local',
+        command: 'node',
+        args: ['server.js'],
+        env: [{ name: 'TOKEN', value: 'secret' }]
+      }
+    ])
+  })
+
+  it('accepts remote aliases, bearer tokens, and request/header maps', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        servers: [
+          {
+            name: 'remote-a',
+            remote_url: 'https://a.test/mcp',
+            server_type: 'http',
+            bearer_token: 'token-a',
+            headers: { 'X-Header': 'header-a' }
+          },
+          {
+            name: 'remote-b',
+            serverUrl: 'https://b.test/mcp',
+            request_options: { headers: { Authorization: 'Bearer token-b', 'X-Org': 'org-b' } }
+          },
+          {
+            name: 'remote-c',
+            url: 'https://c.test/mcp',
+            http_headers: { 'X-Workspace': 'workspace-c' }
+          }
+        ]
+      })
+    )
+    expect(errors).toEqual([])
+    expect(servers).toEqual([
+      {
+        type: 'http',
+        name: 'remote-a',
+        url: 'https://a.test/mcp',
+        headers: [
+          { name: 'X-Header', value: 'header-a' },
+          { name: 'Authorization', value: 'Bearer token-a' }
+        ]
+      },
+      {
+        type: 'http',
+        name: 'remote-b',
+        url: 'https://b.test/mcp',
+        headers: [
+          { name: 'Authorization', value: 'Bearer token-b' },
+          { name: 'X-Org', value: 'org-b' }
+        ]
+      },
+      {
+        type: 'http',
+        name: 'remote-c',
+        url: 'https://c.test/mcp',
+        headers: [{ name: 'X-Workspace', value: 'workspace-c' }]
+      }
+    ])
+  })
+
+  it('accepts canonical upstreams while ignoring built-ins and routing metadata', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        schemaVersion: 1,
+        builtIns: [{ id: 'session-memory', enabled: false }],
+        upstreams: [
+          { id: 'one', name: 'One', type: 'stdio', command: 'node', enabled: false },
+          {
+            id: 'two',
+            name: 'Two',
+            type: 'http',
+            url: 'https://two.test/mcp',
+            headers: [{ name: 'Authorization', value: 'Bearer secret' }]
+          }
+        ],
+        routing: { nameCollision: 'prefixServerId' }
+      })
+    )
+    expect(errors).toEqual([])
+    expect(servers).toEqual([
+      { type: 'stdio', name: 'One', command: 'node' },
+      {
+        type: 'http',
+        name: 'Two',
+        url: 'https://two.test/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer secret' }]
+      }
+    ])
+  })
+
+  it('accepts mcp-proxy command URLs as remote HTTP entries', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        servers: {
+          proxy: { command: 'mcp-proxy', args: ['--url', 'https://proxy.test/mcp'] }
+        }
+      })
+    )
+    expect(errors).toEqual([])
+    expect(servers).toEqual([{ type: 'http', name: 'proxy', url: 'https://proxy.test/mcp' }])
+  })
+
+  it('skips duplicate names and malformed entries without importing secrets into errors', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify([
+        { name: 'same', command: 'node', env: { TOKEN: 'secret-value' } },
+        { name: 'SAME', command: 'bun' },
+        { name: 'bad', command: 'node', args: [1] },
+        { name: 'good', command: 'node' }
+      ])
+    )
+    expect(servers.map((server) => server.name)).toEqual(['same', 'good'])
+    expect(errors).toEqual(['SAME: duplicate server skipped', 'bad: invalid server configuration'])
+    expect(errors.join(' ')).not.toContain('secret-value')
+  })
+
+  it('drops only explicitly referenced secret pairs', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        mcpServers: {
+          remote: {
+            url: 'https://mcp.test/mcp',
+            headers: [
+              { name: 'Authorization', ref: 'mcp/remote/authorization' },
+              { name: 'X-Visible', value: 'visible' }
+            ]
+          }
+        }
+      })
+    )
+    expect(errors).toEqual([])
+    expect(servers[0]?.headers).toEqual([{ name: 'X-Visible', value: 'visible' }])
+  })
+
+  it('prepares a fresh-id append batch and skips names already in the registry', () => {
+    const result = prepareMcpJsonImport(
+      JSON.stringify({
+        servers: {
+          existing: { command: 'node' },
+          fresh: { command: 'bun' }
+        }
+      }),
+      [{ name: 'existing' }],
+      (() => {
+        let index = 0
+        return () => `fresh-${++index}`
+      })()
+    )
+    expect(result.errors).toEqual([])
+    expect(result.skipped).toBe(1)
+    expect(result.servers).toEqual([
+      { id: 'fresh-1', type: 'stdio', name: 'fresh', command: 'bun', enabled: true }
+    ])
+  })
+
+  it('exports canonical config with a standard mcpServers compatibility map', () => {
+    const exported = buildMcpJsonExport({
+      schemaVersion: 1,
+      revision: 4,
+      builtIns: [{ id: 'session-memory', enabled: true }],
+      upstreams: [
+        {
+          id: 'local-id',
+          type: 'stdio',
+          name: 'Local',
+          command: 'node',
+          args: ['server.js'],
+          env: [{ name: 'TOKEN', value: 'secret' }],
+          enabled: false
+        },
+        {
+          id: 'remote-id',
+          type: 'http',
+          name: 'Remote',
+          url: 'https://remote.test/mcp',
+          headers: [{ name: 'X-Org', value: 'org' }],
+          enabled: true
+        }
+      ],
+      routing: { nameCollision: 'prefixServerId' }
+    })
+    expect(exported.schemaVersion).toBe(1)
+    expect(exported.upstreams[0]).toMatchObject({ id: 'local-id', enabled: false })
+    expect(exported.mcpServers).toEqual({
+      Local: { command: 'node', args: ['server.js'], env: { TOKEN: 'secret' } },
+      Remote: { url: 'https://remote.test/mcp', headers: { 'X-Org': 'org' } }
+    })
   })
 })

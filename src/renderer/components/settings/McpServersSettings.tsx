@@ -1,5 +1,15 @@
-import { AlertTriangle, ChevronDown, Pencil, Plus, RefreshCw, Server, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  AlertTriangle,
+  ChevronDown,
+  Download,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Server,
+  Trash2,
+  Upload
+} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -16,6 +26,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
+import { downloadMcpJsonExport, prepareMcpJsonImport } from '@/lib/mcp-json-transfer'
 import { randomUUID } from '@/lib/uuid'
 import { useMcpStore } from '@/stores/mcp-store'
 
@@ -68,7 +79,8 @@ function serverToJson(server: StoredMcpServer): string {
 
 export function McpServersSettings(): React.JSX.Element {
   const { t } = useTranslation('mcp')
-  const servers = useMcpStore((state) => state.config.upstreams)
+  const config = useMcpStore((state) => state.config)
+  const servers = config.upstreams
   const saveMcpServer = useMcpStore((state) => state.saveUpstream)
   const importMcpServers = useMcpStore((state) => state.importUpstreams)
   const setMcpServerEnabled = useMcpStore((state) => state.setUpstreamEnabled)
@@ -81,6 +93,7 @@ export function McpServersSettings(): React.JSX.Element {
   const mcpProbing = useMcpStore((state) => state.probing)
   const [dialog, setDialog] = useState<McpDialogState | null>(null)
   const [jsonText, setJsonText] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [jsonErrors, setJsonErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   // Tracks which server rows have their tool list expanded (Settings surface).
@@ -120,8 +133,9 @@ export function McpServersSettings(): React.JSX.Element {
     setJsonErrors([])
   }
 
-  // Add mode: accepts a Claude Desktop `{"mcpServers": {...}}` wrapper or a
-  // bare single-server object. The input is validated as a whole BEFORE any
+  // Add mode: accepts every shape supported by parseMcpJsonImport (Claude,
+  // tauri-mcp-router, canonical, arrays, or a bare server). The input is
+  // validated as a whole BEFORE any
   // persistence, and the accepted batch is committed through a single atomic
   // store write — so fixing a rejected entry and re-saving can never duplicate
   // previously saved entries, and a multi-server import triggers one registry
@@ -210,6 +224,61 @@ export function McpServersSettings(): React.JSX.Element {
     }
   }
 
+  const handleExport = (): void => {
+    try {
+      downloadMcpJsonExport(config)
+      toast.success(t('settings.importExport.exported'))
+    } catch {
+      toast.error(t('settings.importExport.exportFailed'))
+    }
+  }
+
+  const handleImportFile = async (file: File): Promise<void> => {
+    let text: string
+    try {
+      if (typeof file.text === 'function') {
+        text = await file.text()
+      } else {
+        text = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+          reader.onerror = () => reject(reader.error ?? new Error('file read failed'))
+          reader.readAsText(file)
+        })
+      }
+    } catch {
+      toast.error(t('settings.importExport.importFailed'))
+      return
+    }
+
+    const result = prepareMcpJsonImport(text, servers)
+    const skippedCount = result.skipped + result.errors.length
+    if (result.servers.length === 0) {
+      if (result.errors.length > 0) {
+        toast.error(t('settings.importExport.importFailed'), {
+          description: result.errors.join('\n')
+        })
+      } else if (result.skipped > 0) {
+        toast.info(t('settings.importExport.skipped', { count: result.skipped }))
+      } else {
+        toast.info(t('settings.importExport.noneFound'))
+      }
+      return
+    }
+
+    try {
+      await importMcpServers(result.servers)
+      toast.success(t('settings.importExport.imported', { count: result.servers.length }))
+      if (skippedCount > 0) {
+        toast.info(t('settings.importExport.skipped', { count: skippedCount }), {
+          description: result.errors.length > 0 ? result.errors.join('\n') : undefined
+        })
+      }
+    } catch {
+      toast.error(t('settings.errors.saveMany'))
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/20 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -217,9 +286,34 @@ export function McpServersSettings(): React.JSX.Element {
           <p className="text-sm font-medium text-foreground">{t('page.upstreamsTitle')}</p>
           <p className="text-xs text-muted-foreground">{t('page.upstreamsDescription')}</p>
         </div>
-        <Button type="button" size="sm" onClick={openAdd}>
-          <Plus size={14} className="mr-1.5" /> {t('settings.addServer')}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload size={14} className="mr-1.5" /> {t('settings.importExport.import')}
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={handleExport}>
+            <Download size={14} className="mr-1.5" /> {t('settings.importExport.export')}
+          </Button>
+          <Button type="button" size="sm" onClick={openAdd}>
+            <Plus size={14} className="mr-1.5" /> {t('settings.addServer')}
+          </Button>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          aria-label={t('settings.importExport.import')}
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            event.target.value = ''
+            if (file) void handleImportFile(file)
+          }}
+        />
       </div>
 
       <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">

@@ -8,9 +8,27 @@ export interface McpJsonImportResult {
 }
 
 const TRANSPORTS = ['stdio', 'http', 'sse'] as const
+type McpTransport = (typeof TRANSPORTS)[number]
+
+type ImportEntry = [name: string, value: unknown]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function stripOuterQuotes(value: string): string {
+  const trimmed = value.trim()
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim()
+  }
+  return trimmed
 }
 
 /** All-string array, or `undefined` when `value` is not a string array. */
@@ -20,108 +38,329 @@ function stringArray(value: unknown): string[] | undefined {
   return strings.length === value.length ? strings : undefined
 }
 
-/** `[{name, value}]` array, or `undefined` when `value` is not one. Entries are
- * rebuilt as fresh `{name, value}` objects so any extra properties on the input
- * (e.g. `{name, value, foo}`) are dropped — matching the "unknown fields are
- * silently dropped" contract of the object-map branch in `normalizeEnv`. */
-function stringPairs(value: unknown): Array<{ name: string; value: string }> | undefined {
-  if (!Array.isArray(value)) return undefined
-  const pairs: Array<{ name: string; value: string }> = []
-  for (const entry of value) {
-    if (!isRecord(entry) || typeof entry.name !== 'string' || typeof entry.value !== 'string') {
+/**
+ * Normalize the argv forms emitted by Claude Desktop and tauri-mcp-router.
+ * The router also accepts a whitespace-delimited string, while the existing
+ * Termul editor uses arrays, so both are kept import-compatible.
+ */
+function normalizeArgs(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'string') {
+    return value
+      .trim()
+      .split(/\s+/)
+      .filter((arg) => arg.length > 0)
+      .map(stripOuterQuotes)
+  }
+  return stringArray(value)?.map(stripOuterQuotes)
+}
+
+/**
+ * Normalize a map or `[{name, value}]` list into Termul's pair shape.
+ *
+ * Canonical control-plane files may contain `{name, ref}` entries for a secret
+ * reference. The renderer's import shape only supports inline values, so such
+ * entries are intentionally omitted; inline values remain untouched. This is
+ * the only secret-dropping path and it is driven by an explicit `ref` field.
+ */
+function normalizePairs(value: unknown): McpEnvVar[] | undefined {
+  if (value === undefined) return undefined
+  if (Array.isArray(value)) {
+    const pairs: McpEnvVar[] = []
+    for (const entry of value) {
+      if (!isRecord(entry) || typeof entry.name !== 'string') return undefined
+      if (typeof entry.ref === 'string' && entry.ref.trim().length > 0) continue
+      if (typeof entry.value === 'string') {
+        pairs.push({ name: entry.name, value: entry.value })
+        continue
+      }
       return undefined
     }
-    pairs.push({ name: entry.name, value: entry.value })
+    return pairs
   }
-  return pairs
+  if (isRecord(value)) {
+    const pairs: McpEnvVar[] = []
+    for (const [name, entryValue] of Object.entries(value)) {
+      if (isRecord(entryValue)) {
+        if (typeof entryValue.ref === 'string' && entryValue.ref.trim().length > 0) continue
+        if (typeof entryValue.value === 'string') {
+          pairs.push({ name, value: entryValue.value })
+          continue
+        }
+        return undefined
+      }
+      pairs.push({ name, value: String(entryValue) })
+    }
+    return pairs
+  }
+  return undefined
 }
 
 /**
  * Normalize `env` from a Claude Desktop-style `Record<string,string>` map into
  * Se's internal `[{name, value}]` shape. An already-normalized array passes
- * through unchanged. Any other shape yields `undefined` (the server is rejected
- * by the caller; the rest still import).
+ * through after rebuilding fresh pair objects so unknown fields are dropped.
  */
 function normalizeEnv(value: unknown): McpEnvVar[] | undefined {
-  if (value === undefined) return undefined
-  if (isRecord(value)) {
-    return Object.entries(value).map(([name, entryValue]) => ({
-      name,
-      value: String(entryValue)
-    }))
+  return normalizePairs(value)
+}
+
+function isHttpUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(stripOuterQuotes(value))
+}
+
+function isMcpProxyCommand(command: unknown): boolean {
+  if (typeof command !== 'string') return false
+  const normalized = stripOuterQuotes(command).replace(/\\/g, '/').toLowerCase()
+  return normalized.endsWith('/mcp-proxy') || normalized.endsWith('mcp-proxy')
+}
+
+function findRemoteUrlFromArgs(args: string[] | undefined): string | undefined {
+  if (!args) return undefined
+  const flagIndex = args.findIndex((arg) => arg === '--url' || arg === '-u')
+  const flagged = flagIndex >= 0 ? args[flagIndex + 1] : undefined
+  if (isHttpUrl(flagged)) return stripOuterQuotes(flagged)
+  const found = args.find((arg) => isHttpUrl(arg))
+  return found ? stripOuterQuotes(found) : undefined
+}
+
+function firstStringField(
+  raw: Record<string, unknown>,
+  fields: string[]
+): { value?: string; invalid: boolean } {
+  for (const field of fields) {
+    if (!hasOwn(raw, field)) continue
+    const value = raw[field]
+    if (typeof value !== 'string') return { invalid: true }
+    const trimmed = value.trim()
+    if (trimmed.length > 0) return { value: stripOuterQuotes(trimmed), invalid: false }
   }
-  return stringPairs(value)
+  return { invalid: false }
+}
+
+function extractRemoteUrl(
+  raw: Record<string, unknown>,
+  args: string[] | undefined
+): string | undefined {
+  const configured = firstStringField(raw, ['remoteUrl', 'remote_url', 'serverUrl', 'url'])
+  if (configured.value) return configured.value
+  if (configured.invalid) return undefined
+
+  if (isHttpUrl(raw.command)) return stripOuterQuotes(raw.command)
+  if (isMcpProxyCommand(raw.command)) return findRemoteUrlFromArgs(args)
+  return args?.some((arg) => isMcpProxyCommand(arg)) ? findRemoteUrlFromArgs(args) : undefined
+}
+
+function declaredTransport(raw: Record<string, unknown>): McpTransport | undefined {
+  const declared = raw.type ?? raw.serverType ?? raw.server_type
+  if (typeof declared !== 'string') return undefined
+  switch (declared.trim().toLowerCase()) {
+    case 'stdio':
+    case 'local':
+      return 'stdio'
+    case 'sse':
+      return 'sse'
+    case 'http':
+    case 'https':
+    case 'remote':
+    case 'remote-streamable':
+    case 'streamable-http':
+    case 'streamable_http':
+      return 'http'
+    default:
+      return undefined
+  }
+}
+
+function upsertPair(pairs: McpEnvVar[], next: McpEnvVar): void {
+  const key = next.name.toLowerCase()
+  const existingIndex = pairs.findIndex((pair) => pair.name.toLowerCase() === key)
+  if (existingIndex >= 0) pairs[existingIndex] = next
+  else pairs.push(next)
+}
+
+function collectRemoteHeaders(
+  raw: Record<string, unknown>,
+  env: McpEnvVar[] | undefined
+): { headers?: McpEnvVar[]; invalid: boolean } {
+  const headers: McpEnvVar[] = []
+  if (env) {
+    for (const pair of env) upsertPair(headers, pair)
+  }
+
+  const sources: unknown[] = []
+  if (hasOwn(raw, 'http_headers')) sources.push(raw.http_headers)
+  if (hasOwn(raw, 'request_options')) {
+    const requestOptions = raw.request_options
+    if (isRecord(requestOptions) && hasOwn(requestOptions, 'headers')) {
+      sources.push(requestOptions.headers)
+    }
+  }
+  if (hasOwn(raw, 'requestOptions')) {
+    const requestOptions = raw.requestOptions
+    if (isRecord(requestOptions) && hasOwn(requestOptions, 'headers')) {
+      sources.push(requestOptions.headers)
+    }
+  }
+  if (hasOwn(raw, 'headers')) sources.push(raw.headers)
+
+  for (const source of sources) {
+    const pairs = normalizePairs(source)
+    if (pairs === undefined) return { invalid: true }
+    for (const pair of pairs) upsertPair(headers, pair)
+  }
+
+  const bearerToken = raw.bearerToken ?? raw.bearer_token
+  if (typeof bearerToken === 'string' && bearerToken.trim().length > 0) {
+    upsertPair(headers, { name: 'Authorization', value: `Bearer ${bearerToken.trim()}` })
+  }
+
+  return { headers: headers.length > 0 ? headers : undefined, invalid: false }
 }
 
 /**
- * Build a (partial) server config from a parsed entry, keeping only known
- * fields (`type`, `name`, `command`, `args`, `env`, `url`, `headers`) — unknown
- * fields (e.g. `directTools`, `alwaysAllow`) are silently dropped. Returns
- * `null` for structurally malformed input (`args`/`headers` in the wrong shape,
- * or a non-string `command`/`url`); missing required fields are left to
- * `validateMcpServer` so the per-server error matches the form validation text.
+ * Build a (partial) server config from a parsed entry, keeping only Termul's
+ * known transport fields. Aliases used by Qin/tauri-mcp-router are normalized
+ * here (`remoteUrl`, `remote_url`, `serverUrl`, `serverType`, and headers in
+ * requestOptions/request_options).
  */
 function buildServer(
   raw: Record<string, unknown>,
   name: string,
   env: McpEnvVar[] | undefined
 ): Partial<McpServerConfig> | null {
-  // Explicit `type` is honored when it is a real transport; otherwise infer:
-  // `command` present → stdio, only `url` present → http, default stdio.
-  // Unknown `type` values (e.g. `acp`) are never accepted as a working
-  // transport — they fall through to inference.
-  const explicitType = typeof raw.type === 'string' ? (raw.type as string) : undefined
-  const hasCommand = typeof raw.command === 'string' && raw.command.trim().length > 0
-  const hasUrl = typeof raw.url === 'string' && raw.url.trim().length > 0
-  const type: (typeof TRANSPORTS)[number] =
-    explicitType === 'stdio' || explicitType === 'http' || explicitType === 'sse'
-      ? explicitType
-      : hasCommand
-        ? 'stdio'
-        : hasUrl
-          ? 'http'
-          : 'stdio'
+  const args = normalizeArgs(raw.args)
+  if (raw.args !== undefined && args === undefined) return null
+
+  const commandField = firstStringField(raw, ['command', 'script'])
+  const command = commandField.value
+  const remoteUrl = extractRemoteUrl(raw, args)
+  const type = declaredTransport(raw) ?? (remoteUrl ? 'http' : command ? 'stdio' : 'stdio')
 
   if (type === 'stdio') {
-    if (raw.command !== undefined && typeof raw.command !== 'string') return null
-    const args =
-      raw.args !== undefined ? stringArray(raw.args)?.map((arg) => arg.trim()) : undefined
-    if (raw.args !== undefined && args === undefined) return null
-    const server: Partial<McpServerConfig> = {
+    if (raw.command !== undefined && typeof raw.command !== 'string' && raw.script === undefined) {
+      return null
+    }
+    if (raw.script !== undefined && typeof raw.script !== 'string') return null
+    return {
       type: 'stdio',
       name,
-      ...(typeof raw.command === 'string' ? { command: raw.command.trim() } : {}),
+      ...(command ? { command } : {}),
       ...(args && args.length > 0 ? { args } : {}),
       ...(env && env.length > 0 ? { env } : {})
     }
-    return server
   }
 
-  if (raw.url !== undefined && typeof raw.url !== 'string') return null
-  const headers = raw.headers !== undefined ? stringPairs(raw.headers) : undefined
-  if (raw.headers !== undefined && headers === undefined) return null
-  const shared = {
-    name,
-    ...(typeof raw.url === 'string' ? { url: raw.url.trim() } : {}),
-    ...(headers && headers.length > 0 ? { headers } : {})
+  if (
+    !remoteUrl &&
+    (raw.url !== undefined || raw.remoteUrl !== undefined || raw.remote_url !== undefined)
+  ) {
+    return {
+      type,
+      name,
+      ...(env && env.length > 0 ? { headers: env } : {})
+    } as Partial<McpServerConfig>
   }
-  return type === 'http'
-    ? { type: 'http' as const, ...shared }
-    : { type: 'sse' as const, ...shared }
+
+  const remoteHeaders = collectRemoteHeaders(raw, env)
+  if (remoteHeaders.invalid) return null
+  return {
+    type,
+    name,
+    ...(remoteUrl ? { url: remoteUrl } : {}),
+    ...(remoteHeaders.headers ? { headers: remoteHeaders.headers } : {})
+  } as Partial<McpServerConfig>
+}
+
+function entriesFromWrapper(value: unknown): ImportEntry[] | null {
+  if (!isRecord(value)) return null
+  return Object.entries(value)
+}
+
+function entriesFromArray(value: unknown[]): ImportEntry[] {
+  return value.map((entry) => [
+    isRecord(entry) && typeof entry.name === 'string' ? entry.name : '',
+    entry
+  ])
+}
+
+function hasCanonicalMarker(value: Record<string, unknown>): boolean {
+  return (
+    hasOwn(value, 'schemaVersion') ||
+    hasOwn(value, 'builtIns') ||
+    hasOwn(value, 'upstreams') ||
+    hasOwn(value, 'routing')
+  )
+}
+
+function extractEntries(parsed: unknown): { entries: ImportEntry[]; error?: string } {
+  if (Array.isArray(parsed)) return { entries: entriesFromArray(parsed) }
+  if (!isRecord(parsed)) {
+    return {
+      entries: [],
+      error: runtimeT('mcp', 'import.topLevelObject', 'Invalid JSON: expected a top-level object')
+    }
+  }
+
+  // Canonical exports also contain `mcpServers` for compatibility. Prefer the
+  // canonical upstream list so importing an export never duplicates each entry.
+  if (hasCanonicalMarker(parsed)) {
+    if (parsed.upstreams === undefined) return { entries: [] }
+    if (!Array.isArray(parsed.upstreams)) {
+      return {
+        entries: [],
+        error: runtimeT(
+          'mcp',
+          'import.upstreamsArray',
+          'Invalid JSON: "upstreams" must be an array'
+        )
+      }
+    }
+    return { entries: entriesFromArray(parsed.upstreams) }
+  }
+
+  if (hasOwn(parsed, 'mcpServers')) {
+    const entries = entriesFromWrapper(parsed.mcpServers)
+    if (entries) return { entries }
+    return {
+      entries: [],
+      error: runtimeT('mcp', 'import.serversObject', 'Invalid JSON: "mcpServers" must be an object')
+    }
+  }
+
+  if (hasOwn(parsed, 'servers')) {
+    if (Array.isArray(parsed.servers)) return { entries: entriesFromArray(parsed.servers) }
+    const entries = entriesFromWrapper(parsed.servers)
+    if (entries) return { entries }
+    return {
+      entries: [],
+      error: runtimeT(
+        'mcp',
+        'import.serversShape',
+        'Invalid JSON: "servers" must be an object or array'
+      )
+    }
+  }
+
+  // Bare single-server object.
+  return { entries: [['', parsed]] }
+}
+
+function entryDisplayName(keyName: string, raw: unknown): string {
+  if (keyName.length > 0) return keyName
+  return isRecord(raw) && typeof raw.name === 'string' ? raw.name : ''
 }
 
 /**
- * Parse a pasted MCP JSON config into saveable `McpServerConfig`s.
+ * Parse MCP JSON into saveable `McpServerConfig`s.
  *
- * Accepts TWO shapes, detected by the top-level keys:
- * 1. Claude Desktop `{"mcpServers": {name: {...}}}` — each entry is one server,
- *    named by its wrapper key.
- * 2. A bare single-server object `{command, args, env, name, ...}`.
- *
- * Unknown fields (e.g. `directTools`, `alwaysAllow`) are silently dropped.
- * `env` maps are normalized to `[{name, value}]`; an already-normalized array
- * passes through. Each server is validated via `validateMcpServer`; invalid
- * entries are reported per-server and skipped — the rest still import.
+ * Accepted shapes include Claude `mcpServers`, Qin/tauri-mcp-router `servers`
+ * maps or arrays, a top-level server array, the canonical control-plane object,
+ * and a bare single-server object. Unknown fields are dropped. Env/header maps
+ * become `[{name, value}]` pairs and explicit secret references are omitted
+ * because the renderer cannot resolve references without the host authority.
+ * Each server is validated via `validateMcpServer`; invalid and duplicate
+ * entries are reported per-server while valid entries still import.
  */
 export function parseMcpJsonImport(text: string): McpJsonImportResult {
   let parsed: unknown
@@ -137,37 +376,16 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
       ]
     }
   }
-  if (!isRecord(parsed)) {
-    return {
-      servers: [],
-      errors: [
-        runtimeT('mcp', 'import.topLevelObject', 'Invalid JSON: expected a top-level object')
-      ]
-    }
-  }
 
-  const entries: Array<[string, unknown]> = []
-  if (isRecord(parsed.mcpServers)) {
-    for (const [name, value] of Object.entries(parsed.mcpServers)) {
-      entries.push([name, value])
-    }
-  } else if (parsed.mcpServers !== undefined) {
-    return {
-      servers: [],
-      errors: [
-        runtimeT('mcp', 'import.serversObject', 'Invalid JSON: "mcpServers" must be an object')
-      ]
-    }
-  } else {
-    // Bare single-server object.
-    entries.push(['', parsed])
-  }
+  const extracted = extractEntries(parsed)
+  if (extracted.error) return { servers: [], errors: [extracted.error] }
 
   const servers: McpServerConfig[] = []
   const errors: string[] = []
-  for (const [keyName, raw] of entries) {
-    const name =
-      keyName.length > 0 || !isRecord(raw) ? keyName : typeof raw.name === 'string' ? raw.name : ''
+  const seenNames = new Set<string>()
+
+  for (const [keyName, raw] of extracted.entries) {
+    const name = entryDisplayName(keyName, raw)
     if (!isRecord(raw)) {
       errors.push(
         runtimeT('mcp', 'import.serverObject', `${name || '<unknown>'}: expected a server object`, {
@@ -176,6 +394,7 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
       )
       continue
     }
+
     const env = normalizeEnv(raw.env)
     if (raw.env !== undefined && env === undefined) {
       errors.push(
@@ -188,6 +407,7 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
       )
       continue
     }
+
     const server = buildServer(raw, name, env)
     if (!server) {
       errors.push(
@@ -200,6 +420,7 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
       )
       continue
     }
+
     const validation = validateMcpServer(server)
     if (!validation.valid) {
       errors.push(
@@ -215,7 +436,20 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
       )
       continue
     }
-    servers.push(server as McpServerConfig)
+
+    const normalized = server as McpServerConfig
+    const nameKey = normalized.name.trim().toLocaleLowerCase()
+    if (seenNames.has(nameKey)) {
+      errors.push(
+        runtimeT('mcp', 'import.duplicate', `${name || '<unnamed>'}: duplicate server skipped`, {
+          name: name || runtimeT('mcp', 'import.unnamed', '<unnamed>')
+        })
+      )
+      continue
+    }
+    seenNames.add(nameKey)
+    servers.push(normalized)
   }
+
   return { servers, errors }
 }
