@@ -41,6 +41,8 @@
     "openConversations": "打开会话区",
     "skills": "技能",
     "openSkills": "打开技能",
+    "mcp": "MCP",
+    "openMcp": "打开 MCP",
     "scheduledTasks": "定时任务",
     "openScheduledTasks": "打开定时任务",
     "gitHistory": "Git 历史",

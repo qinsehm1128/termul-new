@@ -4040,7 +4040,7 @@ describe('acp-store', () => {
       sessionId: 's-conv-resume',
       cwd: '/w',
       conversationId: CONVERSATION_ID,
-      mcpServers: [{ type: 'stdio', name: 'Files', command: 'node', args: [], env: [] }]
+      mcpServers: []
     })
     expect(invoke).not.toHaveBeenCalledWith('acp_load_session', expect.anything())
   })
@@ -5844,129 +5844,7 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessionIndex.map((entry) => entry.id)).toContain('s-delete-fail')
   })
 
-  it('MCP registry CRUD persists and removes (P6)', async () => {
-    await useAcpStore
-      .getState()
-      .saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs', command: 'npx' })
-    expect(useAcpStore.getState().mcpServers).toHaveLength(1)
-    await useAcpStore
-      .getState()
-      .saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs2', command: 'npx' })
-    expect(useAcpStore.getState().mcpServers).toHaveLength(1)
-    expect(useAcpStore.getState().mcpServers[0].name).toBe('fs2')
-    await useAcpStore.getState().deleteMcpServer('m1')
-    expect(useAcpStore.getState().mcpServers).toHaveLength(0)
-  })
-
-  it('importMcpServers appends a batch in a single atomic persist', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    vi.mocked(persistence.saveMcpServers).mockClear()
-    useAcpStore.setState({
-      mcpServers: [{ id: 'm0', type: 'stdio', name: 'Existing', command: 'node', enabled: true }]
-    })
-    await useAcpStore.getState().importMcpServers([
-      { id: 'm2', type: 'stdio', name: 'a', command: 'node', enabled: true },
-      { id: 'm3', type: 'http', name: 'b', url: 'https://b.test/mcp', enabled: true }
-    ])
-    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['m0', 'm2', 'm3'])
-    // One disk write for the whole batch — not one per entry.
-    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({ id: 'm2' }),
-        expect.objectContaining({ id: 'm3' })
-      ])
-    )
-  })
-
-  it('syncMcpRegistryToProjectFile mirrors the current registry to the project file (CAP-7)', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    vi.mocked(persistence.syncMcpRegistryToProjectBestEffort).mockClear()
-    useAcpStore.setState({
-      mcpServers: [
-        { id: 'm1', type: 'stdio', name: 'fs', command: 'npx', enabled: true },
-        { id: 'm2', type: 'http', name: 'api', url: 'https://x.test/mcp', enabled: true }
-      ],
-      mcpServersLoaded: true
-    })
-    await useAcpStore.getState().syncMcpRegistryToProjectFile()
-    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({ id: 'm1' }),
-        expect.objectContaining({ id: 'm2' })
-      ])
-    )
-  })
-
-  it('rolls back an import batch when registry persistence fails', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    vi.mocked(persistence.saveMcpServers).mockRejectedValueOnce(new Error('disk full'))
-    useAcpStore.setState({
-      mcpServers: [{ id: 'm0', type: 'stdio', name: 'Existing', command: 'node', enabled: true }]
-    })
-    await expect(
-      useAcpStore
-        .getState()
-        .importMcpServers([{ id: 'm4', type: 'stdio', name: 'c', command: 'node', enabled: true }])
-    ).rejects.toThrow('disk full')
-    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['m0'])
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'acp-store.importMcpServers' })
-    )
-  })
-
-  it('serializes overlapping registry mutations so later writes never clobber earlier ones', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    const save = vi.mocked(persistence.saveMcpServers)
-    save.mockClear()
-    // The import's disk write stalls until the test releases it.
-    let releaseImportWrite: (() => void) | undefined
-    save.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseImportWrite = () => resolve()
-        })
-    )
-    useAcpStore.setState({
-      mcpServers: [{ id: 'q1', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
-    })
-
-    const importPromise = useAcpStore
-      .getState()
-      .importMcpServers([
-        { id: 'q2', type: 'stdio', name: 'Imported', command: 'node', enabled: true }
-      ])
-    // A toggle issued while the import write is in flight must wait its turn —
-    // without the mutation queue it would snapshot the pre-import registry and
-    // persist that stale list after the import (dropping q2), and its rollback
-    // on failure would drop q2 too.
-    const togglePromise = useAcpStore.getState().setMcpServerEnabled('q1', false)
-
-    // Mutations run queued on the microtask queue; let the import mutation
-    // reach its stalled disk write before asserting on the mid-flight state.
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['q1', 'q2'])
-    expect(save).toHaveBeenCalledTimes(1)
-
-    releaseImportWrite?.()
-    await importPromise
-    await togglePromise
-
-    // Both writes land in mutation order; the toggle's snapshot includes q2.
-    expect(save).toHaveBeenCalledTimes(2)
-    expect((save.mock.calls[0]?.[0] ?? []).map((s) => s.id)).toEqual(['q1', 'q2'])
-    const secondWrite = save.mock.calls[1]?.[0] ?? []
-    expect(secondWrite.map((s) => s.id)).toEqual(['q1', 'q2'])
-    expect(secondWrite.find((s) => s.id === 'q1')?.enabled).toBe(false)
-
-    const finalList = useAcpStore.getState().mcpServers
-    expect(finalList.map((s) => s.id)).toEqual(['q1', 'q2'])
-    expect(finalList.find((s) => s.id === 'q1')?.enabled).toBe(false)
-  })
-
-  it('derives enabled MCP servers from capabilities when no override is supplied', async () => {
+  it('does not pass the user MCP registry when no override is supplied', async () => {
     useAcpStore.setState({
       agents: {
         'agent-1': { id: 'agent-1', capabilities: { mcpCapabilities: { http: false } } }
@@ -5983,15 +5861,12 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-1',
       cwd: '/work',
-      mcpServers: [{ type: 'stdio', name: 'Files', command: 'node', args: [], env: [] }],
+      mcpServers: [],
       projectId: 'p1',
       executionTarget: { kind: 'project_root', projectId: 'p1', projectRoot: '/work' }
     })
-    expect(useAcpStore.getState().sessions.derived.mcpServerCount).toBe(1)
-    expect(toastWarning).toHaveBeenCalledWith(
-      'Some MCP servers were skipped',
-      expect.objectContaining({ description: expect.stringContaining('Remote') })
-    )
+    expect(useAcpStore.getState().sessions.derived.mcpServerCount).toBe(0)
+    expect(toastWarning).not.toHaveBeenCalled()
   })
 
   it('preserves an explicit empty MCP override instead of deriving the registry', async () => {
@@ -6012,21 +5887,6 @@ describe('acp-store', () => {
     expect(toastWarning).not.toHaveBeenCalled()
   })
 
-  it('rolls back an enable toggle when registry persistence fails', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    vi.mocked(persistence.saveMcpServers).mockRejectedValueOnce(new Error('disk full'))
-    useAcpStore.setState({
-      mcpServers: [{ id: 'm1', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
-    })
-    await expect(useAcpStore.getState().setMcpServerEnabled('m1', false)).rejects.toThrow(
-      'disk full'
-    )
-    expect(useAcpStore.getState().mcpServers[0].enabled).toBe(true)
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'acp-store.setMcpServerEnabled' })
-    )
-  })
-
   it('startChat forwards selected MCP servers to new_session (P6)', async () => {
     await useAcpStore
       .getState()
@@ -6043,135 +5903,6 @@ describe('acp-store', () => {
       projectId: 'p1',
       executionTarget: { kind: 'project_root', projectId: 'p1', projectRoot: '/work' }
     })
-  })
-
-  it('probeMcpServer updates status + tools + loaded flag on a connected result', async () => {
-    useAcpStore.setState({
-      mcpServers: [{ id: 'p1', type: 'stdio', name: 'Files', command: 'npx', enabled: true }],
-      mcpProbeStatus: {},
-      mcpTools: {},
-      mcpToolsLoaded: {},
-      mcpProbing: {},
-      // A stale error from a previous failed probe must be cleared on success.
-      mcpProbeError: { p1: 'stale error from previous probe' }
-    })
-    vi.mocked(invoke).mockResolvedValueOnce({
-      status: 'connected',
-      tools: [{ name: 'read_file', description: 'read a file' }]
-    })
-    await useAcpStore.getState().probeMcpServer('p1')
-    // The store strips registry-only `id`/`enabled` before passing the wire
-    // config to the probe (stateless — no `toWireServer` default-fill, unlike
-    // `selectMcpServersForAgent` which fills `args: []`/`env: []`).
-    expect(invoke).toHaveBeenCalledWith('acp_probe_mcp_server', {
-      server: { type: 'stdio', name: 'Files', command: 'npx' }
-    })
-    const state = useAcpStore.getState()
-    expect(state.mcpProbeStatus.p1).toBe('connected')
-    expect(state.mcpTools.p1).toEqual([{ name: 'read_file', description: 'read a file' }])
-    expect(state.mcpToolsLoaded.p1).toBe(true)
-    expect(state.mcpProbing.p1).toBe(false)
-    expect(state.mcpProbeError.p1).toBeUndefined()
-  })
-
-  it('probeMcpServer surfaces a disconnected result without throwing', async () => {
-    useAcpStore.setState({
-      mcpServers: [
-        { id: 'p2', type: 'http', name: 'Remote', url: 'https://x.test/m', enabled: true }
-      ],
-      mcpProbeStatus: {},
-      mcpTools: {},
-      mcpToolsLoaded: {},
-      mcpProbing: {},
-      mcpProbeError: {}
-    })
-    vi.mocked(invoke).mockResolvedValueOnce({
-      status: 'disconnected',
-      tools: [],
-      error: 'initialize failed: connection refused'
-    })
-    await useAcpStore.getState().probeMcpServer('p2')
-    const state = useAcpStore.getState()
-    expect(state.mcpProbeStatus.p2).toBe('disconnected')
-    expect(state.mcpTools.p2).toEqual([])
-    expect(state.mcpToolsLoaded.p2).toBe(true)
-    // The backend's redacted failure reason is stored for inline UI surfacing.
-    expect(state.mcpProbeError.p2).toBe('initialize failed: connection refused')
-    // A disconnected probe is a ProbeResult, NOT a throw — no error log.
-    expect(logFrontendError).not.toHaveBeenCalled()
-  })
-
-  it('probeMcpServer dedupes concurrent probes for the same id', async () => {
-    useAcpStore.setState({
-      mcpServers: [{ id: 'p3', type: 'stdio', name: 'Files', command: 'npx', enabled: true }],
-      mcpProbeStatus: {},
-      mcpTools: {},
-      mcpToolsLoaded: {},
-      mcpProbing: {},
-      mcpProbeError: {}
-    })
-    vi.mocked(invoke).mockResolvedValue({ status: 'connected', tools: [] })
-    // Two concurrent calls — only one should reach the transport.
-    await Promise.all([
-      useAcpStore.getState().probeMcpServer('p3'),
-      useAcpStore.getState().probeMcpServer('p3')
-    ])
-    expect(
-      vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_probe_mcp_server')
-    ).toHaveLength(1)
-  })
-
-  it('loadMcpTools no-ops when tools are already loaded', async () => {
-    useAcpStore.setState({
-      mcpServers: [{ id: 'p4', type: 'stdio', name: 'Files', command: 'npx', enabled: true }],
-      mcpToolsLoaded: { p4: true },
-      mcpProbing: {}
-    })
-    vi.mocked(invoke).mockClear()
-    await useAcpStore.getState().loadMcpTools('p4')
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('acp_probe_mcp_server', expect.anything())
-  })
-
-  it('probeMcpServer logs without env values on a transport failure', async () => {
-    useAcpStore.setState({
-      mcpServers: [
-        {
-          id: 'p5',
-          type: 'stdio',
-          name: 'leaky',
-          command: 'npx',
-          args: [],
-          env: [{ name: 'API_KEY', value: 'super-secret-value' }],
-          enabled: true
-        }
-      ],
-      mcpProbeStatus: {},
-      mcpTools: {},
-      mcpToolsLoaded: {},
-      mcpProbing: {},
-      mcpProbeError: {}
-    })
-    vi.mocked(invoke).mockRejectedValueOnce(new Error('transport down'))
-    await useAcpStore.getState().probeMcpServer('p5')
-    const state = useAcpStore.getState()
-    expect(state.mcpProbeStatus.p5).toBe('disconnected')
-    expect(state.mcpProbing.p5).toBe(false)
-    // The canonical facade (`acp-mcp-probe.ts`) normalizes the invoke rejection
-    // to a disconnected ProbeResult carrying the (value-free) error — so the
-    // store's success path stores it for inline UI surfacing.
-    expect(state.mcpProbeError.p5).toBe('Error: transport down')
-    // The canonical facade (`acp-mcp-probe.ts`) normalizes the invoke rejection
-    // to a disconnected ProbeResult and logs the transport failure itself — the
-    // store's success path runs (probe "completed" with a disconnected result),
-    // so `mcpToolsLoaded` is true (no auto-re-probe on next expand — a transport
-    // failure is treated as a completed probe, consistent with the contract).
-    expect(state.mcpToolsLoaded.p5).toBe(true)
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'acp-mcp-probe.probeMcpServer' })
-    )
-    const logged = vi.mocked(logFrontendError).mock.calls.at(-1)?.[0]
-    expect(logged?.message).toContain('leaky')
-    expect(logged?.message).not.toContain('super-secret-value')
   })
 
   // Story 5.3 (AC3): transportReconnecting flag is additive state — verify

@@ -105,8 +105,8 @@ vi.mock('@/components/settings/AcpAgentsSettings', () => ({
   AcpAgentsSettings: () => null
 }))
 
-vi.mock('@/components/settings/McpServersSettings', () => ({
-  McpServersSettings: () => null
+vi.mock('@/components/settings/McpControlPanel', () => ({
+  McpControlPanel: () => null
 }))
 
 vi.mock('@/components/settings/CliResumeDefaultsSettings', () => ({

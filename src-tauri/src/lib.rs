@@ -19,6 +19,8 @@ mod host_admission;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
+/// Runtime-neutral contracts for the independent HTTP-first MCP Core.
+pub mod mcp_core;
 /// Cross-agent conversation memory index: normalizes Claude Code / Codex / pi
 /// transcripts into one shape, stores a searchable projection host-private per
 /// project, and serves it over MCP. Public because the standalone binary's
@@ -3005,6 +3007,10 @@ pub fn run() {
             commands::set_host_default_project,
             commands::remote_sync_chat_history,
             commands::remote_sync_mcp_registry,
+            commands::remote_load_mcp_registry,
+            commands::mcp_get_config,
+            commands::mcp_put_config,
+            commands::mcp_get_status,
             fs_watcher::fs_watcher_subscribe,
             fs_watcher::fs_watcher_set_roots,
             // Desktop ACP renderer-history storage

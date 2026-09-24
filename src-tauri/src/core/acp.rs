@@ -1188,6 +1188,8 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 .as_deref()
                 .map(parse_conversation_id)
                 .transpose()?;
+            // `mcpServers` remains on the Core request for protocol compatibility.
+            // AcpManager discards caller entries and generates host_mcp + Router.
             let result = manager
                 .new_session_with_context(
                     &params.agent_id,

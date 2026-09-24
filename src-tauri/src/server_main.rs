@@ -19,6 +19,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+use se_manager_lib::mcp_core::{
+    AllowAllTools, BuiltInRegistry, McpCore, McpCoreConfig, McpHttpGateway, McpHttpGatewayConfig,
+};
+use se_manager_lib::memory_index::service::MemoryIndexService;
 use se_manager_lib::server_update::{
     check_and_apply_update, current_version, embedded_public_key, is_update_enabled,
     restart_binary, restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome,
@@ -35,6 +39,48 @@ use se_manager_lib::{
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
+
+async fn start_standalone_mcp_gateway(
+    memory_index: Arc<MemoryIndexService>,
+    acp: &AcpManager,
+) -> Result<Option<McpHttpGateway>, String> {
+    let enabled = std::env::var("TERMUL_MCP_CORE_ENABLED")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
+    if !enabled {
+        info!(
+            target: "se_manager::acp::mcp_router",
+            operation = "mcp_router_apply",
+            router = "unavailable",
+            reason = "core_not_wired",
+            stable_code = "UNAVAILABLE",
+            "standalone MCP Core HTTP is opt-in; ACP keeps host_mcp only"
+        );
+        return Ok(None);
+    }
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let process = se_manager_lib::mcp_core::McpCoreProcessConfig::from_env(executable)
+        .map_err(|error| error.to_string())?;
+    let builtins = BuiltInRegistry::memory_backed(memory_index, None);
+    let core =
+        McpCore::new_with_builtins(McpCoreConfig::default(), Arc::new(AllowAllTools), builtins);
+    let auth = process.auth.clone();
+    let gateway = McpHttpGateway::bind(
+        Arc::new(core),
+        McpHttpGatewayConfig {
+            bind_address: process.bind_address,
+            port: process.port,
+            path: "/mcp".into(),
+            generation: 1,
+            auth: process.auth,
+            request_body_limit: process.request_body_limit,
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    acp.apply_mcp_router_endpoint(gateway.endpoint().clone(), auth);
+    Ok(Some(gateway))
+}
 
 fn provision_standalone_authority(
     cfg: &ServerConfig,
@@ -389,6 +435,14 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
 
+        let mcp_gateway = match start_standalone_mcp_gateway(Arc::clone(&memory_index), &acp).await
+        {
+            Ok(gateway) => gateway,
+            Err(error) => {
+                eprintln!("se-server: failed to start in-process MCP Core: {error}");
+                return ExitCode::from(1);
+            }
+        };
         let projects_file = cfg.projects_file.clone();
         // Opt-in self-update loop (default off): only runs when the operator set
         // SE_SERVER_UPDATE_ENABLED=true + SE_SERVER_UPDATE_CHANNEL. A bad
@@ -451,10 +505,16 @@ fn main() -> ExitCode {
         .await
         {
             Ok(()) => {
+                if let Some(gateway) = mcp_gateway {
+                    gateway.shutdown().await;
+                }
                 scheduled_tasks.shutdown(Duration::from_secs(10)).await;
                 ExitCode::SUCCESS
             }
             Err(e) => {
+                if let Some(gateway) = mcp_gateway {
+                    gateway.shutdown().await;
+                }
                 scheduled_tasks.shutdown(Duration::from_secs(10)).await;
                 eprintln!("se-server failed: {e}");
                 ExitCode::from(1)

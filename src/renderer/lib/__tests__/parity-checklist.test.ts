@@ -578,7 +578,8 @@ describe('Parity Checklist Automation', () => {
         'terminals',
         'snapshots',
         'settings',
-        'preferences'
+        'preferences',
+        'mcp'
       ]) {
         expect(routes, `portable router missing ${route}`).toContain(route)
       }
@@ -1235,6 +1236,56 @@ describe('Parity Checklist Automation', () => {
       }
       const router = readFileSync(join(LIB_DIR, '..', 'app', 'portable-router.tsx'), 'utf-8')
       expect(router).toMatch(/path:\s*'skills'/)
+    })
+  })
+
+  describe('MCP control-plane parity', () => {
+    it('facade branches Tauri vs web by isTauriContext()', () => {
+      const facade = readFileSync(join(LIB_DIR, 'mcp-api.ts'), 'utf-8')
+      expect(facade).toMatch(/isTauriContext\(\)/)
+      expect(facade).toMatch(/mcp_get_config/)
+      expect(facade).toMatch(/mcp_put_config/)
+      expect(facade).toMatch(/mcp_get_status/)
+      expect(facade).toMatch(/webServerMcpControl/)
+    })
+
+    it('web helper and router expose canonical /mcp/config|status|probe without dropping aliases', () => {
+      const server = readFileSync(join(LIB_DIR, 'web-server-api.ts'), 'utf-8')
+      const router = readFileSync(
+        join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs'),
+        'utf-8'
+      )
+      for (const route of ['/mcp/config', '/mcp/status', '/mcp/probe']) {
+        expect(server, `web helper missing ${route}`).toContain(route)
+        expect(router, `router missing ${route}`).toContain(route)
+      }
+      for (const alias of ['/mcp-servers', '/mcp-servers/probe']) {
+        expect(router, `router dropped alias ${alias}`).toContain(alias)
+      }
+      expect(server).toContain('/mcp-servers')
+    })
+
+    it('desktop commands are registered and the route exists on both roots', () => {
+      const lib = readFileSync(
+        join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'lib.rs'),
+        'utf-8'
+      )
+      for (const command of ['mcp_get_config', 'mcp_put_config', 'mcp_get_status']) {
+        expect(lib).toContain(command)
+      }
+      const router = readFileSync(join(LIB_DIR, '..', 'app', 'portable-router.tsx'), 'utf-8')
+      expect(router).toMatch(/path:\s*'mcp'/)
+    })
+
+    it('ACP session creation does not select the user MCP registry', () => {
+      const store = readFileSync(join(LIB_DIR, '..', 'stores', 'acp-store.ts'), 'utf-8')
+      const manager = readFileSync(
+        join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager.rs'),
+        'utf-8'
+      )
+      expect(store).not.toMatch(/selectMcpServersForAgent\(/)
+      expect(manager).toContain('assemble_host_session_mcp')
+      expect(manager).not.toMatch(/combined\.extend\((mcp_servers|configured_mcp_servers)\)/)
     })
   })
 

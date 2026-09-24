@@ -4,7 +4,7 @@ import { persistenceApi, secureStorageApi, syncProjects, worktreeApi } from '@/l
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { webServerProjects } from '@/lib/web-server-api'
-import { useAcpStore } from '@/stores/acp-store'
+import { useMcpStore } from '@/stores/mcp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -815,7 +815,7 @@ export function useProjectsAutoSave(): void {
             // leaves the backend on the old default — syncing then would write
             // to the wrong project's file).
             if (projectSwitched && result.success) {
-              void useAcpStore.getState().syncMcpRegistryToProjectFile()
+              void useMcpStore.getState().load()
             }
           })
           .catch((err: unknown) => {

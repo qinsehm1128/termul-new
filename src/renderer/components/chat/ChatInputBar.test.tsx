@@ -128,28 +128,28 @@ vi.mock('@/stores/acp-store', () => ({
   useSessionAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' }),
   useSessionUsage: () => null,
   useAcpMessages: () => [],
-  // Story 1.8: ChatInputBar reads the global MCP server count for the read-only
-  // MCP badge. The selector reads the hoisted `mockMcpCount.current` so a test
-  // can override the count (default 0 → badge hidden). The chatbox popover work
-  // added per-server iteration + toggle/probe actions — the mock now returns
-  // real server objects (with stable ids) plus no-op probe state so the popover
-  // renders without crashing when the count is non-zero.
-  useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
+  useAcpStore: (selector: (s: Record<string, unknown>) => unknown) => selector({})
+}))
+
+vi.mock('@/stores/mcp-store', () => ({
+  useMcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
-      mcpServers: Array.from({ length: mockMcpCount.current }, (_, i) => ({
-        id: `mcp-${i}`,
-        type: 'stdio',
-        name: `MCP ${i + 1}`,
-        command: 'npx',
-        enabled: true
-      })),
-      setMcpServerEnabled: mockSetMcpServerEnabled,
-      mcpProbeStatus: {} as Record<string, string>,
-      mcpProbeError: {} as Record<string, string | undefined>,
-      mcpTools: {} as Record<string, unknown[]>,
-      mcpToolsLoaded: {} as Record<string, boolean>,
-      mcpProbing: {} as Record<string, boolean>,
-      loadMcpTools: mockLoadMcpTools
+      config: {
+        upstreams: Array.from({ length: mockMcpCount.current }, (_, i) => ({
+          id: `mcp-${i}`,
+          type: 'stdio',
+          name: `MCP ${i + 1}`,
+          command: 'npx',
+          enabled: true
+        }))
+      },
+      setUpstreamEnabled: mockSetMcpServerEnabled,
+      probeStatus: {} as Record<string, string>,
+      probeError: {} as Record<string, string | undefined>,
+      tools: {} as Record<string, unknown[]>,
+      toolsLoaded: {} as Record<string, boolean>,
+      probing: {} as Record<string, boolean>,
+      loadTools: mockLoadMcpTools
     })
 }))
 

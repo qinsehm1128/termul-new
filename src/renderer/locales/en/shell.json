@@ -41,6 +41,8 @@
     "openConversations": "Open the conversations area",
     "skills": "Skills",
     "openSkills": "Open skills",
+    "mcp": "MCP",
+    "openMcp": "Open MCP",
     "scheduledTasks": "Scheduled tasks",
     "openScheduledTasks": "Open scheduled tasks",
     "gitHistory": "Git history",

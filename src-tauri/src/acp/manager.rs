@@ -1078,6 +1078,10 @@ pub struct AcpManager {
     /// renders it. See `host_mcp::mod` + the spec
     /// `spec-acp-host-todo-plan-tool.md`.
     host_plan_server: Arc<crate::acp::host_mcp::parent::HostPlanServer>,
+    /// Canonical MCP Core Router endpoint/auth, when the host has threaded one.
+    /// Default is explicit `core_not_wired` absence — callers never fall back
+    /// to the user registry.
+    mcp_router: Mutex<crate::acp::mcp_router::McpRouterAvailability>,
     /// Last advertised mode/model/configOptions per live session. Phone and
     /// web read this instead of reopening a session the driver already owns.
     composer_controls: Arc<ComposerControlCache>,
@@ -1196,6 +1200,7 @@ impl AcpManager {
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
+            mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1221,6 +1226,7 @@ impl AcpManager {
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
+            mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1248,6 +1254,7 @@ impl AcpManager {
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
+            mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1315,6 +1322,37 @@ impl AcpManager {
         service: &Arc<crate::memory_index::service::MemoryIndexService>,
     ) {
         self.host_plan_server.set_memory_index(service);
+    }
+
+    /// Thread the canonical MCP Core HTTP endpoint/auth into ACP session MCP
+    /// generation. Non-loopback or unusable auth is stored as explicit
+    /// unavailability; the user registry is never restored.
+    pub fn apply_mcp_router_endpoint(
+        &self,
+        endpoint: crate::mcp_core::McpEndpointDescriptor,
+        auth: crate::mcp_core::AuthBootstrap,
+    ) {
+        let availability =
+            crate::acp::mcp_router::McpRouterAvailability::from_endpoint_auth(endpoint, auth);
+        match &availability {
+            crate::acp::mcp_router::McpRouterAvailability::Available { endpoint, auth } => {
+                log::info!(
+                    target: crate::acp::mcp_router::MCP_ROUTER_LOG_TARGET,
+                    "operation=mcp_router_apply generation={} port={} auth_generation={} loopback=1 stable_code=OK",
+                    endpoint.generation,
+                    endpoint.port,
+                    auth.generation
+                );
+            }
+            crate::acp::mcp_router::McpRouterAvailability::Unavailable { reason } => {
+                log::info!(
+                    target: crate::acp::mcp_router::MCP_ROUTER_LOG_TARGET,
+                    "operation=mcp_router_apply router=unavailable reason={} stable_code=UNAVAILABLE",
+                    reason.as_str()
+                );
+            }
+        }
+        *self.mcp_router.lock() = availability;
     }
 
     #[must_use]
@@ -1837,12 +1875,9 @@ impl AcpManager {
             .get(&agent_id)
             .map(|entry| (entry.capabilities.clone(), entry.stable_namespace.clone()))
             .ok_or_else(|| format!("unknown agent: {agent_id}"))?;
-        let (port, token, provisional_sid) = self.host_plan_server.register_session(&agent_id.0);
-        let internal = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
-        if let Err(error) = gate_mcp_servers(&caps, &internal) {
-            self.host_plan_server.unregister_by_token(&token);
-            return Err(error);
-        }
+        let (internal, token) =
+            self.assemble_host_session_mcp(&agent_id, &caps, true, 0, "session_replace")?;
+        let token = token.expect("host_mcp token is issued for replacement sessions");
         let tx = self.command_tx(&agent_id)?;
         let (binding_gate_tx, binding_gate_rx) = watch::channel(None);
         let outcome = send_command(&tx, |reply| AcpCommand::NewSession {
@@ -2035,20 +2070,17 @@ impl AcpManager {
                 .map_err(|error| format!("SCHEDULED_TASK_SKILL_PROVISION_FAILED: {error}"))?;
         }
 
-        // Host-injected `plan` MCP tool: prepend a self-spawned stdio child to every
-        // non-ephemeral session. The provisional token is rebound after durable binding.
-        let (combined_mcp_servers, plan_token): (Vec<McpServer>, Option<String>) = if !context
-            .ephemeral
-        {
-            let (port, token, provisional_sid) =
-                self.host_plan_server.register_session(&agent_id.0);
-            let internal = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
-            let mut combined = internal;
-            combined.extend(mcp_servers);
-            (combined, Some(token))
-        } else {
-            (mcp_servers, None)
-        };
+        // Host-owned session MCP set: legacy host_mcp stdio (non-ephemeral) plus
+        // at most one Core Router HTTP entry. Caller/user-registry servers are
+        // discarded rather than restored per agent.
+        let discarded_caller_count = mcp_servers.len();
+        let (combined_mcp_servers, plan_token) = self.assemble_host_session_mcp(
+            agent_id,
+            &caps,
+            !context.ephemeral,
+            discarded_caller_count,
+            "session_new",
+        )?;
 
         let stable_for_binding = stable_agent_namespace
             .clone()
@@ -2301,25 +2333,65 @@ impl AcpManager {
         session_id: &SessionId,
         configured_mcp_servers: Vec<McpServer>,
     ) -> Result<(Vec<McpServer>, String), String> {
-        // Reopen requests carry the complete MCP set. Replace any previous
-        // in-process route for this session before issuing a fresh credential.
+        // Reopen requests keep the protocol `mcpServers` field, but the host
+        // regenerates the session set (host_mcp + optional Router). Drop any
+        // previous in-process route before issuing a fresh credential.
         self.host_plan_server.unregister_session(&session_id.0);
-        let (port, token, provisional_sid) = self.host_plan_server.register_session(&agent_id.0);
+        let caps = self.capabilities(agent_id)?;
+        let discarded_caller_count = configured_mcp_servers.len();
+        let (combined, token) = self.assemble_host_session_mcp(
+            agent_id,
+            &caps,
+            true,
+            discarded_caller_count,
+            "session_reopen",
+        )?;
+        let token = token.expect("host_mcp token is issued for reopen");
         self.host_plan_server.bind_session(&token, &session_id.0);
-        let mut combined = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
-        let configured_count = configured_mcp_servers.len();
-        combined.extend(configured_mcp_servers);
-        if let Err(error) = gate_mcp_servers(&self.capabilities(agent_id)?, &combined) {
-            self.host_plan_server.unregister_by_token(&token);
+        Ok((combined, token))
+    }
+
+    /// Build the host-owned ACP `mcpServers` list. Never extends with the
+    /// caller/user registry: that configuration lives in the canonical MCP
+    /// Core, reached through one generated Router HTTP entry when available.
+    fn assemble_host_session_mcp(
+        &self,
+        agent_id: &AgentId,
+        caps: &AgentCapabilities,
+        inject_host_mcp: bool,
+        discarded_caller_count: usize,
+        operation: &'static str,
+    ) -> Result<(Vec<McpServer>, Option<String>), String> {
+        let (mut servers, token) = if inject_host_mcp {
+            let (port, token, provisional_sid) =
+                self.host_plan_server.register_session(&agent_id.0);
+            (
+                build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid),
+                Some(token),
+            )
+        } else {
+            (Vec::new(), None)
+        };
+        let availability = self.mcp_router.lock().clone();
+        let apply = crate::acp::mcp_router::append_router_entry(&mut servers, &availability, caps);
+        if let Err(error) = gate_mcp_servers(caps, &servers) {
+            if let Some(token) = &token {
+                self.host_plan_server.unregister_by_token(token);
+            }
             return Err(error);
         }
         log::info!(
-            "[host-mcp] boundary=session_reopen_injected agent_id={} configured_count={} total_count={}",
+            target: crate::acp::mcp_router::MCP_ROUTER_LOG_TARGET,
+            "operation={} agent_id={} host_mcp={} router={} discarded_caller_count={} total_count={} router_reason={} stable_code=OK",
+            operation,
             agent_id.0,
-            configured_count,
-            combined.len()
+            if inject_host_mcp { 1 } else { 0 },
+            if apply.injected { 1 } else { 0 },
+            discarded_caller_count,
+            servers.len(),
+            apply.reason.map(crate::acp::mcp_router::McpRouterUnavailableReason::as_str).unwrap_or("applied"),
         );
-        Ok((combined, token))
+        Ok((servers, token))
     }
 
     /// Close a session. Gated on the agent's `sessionCapabilities.close`.
@@ -5594,14 +5666,16 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn reopen_methods_prepend_internal_mcp_to_configured_servers() {
-        let manager = AcpManager::new(vec![]);
+    fn insert_reopen_agent(
+        manager: &AcpManager,
+        http: bool,
+    ) -> (AgentId, mpsc::UnboundedReceiver<AcpCommand>) {
         let agent_id = AgentId::new();
-        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
         let mut capabilities = AgentCapabilities::default();
         capabilities.load_session = true;
         capabilities.session_capabilities.resume = Some(Default::default());
+        capabilities.mcp_capabilities.http = http;
         manager.agents.lock().insert(
             agent_id.clone(),
             AgentEntry {
@@ -5613,38 +5687,54 @@ mod tests {
                 permission_policy: Arc::new(Mutex::new(PermissionPolicy::Ask)),
             },
         );
-        let configured = McpServer::Stdio(McpServerStdio::new(
+        (agent_id, command_rx)
+    }
+
+    fn caller_registry_server() -> McpServer {
+        McpServer::Stdio(McpServerStdio::new(
             "configured".to_string(),
             PathBuf::from("/bin/echo"),
-        ));
-        let capture = tokio::spawn(async move {
-            let mut received = Vec::new();
-            while received.len() < 2 {
-                let command = command_rx.recv().await.unwrap();
-                match command {
-                    AcpCommand::OwnsSession { reply, .. } => {
-                        reply.send(Ok(false)).unwrap();
-                    }
-                    AcpCommand::ResumeSession {
-                        mcp_servers, reply, ..
-                    }
-                    | AcpCommand::LoadSession {
-                        mcp_servers, reply, ..
-                    } => {
-                        received.push(mcp_servers);
-                        reply
-                            .send(Ok(SessionReopenOutcome {
-                                modes: None,
-                                models: None,
-                                config_options: None,
-                            }))
-                            .unwrap();
-                    }
-                    _ => panic!("unexpected ACP command"),
+        ))
+    }
+
+    async fn capture_reopen_mcp(
+        mut command_rx: mpsc::UnboundedReceiver<AcpCommand>,
+        count: usize,
+    ) -> Vec<Vec<McpServer>> {
+        let mut received = Vec::new();
+        while received.len() < count {
+            let command = command_rx.recv().await.unwrap();
+            match command {
+                AcpCommand::OwnsSession { reply, .. } => {
+                    reply.send(Ok(false)).unwrap();
                 }
+                AcpCommand::ResumeSession {
+                    mcp_servers, reply, ..
+                }
+                | AcpCommand::LoadSession {
+                    mcp_servers, reply, ..
+                } => {
+                    received.push(mcp_servers);
+                    reply
+                        .send(Ok(SessionReopenOutcome {
+                            modes: None,
+                            models: None,
+                            config_options: None,
+                        }))
+                        .unwrap();
+                }
+                _ => panic!("unexpected ACP command"),
             }
-            received
-        });
+        }
+        received
+    }
+
+    #[tokio::test]
+    async fn reopen_methods_keep_host_mcp_and_discard_caller_registry() {
+        let manager = AcpManager::new(vec![]);
+        let (agent_id, command_rx) = insert_reopen_agent(&manager, false);
+        let configured = caller_registry_server();
+        let capture = tokio::spawn(capture_reopen_mcp(command_rx, 2));
 
         manager
             .resume_session(
@@ -5673,15 +5763,101 @@ mod tests {
         // production, so it stays green while every already-installed agent keeps
         // addressing a server that no longer exists. `tests/legacy_brand_mcp_name.rs`
         // (T-H09) carries that contract instead, against a frozen agent-side MCP
-        // config on disk. What is left here is what this test is actually about:
-        // the internal server is *prepended* to the configured ones.
+        // config on disk. Load and resume must both keep host_mcp and drop the
+        // caller/user registry when Core is unwired.
         for servers in capture.await.unwrap() {
-            assert_eq!(servers.len(), 2);
-            assert_eq!(
-                serde_json::to_value(&servers[1]).unwrap()["name"],
+            assert_eq!(servers.len(), 1);
+            assert!(matches!(servers[0], McpServer::Stdio(_)));
+            assert_eq!(crate::acp::mcp_router::router_http_count(&servers), 0);
+            assert_ne!(
+                serde_json::to_value(&servers[0]).unwrap()["name"],
                 "configured"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn reopen_methods_inject_one_router_http_when_core_is_wired() {
+        let manager = AcpManager::new(vec![]);
+        manager.apply_mcp_router_endpoint(
+            crate::mcp_core::McpEndpointDescriptor {
+                generation: 4,
+                bind_address: "127.0.0.1".into(),
+                port: 17310,
+                path: "/mcp".into(),
+                auth_generation: 4,
+            },
+            crate::mcp_core::AuthBootstrap::new(4, "router-secret").unwrap(),
+        );
+        let (agent_id, command_rx) = insert_reopen_agent(&manager, true);
+        let capture = tokio::spawn(capture_reopen_mcp(command_rx, 2));
+
+        manager
+            .resume_session(
+                &agent_id,
+                SessionId::new("resume-session"),
+                "/workspace".to_string(),
+                Vec::new(),
+                vec![caller_registry_server()],
+            )
+            .await
+            .unwrap();
+        manager
+            .load_session(
+                &agent_id,
+                SessionId::new("load-session"),
+                "/workspace".to_string(),
+                Vec::new(),
+                vec![caller_registry_server()],
+            )
+            .await
+            .unwrap();
+
+        for servers in capture.await.unwrap() {
+            assert_eq!(servers.len(), 2);
+            assert!(matches!(servers[0], McpServer::Stdio(_)));
+            assert_eq!(crate::acp::mcp_router::router_http_count(&servers), 1);
+            let value = serde_json::to_value(&servers[1]).unwrap();
+            assert_eq!(value["type"], "http");
+            assert_eq!(value["name"], crate::acp::mcp_router::MCP_ROUTER_ACP_NAME);
+            assert_eq!(value["url"], "http://127.0.0.1:17310/mcp");
+            assert_ne!(value["name"], "configured");
+            let headers = value["headers"].as_array().expect("headers");
+            assert_eq!(headers.len(), 1);
+            assert_eq!(headers[0]["name"], "Authorization");
+            assert_eq!(headers[0]["value"], "Bearer router-secret");
+        }
+    }
+
+    #[tokio::test]
+    async fn reopen_skips_router_without_http_capability() {
+        let manager = AcpManager::new(vec![]);
+        manager.apply_mcp_router_endpoint(
+            crate::mcp_core::McpEndpointDescriptor {
+                generation: 4,
+                bind_address: "127.0.0.1".into(),
+                port: 17311,
+                path: "/mcp".into(),
+                auth_generation: 4,
+            },
+            crate::mcp_core::AuthBootstrap::new(4, "router-secret").unwrap(),
+        );
+        let (agent_id, command_rx) = insert_reopen_agent(&manager, false);
+        let capture = tokio::spawn(capture_reopen_mcp(command_rx, 1));
+        manager
+            .load_session(
+                &agent_id,
+                SessionId::new("load-session"),
+                "/workspace".to_string(),
+                Vec::new(),
+                vec![caller_registry_server()],
+            )
+            .await
+            .unwrap();
+        let servers = capture.await.unwrap().remove(0);
+        assert_eq!(servers.len(), 1);
+        assert!(matches!(servers[0], McpServer::Stdio(_)));
+        assert_eq!(crate::acp::mcp_router::router_http_count(&servers), 0);
     }
 
     /// The rejection path must NOT enqueue any command (agent never contacted).

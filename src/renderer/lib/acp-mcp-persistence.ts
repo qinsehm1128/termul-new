@@ -1,7 +1,7 @@
 import { runtimeT } from '@/i18n/runtime'
 import type { AgentCapabilities, McpServer, McpServerConfig } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
-import { syncMcpRegistryToProject } from '@/lib/tauri-remote-api'
+import { loadMcpRegistryFromProject, syncMcpRegistryToProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpServers } from '@/lib/web-server-api'
 import { logFrontendError } from './log-api'
@@ -135,14 +135,26 @@ function normalizeStoredServer(value: unknown): StoredMcpServer | null {
   return null
 }
 
+function extractUpstreamEntries(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value
+  if (
+    isRecord(value) &&
+    (typeof value.schemaVersion === 'number' || Array.isArray(value.upstreams))
+  ) {
+    return Array.isArray(value.upstreams) ? value.upstreams : []
+  }
+  return null
+}
+
 export function normalizeMcpRegistry(value: unknown): StoredMcpServer[] {
-  if (!Array.isArray(value)) return []
-  const normalized = value.flatMap((entry) => {
+  const entries = extractUpstreamEntries(value)
+  if (entries == null) return []
+  const normalized = entries.flatMap((entry) => {
     const server = normalizeStoredServer(entry)
     return server ? [server] : []
   })
-  if (normalized.length !== value.length) {
-    console.warn(`[mcp] discarded ${value.length - normalized.length} malformed registry entries`)
+  if (normalized.length !== entries.length) {
+    console.warn(`[mcp] discarded ${entries.length - normalized.length} malformed registry entries`)
   }
   return normalized
 }
@@ -179,10 +191,27 @@ export function selectMcpServersForAgent(
   return { servers, skipped, pending }
 }
 
+async function loadLegacyDesktopRegistry(): Promise<StoredMcpServer[]> {
+  const res = await persistenceApi.read<unknown>(ACP_MCP_KEY)
+  if (res.success) return normalizeMcpRegistry(res.data)
+  if (res.code === 'KEY_NOT_FOUND') return []
+  throw new Error(
+    res.error ?? runtimeT('mcp', 'persistence.loadFailed', 'Failed to load MCP servers')
+  )
+}
+
 export async function loadMcpServers(): Promise<StoredMcpServer[]> {
-  const res = isTauriContext()
-    ? await persistenceApi.read<unknown>(ACP_MCP_KEY)
-    : await webServerMcpServers.get()
+  if (isTauriContext()) {
+    const project = await loadMcpRegistryFromProject()
+    if (project.success) return normalizeMcpRegistry(project.data)
+    if (project.code === 'MCP_REGISTRY_NOT_FOUND' || project.code === 'NO_ACTIVE_PROJECT_ROOT') {
+      return loadLegacyDesktopRegistry()
+    }
+    throw new Error(
+      project.error ?? runtimeT('mcp', 'persistence.loadFailed', 'Failed to load MCP servers')
+    )
+  }
+  const res = await webServerMcpServers.get()
   if (res.success) return normalizeMcpRegistry(res.data)
   if (res.code === 'KEY_NOT_FOUND') return []
   throw new Error(
@@ -193,17 +222,12 @@ export async function loadMcpServers(): Promise<StoredMcpServer[]> {
 export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
   const normalized = normalizeMcpRegistry(list)
   if (isTauriContext()) {
-    const res = await persistenceApi.write(ACP_MCP_KEY, normalized)
+    const res = await syncMcpRegistryToProject(normalized)
     if (!res.success) {
       throw new Error(
         res.error ?? runtimeT('mcp', 'persistence.saveFailed', 'Failed to persist MCP servers')
       )
     }
-    // CAP-7: mirror the app-store registry to the active project's
-    // `.se-manager/mcp-servers.json` so the web `GET /mcp-servers` route (file-based)
-    // serves the same registry. Best-effort — a sync failure is logged but
-    // never blocks the app-store save (the save above already succeeded).
-    await syncMcpRegistryToProjectBestEffort(normalized)
     return
   }
   const res = await webServerMcpServers.put(normalized)
@@ -216,9 +240,9 @@ export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
 
 /**
  * Best-effort wrapper for `syncMcpRegistryToProject`: logs a failure via
- * `logFrontendError` (with the IpcResult error/code) and never throws. Shared by
- * the `saveMcpServers` desktop hook and the acp-store project-switch hook so the
- * error path stays identical (CAP-7 — registry sync is always non-fatal).
+ * `logFrontendError` (with the IpcResult error/code) and never throws. Kept for
+ * the acp-store project-switch hook so switching projects cannot fail closed on
+ * a registry write. Direct settings saves use `saveMcpServers` and are fatal.
  */
 export async function syncMcpRegistryToProjectBestEffort(
   registry: StoredMcpServer[]

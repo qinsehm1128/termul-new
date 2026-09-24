@@ -2,8 +2,8 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
 
-const { syncMcpRegistryToProjectFile, syncProjectsMock } = vi.hoisted(() => ({
-  syncMcpRegistryToProjectFile: vi.fn(async () => undefined),
+const { loadMcpConfigMock, syncProjectsMock } = vi.hoisted(() => ({
+  loadMcpConfigMock: vi.fn(async () => undefined),
   syncProjectsMock: vi.fn(async () => ({ success: true }))
 }))
 
@@ -33,9 +33,9 @@ vi.mock('@/stores/remote-status-store', () => ({
     subscribe: () => () => {}
   }
 }))
-vi.mock('@/stores/acp-store', () => ({
-  useAcpStore: {
-    getState: () => ({ syncMcpRegistryToProjectFile })
+vi.mock('@/stores/mcp-store', () => ({
+  useMcpStore: {
+    getState: () => ({ load: loadMcpConfigMock })
   }
 }))
 vi.mock('@/stores/terminal-store', () => ({
@@ -80,7 +80,7 @@ describe('useProjectsAutoSave MCP sync on project switch (CAP-7)', () => {
     })
   })
 
-  it('calls syncMcpRegistryToProjectFile when activeProjectId changes', async () => {
+  it('reloads the MCP control plane when activeProjectId changes', async () => {
     const { unmount } = renderHook(() => useProjectsAutoSave())
 
     // First state change initializes the hasInitialized ref (skipped by guard).
@@ -118,13 +118,13 @@ describe('useProjectsAutoSave MCP sync on project switch (CAP-7)', () => {
     ])
 
     await waitFor(() => {
-      expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
+      expect(loadMcpConfigMock).toHaveBeenCalledTimes(1)
     })
 
     unmount()
   })
 
-  it('does not call syncMcpRegistryToProjectFile when only projects change (no switch)', async () => {
+  it('does not reload MCP config when only projects change (no switch)', async () => {
     const { unmount } = renderHook(() => useProjectsAutoSave())
 
     await act(async () => {
@@ -142,12 +142,12 @@ describe('useProjectsAutoSave MCP sync on project switch (CAP-7)', () => {
       expect(syncProjectsMock).toHaveBeenCalled()
     })
 
-    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
+    expect(loadMcpConfigMock).not.toHaveBeenCalled()
 
     unmount()
   })
 
-  it('does not call sync when syncProjects fails', async () => {
+  it('does not reload MCP config when syncProjects fails', async () => {
     syncProjectsMock.mockResolvedValue({ success: false, error: 'boom' })
 
     const { unmount } = renderHook(() => useProjectsAutoSave())
@@ -167,7 +167,7 @@ describe('useProjectsAutoSave MCP sync on project switch (CAP-7)', () => {
       expect(syncProjectsMock).toHaveBeenCalled()
     })
 
-    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
+    expect(loadMcpConfigMock).not.toHaveBeenCalled()
 
     unmount()
   })

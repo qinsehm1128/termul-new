@@ -43,6 +43,10 @@ vi.mock('@/pages/AppPreferences', () => ({
   default: () => <div data-testid="portable-route" data-component="preferences" />
 }))
 
+vi.mock('@/pages/McpPage', () => ({
+  default: () => <div data-testid="portable-route" data-component="mcp" />
+}))
+
 vi.mock('@/pages/NotFound', () => ({
   default: () => <div data-testid="portable-route" data-component="not-found" />
 }))
@@ -122,6 +126,7 @@ const routeCases = [
   ['/snapshots', 'snapshots'],
   ['/settings', 'settings'],
   ['/preferences', 'preferences'],
+  ['/mcp', 'mcp'],
   ['/missing-route', 'not-found']
 ] as const
 

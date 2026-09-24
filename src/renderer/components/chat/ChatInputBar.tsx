@@ -18,12 +18,8 @@ import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
-import {
-  useAcpMessages,
-  useAcpStore,
-  useSessionAgentIdentity,
-  useSessionUsage
-} from '@/stores/acp-store'
+import { useAcpMessages, useSessionAgentIdentity, useSessionUsage } from '@/stores/acp-store'
+import { useMcpStore } from '@/stores/mcp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
@@ -171,18 +167,17 @@ export function ChatInputBar({
   const { name: agentName, templateId: agentTemplateId } = useSessionAgentIdentity(session)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
-  const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
+  const globalMcpCount = useMcpStore((s) => s.config.upstreams.length)
   const mcpCount = session.mcpServerCount ?? globalMcpCount
   // Chatbox popover (per-server enable/disable + status dot + collapsible tool
   // list). The badge degrades to the read-only count pill when the registry is
-  // empty. Reuses `setMcpServerEnabled` (optimistic + rollback) — no new
-  // persistence path. The probe reflects Se's own client connection.
-  const mcpServers = useAcpStore((s) => s.mcpServers)
-  const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
-  const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus)
-  const mcpProbeError = useAcpStore((s) => s.mcpProbeError)
-  const mcpTools = useAcpStore((s) => s.mcpTools)
-  const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
+  // empty. Persistence goes through the project MCP control-plane store.
+  const mcpServers = useMcpStore((s) => s.config.upstreams)
+  const setMcpServerEnabled = useMcpStore((s) => s.setUpstreamEnabled)
+  const mcpProbeStatus = useMcpStore((s) => s.probeStatus)
+  const mcpProbeError = useMcpStore((s) => s.probeError)
+  const mcpTools = useMcpStore((s) => s.tools)
+  const loadMcpTools = useMcpStore((s) => s.loadTools)
   const [value, setValue] = useState('')
   // Persist the in-progress composer draft per session (project + session id)
   // so an unsent message survives a web reload. useState stays the source of

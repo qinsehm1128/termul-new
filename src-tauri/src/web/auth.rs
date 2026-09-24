@@ -203,7 +203,11 @@ impl RemoteRouteClass {
             Some(Self::TerminalWebSocket)
         } else if path == "/projects" || path.starts_with("/projects/") {
             Some(Self::Project)
-        } else if path == "/mcp-servers" || path.starts_with("/mcp-servers/") {
+        } else if path == "/mcp-servers"
+            || path.starts_with("/mcp-servers/")
+            || path == "/mcp"
+            || path.starts_with("/mcp/")
+        {
             Some(Self::Mcp)
         } else if path.starts_with("/fs/") || path == "/shells" {
             Some(Self::Filesystem)

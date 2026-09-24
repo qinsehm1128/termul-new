@@ -27,6 +27,11 @@ name = "se-server"
 path = "src/server_main.rs"
 required-features = ["standalone-server"]
 
+[[bin]]
+name = "se-mcp-fixture"
+path = "src/mcp_fixture_bin.rs"
+required-features = ["mcp-test-fixture"]
+
 [features]
 default = []
 # Enables the se-server binary entry (server_main.rs, required-features on
@@ -42,6 +47,8 @@ default = []
 # "default `cargo build` / `tauri build` do NOT bundle the standalone server
 # binary" invariant.
 standalone-server = []
+# Test-only stdio MCP fixture; never included in normal desktop/server builds.
+mcp-test-fixture = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -83,6 +90,7 @@ flate2 = "1"
 portable-pty = "0.9"
 anyhow = "1"
 tokio = { version = "1", features = ["full", "test-util"] }
+tokio-util = "0.7"
 parking_lot = "0.12"
 futures = "0.3"
 futures-concurrency = "7"
@@ -111,13 +119,15 @@ agent-client-protocol = "1.3"
 #     `transport-io` (`rmcp::transport::io::stdio()`), and `macros`
 #     (`#[tool_router]` / `#[tool]` / `#[tool_handler]`; the `#[tool]` macro
 #     re-exports `rmcp::schemars` for `JsonSchema` derives — no direct `schemars`
-#     dep needed). Resolved to 1.8.0 from `^1.2.0`.
-rmcp = { version = "1.4.0", features = [
+#     dep needed). Targeted at rmcp 3.4.0 after an isolated full-crate compile
+#     confirmed the existing server/client call sites remain compatible.
+rmcp = { version = "3.4.0", features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
     "client-side-sse",
     "server",
+    "transport-streamable-http-server",
     "transport-io",
     "macros",
 ] }

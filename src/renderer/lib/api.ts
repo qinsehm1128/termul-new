@@ -21,6 +21,11 @@ export { gitApi } from './git-api'
 export { keyboardApi } from './keyboard-api'
 export * as logApi from './log-api'
 export * as macosPermissionsApi from './macos-permissions-api'
+export {
+  getMcpConfig,
+  getMcpStatus,
+  putMcpConfig
+} from './mcp-api'
 export { memoryIndexApi } from './memory-index-api'
 export { persistenceApi } from './persistence-api'
 export { scheduledTaskApi } from './scheduled-task-api'

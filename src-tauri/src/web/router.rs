@@ -70,8 +70,17 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 get(mcp_servers_api::get).put(mcp_servers_api::put),
             )
             .route("/mcp-servers/probe", post(mcp_probe_api::probe))
+            .route(
+                "/mcp/config",
+                get(mcp_servers_api::get).put(mcp_servers_api::put_config),
+            )
+            .route("/mcp/status", get(mcp_servers_api::status))
+            .route("/mcp/probe", post(mcp_probe_api::probe))
     } else {
-        Router::<AppState>::new().route("/mcp-servers", get(mcp_servers_api::get))
+        Router::<AppState>::new()
+            .route("/mcp-servers", get(mcp_servers_api::get))
+            .route("/mcp/config", get(mcp_servers_api::get))
+            .route("/mcp/status", get(mcp_servers_api::status))
     };
 
     classified_routes(
@@ -693,6 +702,7 @@ mod tests {
                 false,
             ),
             ("/mcp-servers/probe", "POST", "{}", true),
+            ("/mcp/probe", "POST", "{}", true),
         ] {
             let response = app
                 .clone()

@@ -3944,6 +3944,8 @@ async fn handle_authenticate_agent(
 }
 
 /// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
+/// `mcpServers` stays on the wire for ACP compatibility; the host generates the
+/// session set and does not pass the user/project registry through.
 /// Reply payload = the `NewSessionOutcome` (camelCase: sessionId/modes/models/configOptions).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -4320,22 +4322,12 @@ async fn try_reopen_session_for_switch(
     // cheap error. Any failure (capability, purged session, agent error) →
     // fall back to a new session.
     match acp
-        .resume_session(
-            agent_id,
-            session_id.clone(),
-            target.cwd.clone(),
-            target.mcp_servers.clone(),
-        )
+        .resume_session(agent_id, session_id.clone(), target.cwd.clone(), Vec::new())
         .await
     {
         Ok(_) => Ok(Some(session_id)),
         Err(resume_err) => match acp
-            .load_session(
-                agent_id,
-                session_id.clone(),
-                target.cwd.clone(),
-                target.mcp_servers.clone(),
-            )
+            .load_session(agent_id, session_id.clone(), target.cwd.clone(), Vec::new())
             .await
         {
             Ok(_) => Ok(Some(session_id)),
@@ -4393,7 +4385,7 @@ async fn execute_project_switch(
                 .new_session_with_context(
                     agent_id,
                     target.cwd.clone(),
-                    target.mcp_servers,
+                    Vec::new(),
                     SessionCreationContext {
                         project_id: Some(target.project_id.clone()),
                         ephemeral: false,

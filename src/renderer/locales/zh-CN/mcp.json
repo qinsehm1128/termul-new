@@ -1,4 +1,27 @@
 {
+  "page": {
+    "title": "MCP",
+    "subtitle": "项目级内置能力与上游 MCP 服务器。",
+    "builtInsTitle": "Termul 能力",
+    "builtInsDescription": "Termul 通过统一 MCP 路由暴露的内置工具。",
+    "upstreamsTitle": "上游 MCP 服务器",
+    "upstreamsDescription": "已启用的服务器由项目 MCP 路由聚合。",
+    "statusTitle": "运行状态",
+    "statusDescription": "修订号与上游数量。不会显示密钥。",
+    "revision": "修订号",
+    "upstreamCount": "上游",
+    "revisionConflict": "MCP 配置已在其他位置更新。已重新加载最新版本。",
+    "builtIn": {
+      "session-memory": {
+        "name": "会话记忆",
+        "description": "检索此项目已索引的 agent 会话。"
+      },
+      "project-scope": {
+        "name": "项目范围",
+        "description": "向 MCP 客户端暴露当前项目边界。"
+      }
+    }
+  },
   "common": {
     "servers": "MCP 服务器",
     "save": "保存",
@@ -34,8 +57,8 @@
     "noTools": "没有可用工具。"
   },
   "settings": {
-    "title": "全局 MCP 注册表",
-    "description": "新代理会话启动时会自动提供已启用的服务器。",
+    "title": "上游 MCP 服务器",
+    "description": "已启用的服务器由项目 MCP 路由聚合。",
     "addServer": "添加服务器",
     "storageWarning": "环境变量和请求头存储在现有应用数据存储中。请优先使用 $VARIABLE 引用，而不是明文凭据。",
     "emptyTitle": "尚未配置 MCP 服务器",

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useAcpStore } from '@/stores/acp-store'
+import { emptyMcpConfig } from '@/lib/mcp-api'
+import { useMcpStore } from '@/stores/mcp-store'
 import { McpServersSettings } from './McpServersSettings'
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
@@ -19,20 +20,27 @@ const loadMcpTools = vi.fn(async () => {})
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function seedStore(): void {
-  useAcpStore.setState({
-    mcpServers: [],
-    mcpProbeStatus: {},
-    mcpProbeError: {},
-    mcpTools: {},
-    mcpToolsLoaded: {},
-    mcpProbing: {},
-    saveMcpServer,
-    importMcpServers,
-    setMcpServerEnabled,
-    deleteMcpServer,
-    probeMcpServer,
-    loadMcpTools
+function seedStore(overrides?: {
+  mcpServers?: Array<Record<string, unknown>>
+  mcpProbeStatus?: Record<string, string>
+  mcpProbeError?: Record<string, string | undefined>
+  mcpTools?: Record<string, unknown[]>
+  mcpToolsLoaded?: Record<string, boolean>
+  mcpProbing?: Record<string, boolean>
+}): void {
+  useMcpStore.setState({
+    config: { ...emptyMcpConfig(), upstreams: (overrides?.mcpServers ?? []) as never },
+    probeStatus: (overrides?.mcpProbeStatus ?? {}) as never,
+    probeError: overrides?.mcpProbeError ?? {},
+    tools: (overrides?.mcpTools ?? {}) as never,
+    toolsLoaded: overrides?.mcpToolsLoaded ?? {},
+    probing: overrides?.mcpProbing ?? {},
+    saveUpstream: saveMcpServer,
+    importUpstreams: importMcpServers,
+    setUpstreamEnabled: setMcpServerEnabled,
+    deleteUpstream: deleteMcpServer,
+    probe: probeMcpServer,
+    loadTools: loadMcpTools
   })
 }
 
@@ -177,7 +185,7 @@ describe('McpServersSettings', () => {
   })
 
   it('pre-fills the edit dialog and updates the same registry entry', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [
         {
           id: 's1',
@@ -228,7 +236,7 @@ describe('McpServersSettings', () => {
   })
 
   it('pre-fills HTTP servers with header pairs and updates the url in place', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [
         {
           id: 'http-1',
@@ -266,7 +274,7 @@ describe('McpServersSettings', () => {
   })
 
   it('persists enabled: false from the edit JSON', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's2', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
@@ -283,7 +291,7 @@ describe('McpServersSettings', () => {
   })
 
   it('keeps the existing enabled state when the edit JSON omits it', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's3', type: 'stdio', name: 'Files', command: 'node', enabled: false }]
     })
     render(<McpServersSettings />)
@@ -301,7 +309,7 @@ describe('McpServersSettings', () => {
   })
 
   it('rejects the mcpServers wrapper while editing a single server', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's4', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
@@ -315,7 +323,7 @@ describe('McpServersSettings', () => {
   })
 
   it('shows validation errors inline when the edit JSON is invalid', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's6', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
@@ -367,7 +375,7 @@ describe('McpServersSettings', () => {
 
   it('keeps the edit dialog open when the update fails', async () => {
     saveMcpServer.mockRejectedValueOnce(new Error('disk full'))
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's7', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
@@ -384,7 +392,7 @@ describe('McpServersSettings', () => {
   })
 
   it('toggles and deletes existing servers', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 'one', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
@@ -395,7 +403,7 @@ describe('McpServersSettings', () => {
   })
 
   it('probes enabled servers on mount and shows the connected status dot', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's1', type: 'stdio', name: 'Files', command: 'node', enabled: true }],
       mcpProbeStatus: { s1: 'connected' },
       mcpTools: { s1: [{ name: 'read_file' }] }
@@ -406,7 +414,7 @@ describe('McpServersSettings', () => {
   })
 
   it('shows the disconnected dot and the probe error behind the disclosure', () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [
         { id: 's5', type: 'http', name: 'Remote', url: 'https://x.test/m', enabled: true }
       ],
@@ -425,7 +433,7 @@ describe('McpServersSettings', () => {
   })
 
   it('renders the tool list (read-only) inside the collapsible on expand', () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's3', type: 'stdio', name: 'Probe', command: 'node', enabled: true }],
       mcpTools: { s3: [{ name: 'search', description: 'search files' }] },
       mcpToolsLoaded: { s3: true }
@@ -439,7 +447,7 @@ describe('McpServersSettings', () => {
   })
 
   it('fires the Test button to re-probe a server', async () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [{ id: 's4', type: 'stdio', name: 'Probe', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
@@ -449,7 +457,7 @@ describe('McpServersSettings', () => {
   })
 
   it('renders one compact row per server — detail inline, no form fields', () => {
-    useAcpStore.setState({
+    seedStore({
       mcpServers: [
         { id: 'c1', type: 'stdio', name: 'Files', command: 'node server.js', enabled: true },
         { id: 'c2', type: 'http', name: 'Remote', url: 'https://remote.test/mcp', enabled: true }

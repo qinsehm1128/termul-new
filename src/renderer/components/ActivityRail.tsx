@@ -6,6 +6,7 @@ import {
   MessageSquarePlus,
   Network,
   Palette,
+  Plug,
   SlidersHorizontal,
   Sparkles,
   SquareTerminal
@@ -311,7 +312,7 @@ export function ActivityRail({
           data-activity-rail-section="tools"
           className="m-0 flex min-w-0 flex-col items-center border-0 p-0"
         >
-          <RailTooltip label="Skills">
+          <RailTooltip label={t('activityRail.skills')}>
             <button
               type="button"
               onClick={(e) => {
@@ -319,13 +320,33 @@ export function ActivityRail({
                 navigate('/skills')
               }}
               className={railButtonClass}
-              aria-label="Open Skills"
+              aria-label={t('activityRail.openSkills')}
               aria-current={location.pathname === '/skills' ? 'page' : undefined}
             >
               <Sparkles
                 size={18}
                 className={
                   location.pathname === '/skills' ? 'text-foreground' : 'text-muted-foreground'
+                }
+              />
+            </button>
+          </RailTooltip>
+
+          <RailTooltip label={t('activityRail.mcp')}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                navigate('/mcp')
+              }}
+              className={railButtonClass}
+              aria-label={t('activityRail.openMcp')}
+              aria-current={location.pathname === '/mcp' ? 'page' : undefined}
+            >
+              <Plug
+                size={18}
+                className={
+                  location.pathname === '/mcp' ? 'text-foreground' : 'text-muted-foreground'
                 }
               />
             </button>

@@ -398,8 +398,21 @@ export const webServerMcpServers = {
     return getJson<unknown>('/mcp-servers')
   },
 
-  async put(registry: unknown[]): Promise<IpcResult<void>> {
+  async put(registry: unknown): Promise<IpcResult<void>> {
     return putJson<void>('/mcp-servers', registry)
+  }
+}
+
+/** Canonical MCP control-plane HTTP contract (`/mcp/config|status|probe`). */
+export const webServerMcpControl = {
+  async getConfig(): Promise<IpcResult<unknown>> {
+    return getJson<unknown>('/mcp/config')
+  },
+  async putConfig(config: unknown): Promise<IpcResult<unknown>> {
+    return putJson<unknown>('/mcp/config', config)
+  },
+  async getStatus(): Promise<IpcResult<unknown>> {
+    return getJson<unknown>('/mcp/status')
   }
 }
 
@@ -657,7 +670,7 @@ export const webServerSearch = {
 }
 
 /**
- * On-demand MCP client probe (web parity). `POST /mcp-servers/probe` runs the
+ * On-demand MCP client probe (web parity). `POST /mcp/probe` runs the
  * rmcp client probe on the se-server host (where stdio commands execute).
  * Returns the same `IpcResult<ProbeResult>` shape the desktop Tauri command
  * yields — the renderer facade unwraps it. The probe itself never fails: a
@@ -677,7 +690,7 @@ export const webServerMcpProbe = {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
     try {
-      return await postJson<unknown>('/mcp-servers/probe', server, controller.signal)
+      return await postJson<unknown>('/mcp/probe', server, controller.signal)
     } finally {
       clearTimeout(timer)
     }

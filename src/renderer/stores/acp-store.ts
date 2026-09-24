@@ -67,16 +67,12 @@ import {
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
   type McpServer,
-  type McpServerConfig,
-  type McpToolInfo,
   type MessageChunkEvent,
   type ModeUpdateEvent,
   type PermissionOption,
   type PermissionRequestEvent,
   type PlanEntry,
   type PlanUpdateEvent,
-  type ProbeResult,
-  type ProbeStatus,
   type PromptCompleteEvent,
   type QuestionOption,
   type ScheduledTaskDraftEvent,
@@ -113,13 +109,6 @@ import {
   setCachedSessionPayload,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
-import {
-  loadMcpServers as loadMcpServersFromDisk,
-  type StoredMcpServer,
-  saveMcpServers as saveMcpServersToDisk,
-  selectMcpServersForAgent,
-  syncMcpRegistryToProjectBestEffort
-} from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
 // Story 5.3 (AC3): used to register the WS reconnect listener that flips the
 // store's `transportReconnecting` flag. `getAcpTransport` returns the
@@ -148,7 +137,6 @@ import {
   conversationLifecycleApi
 } from '@/lib/conversation-lifecycle-api'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { getCurrentConversation, useConversationStore } from '@/stores/conversation-store'
@@ -363,32 +351,6 @@ interface AcpState {
   discoveringKeys: Record<string, true>
   /** Ephemeral retry metadata for failed agent-native session reopens. */
   discoveredReopenContexts: Record<SessionId, DiscoveredReopenContext>
-
-  // Global MCP server registry (persisted)
-  mcpServers: StoredMcpServer[]
-  // True once `loadMcpServers` has resolved at least once. Guards
-  // `syncMcpRegistryToProjectFile` against syncing the initial empty state
-  // (which would overwrite a project's `.se-manager/mcp-servers.json` with `[]`
-  // before the app-store registry is loaded — CAP-7 race guard).
-  mcpServersLoaded: boolean
-
-  // MCP probe state — on-demand only (no persistent always-on connections).
-  // `mcpProbeStatus` reflects Se's own rmcp client connection, NOT the
-  // agent's; the dot answers "can Se reach this server and list its tools?".
-  // `mcpTools` is the cached `tools/list` output; `mcpToolsLoaded` gates the
-  // auto-probe on first expand; `mcpProbing` dedupes concurrent probes.
-  mcpProbeStatus: Record<string, ProbeStatus>
-  mcpTools: Record<string, McpToolInfo[]>
-  mcpToolsLoaded: Record<string, boolean>
-  mcpProbing: Record<string, boolean>
-  /**
-   * Last probe error per server (the backend's redacted `ProbeResult.error` —
-   * already stripped of env/header values, tokens, and credentials). Set on
-   * `status:'disconnected'`, cleared on `connected` and on the transport-throw
-   * path (which synthesizes a disconnected status). Surfaced inline in Settings
-   * and as the chatbox "Probe failed" tooltip so failures are diagnosable.
-   */
-  mcpProbeError: Record<string, string | undefined>
 
   // Sessions
   sessions: Record<SessionId, AcpSession>
@@ -659,42 +621,6 @@ interface AcpState {
     cwd: string,
     projectId: string
   ) => Promise<void>
-
-  // Actions — MCP server registry (P6)
-  loadMcpServers: () => Promise<void>
-  saveMcpServer: (server: StoredMcpServer) => Promise<void>
-  /**
-   * Append multiple new registry entries atomically: one optimistic state
-   * update, one disk write, rollback on failure. Used by the Settings JSON add
-   * flow so a multi-server import persists as a single batch — no per-entry
-   * writes, no partial prefix left behind to duplicate on retry.
-   */
-  importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
-  setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
-  deleteMcpServer: (id: string) => Promise<void>
-  /**
-   * CAP-7: mirror the app-store MCP registry to the active project's
-   * `.se-manager/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
-   * host-level project switch so the new project's file is synced with the
-   * desktop's app-store registry before the web route reads it.
-   */
-  syncMcpRegistryToProjectFile: () => Promise<void>
-
-  // Actions — MCP probe (on-demand, read-only). State slices above.
-  /**
-   * Probe a registered MCP server by id (Se's own rmcp client — NOT the
-   * agent's). Updates `mcpProbeStatus[id]` + `mcpTools[id]` +
-   * `mcpToolsLoaded[id]=true`, and `mcpProbeError[id]` with the redacted
-   * `ProbeResult.error` on a disconnected result (cleared on connected and on
-   * the transport-throw path). Read-only — no persistence, no rollback.
-   * Dedupes concurrent probes for the same id (`mcpProbing[id]`).
-   */
-  probeMcpServer: (id: string) => Promise<void>
-  /**
-   * Auto-probe on first expand of a server's tool list. No-op if already
-   * loaded; otherwise delegates to `probeMcpServer(id)`.
-   */
-  loadMcpTools: (id: string) => Promise<void>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
@@ -2844,11 +2770,12 @@ type HistoryReopenOptions = {
 }
 
 async function configuredMcpServersForReopen(
-  get: () => AcpState,
-  agentId: AgentId
+  _get: () => AcpState,
+  _agentId: AgentId
 ): Promise<McpServer[]> {
-  if (!get().mcpServersLoaded) await get().loadMcpServers()
-  return selectMcpServersForAgent(get().mcpServers, get().agents[agentId]?.capabilities).servers
+  // Host generates the session MCP set (legacy host_mcp + optional Core Router).
+  // Do not pass the renderer/user registry through ACP session/new/load/resume.
+  return []
 }
 
 async function openHistorySessionInner(
@@ -3559,21 +3486,6 @@ function coalesceSet(sessionId: SessionId, apply: (s: AcpState) => Partial<AcpSt
   scheduleCoalesceFlush()
 }
 
-// MCP registry mutations (save/import/toggle/delete) are serialized through a
-// single promise queue. Without this, two overlapping mutations each snapshot
-// `mcpServers` before their async disk write; the slower one would persist a
-// stale snapshot AFTER the newer mutation (clobbering it), and its rollback on
-// failure would restore that stale snapshot — dropping the intervening change.
-// The queue guarantees each mutation reads, writes, and (on failure) rolls back
-// against the registry state as of its own turn.
-let mcpRegistryQueue: Promise<unknown> = Promise.resolve()
-async function runSerializedMcpRegistryMutation(mutation: () => Promise<void>): Promise<void> {
-  const run = mcpRegistryQueue.then(mutation)
-  // Swallow for the chain only — the returned promise still rejects to callers.
-  mcpRegistryQueue = run.catch(() => undefined)
-  await run
-}
-
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
@@ -3594,13 +3506,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   discoveredSessions: {},
   discoveringKeys: {},
   discoveredReopenContexts: {},
-  mcpServers: [],
-  mcpServersLoaded: false,
-  mcpProbeStatus: {},
-  mcpTools: {},
-  mcpToolsLoaded: {},
-  mcpProbing: {},
-  mcpProbeError: {},
   sessions: {},
   activeSessionId: null,
   sessionUsage: {},
@@ -3765,23 +3670,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   createSession: async (agentId, cwd, mcpServers, projectId, opts) => {
-    const selection =
-      mcpServers === undefined
-        ? selectMcpServersForAgent(get().mcpServers, get().agents[agentId]?.capabilities)
-        : { servers: mcpServers, skipped: [], pending: false }
-    const sessionMcpServers = selection.servers
-    if (!selection.pending && selection.skipped.length > 0) {
-      toast.warning(runtimeT('mcp', 'skippedTitle', 'Some MCP servers were skipped'), {
-        description: runtimeT(
-          'mcp',
-          'skippedDescription',
-          '{{names}} require HTTP or SSE support from this agent.',
-          {
-            names: selection.skipped.map((server) => server.name).join(', ')
-          }
-        )
-      })
-    }
+    // Wire field retained for ACP compatibility. The host generates host_mcp +
+    // at most one Core Router entry and ignores caller/user-registry servers.
+    const sessionMcpServers = mcpServers ?? []
 
     const openNewSession = async (): Promise<SessionId> => {
       const hasExplicitTarget = Boolean(opts?.executionTarget)
@@ -5666,164 +5557,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       promise: sharedTask
     })
     return sharedTask
-  },
-
-  loadMcpServers: async () => {
-    try {
-      const list = await loadMcpServersFromDisk()
-      set({ mcpServers: list, mcpServersLoaded: true })
-    } catch (err) {
-      void logFrontendError({
-        source: 'acp-store.loadMcpServers',
-        message: `Failed to load MCP registry (${String(err)})`
-      })
-      toast.error(
-        runtimeT('mcp', 'loadFailed', 'Could not load MCP servers. Try reopening Settings.')
-      )
-    }
-  },
-
-  saveMcpServer: (server) =>
-    runSerializedMcpRegistryMutation(async () => {
-      const list = get().mcpServers
-      const idx = list.findIndex((item) => item.id === server.id)
-      const nextServer = { ...server, enabled: server.enabled ?? true }
-      const next =
-        idx === -1
-          ? [...list, nextServer]
-          : list.map((item) => (item.id === server.id ? nextServer : item))
-      set({ mcpServers: next })
-      try {
-        await saveMcpServersToDisk(next)
-      } catch (err) {
-        set({ mcpServers: list })
-        void logFrontendError({
-          source: 'acp-store.saveMcpServer',
-          message: `Failed to persist MCP registry (${String(err)})`
-        })
-        throw err
-      }
-    }),
-
-  importMcpServers: async (servers) => {
-    if (servers.length === 0) return
-    await runSerializedMcpRegistryMutation(async () => {
-      const list = get().mcpServers
-      const next = [...list, ...servers]
-      set({ mcpServers: next })
-      try {
-        await saveMcpServersToDisk(next)
-      } catch (err) {
-        set({ mcpServers: list })
-        void logFrontendError({
-          source: 'acp-store.importMcpServers',
-          message: `Failed to persist MCP registry import (${String(err)})`
-        })
-        throw err
-      }
-    })
-  },
-
-  setMcpServerEnabled: (id, enabled) =>
-    runSerializedMcpRegistryMutation(async () => {
-      const list = get().mcpServers
-      const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
-      set({ mcpServers: next })
-      try {
-        await saveMcpServersToDisk(next)
-      } catch (err) {
-        set({ mcpServers: list })
-        void logFrontendError({
-          source: 'acp-store.setMcpServerEnabled',
-          message: `Failed to persist MCP registry toggle (${String(err)})`
-        })
-        throw err
-      }
-    }),
-
-  deleteMcpServer: (id) =>
-    runSerializedMcpRegistryMutation(async () => {
-      const list = get().mcpServers
-      const next = list.filter((server) => server.id !== id)
-      set({ mcpServers: next })
-      try {
-        await saveMcpServersToDisk(next)
-      } catch (err) {
-        set({ mcpServers: list })
-        void logFrontendError({
-          source: 'acp-store.deleteMcpServer',
-          message: `Failed to persist MCP registry deletion (${String(err)})`
-        })
-        throw err
-      }
-    }),
-
-  // CAP-7: on a desktop host-level project switch, mirror the app-store MCP
-  // registry to the new project's `.se-manager/mcp-servers.json` so the web
-  // `GET /mcp-servers` route (file-based) serves the same registry. Invoked
-  // from `useProjectsAutoSave` AFTER `syncProjects` lands so the backend
-  // `ProjectRegistry` (and thus the resolved project root) reflects the new
-  // default. Best-effort + non-fatal — the wrapper logs failures and never
-  // throws, so a switch still completes even if the sync write fails.
-  syncMcpRegistryToProjectFile: async () => {
-    if (!isTauriContext()) return
-    if (!get().mcpServersLoaded) return
-    await syncMcpRegistryToProjectBestEffort(get().mcpServers)
-  },
-
-  // MCP probe (on-demand, read-only). No persistence, no rollback. Dedupes
-  // concurrent probes per server id via `mcpProbing`.
-  probeMcpServer: async (id) => {
-    if (get().mcpProbing[id]) return
-    const server = get().mcpServers.find((s) => s.id === id)
-    if (!server) return
-    // Strip registry-only fields (`id`/`enabled`) — the probe takes a
-    // stateless `McpServerConfig`, not a registry entry. Mirrors the wire
-    // shape `toWireServer` builds for `session/new` injection.
-    const { id: _id, enabled: _enabled, ...config } = server
-    set((s) => ({ mcpProbing: { ...s.mcpProbing, [id]: true } }))
-    try {
-      const result: ProbeResult = await acpApi.probeMcpServer(config as McpServerConfig)
-      set((s) => ({
-        mcpProbeStatus: { ...s.mcpProbeStatus, [id]: result.status },
-        mcpTools: { ...s.mcpTools, [id]: result.tools },
-        mcpToolsLoaded: { ...s.mcpToolsLoaded, [id]: true },
-        mcpProbing: { ...s.mcpProbing, [id]: false },
-        // Disconnected → keep the backend's (redacted) reason for the UI; a
-        // successful probe clears any stale error.
-        mcpProbeError: {
-          ...s.mcpProbeError,
-          [id]: result.status === 'connected' ? undefined : result.error
-        }
-      }))
-    } catch (err) {
-      // Transport/parse failure (NOT a disconnected probe — that's a
-      // `status:'disconnected'` ProbeResult, not a throw). Surface the
-      // failure in the dot + log WITHOUT env/header values, tokens, or
-      // credentials. The synthetic disconnected status has no real backend
-      // error to show, so the probe error is cleared.
-      set((s) => ({
-        mcpProbeStatus: { ...s.mcpProbeStatus, [id]: 'disconnected' },
-        // A throw means the probe never produced a result — drop any tools left
-        // over from a prior successful probe so the UI shows the disconnected
-        // state (McpBadge checks the tool list first), and mark tools as not
-        // loaded so a later expand auto-retries instead of caching the failure.
-        mcpTools: { ...s.mcpTools, [id]: [] },
-        mcpToolsLoaded: { ...s.mcpToolsLoaded, [id]: false },
-        mcpProbing: { ...s.mcpProbing, [id]: false },
-        mcpProbeError: { ...s.mcpProbeError, [id]: undefined }
-      }))
-      void logFrontendError({
-        source: 'acp-store.probeMcpServer',
-        message: `MCP probe failed for server '${server.name}' (${String(err)})`
-      })
-    }
-  },
-
-  loadMcpTools: async (id) => {
-    // Auto-probe on first expand — no-op if already loaded (or in flight).
-    if (get().mcpToolsLoaded[id] || get().mcpProbing[id]) return
-    await get().probeMcpServer(id)
   },
 
   sendPrompt: (sessionId, text) =>

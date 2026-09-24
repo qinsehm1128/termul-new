@@ -80,6 +80,14 @@ describe('ActivityRail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/preferences')
   })
 
+  it('navigates to the MCP page on click', () => {
+    renderRail()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open MCP' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/mcp')
+  })
+
   it('exposes the keyboard shortcuts trigger', () => {
     renderRail()
 

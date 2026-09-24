@@ -67,15 +67,8 @@ import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-ac
 import { runtimeT } from '@/i18n/runtime'
 import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import {
-  type AuthMethod,
-  acpApi,
-  type ContentBlock,
-  type McpToolInfo,
-  type ProbeStatus
-} from '@/lib/acp-api'
+import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
 import { normalizeCwdForScope } from '@/lib/acp-history-persistence'
-import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
@@ -107,8 +100,8 @@ import {
   useAcpSession,
   useAcpStore
 } from '@/stores/acp-store'
-import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useConversationStore } from '@/stores/conversation-store'
+import { useMcpStore } from '@/stores/mcp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, Worktree } from '@/types/project'
@@ -129,10 +122,6 @@ interface AgentLauncherProps {
 
 const EMPTY_COMMANDS: [] = []
 const EMPTY_AUTH_METHODS: AuthMethod[] = []
-const EMPTY_MCP_SERVERS: StoredMcpServer[] = []
-const EMPTY_PROBE_STATUS: Record<string, ProbeStatus> = {}
-const EMPTY_MCP_TOOLS: Record<string, McpToolInfo[]> = {}
-const EMPTY_PROBE_ERROR: Record<string, string | undefined> = {}
 
 /** Survives overlay unmount so the new-thread picker does not flash the default. */
 let cachedConfigId: string | null = null
@@ -200,13 +189,13 @@ export function AgentLauncher({
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
-  const mcpServers = useAcpStore((s) => s.mcpServers) ?? EMPTY_MCP_SERVERS
+  const mcpServers = useMcpStore((s) => s.config.upstreams)
   const mcpCount = mcpServers.length
-  const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
-  const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus) ?? EMPTY_PROBE_STATUS
-  const mcpProbeError = useAcpStore((s) => s.mcpProbeError) ?? EMPTY_PROBE_ERROR
-  const mcpTools = useAcpStore((s) => s.mcpTools) ?? EMPTY_MCP_TOOLS
-  const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
+  const setMcpServerEnabled = useMcpStore((s) => s.setUpstreamEnabled)
+  const mcpProbeStatus = useMcpStore((s) => s.probeStatus)
+  const mcpProbeError = useMcpStore((s) => s.probeError)
+  const mcpTools = useMcpStore((s) => s.tools)
+  const loadMcpTools = useMcpStore((s) => s.loadTools)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const projects = useProjectStore((s) => s.projects)
   const activeGroupId = useProjectStore((s) => s.activeGroupId)

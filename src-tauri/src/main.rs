@@ -13,6 +13,13 @@ fn main() {
         std::process::exit(se_manager_lib::core::run_core_process(role));
     }
 
+    if std::env::args()
+        .skip(1)
+        .any(|argument| argument == "--mcp-core")
+    {
+        std::process::exit(se_manager_lib::mcp_core::run_mcp_core_process());
+    }
+
     // Self-spawned `--internal-mcp-plan-server` child: the agent spawns this
     // binary (current_exe) as the injected `McpServer::Stdio` for the
     // host-injected `plan` tool. Branch BEFORE any Tauri/log setup so

@@ -1,4 +1,27 @@
 {
+  "page": {
+    "title": "MCP",
+    "subtitle": "Project-scoped built-in capabilities and upstream MCP servers.",
+    "builtInsTitle": "Termul capabilities",
+    "builtInsDescription": "Built-in tools Termul exposes through the unified MCP router.",
+    "upstreamsTitle": "Upstream MCP servers",
+    "upstreamsDescription": "Enabled servers are aggregated by the project MCP router.",
+    "statusTitle": "Runtime status",
+    "statusDescription": "Revision and upstream counts. Secrets are never shown.",
+    "revision": "Revision",
+    "upstreamCount": "Upstreams",
+    "revisionConflict": "This MCP config was updated elsewhere. Reloaded the latest version.",
+    "builtIn": {
+      "session-memory": {
+        "name": "Session memory",
+        "description": "Search indexed agent sessions for this project."
+      },
+      "project-scope": {
+        "name": "Project scope",
+        "description": "Expose the current project boundary to MCP clients."
+      }
+    }
+  },
   "common": {
     "servers": "MCP servers",
     "save": "Save",
@@ -34,8 +57,8 @@
     "noTools": "No tools available."
   },
   "settings": {
-    "title": "Global MCP registry",
-    "description": "Enabled servers are offered automatically when a new agent session starts.",
+    "title": "Upstream MCP servers",
+    "description": "Enabled servers are aggregated by the project MCP router.",
     "addServer": "Add server",
     "storageWarning": "Environment variables and headers are stored in the existing application data store. Prefer $VARIABLE references instead of literal credentials.",
     "emptyTitle": "No MCP servers configured",

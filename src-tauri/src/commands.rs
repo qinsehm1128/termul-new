@@ -1001,18 +1001,17 @@ pub async fn terminal_resume(
         return Err("Session workspace service is unavailable".to_string());
     };
     let pty_manager = require_in_process_pty(terminal.inner())?;
-    let (grant, replay) =
-        match terminal_resume_resource(&request, &pty_manager, workspace).await {
-            Ok(value) => value,
-            // Distinct on purpose: the renderer retires a record it can never
-            // revive, and keeps the retryable placeholder for everything else.
-            Err(TerminalResumeDenial::Gone) => {
-                return Ok(IpcResult::error("Terminal is gone", "TERMINAL_GONE"))
-            }
-            Err(TerminalResumeDenial::Unauthorized) => {
-                return Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED"))
-            }
-        };
+    let (grant, replay) = match terminal_resume_resource(&request, &pty_manager, workspace).await {
+        Ok(value) => value,
+        // Distinct on purpose: the renderer retires a record it can never
+        // revive, and keeps the retryable placeholder for everything else.
+        Err(TerminalResumeDenial::Gone) => {
+            return Ok(IpcResult::error("Terminal is gone", "TERMINAL_GONE"))
+        }
+        Err(TerminalResumeDenial::Unauthorized) => {
+            return Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED"))
+        }
+    };
 
     let token = ATTACH_FORWARDER_TOKENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     let replacing_view = {
@@ -1505,10 +1504,12 @@ pub async fn terminal_terminate(
     workspace: State<'_, Option<Arc<crate::conversation::SessionWorkspaceService>>>,
 ) -> Result<IpcResult<()>, String> {
     if let Some(client) = terminal.core_client() {
-        return Ok(
-            terminal_terminate_via_core_optional_workspace(&terminal_id, &client, workspace.as_ref())
-                .await,
-        );
+        return Ok(terminal_terminate_via_core_optional_workspace(
+            &terminal_id,
+            &client,
+            workspace.as_ref(),
+        )
+        .await);
     }
     let Some(workspace) = workspace.as_ref() else {
         return Err("Session workspace service is unavailable".to_string());
@@ -5057,22 +5058,15 @@ pub async fn remote_sync_chat_history(
     Ok(IpcResult::success(()))
 }
 
-/// Mirror the desktop app-store MCP registry to the active project's
-/// `<workspace dir>/mcp-servers.json` (CAP-7 — registry sync gap).
+/// Write the project MCP control-plane document to the active project's
+/// `<workspace dir>/mcp-servers.json`.
 ///
-/// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`
-/// (tauri-plugin-store, app-data dir), while the web `GET /mcp-servers` route
-/// reads `{project_root}/<workspace dir>/mcp-servers.json`. Without this bridge the web
-/// route never sees desktop-configured servers, so `McpBadge` stays hidden on
-/// web/mobile. Called best-effort after every desktop MCP save and on project
-/// switch — a sync failure is logged but never blocks the app-store save.
-///
-/// Resolves the active project root via the same chain `RemoteServerState::start`
-/// uses: the registry's default-project path (canonicalized), falling back to
-/// `default_project_root()` (`$SE_PROJECT_ROOT` / `$HOME`) when the
-/// registry has no default (server stopped / never started). The write reuses
-/// `mcp_servers_api::registry_path` + `atomic_file::replace` so the sync writes
-/// the exact file the web route reads.
+/// This is the desktop write path for the single project-scoped MCP authority.
+/// Accepts the legacy server array or the versioned control-plane object and
+/// always persists the canonical object. Resolves the active project root via
+/// the same chain `RemoteServerState::start` uses: the registry's default-project
+/// path (canonicalized), falling back to `default_project_root()` (`$SE_PROJECT_ROOT`
+/// / `$HOME`) when the registry has no default.
 #[tauri::command]
 pub async fn remote_sync_mcp_registry(
     registry: serde_json::Value,
@@ -5081,125 +5075,243 @@ pub async fn remote_sync_mcp_registry(
     Ok(sync_mcp_registry_to_project_file(project_registry.inner(), registry).await)
 }
 
-/// Testable core of `remote_sync_mcp_registry`: writes `registry` to
-/// `{active_project_root}/<workspace dir>/mcp-servers.json` via `atomic_file::replace`.
-/// Extracted so a Rust unit test can exercise the write path without a Tauri
-/// `AppHandle` (CAP-7 regression guard).
-pub(crate) async fn sync_mcp_registry_to_project_file(
+/// Read the project MCP control-plane document without creating it.
+///
+/// Missing files return `MCP_REGISTRY_NOT_FOUND` so the desktop renderer can
+/// fall back to the one-time `acp/mcp-servers` migration reader. Legacy arrays
+/// are migrated in memory only.
+#[tauri::command]
+pub async fn remote_load_mcp_registry(
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(load_mcp_registry_from_project_file(project_registry.inner()).await)
+}
+
+/// Canonical desktop GET for the project MCP control-plane document.
+#[tauri::command]
+pub async fn mcp_get_config(
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(load_mcp_registry_from_project_file(project_registry.inner()).await)
+}
+
+/// Canonical desktop PUT. Returns the written document (including revision).
+#[tauri::command]
+pub async fn mcp_put_config(
+    config: serde_json::Value,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(write_mcp_control_plane(project_registry.inner(), config).await)
+}
+
+/// Redacted desktop MCP status. Missing files return the empty document status.
+#[tauri::command]
+pub async fn mcp_get_status(
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+) -> Result<IpcResult<crate::mcp_core::McpControlPlaneStatus>, String> {
+    Ok(load_mcp_status_from_project_file(project_registry.inner()).await)
+}
+
+fn active_mcp_project_root(
     project_registry: &crate::web::ProjectRegistry,
-    registry: serde_json::Value,
-) -> IpcResult<()> {
-    log::info!("remote_sync_mcp_registry: start");
-
-    // Validate the payload is an array (mirrors `mcp_servers_api::put`).
-    if !registry.is_array() {
-        log::warn!("remote_sync_mcp_registry: rejected non-array payload");
-        return IpcResult::error("MCP registry must be a JSON array", "MCP_REGISTRY_INVALID");
-    }
-
-    // Serialize + enforce the 1 MiB ceiling (mirrors `mcp_servers_api::put`).
-    let bytes = match serde_json::to_vec(&registry) {
-        Ok(bytes) if bytes.len() <= crate::web::mcp_servers_api::MAX_REGISTRY_BYTES => bytes,
-        Ok(_) => {
-            log::warn!("remote_sync_mcp_registry: rejected payload over 1 MiB");
-            return IpcResult::error(
-                "MCP registry exceeds the 1 MiB limit",
-                "MCP_REGISTRY_TOO_LARGE",
-            );
-        }
-        Err(_) => {
-            log::warn!("remote_sync_mcp_registry: payload not serializable");
-            return IpcResult::error("MCP registry is not serializable", "MCP_REGISTRY_INVALID");
-        }
-    };
-
-    // Resolve the active project root (same chain as `RemoteServerState::start`):
-    // registry default → canonicalize; else `default_project_root()` → canonicalize.
-    // A present-but-invalid default path returns an error rather than silently
-    // falling back to the home directory (which the web route never reads).
-    let project_root = match project_registry.default_project_path() {
+) -> Result<std::path::PathBuf, IpcResult<()>> {
+    match project_registry.default_project_path() {
         Some(p) => {
             match crate::web::config::resolve_and_validate_project_root(std::path::Path::new(&p)) {
-                Ok(root) => root,
+                Ok(root) => Ok(root),
                 Err(e) => {
                     log::error!(
-                        "remote_sync_mcp_registry: default project path '{}' \
-                     failed canonicalization: {}",
+                        "mcp registry: default project path '{}' failed canonicalization: {}",
                         p,
                         e
                     );
-                    return IpcResult::error(
+                    Err(IpcResult::error(
                         "No active project root available for MCP registry sync",
                         "NO_ACTIVE_PROJECT_ROOT",
-                    );
+                    ))
                 }
             }
         }
         None => {
             log::warn!(
-                "remote_sync_mcp_registry: no active project path in registry; \
-                 falling back to default_project_root"
+                "mcp registry: no active project path in registry; falling back to default_project_root"
             );
             match crate::web::config::default_project_root() {
                 Some(raw) => match crate::web::config::resolve_and_validate_project_root(&raw) {
-                    Ok(root) => root,
+                    Ok(root) => Ok(root),
                     Err(e) => {
                         log::error!(
-                            "remote_sync_mcp_registry: default project root '{}' \
-                             failed canonicalization: {}",
+                            "mcp registry: default project root '{}' failed canonicalization: {}",
                             raw.display(),
                             e
                         );
-                        return IpcResult::error(
+                        Err(IpcResult::error(
                             "No active project root available for MCP registry sync",
                             "NO_ACTIVE_PROJECT_ROOT",
-                        );
+                        ))
                     }
                 },
                 None => {
                     log::error!(
-                        "remote_sync_mcp_registry: no active project root and \
-                         default_project_root unavailable"
+                        "mcp registry: no active project root and default_project_root unavailable"
                     );
-                    return IpcResult::error(
+                    Err(IpcResult::error(
                         "No active project root available for MCP registry sync",
                         "NO_ACTIVE_PROJECT_ROOT",
-                    );
+                    ))
                 }
             }
         }
-    };
+    }
+}
 
-    let path = crate::web::mcp_servers_api::registry_path(&project_root);
-    let write_path = path.clone();
-    let bytes_len = bytes.len();
-    let write_result =
-        tokio::task::spawn_blocking(move || crate::acp::atomic_file::replace(&write_path, &bytes))
-            .await;
-    match write_result {
-        Ok(Ok(())) => {
-            log::info!(
-                "remote_sync_mcp_registry: success ({} bytes → {})",
-                bytes_len,
-                path.display()
-            );
-            IpcResult::success(())
-        }
-        Ok(Err(error)) => {
-            log::error!(
-                "remote_sync_mcp_registry: atomic write failed for {}: {}",
-                path.display(),
-                error
-            );
-            IpcResult::error("Failed to persist MCP registry", "MCP_REGISTRY_WRITE_ERROR")
-        }
+fn mcp_document_error<T>(
+    error: crate::web::mcp_servers_api::RegistryDocumentError,
+) -> IpcResult<T> {
+    IpcResult::error(error.message(), error.code())
+}
+
+/// Testable core of `remote_sync_mcp_registry`: writes the canonical control-plane
+/// document to `{active_project_root}/<workspace dir>/mcp-servers.json`.
+pub(crate) async fn sync_mcp_registry_to_project_file(
+    project_registry: &crate::web::ProjectRegistry,
+    registry: serde_json::Value,
+) -> IpcResult<()> {
+    match write_mcp_control_plane(project_registry, registry).await {
+        IpcResult { success: true, .. } => IpcResult::success(()),
+        IpcResult {
+            success: false,
+            error,
+            code,
+            ..
+        } => IpcResult::error(
+            error.unwrap_or_else(|| "Failed to persist MCP registry".into()),
+            code.unwrap_or_else(|| "MCP_REGISTRY_WRITE_ERROR".into()),
+        ),
+    }
+}
+
+pub(crate) async fn write_mcp_control_plane(
+    project_registry: &crate::web::ProjectRegistry,
+    registry: serde_json::Value,
+) -> IpcResult<serde_json::Value> {
+    let project_root = match active_mcp_project_root(project_registry) {
+        Ok(root) => root,
         Err(error) => {
             log::error!(
-                "remote_sync_mcp_registry: write task panicked for {}: {}",
-                path.display(),
+                target: crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
+                "operation=mcp_put_config stable_code=NO_ACTIVE_PROJECT_ROOT"
+            );
+            return IpcResult::error(
                 error
+                    .error
+                    .unwrap_or_else(|| "No active project root".into()),
+                error
+                    .code
+                    .unwrap_or_else(|| "NO_ACTIVE_PROJECT_ROOT".into()),
+            );
+        }
+    };
+    let incoming = registry.clone();
+    let write_root = project_root.clone();
+    let write_result = tokio::task::spawn_blocking(move || {
+        crate::web::mcp_servers_api::write_document(&write_root, &incoming)
+    })
+    .await;
+    match write_result {
+        Ok(Ok(config)) => match config.to_canonical_json() {
+            Ok(value) => IpcResult::success(value),
+            Err(error) => IpcResult::error(error.to_string(), "MCP_REGISTRY_INVALID"),
+        },
+        Ok(Err(error)) => {
+            log::error!(
+                target: crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
+                "operation=mcp_put_config stable_code={}",
+                error.code()
+            );
+            mcp_document_error(error)
+        }
+        Err(_) => {
+            log::error!(
+                target: crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
+                "operation=mcp_put_config stable_code=MCP_REGISTRY_WRITE_ERROR"
             );
             IpcResult::error("Failed to persist MCP registry", "MCP_REGISTRY_WRITE_ERROR")
+        }
+    }
+}
+
+pub(crate) async fn load_mcp_registry_from_project_file(
+    project_registry: &crate::web::ProjectRegistry,
+) -> IpcResult<serde_json::Value> {
+    let project_root = match active_mcp_project_root(project_registry) {
+        Ok(root) => root,
+        Err(error) => {
+            return IpcResult::error(
+                error
+                    .error
+                    .unwrap_or_else(|| "No active project root".into()),
+                error
+                    .code
+                    .unwrap_or_else(|| "NO_ACTIVE_PROJECT_ROOT".into()),
+            )
+        }
+    };
+    let read_root = project_root.clone();
+    let read_result =
+        tokio::task::spawn_blocking(move || crate::web::mcp_servers_api::read_document(&read_root))
+            .await;
+    match read_result {
+        Ok(Ok(Some(config))) => match config.to_canonical_json() {
+            Ok(value) => IpcResult::success(value),
+            Err(error) => IpcResult::error(error.to_string(), "MCP_REGISTRY_INVALID"),
+        },
+        Ok(Ok(None)) => IpcResult::error("MCP registry file not found", "MCP_REGISTRY_NOT_FOUND"),
+        Ok(Err(error)) => IpcResult::error(error.message(), error.code()),
+        Err(error) => {
+            log::error!(
+                "remote_load_mcp_registry: read task panicked for {}: {}",
+                crate::web::mcp_servers_api::registry_path(&project_root).display(),
+                error
+            );
+            IpcResult::error("Failed to read MCP registry", "MCP_REGISTRY_READ_ERROR")
+        }
+    }
+}
+
+pub(crate) async fn load_mcp_status_from_project_file(
+    project_registry: &crate::web::ProjectRegistry,
+) -> IpcResult<crate::mcp_core::McpControlPlaneStatus> {
+    let project_root = match active_mcp_project_root(project_registry) {
+        Ok(root) => root,
+        Err(error) => {
+            return IpcResult::error(
+                error
+                    .error
+                    .unwrap_or_else(|| "No active project root".into()),
+                error
+                    .code
+                    .unwrap_or_else(|| "NO_ACTIVE_PROJECT_ROOT".into()),
+            )
+        }
+    };
+    let read_root = project_root.clone();
+    let read_result =
+        tokio::task::spawn_blocking(move || crate::web::mcp_servers_api::read_document(&read_root))
+            .await;
+    match read_result {
+        Ok(Ok(Some(config))) => IpcResult::success(config.to_status()),
+        Ok(Ok(None)) => {
+            IpcResult::success(crate::mcp_core::McpControlPlaneConfig::empty().to_status())
+        }
+        Ok(Err(error)) => IpcResult::error(error.message(), error.code()),
+        Err(error) => {
+            log::error!(
+                "mcp_get_status: read task panicked for {}: {}",
+                crate::web::mcp_servers_api::registry_path(&project_root).display(),
+                error
+            );
+            IpcResult::error("Failed to read MCP registry", "MCP_REGISTRY_READ_ERROR")
         }
     }
 }
@@ -8778,7 +8890,10 @@ mod remote_sync_projects_tests {
 
 #[cfg(test)]
 mod remote_sync_mcp_registry_tests {
-    use super::sync_mcp_registry_to_project_file;
+    use super::{
+        load_mcp_registry_from_project_file, sync_mcp_registry_to_project_file,
+        write_mcp_control_plane,
+    };
     use crate::web::mcp_servers_api::registry_path;
     use crate::web::{ProjectRegistry, ProjectSummary};
     use serde_json::json;
@@ -8833,9 +8948,11 @@ mod remote_sync_mcp_registry_tests {
         let file = registry_path(&dir);
         let bytes = std::fs::read(&file).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value.as_array().map(Vec::len), Some(1));
-        assert_eq!(value[0]["name"], "fs");
-        assert_eq!(value[0]["command"], "npx");
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["revision"], 1);
+        assert_eq!(value["upstreams"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["upstreams"][0]["name"], "fs");
+        assert_eq!(value["upstreams"][0]["command"], "npx");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -8861,8 +8978,9 @@ mod remote_sync_mcp_registry_tests {
         let file = registry_path(&dir);
         let bytes = std::fs::read(&file).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let entries = value.as_array().unwrap();
+        let entries = value["upstreams"].as_array().unwrap();
         assert_eq!(entries.len(), 2, "registry must be replaced, not appended");
+        assert_eq!(value["revision"], 2);
         assert_eq!(entries[0]["id"], "b");
         assert_eq!(entries[1]["id"], "c");
 
@@ -8909,12 +9027,92 @@ mod remote_sync_mcp_registry_tests {
         let file = registry_path(&dir);
         let bytes = std::fs::read(&file).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value[0]["name"], "fallback");
+        assert_eq!(value["upstreams"][0]["name"], "fallback");
 
         // Restore the env var.
         match prev {
             Some(v) => std::env::set_var("SE_PROJECT_ROOT", v),
             None => std::env::remove_var("SE_PROJECT_ROOT"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn load_returns_not_found_until_canonical_write_exists() {
+        let dir = temp_dir("load");
+        let reg = registry_with_default(&dir);
+        let missing = load_mcp_registry_from_project_file(&reg).await;
+        assert!(!missing.success);
+        assert_eq!(missing.code.as_deref(), Some("MCP_REGISTRY_NOT_FOUND"));
+
+        let written = sync_mcp_registry_to_project_file(
+            &reg,
+            json!([{"id":"one","type":"stdio","name":"fs","command":"npx"}]),
+        )
+        .await;
+        assert!(written.success, "{written:?}");
+
+        let loaded = load_mcp_registry_from_project_file(&reg).await;
+        assert!(loaded.success, "{loaded:?}");
+        let value = loaded.data.expect("canonical document");
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["upstreams"][0]["id"], "one");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn control_plane_put_boundary_log_omits_path_and_secrets() {
+        let _guard = crate::web::auth::test_tracing::lock().await;
+        let dir = temp_dir("boundary-log");
+        let reg = registry_with_default(&dir);
+        let registry = json!({
+            "schemaVersion": 1,
+            "revision": 1,
+            "upstreams": [{
+                "id": "files",
+                "type": "stdio",
+                "name": "Files",
+                "command": "/tmp/secret-bin",
+                "args": ["--token"],
+                "env": [{"name": "TOKEN", "value": "super-secret"}],
+                "enabled": true
+            }, {
+                "id": "remote",
+                "type": "http",
+                "name": "Remote",
+                "url": "https://example.test/mcp",
+                "headers": [{"name": "Authorization", "value": "Bearer leaked-header"}],
+                "enabled": false
+            }]
+        });
+        let result = write_mcp_control_plane(&reg, registry).await;
+        assert!(result.success, "{result:?}");
+
+        let output = crate::web::auth::test_tracing::messages(
+            crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
+        )
+        .join("\n");
+        let path = registry_path(&dir).display().to_string();
+        for required in [
+            "operation=mcp_put_config",
+            "revision=1",
+            "server_ids=files,remote",
+            "status=enabled,disabled",
+            "stable_code=OK",
+        ] {
+            assert!(output.contains(required), "missing {required}: {output}");
+        }
+        for leaked in [
+            "super-secret",
+            "/tmp/secret-bin",
+            "--token",
+            "TOKEN",
+            "leaked-header",
+            "Authorization",
+            "https://example.test/mcp",
+            path.as_str(),
+        ] {
+            assert!(!output.contains(leaked), "leaked {leaked}: {output}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

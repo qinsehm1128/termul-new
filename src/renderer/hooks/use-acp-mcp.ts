@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
-import { useAcpStore } from '@/stores/acp-store'
+import { useMcpStore } from '@/stores/mcp-store'
 
-/** Load the persisted MCP server registry once at app mount. */
+/** Load the project MCP control plane once at app mount. */
 export function useAcpMcp(): void {
-  const loadMcpServers = useAcpStore((s) => s.loadMcpServers)
+  const load = useMcpStore((s) => s.load)
   useEffect(() => {
-    void loadMcpServers()
-  }, [loadMcpServers])
+    void load()
+  }, [load])
 }

@@ -264,7 +264,9 @@ pub async fn acp_set_permission_policy(
     manager.set_permission_policy(&agent_id, policy)
 }
 
-/// Create a new session. `mcpServers` is passed through to `session/new` as-is.
+/// Create a new session. `mcpServers` is accepted for ACP wire compatibility;
+/// the host generates the session set (legacy `host_mcp` plus at most one Core
+/// Router HTTP entry) and does not pass the user registry through.
 /// `projectId` (CAP-2 attribution) is optional; the renderer passes the owning
 /// project so the host-owned durable record is project-scoped. `worktreePath` +
 /// `worktreeBranch` (CAP-3) are persisted for the chat indicator + the

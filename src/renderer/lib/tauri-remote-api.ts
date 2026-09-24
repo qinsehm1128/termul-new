@@ -134,21 +134,29 @@ export async function setHostDefaultProject(projectId: string): Promise<IpcResul
 }
 
 /**
- * Mirror the desktop app-store MCP registry to the active project's
- * `.se-manager/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
- * `remote_sync_mcp_registry` command resolves the active project root via the
- * shared `ProjectRegistry` (same chain `RemoteServerState::start` uses) and
- * writes the registry via `atomic_file::replace`, so the web `GET /mcp-servers`
- * route (file-based) serves the same registry the desktop app store holds.
+ * Write the active project's canonical MCP control-plane document.
+ * The Rust `remote_sync_mcp_registry` command resolves the active project root
+ * via the shared `ProjectRegistry` and persists a versioned object to
+ * `.se-manager/mcp-servers.json`. Legacy arrays are accepted as input and
+ * rewritten as the canonical document.
  *
- * Best-effort: the result is `IpcResult<void>` (never throws — invoke errors map
- * to `{ success: false, code: 'INVOKE_ERROR' }`). Callers log a failure but never
- * let it block the app-store save or the project switch.
+ * Returns `IpcResult<void>` (never throws — invoke errors map to
+ * `{ success: false, code: 'INVOKE_ERROR' }`). Project-switch callers may treat
+ * a failure as non-fatal; the settings save path treats it as the write itself.
  */
 export async function syncMcpRegistryToProject(
-  registry: StoredMcpServer[]
+  registry: StoredMcpServer[] | Record<string, unknown>
 ): Promise<IpcResult<void>> {
   return invokeIpc<void>('remote_sync_mcp_registry', { registry })
+}
+
+/**
+ * Read the active project's canonical MCP control-plane document.
+ * Missing files return `MCP_REGISTRY_NOT_FOUND` so callers can fall back to the
+ * one-time `acp/mcp-servers` migration reader. Never creates or rewrites the file.
+ */
+export async function loadMcpRegistryFromProject(): Promise<IpcResult<unknown>> {
+  return invokeIpc<unknown>('remote_load_mcp_registry')
 }
 
 /**

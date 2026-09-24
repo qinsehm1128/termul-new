@@ -477,6 +477,25 @@ vi.mock('@/stores/acp-store', () => {
   }
 })
 
+vi.mock('@/stores/mcp-store', () => {
+  const useMcpStore = (sel: (state: Record<string, unknown>) => unknown) =>
+    sel({
+      config: {
+        schemaVersion: 1,
+        revision: 0,
+        builtIns: [],
+        upstreams: acpStateRef.current.mcpServers,
+        routing: { nameCollision: 'prefixServerId' }
+      },
+      setUpstreamEnabled: mockSetMcpServerEnabled,
+      probeStatus: acpStateRef.current.mcpProbeStatus,
+      probeError: {},
+      tools: acpStateRef.current.mcpTools,
+      loadTools: mockLoadMcpTools
+    })
+  return { useMcpStore }
+})
+
 const ACP_CONFIG: StoredAgentConfig = {
   id: 'acp-registry:claude-acp',
   name: 'Claude Agent',

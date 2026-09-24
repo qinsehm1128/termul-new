@@ -17,7 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { randomUUID } from '@/lib/uuid'
-import { useAcpStore } from '@/stores/acp-store'
+import { useMcpStore } from '@/stores/mcp-store'
 
 type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer }
 
@@ -68,17 +68,17 @@ function serverToJson(server: StoredMcpServer): string {
 
 export function McpServersSettings(): React.JSX.Element {
   const { t } = useTranslation('mcp')
-  const servers = useAcpStore((state) => state.mcpServers)
-  const saveMcpServer = useAcpStore((state) => state.saveMcpServer)
-  const importMcpServers = useAcpStore((state) => state.importMcpServers)
-  const setMcpServerEnabled = useAcpStore((state) => state.setMcpServerEnabled)
-  const deleteMcpServer = useAcpStore((state) => state.deleteMcpServer)
-  const probeMcpServer = useAcpStore((state) => state.probeMcpServer)
-  const loadMcpTools = useAcpStore((state) => state.loadMcpTools)
-  const mcpProbeStatus = useAcpStore((state) => state.mcpProbeStatus)
-  const mcpProbeError = useAcpStore((state) => state.mcpProbeError)
-  const mcpTools = useAcpStore((state) => state.mcpTools)
-  const mcpProbing = useAcpStore((state) => state.mcpProbing)
+  const servers = useMcpStore((state) => state.config.upstreams)
+  const saveMcpServer = useMcpStore((state) => state.saveUpstream)
+  const importMcpServers = useMcpStore((state) => state.importUpstreams)
+  const setMcpServerEnabled = useMcpStore((state) => state.setUpstreamEnabled)
+  const deleteMcpServer = useMcpStore((state) => state.deleteUpstream)
+  const probeMcpServer = useMcpStore((state) => state.probe)
+  const loadMcpTools = useMcpStore((state) => state.loadTools)
+  const mcpProbeStatus = useMcpStore((state) => state.probeStatus)
+  const mcpProbeError = useMcpStore((state) => state.probeError)
+  const mcpTools = useMcpStore((state) => state.tools)
+  const mcpProbing = useMcpStore((state) => state.probing)
   const [dialog, setDialog] = useState<McpDialogState | null>(null)
   const [jsonText, setJsonText] = useState('')
   const [jsonErrors, setJsonErrors] = useState<string[]>([])
@@ -214,8 +214,8 @@ export function McpServersSettings(): React.JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/20 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-foreground">{t('settings.title')}</p>
-          <p className="text-xs text-muted-foreground">{t('settings.description')}</p>
+          <p className="text-sm font-medium text-foreground">{t('page.upstreamsTitle')}</p>
+          <p className="text-xs text-muted-foreground">{t('page.upstreamsDescription')}</p>
         </div>
         <Button type="button" size="sm" onClick={openAdd}>
           <Plus size={14} className="mr-1.5" /> {t('settings.addServer')}

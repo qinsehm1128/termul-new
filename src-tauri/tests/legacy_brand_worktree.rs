@@ -234,7 +234,7 @@ async fn harness_reaches_the_real_routes_over_the_frozen_legacy_repo() {
     let registry = read_registry(&state).await;
     assert!(registry.success, "mcp registry read: {registry:?}");
     assert_eq!(
-        registry.data.as_ref().expect("registry data")[0]["name"],
+        registry.data.as_ref().expect("registry data")["upstreams"][0]["name"],
         "filesystem",
         "the legacy .termul/mcp-servers.json must stay readable"
     );
