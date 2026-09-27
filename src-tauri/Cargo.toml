@@ -1,6 +1,6 @@
 [package]
 name = "se-manager"
-version = "0.12.8"
+version = "0.12.9"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["qinsehm1128", "gnoviawan (original author)", "mannnrachman (Tauri port)"]
 edition = "2021"
@@ -58,7 +58,7 @@ tauri-build = { version = "2", features = [] }
 # already resolves, so this adds no new resolution to the lockfile.
 notify = "8"
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
+tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon", "protocol-asset"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-fs = { version = "2", features = ["watch"] }

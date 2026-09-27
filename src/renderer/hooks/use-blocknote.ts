@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { mermaidBlockSpec } from '@/components/editor/mermaid-block-spec'
 import type { TocHeading } from '@/hooks/use-toc-headings'
 import { requestSaveEditorFile } from '@/lib/editor-save'
+import { isTauriContext, resolveTauriAssetPath } from '@/lib/tauri-runtime'
 
 function convertMermaidBlocks(
   blocks: Array<Record<string, unknown>>
@@ -43,6 +44,79 @@ function convertMermaidBlocks(
     }
     return block
   })
+}
+
+type MarkdownImageReference = { index: number; url: string }
+
+export function extractMarkdownImageReferences(markdown: string): string[] {
+  const references: MarkdownImageReference[] = []
+  const markdownImage = /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g
+  const htmlImage = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi
+
+  for (const match of markdown.matchAll(markdownImage)) {
+    const url = match[1] ?? match[2]
+    if (url) references.push({ index: match.index ?? 0, url })
+  }
+  for (const match of markdown.matchAll(htmlImage)) {
+    const url = match[1] ?? match[2] ?? match[3]
+    if (url) references.push({ index: match.index ?? 0, url })
+  }
+
+  return references.sort((a, b) => a.index - b.index).map(({ url }) => url)
+}
+
+export function restoreMarkdownImageUrls(
+  blocks: Array<Record<string, unknown>>,
+  references: string[],
+  cursor = { value: 0 }
+): Array<Record<string, unknown>> {
+  return blocks.map((block) => {
+    let restored = block
+    if (block.type === 'image' && references[cursor.value]) {
+      restored = {
+        ...restored,
+        props: {
+          ...(block.props as Record<string, unknown> | undefined),
+          url: references[cursor.value]
+        }
+      }
+      cursor.value += 1
+    }
+    if (Array.isArray(restored.children) && restored.children.length > 0) {
+      restored = {
+        ...restored,
+        children: restoreMarkdownImageUrls(
+          restored.children as Array<Record<string, unknown>>,
+          references,
+          cursor
+        )
+      }
+    }
+    return restored
+  })
+}
+
+function isExternalImageUrl(url: string): boolean {
+  return /^(?:https?:|data:|blob:|asset:|tauri:)/i.test(url)
+}
+
+function localPathFromFileUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'file:') return null
+    const path = decodeURIComponent(parsed.pathname)
+    return /^\/[A-Za-z]:[\\/]/.test(path) ? path.slice(1) : path
+  } catch {
+    return null
+  }
+}
+
+export async function resolveImageFileUrl(url: string, markdownPath: string): Promise<string> {
+  if (!isTauriContext() || !url || isExternalImageUrl(url)) return url
+
+  const fileUrlPath = localPathFromFileUrl(url)
+  const localPath = fileUrlPath ?? url
+  return resolveTauriAssetPath(localPath, markdownPath)
 }
 
 interface UseBlockNoteOptions {
@@ -98,7 +172,8 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     })
     return BlockNoteEditor.create({
       schema,
-      extensions: [saveShortcutExtension]
+      extensions: [saveShortcutExtension],
+      resolveFileUrl: (url) => resolveImageFileUrl(url, filePathRef.current)
     })
   }, [saveShortcutExtension])
 
@@ -108,7 +183,11 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
         isReplacingRef.current = true
         const blocks = await editor.tryParseMarkdownToBlocks(markdown)
         if (token !== replaceTokenRef.current) return
-        const processedBlocks = convertMermaidBlocks(blocks as Array<Record<string, unknown>>)
+        const parsedBlocks = blocks as Array<Record<string, unknown>>
+        const processedBlocks = restoreMarkdownImageUrls(
+          convertMermaidBlocks(parsedBlocks),
+          extractMarkdownImageReferences(markdown)
+        )
         if (token !== replaceTokenRef.current) return
         editor.replaceBlocks(editor.document, processedBlocks)
       } catch {

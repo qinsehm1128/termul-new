@@ -1,4 +1,6 @@
+import { convertFileSrc } from '@tauri-apps/api/core'
 import type { UnlistenFn } from '@tauri-apps/api/event'
+import { dirname, join } from '@tauri-apps/api/path'
 
 type MaybeUnlisten = Promise<UnlistenFn> | UnlistenFn | null | undefined
 
@@ -21,6 +23,16 @@ export function isLoopbackWebClient(): boolean {
   if (typeof window === 'undefined' || !window.location) return false
   const host = window.location.hostname
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
+}
+
+function isAbsolutePath(path: string): boolean {
+  return /^\/?(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(path)
+}
+
+export async function resolveTauriAssetPath(path: string, baseFilePath: string): Promise<string> {
+  if (!isTauriContext()) return path
+  const absolutePath = isAbsolutePath(path) ? path : await join(await dirname(baseFilePath), path)
+  return convertFileSrc(absolutePath, 'asset')
 }
 
 export function cleanupTauriListener(unlisten: MaybeUnlisten): void {
