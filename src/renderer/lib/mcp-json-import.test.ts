@@ -423,4 +423,84 @@ describe('parseMcpJsonImport', () => {
       Remote: { url: 'https://remote.test/mcp', headers: { 'X-Org': 'org' } }
     })
   })
+
+  it('exports oauth metadata but never token material', () => {
+    const exported = JSON.stringify(
+      buildMcpJsonExport({
+        schemaVersion: 1,
+        revision: 1,
+        builtIns: [],
+        routing: { nameCollision: 'prefixServerId' },
+        upstreams: [
+          {
+            id: 'remote',
+            type: 'http',
+            name: 'Remote',
+            url: 'https://remote.test/mcp',
+            oauth: {
+              authMode: 'oauth',
+              registrationMode: 'preregistered',
+              clientId: 'public-client',
+              scopes: ['mcp'],
+              accessToken: 'access-token-canary',
+              refreshToken: 'refresh-token-canary',
+              clientSecret: 'client-secret-canary'
+            },
+            accessToken: 'access-token-canary',
+            clientSecret: 'client-secret-canary'
+          } as never
+        ]
+      })
+    )
+    expect(exported).toContain('public-client')
+    expect(exported).toContain('"authMode":"oauth"')
+    expect(exported).not.toContain('access-token-canary')
+    expect(exported).not.toContain('refresh-token-canary')
+    expect(exported).not.toContain('client-secret-canary')
+    expect(exported).not.toContain('accessToken')
+    expect(exported).not.toContain('clientSecret')
+    expect(exported).not.toContain('refreshToken')
+  })
+
+  it('imports canonical oauth metadata and ignores embedded tokens', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        schemaVersion: 1,
+        upstreams: [
+          {
+            id: 'remote',
+            name: 'Remote',
+            type: 'sse',
+            url: 'https://remote.test/sse',
+            bearerToken: 'legacy-token',
+            oauth: {
+              authMode: 'static',
+              registrationMode: 'none',
+              clientId: 'public-client',
+              discoveredAt: 42,
+              refreshToken: 'refresh-token-canary',
+              client_secret: 'client-secret-canary'
+            }
+          }
+        ]
+      })
+    )
+    expect(errors).toEqual([])
+    expect(servers).toEqual([
+      {
+        type: 'sse',
+        name: 'Remote',
+        url: 'https://remote.test/sse',
+        headers: [{ name: 'Authorization', value: 'Bearer legacy-token' }],
+        oauth: {
+          authMode: 'static',
+          registrationMode: 'none',
+          clientId: 'public-client',
+          discoveredAt: 42
+        }
+      }
+    ])
+    expect(JSON.stringify(servers)).not.toContain('refresh-token-canary')
+    expect(JSON.stringify(servers)).not.toContain('client-secret-canary')
+  })
 })

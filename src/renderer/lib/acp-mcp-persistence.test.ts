@@ -25,7 +25,9 @@ import {
   buildMcpServers,
   loadMcpServers,
   normalizeMcpRegistry,
+  normalizeOAuthConfig,
   type StoredMcpServer,
+  sanitizeMcpUpstream,
   saveMcpServers,
   selectMcpServersForAgent,
   transportOf,
@@ -96,6 +98,47 @@ describe('MCP registry helpers', () => {
     ).toEqual([{ id: 'legacy', type: 'stdio', name: 'Legacy', command: 'node', enabled: true }])
   })
 
+  it('keeps remote authorization from object headers and bearerToken config forms', () => {
+    expect(
+      normalizeMcpRegistry([
+        {
+          id: 'headers-map',
+          type: 'http',
+          name: 'Headers map',
+          url: 'https://headers.test/mcp',
+          headers: { Authorization: 'Bearer header-token', 'X-Tenant': 'tenant-a' }
+        },
+        {
+          id: 'bearer-token',
+          type: 'http',
+          name: 'Bearer token',
+          url: 'https://bearer.test/mcp',
+          bearerToken: 'bearer-token'
+        }
+      ])
+    ).toEqual([
+      {
+        id: 'headers-map',
+        type: 'http',
+        name: 'Headers map',
+        url: 'https://headers.test/mcp',
+        headers: [
+          { name: 'Authorization', value: 'Bearer header-token' },
+          { name: 'X-Tenant', value: 'tenant-a' }
+        ],
+        enabled: true
+      },
+      {
+        id: 'bearer-token',
+        type: 'http',
+        name: 'Bearer token',
+        url: 'https://bearer.test/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer bearer-token' }],
+        enabled: true
+      }
+    ])
+  })
+
   it('selects enabled supported transports and reports unsupported servers', () => {
     expect(
       selectMcpServersForAgent(registry, { mcpCapabilities: { http: false, acp: true } })
@@ -148,6 +191,73 @@ describe('MCP registry helpers', () => {
       { type: 'stdio', name: 'Files', command: 'npx', args: [], env: [] },
       { type: 'sse', name: 'Events', url: 'https://example.com/sse', headers: [] }
     ])
+  })
+
+  it('round-trips oauth metadata and drops token material before the ACP wire', () => {
+    const stored = normalizeMcpRegistry([
+      {
+        id: 'remote',
+        type: 'http',
+        name: 'Remote',
+        url: 'https://example.test/mcp',
+        bearerToken: 'legacy-token',
+        oauth: {
+          auth_mode: 'oauth',
+          registration_mode: 'dynamic',
+          client_id: ' public-client ',
+          client_metadata_url: 'https://client.example/oauth.json',
+          scopes: 'mcp offline_access',
+          endpoints: {
+            authorization_endpoint: 'https://auth.example/authorize',
+            token_endpoint: 'https://auth.example/token'
+          },
+          discovered_at: 1700000000,
+          accessToken: 'access-token-canary',
+          refresh_token: 'refresh-token-canary',
+          clientSecret: 'client-secret-canary'
+        }
+      }
+    ])
+    expect(stored).toEqual([
+      {
+        id: 'remote',
+        type: 'http',
+        name: 'Remote',
+        url: 'https://example.test/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer legacy-token' }],
+        enabled: true,
+        oauth: {
+          authMode: 'oauth',
+          registrationMode: 'dynamic',
+          clientId: 'public-client',
+          clientMetadataUrl: 'https://client.example/oauth.json',
+          scopes: ['mcp', 'offline_access'],
+          endpoints: {
+            authorizationEndpoint: 'https://auth.example/authorize',
+            tokenEndpoint: 'https://auth.example/token'
+          },
+          discoveredAt: 1700000000
+        }
+      }
+    ])
+    const wire = JSON.stringify(buildMcpServers(stored, ['remote']))
+    expect(wire).not.toContain('access-token-canary')
+    expect(wire).not.toContain('refresh-token-canary')
+    expect(wire).not.toContain('client-secret-canary')
+    expect(wire).not.toContain('public-client')
+    expect(wire).toContain('Bearer legacy-token')
+    expect(normalizeOAuthConfig({ accessToken: 'access-token-canary' })).toBeUndefined()
+    expect(
+      sanitizeMcpUpstream({
+        id: 'stdio',
+        type: 'stdio',
+        name: 'Local',
+        command: 'node',
+        oauth: { authMode: 'oauth', accessToken: 'access-token-canary' },
+        accessToken: 'access-token-canary',
+        clientSecret: 'client-secret-canary'
+      })
+    ).toEqual({ id: 'stdio', type: 'stdio', name: 'Local', command: 'node' })
   })
 })
 

@@ -83,9 +83,14 @@
     "notProbedTitle": "Not probed yet — click \"Test\" to check",
     "probeRetry": "Probe failed — retry",
     "testConnection": "Test {{name}} connection",
+    "oauth": {
+      "authorize": "Authorize {{name}} with OAuth",
+      "started": "OAuth authorization opened in your browser.",
+      "failed": "Could not start OAuth authorization."
+    },
     "edit": "Edit {{name}}",
     "delete": "Delete {{name}}",
-    "probeNetwork": "Probe failed — check the server config or network.",
+    "probeNetwork": "Probe failed — see the diagnostic details below.",
     "probeNoTools": "Probe completed — no tools found.",
     "expandProbe": "Expand to probe (read-only — per-tool toggle coming soon).",
     "experimentalTitle": "Experimental MCP-over-ACP",

@@ -14,9 +14,17 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 import {
   loadMcpServers as loadLegacyMcpServers,
+  type McpAuthMode,
+  type McpOAuthConfig,
+  type McpOAuthEndpoints,
+  type McpOAuthRegistrationMode,
   normalizeMcpRegistry,
-  type StoredMcpServer
+  type StoredMcpServer,
+  sanitizeMcpUpstream
 } from '@/lib/acp-mcp-persistence'
+
+export type { McpAuthMode, McpOAuthConfig, McpOAuthEndpoints, McpOAuthRegistrationMode }
+
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpControl } from '@/lib/web-server-api'
 
@@ -69,6 +77,24 @@ export interface McpUpstreamStatus {
   name: string
   enabled: boolean
   type: 'stdio' | 'http' | 'sse' | string
+}
+
+export type McpOAuthAuthorizationState = 'idle' | 'pending' | 'authorized' | 'failed'
+
+export interface McpOAuthStatus {
+  serverId: string
+  state: McpOAuthAuthorizationState
+  hasCredentials: boolean
+  canRefresh: boolean
+  expiresAt?: number
+  authorizationRequired: boolean
+}
+
+export interface McpOAuthBeginResult {
+  serverId: string
+  authorizationUrl: string
+  expiresAt: number
+  state: McpOAuthAuthorizationState
 }
 
 export interface McpControlPlaneStatus {
@@ -249,7 +275,8 @@ export async function putMcpConfig(
     ...config,
     schemaVersion: MCP_CONTROL_PLANE_SCHEMA_VERSION,
     builtIns: fillDefaultBuiltIns(config.builtIns),
-    routing: config.routing ?? { nameCollision: 'prefixServerId' }
+    routing: config.routing ?? { nameCollision: 'prefixServerId' },
+    upstreams: config.upstreams.map((upstream) => sanitizeMcpUpstream(upstream))
   }
   if (isTauriContext()) {
     const res = await invokeIpc<unknown>('mcp_put_config', { config: payload })
@@ -259,6 +286,51 @@ export async function putMcpConfig(
   const res = await webServerMcpControl.putConfig(payload)
   if (!res.success) return res
   return { success: true, data: normalizeMcpConfig(res.data) }
+}
+
+async function invokeRaw<T>(command: string, args: Record<string, unknown>): Promise<IpcResult<T>> {
+  try {
+    return { success: true, data: await invoke<T>(command, args) }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      code: 'INVOKE_ERROR'
+    }
+  }
+}
+
+export async function beginMcpOAuth(
+  id: string,
+  challenge?: string
+): Promise<IpcResult<McpOAuthBeginResult>> {
+  if (!isTauriContext())
+    return {
+      success: false,
+      error: 'OAuth authorization is available in the desktop app',
+      code: 'OAUTH_UNSUPPORTED_RUNTIME'
+    }
+  return invokeRaw<McpOAuthBeginResult>('begin_mcp_oauth', { id, challenge })
+}
+
+export async function getMcpOAuthStatus(id: string): Promise<IpcResult<McpOAuthStatus>> {
+  if (!isTauriContext())
+    return {
+      success: false,
+      error: 'OAuth status is available in the desktop app',
+      code: 'OAUTH_UNSUPPORTED_RUNTIME'
+    }
+  return invokeRaw<McpOAuthStatus>('get_mcp_oauth_status', { id })
+}
+
+export async function cancelMcpOAuth(id: string): Promise<IpcResult<McpOAuthStatus>> {
+  if (!isTauriContext())
+    return {
+      success: false,
+      error: 'OAuth cancellation is available in the desktop app',
+      code: 'OAUTH_UNSUPPORTED_RUNTIME'
+    }
+  return invokeRaw<McpOAuthStatus>('cancel_mcp_oauth', { id })
 }
 
 export async function getMcpStatus(): Promise<IpcResult<McpControlPlaneStatus>> {

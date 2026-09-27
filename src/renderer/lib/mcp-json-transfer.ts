@@ -1,5 +1,5 @@
 import type { McpServerConfig } from '@/lib/acp-api'
-import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
+import { type StoredMcpServer, sanitizeMcpUpstream } from '@/lib/acp-mcp-persistence'
 import type { McpControlPlaneConfig, McpUpstreamConfig } from '@/lib/mcp-api'
 import { randomUUID } from '@/lib/uuid'
 import { parseMcpJsonImport } from './mcp-json-import'
@@ -66,12 +66,13 @@ function uniqueCompatibilityName(
 
 /** Build the canonical-plus-compatibility object without serializing it. */
 export function buildMcpJsonExport(config: McpControlPlaneConfig): McpJsonExport {
+  const upstreams = config.upstreams.map((server) => sanitizeMcpUpstream(server))
   const mcpServers: Record<string, Record<string, unknown>> = {}
-  for (const server of config.upstreams) {
+  for (const server of upstreams) {
     const key = uniqueCompatibilityName(server.name, server, mcpServers)
     mcpServers[key] = compatibilityServer(server)
   }
-  return { ...config, mcpServers }
+  return { ...config, upstreams, mcpServers }
 }
 
 /** Stable, human-readable JSON suitable for a browser/Tauri file download. */

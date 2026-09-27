@@ -905,7 +905,7 @@ fn toggle_devtools<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> Result<(), 
 }
 
 #[cfg(target_os = "windows")]
-fn open_external_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_external_url(url: &str) -> Result<(), String> {
     Command::new("cmd")
         .args(["/C", "start", "", url])
         .spawn()
@@ -914,7 +914,7 @@ fn open_external_url(url: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_external_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_external_url(url: &str) -> Result<(), String> {
     Command::new("open")
         .arg(url)
         .spawn()
@@ -923,7 +923,7 @@ fn open_external_url(url: &str) -> Result<(), String> {
 }
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-fn open_external_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_external_url(url: &str) -> Result<(), String> {
     Command::new("xdg-open")
         .arg(url)
         .spawn()
@@ -3256,6 +3256,10 @@ pub fn run() {
             commands::mcp_put_config,
             commands::mcp_get_status,
             commands::mcp_get_runtime_status,
+            commands::begin_mcp_oauth,
+            commands::complete_mcp_oauth,
+            commands::cancel_mcp_oauth,
+            commands::get_mcp_oauth_status,
             fs_watcher::fs_watcher_subscribe,
             fs_watcher::fs_watcher_set_roots,
             // Desktop ACP renderer-history storage

@@ -13,6 +13,7 @@ pub mod config;
 pub mod desktop;
 pub mod domain;
 pub mod http;
+pub mod oauth;
 pub mod process;
 pub mod snapshot;
 pub use builtins::{BuiltInCapability, BuiltInRegistry};
@@ -32,6 +33,12 @@ pub use domain::{
     UpstreamFailure, UpstreamKind,
 };
 pub use http::{GatewayMode, McpHttpGateway, McpHttpGatewayConfig, McpHttpGatewayError};
+pub use oauth::{
+    mcp_oauth_credential_key, McpAuthMode, McpCredentialError, McpCredentialStatus,
+    McpCredentialStore, McpOAuthConfig, McpOAuthConfigError, McpOAuthEndpoints,
+    McpOAuthRegistrationMode, McpServerSecrets, McpStoredCredentialKind, OAuthSecret,
+    OAuthSecretInput, StaticBearerSecret, StaticHeaderSecret, MCP_OAUTH_KEY_PREFIX,
+};
 pub use process::{
     run_mcp_core_process, McpCoreProcessConfig, McpCoreSupervisor, ProcessError,
     MCP_CORE_PROBE_MISSES,
@@ -106,6 +113,8 @@ pub enum McpUpstreamTransport {
         url: String,
         #[serde(default)]
         headers: BTreeMap<String, RedactedSecret>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<oauth::McpOAuthConfig>,
     },
 }
 
@@ -118,10 +127,15 @@ impl fmt::Debug for McpUpstreamTransport {
                 .field("args", args)
                 .field("env", &RedactedMap(env))
                 .finish(),
-            Self::StreamableHttp { url, headers } => f
+            Self::StreamableHttp {
+                url,
+                headers,
+                oauth,
+            } => f
                 .debug_struct("StreamableHttp")
                 .field("url", url)
                 .field("headers", &RedactedMap(headers))
+                .field("oauth", oauth)
                 .finish(),
         }
     }
@@ -474,6 +488,7 @@ mod tests {
         invalid.servers[0].transport = McpUpstreamTransport::StreamableHttp {
             url: "file:///tmp/server".into(),
             headers: BTreeMap::new(),
+            oauth: None,
         };
         assert!(invalid.validate().is_err());
     }

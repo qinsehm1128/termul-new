@@ -150,9 +150,16 @@ fn build_server(
             args: args.clone(),
             env: resolve_secrets(&upstream.id, "env", env, resolver)?,
         },
-        McpPersistedTransport::Http { url, headers } => McpUpstreamTransport::StreamableHttp {
+        // OAuth metadata stays on the project document. Access and refresh
+        // tokens stay in the keyring and are not copied into the Core snapshot.
+        McpPersistedTransport::Http {
+            url,
+            headers,
+            oauth,
+        } => McpUpstreamTransport::StreamableHttp {
             url: url.clone(),
             headers: resolve_secrets(&upstream.id, "headers", headers, resolver)?,
+            oauth: oauth.clone(),
         },
         McpPersistedTransport::Sse { .. } => {
             return Err(SnapshotError::InvalidRegistry(

@@ -52,7 +52,7 @@ async function runSerialized(mutation: () => Promise<void>): Promise<void> {
 }
 
 function toWireConfig(server: StoredMcpServer): McpServerConfig {
-  const { id: _id, enabled: _enabled, ...config } = server
+  const { enabled: _enabled, ...config } = server
   return config as McpServerConfig
 }
 

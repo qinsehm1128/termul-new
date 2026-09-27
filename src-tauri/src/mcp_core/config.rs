@@ -11,6 +11,8 @@ use std::{collections::BTreeSet, fmt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::oauth::{sanitize_mcp_oauth_metadata, McpOAuthConfig};
+
 pub const MCP_CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 pub const BUILTIN_SESSION_MEMORY: &str = "session-memory";
 pub const BUILTIN_PROJECT_SCOPE: &str = "project-scope";
@@ -127,11 +129,17 @@ pub enum McpPersistedTransport {
         url: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         headers: Vec<NamedSecret>,
+        /// Credential-free OAuth metadata. Tokens stay in the keyring.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<McpOAuthConfig>,
     },
     Sse {
         url: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         headers: Vec<NamedSecret>,
+        /// Credential-free OAuth metadata. Tokens stay in the keyring.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<McpOAuthConfig>,
     },
 }
 
@@ -144,15 +152,25 @@ impl fmt::Debug for McpPersistedTransport {
                 .field("args", args)
                 .field("env", env)
                 .finish(),
-            Self::Http { url, headers } => f
+            Self::Http {
+                url,
+                headers,
+                oauth,
+            } => f
                 .debug_struct("Http")
                 .field("url", url)
                 .field("headers", headers)
+                .field("oauth", oauth)
                 .finish(),
-            Self::Sse { url, headers } => f
+            Self::Sse {
+                url,
+                headers,
+                oauth,
+            } => f
                 .debug_struct("Sse")
                 .field("url", url)
                 .field("headers", headers)
+                .field("oauth", oauth)
                 .finish(),
         }
     }
@@ -349,19 +367,20 @@ impl McpControlPlaneConfig {
     }
 
     pub fn from_stored_json(value: &Value) -> Result<ParsedControlPlane, ConfigError> {
-        if let Some(entries) = value.as_array() {
+        let mut owned = value.clone();
+        sanitize_mcp_oauth_metadata(&mut owned)
+            .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+        if let Some(entries) = owned.as_array() {
             let config = migrate_legacy_array(entries)?;
             return Ok(ParsedControlPlane {
                 config,
                 source: ConfigSource::LegacyArray,
             });
         }
-        let object = value.as_object().ok_or_else(|| {
-            ConfigError::Invalid("MCP registry must be a JSON array or control-plane object".into())
-        })?;
-        if is_canonical_object(object) {
+        if owned.as_object().is_some_and(is_canonical_object) {
+            merge_bearer_tokens_into_headers(&mut owned)?;
             let mut config: McpControlPlaneConfig =
-                serde_json::from_value(value.clone()).map_err(|error| {
+                serde_json::from_value(owned).map_err(|error| {
                     ConfigError::Invalid(format!("invalid MCP control-plane document: {error}"))
                 })?;
             if config.schema_version == 0 {
@@ -421,8 +440,16 @@ impl McpControlPlaneConfig {
                     }
                     normalize_secrets(env)?;
                 }
-                McpPersistedTransport::Http { url, headers }
-                | McpPersistedTransport::Sse { url, headers } => {
+                McpPersistedTransport::Http {
+                    url,
+                    headers,
+                    oauth,
+                }
+                | McpPersistedTransport::Sse {
+                    url,
+                    headers,
+                    oauth,
+                } => {
                     if url.trim().is_empty() {
                         return Err(ConfigError::Invalid(format!(
                             "url for upstream {} must not be empty",
@@ -430,6 +457,14 @@ impl McpControlPlaneConfig {
                         )));
                     }
                     normalize_secrets(headers)?;
+                    if let Some(oauth_config) = oauth.as_mut() {
+                        oauth_config
+                            .normalize()
+                            .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+                    }
+                    if oauth.as_ref().is_some_and(McpOAuthConfig::is_blank) {
+                        *oauth = None;
+                    }
                 }
             }
         }
@@ -547,11 +582,13 @@ fn migrate_legacy_entry(
         },
         "http" => McpPersistedTransport::Http {
             url: required_string(object, "url")?.to_owned(),
-            headers: parse_named_secrets(object.get("headers"), "headers")?,
+            headers: parse_http_headers(object)?,
+            oauth: parse_oauth_config(object)?,
         },
         "sse" => McpPersistedTransport::Sse {
             url: required_string(object, "url")?.to_owned(),
-            headers: parse_named_secrets(object.get("headers"), "headers")?,
+            headers: parse_http_headers(object)?,
+            oauth: parse_oauth_config(object)?,
         },
         other => {
             return Err(ConfigError::Invalid(format!(
@@ -610,6 +647,100 @@ fn string_array(value: Option<&Value>, field: &str) -> Result<Vec<String>, Confi
                 .ok_or_else(|| ConfigError::Invalid(format!("{field} entries must be strings")))
         })
         .collect()
+}
+
+fn parse_oauth_config(object: &Map<String, Value>) -> Result<Option<McpOAuthConfig>, ConfigError> {
+    let Some(value) = object.get("oauth") else {
+        return Ok(None);
+    };
+    let mut config: McpOAuthConfig = serde_json::from_value(value.clone())
+        .map_err(|_| ConfigError::Invalid("oauth metadata is invalid".into()))?;
+    config
+        .normalize()
+        .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+    if config.is_blank() {
+        Ok(None)
+    } else {
+        Ok(Some(config))
+    }
+}
+
+fn parse_http_headers(object: &Map<String, Value>) -> Result<Vec<NamedSecret>, ConfigError> {
+    let mut headers = parse_named_secrets(object.get("headers"), "headers")?;
+    let bearer_token = object
+        .get("bearerToken")
+        .or_else(|| object.get("bearer_token"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(token) = bearer_token {
+        if !headers
+            .iter()
+            .any(|header| header.name.eq_ignore_ascii_case("authorization"))
+        {
+            headers.push(NamedSecret::inline(
+                "Authorization",
+                format!("Bearer {token}"),
+            ));
+        }
+    }
+    Ok(headers)
+}
+
+fn merge_bearer_tokens_into_headers(value: &mut Value) -> Result<(), ConfigError> {
+    let Some(upstreams) = value
+        .as_object_mut()
+        .and_then(|object| object.get_mut("upstreams"))
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    for upstream in upstreams {
+        let Some(object) = upstream.as_object_mut() else {
+            continue;
+        };
+        let bearer_token = object
+            .get("bearerToken")
+            .or_else(|| object.get("bearer_token"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let Some(token) = bearer_token else {
+            continue;
+        };
+        let headers = object
+            .entry("headers")
+            .or_insert_with(|| Value::Object(Map::new()));
+        match headers {
+            Value::Object(header_map)
+                if !header_map
+                    .keys()
+                    .any(|name| name.eq_ignore_ascii_case("authorization")) =>
+            {
+                header_map.insert(
+                    "Authorization".into(),
+                    Value::String(format!("Bearer {token}")),
+                );
+            }
+            Value::Array(header_list) => {
+                let has_authorization = header_list.iter().any(|header| {
+                    header
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| name.eq_ignore_ascii_case("authorization"))
+                });
+                if !has_authorization {
+                    header_list.push(serde_json::json!({
+                        "name": "Authorization",
+                        "value": format!("Bearer {token}")
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn parse_named_secrets(
@@ -769,6 +900,48 @@ mod tests {
     }
 
     #[test]
+    fn reads_bearer_token_into_plain_http_headers() {
+        let parsed = McpControlPlaneConfig::from_stored_json(&json!([
+            {
+                "id": "legacy",
+                "type": "http",
+                "name": "Legacy",
+                "url": "https://legacy.test/mcp",
+                "bearerToken": "legacy-token"
+            }
+        ]))
+        .unwrap()
+        .config;
+        let McpPersistedTransport::Http { headers, .. } = &parsed.upstreams[0].transport else {
+            panic!("expected HTTP transport");
+        };
+        assert_eq!(headers[0].name, "Authorization");
+        assert_eq!(headers[0].value.as_deref(), Some("Bearer legacy-token"));
+
+        let canonical = json!({
+            "schemaVersion": 1,
+            "revision": 1,
+            "builtIns": [],
+            "upstreams": [{
+                "id": "canonical",
+                "type": "http",
+                "name": "Canonical",
+                "url": "https://canonical.test/mcp",
+                "bearerToken": "canonical-token",
+                "headers": []
+            }],
+            "routing": {"nameCollision": "prefixServerId"}
+        });
+        let canonical = McpControlPlaneConfig::from_stored_json(&canonical)
+            .unwrap()
+            .config;
+        let McpPersistedTransport::Http { headers, .. } = &canonical.upstreams[0].transport else {
+            panic!("expected HTTP transport");
+        };
+        assert_eq!(headers[0].value.as_deref(), Some("Bearer canonical-token"));
+    }
+
+    #[test]
     fn generates_stable_ids_for_legacy_entries_without_id() {
         let parsed = McpControlPlaneConfig::from_stored_json(&json!([
             { "name": "filesystem", "command": "npx" },
@@ -873,6 +1046,119 @@ mod tests {
         newer.revision = 3;
         let accepted = prepare_write(&newer.to_canonical_json().unwrap(), Some(&second)).unwrap();
         assert_eq!(accepted.revision, 3);
+    }
+
+    #[test]
+    fn oauth_metadata_round_trips_without_credential_fields() {
+        for transport in ["http", "sse"] {
+            let parsed = McpControlPlaneConfig::from_stored_json(&json!({
+                "schemaVersion": 1,
+                "revision": 2,
+                "upstreams": [{
+                    "id": "remote",
+                    "name": "Remote",
+                    "type": transport,
+                    "url": "https://example.test/mcp",
+                    "oauth": {
+                        "authMode": "oauth",
+                        "registrationMode": "clientMetadata",
+                        "clientId": " https://client.example/oauth.json ",
+                        "clientMetadataUrl": "https://client.example/oauth.json",
+                        "scopes": ["mcp", "mcp", "offline_access"],
+                        "endpoints": {
+                            "protectedResourceMetadataUrl": "https://example.test/.well-known/oauth-protected-resource",
+                            "authorizationEndpoint": "https://auth.example/authorize",
+                            "tokenEndpoint": "https://auth.example/token"
+                        },
+                        "discoveredAt": 1700000000,
+                        "accessToken": "access-token-canary",
+                        "refreshToken": "refresh-token-canary",
+                        "clientSecret": "client-secret-canary"
+                    }
+                }]
+            }))
+            .unwrap()
+            .config;
+            let encoded = parsed.to_canonical_json().unwrap();
+            let text = encoded.to_string();
+            assert!(!text.contains("access-token-canary"), "{transport}");
+            assert!(!text.contains("refresh-token-canary"), "{transport}");
+            assert!(!text.contains("client-secret-canary"), "{transport}");
+            assert!(!text.contains("accessToken"), "{transport}");
+            assert!(!text.contains("clientSecret"), "{transport}");
+            let oauth = encoded["upstreams"][0]["oauth"].clone();
+            assert_eq!(
+                oauth,
+                json!({
+                    "authMode": "oauth",
+                    "registrationMode": "clientMetadata",
+                    "clientId": "https://client.example/oauth.json",
+                    "clientMetadataUrl": "https://client.example/oauth.json",
+                    "scopes": ["mcp", "offline_access"],
+                    "endpoints": {
+                        "protectedResourceMetadataUrl": "https://example.test/.well-known/oauth-protected-resource",
+                        "authorizationEndpoint": "https://auth.example/authorize",
+                        "tokenEndpoint": "https://auth.example/token"
+                    },
+                    "discoveredAt": 1700000000
+                })
+            );
+            let again = McpControlPlaneConfig::from_stored_json(&encoded)
+                .unwrap()
+                .config;
+            assert_eq!(parsed, again);
+            assert!(!format!("{parsed:?}").contains("access-token-canary"));
+        }
+    }
+
+    #[test]
+    fn oauth_metadata_rejects_credential_urls_without_echoing_them() {
+        let error = McpControlPlaneConfig::from_stored_json(&json!({
+            "schemaVersion": 1,
+            "upstreams": [{
+                "id": "remote",
+                "name": "Remote",
+                "type": "http",
+                "url": "https://example.test/mcp",
+                "oauth": {
+                    "authMode": "oauth",
+                    "clientMetadataUrl": "https://user:super-secret-password@example.test/client.json"
+                }
+            }]
+        }))
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(!text.contains("super-secret-password"));
+        assert!(text.contains("clientMetadataUrl"));
+    }
+
+    #[test]
+    fn static_bearer_still_round_trips_beside_oauth_metadata() {
+        let parsed = McpControlPlaneConfig::from_stored_json(&json!([{
+            "id": "remote",
+            "type": "http",
+            "name": "Remote",
+            "url": "https://example.test/mcp",
+            "bearerToken": "legacy-token",
+            "oauth": {
+                "authMode": "static",
+                "registrationMode": "none"
+            }
+        }]))
+        .unwrap()
+        .config;
+        let McpPersistedTransport::Http { headers, oauth, .. } = &parsed.upstreams[0].transport
+        else {
+            panic!("expected HTTP transport");
+        };
+        assert_eq!(headers[0].value.as_deref(), Some("Bearer legacy-token"));
+        assert_eq!(
+            oauth.as_ref().map(|config| config.auth_mode),
+            Some(super::super::oauth::McpAuthMode::Static)
+        );
+        let encoded = parsed.to_canonical_json().unwrap();
+        assert!(encoded.to_string().contains("legacy-token"));
+        assert_eq!(encoded["upstreams"][0]["oauth"]["authMode"], "static");
     }
 
     #[test]

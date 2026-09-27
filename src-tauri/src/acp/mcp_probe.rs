@@ -34,10 +34,11 @@
 //! Probe outcomes are logged (connected/disconnected + server name + transport)
 //! WITHOUT env/header values, tokens, or credentials.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::process::Stdio;
 use std::time::Duration;
 
+use crate::mcp_core::oauth::McpOAuthConfig;
 use rmcp::model::ClientConfig;
 use rmcp::service::{serve_client, RunningService};
 use rmcp::transport::child_process::TokioChildProcess;
@@ -87,6 +88,8 @@ impl std::fmt::Debug for McpNameValuePair {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
+    #[serde(default)]
+    pub id: Option<String>,
     #[serde(default, rename = "type")]
     pub r#type: Option<String>,
     pub name: String,
@@ -98,11 +101,14 @@ pub struct McpServerConfig {
     pub url: Option<String>,
     #[serde(default)]
     pub headers: Vec<McpNameValuePair>,
+    #[serde(default)]
+    pub oauth: Option<McpOAuthConfig>,
 }
 
 impl std::fmt::Debug for McpServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("McpServerConfig")
+            .field("id", &self.id)
             .field("type", &self.r#type)
             .field("name", &self.name)
             .field("command", &self.command)
@@ -237,6 +243,38 @@ fn expand_env_with(value: &str, lookup: impl Fn(&str) -> Option<String>) -> Stri
 /// One-shot probe: open a fresh rmcp client connection, `initialize`, list
 /// tools, close. Never panics, never logs secrets — only the server name +
 /// transport + outcome.
+fn classify_probe_error(error: impl std::fmt::Display) -> String {
+    let rendered = error.to_string();
+    let lower = rendered.to_ascii_lowercase();
+    if lower.contains("auth required")
+        || lower.contains("401 unauthorized")
+        || (lower.contains("authorization")
+            && (lower.contains("cannot authenticate")
+                || lower.contains("authentication")
+                || lower.contains("auth")))
+    {
+        return "remote MCP server requires a valid Authorization header; check headers or bearerToken in the MCP JSON".into();
+    }
+    if lower.contains("could not parse json response as jsonrpcmessage")
+        || (lower.contains("unexpected server response") && lower.contains("json"))
+    {
+        if lower.contains("\"success\"") || lower.contains("\"code\"") {
+            return "remote endpoint returned a non-MCP JSON error; check Authorization and confirm the URL is the MCP endpoint".into();
+        }
+        return "remote endpoint returned invalid MCP JSON-RPC; confirm the URL and transport type"
+            .into();
+    }
+    if lower.contains("unexpected content type") {
+        return "remote endpoint returned a non-MCP content type; confirm the URL is a Streamable HTTP MCP endpoint".into();
+    }
+    if lower.contains("missing session id") || lower.contains("session id in response") {
+        return "remote MCP endpoint requires a session response that it did not provide".into();
+    }
+    rendered
+        .replace("Authorization: Bearer ", "Authorization: Bearer <redacted>")
+        .replace("authorization: Bearer ", "authorization: Bearer <redacted>")
+}
+
 pub async fn probe(server: McpServerConfig) -> ProbeResult {
     let transport = server.transport();
     let name = server.name.clone();
@@ -294,18 +332,55 @@ fn resolve_stdio_command(command: &str) -> (String, Vec<String>) {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn resolve_stdio_command_in_path(command: &str, path: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if command.contains('/') {
+        return Some(command.to_string());
+    }
+    for directory in path.split(':').filter(|segment| !segment.is_empty()) {
+        let candidate = std::path::Path::new(directory).join(command);
+        if let Ok(metadata) = std::fs::metadata(&candidate) {
+            if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
 async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     let command = match server.command.as_deref() {
         Some(c) if !c.trim().is_empty() => c,
         _ => return ProbeResult::disconnected("stdio command is required"),
     };
-    let (program, prepend_args) = resolve_stdio_command(command);
+    let (mut program, prepend_args) = resolve_stdio_command(command);
+
+    // A GUI-launched desktop process often inherits a minimal PATH from
+    // Finder/Dock rather than the user's interactive shell. Keep MCP stdio
+    // probes consistent with ACP and PTY launches by refreshing and merging
+    // the login-shell PATH before spawning package-manager commands such as
+    // `npx`/`uvx`. Explicit MCP env values remain in the map and win for their
+    // own keys after expansion.
+    let mut env_map = HashMap::new();
+    for pair in &server.env {
+        // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
+        env_map.insert(pair.name.clone(), expand_env(&pair.value));
+    }
+    crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+    #[cfg(not(target_os = "windows"))]
+    if let Some(path) = env_map.get("PATH") {
+        if let Some(resolved) = resolve_stdio_command_in_path(&program, path) {
+            program = resolved;
+        }
+    }
+
     let mut cmd = Command::new(&program);
     cmd.args(&prepend_args);
     cmd.args(&server.args);
-    for pair in &server.env {
-        // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
-        cmd.env(&pair.name, expand_env(&pair.value));
+    for (name, value) in env_map {
+        cmd.env(name, value);
     }
     // Windows: suppress the console window a GUI-launched probe would flash.
     // CREATE_NO_WINDOW = 0x0800_0000 (mirrors the vendored ACP patch). tokio's
@@ -332,7 +407,12 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     };
     let running = match serve_client(ClientConfig::default(), transport).await {
         Ok(service) => service,
-        Err(error) => return ProbeResult::disconnected(format!("initialize failed: {error}")),
+        Err(error) => {
+            return ProbeResult::disconnected(format!(
+                "initialize failed: {}",
+                classify_probe_error(error)
+            ))
+        }
     };
     drive_running(running).await
 }
@@ -347,6 +427,40 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
         _ => return ProbeResult::disconnected(format!("{transport} URL is required")),
     };
     let mut config = StreamableHttpClientTransportConfig::with_uri(url);
+    // Several hosted MCP services (including providers compatible with the
+    // router client) do not return a Mcp-Session-Id and operate statelessly.
+    // The probe is a one-shot initialize + tools/list connection, so requiring
+    // a session here rejects otherwise valid HTTP MCP endpoints.
+    config.allow_stateless = true;
+    if let (Some(oauth), Some(server_id)) = (
+        server
+            .oauth
+            .as_ref()
+            .filter(|value| value.auth_mode == crate::mcp_core::oauth::McpAuthMode::OAuth),
+        server.id.as_deref(),
+    ) {
+        let headers = server
+            .headers
+            .iter()
+            .filter(|pair| !is_transport_managed_header(&pair.name))
+            .map(|pair| (pair.name.clone(), pair.value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let client =
+            match crate::mcp_core::oauth::oauth_transport(url, server_id, oauth, &headers).await {
+                Ok(client) => client,
+                Err(error) => return ProbeResult::disconnected(error),
+            };
+        let running = match serve_client(ClientConfig::default(), client).await {
+            Ok(service) => service,
+            Err(error) => {
+                return ProbeResult::disconnected(format!(
+                    "initialize failed: {}",
+                    classify_probe_error(error)
+                ))
+            }
+        };
+        return drive_running(running).await;
+    }
     if !server.headers.is_empty() {
         let mut headers = HashMap::new();
         for pair in &server.headers {
@@ -383,7 +497,12 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
     let client = StreamableHttpClientTransport::from_config(config);
     let running = match serve_client(ClientConfig::default(), client).await {
         Ok(service) => service,
-        Err(error) => return ProbeResult::disconnected(format!("initialize failed: {error}")),
+        Err(error) => {
+            return ProbeResult::disconnected(format!(
+                "initialize failed: {}",
+                classify_probe_error(error)
+            ))
+        }
     };
     drive_running(running).await
 }
@@ -398,7 +517,10 @@ async fn drive_running(
         Ok(tools) => tools,
         Err(error) => {
             let _ = running.cancel().await;
-            return ProbeResult::disconnected(format!("tools/list failed: {error}"));
+            return ProbeResult::disconnected(format!(
+                "tools/list failed: {}",
+                classify_probe_error(error)
+            ));
         }
     };
     let mapped = tools
@@ -452,6 +574,29 @@ mod tests {
     }
 
     #[test]
+    fn classifies_remote_auth_and_non_mcp_json_errors_without_credentials() {
+        assert_eq!(
+            classify_probe_error(
+                "unexpected server response: could not parse JSON response as JsonRpcMessage: {\"code\":1001,\"msg\":\"Authorization required\"}"
+            ),
+            "remote MCP server requires a valid Authorization header; check headers or bearerToken in the MCP JSON"
+        );
+        assert_eq!(
+            classify_probe_error(
+                "unexpected server response: could not parse JSON response as JsonRpcMessage: {\"success\":false,\"message\":\"bad request\"}"
+            ),
+            "remote endpoint returned a non-MCP JSON error; check Authorization and confirm the URL is the MCP endpoint"
+        );
+        assert_eq!(
+            classify_probe_error("Auth required, when send initialize request"),
+            "remote MCP server requires a valid Authorization header; check headers or bearerToken in the MCP JSON"
+        );
+        let redacted =
+            classify_probe_error("request failed Authorization: Bearer super-secret-token");
+        assert!(!redacted.contains("super-secret-token"));
+    }
+
+    #[test]
     fn rejects_unsupported_transport() {
         // The config is loose enough to accept any `type`; the probe rejects
         // unknown transports with a disconnected result (no panic).
@@ -463,6 +608,8 @@ mod tests {
             env: Vec::new(),
             url: None,
             headers: Vec::new(),
+            id: None,
+            oauth: None,
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(probe(config));
@@ -485,6 +632,8 @@ mod tests {
             }],
             url: None,
             headers: Vec::new(),
+            id: None,
+            oauth: None,
         };
         let result = probe(config).await;
         assert_eq!(result.status, ProbeStatus::Disconnected);
@@ -507,6 +656,8 @@ mod tests {
             env: Vec::new(),
             url: None,
             headers: Vec::new(),
+            id: None,
+            oauth: None,
         };
         let result = probe(config).await;
         assert_eq!(result.status, ProbeStatus::Disconnected);
@@ -560,6 +711,110 @@ mod tests {
         assert!(!is_transport_managed_header("X-Workspace"));
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn resolves_stdio_command_from_refreshed_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("npx");
+        std::fs::write(&executable, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+
+        let path = directory.path().to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_stdio_command_in_path("npx", &path),
+            Some(executable.to_string_lossy().into_owned())
+        );
+        assert_eq!(resolve_stdio_command_in_path("missing", &path), None);
+    }
+
+    #[tokio::test]
+    async fn http_probe_sends_authorization_to_stateless_endpoint() {
+        use axum::{
+            extract::State,
+            http::{header, HeaderMap, StatusCode},
+            response::{IntoResponse, Response},
+            routing::post,
+            Json, Router,
+        };
+        use serde_json::{json, Value};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use tokio::net::TcpListener;
+
+        async fn handle(
+            State(authorized): State<Arc<AtomicBool>>,
+            headers: HeaderMap,
+            Json(request): Json<Value>,
+        ) -> Response {
+            if headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                == Some("Bearer test-token")
+            {
+                authorized.store(true, Ordering::SeqCst);
+            }
+            let method = request
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if method.starts_with("notifications/") {
+                return (StatusCode::OK, "").into_response();
+            }
+            let id = request.get("id").cloned().unwrap_or(Value::Null);
+            let result = if method == "initialize" {
+                json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "stateless-fixture", "version": "1"}
+                })
+            } else {
+                json!({"tools": []})
+            };
+            (
+                [(header::CONTENT_TYPE, "application/json")],
+                Json(json!({"jsonrpc": "2.0", "id": id, "result": result})),
+            )
+                .into_response()
+        }
+
+        let authorized = Arc::new(AtomicBool::new(false));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route("/mcp", post(handle))
+            .with_state(Arc::clone(&authorized));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let result = probe(McpServerConfig {
+            r#type: Some("http".to_string()),
+            name: "stateless-fixture".to_string(),
+            command: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            url: Some(url),
+            headers: vec![McpNameValuePair {
+                name: "Authorization".to_string(),
+                value: "Bearer test-token".to_string(),
+            }],
+            id: None,
+            oauth: None,
+        })
+        .await;
+
+        assert_eq!(result.status, ProbeStatus::Connected);
+        assert!(result.tools.is_empty());
+        assert!(authorized.load(Ordering::SeqCst));
+        server.abort();
+    }
+
     #[tokio::test]
     async fn unreachable_http_url_returns_disconnected() {
         // A port nothing listens on → connect failure → disconnected. The error
@@ -575,6 +830,8 @@ mod tests {
                 name: "Authorization".to_string(),
                 value: "Bearer super-secret".to_string(),
             }],
+            id: None,
+            oauth: None,
         };
         let result = probe(config).await;
         assert_eq!(result.status, ProbeStatus::Disconnected);

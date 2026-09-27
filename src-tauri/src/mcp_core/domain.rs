@@ -671,14 +671,52 @@ impl McpCore {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn resolve_stdio_command_in_path(command: &str, path: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if command.contains('/') {
+        return Some(command.to_string());
+    }
+    for directory in path.split(':').filter(|segment| !segment.is_empty()) {
+        let candidate = std::path::Path::new(directory).join(command);
+        if let Ok(metadata) = std::fs::metadata(&candidate) {
+            if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
 async fn connect_server(server: &McpUpstreamServer) -> Result<UpstreamConnection, McpDomainError> {
     let (kind, client) = match &server.transport {
         McpUpstreamTransport::Stdio { command, args, env } => {
-            let mut command_line = Command::new(command);
-            command_line.args(args).kill_on_drop(true);
-            command_line.stderr(Stdio::null());
+            let mut env_map = HashMap::new();
             for (name, value) in env {
-                command_line.env(name, value.expose());
+                env_map.insert(name.clone(), value.expose().to_owned());
+            }
+            crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+
+            let resolved = crate::pty::manager::resolve_spawn_program(command).ok();
+            let mut program = resolved
+                .as_ref()
+                .map(|value| value.program.clone())
+                .unwrap_or_else(|| command.clone());
+            let mut command_args = resolved.map(|value| value.prepend_args).unwrap_or_default();
+            command_args.extend(args.iter().cloned());
+            #[cfg(not(target_os = "windows"))]
+            if let Some(path) = env_map.get("PATH") {
+                if let Some(path_program) = resolve_stdio_command_in_path(&program, path) {
+                    program = path_program;
+                }
+            }
+
+            let mut command_line = Command::new(program);
+            command_line.args(command_args).kill_on_drop(true);
+            command_line.stderr(Stdio::null());
+            for (name, value) in env_map {
+                command_line.env(name, value);
             }
             let (transport, _) = TokioChildProcess::builder(command_line)
                 .stderr(Stdio::null())
@@ -691,23 +729,55 @@ async fn connect_server(server: &McpUpstreamServer) -> Result<UpstreamConnection
                     .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
             )
         }
-        McpUpstreamTransport::StreamableHttp { url, headers } => {
-            let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
-            let mut custom = HashMap::new();
-            for (name, value) in headers {
-                let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
-                let value = reqwest::header::HeaderValue::from_str(value.expose())
-                    .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
-                custom.insert(name, value);
+        McpUpstreamTransport::StreamableHttp {
+            url,
+            headers,
+            oauth,
+        } => {
+            if oauth
+                .as_ref()
+                .is_some_and(|value| value.auth_mode == crate::mcp_core::oauth::McpAuthMode::OAuth)
+            {
+                let header_values = headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+                    .collect::<BTreeMap<_, _>>();
+                let transport = crate::mcp_core::oauth::oauth_transport(
+                    url.as_str(),
+                    &server.id,
+                    oauth.as_ref().expect("oauth config"),
+                    &header_values,
+                )
+                .await
+                .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
+                (
+                    UpstreamKind::StreamableHttp,
+                    ().serve(transport)
+                        .await
+                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
+                )
+            } else {
+                let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
+                // Hosted MCP services may intentionally omit Mcp-Session-Id and
+                // serve stateless HTTP requests. The router client accepts this;
+                // the Core aggregator must do the same for the same upstream.
+                config.allow_stateless = true;
+                let mut custom = HashMap::new();
+                for (name, value) in headers {
+                    let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
+                    let value = reqwest::header::HeaderValue::from_str(value.expose())
+                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
+                    custom.insert(name, value);
+                }
+                config = config.custom_headers(custom);
+                (
+                    UpstreamKind::StreamableHttp,
+                    ().serve(StreamableHttpClientTransport::from_config(config))
+                        .await
+                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
+                )
             }
-            config = config.custom_headers(custom);
-            (
-                UpstreamKind::StreamableHttp,
-                ().serve(StreamableHttpClientTransport::from_config(config))
-                    .await
-                    .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
-            )
         }
     };
     Ok(UpstreamConnection {

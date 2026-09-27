@@ -204,6 +204,7 @@ export interface McpHeader {
 export interface McpStdioServer {
   type?: 'stdio'
   name: string
+  id?: string
   command: string
   args?: string[]
   env?: McpEnvVar[]
@@ -213,12 +214,16 @@ export interface McpHttpServer {
   name: string
   url: string
   headers?: McpHeader[]
+  id?: string
+  oauth?: import('@/lib/acp-mcp-persistence').McpOAuthConfig
 }
 export interface McpSseServer {
   type: 'sse'
   name: string
   url: string
   headers?: McpHeader[]
+  id?: string
+  oauth?: import('@/lib/acp-mcp-persistence').McpOAuthConfig
 }
 export type McpServerConfig = McpStdioServer | McpHttpServer | McpSseServer
 

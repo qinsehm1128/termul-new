@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ChevronDown,
   Download,
+  KeyRound,
   Pencil,
   Plus,
   RefreshCw,
@@ -25,8 +26,10 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
+import { beginMcpOAuth } from '@/lib/mcp-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { downloadMcpJsonExport, prepareMcpJsonImport } from '@/lib/mcp-json-transfer'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { useMcpStore } from '@/stores/mcp-store'
 
@@ -392,6 +395,26 @@ export function McpServersSettings(): React.JSX.Element {
                         ? t('settings.probeRetry')
                         : t('common.showTools')}
                   </CollapsibleTrigger>
+                  {isTauriContext() && transportOf(server) !== 'stdio' ? (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => {
+                        void beginMcpOAuth(server.id).then((result) => {
+                          if (!result.success) {
+                            toast.error(result.error ?? t('settings.oauth.failed'))
+                            return
+                          }
+                          toast.success(t('settings.oauth.started'))
+                        })
+                      }}
+                      aria-label={t('settings.oauth.authorize', { name: server.name })}
+                      title={t('settings.oauth.authorize', { name: server.name })}
+                    >
+                      <KeyRound size={14} />
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     size="icon"

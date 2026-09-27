@@ -10,7 +10,37 @@ export const ACP_MCP_KEY = 'acp/mcp-servers'
 
 export type McpTransport = 'stdio' | 'http' | 'sse'
 
-export type StoredMcpServer = McpServerConfig & { id: string; enabled?: boolean }
+/** Credential-free OAuth metadata. Tokens stay in the host keyring. */
+export type McpAuthMode = 'none' | 'static' | 'oauth'
+
+export type McpOAuthRegistrationMode = 'none' | 'preregistered' | 'dynamic' | 'clientMetadata'
+
+export interface McpOAuthEndpoints {
+  protectedResourceMetadataUrl?: string
+  authorizationServerMetadataUrl?: string
+  issuer?: string
+  authorizationEndpoint?: string
+  tokenEndpoint?: string
+  registrationEndpoint?: string
+  revocationEndpoint?: string
+}
+
+/** Unix `discoveredAt` is seconds. Secret fields are not part of this type. */
+export interface McpOAuthConfig {
+  authMode: McpAuthMode
+  registrationMode: McpOAuthRegistrationMode
+  clientId?: string
+  clientMetadataUrl?: string
+  scopes?: string[]
+  endpoints?: McpOAuthEndpoints
+  discoveredAt?: number
+}
+
+export type StoredMcpServer = McpServerConfig & {
+  id: string
+  enabled?: boolean
+  oauth?: McpOAuthConfig
+}
 
 export interface McpValidation {
   valid: boolean
@@ -88,12 +118,251 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringPairs(value: unknown): Array<{ name: string; value: string }> | undefined {
   if (value === undefined) return undefined
-  if (!Array.isArray(value)) return undefined
-  const pairs = value.filter(
-    (entry): entry is { name: string; value: string } =>
-      isRecord(entry) && typeof entry.name === 'string' && typeof entry.value === 'string'
-  )
-  return pairs.length === value.length ? pairs : undefined
+  if (Array.isArray(value)) {
+    const pairs = value.filter(
+      (entry): entry is { name: string; value: string } =>
+        isRecord(entry) && typeof entry.name === 'string' && typeof entry.value === 'string'
+    )
+    return pairs.length === value.length ? pairs : undefined
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+    return entries.every(([, entry]) => typeof entry === 'string')
+      ? entries.map(([name, entry]) => ({ name, value: entry as string }))
+      : undefined
+  }
+  return undefined
+}
+
+const OAUTH_SECRET_KEYS = new Set([
+  'accessToken',
+  'access_token',
+  'refreshToken',
+  'refresh_token',
+  'clientSecret',
+  'client_secret',
+  'idToken',
+  'id_token',
+  'token',
+  'bearerToken',
+  'bearer_token'
+])
+
+function readOptionalString(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | undefined | null {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue
+    if (OAUTH_SECRET_KEYS.has(key)) continue
+    const value = record[key]
+    if (typeof value !== 'string') return null
+    return value
+  }
+  return undefined
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 31 || code === 127) return true
+  }
+  return false
+}
+
+function isPublicHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    if (url.username || url.password) return false
+    return url.hostname.length > 0
+  } catch {
+    return false
+  }
+}
+
+function normalizeOptionalUrl(value: string | undefined): string | undefined | null {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return undefined
+  return isPublicHttpUrl(trimmed) ? trimmed : null
+}
+
+function normalizeScopes(value: unknown): string[] | undefined | null {
+  if (value === undefined) return undefined
+  let parts: unknown[]
+  if (typeof value === 'string') {
+    parts = value.trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) return undefined
+  } else if (Array.isArray(value)) {
+    parts = value
+  } else {
+    return null
+  }
+  const scopes: string[] = []
+  for (const entry of parts) {
+    if (typeof entry !== 'string') return null
+    const trimmed = entry.trim()
+    if (trimmed.length === 0 || hasControlCharacter(trimmed) || /\s/.test(trimmed)) {
+      return null
+    }
+    if (!scopes.includes(trimmed)) scopes.push(trimmed)
+  }
+  return scopes.length > 0 ? scopes : undefined
+}
+
+function normalizeEndpoints(value: unknown): McpOAuthEndpoints | undefined | null {
+  if (value === undefined || value === null) return undefined
+  if (!isRecord(value)) return null
+  const fields: Array<[keyof McpOAuthEndpoints, string[]]> = [
+    [
+      'protectedResourceMetadataUrl',
+      ['protectedResourceMetadataUrl', 'protected_resource_metadata_url']
+    ],
+    [
+      'authorizationServerMetadataUrl',
+      ['authorizationServerMetadataUrl', 'authorization_server_metadata_url']
+    ],
+    ['issuer', ['issuer']],
+    ['authorizationEndpoint', ['authorizationEndpoint', 'authorization_endpoint']],
+    ['tokenEndpoint', ['tokenEndpoint', 'token_endpoint']],
+    ['registrationEndpoint', ['registrationEndpoint', 'registration_endpoint']],
+    ['revocationEndpoint', ['revocationEndpoint', 'revocation_endpoint']]
+  ]
+  const endpoints: McpOAuthEndpoints = {}
+  for (const [canonical, keys] of fields) {
+    const raw = readOptionalString(value, keys)
+    if (raw === null) return null
+    const url = normalizeOptionalUrl(raw)
+    if (url === null) return null
+    if (url) endpoints[canonical] = url
+  }
+  return Object.keys(endpoints).length > 0 ? endpoints : undefined
+}
+
+/**
+ * Keep credential-free OAuth metadata.
+ * `undefined` means absent or blank, `null` means the object is malformed.
+ * Access tokens, refresh tokens, and client secrets are ignored.
+ */
+export function normalizeOAuthConfig(value: unknown): McpOAuthConfig | undefined | null {
+  if (value === undefined || value === null) return undefined
+  if (!isRecord(value)) return null
+  const authMode = readOptionalString(value, ['authMode', 'auth_mode'])
+  if (authMode === null) return null
+  const registrationMode = readOptionalString(value, ['registrationMode', 'registration_mode'])
+  if (registrationMode === null) return null
+  const allowedAuth: readonly McpAuthMode[] = ['none', 'static', 'oauth']
+  const allowedRegistration: readonly McpOAuthRegistrationMode[] = [
+    'none',
+    'preregistered',
+    'dynamic',
+    'clientMetadata'
+  ]
+  const normalizedAuth = (authMode ?? 'none') as McpAuthMode
+  const normalizedRegistration = (registrationMode ?? 'none') as McpOAuthRegistrationMode
+  if (authMode !== undefined && !allowedAuth.includes(normalizedAuth)) return null
+  if (registrationMode !== undefined && !allowedRegistration.includes(normalizedRegistration)) {
+    return null
+  }
+  const clientIdRaw = readOptionalString(value, ['clientId', 'client_id'])
+  if (clientIdRaw === null) return null
+  const clientId = clientIdRaw?.trim()
+  if (
+    clientId &&
+    (clientId.length > 2048 || hasControlCharacter(clientId) || /\s/.test(clientId))
+  ) {
+    return null
+  }
+  const metadataRaw = readOptionalString(value, ['clientMetadataUrl', 'client_metadata_url'])
+  if (metadataRaw === null) return null
+  const clientMetadataUrl = normalizeOptionalUrl(metadataRaw)
+  if (clientMetadataUrl === null) return null
+  const scopes = normalizeScopes(value.scopes)
+  if (scopes === null) return null
+  const endpoints = normalizeEndpoints(value.endpoints)
+  if (endpoints === null) return null
+  const discoveredRaw = readTimestamp(value, ['discoveredAt', 'discovered_at'])
+  if (discoveredRaw === null) return null
+  const config: McpOAuthConfig = {
+    authMode: normalizedAuth,
+    registrationMode: normalizedRegistration,
+    ...(clientId ? { clientId } : {}),
+    ...(clientMetadataUrl ? { clientMetadataUrl } : {}),
+    ...(scopes ? { scopes } : {}),
+    ...(endpoints ? { endpoints } : {}),
+    ...(discoveredRaw !== undefined ? { discoveredAt: discoveredRaw } : {})
+  }
+  if (
+    config.authMode === 'none' &&
+    config.registrationMode === 'none' &&
+    !config.clientId &&
+    !config.clientMetadataUrl &&
+    !config.scopes &&
+    !config.endpoints &&
+    config.discoveredAt === undefined
+  ) {
+    return undefined
+  }
+  return config
+}
+
+function readTimestamp(record: Record<string, unknown>, keys: string[]): number | undefined | null {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue
+    const value = record[key]
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return null
+    return value
+  }
+  return undefined
+}
+
+const TOP_LEVEL_OAUTH_SECRET_KEYS = new Set([
+  'accessToken',
+  'access_token',
+  'refreshToken',
+  'refresh_token',
+  'clientSecret',
+  'client_secret',
+  'idToken',
+  'id_token',
+  'token'
+])
+
+function withoutTopLevelOAuthSecrets<T extends object>(server: T): T {
+  const cleaned: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(server)) {
+    if (TOP_LEVEL_OAUTH_SECRET_KEYS.has(key)) continue
+    cleaned[key] = value
+  }
+  return cleaned as T
+}
+
+export function sanitizeMcpUpstream<T extends { type?: string; oauth?: unknown }>(server: T): T {
+  const cleaned = withoutTopLevelOAuthSecrets(server)
+  if (cleaned.type === undefined || cleaned.type === 'stdio' || cleaned.oauth === undefined) {
+    if (!Object.prototype.hasOwnProperty.call(cleaned, 'oauth')) return cleaned
+    const { oauth: _oauth, ...rest } = cleaned
+    return rest as T
+  }
+  const oauth = normalizeOAuthConfig(cleaned.oauth)
+  if (!oauth) {
+    const { oauth: _oauth, ...rest } = cleaned
+    return rest as T
+  }
+  return { ...cleaned, oauth }
+}
+
+function appendBearerAuthorization(
+  headers: Array<{ name: string; value: string }> | undefined,
+  bearerToken: unknown
+): Array<{ name: string; value: string }> | undefined {
+  if (typeof bearerToken !== 'string' || bearerToken.trim().length === 0) return headers
+  const next = headers ? [...headers] : []
+  if (!next.some((pair) => pair.name.toLowerCase() === 'authorization')) {
+    next.push({ name: 'Authorization', value: `Bearer ${bearerToken.trim()}` })
+  }
+  return next
 }
 
 function normalizeStoredServer(value: unknown): StoredMcpServer | null {
@@ -120,14 +389,18 @@ function normalizeStoredServer(value: unknown): StoredMcpServer | null {
     return validateMcpServer(server).valid ? server : null
   }
   if ((type === 'http' || type === 'sse') && typeof value.url === 'string') {
-    const headers = stringPairs(value.headers)
-    if (value.headers !== undefined && headers === undefined) return null
+    const parsedHeaders = stringPairs(value.headers)
+    if (value.headers !== undefined && parsedHeaders === undefined) return null
+    const headers = appendBearerAuthorization(parsedHeaders, value.bearerToken)
+    const oauth = value.oauth === undefined ? undefined : normalizeOAuthConfig(value.oauth)
+    if (oauth === null) return null
     const server: StoredMcpServer = {
       id: value.id,
       type,
       name: value.name,
       url: value.url,
       ...(headers ? { headers } : {}),
+      ...(oauth ? { oauth } : {}),
       enabled: value.enabled ?? true
     }
     return validateMcpServer(server).valid ? server : null

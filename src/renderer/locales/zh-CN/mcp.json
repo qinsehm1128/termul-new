@@ -83,9 +83,14 @@
     "notProbedTitle": "尚未探测 — 点击“测试”进行检查",
     "probeRetry": "探测失败 — 重试",
     "testConnection": "测试 {{name}} 连接",
+    "oauth": {
+      "authorize": "使用 OAuth 授权 {{name}}",
+      "started": "已在浏览器中打开 OAuth 授权页面。",
+      "failed": "无法启动 OAuth 授权。"
+    },
     "edit": "编辑 {{name}}",
     "delete": "删除 {{name}}",
-    "probeNetwork": "探测失败 — 请检查服务器配置或网络。",
+    "probeNetwork": "探测失败 — 请查看下方诊断信息。",
     "probeNoTools": "探测完成 — 未发现工具。",
     "expandProbe": "展开以探测（只读 — 即将支持按工具切换）。",
     "experimentalTitle": "实验性 MCP-over-ACP",

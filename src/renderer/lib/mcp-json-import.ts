@@ -1,10 +1,16 @@
 import { runtimeT } from '@/i18n/runtime'
 import type { McpEnvVar, McpServerConfig } from '@/lib/acp-api'
-import { validateMcpServer } from '@/lib/acp-mcp-persistence'
+import {
+  type McpOAuthConfig,
+  normalizeOAuthConfig,
+  validateMcpServer
+} from '@/lib/acp-mcp-persistence'
 
 export type ImportedMcpServer = McpServerConfig & {
   /** Preserve Qin/router autoStart and canonical enabled state on import. */
   enabled?: boolean
+  /** Credential-free OAuth metadata copied from canonical upstreams. */
+  oauth?: McpOAuthConfig
 }
 
 export interface McpJsonImportResult {
@@ -277,11 +283,14 @@ function buildServer(
 
   const remoteHeaders = collectRemoteHeaders(raw, env)
   if (remoteHeaders.invalid) return null
+  const oauth = raw.oauth === undefined ? undefined : normalizeOAuthConfig(raw.oauth)
+  if (oauth === null) return null
   return {
     type,
     name,
     ...(remoteUrl ? { url: remoteUrl } : {}),
     ...(remoteHeaders.headers ? { headers: remoteHeaders.headers } : {}),
+    ...(oauth ? { oauth } : {}),
     ...(enabled === undefined ? {} : { enabled })
   } as Partial<ImportedMcpServer>
 }
