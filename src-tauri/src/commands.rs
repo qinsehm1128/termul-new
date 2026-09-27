@@ -5209,6 +5209,16 @@ async fn persist_oauth_config(
         "oauth".into(),
         serde_json::to_value(oauth).map_err(|_| "OAuth metadata is invalid".to_string())?,
     );
+    let revision = document
+        .get("revision")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if let Some(object) = document.as_object_mut() {
+        object.insert(
+            "revision".into(),
+            serde_json::Value::from(revision.saturating_add(1).max(1)),
+        );
+    }
     match write_mcp_control_plane(project_registry, document).await {
         IpcResult { success: true, .. } => Ok(()),
         IpcResult {
@@ -9371,10 +9381,13 @@ mod remote_sync_projects_tests {
 #[cfg(test)]
 mod remote_sync_mcp_registry_tests {
     use super::{
-        load_mcp_registry_from_project_file, refresh_live_mcp_snapshot,
+        load_mcp_registry_from_project_file, persist_oauth_config, refresh_live_mcp_snapshot,
         sync_mcp_registry_to_project_file, write_mcp_control_plane,
     };
-    use crate::mcp_core::{AuthBootstrap, DesktopMcpCoreRuntime, McpHttpGatewayConfig};
+    use crate::mcp_core::{
+        oauth::{McpAuthMode, McpOAuthConfig},
+        AuthBootstrap, DesktopMcpCoreRuntime, McpHttpGatewayConfig,
+    };
     use crate::memory_index::service::MemoryIndexService;
     use crate::web::mcp_servers_api::registry_path;
     use crate::web::{ProjectRegistry, ProjectSummary};
@@ -9471,6 +9484,43 @@ mod remote_sync_mcp_registry_tests {
         assert_eq!(value["upstreams"].as_array().map(Vec::len), Some(1));
         assert_eq!(value["upstreams"][0]["name"], "fs");
         assert_eq!(value["upstreams"][0]["command"], "npx");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn oauth_metadata_persistence_advances_canonical_revision() {
+        let dir = temp_dir("oauth-revision");
+        let reg = registry_with_default(&dir);
+        let initial = sync_mcp_registry_to_project_file(
+            &reg,
+            json!([{
+                "id":"tinyfish",
+                "type":"http",
+                "name":"TinyFish",
+                "url":"https://agent.tinyfish.ai/mcp",
+                "enabled":true
+            }]),
+        )
+        .await;
+        assert!(initial.success, "initial write failed: {:?}", initial.error);
+
+        persist_oauth_config(
+            &reg,
+            "tinyfish",
+            McpOAuthConfig {
+                auth_mode: McpAuthMode::OAuth,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("OAuth metadata write should advance the revision");
+
+        let loaded = load_mcp_registry_from_project_file(&reg).await;
+        assert!(loaded.success, "load failed: {:?}", loaded.error);
+        let document = loaded.data.expect("canonical document");
+        assert_eq!(document["revision"], 2);
+        assert_eq!(document["upstreams"][0]["oauth"]["authMode"], "oauth");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
