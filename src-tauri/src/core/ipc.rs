@@ -1,9 +1,9 @@
-//! App-level Core identity on top of the `termul-ipc` wire protocol.
+//! App-level Core identity on top of the `se-ipc` wire protocol.
 //!
 //! Build identity and capabilities describe this application's components,
 //! so they live here rather than in the protocol crate.
 
-pub use termul_ipc::*;
+pub use se_ipc::*;
 
 pub fn component_build_id(role: CoreRole) -> String {
     let configured = match role {

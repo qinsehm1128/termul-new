@@ -3,20 +3,20 @@
 //! This module provides terminal spawning, I/O, and lifecycle management
 //! ported from the Electron implementation.
 
-use crate::pty::claims::ClaimError;
+use crate::claims::ClaimError;
 use crate::trackers::{
     CwdTracker, ExitCodeTracker, GitTracker, TerminalDisplayMode, TerminalEvent, TerminalEventHub,
 };
 use parking_lot::RwLock;
 use portable_pty::{Child, MasterPty, PtySize};
-use termul_foundation::ids::ConversationId;
+use se_foundation::ids::ConversationId;
 
 #[cfg(target_os = "windows")]
-use crate::pty::windows::{resize_conpty, spawn_conpty, ConPtyHandles};
-#[cfg(target_os = "windows")]
-use crate::shell_paths::git_bash_paths;
+use crate::windows::{resize_conpty, spawn_conpty, ConPtyHandles};
 #[cfg(target_os = "windows")]
 use parking_lot::Mutex as ParkingMutex;
+#[cfg(target_os = "windows")]
+use se_foundation::shell_paths::git_bash_paths;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -36,7 +36,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
         return candidate.exists().then(|| command.to_string());
     }
 
-    let path_var = crate::pty::env_refresh::path_for_resolution();
+    let path_var = crate::env_refresh::path_for_resolution();
     if path_var.is_empty() {
         return None;
     }
@@ -83,7 +83,7 @@ use tauri::ipc::{Channel, Response};
 /// entries that must be prepended before the user-supplied args (e.g. when a
 /// `.cmd` npm shim is rewritten to `node.exe <script>`).
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedProgram {
+pub struct ResolvedProgram {
     /// Absolute path to the executable (always a PE image on Windows).
     pub program: String,
     /// Extra argv entries to insert before the user's args.
@@ -344,7 +344,7 @@ fn try_parse_windows_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
 /// found so the caller can fall back to its previous behavior.
 ///
 /// On non-Windows: returns the program unchanged (no rewriting needed).
-pub(crate) fn resolve_spawn_program(program: &str) -> Result<ResolvedProgram, String> {
+pub fn resolve_spawn_program(program: &str) -> Result<ResolvedProgram, String> {
     let trimmed = program.trim();
     if trimmed.is_empty() {
         return Err("program is empty".to_string());
@@ -570,7 +570,7 @@ pub struct TerminalReplay {
     pub receiver: tokio::sync::broadcast::Receiver<TerminalOutputChunk>,
     /// Exact claim generation authorized for a trusted resume. This is
     /// process-local control metadata and is never serialized.
-    pub(crate) claim_generation: Option<u64>,
+    pub claim_generation: Option<u64>,
 }
 
 /// Broadcast channel capacity (number of buffered output batches per terminal).
@@ -631,7 +631,7 @@ impl Default for SpawnOptions {
 /// SessionWorkspace refs exist only for conversation-scoped local terminals.
 /// Scope-less project terminals and ephemeral SSH keep a process-local
 /// ConversationId for claims, but they never enter workspace admission.
-pub(crate) fn tracks_session_workspace_ref(options: &SpawnOptions) -> bool {
+pub fn tracks_session_workspace_ref(options: &SpawnOptions) -> bool {
     !matches!(options.kind.as_deref(), Some("ssh") | Some("project"))
         && options.conversation_id.is_some()
 }
@@ -879,7 +879,7 @@ impl PtyShutdownReceipt {
 
 /// Crate-private production seam used by deterministic failure tests. Every method receives the
 /// same absolute deadline; implementations must never mint a per-stage budget.
-pub(crate) trait CleanupDriver: Send + Sync {
+pub trait CleanupDriver: Send + Sync {
     fn kill(
         &self,
         child: &mut dyn Child,
@@ -913,7 +913,7 @@ enum WaitOutcome {
 /// gone, which is what the join waits for — but it is a degraded teardown and
 /// must stay visible instead of being folded into an ordinary success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorkerExit {
+pub enum WorkerExit {
     Clean,
     Panicked,
 }
@@ -1084,16 +1084,16 @@ impl CleanupDriver for SystemCleanupDriver {
 }
 
 /// Deterministic one-shot failure driver shared by PTY, command, and WebSocket tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default)]
-pub(crate) struct ScriptedCleanupDriver {
+pub struct ScriptedCleanupDriver {
     failures: Mutex<HashMap<TerminalCleanupStage, usize>>,
     observed_deadlines: Mutex<Vec<(TerminalCleanupStage, Instant)>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ScriptedCleanupDriver {
-    pub(crate) fn fail_once(&self, stage: TerminalCleanupStage) {
+    pub fn fail_once(&self, stage: TerminalCleanupStage) {
         let mut failures = self
             .failures
             .lock()
@@ -1101,7 +1101,7 @@ impl ScriptedCleanupDriver {
         *failures.entry(stage).or_default() += 1;
     }
 
-    pub(crate) fn observed_deadlines(&self) -> Vec<(TerminalCleanupStage, Instant)> {
+    pub fn observed_deadlines(&self) -> Vec<(TerminalCleanupStage, Instant)> {
         self.observed_deadlines
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1128,7 +1128,7 @@ impl ScriptedCleanupDriver {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl CleanupDriver for ScriptedCleanupDriver {
     fn kill(
         &self,
@@ -1521,7 +1521,7 @@ impl Drop for TerminalSlotReservation {
 /// fails, the guard's drop removes the dangling claim record so no terminal
 /// exists with a live credential but no PTY (and vice versa).
 struct ClaimRollbackGuard<'a> {
-    claims: &'a crate::pty::claims::TerminalClaimRegistry,
+    claims: &'a crate::claims::TerminalClaimRegistry,
     terminal_id: String,
     active: bool,
 }
@@ -1541,6 +1541,14 @@ impl Drop for ClaimRollbackGuard<'_> {
 }
 
 /// Manages all PTY instances
+/// Identity advertised to spawned shells as `TERM_PROGRAM` and
+/// `TERM_PROGRAM_VERSION`. The host app supplies its own brand and version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalProgram {
+    pub name: String,
+    pub version: String,
+}
+
 #[derive(Clone)]
 pub struct PtyManager {
     terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
@@ -1556,7 +1564,7 @@ pub struct PtyManager {
     /// Claim credential registry (CAP-3). Single ownership here keeps the
     /// claim lifecycle coupled to the terminal lifecycle: issued at spawn,
     /// removed at kill/reap.
-    claims: Arc<crate::pty::claims::TerminalClaimRegistry>,
+    claims: Arc<crate::claims::TerminalClaimRegistry>,
     cleanup_driver: Arc<RwLock<Arc<dyn CleanupDriver>>>,
     cleanup_job_counter: Arc<AtomicU64>,
     /// When true, orphan detection and kill operations are deferred.
@@ -1566,6 +1574,7 @@ pub struct PtyManager {
     /// Live output views (desktop attach + web/iOS attach/watch).
     /// The last view close pauses cwd/git polling without killing the PTY.
     view_refs: Arc<parking_lot::Mutex<HashMap<String, u32>>>,
+    terminal_program: Arc<TerminalProgram>,
 }
 
 impl PtyManager {
@@ -1575,6 +1584,7 @@ impl PtyManager {
         cwd_tracker: Arc<CwdTracker>,
         git_tracker: Arc<GitTracker>,
         exit_code_tracker: Arc<ExitCodeTracker>,
+        terminal_program: TerminalProgram,
     ) -> Self {
         Self {
             terminals: Arc::new(RwLock::new(HashMap::new())),
@@ -1588,10 +1598,11 @@ impl PtyManager {
             cwd_tracker,
             git_tracker,
             exit_code_tracker,
-            claims: Arc::new(crate::pty::claims::TerminalClaimRegistry::new()),
+            claims: Arc::new(crate::claims::TerminalClaimRegistry::new()),
             cleanup_driver: Arc::new(RwLock::new(Arc::new(SystemCleanupDriver))),
             cleanup_job_counter: Arc::new(AtomicU64::new(0)),
             view_refs: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            terminal_program: Arc::new(terminal_program),
         }
     }
 
@@ -1978,11 +1989,11 @@ impl PtyManager {
         options: SpawnOptions,
         on_data: Option<Channel<Response>>,
     ) -> Result<SpawnedTerminal, String> {
-        if crate::host_admission::HostAdmission::global()
+        if se_foundation::host_admission::HostAdmission::global()
             .check()
             .is_err()
         {
-            return Err(crate::host_admission::HOST_SHUTTING_DOWN.to_string());
+            return Err(se_foundation::host_admission::HOST_SHUTTING_DOWN.to_string());
         }
         // Start orphan detection on first spawn (lazy initialization)
         self.start_orphan_detection();
@@ -2090,8 +2101,8 @@ impl PtyManager {
         // mirroring the #347 fix for git worktree paths. See `strip_verbatim_prefix`.
         let cwd = std::fs::canonicalize(&cwd)
             .map_err(|e| format!("Invalid working directory '{}': {}", cwd, e))?;
-        let cwd =
-            crate::path_validation::strip_verbatim_prefix(&cwd.to_string_lossy()).into_owned();
+        let cwd = se_foundation::path_validation::strip_verbatim_prefix(&cwd.to_string_lossy())
+            .into_owned();
 
         // Get terminal size
         let cols = options.cols.unwrap_or(80);
@@ -2126,11 +2137,11 @@ impl PtyManager {
         env.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
         env.insert(
             "TERM_PROGRAM".to_string(),
-            crate::brand::canonical().display_name.to_string(),
+            self.terminal_program.name.clone(),
         );
         env.insert(
             "TERM_PROGRAM_VERSION".to_string(),
-            env!("CARGO_PKG_VERSION").to_string(),
+            self.terminal_program.version.clone(),
         );
         env.insert("FORCE_HYPERLINK".to_string(), "1".to_string());
 
@@ -2142,7 +2153,7 @@ impl PtyManager {
             // a single argument and is never shell-interpolated. In shell mode,
             // preserve the existing shell-escaping behavior verbatim.
             let shell_escaped = if options.program.is_some() {
-                crate::pty::windows::build_windows_command_line(&shell_path, &program_args)
+                crate::windows::build_windows_command_line(&shell_path, &program_args)
             } else if shell_path.contains(' ') {
                 format!(
                     "\"{}\" {}",
@@ -2306,7 +2317,7 @@ impl PtyManager {
             let mut cmd = CommandBuilder::new(&shell_path);
             // Login + interactive so ~/.zprofile and ~/.zshrc load (GH-275).
             if options.program.is_none() {
-                for arg in crate::pty::env_refresh::shell_startup_args(&shell_path) {
+                for arg in crate::env_refresh::shell_startup_args(&shell_path) {
                     cmd.arg(*arg);
                 }
             }
@@ -2554,7 +2565,7 @@ impl PtyManager {
         let mut buffer = [0u8; READ_BUF];
         let id = terminal_id.clone();
         // ADR-002.5: DA filter — intercepts DA queries and responds to PTY writer
-        let mut da_filter = crate::pty::DaFilter::new();
+        let mut da_filter = crate::DaFilter::new();
         // Owned by this thread: one reader per terminal, so the OSC parse state
         // needs no lock. Retained title lives in the event hub snapshot.
         let mut osc_title_tracker =
@@ -3531,7 +3542,7 @@ impl PtyManager {
     }
 
     #[must_use]
-    pub(crate) fn active_terminal_slot_count(&self) -> usize {
+    pub fn active_terminal_slot_count(&self) -> usize {
         self.active_terminal_slots.load(Ordering::SeqCst)
     }
 
@@ -3539,8 +3550,8 @@ impl PtyManager {
         self.active_terminal_slot_count() >= GLOBAL_TERMINAL_LIMIT
     }
 
-    #[cfg(test)]
-    pub(crate) fn install_cleanup_driver(&self, driver: Arc<dyn CleanupDriver>) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn install_cleanup_driver(&self, driver: Arc<dyn CleanupDriver>) {
         *self.cleanup_driver.write() = driver;
     }
 
@@ -3716,7 +3727,7 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            let path_for_which = crate::pty::env_refresh::path_for_resolution();
+            let path_for_which = crate::env_refresh::path_for_resolution();
             if let Ok(output) = std::process::Command::new("which")
                 .env("PATH", &path_for_which)
                 .arg(trimmed)
@@ -3845,7 +3856,9 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            if let Some(resolved) = crate::shell_paths::unix_shell_paths::resolve_name(shell) {
+            if let Some(resolved) =
+                se_foundation::shell_paths::unix_shell_paths::resolve_name(shell)
+            {
                 return Ok(resolved);
             }
         }
@@ -3965,20 +3978,18 @@ impl PtyManager {
 
         #[cfg(target_os = "windows")]
         {
-            let mut env_map = merge_windows_environment_map(
-                crate::pty::env_refresh::inherited_process_env(),
-                None,
-            );
+            let mut env_map =
+                merge_windows_environment_map(crate::env_refresh::inherited_process_env(), None);
             if !custom_sets_path {
-                crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+                crate::env_refresh::apply_fresh_path(&mut env_map);
             }
-            crate::pty::env_refresh::apply_utf8_locale(&mut env_map);
+            crate::env_refresh::apply_utf8_locale(&mut env_map);
             if let Some(custom) = custom_env {
                 for (key, value) in custom {
                     upsert_windows_env_var(&mut env_map, &key, value);
                 }
             }
-            crate::pty::env_refresh::apply_color_capability(&mut env_map);
+            crate::env_refresh::apply_color_capability(&mut env_map);
             if !has_windows_env_var(&env_map, "Path") {
                 upsert_windows_env_var(&mut env_map, "Path", env::var("PATH").unwrap_or_default());
             }
@@ -3996,15 +4007,15 @@ impl PtyManager {
         {
             let mut env = HashMap::new();
 
-            for (key, value) in crate::pty::env_refresh::inherited_process_env() {
+            for (key, value) in crate::env_refresh::inherited_process_env() {
                 env.insert(key, value);
             }
 
             if !custom_sets_path {
-                crate::pty::env_refresh::apply_fresh_path(&mut env);
+                crate::env_refresh::apply_fresh_path(&mut env);
             }
 
-            crate::pty::env_refresh::apply_utf8_locale(&mut env);
+            crate::env_refresh::apply_utf8_locale(&mut env);
 
             if let Some(custom) = custom_env {
                 for (key, value) in custom {
@@ -4012,7 +4023,7 @@ impl PtyManager {
                 }
             }
 
-            crate::pty::env_refresh::apply_color_capability(&mut env);
+            crate::env_refresh::apply_color_capability(&mut env);
 
             if !env.contains_key("PATH") {
                 env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
@@ -4394,7 +4405,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_real_shell_osc_title_reaches_the_event_hub() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let mut events = manager.terminal_events().subscribe();
         let temp = tempfile::tempdir().unwrap();
         let cwd = temp.path().canonicalize().unwrap();
@@ -4454,8 +4465,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawned_shells_see_the_host_supplied_terminal_program() {
+        let manager = crate::test_pty_manager();
+        let mut events = manager.terminal_events().subscribe();
+        let temp = tempfile::tempdir().unwrap();
+
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    cols: Some(80),
+                    rows: Some(24),
+                    shell: Some("/bin/sh".into()),
+                    env: Some(HashMap::from([("PS1".into(), "$ ".into())])),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn a real PTY");
+        let terminal_id = spawned.info.id.clone();
+
+        manager
+            .write(
+                &terminal_id,
+                "printf '\\033]0;%s\\007' \"$TERM_PROGRAM/$TERM_PROGRAM_VERSION\"\n",
+            )
+            .await
+            .expect("write to the PTY");
+
+        let title = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match events.recv().await.expect("event stream open") {
+                    TerminalEvent::OscTitleChanged {
+                        terminal_id: id,
+                        title,
+                    } if id == terminal_id => return title,
+                    _ => continue,
+                }
+            }
+        })
+        .await
+        .expect("an OSC title event within the deadline");
+
+        assert_eq!(title.as_deref(), Some("se-test/0.0.0-test"));
+        let _ = manager.terminate(&terminal_id).await;
+    }
+
+    #[tokio::test]
     async fn terminate_retires_a_flusher_whose_reader_never_set_done_flag() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-immortal-flusher");
 
         // A flusher with the production exit condition: `done_flag` only.
@@ -4542,7 +4601,7 @@ mod tests {
     /// nor closable, with every retry re-running the same losing sequence.
     #[tokio::test]
     async fn force_kill_releases_a_terminal_whose_worker_will_not_stop() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-wedged");
 
         // A worker that ignores every stop signal there is.
@@ -4587,7 +4646,7 @@ mod tests {
     /// escalates instead.
     #[test]
     fn orphan_reaping_skips_in_flight_but_still_collects_quarantined() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         // The fixture starts with no renderer refs, so it is already an orphan.
         let instance = install_cleanup_fixture(&manager, "term-orphan-state");
         instance.set_protected(false);
@@ -4614,7 +4673,7 @@ mod tests {
     /// retries still gives its slot back.
     #[tokio::test]
     async fn quarantined_orphan_is_released_by_escalation() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let driver = Arc::new(ScriptedCleanupDriver::default());
         driver.fail_once(TerminalCleanupStage::Kill);
         manager.install_cleanup_driver(driver);
@@ -4647,7 +4706,7 @@ mod tests {
     /// appended after the flusher's final drain.
     #[tokio::test]
     async fn terminate_does_not_drop_tail_output_produced_during_cleanup() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-tail-output");
         let mut outputs = instance.broadcast_tx.subscribe();
 
@@ -4732,7 +4791,7 @@ mod tests {
     /// thread for the same failure — permanently unkillable.
     #[tokio::test]
     async fn terminate_treats_a_panicked_worker_as_joined() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-panicked-reader");
 
         let panicked = std::thread::spawn(|| panic!("reader blew up"));
@@ -4754,7 +4813,7 @@ mod tests {
 
     #[test]
     fn phone_fit_parks_desktop_size_until_last_owner_leaves() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-phone-fit");
         *instance.cols.write() = 120;
         *instance.rows.write() = 40;
@@ -4791,7 +4850,7 @@ mod tests {
 
     #[tokio::test]
     async fn resize_is_ignored_while_phone_fit() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-phone-ignore");
         *instance.cols.write() = 100;
         *instance.rows.write() = 30;
@@ -4817,7 +4876,7 @@ mod tests {
 
     #[tokio::test]
     async fn same_size_resize_skips_ioctl() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-same-size");
         *instance.cols.write() = 120;
         *instance.rows.write() = 40;
@@ -4832,7 +4891,7 @@ mod tests {
 
     #[test]
     fn force_desktop_clears_every_phone_owner() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let instance = install_cleanup_fixture(&manager, "term-phone-force");
         *instance.cols.write() = 132;
         *instance.rows.write() = 43;
@@ -4845,7 +4904,7 @@ mod tests {
 
     #[tokio::test]
     async fn last_view_close_pauses_git_and_cwd_tracking_without_removing_pty() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         install_cleanup_fixture(&manager, "view-t1");
         manager
             .cwd_tracker()
@@ -4891,7 +4950,7 @@ mod tests {
 
     #[tokio::test]
     async fn unwatched_close_view_keeps_polling_while_another_view_is_open() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         install_cleanup_fixture(&manager, "view-t2");
         manager
             .cwd_tracker()
@@ -4915,7 +4974,7 @@ mod tests {
             TerminalCleanupStage::ReaderJoin,
             TerminalCleanupStage::FlusherJoin,
         ] {
-            let manager = crate::web::test_pty_manager();
+            let manager = crate::test_pty_manager();
             let driver = Arc::new(ScriptedCleanupDriver::default());
             driver.fail_once(stage);
             manager.install_cleanup_driver(driver.clone());
@@ -4993,7 +5052,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_duplicate_terminate_releases_one_quarantined_slot_only() {
-        let manager = Arc::new(crate::web::test_pty_manager());
+        let manager = Arc::new(crate::test_pty_manager());
         install_cleanup_fixture(&manager, "cleanup-concurrent");
         let driver = Arc::new(ScriptedCleanupDriver::default());
         driver.fail_once(TerminalCleanupStage::Kill);
@@ -5124,7 +5183,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn blocking_cleanup_returns_by_caller_deadline_and_retry_observes_one_retained_job() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         install_cleanup_fixture(&manager, "cleanup-blocking");
         let driver = Arc::new(BlockingCleanupDriver::default());
         manager.install_cleanup_driver(driver.clone());
@@ -5186,7 +5245,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn thirty_stalled_terminals_share_one_deadline_without_serial_multiplication() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         for ordinal in 0..GLOBAL_TERMINAL_LIMIT {
             install_cleanup_fixture(&manager, &format!("cleanup-batch-{ordinal:02}"));
         }
@@ -5277,7 +5336,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn mixed_shutdown_receipt_counts_success_failure_and_in_flight_under_one_deadline() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         for terminal_id in ["cleanup-mixed-a", "cleanup-mixed-b", "cleanup-mixed-c"] {
             install_cleanup_fixture(&manager, terminal_id);
         }
@@ -5780,7 +5839,7 @@ mod tests {
 
     #[tokio::test]
     async fn resume_preserves_pty_and_replays_cursor() {
-        let manager = crate::web::test_pty_manager();
+        let manager = crate::test_pty_manager();
         let conversation_id =
             ConversationId::parse("018f7a1c-1b4d-7c8a-9f01-0123456789ab").unwrap();
         let other_conversation_id =

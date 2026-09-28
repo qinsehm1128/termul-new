@@ -18,7 +18,7 @@ pub mod core;
 pub mod credentials;
 mod editor_workspaces;
 mod fs_watcher;
-use termul_foundation::host_admission;
+use se_foundation::host_admission;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
@@ -35,8 +35,8 @@ pub mod migration_detect;
 /// User-initiated merge orchestrator for the pre-rename roots (T-MIG-RUN).
 pub mod migration_run;
 mod migrations;
-use termul_foundation::path_validation;
-mod pty;
+use se_foundation::path_validation;
+use se_pty as pty;
 mod remote;
 pub mod scheduled_tasks;
 mod secure_storage;
@@ -45,12 +45,12 @@ mod secure_storage;
 // verification — runs under the spec's default `cargo test` gate. Only the
 // standalone binary wiring (server_main.rs) is gated by `standalone-server`.
 pub mod server_update;
-use termul_foundation::shell_paths;
+use se_foundation::shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
 pub mod skills;
 mod ssh;
-mod trackers;
+use se_pty::trackers;
 mod updater_api;
 pub mod web;
 pub mod webview_storage_handoff;
@@ -428,6 +428,14 @@ pub use conversation::{
     TerminalResourceRef,
 };
 pub use pty::{PtyManager, SpawnOptions};
+
+/// Identity this app advertises to the shells it spawns (`TERM_PROGRAM`).
+pub fn terminal_program() -> pty::TerminalProgram {
+    pty::TerminalProgram {
+        name: brand::canonical().display_name.to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
 pub use scheduled_tasks::ScheduledTaskStore;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
@@ -2610,6 +2618,7 @@ pub fn run() {
                 cwd_tracker,
                 git_tracker,
                 exit_code_tracker,
+                terminal_program(),
             ));
             let terminal_handle = desktop_terminal_service(
                 &app_data_dir,

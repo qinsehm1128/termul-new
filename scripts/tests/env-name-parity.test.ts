@@ -59,7 +59,14 @@ const LOCALE_FILES = [
 ]
 
 /** Roots the frozen inventory was captured from. */
-const SCAN_ROOTS = ['src-tauri/src', 'src-tauri/tests', 'src', 'scripts', 'vite.config.web.ts']
+const SCAN_ROOTS = [
+  'src-tauri/src',
+  'src-tauri/crates',
+  'src-tauri/tests',
+  'src',
+  'scripts',
+  'vite.config.web.ts'
+]
 
 /** Text file types that can carry an env name: Rust, TS, JSON, shell, bats. */
 const SCANNED_EXTENSIONS = new Set([

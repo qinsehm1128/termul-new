@@ -47,6 +47,12 @@ pub struct DaFilter {
     hold: Vec<u8>,
 }
 
+impl Default for DaFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DaFilter {
     /// Create a new DA filter in the Idle state.
     pub fn new() -> Self {

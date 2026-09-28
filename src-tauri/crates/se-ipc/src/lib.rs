@@ -423,7 +423,7 @@ mod tests {
     fn endpoint_is_profile_scoped() {
         #[cfg(unix)]
         {
-            let endpoint = CoreEndpoint::for_profile("/tmp/termul-test", CoreRole::AcpCore);
+            let endpoint = CoreEndpoint::for_profile("/tmp/se-test", CoreRole::AcpCore);
             assert!(endpoint.describe().contains("acp-core"));
         }
     }

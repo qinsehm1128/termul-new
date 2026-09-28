@@ -228,7 +228,7 @@ fn probe_unix_login_path() -> Option<String> {
 /// duration of this probe breaks whatever unrelated test happens to be resolving
 /// a path at the same moment — which is exactly what it did.
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn probe_shell_path(shell: &str, env_overrides: &[(&str, &str)]) -> Option<String> {
+pub fn probe_shell_path(shell: &str, env_overrides: &[(&str, &str)]) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
 

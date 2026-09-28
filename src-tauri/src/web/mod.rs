@@ -88,7 +88,13 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
     let cwd = Arc::new(CwdTracker::new(events.clone()));
     let git = Arc::new(GitTracker::new(None, events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
-    Arc::new(PtyManager::new(events, cwd, git, exit))
+    Arc::new(PtyManager::new(
+        events,
+        cwd,
+        git,
+        exit,
+        crate::terminal_program(),
+    ))
 }
 
 pub(crate) const ACP_PRODUCER_STOP_FAILED: &str = "ACP_PRODUCER_STOP_FAILED";

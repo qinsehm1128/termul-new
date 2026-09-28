@@ -1,5 +1,5 @@
 [package]
-name = "termul-foundation"
+name = "se-foundation"
 version = "0.1.0"
 description = "Domain-free building blocks shared by the Se Manager app and its Core crates"
 edition = "2021"

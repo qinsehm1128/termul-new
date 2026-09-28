@@ -7,8 +7,8 @@
     "src-tauri/src/core/ipc.rs",
     "src-tauri/src/core/mod.rs",
     "src-tauri/src/core/transport.rs",
-    "src-tauri/crates/termul-ipc",
-    "src-tauri/crates/termul-foundation"
+    "src-tauri/crates/se-ipc",
+    "src-tauri/crates/se-foundation"
   ],
   "components": {
     "renderer": ["src/renderer", "src/shared", "package.json", "bun.lock"],
@@ -30,8 +30,7 @@
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
       "src-tauri/src/commands.rs",
-      "src-tauri/src/pty",
-      "src-tauri/src/trackers",
+      "src-tauri/crates/se-pty",
       "src-tauri/src/mcp_core",
       "src-tauri/src/skills",
       "src-tauri/src/web/sink.rs",
@@ -46,11 +45,10 @@
     "terminalCore": [
       "src-tauri/src/core/handles.rs",
       "src-tauri/src/core/terminal.rs",
-      "src-tauri/src/pty",
+      "src-tauri/crates/se-pty",
       "src-tauri/src/core/launcher.rs",
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
-      "src-tauri/src/trackers",
       "src-tauri/src/brand.rs",
       "src-tauri/src/conversation/contracts.rs"
     ]

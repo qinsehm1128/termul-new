@@ -31,7 +31,7 @@ pub const MAX_CONVERSATION_HISTORY_PAGE_BYTES: usize = 4 * 1024 * 1024;
 const MACOS_EINVAL: i32 = 22;
 const MACOS_ENOTSUP: i32 = 45;
 
-pub use termul_foundation::ids::{ConversationId, ConversationIdPathError};
+pub use se_foundation::ids::{ConversationId, ConversationIdPathError};
 
 /// RFC3339-millisecond UTC timestamp validation error.
 #[derive(Debug, Clone, PartialEq, Eq)]

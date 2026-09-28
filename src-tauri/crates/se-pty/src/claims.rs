@@ -26,10 +26,10 @@
 //! forwarders) can observe invalidation and terminate.
 
 use parking_lot::Mutex;
+use se_foundation::ids::ConversationId;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use subtle::ConstantTimeEq;
-use termul_foundation::ids::ConversationId;
 
 /// Length of an issued credential: 32 random bytes hex-encoded.
 pub const CLAIM_CREDENTIAL_LEN: usize = 64;

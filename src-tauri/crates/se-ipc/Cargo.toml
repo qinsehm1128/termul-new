@@ -1,5 +1,5 @@
 [package]
-name = "termul-ipc"
+name = "se-ipc"
 version = "0.1.0"
 description = "Local IPC wire protocol shared by the Se Manager GUI and its Core processes"
 edition = "2021"

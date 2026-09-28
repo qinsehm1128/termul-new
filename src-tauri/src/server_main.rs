@@ -425,6 +425,7 @@ fn main() -> ExitCode {
             Arc::clone(&cwd_tracker),
             Arc::clone(&git_tracker),
             Arc::clone(&exit_code_tracker),
+            se_manager_lib::terminal_program(),
         ));
         let _services =
             se_manager_lib::core::CoreServices::in_process(Arc::clone(&pty), Arc::clone(&acp));

@@ -1,0 +1,60 @@
+[package]
+name = "se-pty"
+version = "0.1.0"
+description = "PTY runtime and terminal state trackers for Se Manager"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[features]
+# Exposes `test_pty_manager()` to dependents' test builds.
+test-support = []
+
+[dependencies]
+se-foundation = { path = "../se-foundation" }
+tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon", "protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+portable-pty = "0.9"
+parking_lot = "0.12"
+futures = "0.3"
+regex = "1"
+lazy_static = "1.4"
+log = "0.4"
+sha2 = "0.10"
+subtle = "2"
+getrandom = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+winapi = { version = "0.3", features = [
+    "jobapi2",
+    "winbase",
+    "winuser",
+    "consoleapi",
+    "handleapi",
+    "processenv",
+    "processthreadsapi",
+    "synchapi",
+    "minwindef",
+    "winnt",
+    "namedpipeapi",
+    "wincontypes",
+    "ntdef",
+] }
+
+[dev-dependencies]
+se-foundation = { path = "../se-foundation", features = ["test-support"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+tempfile = "3"

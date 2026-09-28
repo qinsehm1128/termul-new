@@ -61,12 +61,12 @@ const workspaceCrates = new Set(
 
 /**
  * `lib.rs` re-exports crate modules at their old paths
- * (`use termul_foundation::host_admission;`), so `crate::host_admission`
- * in a Core's source still means the `termul-foundation` crate.
+ * (`use se_foundation::host_admission;`), so `crate::host_admission`
+ * in a Core's source still means the `se-foundation` crate.
  */
 const reexportedModules = new Map<string, string>()
 for (const match of readFileSync(join(repoRoot, srcRoot, 'lib.rs'), 'utf8').matchAll(
-  /^(?:pub(?:\(crate\))? )?use (termul_[a-z_0-9]+)(?:::([a-z_0-9]+))?(?: as ([a-z_0-9]+))?;/gm
+  /^(?:pub(?:\(crate\))? )?use (se_[a-z_0-9]+)(?:::([a-z_0-9]+))?(?: as ([a-z_0-9]+))?;/gm
 )) {
   const alias = match[3] ?? match[2]
   if (alias) reexportedModules.set(alias, match[1].replaceAll('_', '-'))
@@ -75,7 +75,7 @@ for (const match of readFileSync(join(repoRoot, srcRoot, 'lib.rs'), 'utf8').matc
 /** Workspace crates a Core's source uses, directly or through a `crate::` re-export. */
 function referencedCrates(source: string): Set<string> {
   const crates = new Set<string>()
-  for (const match of source.matchAll(/\b(termul_[a-z_0-9]+)::/g)) {
+  for (const match of source.matchAll(/\b(se_[a-z_0-9]+)::/g)) {
     const name = match[1].replaceAll('_', '-')
     if (workspaceCrates.has(name)) crates.add(name)
   }
@@ -138,9 +138,9 @@ describe('component build inputs', () => {
   })
 
   test('reads crate modules that lib.rs re-exports at their old paths', () => {
-    expect(reexportedModules.get('host_admission')).toBe('termul-foundation')
+    expect(reexportedModules.get('host_admission')).toBe('se-foundation')
     expect(referencedCrates('crate::host_admission::HostAdmission::global()')).toEqual(
-      new Set(['termul-foundation'])
+      new Set(['se-foundation'])
     )
   })
 

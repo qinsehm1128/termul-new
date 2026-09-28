@@ -15,6 +15,8 @@ default-run = "se-manager"
 
 [workspace]
 members = ["crates/*"]
+# Plain `cargo test` / `cargo clippy` (as CI runs them) must cover every crate.
+default-members = [".", "crates/*"]
 
 [lib]
 name = "se_manager_lib"
@@ -58,9 +60,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Local IPC wire protocol shared with the Core processes.
-termul-ipc = { path = "crates/termul-ipc" }
+se-ipc = { path = "crates/se-ipc" }
 # Domain-free helpers (admission gate, path/shell utilities, session ids).
-termul-foundation = { path = "crates/termul-foundation" }
+se-foundation = { path = "crates/se-foundation" }
+# PTY runtime and terminal trackers.
+se-pty = { path = "crates/se-pty" }
 # Recursive fs watching for `fs_watcher`. Pinned to the same major the fs plugin
 # already resolves, so this adds no new resolution to the lockfile.
 notify = "8"
@@ -220,7 +224,8 @@ cron = "0.17.0"
 chrono-tz = "0.10.4"
 
 [dev-dependencies]
-termul-foundation = { path = "crates/termul-foundation", features = ["test-support"] }
+se-foundation = { path = "crates/se-foundation", features = ["test-support"] }
+se-pty = { path = "crates/se-pty", features = ["test-support"] }
 tauri = { version = "2.0", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
 syn = { version = "2", features = ["full", "visit"] }
