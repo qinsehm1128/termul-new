@@ -375,6 +375,15 @@ const P1_DOMAINS: DomainCheck[] = [
     testFile: 'tauri-workspace-manifest-api.test.ts'
   },
   {
+    domain: 'QuickTerminal',
+    priority: 'P1',
+    tauriAdapterFile: '../features/quick-terminal/tauri-quick-terminal-api.ts',
+    adapterExportName: 'createTauriQuickTerminalApi',
+    methods: ['list', 'create', 'open', 'rename', 'remove'],
+    apiBridgeExport: 'quickTerminalApi',
+    testFile: '../features/quick-terminal/tauri-quick-terminal-api.test.ts'
+  },
+  {
     domain: 'ScheduledTask',
     priority: 'P1',
     tauriAdapterFile: 'tauri-scheduled-task-api.ts',
@@ -575,6 +584,8 @@ describe('Parity Checklist Automation', () => {
         'legacy/storage/:legacyValue',
         'legacy/history/:legacyValue',
         'scheduled-tasks',
+        'quick-terminals',
+        'quick-terminals/:quickTerminalId',
         'terminals',
         'snapshots',
         'settings',

@@ -111,6 +111,31 @@ describe('terminal-board-navigation', () => {
     expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
   })
 
+  it('opens a quick terminal on its own page', () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: 'pty-quick',
+          name: 'scratch',
+          quickTerminalId: 'qt-1',
+          shell: 'zsh',
+          ptyId: 'pty-quick',
+          healthStatus: 'running',
+          viewState: 'visible'
+        }
+      ],
+      activeTerminalId: '',
+      ptyIdIndex: new Map([['pty-quick', 'pty-quick']]),
+      cleanupRecoveries: {}
+    })
+    const navigate = vi.fn()
+
+    openBoardTerminal({ projectId: null, terminalId: 'pty-quick', navigate })
+
+    expect(navigate).toHaveBeenCalledWith('/quick-terminals/qt-1')
+    expect(peekPendingTerminalFocus()).toBeNull()
+  })
+
   it('opens a project without focusing a terminal', () => {
     const navigate = vi.fn()
     openBoardTerminal({ projectId: 'p-cost', terminalId: 'term-1', navigate })

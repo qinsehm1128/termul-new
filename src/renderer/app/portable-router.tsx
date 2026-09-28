@@ -7,6 +7,7 @@ import WorkspaceLayout from '@/layouts/WorkspaceLayout'
 
 const WorkspaceDashboard = lazy(() => import('@/pages/WorkspaceDashboard'))
 const TerminalBoard = lazy(() => import('@/pages/TerminalBoard'))
+const QuickTerminalsPage = lazy(() => import('@/features/quick-terminal/QuickTerminalsPage'))
 const ProjectSettings = lazy(() => import('@/pages/ProjectSettings'))
 const AppPreferences = lazy(() => import('@/pages/AppPreferences'))
 const WorkspaceSnapshots = lazy(() => import('@/pages/WorkspaceSnapshots'))
@@ -39,6 +40,11 @@ export const portableRouteObjects: RouteObject[] = [
       // Activity Rail chat toggle.
       { path: 'conversations', element: deferred(<WorkspaceDashboard />) },
       { path: 'terminals', element: deferred(<TerminalBoard />) },
+      { path: 'quick-terminals', element: deferred(<QuickTerminalsPage />) },
+      {
+        path: 'quick-terminals/:quickTerminalId',
+        element: deferred(<QuickTerminalsPage />)
+      },
       { path: 'c/:conversationId', element: <ConversationRoute /> },
       {
         path: 'legacy/session/:legacyValue',

@@ -96,6 +96,38 @@
   },
   "overrides": [
     {
+      "includes": ["src/renderer/features/quick-terminal/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@tauri-apps", "@tauri-apps/**"],
+                    "message": "Import Tauri APIs only via src/renderer/lib/ facades (Story 1.6)."
+                  },
+                  {
+                    "group": [
+                      "@/stores/conversation-store",
+                      "@/stores/acp-store",
+                      "@/components/agents/**",
+                      "@/components/chat/**",
+                      "@/components/conversation/**",
+                      "@/lib/conversation-*",
+                      "@/features/agent-session/**"
+                    ],
+                    "message": "Quick terminals must not depend on agent sessions."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/renderer/lib/**"],
       "linter": {
         "rules": {

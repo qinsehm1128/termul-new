@@ -90,6 +90,14 @@ describe('ActivityRail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/mcp')
   })
 
+  it('navigates to quick terminals on click', () => {
+    renderRail()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open quick terminals' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/quick-terminals')
+  })
+
   it('exposes the keyboard shortcuts trigger', () => {
     renderRail()
 

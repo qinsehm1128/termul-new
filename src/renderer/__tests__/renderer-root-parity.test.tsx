@@ -27,6 +27,10 @@ vi.mock('@/components/ChatRoute', () => ({
   )
 }))
 
+vi.mock('@/features/quick-terminal/QuickTerminalsPage', () => ({
+  default: () => <div data-testid="portable-route" data-component="quick-terminals" />
+}))
+
 vi.mock('@/pages/TerminalBoard', () => ({
   default: () => <div data-testid="portable-route" data-component="terminals" />
 }))
@@ -127,6 +131,8 @@ const routeCases = [
   ['/legacy/storage/opaque-value', 'legacy:legacyStorageKey'],
   ['/legacy/history/opaque-value', 'legacy:legacyChatHistoryId'],
   ['/terminals', 'terminals'],
+  ['/quick-terminals', 'quick-terminals'],
+  ['/quick-terminals/11111111-1111-4111-8111-111111111111', 'quick-terminals'],
   ['/snapshots', 'snapshots'],
   ['/settings', 'settings'],
   ['/preferences', 'preferences'],

@@ -8,6 +8,7 @@
  *   import { terminalApi, clipboardApi, systemApi } from '@/lib/api'
  */
 
+export { quickTerminalApi } from '../features/quick-terminal/quick-terminal-api'
 export { acpApi } from './acp-api'
 export { acpCatalogApi } from './acp-catalog-api'
 export { acpInstallApi } from './acp-install-api'

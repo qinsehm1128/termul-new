@@ -19,7 +19,8 @@ import {
   Plug,
   SlidersHorizontal,
   Sparkles,
-  SquareTerminal
+  SquareTerminal,
+  Terminal as TerminalIcon
 } from 'lucide-react'
 import {
   cloneElement,
@@ -66,6 +67,7 @@ const ITEM_LABEL_KEY: Record<RailItemId, string> = {
   gitHistory: 'activityRail.gitHistory',
   ssh: 'activityRail.toggleSsh',
   conversations: 'activityRail.conversations',
+  quickTerminals: 'activityRail.quickTerminals',
   skills: 'activityRail.skills',
   aiChannels: 'activityRail.aiChannels',
   mcp: 'activityRail.mcp',
@@ -598,6 +600,31 @@ export function ActivityRail({
             </RailTooltip>
           )
         }
+      case 'quickTerminals': {
+        const active = location.pathname.startsWith('/quick-terminals')
+        return {
+          disabled: false,
+          element: (
+            <RailTooltip label={t('activityRail.quickTerminals')}>
+              <button
+                type="button"
+                onClick={activate(() => navigate('/quick-terminals'))}
+                className={railButtonClass}
+                aria-label={t('activityRail.openQuickTerminals')}
+                aria-current={active ? 'page' : undefined}
+              >
+                <TerminalIcon
+                  size={18}
+                  className={cn(
+                    'transition-colors',
+                    active ? 'text-foreground' : 'text-muted-foreground'
+                  )}
+                />
+              </button>
+            </RailTooltip>
+          )
+        }
+      }
       case 'scheduledTasks':
         return {
           disabled: false,

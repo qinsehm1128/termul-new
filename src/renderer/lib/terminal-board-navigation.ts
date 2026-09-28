@@ -73,9 +73,15 @@ export function openBoardTerminal(options: {
   // no surface can forget it. A Conversation terminal lives at `/c/<id>`;
   // selecting a project and navigating to `/` sends the user to the one
   // workspace that terminal is not in.
-  const owner = useTerminalStore
+  const record = useTerminalStore
     .getState()
-    .terminals.find((terminal) => terminal.id === options.terminalId)?.conversationId
+    .terminals.find((terminal) => terminal.id === options.terminalId)
+  if (record?.quickTerminalId) {
+    clearPendingTerminalFocus()
+    options.navigate(`/quick-terminals/${record.quickTerminalId}`)
+    return
+  }
+  const owner = record?.conversationId
   if (owner) {
     clearPendingTerminalFocus()
     useWorkspaceStore.getState().hideAgentLauncher()
