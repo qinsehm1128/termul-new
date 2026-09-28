@@ -54,6 +54,21 @@ function productionSource(path: string): string {
   return lines.join('\n')
 }
 
+const crateRoot = 'src-tauri/crates'
+const workspaceCrates = new Set(
+  existsSync(join(repoRoot, crateRoot)) ? readdirSync(join(repoRoot, crateRoot)) : []
+)
+
+/** Workspace crates (`termul_foo::` → `termul-foo`) named by a Core's source. */
+function referencedCrates(source: string): Set<string> {
+  const crates = new Set<string>()
+  for (const match of source.matchAll(/\b(termul_[a-z_0-9]+)::/g)) {
+    const name = match[1].replaceAll('_', '-')
+    if (workspaceCrates.has(name)) crates.add(name)
+  }
+  return crates
+}
+
 function referencedModules(source: string): Set<string> {
   const modules = new Set<string>()
   for (const match of source.matchAll(/crate::([a-z_0-9]+)/g)) modules.add(match[1])
@@ -103,6 +118,19 @@ describe('component build inputs', () => {
     // runs it, or to acknowledgedExternalModules.${core} with the reason it
     // never runs there.
     expect(unaccounted).toEqual([])
+  })
+
+  test.each(CORES)('%s identity covers every workspace crate its code uses', (core) => {
+    const paths = [...inputs.components[core], ...inputs.sharedFiles]
+    const uncovered = new Set<string>()
+    // Shared files run in every Core too (e.g. `core/ipc.rs` re-exports the IPC crate).
+    for (const file of paths.flatMap(rustFiles)) {
+      for (const name of referencedCrates(productionSource(file))) {
+        const dir = `${crateRoot}/${name}`
+        if (!paths.some((path) => path === dir || dir.startsWith(`${path}/`))) uncovered.add(name)
+      }
+    }
+    expect([...uncovered]).toEqual([])
   })
 
   test.each(CORES)('%s acknowledges only modules it still references', (core) => {

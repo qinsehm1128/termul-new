@@ -13,6 +13,9 @@ rust-version = "1.88"
 # `cargo build --bin se-server --features standalone-server`.
 default-run = "se-manager"
 
+[workspace]
+members = ["crates/*"]
+
 [lib]
 name = "se_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -54,6 +57,8 @@ mcp-test-fixture = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Local IPC wire protocol shared with the Core processes.
+termul-ipc = { path = "crates/termul-ipc" }
 # Recursive fs watching for `fs_watcher`. Pinned to the same major the fs plugin
 # already resolves, so this adds no new resolution to the lockfile.
 notify = "8"

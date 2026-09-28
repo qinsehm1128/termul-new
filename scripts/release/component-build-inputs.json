@@ -6,7 +6,8 @@
     "src-tauri/build.rs",
     "src-tauri/src/core/ipc.rs",
     "src-tauri/src/core/mod.rs",
-    "src-tauri/src/core/transport.rs"
+    "src-tauri/src/core/transport.rs",
+    "src-tauri/crates/termul-ipc"
   ],
   "components": {
     "renderer": ["src/renderer", "src/shared", "package.json", "bun.lock"],
