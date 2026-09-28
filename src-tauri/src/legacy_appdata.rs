@@ -29,7 +29,7 @@
 //! dev experiment overwrite — or be overwritten by — real user data.
 //!
 //! Both trees are still *declared* as legacy-readable roots
-//! (`HostConversationRoots::desktop`), because detection and the merge
+//! (`conversation_roots::desktop`), because detection and the merge
 //! inventory have to be able to tell the user about either one.
 //!
 //! # Copy only. Never delete, never overwrite (FORBID-05)

@@ -34,9 +34,8 @@ use crate::acp::session_persistence::SessionRegistration;
 use crate::conversation::{
     ConversationApplicationService, ConversationBootstrap, ConversationCreationService,
     ConversationId, ConversationLifecycleAction, ConversationLifecycleOutcome,
-    ConversationPersistenceAdapter, ExecutionTarget, HostConversationRoots,
-    LifecycleOperationJournal, MigrationHostMode, PrepareConversationRequest, ProjectAttachment,
-    SessionWorkspaceService,
+    ConversationPersistenceAdapter, ExecutionTarget, LifecycleOperationJournal, MigrationHostMode,
+    PrepareConversationRequest, ProjectAttachment, SessionWorkspaceService,
 };
 use crate::memory_index::commands::{
     throttled, MemoryIndexBuildArgs, MemoryIndexListArgs, MemoryIndexScopeArgs,
@@ -481,7 +480,7 @@ fn compose_acp_core(
     shutdown: watch::Sender<bool>,
 ) -> Result<AcpCoreState, CoreError> {
     let bootstrap = ConversationBootstrap::run(
-        HostConversationRoots::desktop(state_root.clone(), workspace_base),
+        crate::conversation_roots::desktop(state_root.clone(), workspace_base),
         MigrationHostMode::Desktop,
     )
     .map_err(|error| invalid(format!("conversation bootstrap failed: {error}")))?;

@@ -43,7 +43,13 @@ pub fn attach(
     lifecycle: ConversationLifecycleService,
 ) -> Result<(), ConversationApplicationError> {
     application.attach_lifecycle(lifecycle)?;
-    application.attach_skill_provisioner(Arc::new(ConversationSkillProvisioner::new()))
+    application.attach_skill_provisioner(skill_provisioner())
+}
+
+/// The host's managed-skill provisioner.
+#[must_use]
+pub fn skill_provisioner() -> Arc<dyn ManagedSkillProvisioner> {
+    Arc::new(ConversationSkillProvisioner::new())
 }
 
 impl ManagedSkillProvisioner for ConversationSkillProvisioner {
@@ -196,7 +202,7 @@ mod tests {
     fn attach_gives_the_application_both_host_services() {
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = ConversationBootstrap::run(
-            HostConversationRoots::desktop(temp.path().join("state"), temp.path().join("visible")),
+            HostConversationRoots::new(temp.path().join("state"), temp.path().join("visible")),
             MigrationHostMode::Desktop,
         )
         .unwrap();

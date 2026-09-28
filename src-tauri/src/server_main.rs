@@ -220,7 +220,7 @@ fn main() -> ExitCode {
         // The standalone host crosses the same synchronous Conversation admission gate as
         // Desktop before opening any app-managed store, manager, PTY, or network route.
         let conversation_bootstrap = match se_manager_lib::conversation::ConversationBootstrap::run(
-            se_manager_lib::conversation::HostConversationRoots::standalone(
+            se_manager_lib::conversation_roots::standalone(
                 cfg.service_account_state_dir(),
                 cfg.conversation_workspace_root(),
                 cfg.sessions_dir.clone(),

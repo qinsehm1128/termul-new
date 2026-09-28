@@ -54,10 +54,10 @@ pub struct HostConversationRoots {
     /// 2. *Channel.* This vector reports **both** identifier trees, including
     ///    the install channel the running process is not. Migrating that one
     ///    would merge a dev build's data into a release install, which
-    ///    [`crate::legacy_appdata`] exists specifically to prevent.
+    ///    the host's legacy app-data carry-forward exists specifically to prevent.
     ///
     /// The matching channel's data reaches the canonical root by
-    /// [`crate::legacy_appdata::carry_forward`] instead, which runs before this
+    /// the host's carry-forward instead, which runs before this
     /// struct is built. By the time the inventory looks at
     /// `host_state_root.join("acp-sessions")`, the carried-forward records are
     /// already there. This field's job is to let detection and the merge banner
@@ -76,103 +76,26 @@ pub struct HostConversationRoots {
     /// the bundle identifier. Renaming only the bundle id leaves it alone;
     /// renaming only the display name strands the entire root.
     pub legacy_workspace_bases: Vec<PathBuf>,
+    /// The channel-matched pre-rename state root the host carried this
+    /// install's data forward from, if any. A migration journal written there
+    /// keyed its operation under the retired path-dependent formula; see
+    /// [`superseded_operation_keys`].
+    pub carried_from_state_roots: Vec<PathBuf>,
 }
 
 impl HostConversationRoots {
-    /// The desktop host's roots, including everything a pre-rename install left
-    /// behind (M-01, M-02, M-06).
-    ///
-    /// `state_root` is Tauri's `app_data_dir()`, which is named from the bundle
-    /// identifier: renaming the identifier moves it, and every byte under the
-    /// old one becomes unreachable. So this constructor does two distinct
-    /// things before returning:
-    ///
-    /// 1. **Carries the matching pre-rename tree forward** (copy-only, never
-    ///    overwriting, never deleting — see [`crate::legacy_appdata`]). prod
-    ///    carries prod and dev carries dev; the two are separate installs.
-    /// 2. **Declares both pre-rename identifier trees, and the pre-rename
-    ///    `~/Documents/<display name>` workspace root, as legacy-readable**, so
-    ///    the migration inventory and the startup detector can see data under
-    ///    either one. Declaring is read-only: the user's `~/Documents` tree is
-    ///    never moved or copied by this call.
-    ///
-    /// Resolving the brand seam here is deliberate and load-bearing:
-    /// `brand::canonical()` is thread-local, so it must be read on the thread
-    /// that owns the override, never inside a spawned closure (FORBID-07). This
-    /// runs on the caller's thread — the Tauri `setup` thread in production.
+    /// Roots with no legacy sources declared. Hosts that know about
+    /// pre-rename installs fill the legacy fields themselves.
     #[must_use]
-    pub fn desktop(state_root: PathBuf, workspace_base: PathBuf) -> Self {
-        let (legacy_appdata_roots, legacy_workspace_bases) = if crate::brand::is_canary_build() {
-            // Canary is a parallel install, not a rename/migration target. It
-            // must never inspect or copy production conversation roots.
-            (Vec::new(), Vec::new())
-        } else {
-            let legacy_appdata_roots = crate::legacy_appdata::legacy_appdata_roots(&state_root);
-            if let Some(source) = crate::legacy_appdata::matching_legacy_root(&state_root) {
-                match crate::legacy_appdata::carry_forward(&source, &state_root) {
-                    Ok(report) if report.is_noop() => {}
-                    Ok(report) => log::info!(
-                        "[legacy-appdata] carried the pre-rename app data root forward from {} copied={} already_present={} skipped_links={}",
-                        source.display(),
-                        report.copied,
-                        report.already_present,
-                        report.skipped_links
-                    ),
-                    // Non-fatal by design: the legacy tree is still on disk and is
-                    // still declared below, so a failed copy costs "the merge has
-                    // more to do", never data. Refusing to launch would not make
-                    // the user's data any more reachable.
-                    Err(error) => log::error!(
-                        "[legacy-appdata] could not carry {} forward into {}: {error}",
-                        source.display(),
-                        state_root.display()
-                    ),
-                }
-            }
-            (
-                legacy_appdata_roots,
-                legacy_workspace_base(&workspace_base).into_iter().collect(),
-            )
-        };
+    pub fn new(state_root: PathBuf, workspace_base: PathBuf) -> Self {
         Self {
             state_root,
             workspace_base,
-            // Unchanged: the desktop host has never had standalone-shaped
-            // legacy leaves, and the carried-forward tree is reached through
-            // `host_state_root` like it always was. See
-            // `legacy_appdata_roots`'s doc for why the pre-rename roots do not
-            // belong here.
             legacy_session_roots: Vec::new(),
             legacy_workspace_manifest_roots: Vec::new(),
-            legacy_appdata_roots,
-            legacy_workspace_bases,
-        }
-    }
-
-    #[must_use]
-    pub fn standalone(
-        state_root: PathBuf,
-        workspace_base: PathBuf,
-        legacy_session_root: Option<PathBuf>,
-        legacy_workspace_manifest_root: Option<PathBuf>,
-    ) -> Self {
-        // `<project_root>/<display name>` is the standalone twin of
-        // `~/Documents/<display name>` and is named by the same identity, so
-        // the same pre-rename sibling can be sitting next to it (T-A16). Read
-        // on the caller's thread like the desktop constructor (FORBID-07), and
-        // read-only in exactly the same sense: the user's workspaces are never
-        // moved on the strength of this field.
-        let legacy_workspace_bases = legacy_workspace_base(&workspace_base).into_iter().collect();
-        Self {
-            state_root,
-            workspace_base,
-            legacy_session_roots: legacy_session_root.into_iter().collect(),
-            legacy_workspace_manifest_roots: legacy_workspace_manifest_root.into_iter().collect(),
-            // The standalone host names its state root from `state_dir`, not
-            // from a bundle identifier. Its own legacy fallback is T-M07's,
-            // applied by the caller before it gets here.
             legacy_appdata_roots: Vec::new(),
-            legacy_workspace_bases,
+            legacy_workspace_bases: Vec::new(),
+            carried_from_state_roots: Vec::new(),
         }
     }
 
@@ -190,39 +113,6 @@ impl HostConversationRoots {
     pub fn lifecycle_journal_root(&self) -> PathBuf {
         super::lifecycle_journal::lifecycle_journal_root_for(&self.state_root)
     }
-}
-
-/// The pre-rename sibling of `workspace_base` — `~/Documents/<old display
-/// name>` — when it exists on disk (M-06).
-///
-/// `workspace_base` is `<documents>/<display_name>`, so the legacy root is its
-/// sibling under the same parent. `None` when the final component is not the
-/// canonical display name (the user pointed `SE_CONVERSATION_WORKSPACE_ROOT`
-/// somewhere of their own), when the rename has not landed yet and the two
-/// names are equal, or when nothing is there.
-///
-/// This is a *detection* helper and nothing more. The directory it returns is
-/// full of the user's own project files; the merge never moves or copies it,
-/// and the caller stores the result in a field documented read-only.
-///
-/// Reads the brand seam, so it must be called on the thread that owns it
-/// (FORBID-07).
-///
-/// `pub(crate)` so `migration_detect` reports the same root this constructor
-/// declares. A second copy of the "is the final component the canonical display
-/// name?" rule would let the banner list a directory the host never registered.
-#[must_use]
-pub(crate) fn legacy_workspace_base(workspace_base: &Path) -> Option<PathBuf> {
-    let canonical = crate::brand::canonical();
-    let legacy_name = crate::brand::LEGACY.display_name;
-    if legacy_name == canonical.display_name {
-        return None;
-    }
-    if workspace_base.file_name()?.to_str()? != canonical.display_name {
-        return None;
-    }
-    let legacy_base = workspace_base.parent()?.join(legacy_name);
-    legacy_base.is_dir().then_some(legacy_base)
 }
 
 pub struct BootstrapOutcome {
@@ -349,11 +239,8 @@ impl ConversationBootstrap {
         // A journal carried forward from a previous install path still
         // describes this operation; recognising its old key is what keeps a
         // relocation from reading as a foreign migration.
-        let carried_from = crate::legacy_appdata::matching_legacy_root(&roots.state_root)
-            .into_iter()
-            .collect::<Vec<_>>();
         let adoptable_operation_keys =
-            superseded_operation_keys(&legacy_configuration, &carried_from);
+            superseded_operation_keys(&legacy_configuration, &roots.carried_from_state_roots);
         let mut report = migration_service
             .recover_and_run(MigrationContext {
                 lock_guard: &lock_guard,
@@ -687,7 +574,7 @@ fn migration_operation_key(configuration: &LegacyRootConfiguration) -> String {
 /// A journal already on disk was written before the key stopped depending on the
 /// install path, and possibly under a different root. `previous_state_roots` is
 /// therefore the channel-matched pre-rename root and nothing else: that is the
-/// only place [`crate::legacy_appdata::carry_forward`] can have brought this
+/// only place the host's carry-forward can have brought this
 /// journal from. Passing every known legacy root instead would let a dev
 /// install's journal be adopted by a release one, which is the exact merge that
 /// module exists to prevent.
@@ -749,112 +636,8 @@ fn error(code: &'static str, operation: &'static str, detail: impl Into<String>)
 }
 
 #[cfg(test)]
-mod legacy_root_declaration_tests {
-    use super::*;
-    use crate::brand::{self, BrandCanonical};
-
-    fn post_rename() -> BrandCanonical {
-        BrandCanonical {
-            bundle_id: "com.se-manager.app",
-            bundle_id_dev: "com.se-manager.app.dev",
-            display_name: "Se",
-            ..brand::DEFAULT_CANONICAL
-        }
-    }
-
-    /// M-06. `~/Documents/<old display name>` is named by `display_name`, an
-    /// identity completely separate from the bundle identifier that names
-    /// `app_data_dir`.
-    #[test]
-    fn legacy_workspace_base_finds_the_pre_rename_documents_root() {
-        let temp = tempfile::tempdir().unwrap();
-        let documents = temp.path();
-        fs::create_dir_all(documents.join(brand::LEGACY.display_name)).unwrap();
-        let _brand = brand::override_canonical(post_rename());
-
-        assert_eq!(
-            legacy_workspace_base(&documents.join(post_rename().display_name)),
-            Some(documents.join(brand::LEGACY.display_name))
-        );
-    }
-
-    #[test]
-    fn legacy_workspace_base_ignores_a_user_supplied_root() {
-        let temp = tempfile::tempdir().unwrap();
-        let documents = temp.path();
-        fs::create_dir_all(documents.join(brand::LEGACY.display_name)).unwrap();
-        let _brand = brand::override_canonical(post_rename());
-
-        // SE_CONVERSATION_WORKSPACE_ROOT pointed somewhere of the user's
-        // own choosing: there is no rename relationship to infer.
-        assert_eq!(
-            legacy_workspace_base(&documents.join("my-own-projects")),
-            None
-        );
-    }
-
-    #[test]
-    fn legacy_workspace_base_is_none_before_the_rename_lands() {
-        let temp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(temp.path().join(brand::DEFAULT_CANONICAL.display_name)).unwrap();
-        assert_eq!(
-            legacy_workspace_base(&temp.path().join(brand::DEFAULT_CANONICAL.display_name)),
-            None,
-            "with canonical == legacy the sibling IS the canonical root"
-        );
-    }
-
-    /// The pre-rename `app_data_dir` trees are reported for detection, but they
-    /// must never reach `LegacyRootConfiguration`: `standalone_session_roots`
-    /// entries are scanned as `acp-sessions` leaves, and the vector
-    /// deliberately includes the install channel this process is not.
-    #[test]
-    fn pre_rename_appdata_roots_are_declared_for_detection_but_never_migrated() {
-        let temp = tempfile::tempdir().unwrap();
-        let support = temp.path().join("Application Support");
-        for name in [brand::LEGACY.bundle_id, brand::LEGACY.bundle_id_dev] {
-            fs::create_dir_all(support.join(name)).unwrap();
-        }
-        let state_root = support.join(post_rename().bundle_id);
-        fs::create_dir_all(&state_root).unwrap();
-        let _brand = brand::override_canonical(post_rename());
-
-        let roots = HostConversationRoots::desktop(state_root.clone(), temp.path().join("Se"));
-
-        assert_eq!(
-            roots.legacy_appdata_roots,
-            vec![
-                support.join(brand::LEGACY.bundle_id),
-                support.join(brand::LEGACY.bundle_id_dev),
-            ],
-            "both identifier trees must be visible to the detector"
-        );
-        assert!(
-            roots.legacy_session_roots.is_empty(),
-            "an app_data_dir root is not an acp-sessions leaf and the dev tree \
-             must not be merged into a release install; got {:?}",
-            roots.legacy_session_roots
-        );
-
-        let configuration = LegacyRootConfiguration {
-            host_state_root: roots.state_root.clone(),
-            standalone_session_roots: roots.legacy_session_roots.clone(),
-            standalone_workspace_manifest_roots: roots.legacy_workspace_manifest_roots.clone(),
-        };
-        for spec in configuration.known_roots() {
-            assert!(
-                spec.path.starts_with(&state_root),
-                "the inventory must only ever scan under the canonical root, got {}",
-                spec.path.display()
-            );
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brand;
 
     fn desktop_config(state_root: &str) -> LegacyRootConfiguration {
         LegacyRootConfiguration {
@@ -968,7 +751,7 @@ mod tests {
     fn fresh_desktop_and_standalone_roots_are_distinct_and_publish_identical_services() {
         let temp = tempfile::tempdir().unwrap();
         let desktop = ConversationBootstrap::run(
-            HostConversationRoots::desktop(
+            HostConversationRoots::new(
                 temp.path().join("desktop-state"),
                 temp.path().join("desktop-visible"),
             ),
@@ -976,11 +759,9 @@ mod tests {
         )
         .unwrap();
         let standalone = ConversationBootstrap::run(
-            HostConversationRoots::standalone(
+            HostConversationRoots::new(
                 temp.path().join("server-state"),
                 temp.path().join("server-visible"),
-                None,
-                None,
             ),
             MigrationHostMode::Standalone,
         )
@@ -1110,7 +891,7 @@ mod tests {
     async fn projectless_conversation_exists_before_acp_new() {
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = ConversationBootstrap::run(
-            HostConversationRoots::desktop(temp.path().join("state"), temp.path().join("visible")),
+            HostConversationRoots::new(temp.path().join("state"), temp.path().join("visible")),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1167,7 +948,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let state = temp.path().join("state");
         let bootstrap = ConversationBootstrap::run(
-            HostConversationRoots::desktop(state.clone(), temp.path().join("visible")),
+            HostConversationRoots::new(state.clone(), temp.path().join("visible")),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1269,7 +1050,7 @@ mod tests {
             .insert(state.clone(), Arc::clone(&hook));
 
         let outcome = ConversationBootstrap::run(
-            HostConversationRoots::desktop(state.clone(), visible),
+            HostConversationRoots::new(state.clone(), visible),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1309,7 +1090,7 @@ mod tests {
         let state = temp.path().join("state");
         let visible = temp.path().join("visible");
         let first = ConversationBootstrap::run(
-            HostConversationRoots::desktop(state.clone(), visible.clone()),
+            HostConversationRoots::new(state.clone(), visible.clone()),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1325,7 +1106,7 @@ mod tests {
         };
         control.request(rollback).unwrap();
         let rolled_back = ConversationBootstrap::run(
-            HostConversationRoots::desktop(state.clone(), visible.clone()),
+            HostConversationRoots::new(state.clone(), visible.clone()),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1341,7 +1122,7 @@ mod tests {
         };
         control.request(reapply.clone()).unwrap();
         let reapplied = ConversationBootstrap::run(
-            HostConversationRoots::desktop(state.clone(), visible),
+            HostConversationRoots::new(state.clone(), visible),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1398,7 +1179,7 @@ mod tests {
         let first_visible = visible.clone();
         let first = std::thread::spawn(move || {
             ConversationBootstrap::run(
-                HostConversationRoots::desktop(first_state, first_visible),
+                HostConversationRoots::new(first_state, first_visible),
                 MigrationHostMode::Desktop,
             )
         });
@@ -1425,7 +1206,7 @@ mod tests {
         );
 
         let second = ConversationBootstrap::run(
-            HostConversationRoots::desktop(state.clone(), visible),
+            HostConversationRoots::new(state.clone(), visible),
             MigrationHostMode::Desktop,
         )
         .err()
@@ -1502,7 +1283,7 @@ mod tests {
             .join("conversation-migrations")
             .join(crate::conversation::migration::MIGRATION_JOURNAL_FILE);
         let failure = ConversationBootstrap::run(
-            HostConversationRoots::desktop(state.clone(), visible),
+            HostConversationRoots::new(state.clone(), visible),
             MigrationHostMode::Desktop,
         )
         .err()
@@ -1512,41 +1293,49 @@ mod tests {
         assert!(!state.join("conversations/v2").exists());
     }
 
-    /// The shipped v0.6.0 crash, end to end.
-    ///
-    /// A user whose data lived under the pre-rename bundle identifier gets the
-    /// whole tree carried forward on first launch — journal included. That
-    /// journal's key was derived from the OLD root, so startup used to abort
-    /// with `MIGRATION_IDEMPOTENCY_CONFLICT` on data that was entirely intact.
-    /// Uses the real directory names so a future rename cannot quietly make
-    /// this test stop covering the case it was written for.
+    /// A journal the host carried forward from a pre-rename root still carries
+    /// that root's retired key. It is adopted only when the host names that
+    /// root in `carried_from_state_roots`; otherwise it is a foreign operation.
     #[test]
-    fn a_journal_carried_forward_from_the_pre_rename_root_does_not_abort_startup() {
+    fn a_journal_keyed_under_the_carried_from_root_is_adopted_only_when_declared() {
         let temp = tempfile::tempdir().unwrap();
-        let parent = temp.path();
-        let canonical_root = parent.join(brand::canonical().bundle_id_dev);
-        let legacy_root = parent.join(brand::LEGACY.bundle_id_dev);
+        let legacy = temp.path().join("legacy-state");
+        let retired_key =
+            superseded_operation_keys(&desktop_config(legacy.to_str().unwrap()), &[]).remove(0);
+        let seed = |state: &Path| {
+            let dir = state.join("conversation-migrations");
+            fs::create_dir_all(&dir).unwrap();
+            let journal = crate::conversation::migration::MigrationJournalV1::new(
+                retired_key.clone(),
+                Utc::now(),
+            );
+            fs::write(
+                dir.join(crate::conversation::migration::MIGRATION_JOURNAL_FILE),
+                serde_json::to_vec(&journal).unwrap(),
+            )
+            .unwrap();
+        };
 
-        // Migrate once under the legacy identifier, exactly as the pre-rename
-        // build did.
-        let first = ConversationBootstrap::run(
-            HostConversationRoots::desktop(legacy_root.clone(), parent.join("visible")),
+        let undeclared = temp.path().join("undeclared");
+        seed(&undeclared);
+        let error = ConversationBootstrap::run(
+            HostConversationRoots::new(undeclared, temp.path().join("visible-a")),
             MigrationHostMode::Desktop,
         )
-        .expect("the pre-rename install migrates cleanly");
-        assert_eq!(first.migration_phase, MigrationPhase::ObservationWindow);
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "MIGRATION_IDEMPOTENCY_CONFLICT");
 
-        // Rename lands: the canonical root does not exist yet, so bootstrap
-        // carries the legacy tree — journal and all — forward into it.
-        let carried = ConversationBootstrap::run(
-            HostConversationRoots::desktop(canonical_root.clone(), parent.join("visible")),
+        let declared = temp.path().join("declared");
+        seed(&declared);
+        ConversationBootstrap::run(
+            HostConversationRoots {
+                carried_from_state_roots: vec![legacy],
+                ..HostConversationRoots::new(declared, temp.path().join("visible-b"))
+            },
             MigrationHostMode::Desktop,
         )
-        .expect("a carried-forward journal must not abort startup");
-        assert_eq!(carried.migration_phase, MigrationPhase::ObservationWindow);
-
-        // And the legacy tree is still there, untouched.
-        assert!(legacy_root.join("conversation-migrations").is_dir());
+        .expect("the carried-forward journal is adopted");
     }
 
     #[test]
@@ -1578,7 +1367,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         ConversationBootstrap::run(
-            HostConversationRoots::desktop(state, visible),
+            HostConversationRoots::new(state, visible),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1602,7 +1391,7 @@ mod tests {
         let project = temp.path().join("project");
         fs::create_dir_all(&project).unwrap();
         let outcome = ConversationBootstrap::run(
-            HostConversationRoots::desktop(temp.path().join("state"), temp.path().join("visible")),
+            HostConversationRoots::new(temp.path().join("state"), temp.path().join("visible")),
             MigrationHostMode::Desktop,
         )
         .unwrap();
@@ -1648,7 +1437,7 @@ mod tests {
     fn admission_must_be_clear_before_the_lock_or_repository_opens() {
         let temp = tempfile::tempdir().unwrap();
         let error = ConversationBootstrap::run_with_admission(
-            HostConversationRoots::desktop(temp.path().join("state"), temp.path().join("visible")),
+            HostConversationRoots::new(temp.path().join("state"), temp.path().join("visible")),
             MigrationHostMode::Desktop,
             MigrationAdmissionState {
                 session_persistence_active: true,

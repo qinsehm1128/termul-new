@@ -323,7 +323,7 @@ fn probe_app_data_dir(roots: &LegacyRoots) -> LegacyDataSignal {
 
 /// M-06 — `~/Documents/<pre-rename display name>`.
 fn probe_documents_workspace(roots: &LegacyRoots) -> LegacyDataSignal {
-    match crate::conversation::bootstrap::legacy_workspace_base(&roots.workspace_base) {
+    match crate::conversation_roots::legacy_workspace_base(&roots.workspace_base) {
         Some(found) => LegacyDataSignal::found(LegacySignalKind::DocumentsWorkspace, Some(&found)),
         None => LegacyDataSignal::absent(LegacySignalKind::DocumentsWorkspace),
     }

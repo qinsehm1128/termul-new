@@ -2535,7 +2535,7 @@ mod tests {
         child.wait().unwrap();
 
         let outcome = crate::conversation::ConversationBootstrap::run(
-            crate::conversation::HostConversationRoots::desktop(root, visible),
+            crate::conversation::HostConversationRoots::new(root, visible),
             MigrationHostMode::Desktop,
         )
         .unwrap();

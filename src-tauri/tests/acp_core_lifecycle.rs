@@ -45,11 +45,11 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
     // no IPC creates one without a live agent.
     let prepared = {
         use se_manager_lib::conversation::{
-            AgentBindingResult, ConversationBootstrap, ExecutionTarget, HostConversationRoots,
-            MigrationHostMode, PrepareConversationRequest,
+            AgentBindingResult, ConversationBootstrap, ExecutionTarget, MigrationHostMode,
+            PrepareConversationRequest,
         };
         let bootstrap = ConversationBootstrap::run(
-            HostConversationRoots::desktop(profile.clone(), workspace.clone()),
+            se_manager_lib::conversation_roots::desktop(profile.clone(), workspace.clone()),
             MigrationHostMode::Desktop,
         )
         .expect("seed bootstrap");

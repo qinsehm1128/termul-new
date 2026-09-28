@@ -731,12 +731,12 @@ async fn terminal_service_graph_is_host_exact() {
     let temp = tempfile::tempdir().unwrap();
     let base = temp.path().canonicalize().unwrap();
     let host_a = ConversationBootstrap::run(
-        HostConversationRoots::desktop(base.join("state-a"), base.join("visible-a")),
+        HostConversationRoots::new(base.join("state-a"), base.join("visible-a")),
         MigrationHostMode::Desktop,
     )
     .unwrap();
     let host_b = ConversationBootstrap::run(
-        HostConversationRoots::desktop(base.join("state-b"), base.join("visible-b")),
+        HostConversationRoots::new(base.join("state-b"), base.join("visible-b")),
         MigrationHostMode::Desktop,
     )
     .unwrap();

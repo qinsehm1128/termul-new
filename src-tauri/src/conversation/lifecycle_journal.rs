@@ -1083,11 +1083,9 @@ mod tests {
 
     #[test]
     fn journal_root_stays_outside_conversation_repository() {
-        let roots = HostConversationRoots::standalone(
+        let roots = HostConversationRoots::new(
             PathBuf::from("/tmp/termul-profile"),
             PathBuf::from("/tmp/termul-workspace"),
-            None,
-            None,
         );
         assert_eq!(
             roots.lifecycle_journal_root(),

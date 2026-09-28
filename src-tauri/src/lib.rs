@@ -20,6 +20,7 @@ mod editor_workspaces;
 mod fs_watcher;
 use se_foundation::host_admission;
 pub mod conversation_host;
+pub mod conversation_roots;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
@@ -2547,7 +2548,7 @@ pub fn run() {
             )?;
             let conversation_bootstrap = if acp_core_handle.is_none() {
                 let conversation_bootstrap = crate::conversation::ConversationBootstrap::run(
-                    crate::conversation::HostConversationRoots::desktop(
+                    crate::conversation_roots::desktop(
                         app_data_dir.clone(),
                         conversation_workspace_base.clone(),
                     ),
@@ -4155,7 +4156,7 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = crate::conversation::ConversationBootstrap::run(
-            crate::conversation::HostConversationRoots::desktop(
+            crate::conversation_roots::desktop(
                 temp.path().join("state"),
                 temp.path().join("visible"),
             ),
