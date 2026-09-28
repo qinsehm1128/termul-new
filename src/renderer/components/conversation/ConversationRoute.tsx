@@ -1,7 +1,8 @@
+import { conversationBackendOf } from '@shared/types/conversation.types'
 import { AlertTriangle, LoaderCircle } from 'lucide-react'
 import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useParams } from 'react-router-dom'
+import { Navigate, useParams } from 'react-router-dom'
 import { useConversationStore } from '@/stores/conversation-store'
 
 interface ConversationRouteProps {
@@ -40,6 +41,13 @@ export function ConversationRoute({
   const cancelConversationActivation = useConversationStore(
     (state) => state.cancelConversationActivation
   )
+  // A terminal-backed Conversation became a quick terminal with the same id.
+  const isTerminalBacked = useConversationStore(
+    (state) =>
+      conversationBackendOf(
+        state.summariesById[routeValue] ?? state.detailsById[routeValue]?.conversation
+      ) === 'terminal'
+  )
   const opening = useConversationStore((state) => state.openingById[routeValue] === true)
   const storeError = useConversationStore((state) => state.errorsById[routeValue])
   const activationEpochRef = useRef<number | null>(null)
@@ -52,6 +60,7 @@ export function ConversationRoute({
   }, [activateConversation, beginConversationActivation, routeValue])
 
   useEffect(() => {
+    if (isTerminalBacked) return
     open()
     return () => {
       if (activationEpochRef.current !== null) {
@@ -60,7 +69,9 @@ export function ConversationRoute({
         cancelConversationActivation(activationEpoch)
       }
     }
-  }, [cancelConversationActivation, open])
+  }, [cancelConversationActivation, isTerminalBacked, open])
+
+  if (isTerminalBacked) return <Navigate replace to={`/quick-terminals/${routeValue}`} />
 
   const errorCode = storeError?.code
   if (opening && !errorCode) {

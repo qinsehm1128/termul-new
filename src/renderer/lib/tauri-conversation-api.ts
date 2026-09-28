@@ -1,27 +1,18 @@
 import {
-  type ConversationAggregateMutationOutcome,
   type ConversationId,
-  type ConversationRecordV2,
   type ExecutionTarget,
   isConversationId,
   type ProjectAttachment,
   parseConversationAggregateMutationOutcome,
   parseConversationRecordV2
 } from '@shared/types/conversation.types'
-import type {
-  ConversationApi,
-  ConversationHostStatus,
-  ConversationOpenOutcome,
-  LegacyConversationKey,
-  LegacyConversationResolution
-} from '@shared/types/conversation-api.types'
+import type { ConversationApi, LegacyConversationKey } from '@shared/types/conversation-api.types'
 import {
   parseConversationBindingSnapshot,
   parseConversationHostStatus,
   parseConversationOpenOutcome,
   parseConversationRecordV2Array,
-  parseLegacyConversationResolution,
-  parsePreparedConversation
+  parseLegacyConversationResolution
 } from '@shared/types/conversation-api.types'
 import type { IpcDataDecoder, IpcResult } from '@shared/types/ipc.types'
 import { listen } from '@tauri-apps/api/event'
@@ -107,15 +98,6 @@ export function createTauriConversationApi(): ConversationApi {
     openConversation: (conversationId) =>
       withConversationId(conversationId, () =>
         invokeConversation('conversation_open', parseConversationOpenOutcome, { conversationId })
-      ),
-    prepareTerminalConversation: (request) =>
-      invokeConversation('conversation_prepare_terminal', parsePreparedConversation, { request }),
-    provisionTerminalConversation: (conversationId, terminalId) =>
-      withConversationId(conversationId, () =>
-        invokeConversation('conversation_provision_terminal', () => null, {
-          conversationId,
-          terminalId
-        })
       ),
     renameConversation: (conversationId, title) =>
       withConversationId(conversationId, () =>

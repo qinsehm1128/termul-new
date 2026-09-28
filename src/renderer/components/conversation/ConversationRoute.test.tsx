@@ -376,6 +376,49 @@ describe('ConversationRoute canonical open', () => {
   })
 })
 
+describe('ConversationRoute terminal-backed redirect', () => {
+  function renderWithQuickTerminals(): void {
+    render(
+      <MemoryRouter initialEntries={[`/c/${conversationId}`]}>
+        <Routes>
+          <Route path="/c/:conversationId" element={<ConversationRoute />} />
+          <Route
+            path="/quick-terminals/:quickTerminalId"
+            element={<div data-testid="quick-terminal-route" />}
+          />
+        </Routes>
+      </MemoryRouter>
+    )
+  }
+
+  it('sends a known terminal-backed conversation to its quick terminal without opening it', async () => {
+    useConversationStore.setState({
+      summariesById: { [conversationId]: { ...conversation, backend: 'terminal' } },
+      conversationIds: [conversationId]
+    })
+
+    renderWithQuickTerminals()
+
+    expect(await screen.findByTestId('quick-terminal-route')).toBeInTheDocument()
+    expect(conversationApi.openConversation).not.toHaveBeenCalled()
+  })
+
+  it('redirects once opening reveals the conversation is terminal-backed', async () => {
+    vi.mocked(conversationApi.openConversation).mockResolvedValue({
+      success: true,
+      data: {
+        conversation: { ...conversation, backend: 'terminal' },
+        workspace: { status: 'missing', conversationId }
+      }
+    })
+
+    renderWithQuickTerminals()
+
+    expect(await screen.findByTestId('quick-terminal-route')).toBeInTheDocument()
+    expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+  })
+})
+
 describe('ChatRoute legacy redirect', () => {
   it('uses the typed read-only resolver and replace-redirects to the canonical route', async () => {
     vi.mocked(conversationApi.resolveLegacyConversationId).mockResolvedValue({

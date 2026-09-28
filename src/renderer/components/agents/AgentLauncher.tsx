@@ -10,11 +10,9 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
-  Loader2,
-  SquareTerminal
+  Loader2
 } from 'lucide-react'
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   emptyPendingLauncherOptions,
@@ -86,7 +84,6 @@ import { resolveConversationSessionId } from '@/lib/conversation-binding'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { isLoopbackWebClient } from '@/lib/tauri-runtime'
-import { launchTerminalConversation } from '@/lib/terminal-conversation-launch'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
@@ -170,7 +167,6 @@ export function AgentLauncher({
   onLaunched
 }: AgentLauncherProps): React.JSX.Element {
   const t = useRuntimeTranslation('agents')
-  const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
@@ -1067,63 +1063,6 @@ export function AgentLauncher({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [preparedSessionId, pendingOptions, t])
 
-  const [terminalLaunching, setTerminalLaunching] = useState(false)
-
-  /**
-   * Start a Conversation backed by a terminal instead of an agent.
-   *
-   * Shares the execution target — the folder choice above applies unchanged —
-   * and nothing else: no config, model, mode or prompt applies to a shell.
-   */
-  const launchTerminal = useCallback(async () => {
-    const targetError = validateExecutionTarget(executionTarget)
-    if (targetError) {
-      toast.error(t(`launcher.errors.${targetError}`, 'Select a valid execution target'))
-      return
-    }
-    if (terminalLaunching) return
-    setTerminalLaunching(true)
-    try {
-      const attachment =
-        projectAttachment ??
-        (executionTarget.kind === 'workspace'
-          ? null
-          : (defaultProjectContext(selectedProject)?.projectAttachment ?? null))
-      const result = await launchTerminalConversation({
-        executionTarget,
-        projectAttachment: attachment
-      })
-      if (!result.success) {
-        toast.error(result.error)
-        return
-      }
-      // Opening the Conversation is the whole handoff: no tab is added here,
-      // because activation loads the Conversation's own workspace and opens the
-      // terminal inside it. Anything this component put in the current pane
-      // would belong to the workspace that activation is about to replace.
-      //
-      // The fallback matters — `onLaunched` is absent wherever the launcher is
-      // rendered inside a pane, and without navigation the new Conversation
-      // would be created and then never shown.
-      if (onLaunched) onLaunched(result.conversationId)
-      else navigate(`/c/${result.conversationId}`)
-      useWorkspaceStore.getState().hideAgentLauncher()
-      console.info(
-        `[agentLauncher.launchTerminal] conversationId=${result.conversationId} target=${executionTarget.kind}`
-      )
-    } finally {
-      setTerminalLaunching(false)
-    }
-  }, [
-    executionTarget,
-    projectAttachment,
-    selectedProject,
-    navigate,
-    onLaunched,
-    terminalLaunching,
-    t
-  ])
-
   const launch = useCallback(async () => {
     const targetError = validateExecutionTarget(executionTarget)
     if (targetError) {
@@ -1843,7 +1782,6 @@ export function AgentLauncher({
                   disabled={Boolean(installingConfigId) || savingManualPath}
                   installingConfigId={installingConfigId}
                   onSelectAgent={handleSelectAgent}
-                  onStartTerminal={() => void launchTerminal()}
                 />
                 <AcpModelPicker
                   selectedEntry={selectedEntry}
@@ -2232,8 +2170,7 @@ function AcpAgentPicker({
   selectedConfig,
   disabled,
   installingConfigId,
-  onSelectAgent,
-  onStartTerminal
+  onSelectAgent
 }: {
   agents: readonly SupportedAcpAgentEntry[]
   selectedEntry: SupportedAcpAgentEntry | null
@@ -2246,7 +2183,6 @@ function AcpAgentPicker({
    * configure and no prompt to write, so offering it as a selectable *mode*
    * left the user in front of a composer with nothing to type into it.
    */
-  onStartTerminal: () => void
 }): React.JSX.Element {
   const t = useRuntimeTranslation('agents')
   const [query, setQuery] = useState('')
@@ -2276,24 +2212,6 @@ function AcpAgentPicker({
         side="top"
         className="w-72 p-1 shadow-[0_12px_36px_hsl(var(--background)/0.65),inset_0_1px_0_0_hsl(var(--foreground)/0.05)]"
       >
-        <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-          {t('launcher.backendPicker', 'Run with')}
-        </div>
-        <button
-          type="button"
-          data-testid="launcher-pick-terminal"
-          onClick={onStartTerminal}
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-        >
-          <SquareTerminal size={16} className="shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate">
-            {t('launcher.terminalOption', 'Terminal')}
-          </span>
-          <span className="shrink-0 text-3xs text-muted-foreground">
-            {t('launcher.terminalOptionHint', 'opens now')}
-          </span>
-        </button>
-        <div className="my-1 h-px bg-border/60" />
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
           {t('launcher.agentPicker', 'ACP Agent')}
         </div>

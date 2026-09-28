@@ -86,7 +86,6 @@ import {
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { runCloseFlush } from '@/lib/close-flush'
 import { getColorClasses } from '@/lib/colors'
-import { terminalCloseIntent } from '@/lib/conversation-terminal-view'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
@@ -97,6 +96,7 @@ import {
   openBoardTerminal,
   peekPendingTerminalFocus
 } from '@/lib/terminal-board-navigation'
+import { terminalCloseIntent } from '@/lib/terminal-close-intent'
 import { spawnTerminalInPane, spawnTerminalInSplit } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'

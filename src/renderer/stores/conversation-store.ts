@@ -634,6 +634,22 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       })
       return false
     }
+    // Terminal-backed Conversations now live on as quick terminals; the route
+    // redirects there. Record what the host said and stop before any agent work.
+    if (conversationBackendOf(openResult.data.conversation) === 'terminal') {
+      set((state) =>
+        activationIsCurrent(state, conversationId, activationEpoch)
+          ? {
+              summariesById: {
+                ...state.summariesById,
+                [conversationId]: openResult.data.conversation
+              },
+              openingById: { ...state.openingById, [conversationId]: false }
+            }
+          : {}
+      )
+      return true
+    }
     notifyAgentSkillsChanged(openResult.data.conversation.workspaceCwd)
 
     // Snapshot the project pane tree before this Conversation becomes active so
@@ -785,33 +801,6 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       logStaleActivation(conversationId, activationEpoch, 'binding-index')
       return false
     }
-    // A terminal-backed Conversation has no agent session to resolve, and the
-    // binding-miss fallback below would hand it an `agent-chat` tab — which
-    // `PaneContent` renders as the launcher, the restart surface for an agent
-    // it never had. The active session is still cleared: the previously open
-    // Conversation's chat must not stay live behind this one.
-    //
-    // `loadSessionWorkspace` above restored the terminal *records* from the
-    // manifest, but a record with no tab in the restored topology is invisible,
-    // and an empty Conversation pane renders the launcher too. Opening the
-    // terminal is therefore part of activation, not a side effect the launcher
-    // is trusted to have arranged earlier.
-    if (conversationBackendOf(get().summariesById[conversationId]) === 'terminal') {
-      useAcpStore.getState().setActiveSession(null)
-      const terminalViewModule = await import('@/lib/conversation-terminal-view')
-      if (!isCurrent()) {
-        logStaleActivation(conversationId, activationEpoch, 'terminal-view-import')
-        return false
-      }
-      await terminalViewModule.ensureConversationTerminal(conversationId, isCurrent)
-      set((state) =>
-        activationIsCurrent(state, conversationId, activationEpoch)
-          ? { openingById: { ...state.openingById, [conversationId]: false } }
-          : {}
-      )
-      return true
-    }
-
     let acp = useAcpStore.getState()
     let sessionId = bindingSessionId(acp, conversationId)
     if (!sessionId) {
@@ -1313,29 +1302,33 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
 
 export function selectVisibleConversations(state: ConversationState): ConversationRecordV2[] {
   const query = state.searchQuery.trim().toLowerCase()
-  return state.conversationIds
-    .map((conversationId) => state.summariesById[conversationId])
-    .filter((summary): summary is ConversationRecordV2 => Boolean(summary))
-    .filter((summary) => summary.lifecycleState !== 'deleted')
-    .filter((summary) => {
-      if (state.projectFilter === 'projectless') return summary.projectAttachment === null
-      if (state.projectFilter) {
-        return summary.projectAttachment?.projectId === state.projectFilter
-      }
-      return true
-    })
-    .filter((summary) => {
-      if (!query) return true
-      const attachment = summary.projectAttachment
-      return [
-        summary.conversationId,
-        summary.workspaceCwd,
-        attachment?.projectId,
-        attachment?.projectPathSnapshot,
-        attachment?.worktreePath,
-        attachment?.worktreeBranch
-      ].some((value) => value?.toLowerCase().includes(query))
-    })
+  return (
+    state.conversationIds
+      .map((conversationId) => state.summariesById[conversationId])
+      .filter((summary): summary is ConversationRecordV2 => Boolean(summary))
+      .filter((summary) => summary.lifecycleState !== 'deleted')
+      // Terminal-backed Conversations are listed as quick terminals instead.
+      .filter((summary) => conversationBackendOf(summary) !== 'terminal')
+      .filter((summary) => {
+        if (state.projectFilter === 'projectless') return summary.projectAttachment === null
+        if (state.projectFilter) {
+          return summary.projectAttachment?.projectId === state.projectFilter
+        }
+        return true
+      })
+      .filter((summary) => {
+        if (!query) return true
+        const attachment = summary.projectAttachment
+        return [
+          summary.conversationId,
+          summary.workspaceCwd,
+          attachment?.projectId,
+          attachment?.projectPathSnapshot,
+          attachment?.worktreePath,
+          attachment?.worktreeBranch
+        ].some((value) => value?.toLowerCase().includes(query))
+      })
+  )
 }
 
 export function useVisibleConversations(): ConversationRecordV2[] {

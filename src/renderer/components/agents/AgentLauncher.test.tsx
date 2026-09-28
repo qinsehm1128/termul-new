@@ -340,11 +340,6 @@ const {
   mockSetActiveWorktree: vi.fn()
 }))
 
-const launchTerminalConversationMock = vi.fn()
-vi.mock('@/lib/terminal-conversation-launch', () => ({
-  launchTerminalConversation: (...args: unknown[]) => launchTerminalConversationMock(...args)
-}))
-
 vi.mock('@/lib/worktree-api', () => ({
   worktreeApi: {
     create: mockWorktreeCreate,
@@ -2149,148 +2144,14 @@ describe('AgentLauncher placeholder', () => {
   })
 })
 
-describe('AgentLauncher — terminal-backed conversation', () => {
-  it('starts the terminal on the click that picks it, with no second step', async () => {
-    // A terminal has nothing to configure and no prompt to write. Making it a
-    // selectable mode left the user in front of a composer with nothing to type
-    // into it, waiting to press send for no reason.
-    launchTerminalConversationMock.mockResolvedValue({
-      success: true,
-      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
-      terminalId: 'terminal-1'
-    })
+describe('AgentLauncher — agents only', () => {
+  it('offers no terminal in the agent picker', async () => {
+    // Terminals are quick terminals now, with their own rail entry. The agent
+    // launcher starts agent sessions and nothing else.
     renderLauncher()
     fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
 
-    await waitFor(() => expect(launchTerminalConversationMock).toHaveBeenCalledTimes(1))
-  })
-
-  it('leaves the composer describing the agent it was already on', async () => {
-    // Picking terminal is an action, not a selection: it must not repaint the
-    // pill or strip the agent's chips, because nothing about the agent changed.
-    renderLauncher()
-    const pillBefore = screen.getByLabelText(/Select ACP agent/i).textContent
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-
-    expect(screen.getByLabelText(/Select ACP agent/i).textContent).toBe(pillBefore)
-    expect(screen.getByLabelText(/Select model/i)).toBeInTheDocument()
-    expect(screen.getByTestId('launcher-start-chat')).toBeInTheDocument()
-  })
-
-  it('offers terminal as a peer of the agents in the picker, not a stray button', async () => {
-    // The first attempt put this behind an unlabeled icon wedged between the
-    // agent config chips and send. Nothing about it said "run a shell instead
-    // of an agent", and it read as one more agent option.
-    renderLauncher()
+    await screen.findByText(/ACP Agent/i)
     expect(screen.queryByTestId('launcher-pick-terminal')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-
-    expect(await screen.findByTestId('launcher-pick-terminal')).toBeInTheDocument()
-  })
-
-  it('does not file terminal under the ACP Agent heading', async () => {
-    // First attempt put the row directly beneath a heading reading "ACP AGENT",
-    // which is exactly what a terminal is not. The heading has to belong to the
-    // agent list below it.
-    renderLauncher()
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-
-    const terminalRow = await screen.findByTestId('launcher-pick-terminal')
-    const acpHeading = screen.getByText('ACP Agent')
-    // Node.DOCUMENT_POSITION_FOLLOWING === 4: the heading comes *after* the row.
-    expect(terminalRow.compareDocumentPosition(acpHeading) & 4).toBe(4)
-  })
-
-  it('starts a terminal in the selected folder without touching the agent path', async () => {
-    // The folder choice above is the only thing the two paths share; a shell has
-    // no config, model, mode or prompt.
-    launchTerminalConversationMock.mockResolvedValue({
-      success: true,
-      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
-      terminalId: 'terminal-1'
-    })
-    renderLauncher()
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-
-    await waitFor(() => expect(launchTerminalConversationMock).toHaveBeenCalledTimes(1))
-    // Inherits the launcher's resolved target and attachment verbatim — that is
-    // the "same folder semantics as an agent chat" requirement, and it is the
-    // only thing carried over.
-    expect(launchTerminalConversationMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        executionTarget: { kind: 'project_root', projectId: 'p1', projectRoot: '/work' },
-        projectAttachment: expect.objectContaining({ projectId: 'p1' })
-      })
-    )
-    // No pane is handed over, deliberately. The pane on screen belongs to the
-    // workspace activation is about to replace, so a terminal placed in it
-    // would end up in the previous project's tab bar instead of this
-    // Conversation.
-    expect(launchTerminalConversationMock.mock.calls[0]?.[0]).not.toHaveProperty('paneId')
-    // Nothing from the agent path runs.
-    expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
-    // And no chat tab is stacked on top of the terminal's own tab: that tab
-    // renders the launcher when it has no agent session, which put the user
-    // straight back on this screen with the terminal hidden underneath.
-    expect(mockAddAgentChatTab).not.toHaveBeenCalled()
-  })
-
-  it('hands the new conversation to the caller so the route opens it', async () => {
-    // Navigation is what makes activation run, and activation is what decides
-    // the view for a terminal-backed Conversation. Without it the terminal is
-    // spawned but the launcher stays on screen.
-    launchTerminalConversationMock.mockResolvedValue({
-      success: true,
-      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
-      terminalId: 'terminal-1'
-    })
-    const onLaunched = vi.fn()
-    render(
-      <TooltipProvider>
-        <MemoryRouter>
-          <AgentLauncher paneId="pane1" onLaunched={onLaunched} />
-        </MemoryRouter>
-      </TooltipProvider>
-    )
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-
-    await waitFor(() =>
-      expect(onLaunched).toHaveBeenCalledWith('018f7a1c-1b4d-7c8a-9f01-0123456789ab')
-    )
-  })
-
-  it('navigates itself when no caller is listening', async () => {
-    // Every in-pane rendering of the launcher omits `onLaunched`. Since the
-    // terminal is opened by activation and activation is driven by the route,
-    // skipping navigation there would create the Conversation and then never
-    // show it — a click that silently does nothing.
-    launchTerminalConversationMock.mockResolvedValue({
-      success: true,
-      conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
-    })
-    renderLauncher()
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-
-    await waitFor(() =>
-      expect(mockNavigate).toHaveBeenCalledWith('/c/018f7a1c-1b4d-7c8a-9f01-0123456789ab')
-    )
-  })
-
-  it('surfaces a launch failure instead of opening an empty conversation', async () => {
-    launchTerminalConversationMock.mockResolvedValue({
-      success: false,
-      error: 'terminal limit reached'
-    })
-    renderLauncher()
-    fireEvent.click(screen.getByLabelText(/Select ACP agent/i))
-    fireEvent.click(await screen.findByTestId('launcher-pick-terminal'))
-
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('terminal limit reached'))
   })
 })

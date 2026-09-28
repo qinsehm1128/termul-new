@@ -252,8 +252,6 @@ const P0_DOMAINS: DomainCheck[] = [
       'getCurrentBinding',
       'openConversation',
       'renameConversation',
-      'prepareTerminalConversation',
-      'provisionTerminalConversation',
       'resolveLegacyConversationId',
       'attachProject',
       'detachProject',

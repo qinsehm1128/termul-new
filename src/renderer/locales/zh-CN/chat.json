@@ -417,9 +417,5 @@
   },
   "launcher": {
     "startTerminal": "在这个文件夹里开一个终端"
-  },
-  "terminalConversation": {
-    "prepareFailed": "创建会话失败",
-    "provisionFailed": "终端已启动，但会话没能完成登记"
   }
 }
