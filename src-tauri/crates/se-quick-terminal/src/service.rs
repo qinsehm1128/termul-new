@@ -115,12 +115,15 @@ impl QuickTerminalService {
         let now = Utc::now();
         let cwd = match &request.target {
             QuickTerminalTarget::Workspace => {
-                let folder = self.workspace_base.join("terminals").join(format!(
-                    "{:04}/{:02}/{:02}/{id}",
-                    now.year(),
-                    now.month(),
-                    now.day()
-                ));
+                let folder = self
+                    .resolved_workspace_base()?
+                    .join("terminals")
+                    .join(format!(
+                        "{:04}/{:02}/{:02}/{id}",
+                        now.year(),
+                        now.month(),
+                        now.day()
+                    ));
                 self.fs
                     .create_dir_durable(&folder, DirectoryPermissions::Inherit)
                     .map_err(|error| QuickTerminalError::Storage(error.to_string()))?;
@@ -304,6 +307,21 @@ impl QuickTerminalService {
             && !self.pty.terminal_events().snapshot(terminal_id).exited
     }
 
+    /// The configured base, created if missing and resolved to its real path.
+    ///
+    /// The base is trusted configuration but may sit behind a symlink (macOS
+    /// `/tmp`, a synced Documents folder). Durable creation refuses symlinked
+    /// components, so only the folders created below the base are held to that.
+    fn resolved_workspace_base(&self) -> Result<PathBuf> {
+        std::fs::create_dir_all(&self.workspace_base)
+            .and_then(|()| self.workspace_base.canonicalize())
+            .map_err(|error| {
+                QuickTerminalError::Storage(format!(
+                    "the quick terminal folder root is unavailable: {error}"
+                ))
+            })
+    }
+
     fn lock_for(&self, id: QuickTerminalId) -> Arc<tokio::sync::Mutex<()>> {
         Arc::clone(self.locks.lock().entry(id).or_default())
     }
@@ -429,6 +447,34 @@ mod tests {
             Some(opened.terminal_id.clone())
         );
         let _ = fixture.pty.terminate(&opened.terminal_id).await;
+    }
+
+    #[test]
+    fn a_workspace_base_reached_through_a_symlink_still_gets_folders() {
+        // The configured base is trusted, but it may sit behind a symlink
+        // (macOS `/tmp` → `/private/tmp`, a synced Documents folder). Durable
+        // creation refuses symlinked components, so the base is resolved first.
+        let state = tempfile::tempdir().unwrap();
+        let real = tempfile::tempdir().unwrap();
+        let link_parent = tempfile::tempdir().unwrap();
+        let link = link_parent.path().join("workspace-link");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+        let store =
+            QuickTerminalStore::open(state.path().canonicalize().unwrap().join("quick-terminals"))
+                .unwrap();
+        let service = QuickTerminalService::new(store, link.clone(), se_pty::test_pty_manager());
+
+        let record = service
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::Workspace,
+                title: None,
+            })
+            .unwrap();
+
+        assert!(Path::new(&record.cwd).is_dir());
+        assert!(record
+            .cwd
+            .starts_with(real.path().canonicalize().unwrap().to_str().unwrap()));
     }
 
     #[tokio::test]
