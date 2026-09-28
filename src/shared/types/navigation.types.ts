@@ -4,8 +4,10 @@
  * The brand mark is not an entry and cannot be dragged. Dividers are
  * structural markers: unknown or duplicate entries are dropped on load, and
  * missing default entries are inserted beside the nearest preceding default
- * neighbor. Utility actions stay pinned unless a saved layout opts them into
- * the sortable region by including them.
+ * neighbor. Users may add their own `sep-N` dividers; only those can be
+ * removed, because the built-in dividers are defaults and always return.
+ * Utility actions stay pinned unless a saved layout opts them into the
+ * sortable region by including them.
  */
 
 import {
@@ -42,7 +44,9 @@ export const RAIL_ITEM_IDS = [...RAIL_SORTABLE_ITEM_IDS, ...RAIL_UTILITY_ITEM_ID
 
 export type RailSortableItemId = (typeof RAIL_SORTABLE_ITEM_IDS)[number]
 export type RailUtilityItemId = (typeof RAIL_UTILITY_ITEM_IDS)[number]
-export type RailDividerId = (typeof RAIL_DIVIDER_IDS)[number]
+export type RailBuiltinDividerId = (typeof RAIL_DIVIDER_IDS)[number]
+export type RailUserDividerId = `sep-${number}`
+export type RailDividerId = RailBuiltinDividerId | RailUserDividerId
 export type RailItemId = (typeof RAIL_ITEM_IDS)[number]
 export type RailItemMobility = 'sortable' | 'utility'
 
@@ -186,6 +190,32 @@ export function applyRailReorder(
   if (placement.kind === 'by') return moveBy(entries, id, placement.delta)
   if (!Number.isInteger(placement.index)) return unchanged(entries, id, 'same')
   return moveToRestIndex(entries, id, placement.index)
+}
+
+/** Insert a new user divider before `beforeEntryIndex` (clamped to the list). */
+export function insertRailDivider(
+  entries: readonly RailLayoutEntry[],
+  beforeEntryIndex: number
+): RailLayoutEntry[] {
+  const next = entries.map(cloneEntry)
+  if (next.length >= RAIL_ENTRIES_MAX) return next
+  const index = Math.min(next.length, Math.max(0, Math.trunc(beforeEntryIndex)))
+  next.splice(index, 0, { kind: 'divider', id: nextUserDividerId(entries) })
+  return next
+}
+
+/** Remove a user divider. Built-in dividers are defaults and are kept. */
+export function removeRailDivider(
+  entries: readonly RailLayoutEntry[],
+  id: RailDividerId
+): RailLayoutEntry[] {
+  return entries
+    .filter((entry) => !(entry.kind === 'divider' && entry.id === id && isUserDividerId(id)))
+    .map(cloneEntry)
+}
+
+export function isUserDividerId(value: string): value is RailUserDividerId {
+  return USER_DIVIDER_ID.test(value)
 }
 
 export function sameRailEntries(
@@ -359,6 +389,15 @@ function isUtilityItemId(value: string): value is RailUtilityItemId {
   return (RAIL_UTILITY_ITEM_IDS as readonly string[]).includes(value)
 }
 
+const USER_DIVIDER_ID = /^sep-[1-9][0-9]{0,5}$/
+
+function nextUserDividerId(entries: readonly RailLayoutEntry[]): RailUserDividerId {
+  const used = new Set(entries.map((entry) => entry.id))
+  let n = 1
+  while (used.has(`sep-${n}`)) n += 1
+  return `sep-${n}`
+}
+
 function isDividerId(value: string): value is RailDividerId {
-  return (RAIL_DIVIDER_IDS as readonly string[]).includes(value)
+  return (RAIL_DIVIDER_IDS as readonly string[]).includes(value) || isUserDividerId(value)
 }

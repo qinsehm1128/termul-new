@@ -7,7 +7,7 @@ import {
   type AiProviderKind,
   type AiRoute
 } from '@shared/types/ai-channels.types'
-import { Plus, Save, Sparkles, Trash2 } from 'lucide-react'
+import { BrainCircuit, Plus, Save, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -179,7 +179,7 @@ export default function AiChannelsPage(): React.JSX.Element {
     <div className="flex h-full flex-col overflow-auto bg-background">
       <header className="border-b border-border px-6 py-4">
         <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-primary" />
+          <BrainCircuit size={16} className="text-primary" />
           <h1 className="text-lg font-medium text-foreground">{t('page.title')}</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">{t('page.subtitle')}</p>

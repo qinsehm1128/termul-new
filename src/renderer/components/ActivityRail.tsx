@@ -1,4 +1,5 @@
 import {
+  isUserDividerId,
   RAIL_UTILITY_ITEM_IDS,
   type RailDividerId,
   type RailItemId,
@@ -7,6 +8,7 @@ import {
   railItemMobility
 } from '@shared/types/navigation.types'
 import {
+  BrainCircuit,
   CalendarClock,
   FolderKanban,
   GitBranch,
@@ -34,6 +36,12 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { SeMark } from '@/components/SeMark'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { useNavigationLayout } from '@/hooks/use-navigation-layout'
@@ -142,8 +150,11 @@ function neighborLabel(
   translate: (key: string) => string
 ): string {
   if (feedback.neighborKind === 'divider') {
-    return feedback.neighborId === 'workspace-contexts'
-      ? translate('activityRail.dividerWorkspace')
+    if (feedback.neighborId === 'workspace-contexts') {
+      return translate('activityRail.dividerWorkspace')
+    }
+    return isUserDividerId(feedback.neighborId)
+      ? translate('activityRail.dividerCustom')
       : translate('activityRail.dividerTools')
   }
   return translate(ITEM_LABEL_KEY[feedback.neighborId as RailItemId])
@@ -204,6 +215,8 @@ export function ActivityRail({
   const moveItemBy = useNavigationStore((state) => state.moveItemBy)
   const moveItemToIndex = useNavigationStore((state) => state.moveItemToIndex)
   const pinUtility = useNavigationStore((state) => state.pinUtility)
+  const insertDivider = useNavigationStore((state) => state.insertDivider)
+  const removeDivider = useNavigationStore((state) => state.removeDivider)
   const isSSHPanelVisible = useSSHPanelVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
   const navigate = useNavigate()
@@ -551,7 +564,7 @@ export function ActivityRail({
                 aria-label={t('activityRail.openAiChannels')}
                 aria-current={location.pathname === '/ai-channels' ? 'page' : undefined}
               >
-                <Sparkles
+                <BrainCircuit
                   size={18}
                   className={
                     location.pathname === '/ai-channels'
@@ -684,11 +697,22 @@ export function ActivityRail({
     }
   }
 
+  // Radix picks the innermost trigger; stopping propagation keeps the global
+  // copy/paste menu from also handling a rail right-click.
+  const withRailMenu = (key: string, row: ReactElement, items: ReactElement): ReactElement => (
+    <ContextMenu key={key}>
+      <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
+        {row}
+      </ContextMenuTrigger>
+      <ContextMenuContent>{items}</ContextMenuContent>
+    </ContextMenu>
+  )
+
   const renderSortable = (id: RailItemId, entryIndex: number | null): ReactElement => {
     const button = renderButton(id)
     const showIndicator =
       entryIndex !== null && drop !== null && !drop.pin && drop.beforeEntryIndex === entryIndex
-    return (
+    const row = (
       <div
         key={id}
         data-rail-entry={id}
@@ -716,9 +740,35 @@ export function ActivityRail({
         {button.element}
       </div>
     )
+    // Pinned utilities have no place in the entry list to insert beside.
+    if (entryIndex === null) return row
+    return withRailMenu(
+      id,
+      row,
+      <>
+        <ContextMenuItem onSelect={() => insertDivider(entryIndex)}>
+          {t('activityRail.insertDividerAbove')}
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => insertDivider(entryIndex + 1)}>
+          {t('activityRail.insertDividerBelow')}
+        </ContextMenuItem>
+      </>
+    )
   }
 
-  const renderDivider = (id: RailDividerId, entryIndex: number): ReactElement => (
+  const renderDivider = (id: RailDividerId, entryIndex: number): ReactElement => {
+    const row = renderDividerRow(id, entryIndex)
+    if (!isUserDividerId(id)) return row
+    return withRailMenu(
+      id,
+      row,
+      <ContextMenuItem onSelect={() => removeDivider(id)}>
+        {t('activityRail.removeDivider')}
+      </ContextMenuItem>
+    )
+  }
+
+  const renderDividerRow = (id: RailDividerId, entryIndex: number): ReactElement => (
     <div key={id} className="relative flex w-full justify-center">
       {drop && !drop.pin && drop.beforeEntryIndex === entryIndex ? (
         <div
@@ -842,10 +892,21 @@ function buildSections(
   entries.forEach((entry, entryIndex) => {
     if (entry.kind === 'divider') {
       sections.push(section)
+      // A user divider only splits the rail visually; its items stay in the
+      // group the preceding built-in divider opened.
+      const user = isUserDividerId(entry.id)
       section = {
         key: `${entry.id}-${entryIndex}`,
-        sectionId: entry.id === 'workspace-contexts' ? 'conversations' : 'tools',
-        label: entry.id === 'workspace-contexts' ? conversationLabel : 'Tools',
+        sectionId: user
+          ? section.sectionId
+          : entry.id === 'workspace-contexts'
+            ? 'conversations'
+            : 'tools',
+        label: user
+          ? section.label
+          : entry.id === 'workspace-contexts'
+            ? conversationLabel
+            : 'Tools',
         dividerBefore: { id: entry.id, entryIndex },
         items: []
       }

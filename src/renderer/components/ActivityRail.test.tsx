@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
+import { resetNavigationStore, useNavigationStore } from '@/stores/navigation-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { ActivityRail } from './ActivityRail'
@@ -51,6 +52,7 @@ describe('ActivityRail', () => {
     vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(
       mockUpdatePanelVisibility
     )
+    resetNavigationStore()
     useSSHPanelStore.setState({ isVisible: true })
     useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
   })
@@ -157,6 +159,50 @@ describe('ActivityRail', () => {
     expect(
       container.querySelector('[data-activity-rail-divider="workspace-contexts"]')
     ).toBeInTheDocument()
+  })
+
+  it('inserts a separator from an icon menu and removes it from the separator menu', async () => {
+    const { container } = renderRail()
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open projects' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Insert Separator Below' }))
+
+    const entries = useNavigationStore.getState().layout.entries
+    expect(entries.slice(0, 2)).toEqual([
+      { kind: 'item', id: 'projects' },
+      { kind: 'divider', id: 'sep-1' }
+    ])
+    const separator = container.querySelector('[data-activity-rail-divider="sep-1"]')
+    expect(separator).toBeInTheDocument()
+
+    fireEvent.contextMenu(separator as Element)
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove Separator' }))
+
+    expect(container.querySelector('[data-activity-rail-divider="sep-1"]')).toBeNull()
+    expect(useNavigationStore.getState().layout.entries.slice(0, 2)).toEqual([
+      { kind: 'item', id: 'projects' },
+      { kind: 'item', id: 'terminals' }
+    ])
+  })
+
+  it('gives skills, AI channels, and MCP distinct icons', () => {
+    renderRail()
+
+    const iconOf = (name: string) =>
+      screen.getByRole('button', { name }).querySelector('svg')?.getAttribute('class')
+    const icons = ['Open skills', 'Open AI Channels', 'Open MCP'].map(iconOf)
+    expect(icons.every(Boolean)).toBe(true)
+    expect(new Set(icons).size).toBe(3)
+  })
+
+  it('offers no remove action on a built-in separator', () => {
+    const { container } = renderRail()
+
+    fireEvent.contextMenu(
+      container.querySelector('[data-activity-rail-divider="workspace-contexts"]') as Element
+    )
+
+    expect(screen.queryByRole('menuitem', { name: 'Remove Separator' })).toBeNull()
   })
 
   it('provides hover labels for primary and utility actions', () => {

@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   Bot,
+  BrainCircuit,
   Globe,
   History,
   Keyboard,
@@ -11,7 +12,6 @@ import {
   Save,
   Settings,
   SlidersHorizontal,
-  Sparkles,
   SquareTerminal,
   Terminal
 } from 'lucide-react'
@@ -212,7 +212,7 @@ export function CommandPalette({
       {
         id: 'open-ai-channels',
         category: 'navigation' as const,
-        icon: <Sparkles aria-hidden="true" size={16} />,
+        icon: <BrainCircuit aria-hidden="true" size={16} />,
         label: t('activityRail.aiChannels'),
         description: t('shortcuts.items.aiChannels.description'),
         keywords: ['ai', 'channels', 'provider', 'model', 'fallback'],

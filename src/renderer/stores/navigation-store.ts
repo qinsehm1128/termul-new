@@ -3,11 +3,14 @@ import {
   applyRailReorder,
   createRailRevisionFence,
   defaultRailLayout,
+  insertRailDivider,
   normalizeRailLayout,
   RAIL_LAYOUT_SCHEMA_VERSION,
+  type RailDividerId,
   type RailItemId,
   type RailLayoutConfig,
   type RailReorderFeedback,
+  removeRailDivider,
   sameRailEntries
 } from '@shared/types/navigation.types'
 import { create } from 'zustand'
@@ -23,6 +26,8 @@ interface NavigationState {
   moveItemBy: (id: RailItemId, delta: -1 | 1) => RailReorderFeedback
   moveItemToIndex: (id: RailItemId, index: number) => RailReorderFeedback
   pinUtility: (id: RailItemId) => RailReorderFeedback
+  insertDivider: (beforeEntryIndex: number) => void
+  removeDivider: (id: RailDividerId) => void
 }
 
 const railRevisionFence = createRailRevisionFence()
@@ -73,6 +78,14 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     const result = applyRailReorder(get().layout.entries, id, { kind: 'pin' })
     if (result.changed) commitEntries(result.entries, set, get)
     return result.feedback
+  },
+
+  insertDivider: (beforeEntryIndex) => {
+    commitEntries(insertRailDivider(get().layout.entries, beforeEntryIndex), set, get)
+  },
+
+  removeDivider: (id) => {
+    commitEntries(removeRailDivider(get().layout.entries, id), set, get)
   }
 }))
 

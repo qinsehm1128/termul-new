@@ -3,8 +3,10 @@ import {
   acceptRailRevision,
   createRailRevisionFence,
   defaultRailLayout,
+  insertRailDivider,
   normalizeRailLayout,
-  railItemMobility
+  railItemMobility,
+  removeRailDivider
 } from './navigation.types'
 
 describe('activity rail layout', () => {
@@ -60,6 +62,40 @@ describe('activity rail layout', () => {
       'item:shortcuts'
     ])
     expect(normalized.entries.filter((entry) => entry.id === 'themes')).toHaveLength(0)
+  })
+
+  it('keeps user separators across a reload and removes only those', () => {
+    const base = defaultRailLayout().entries
+    const withSeparators = insertRailDivider(insertRailDivider(base, 1), 0)
+    expect(withSeparators.slice(0, 3).map((entry) => `${entry.kind}:${entry.id}`)).toEqual([
+      'divider:sep-2',
+      'item:projects',
+      'divider:sep-1'
+    ])
+
+    const reloaded = normalizeRailLayout({ schemaVersion: 1, revision: 3, entries: withSeparators })
+    expect(reloaded.entries).toEqual(withSeparators)
+
+    expect(removeRailDivider(withSeparators, 'sep-1').map((entry) => entry.id)).not.toContain(
+      'sep-1'
+    )
+    expect(removeRailDivider(base, 'tools')).toEqual(base)
+  })
+
+  it('drops malformed and duplicate user separators on load', () => {
+    const normalized = normalizeRailLayout({
+      schemaVersion: 1,
+      revision: 1,
+      entries: [
+        { kind: 'divider', id: 'sep-0' },
+        { kind: 'divider', id: 'sep-x' },
+        { kind: 'divider', id: 'sep-1' },
+        { kind: 'divider', id: 'sep-1' }
+      ]
+    })
+    expect(normalized.entries.filter((entry) => entry.id.startsWith('sep-'))).toEqual([
+      { kind: 'divider', id: 'sep-1' }
+    ])
   })
 
   it('preserves a user-moved item while inserting a missing neighbor after its predecessor', () => {
