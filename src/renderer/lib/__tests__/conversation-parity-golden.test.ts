@@ -667,7 +667,7 @@ describe('Conversation production transport golden parity', () => {
       'src/renderer/lib/tauri-conversation-api.ts',
       'src/renderer/lib/web-conversation-api.ts',
       'src/renderer/hooks/use-conversation-host-bootstrap.ts',
-      'src/renderer/components/conversation/ConversationHostStatus.tsx'
+      'src/renderer/features/agent-session/conversation/ConversationHostStatus.tsx'
     ]
     for (const relative of files) {
       const source = readFileSync(join(root, relative), 'utf8')

@@ -36,10 +36,10 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+import type { ChatMessage } from '@/features/agent-session/stores/acp-store'
 import { i18n } from '@/i18n'
 import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
-import type { ChatMessage } from '@/stores/acp-store'
 import {
   _clearPayloadCacheForTesting,
   _failedPrefixIdsForTesting,

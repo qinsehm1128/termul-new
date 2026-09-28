@@ -68,7 +68,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use se_manager_lib::brand::{self, BrandCanonical};
-use se_manager_lib::conversation::HostConversationRoots;
+use se_manager_lib::conversation_roots;
 use se_manager_lib::web::config::{default_sessions_dir, ServerConfig};
 
 /// The resolvers under test read *process*-global env vars while `cargo test`
@@ -564,7 +564,7 @@ fn standalone_conversation_workspace_root_uses_the_canonical_display_name_and_st
 
     // The real constructor the standalone host uses (`server_main.rs:148`),
     // fed the root the parser just resolved.
-    let roots = HostConversationRoots::standalone(
+    let roots = conversation_roots::standalone(
         temp.path().join("server-state"),
         resolved.clone(),
         None,

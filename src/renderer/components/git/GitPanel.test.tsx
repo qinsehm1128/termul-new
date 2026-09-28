@@ -69,7 +69,7 @@ vi.mock('sonner', () => ({
 vi.mock('@/lib/git-api', () => ({ gitApi: { getDiff } }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/components/git/GitDiffView', () => ({ GitDiffView: () => null }))
-vi.mock('@/stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   useAcpStore: (selector: (state: Record<string, unknown>) => unknown) => selector(acpState)
 }))
 vi.mock('@/stores/git-status-store', () => ({

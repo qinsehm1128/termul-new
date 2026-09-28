@@ -68,6 +68,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { webServerMcpProbe } from '@/lib/web-server-api'
+import { getRemoteAccessCredential, revokeRemoteAccessCredential } from './remote-access-credential'
 
 /**
  * CAP-6 / Story 8: the host-resolved catalog shape returned by the WS
@@ -430,44 +431,11 @@ export function resolveWsUrl(
   return `${proto}//${locationLike.host}/ws`
 }
 
-/** Process-memory-only credential shared by authenticated HTTP and WebSocket transports. */
-let remoteAccessCredential: string | null = null
-let remoteAccessCredentialConsumed = false
-
-/**
- * Consume the QR-delivered credential fragment exactly once. Fragments are not
- * sent to the server; clearing it immediately keeps the credential out of
- * browser history updates, query parameters, storage, and later copied URLs.
- */
-export function getRemoteAccessCredential(): string {
-  if (remoteAccessCredentialConsumed) return remoteAccessCredential ?? ''
-  if (typeof window === 'undefined') return ''
-
-  remoteAccessCredentialConsumed = true
-  const rawHash = window.location.hash.startsWith('#')
-    ? window.location.hash.slice(1)
-    : window.location.hash
-  const fragment = new URLSearchParams(rawHash)
-  remoteAccessCredential = fragment.get('access_token')
-  if (fragment.has('access_token')) {
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
-  }
-  return remoteAccessCredential ?? ''
-}
-
-/** Add the in-memory bearer credential without persisting or logging it. */
-export function remoteAccessHeaders(initial?: HeadersInit): Headers {
-  const headers = new Headers(initial)
-  const credential = getRemoteAccessCredential()
-  if (credential) headers.set('authorization', `Bearer ${credential}`)
-  return headers
-}
-
-/** @internal test helper */
-export function _resetRemoteAccessCredentialForTests(): void {
-  remoteAccessCredential = null
-  remoteAccessCredentialConsumed = false
-}
+export {
+  _resetRemoteAccessCredentialForTests,
+  getRemoteAccessCredential,
+  remoteAccessHeaders
+} from './remote-access-credential'
 
 const REQUEST_TIMEOUT_MS = 60_000
 /**
@@ -1366,8 +1334,7 @@ export class WsAcpTransport implements AcpTransport {
     if (this.terminalState) return
     this.terminalState = { code: 'REAUTHENTICATION_REQUIRED', rePairRequired: true }
     this.remoteAccessToken = ''
-    remoteAccessCredential = null
-    remoteAccessCredentialConsumed = true
+    revokeRemoteAccessCredential()
     this.clearReconnectTimer()
     this.clearHeartbeat()
     this.detachVisibilityListeners()

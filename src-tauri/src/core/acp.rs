@@ -32,10 +32,9 @@ use crate::acp::manager::{
 };
 use crate::acp::session_persistence::SessionRegistration;
 use crate::conversation::{
-    ConversationApplicationService, ConversationBackend, ConversationBootstrap,
-    ConversationCreationService, ConversationId, ConversationLifecycleAction,
-    ConversationLifecycleOutcome, ConversationPersistenceAdapter, ExecutionTarget,
-    HostConversationRoots, LifecycleOperationJournal, MigrationHostMode,
+    ConversationApplicationService, ConversationBootstrap, ConversationCreationService,
+    ConversationId, ConversationLifecycleAction, ConversationLifecycleOutcome,
+    ConversationPersistenceAdapter, ExecutionTarget, LifecycleOperationJournal, MigrationHostMode,
     PrepareConversationRequest, ProjectAttachment, SessionWorkspaceService,
 };
 use crate::memory_index::commands::{
@@ -117,8 +116,6 @@ pub const METHOD_CONVERSATION_HOST_STATUS: &str = "conversationHostStatus";
 pub const METHOD_CONVERSATION_LIST: &str = "conversationList";
 pub const METHOD_CONVERSATION_OPEN: &str = "conversationOpen";
 pub const METHOD_CONVERSATION_RENAME: &str = "conversationRename";
-pub const METHOD_CONVERSATION_PREPARE_TERMINAL: &str = "conversationPrepareTerminal";
-pub const METHOD_CONVERSATION_PROVISION_TERMINAL: &str = "conversationProvisionTerminal";
 pub const METHOD_CONVERSATION_RECOVERY_RESOLVE: &str = "conversationRecoveryResolve";
 pub const METHOD_CONVERSATION_ATTACH_PROJECT: &str = "conversationAttachProject";
 pub const METHOD_CONVERSATION_DETACH_PROJECT: &str = "conversationDetachProject";
@@ -398,36 +395,8 @@ fn response(id: u64, result: Result<Value, CoreError>) -> CoreResponse {
     }
 }
 
-/// Resolve the Conversation workspace base the same way the desktop does:
-/// explicit env override, else `<home>/Documents/<brand>`, else `<home>/<brand>`.
-/// The GUI launcher passes its own computed root via env so both processes
-/// always agree; the fallback keeps the Core runnable standalone in tests.
-fn workspace_base_from_env() -> PathBuf {
-    if let Some(root) = std::env::var_os("TERMUL_CORE_WORKSPACE_ROOT") {
-        let root = PathBuf::from(root);
-        if root.as_os_str().is_empty() {
-            // fall through to the derived default
-        } else {
-            return root;
-        }
-    }
-    #[cfg(unix)]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-    #[cfg(not(any(unix, windows)))]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let brand = crate::brand::canonical().display_name.to_string();
-    match home {
-        Some(home) => home.join("Documents").join(&brand),
-        None => std::env::temp_dir().join(brand),
-    }
-}
-
 pub async fn run_acp_core(profile_root: PathBuf) -> Result<(), CoreError> {
-    let workspace_base = workspace_base_from_env();
+    let workspace_base = super::launcher::workspace_base_from_env();
     run_acp_core_with_roots(profile_root, workspace_base).await
 }
 
@@ -511,7 +480,7 @@ fn compose_acp_core(
     shutdown: watch::Sender<bool>,
 ) -> Result<AcpCoreState, CoreError> {
     let bootstrap = ConversationBootstrap::run(
-        HostConversationRoots::desktop(state_root.clone(), workspace_base),
+        crate::conversation_roots::desktop(state_root.clone(), workspace_base),
         MigrationHostMode::Desktop,
     )
     .map_err(|error| invalid(format!("conversation bootstrap failed: {error}")))?;
@@ -610,17 +579,16 @@ fn compose_acp_core(
     ));
     relay.set_question_rendezvous(question_rendezvous);
 
-    bootstrap
-        .application
-        .attach_lifecycle(
-            crate::conversation::ConversationLifecycleService::from_terminal(
-                Arc::clone(&manager),
-                terminal_service.clone(),
-            )
-            .map_err(|error| invalid(error.to_string()))?
-            .with_journal(Arc::clone(&lifecycle_journal)),
+    crate::conversation_host::attach(
+        &bootstrap.application,
+        crate::conversation_host::lifecycle_from_terminal(
+            Arc::clone(&manager),
+            terminal_service.clone(),
         )
-        .map_err(|error| invalid(error.to_string()))?;
+        .map_err(|error| invalid(error.to_string()))?
+        .with_journal(Arc::clone(&lifecycle_journal)),
+    )
+    .map_err(|error| invalid(error.to_string()))?;
 
     // DurableFileSystem rejects symlink path components (`/var` -> `/private/var` on
     // macOS). Canonicalize the existing state root before joining so tempfile-backed
@@ -1031,13 +999,6 @@ struct ConversationRequestParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ConversationProvisionTerminalParams {
-    conversation_id: String,
-    terminal_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ConversationRevisionParams {
     conversation_id: String,
     expected_revision: u64,
@@ -1162,18 +1123,6 @@ fn conversation_application_err(
         error.code
     );
     invalid(format!("{}:{}", error.code, error.detail))
-}
-
-fn conversation_creation_err(error: crate::conversation::ConversationCreationError) -> CoreError {
-    log::warn!(
-        "[acp-core] operation={} conversation_id={} code={:?}",
-        error.operation,
-        error
-            .conversation_id
-            .map_or_else(|| "none".to_string(), |value| value.to_string()),
-        error.code
-    );
-    invalid(format!("{:?}:{}", error.code, error.detail))
 }
 
 fn to_json<T: Serialize>(value: T) -> Result<Value, CoreError> {
@@ -1332,7 +1281,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 let terminal_runtime = manager
                     .terminal_runtime()
                     .ok_or_else(|| invalid("acp core terminal runtime is not configured"))?;
-                let service = crate::conversation::ConversationLifecycleService::from_terminal(
+                let service = crate::conversation_host::lifecycle_from_terminal(
                     Arc::clone(manager),
                     TerminalServiceHandle::from_runtime(terminal_runtime),
                 )
@@ -1742,32 +1691,6 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 .await
                 .map_err(conversation_application_err)?;
             to_json(record)
-        }
-        METHOD_CONVERSATION_PREPARE_TERMINAL => {
-            let params: ConversationRequestParams = parse_params(request)?;
-            let mut prepared_request: PrepareConversationRequest =
-                payload_from_value(params.request)?;
-            // The caller names the folder; the backend is this command's identity and is
-            // never taken from the payload. A request that could ask for `agent` here
-            // would be a second, unaudited way to create an agent Conversation.
-            prepared_request.backend = ConversationBackend::Terminal;
-            let prepared = state
-                .creation
-                .prepare_conversation(prepared_request)
-                .await
-                .map_err(conversation_creation_err)?;
-            to_json(prepared)
-        }
-        METHOD_CONVERSATION_PROVISION_TERMINAL => {
-            let params: ConversationProvisionTerminalParams = parse_params(request)?;
-            let conversation_id = ConversationId::parse(&params.conversation_id)
-                .map_err(|error| invalid(format!("conversationId is not a UUID: {error}")))?;
-            state
-                .creation
-                .provision_terminal(conversation_id, &params.terminal_id)
-                .await
-                .map_err(conversation_creation_err)?;
-            to_json(())
         }
         METHOD_CONVERSATION_RECOVERY_RESOLVE => {
             let params: ConversationRequestParams = parse_params(request)?;
@@ -2600,14 +2523,6 @@ mod tests {
         assert_eq!(METHOD_CONVERSATION_LIST, "conversationList");
         assert_eq!(METHOD_CONVERSATION_OPEN, "conversationOpen");
         assert_eq!(METHOD_CONVERSATION_RENAME, "conversationRename");
-        assert_eq!(
-            METHOD_CONVERSATION_PREPARE_TERMINAL,
-            "conversationPrepareTerminal"
-        );
-        assert_eq!(
-            METHOD_CONVERSATION_PROVISION_TERMINAL,
-            "conversationProvisionTerminal"
-        );
         assert_eq!(
             METHOD_CONVERSATION_RECOVERY_RESOLVE,
             "conversationRecoveryResolve"

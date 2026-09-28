@@ -219,6 +219,15 @@ export function CommandPalette({
         execute: () => navigateToPath('/ai-channels')
       },
       {
+        id: 'open-quick-terminals',
+        category: 'navigation' as const,
+        icon: <Terminal aria-hidden="true" size={16} />,
+        label: t('commandPalette.quickTerminals'),
+        description: t('commandPalette.quickTerminalsDescription'),
+        keywords: ['quick', 'terminal', 'shell', 'folder', '快捷终端'],
+        execute: () => navigateToPath('/quick-terminals')
+      },
+      {
         id: 'open-terminal-board',
         category: 'navigation' as const,
         icon: <SquareTerminal aria-hidden="true" size={16} />,

@@ -184,7 +184,7 @@ export interface TerminalAttachResult {
  * host replays from the stored cursor. Writing both duplicates whole blocks of
  * output, so the two are made mutually exclusive and this is the discriminator:
  * `gap === false` means the host replay fully covered `(lastSeq, latestSeq]`
- * (`PtyInstance::subscribe_from`, src-tauri/src/pty/manager.rs:1331-1333) and
+ * (`PtyInstance::subscribe_from`, src-tauri/crates/se-pty/src/manager.rs) and
  * the transcript is redundant. `null` means no host replay happened at all —
  * a live-only handoff, or an already-reconciled record — and the transcript is
  * then the only source of continuity.

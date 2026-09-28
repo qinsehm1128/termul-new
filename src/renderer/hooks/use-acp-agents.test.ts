@@ -79,7 +79,7 @@ vi.mock('@/stores/project-store', () => {
   return { useProjectStore }
 })
 
-vi.mock('@/stores/acp-store', () => {
+vi.mock('@/features/agent-session/stores/acp-store', () => {
   const getState = () => ({
     agentConfigs: stateRef.current.agentConfigs,
     loadAgentConfigs: mockLoadAgentConfigs,

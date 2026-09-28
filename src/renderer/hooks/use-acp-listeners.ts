@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { initAcpEventListeners } from '@/stores/acp-store'
+import { initAcpEventListeners } from '@/features/agent-session/stores/acp-store'
 
 /**
  * Wire the ACP store to backend events exactly once for the app lifetime.

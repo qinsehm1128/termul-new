@@ -13,9 +13,8 @@ use super::acp::AcpCoreClient;
 use super::ipc::{CoreError, CoreErrorPayload, CoreRequest, CoreResponse};
 use super::terminal::TerminalCoreClient;
 use crate::acp::AcpManager;
-use crate::conversation::{ConversationId, ConversationRecordV2};
-use crate::pty::manager::TerminalSpawnIntentV1;
-use crate::pty::PtyManager;
+use crate::conversation::ConversationId;
+use crate::pty::{PtyManager, SpawnOptions};
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -70,12 +69,10 @@ pub trait TerminalRuntimeHandle: Send + Sync {
             "conversation-scoped terminal termination is unavailable".into(),
         ))
     }
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
-        let _ = (intent, conversation);
+    /// Spawn a terminal from options the caller already derived on the
+    /// trusted host side (see `conversation::TerminalSpawnIntentV1`).
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
+        let _ = options;
         Err(CoreError::InvalidRequest(
             "conversation terminal spawn is unavailable".into(),
         ))
@@ -261,14 +258,10 @@ impl TerminalRuntimeHandle for InProcessTerminalRuntime {
         })
     }
 
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
         let spawned = self
             .manager()?
-            .spawn_for_conversation(intent, conversation, None)
+            .spawn(options, None)
             .await
             .map_err(map_spawn_scope_error)?;
         Ok(spawned.info.id)
@@ -292,6 +285,9 @@ pub struct TerminalServiceHandle {
     runtime: Arc<dyn TerminalRuntimeHandle>,
     in_process: Option<Arc<PtyManager>>,
     core: Option<Arc<TerminalCoreClient>>,
+    /// Quick terminals owned by this process. `None` in Core mode, where
+    /// Terminal Core owns them and requests go through `core`.
+    quick_terminals: Option<Arc<se_quick_terminal::QuickTerminalService>>,
 }
 
 impl TerminalServiceHandle {
@@ -300,6 +296,7 @@ impl TerminalServiceHandle {
             runtime: Arc::new(InProcessTerminalRuntime::new(Arc::clone(&pty))),
             in_process: Some(pty),
             core: None,
+            quick_terminals: None,
         }
     }
 
@@ -308,6 +305,7 @@ impl TerminalServiceHandle {
             runtime,
             in_process: None,
             core: None,
+            quick_terminals: None,
         }
     }
 
@@ -317,6 +315,7 @@ impl TerminalServiceHandle {
             runtime: Arc::clone(&client) as Arc<dyn TerminalRuntimeHandle>,
             in_process: None,
             core: Some(client),
+            quick_terminals: None,
         }
     }
 
@@ -349,6 +348,20 @@ impl TerminalServiceHandle {
 
     pub fn owns_core_process(&self) -> bool {
         self.core.is_some() && self.in_process.is_none()
+    }
+
+    /// Host quick terminals in this process (no Terminal Core).
+    #[must_use]
+    pub fn with_quick_terminals(
+        mut self,
+        service: Arc<se_quick_terminal::QuickTerminalService>,
+    ) -> Self {
+        self.quick_terminals = Some(service);
+        self
+    }
+
+    pub fn quick_terminals(&self) -> Option<Arc<se_quick_terminal::QuickTerminalService>> {
+        self.quick_terminals.clone()
     }
 }
 
@@ -409,13 +422,9 @@ impl TerminalRuntimeHandle for SwitchableTerminalRuntime {
             .await
     }
 
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
         let runtime = Arc::clone(&self.current.read());
-        runtime.spawn_for_conversation(intent, conversation).await
+        runtime.spawn_trusted(options).await
     }
 
     fn is_live(&self, terminal_id: &str) -> bool {
@@ -634,7 +643,13 @@ mod tests {
         let cwd = Arc::new(CwdTracker::new(events.clone()));
         let git = Arc::new(GitTracker::new(None, events.clone()));
         let exit = Arc::new(ExitCodeTracker::new(events.clone()));
-        Arc::new(PtyManager::new(events, cwd, git, exit))
+        Arc::new(PtyManager::new(
+            events,
+            cwd,
+            git,
+            exit,
+            crate::terminal_program(),
+        ))
     }
 
     #[tokio::test]

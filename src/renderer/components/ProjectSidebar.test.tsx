@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
-import { useConversationStore } from '@/stores/conversation-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -68,8 +68,8 @@ vi.mock('@/stores/terminal-store', async () => {
   }
 })
 
-vi.mock('@/stores/acp-store', async () => {
-  const actual = await vi.importActual('@/stores/acp-store')
+vi.mock('@/features/agent-session/stores/acp-store', async () => {
+  const actual = await vi.importActual('@/features/agent-session/stores/acp-store')
   return {
     ...actual,
     useProjectsWithActiveAgentChat: () => mockUseProjectsWithActiveAgentChat()

@@ -2,11 +2,11 @@ import type { ConversationRecordV2 } from '@shared/types/conversation.types'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useConversationStore } from '@/stores/conversation-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useProjectStore } from '@/stores/project-store'
 import { ProjectChatList } from './ProjectChatList'
 
-vi.mock('@/components/chat/ChatHistoryEntryRow', () => ({
+vi.mock('@/features/agent-session/chat/ChatHistoryEntryRow', () => ({
   ConversationLifecycleActions: () => null
 }))
 

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useConversationStore } from '@/stores/conversation-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { MobileChatShell } from './MobileChatShell'
 
@@ -103,7 +103,7 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: (...args: unknown[]) => mockLogFrontendError(...args)
 }))
 
-vi.mock('@/stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   useAcpStore: (sel: (s: Record<string, unknown>) => unknown) =>
     sel({
       sessions: {
@@ -122,7 +122,7 @@ vi.mock('@/stores/acp-store', () => ({
     })
 }))
 
-vi.mock('@/components/chat/ChatHistoryTab', () => ({
+vi.mock('@/features/agent-session/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: ({ onSessionOpened }: { onSessionOpened?: () => void }) => (
     <button type="button" onClick={() => onSessionOpened?.()}>
       Open history chat
@@ -133,7 +133,7 @@ vi.mock('@/components/chat/ChatHistoryTab', () => ({
 // Stub the drawer so the shell test focuses on the trigger wiring (button →
 // projectsOpen → drawer `open` prop → onOpenChange close). The drawer's own
 // open/close + state rendering is covered in ProjectSwitcherDrawer.test.tsx.
-vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
+vi.mock('@/features/agent-session/chat/ProjectSwitcherDrawer', () => ({
   ProjectSwitcherDrawer: ({
     open,
     onOpenChange

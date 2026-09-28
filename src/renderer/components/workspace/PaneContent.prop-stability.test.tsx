@@ -72,8 +72,8 @@ vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
   WorkspaceTabBar: () => <div data-testid="tabbar-stub" />
 }))
 vi.mock('@/components/workspace/DropZoneOverlay', () => ({ DropZoneOverlay: () => null }))
-vi.mock('@/components/agents/AgentLauncher', () => ({ AgentLauncher: () => null }))
-vi.mock('@/components/agents/AgentIcon', () => ({ AgentIcon: () => null }))
+vi.mock('@/features/agent-session/agents/AgentLauncher', () => ({ AgentLauncher: () => null }))
+vi.mock('@/features/agent-session/agents/AgentIcon', () => ({ AgentIcon: () => null }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
 import { PaneContent } from './PaneContent'

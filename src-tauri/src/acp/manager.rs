@@ -5387,7 +5387,7 @@ mod tests {
     async fn resolve_live_agent_id_remaps_stale_spawn_uuid_via_binding_namespace() {
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = crate::conversation::ConversationBootstrap::run(
-            crate::conversation::HostConversationRoots::desktop(
+            crate::conversation::HostConversationRoots::new(
                 temp.path().join("state"),
                 temp.path().join("visible"),
             ),
@@ -5561,7 +5561,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let state_root = temp.path().join("state");
         let bootstrap = crate::conversation::ConversationBootstrap::run(
-            crate::conversation::HostConversationRoots::desktop(
+            crate::conversation::HostConversationRoots::new(
                 state_root.clone(),
                 temp.path().join("visible"),
             ),

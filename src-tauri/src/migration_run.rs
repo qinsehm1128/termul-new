@@ -277,7 +277,7 @@ fn migrate_app_data_dir(roots: &LegacyRoots) -> BrandMigrationRootReceipt {
 /// leaves every byte of it exactly where the user put it.
 fn migrate_documents_workspace(roots: &LegacyRoots) -> BrandMigrationRootReceipt {
     let kind = LegacySignalKind::DocumentsWorkspace;
-    match crate::conversation::bootstrap::legacy_workspace_base(&roots.workspace_base) {
+    match crate::conversation_roots::legacy_workspace_base(&roots.workspace_base) {
         Some(base) => BrandMigrationRootReceipt::skipped(
             kind,
             format!(

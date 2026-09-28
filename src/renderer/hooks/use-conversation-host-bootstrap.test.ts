@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { conversationApi } from '@/lib/conversation-api'
-import { useConversationStore } from '@/stores/conversation-store'
 import {
   useConversationHostBootstrap,
   useConversationHostBootstrapStore

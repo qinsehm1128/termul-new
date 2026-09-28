@@ -37,6 +37,7 @@ pub mod operation_policy;
 pub mod permissions;
 pub mod project_registry;
 pub mod projects_api;
+pub mod quick_terminal_api;
 pub mod router;
 pub mod scheduled_tasks_api;
 pub mod search_api;
@@ -88,7 +89,13 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
     let cwd = Arc::new(CwdTracker::new(events.clone()));
     let git = Arc::new(GitTracker::new(None, events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
-    Arc::new(PtyManager::new(events, cwd, git, exit))
+    Arc::new(PtyManager::new(
+        events,
+        cwd,
+        git,
+        exit,
+        crate::terminal_program(),
+    ))
 }
 
 pub(crate) const ACP_PRODUCER_STOP_FAILED: &str = "ACP_PRODUCER_STOP_FAILED";
@@ -319,7 +326,11 @@ pub async fn serve(
     skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let terminal = crate::core::TerminalServiceHandle::in_process(pty.clone());
+    let terminal = crate::quick_terminal::with_local_service(
+        crate::core::TerminalServiceHandle::in_process(pty.clone()),
+        &cfg.service_account_state_dir(),
+        &cfg.conversation_workspace_root(),
+    );
     acp.set_terminal_service(terminal.clone());
     let host = crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&ws_relay));
     let (_addr, handle) = serve_router(

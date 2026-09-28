@@ -1,7 +1,7 @@
 import { Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { ConversationList } from '@/components/conversation/ConversationList'
-import { useConversationStore } from '@/stores/conversation-store'
+import { ConversationList } from '@/features/agent-session/conversation/ConversationList'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 
 interface ProjectChatListProps {
   projectId: string

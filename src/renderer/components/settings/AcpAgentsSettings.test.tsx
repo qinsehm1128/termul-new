@@ -32,7 +32,7 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() }
 }))
 
-vi.mock('@/stores/acp-store', () => {
+vi.mock('@/features/agent-session/stores/acp-store', () => {
   const useAcpStore = (sel?: (s: typeof stateRef.current) => unknown) =>
     sel ? sel(stateRef.current) : stateRef.current
   const useConfigWarmState = () => ({

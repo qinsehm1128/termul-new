@@ -12,7 +12,7 @@ vi.mock('@/lib/conversation-lifecycle-api', () => ({
   conversationLifecycleApi: { subscribe: subscribeMock }
 }))
 
-vi.mock('@/stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   useAcpStore: {
     getState: () => ({ _onConversationLifecycle: projectLifecycleMock })
   }
@@ -20,7 +20,7 @@ vi.mock('@/stores/acp-store', () => ({
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
-import { useConversationStore } from '@/stores/conversation-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useConversationLifecycle } from './use-conversation-lifecycle'
 
 const conversationId = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'

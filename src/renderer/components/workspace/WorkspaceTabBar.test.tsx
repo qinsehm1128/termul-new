@@ -61,18 +61,6 @@ const { mockTerminals } = vi.hoisted(() => ({
   ] as Array<Record<string, unknown>>
 }))
 
-vi.mock('@/stores/conversation-store', () => ({
-  useConversationStore: {
-    getState: () => ({
-      summariesById: {
-        'conv-agent': { conversationId: 'conv-agent', backend: 'agent' },
-        'conv-terminal': { conversationId: 'conv-terminal', backend: 'terminal' }
-      },
-      detailsById: {}
-    })
-  }
-}))
-
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: vi.fn((selector: (state: { terminals: typeof mockTerminals }) => unknown) =>
     selector({
@@ -1049,22 +1037,17 @@ describe('WorkspaceTabBar', () => {
     beforeEach(() => {
       mockTerminals.push(
         { id: 'term-agent', name: 'Agent shell', shell: 'bash', conversationId: 'conv-agent' },
-        {
-          id: 'term-backend',
-          name: 'Backend shell',
-          shell: 'bash',
-          conversationId: 'conv-terminal'
-        }
+        { id: 'term-project', name: 'Project shell', shell: 'bash', projectId: 'p1' }
       )
     })
 
     it('labels the close button by what it actually does', async () => {
-      // An agent's shell survives its tab, so × closes a view. A Conversation
-      // whose entire content is the shell does not, so × ends the process.
-      // Labelling both "close view" told the user their × had been ignored.
+      // An agent's shell survives its tab, so × closes a view. A project shell
+      // has no other owner, so × ends the process. Labelling both "close view"
+      // told the user their × had been ignored.
       const tabs: WorkspaceTab[] = [
         { type: 'terminal', id: 'tab-agent', terminalId: 'term-agent' },
-        { type: 'terminal', id: 'tab-backend', terminalId: 'term-backend' }
+        { type: 'terminal', id: 'tab-project', terminalId: 'term-project' }
       ]
 
       render(
@@ -1078,7 +1061,7 @@ describe('WorkspaceTabBar', () => {
       await flushShellEffect()
 
       expect(screen.getByLabelText('Close view Agent shell')).toBeTruthy()
-      expect(screen.getByLabelText('Terminate process Backend shell')).toBeTruthy()
+      expect(screen.getByLabelText('Terminate process Project shell')).toBeTruthy()
     })
 
     it('offers "Kill Process" only where the close button would not kill', async () => {
@@ -1088,7 +1071,7 @@ describe('WorkspaceTabBar', () => {
       const onTerminateTerminal = vi.fn()
       const tabs: WorkspaceTab[] = [
         { type: 'terminal', id: 'tab-agent', terminalId: 'term-agent' },
-        { type: 'terminal', id: 'tab-backend', terminalId: 'term-backend' }
+        { type: 'terminal', id: 'tab-project', terminalId: 'term-project' }
       ]
 
       const { container } = render(

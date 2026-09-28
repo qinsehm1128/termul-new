@@ -29,7 +29,7 @@ const state: {
   sessions: {}
 }
 
-vi.mock('@/stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   // zustand `useStore(selector)` shape + `.getState()` accessor.
   useAcpStore: Object.assign((selector: (s: typeof state) => unknown) => selector(state), {
     getState: () => state

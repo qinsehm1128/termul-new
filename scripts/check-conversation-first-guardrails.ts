@@ -929,7 +929,7 @@ function checkRootParity(findings: GuardFinding[], models: TypeScriptModel[]): v
       [
         model.hasJsx(
           'ConversationHostStatus',
-          '@/components/conversation/ConversationHostStatus',
+          '@/features/agent-session/conversation/ConversationHostStatus',
           'default'
         ),
         'renderer root must render the imported ConversationHostStatus component'
@@ -937,7 +937,7 @@ function checkRootParity(findings: GuardFinding[], models: TypeScriptModel[]): v
       [
         model.countJsx(
           'ConversationRecoveryPanel',
-          '@/components/conversation/ConversationRecoveryPanel',
+          '@/features/agent-session/conversation/ConversationRecoveryPanel',
           'default'
         ) === 1,
         'renderer root must execute exactly one imported ConversationRecoveryPanel owner'
@@ -978,12 +978,12 @@ function checkRootParity(findings: GuardFinding[], models: TypeScriptModel[]): v
   if (
     dashboard &&
     (dashboard.hasImport(
-      '@/components/conversation/ConversationRecoveryPanel',
+      '@/features/agent-session/conversation/ConversationRecoveryPanel',
       'ConversationRecoveryPanel'
     ) ||
       dashboard.countJsx(
         'ConversationRecoveryPanel',
-        '@/components/conversation/ConversationRecoveryPanel'
+        '@/features/agent-session/conversation/ConversationRecoveryPanel'
       ) > 0)
   ) {
     findings.push({
@@ -1506,7 +1506,7 @@ function checkNativeCi(findings: GuardFinding[], validation: ParsedWorkflow): vo
     )
   )
   for (const required of [
-    'cargo test --locked conversation::native_durability_tests',
+    'cargo test --locked -p se-agent-session native_durability_tests',
     'cargo test --locked --test conversation_first_guardrails',
     'cargo build --locked --bin se-server --features standalone-server',
     'cargo clippy --locked --bin se-server --features standalone-server -- -D warnings',

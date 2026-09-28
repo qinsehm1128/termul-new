@@ -71,14 +71,14 @@ vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
 vi.mock('@/components/workspace/DropZoneOverlay', () => ({
   DropZoneOverlay: () => null
 }))
-vi.mock('@/components/agents/AgentLauncher', () => ({
+vi.mock('@/features/agent-session/agents/AgentLauncher', () => ({
   AgentLauncher: () => <div data-testid="launcher-stub" />
 }))
-vi.mock('@/components/agents/AgentIcon', () => ({
+vi.mock('@/features/agent-session/agents/AgentIcon', () => ({
   AgentIcon: () => <span data-testid="agent-icon-stub" />
 }))
 
-import { useConversationStore } from '@/stores/conversation-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { PaneContent } from './PaneContent'
 
 const editorPane: LeafNode = {
@@ -186,20 +186,6 @@ describe('PaneContent — an agent-chat tab whose conversation has no agent', ()
     useConversationStore.setState({ summariesById: {}, conversationIds: {} } as never)
   })
 
-  it('does not offer the launcher for a terminal-backed conversation', async () => {
-    // The launcher is a restart surface for an agent. Offering it here invites
-    // the user to start something this conversation never asked for.
-    seedConversation('terminal')
-    render(
-      <MemoryRouter>
-        <PaneContent pane={chatPane} />
-      </MemoryRouter>
-    )
-
-    expect(await screen.findByTestId('conversation-terminal-empty')).toBeInTheDocument()
-    expect(screen.queryByTestId('launcher-stub')).not.toBeInTheDocument()
-  })
-
   it('still offers the launcher when the conversation declares no backend', async () => {
     // Every record predating the discriminator: an agent conversation whose
     // agent is simply not currently bound.
@@ -211,6 +197,5 @@ describe('PaneContent — an agent-chat tab whose conversation has no agent', ()
     )
 
     expect(await screen.findByTestId('launcher-stub')).toBeInTheDocument()
-    expect(screen.queryByTestId('conversation-terminal-empty')).not.toBeInTheDocument()
   })
 })

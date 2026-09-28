@@ -6,7 +6,9 @@
     "src-tauri/build.rs",
     "src-tauri/src/core/ipc.rs",
     "src-tauri/src/core/mod.rs",
-    "src-tauri/src/core/transport.rs"
+    "src-tauri/src/core/transport.rs",
+    "src-tauri/crates/se-ipc",
+    "src-tauri/crates/se-foundation"
   ],
   "components": {
     "renderer": ["src/renderer", "src/shared", "package.json", "bun.lock"],
@@ -20,7 +22,9 @@
       "src-tauri/src/core/acp.rs",
       "src-tauri/src/core/handles.rs",
       "src-tauri/src/acp",
-      "src-tauri/src/conversation",
+      "src-tauri/crates/se-agent-session",
+      "src-tauri/src/conversation_host.rs",
+      "src-tauri/src/conversation_roots.rs",
       "src-tauri/src/memory_index",
       "src-tauri/src/scheduled_tasks",
       "src-tauri/src/core/launcher.rs",
@@ -28,35 +32,31 @@
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
       "src-tauri/src/commands.rs",
-      "src-tauri/src/pty",
-      "src-tauri/src/trackers",
+      "src-tauri/crates/se-pty",
+      "src-tauri/crates/se-quick-terminal",
+      "src-tauri/src/quick_terminal.rs",
       "src-tauri/src/mcp_core",
       "src-tauri/src/skills",
       "src-tauri/src/web/sink.rs",
       "src-tauri/src/web/permissions.rs",
       "src-tauri/src/web/project_registry.rs",
-      "src-tauri/src/host_admission.rs",
       "src-tauri/src/brand.rs",
       "src-tauri/src/legacy_appdata.rs",
       "src-tauri/src/acp_registry_snapshot.rs",
       "src-tauri/src/agent_registry.rs",
-      "src-tauri/src/cli_session",
-      "src-tauri/src/path_validation.rs",
-      "src-tauri/src/shell_paths.rs"
+      "src-tauri/src/cli_session"
     ],
     "terminalCore": [
       "src-tauri/src/core/handles.rs",
       "src-tauri/src/core/terminal.rs",
-      "src-tauri/src/pty",
+      "src-tauri/crates/se-pty",
+      "src-tauri/crates/se-quick-terminal",
+      "src-tauri/src/quick_terminal.rs",
       "src-tauri/src/core/launcher.rs",
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
-      "src-tauri/src/trackers",
-      "src-tauri/src/shell_paths.rs",
-      "src-tauri/src/path_validation.rs",
-      "src-tauri/src/host_admission.rs",
       "src-tauri/src/brand.rs",
-      "src-tauri/src/conversation/contracts.rs"
+      "src-tauri/crates/se-agent-session"
     ]
   },
   "acknowledgedExternalModules": {

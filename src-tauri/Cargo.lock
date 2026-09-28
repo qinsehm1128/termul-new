@@ -4899,6 +4899,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "se-agent-session"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "chrono",
+ "fs2",
+ "futures",
+ "libc",
+ "log",
+ "parking_lot",
+ "se-foundation",
+ "se-pty",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "se-foundation"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "se-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "se-manager"
 version = "0.12.11"
 dependencies = [
@@ -4932,6 +4976,11 @@ dependencies = [
  "rmcp",
  "rusqlite",
  "rust-embed",
+ "se-agent-session",
+ "se-foundation",
+ "se-ipc",
+ "se-pty",
+ "se-quick-terminal",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4968,6 +5017,46 @@ dependencies = [
  "windows-sys 0.59.0",
  "winreg 0.55.0",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "se-pty"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "getrandom 0.2.17",
+ "lazy_static",
+ "libc",
+ "log",
+ "parking_lot",
+ "portable-pty",
+ "regex",
+ "se-foundation",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tauri",
+ "tempfile",
+ "tokio",
+ "winapi",
+ "windows-sys 0.59.0",
+ "winreg 0.55.0",
+]
+
+[[package]]
+name = "se-quick-terminal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "log",
+ "parking_lot",
+ "se-foundation",
+ "se-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

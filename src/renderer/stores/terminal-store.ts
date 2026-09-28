@@ -155,6 +155,19 @@ export interface TerminalState {
     conversationId?: string
   ) => Terminal
   adoptRemoteProjectTerminal: (event: TerminalSpawnedEvent) => string | null
+  /**
+   * Register the PTY a quick terminal is showing. Terminal Core started it, so
+   * the renderer holds no output channel: the record carries no claim and the
+   * mounted terminal attaches by watching, like a PTY that survived a restart.
+   */
+  adoptQuickTerminal: (input: {
+    quickTerminalId: string
+    ptyId: string
+    name: string
+    cwd: string
+  }) => Terminal
+  /** Drop every record a quick terminal owns; the host already ended its PTY. */
+  forgetQuickTerminal: (quickTerminalId: string) => void
   closeTerminal: (id: string, projectId: string) => void
   closeTerminalView: (id: string) => Promise<boolean>
   reopenTerminalView: (id: string) => void
@@ -338,6 +351,48 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       message: `Adopted host terminal projectId=${projectId}`
     })
     return adopted.id
+  },
+
+  adoptQuickTerminal: ({ quickTerminalId, ptyId, name, cwd }) => {
+    const existing = get().findTerminalByPtyId(ptyId)
+    if (existing) return existing
+    const adopted: Terminal = {
+      id: ptyId,
+      ptyId,
+      quickTerminalId,
+      name,
+      shell: 'shell',
+      cwd,
+      output: [],
+      healthStatus: 'running',
+      viewState: 'visible',
+      isHidden: false
+    }
+    set((state) => {
+      const nextIndex = new Map(state.ptyIdIndex)
+      nextIndex.set(ptyId, adopted.id)
+      return { terminals: [...state.terminals, adopted], ptyIdIndex: nextIndex }
+    })
+    return adopted
+  },
+
+  forgetQuickTerminal: (quickTerminalId) => {
+    set((state) => {
+      const owned = state.terminals.filter(
+        (terminal) => terminal.quickTerminalId === quickTerminalId
+      )
+      if (owned.length === 0) return state
+      const nextIndex = new Map(state.ptyIdIndex)
+      for (const terminal of owned) {
+        if (terminal.ptyId) nextIndex.delete(terminal.ptyId)
+      }
+      return {
+        terminals: state.terminals.filter(
+          (terminal) => terminal.quickTerminalId !== quickTerminalId
+        ),
+        ptyIdIndex: nextIndex
+      }
+    })
   },
 
   closeTerminal: (id: string, projectId: string): void => {

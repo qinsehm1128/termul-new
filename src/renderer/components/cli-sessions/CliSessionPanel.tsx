@@ -3,7 +3,6 @@ import { CLI_SESSION_AGENT_IDS, CLI_SESSION_AGENT_LABELS } from '@shared/types/c
 import { ChevronDown, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { AgentIcon } from '@/components/agents/AgentIcon'
 import { CliSessionResumeDialog } from '@/components/cli-sessions/CliSessionResumeDialog'
 import {
   ListEmptyState,
@@ -24,6 +23,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { launchAgentResumeInPane } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
@@ -47,7 +48,6 @@ import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useCliSessionPanelVisible } from '@/stores/cli-session-panel-store'
-import { useConversationStore } from '@/stores/conversation-store'
 import { useActiveProject } from '@/stores/project-store'
 import { useActiveTerminal } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'

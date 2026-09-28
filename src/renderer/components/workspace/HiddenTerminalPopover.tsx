@@ -1,8 +1,8 @@
 import { EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { AgentIcon } from '@/components/agents/AgentIcon'
 import { ListRow, ListRowMeta, pathBasename } from '@/components/lists'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
 import type { Terminal } from '@/types/project'
 
 interface HiddenTerminalPopoverProps {

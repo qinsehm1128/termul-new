@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { runHistoryWipeMigration } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { useAcpStore } from '@/stores/acp-store'
 
 /**
  * Load the persisted chat-history index once at app mount. Payloads load lazily

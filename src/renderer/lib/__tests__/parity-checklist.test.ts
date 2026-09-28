@@ -252,8 +252,6 @@ const P0_DOMAINS: DomainCheck[] = [
       'getCurrentBinding',
       'openConversation',
       'renameConversation',
-      'prepareTerminalConversation',
-      'provisionTerminalConversation',
       'resolveLegacyConversationId',
       'attachProject',
       'detachProject',
@@ -373,6 +371,15 @@ const P1_DOMAINS: DomainCheck[] = [
     methods: ['getManifest', 'writeManifest', 'deleteManifest'],
     apiBridgeExport: 'workspaceManifestApi',
     testFile: 'tauri-workspace-manifest-api.test.ts'
+  },
+  {
+    domain: 'QuickTerminal',
+    priority: 'P1',
+    tauriAdapterFile: '../features/quick-terminal/tauri-quick-terminal-api.ts',
+    adapterExportName: 'createTauriQuickTerminalApi',
+    methods: ['list', 'create', 'open', 'rename', 'remove'],
+    apiBridgeExport: 'quickTerminalApi',
+    testFile: '../features/quick-terminal/tauri-quick-terminal-api.test.ts'
   },
   {
     domain: 'ScheduledTask',
@@ -542,14 +549,14 @@ describe('Parity Checklist Automation', () => {
         expect(
           hasImportedJsx(
             root,
-            '@/components/conversation/ConversationHostStatus',
+            '@/features/agent-session/conversation/ConversationHostStatus',
             'ConversationHostStatus'
           )
         ).toBe(true)
         expect(
           hasImportedJsx(
             root,
-            '@/components/conversation/ConversationRecoveryPanel',
+            '@/features/agent-session/conversation/ConversationRecoveryPanel',
             'ConversationRecoveryPanel'
           )
         ).toBe(true)
@@ -575,6 +582,8 @@ describe('Parity Checklist Automation', () => {
         'legacy/storage/:legacyValue',
         'legacy/history/:legacyValue',
         'scheduled-tasks',
+        'quick-terminals',
+        'quick-terminals/:quickTerminalId',
         'terminals',
         'snapshots',
         'settings',
@@ -888,7 +897,7 @@ describe('Parity Checklist Automation', () => {
       const typesPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'workspace-manifest.types.ts')
       expect(existsSync(typesPath), 'workspace-manifest.types.ts should exist').toBe(true)
       const content = readFileSync(typesPath, 'utf-8')
-      // Core shapes mirrored from `src-tauri/src/acp/workspace_manifest.rs`.
+      // Core shapes mirrored from `src-tauri/src/conversation/workspace_manifest.rs`.
       expect(content).toMatch(/export\s+interface\s+WorkspaceManifest\b/)
       expect(content).toMatch(/export\s+type\s+WriteOutcome\b/)
       expect(content).toMatch(/export\s+interface\s+TerminalDescriptor\b/)
@@ -1278,7 +1287,10 @@ describe('Parity Checklist Automation', () => {
     })
 
     it('ACP session creation does not select the user MCP registry', () => {
-      const store = readFileSync(join(LIB_DIR, '..', 'stores', 'acp-store.ts'), 'utf-8')
+      const store = readFileSync(
+        join(LIB_DIR, '..', 'features', 'agent-session', 'stores', 'acp-store.ts'),
+        'utf-8'
+      )
       const manager = readFileSync(
         join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager.rs'),
         'utf-8'

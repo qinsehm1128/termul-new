@@ -103,6 +103,11 @@ export interface Terminal {
   id: string
   /** Conversation ownership scope; absent for scope-less project terminals. */
   conversationId?: string
+  /**
+   * Quick terminal that owns this PTY. Such records carry no project id, so no
+   * project surface (tab bar, auto-save, restore) ever picks them up.
+   */
+  quickTerminalId?: string
   ptyId?: string
   name: string
   /** Optional attribution/filter only; never ownership or authorization. */

@@ -220,7 +220,7 @@ fn main() -> ExitCode {
         // The standalone host crosses the same synchronous Conversation admission gate as
         // Desktop before opening any app-managed store, manager, PTY, or network route.
         let conversation_bootstrap = match se_manager_lib::conversation::ConversationBootstrap::run(
-            se_manager_lib::conversation::HostConversationRoots::standalone(
+            se_manager_lib::conversation_roots::standalone(
                 cfg.service_account_state_dir(),
                 cfg.conversation_workspace_root(),
                 cfg.sessions_dir.clone(),
@@ -425,35 +425,35 @@ fn main() -> ExitCode {
             Arc::clone(&cwd_tracker),
             Arc::clone(&git_tracker),
             Arc::clone(&exit_code_tracker),
+            se_manager_lib::terminal_program(),
         ));
         let _services =
             se_manager_lib::core::CoreServices::in_process(Arc::clone(&pty), Arc::clone(&acp));
-        let lifecycle =
-            match se_manager_lib::conversation::ConversationLifecycleService::from_manager(
-                Arc::clone(&acp),
-                Arc::clone(&pty),
+        let lifecycle = match se_manager_lib::conversation_host::lifecycle_from_manager(
+            Arc::clone(&acp),
+            Arc::clone(&pty),
+        ) {
+            Ok(service) => match se_manager_lib::conversation::LifecycleOperationJournal::open(
+                cfg.service_account_state_dir(),
             ) {
-                Ok(service) => match se_manager_lib::conversation::LifecycleOperationJournal::open(
-                    cfg.service_account_state_dir(),
-                ) {
-                    Ok(journal) => service.with_journal(std::sync::Arc::new(journal)),
-                    Err(error) => {
-                        error!(error = %error, "Conversation lifecycle journal open failed");
-                        service
-                    }
-                },
+                Ok(journal) => service.with_journal(std::sync::Arc::new(journal)),
                 Err(error) => {
-                    error!(
-                        code = error.code.as_str(),
-                        "Conversation lifecycle construction failed"
-                    );
-                    return ExitCode::from(1);
+                    error!(error = %error, "Conversation lifecycle journal open failed");
+                    service
                 }
-            };
-        if let Err(error) = conversation_bootstrap
-            .application
-            .attach_lifecycle(lifecycle)
-        {
+            },
+            Err(error) => {
+                error!(
+                    code = error.code.as_str(),
+                    "Conversation lifecycle construction failed"
+                );
+                return ExitCode::from(1);
+            }
+        };
+        if let Err(error) = se_manager_lib::conversation_host::attach(
+            &conversation_bootstrap.application,
+            lifecycle,
+        ) {
             error!(code = error.code, "Conversation lifecycle admission failed");
             return ExitCode::from(1);
         }

@@ -50,7 +50,7 @@ use tempfile::TempDir;
 use se_manager_lib::brand::{self, BrandCanonical, BrandOverrideGuard, DEFAULT_CANONICAL};
 use se_manager_lib::conversation::{
     AgentBindingResult, BootstrapOutcome, ConversationBootstrap, ConversationCreationService,
-    HostConversationRoots, MigrationHostMode, PrepareConversationRequest,
+    MigrationHostMode, PrepareConversationRequest,
 };
 use se_manager_lib::{ConversationId, ExecutionTarget};
 
@@ -118,10 +118,18 @@ fn open_conversation_under(
 ) -> OpenedWorkspace {
     let temp = TempDir::new().unwrap();
     let outcome: BootstrapOutcome = ConversationBootstrap::run(
-        HostConversationRoots::desktop(temp.path().join("state"), temp.path().join("workspaces")),
+        se_manager_lib::conversation_roots::desktop(
+            temp.path().join("state"),
+            temp.path().join("workspaces"),
+        ),
         MigrationHostMode::Desktop,
     )
     .expect("conversation bootstrap over an empty state root");
+    // What the host attaches in production; without it opening provisions nothing.
+    outcome
+        .application
+        .attach_skill_provisioner(se_manager_lib::conversation_host::skill_provisioner())
+        .expect("attach the host skill provisioner");
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

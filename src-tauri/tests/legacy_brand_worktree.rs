@@ -163,6 +163,7 @@ fn app_state(project_root: PathBuf) -> AppState {
         cwd.clone(),
         git_tracker.clone(),
         exit.clone(),
+        se_manager_lib::terminal_program(),
     ));
     AppState {
         acp: se_manager_lib::core::AcpWebHostHandle::in_process(

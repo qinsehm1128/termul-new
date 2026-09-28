@@ -8,10 +8,8 @@ import { useTranslation } from 'react-i18next'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityRail } from '@/components/ActivityRail'
-import { AgentLauncher } from '@/components/agents/AgentLauncher'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
-import { ConversationSidebar } from '@/components/conversation/ConversationSidebar'
 import { ImportEditorWorkspacesDialog } from '@/components/ImportEditorWorkspacesDialog'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ProjectSidebar } from '@/components/ProjectSidebar'
@@ -42,6 +40,10 @@ import { ResizableRail } from '@/components/workspace/ResizableRail'
 import { TerminalListPanel } from '@/components/workspace/TerminalListPanel'
 import { TerminalSwitcherBar } from '@/components/workspace/TerminalSwitcherBar'
 import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
+import { AgentLauncher } from '@/features/agent-session/agents/AgentLauncher'
+import { ConversationSidebar } from '@/features/agent-session/conversation/ConversationSidebar'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import {
   useUpdateAppSetting,
   useUpdatePanelVisibility,
@@ -86,7 +88,6 @@ import {
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { runCloseFlush } from '@/lib/close-flush'
 import { getColorClasses } from '@/lib/colors'
-import { terminalCloseIntent } from '@/lib/conversation-terminal-view'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
@@ -97,12 +98,12 @@ import {
   openBoardTerminal,
   peekPendingTerminalFocus
 } from '@/lib/terminal-board-navigation'
+import { terminalCloseIntent } from '@/lib/terminal-close-intent'
 import { spawnTerminalInPane, spawnTerminalInSplit } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
-import { useAcpStore } from '@/stores/acp-store'
 import {
   useAppearanceMode,
   useColorTheme,
@@ -115,7 +116,6 @@ import {
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCliSessionPanelVisible } from '@/stores/cli-session-panel-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
-import { useConversationStore } from '@/stores/conversation-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'

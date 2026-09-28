@@ -1,4 +1,3 @@
-import { conversationBackendOf } from '@shared/types/conversation.types'
 import type { ShellInfo, TerminalSpawnOptions } from '@shared/types/ipc.types'
 import { RefreshCcw, Unplug, X } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -6,17 +5,17 @@ import { useTranslation } from 'react-i18next'
 import { useLocation } from 'react-router-dom'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
-import { AgentIcon } from '@/components/agents/AgentIcon'
-import { AgentLauncher } from '@/components/agents/AgentLauncher'
 import { Skeleton } from '@/components/ui/skeleton'
+import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
+import { AgentLauncher } from '@/features/agent-session/agents/AgentLauncher'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useAddCommand } from '@/hooks/use-command-history'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { resolveConversationSessionId } from '@/lib/conversation-binding'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
-import { useConversationStore } from '@/stores/conversation-store'
 import { useTerminalActions, useTerminalStore } from '@/stores/terminal-store'
 import type { AgentChatTab, WorkspaceTab } from '@/stores/workspace-store'
 import { getAllLeafPanes, retireTerminalRecord, useWorkspaceStore } from '@/stores/workspace-store'
@@ -28,7 +27,9 @@ import { WorkspaceTabBar } from './WorkspaceTabBar'
 const INACTIVE_TAB_PANE_CLASS = 'w-full h-full absolute inset-0 invisible pointer-events-none'
 
 const AgentChatPanel = lazy(() =>
-  import('@/components/chat/AgentChatPanel').then((m) => ({ default: m.AgentChatPanel }))
+  import('@/features/agent-session/chat/AgentChatPanel').then((m) => ({
+    default: m.AgentChatPanel
+  }))
 )
 const BrowserPanel = lazy(() =>
   import('@/components/browser/BrowserPanel').then((m) => ({ default: m.BrowserPanel }))
@@ -51,25 +52,6 @@ function PaneSkeleton(): React.JSX.Element {
   return <Skeleton className="h-full w-full" />
 }
 
-/**
- * What a terminal-backed Conversation shows where an agent chat would be.
- *
- * Reached only when a restored layout carries an `agent-chat` tab for a
- * Conversation that has no agent — the terminals themselves are ordinary
- * workspace tabs and render through their own path.
- */
-function ConversationTerminalEmptyState(): React.JSX.Element {
-  const { t } = useTranslation('workspace')
-  return (
-    <div
-      data-testid="conversation-terminal-empty"
-      className="flex h-full w-full items-center justify-center p-6 text-center text-sm text-muted-foreground"
-    >
-      {t('pane.terminalConversation', 'This conversation runs in a terminal.')}
-    </div>
-  )
-}
-
 function ConversationAgentChatPanel({
   tab,
   paneId,
@@ -87,19 +69,9 @@ function ConversationAgentChatPanel({
   const opening = useConversationStore((state) =>
     tab.conversationId ? state.openingById[tab.conversationId] === true : false
   )
-  const isTerminalBacked = useConversationStore((state) =>
-    tab.conversationId
-      ? conversationBackendOf(state.summariesById[tab.conversationId]) === 'terminal'
-      : false
-  )
 
   if (!sessionId) {
     if (opening) return <PaneSkeleton />
-    // A terminal-backed Conversation has no agent to restart, so the launcher
-    // would be offering to start one it never asked for. Activation does not
-    // create this tab for those Conversations; this guard covers the tab
-    // arriving from a restored layout instead.
-    if (isTerminalBacked) return <ConversationTerminalEmptyState />
     // This tab already owns a Conversation; the launcher is its restart
     // surface, not a new-chat composer. Name the target explicitly — the
     // launcher deliberately no longer infers one from the sidebar selection.

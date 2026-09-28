@@ -10,7 +10,7 @@ pub mod brand;
 mod browser_tab_manager;
 mod cli_session;
 mod commands;
-pub mod conversation;
+pub use se_agent_session as conversation;
 pub mod core;
 /// The injectable seam every OS-keychain read/write goes through. Public
 /// because the brand-migration harness in `tests/` links this crate as an
@@ -18,7 +18,11 @@ pub mod core;
 pub mod credentials;
 mod editor_workspaces;
 mod fs_watcher;
-mod host_admission;
+use se_foundation::host_admission;
+pub mod conversation_host;
+#[cfg(test)]
+mod conversation_host_tests;
+pub mod conversation_roots;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
@@ -35,8 +39,11 @@ pub mod migration_detect;
 /// User-initiated merge orchestrator for the pre-rename roots (T-MIG-RUN).
 pub mod migration_run;
 mod migrations;
-mod path_validation;
-mod pty;
+pub mod quick_terminal;
+mod quick_terminal_commands;
+mod quick_terminal_migration;
+use se_foundation::path_validation;
+use se_pty as pty;
 mod remote;
 pub mod scheduled_tasks;
 mod secure_storage;
@@ -45,12 +52,12 @@ mod secure_storage;
 // verification — runs under the spec's default `cargo test` gate. Only the
 // standalone binary wiring (server_main.rs) is gated by `standalone-server`.
 pub mod server_update;
-mod shell_paths;
+use se_foundation::shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
 pub mod skills;
 mod ssh;
-mod trackers;
+use se_pty::trackers;
 mod updater_api;
 pub mod web;
 pub mod webview_storage_handoff;
@@ -428,6 +435,14 @@ pub use conversation::{
     TerminalResourceRef,
 };
 pub use pty::{PtyManager, SpawnOptions};
+
+/// Identity this app advertises to the shells it spawns (`TERM_PROGRAM`).
+pub fn terminal_program() -> pty::TerminalProgram {
+    pty::TerminalProgram {
+        name: brand::canonical().display_name.to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
 pub use scheduled_tasks::ScheduledTaskStore;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
@@ -1956,6 +1971,7 @@ fn core_allows_in_process_fallback(app_data_dir: &Path, role: crate::core::CoreR
 
 fn desktop_terminal_service(
     app_data_dir: &Path,
+    workspace_base: &Path,
     local_pty: Arc<PtyManager>,
     app_handle: tauri::AppHandle,
 ) -> Result<crate::core::TerminalServiceHandle, String> {
@@ -2016,7 +2032,11 @@ fn desktop_terminal_service(
         );
         let _ = app_handle;
     }
-    Ok(crate::core::TerminalServiceHandle::in_process(local_pty))
+    Ok(crate::quick_terminal::with_local_service(
+        crate::core::TerminalServiceHandle::in_process(local_pty),
+        app_data_dir,
+        workspace_base,
+    ))
 }
 
 #[cfg(unix)]
@@ -2530,9 +2550,9 @@ pub fn run() {
             )?;
             let conversation_bootstrap = if acp_core_handle.is_none() {
                 let conversation_bootstrap = crate::conversation::ConversationBootstrap::run(
-                    crate::conversation::HostConversationRoots::desktop(
+                    crate::conversation_roots::desktop(
                         app_data_dir.clone(),
-                        conversation_workspace_base,
+                        conversation_workspace_base.clone(),
                     ),
                     crate::conversation::MigrationHostMode::Desktop,
                 )
@@ -2610,9 +2630,11 @@ pub fn run() {
                 cwd_tracker,
                 git_tracker,
                 exit_code_tracker,
+                terminal_program(),
             ));
             let terminal_handle = desktop_terminal_service(
                 &app_data_dir,
+                &conversation_workspace_base,
                 Arc::clone(&pty_manager),
                 handle.clone(),
             )?;
@@ -2825,7 +2847,7 @@ pub fn run() {
                 acp_manager.set_terminal_service(terminal_handle.clone());
                 let acp_handle = crate::core::AcpServiceHandle::in_process(Arc::clone(&acp_manager));
                 let lifecycle =
-                    crate::conversation::ConversationLifecycleService::from_terminal(
+                    crate::conversation_host::lifecycle_from_terminal(
                         Arc::clone(&acp_manager),
                         terminal_handle.clone(),
                     )
@@ -2842,9 +2864,7 @@ pub fn run() {
                         lifecycle
                     }
                 };
-                conversation_bootstrap
-                    .application
-                    .attach_lifecycle(lifecycle)
+                crate::conversation_host::attach(&conversation_bootstrap.application, lifecycle)
                     .map_err(|error| error.to_string())?;
                 // Attach the server-side permission rendezvous so a phone can
                 // respond to `acp:permission_request` over WS. The desktop renderer
@@ -2936,6 +2956,13 @@ pub fn run() {
                 app.manage(commands::HostConversationStore(Some(Arc::clone(
                     &conversation_bootstrap.application,
                 ))));
+                quick_terminal_migration::spawn_startup_migration(
+                    handle.clone(),
+                    Arc::new(quick_terminal_migration::LocalConversations(Arc::clone(
+                        &conversation_bootstrap.application,
+                    ))),
+                    terminal_handle.clone(),
+                );
                 app.manage(commands::HostConversationCreation(Some(Arc::clone(
                     &conversation_bootstrap.creation,
                 ))));
@@ -2965,6 +2992,13 @@ pub fn run() {
                 // history refresh, shared-live subscribers) sees the same fan-out
                 // instead of each caller minting a divergent relay.
                 if let Some(client) = acp_core_handle.core_client() {
+                    quick_terminal_migration::spawn_startup_migration(
+                        handle.clone(),
+                        Arc::new(quick_terminal_migration::AcpCoreConversations(Arc::clone(
+                            &client,
+                        ))),
+                        terminal_handle.clone(),
+                    );
                     let live_relay = Arc::new(WsRelaySink::new());
                     crate::core::web_host::CoreRelayHost::start(client, Arc::clone(&live_relay));
                     app.manage(Option::<Arc<WsRelaySink>>::Some(live_relay));
@@ -3435,8 +3469,11 @@ pub fn run() {
             commands::conversation_get_binding,
             commands::conversation_rename,
             commands::conversation_open,
-            commands::conversation_prepare_terminal,
-            commands::conversation_provision_terminal,
+            quick_terminal_commands::quick_terminal_list,
+            quick_terminal_commands::quick_terminal_create,
+            quick_terminal_commands::quick_terminal_open,
+            quick_terminal_commands::quick_terminal_rename,
+            quick_terminal_commands::quick_terminal_delete,
             commands::conversation_resolve_legacy_id,
             commands::conversation_attach_project,
             commands::conversation_detach_project,
@@ -4121,7 +4158,7 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = crate::conversation::ConversationBootstrap::run(
-            crate::conversation::HostConversationRoots::desktop(
+            crate::conversation_roots::desktop(
                 temp.path().join("state"),
                 temp.path().join("visible"),
             ),

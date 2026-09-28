@@ -8,6 +8,7 @@ import gitEn from '@/locales/en/git.json'
 import mcpEn from '@/locales/en/mcp.json'
 import mobileEn from '@/locales/en/mobile.json'
 import projectsEn from '@/locales/en/projects.json'
+import quickTerminalEn from '@/locales/en/quickTerminal.json'
 import settingsEn from '@/locales/en/settings.json'
 import shellEn from '@/locales/en/shell.json'
 import sshEn from '@/locales/en/ssh.json'
@@ -23,6 +24,7 @@ import gitZhCn from '@/locales/zh-CN/git.json'
 import mcpZhCn from '@/locales/zh-CN/mcp.json'
 import mobileZhCn from '@/locales/zh-CN/mobile.json'
 import projectsZhCn from '@/locales/zh-CN/projects.json'
+import quickTerminalZhCn from '@/locales/zh-CN/quickTerminal.json'
 import settingsZhCn from '@/locales/zh-CN/settings.json'
 import shellZhCn from '@/locales/zh-CN/shell.json'
 import sshZhCn from '@/locales/zh-CN/ssh.json'
@@ -38,6 +40,7 @@ export const resources = {
     shell: shellEn,
     settings: settingsEn,
     projects: projectsEn,
+    quickTerminal: quickTerminalEn,
     workspace: workspaceEn,
     terminal: terminalEn,
     git: gitEn,
@@ -55,6 +58,7 @@ export const resources = {
     shell: shellZhCn,
     settings: settingsZhCn,
     projects: projectsZhCn,
+    quickTerminal: quickTerminalZhCn,
     workspace: workspaceZhCn,
     terminal: terminalZhCn,
     git: gitZhCn,

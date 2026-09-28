@@ -22,7 +22,7 @@
 //! # The lever, and how Wave 4 answered it
 //!
 //! When these tests were written (Wave 1) they asserted a specific *design*:
-//! that `HostConversationRoots::desktop` would declare the legacy trees in
+//! that `conversation_roots::desktop` would declare the legacy trees in
 //! `legacy_session_roots`, and that `LegacyRootConfiguration::known_roots()`
 //! would then carry them. Wave 4 delivered the capability by a different
 //! mechanism, and the assertions below were retargeted onto it. Two findings
@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 
 use se_manager_lib::brand::{self, BrandCanonical};
 use se_manager_lib::conversation::migration::{inventory_legacy_roots, LegacyRootConfiguration};
-use se_manager_lib::conversation::HostConversationRoots;
+use se_manager_lib::conversation_roots;
 use sha2::{Digest, Sha256};
 
 /// The six subdirectories that live under the appdata root and are absent from
@@ -256,7 +256,7 @@ fn desktop_roots_detect_both_legacy_identifier_trees() {
 
     // The real desktop bootstrap call, as made at src/lib.rs:1543.
     let host_roots =
-        HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
+        conversation_roots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
 
     let declared = &host_roots.legacy_appdata_roots;
     let mut undetected = Vec::new();
@@ -267,7 +267,7 @@ fn desktop_roots_detect_both_legacy_identifier_trees() {
     }
     assert!(
         undetected.is_empty(),
-        "HostConversationRoots::desktop must declare the legacy bundle-identifier trees \
+        "conversation_roots::desktop must declare the legacy bundle-identifier trees \
          so detection and the merge banner can report them; undetected: {undetected:?}; \
          declared: {declared:?}",
     );
@@ -315,7 +315,7 @@ fn merge_copies_legacy_trees_and_leaves_the_source_bytes_untouched() {
     // The real production chain: the desktop constructor performs the
     // carry-forward before it returns.
     let _host_roots =
-        HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
+        conversation_roots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
 
     // Equivalent content at the new root, for the matching channel.
     for (relative, digest) in &before[0] {
@@ -378,7 +378,7 @@ fn every_appdata_subdirectory_is_carried_even_though_the_pipeline_ignores_it() {
     let _brand = brand::override_canonical(post_rename());
 
     let host_roots =
-        HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
+        conversation_roots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
 
     let mut uncovered = Vec::new();
     for subdir in UNCOVERED_SUBDIRS {
@@ -491,7 +491,7 @@ fn remote_tunnel_secrets_keeps_mode_0600_after_the_merge() {
 
     let _brand = brand::override_canonical(post_rename());
     let _host_roots =
-        HostConversationRoots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
+        conversation_roots::desktop(roots.canonical.clone(), roots.workspace_base.clone());
 
     let merged = roots.canonical.join(SECRETS_FILE);
     let merged_mode = fs::metadata(&merged)

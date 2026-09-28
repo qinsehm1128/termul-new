@@ -17,13 +17,11 @@ import {
   type ConversationOpenOutcome,
   type LegacyConversationKey,
   type LegacyConversationResolution,
-  type PreparedConversation,
   parseConversationBindingSnapshot,
   parseConversationHostStatus,
   parseConversationOpenOutcome,
   parseConversationRecordV2Array,
-  parseLegacyConversationResolution,
-  parsePreparedConversation
+  parseLegacyConversationResolution
 } from '@shared/types/conversation-api.types'
 import type { IpcDataDecoder, IpcResult } from '@shared/types/ipc.types'
 import { requestHttpIpcResult } from '@/lib/http-ipc-result'
@@ -120,20 +118,6 @@ export function createWebConversationApi(): ConversationApi {
           `/conversations/${encodeURIComponent(conversationId)}/open`,
           {},
           parseConversationOpenOutcome
-        )
-      ),
-    prepareTerminalConversation: (request) =>
-      postJson<PreparedConversation>(
-        '/conversations/prepare-terminal',
-        request,
-        parsePreparedConversation
-      ),
-    provisionTerminalConversation: (conversationId, terminalId) =>
-      withConversationId(conversationId, () =>
-        postJson<null>(
-          `/conversations/${encodeURIComponent(conversationId)}/provision-terminal`,
-          { terminalId },
-          () => null
         )
       ),
     renameConversation: (conversationId, title) =>

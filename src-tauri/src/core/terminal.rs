@@ -15,11 +15,10 @@ use super::ipc::{
     CURRENT_PROTOCOL_VERSION,
 };
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
-use crate::conversation::{ConversationId, ConversationRecordV2};
+use crate::conversation::ConversationId;
 use crate::pty::claims::RotatedClaim;
 use crate::pty::manager::{
     SpawnedTerminal, TerminalAttachResult, TerminalResumeGrant, TerminalResumeRequest,
-    TerminalSpawnIntentV1,
 };
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::trackers::{
@@ -384,11 +383,20 @@ fn construct_pty_manager() -> Arc<PtyManager> {
     let cwd = Arc::new(CwdTracker::new(events.clone()));
     let git = Arc::new(GitTracker::new(None, events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
-    Arc::new(PtyManager::new(events, cwd, git, exit))
+    Arc::new(PtyManager::new(
+        events,
+        cwd,
+        git,
+        exit,
+        crate::terminal_program(),
+    ))
 }
 
 struct TerminalCoreState {
     pty: Arc<PtyManager>,
+    /// Quick terminals live beside the PTYs they own. `None` when the store
+    /// could not be opened; the rest of Terminal Core keeps working.
+    quick: Option<Arc<crate::quick_terminal::QuickTerminalService>>,
     shutdown: watch::Sender<bool>,
 }
 
@@ -396,7 +404,8 @@ pub async fn run_terminal_core(profile_root: PathBuf) -> Result<(), CoreError> {
     #[cfg(any(unix, windows))]
     {
         let endpoint = CoreEndpoint::for_profile(&profile_root, CoreRole::TerminalCore);
-        run_terminal_core_on_endpoint(endpoint).await
+        let workspace_base = super::launcher::workspace_base_from_env();
+        run_terminal_core_with(endpoint, Some((profile_root, workspace_base))).await
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -406,14 +415,37 @@ pub async fn run_terminal_core(profile_root: PathBuf) -> Result<(), CoreError> {
 }
 
 pub async fn run_terminal_core_on_endpoint(endpoint: CoreEndpoint) -> Result<(), CoreError> {
+    run_terminal_core_with(endpoint, None).await
+}
+
+/// `quick_roots` is `(profile_root, workspace_base)` for the quick terminal
+/// store; without it Terminal Core serves PTYs only.
+async fn run_terminal_core_with(
+    endpoint: CoreEndpoint,
+    quick_roots: Option<(PathBuf, PathBuf)>,
+) -> Result<(), CoreError> {
     prepare_runtime_dir(&endpoint)?;
     let _ = remove_stale_socket(&endpoint);
     let mut listener = listen_core(&endpoint, CoreRole::TerminalCore).await?;
 
     let pty = construct_pty_manager();
+    let quick = quick_roots.and_then(|(profile_root, workspace_base)| {
+        match crate::quick_terminal::open_service(&profile_root, &workspace_base, Arc::clone(&pty))
+        {
+            Ok(service) => Some(service),
+            Err(error) => {
+                log::error!(
+                    target: "se_manager::core",
+                    "operation=quick_terminal_store role=terminal-core stable_code=QUICK_TERMINAL_UNAVAILABLE error={error}"
+                );
+                None
+            }
+        }
+    });
     let (shutdown, shutdown_rx) = watch::channel(false);
     let state = Arc::new(TerminalCoreState {
         pty: Arc::clone(&pty),
+        quick,
         shutdown,
     });
 
@@ -522,6 +554,12 @@ async fn handle_connection(
             }
             let request: CoreRequest = serde_json::from_slice(&payload)
                 .map_err(|error| CoreError::InvalidFrame(format!("invalid JSON frame: {error}")))?;
+            if crate::quick_terminal::is_quick_terminal_method(&request.method) {
+                // Opening or deleting may start or end a shell; answer on a
+                // task so terminal input on this connection keeps flowing.
+                spawn_quick_terminal_reply(Arc::clone(&state), request, Arc::clone(&writer));
+                continue;
+            }
             let method = request.method.clone();
             let response = dispatch_request(&state, &request, &writer, &mut subscriptions).await;
             {
@@ -545,6 +583,36 @@ async fn handle_connection(
     let mut guard = writer.lock().await;
     let _ = guard.shutdown().await;
     result
+}
+
+fn spawn_quick_terminal_reply(
+    state: Arc<TerminalCoreState>,
+    request: CoreRequest,
+    writer: Arc<tokio::sync::Mutex<CoreWriteHalf>>,
+) {
+    tokio::spawn(async move {
+        let reply = match state.quick.as_deref() {
+            Some(service) => {
+                crate::quick_terminal::dispatch(service, &request.method, request.params).await
+            }
+            None => crate::quick_terminal::QuickTerminalReply::Err {
+                code: "QUICK_TERMINAL_UNAVAILABLE".to_string(),
+                message: "quick terminal store is unavailable".to_string(),
+            },
+        };
+        let response = match serde_json::to_value(&reply) {
+            Ok(value) => ok_response(request.id, value),
+            Err(error) => error_response(request.id, invalid(error.to_string())),
+        };
+        let mut guard = writer.lock().await;
+        if let Err(error) = write_json_frame(&mut *guard, &response).await {
+            log::debug!(
+                target: "se_manager::core",
+                "operation=quick_terminal_reply stable_code={} error={error}",
+                error.code()
+            );
+        }
+    });
 }
 
 async fn dispatch_request(
@@ -1394,6 +1462,12 @@ impl TerminalCoreClient {
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, CoreError> {
         client_rpc(&self.inner, method, params).await
     }
+
+    /// Raw request for services Terminal Core hosts beside its PTYs
+    /// (quick terminals); their replies carry their own error codes.
+    pub async fn request(&self, method: &str, params: Value) -> Result<Value, CoreError> {
+        self.rpc(method, params).await
+    }
 }
 
 async fn client_rpc(
@@ -1591,18 +1665,7 @@ impl TerminalRuntimeHandle for TerminalCoreClient {
         .await
     }
 
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
-        let options = intent.into_trusted_options(conversation).map_err(|error| {
-            if error.ends_with("scope is unauthorized") {
-                CoreError::Unauthorized
-            } else {
-                invalid(error)
-            }
-        })?;
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
         let spawned = TerminalCoreClient::spawn(self, options).await?;
         Ok(spawned.info.id)
     }
@@ -1702,6 +1765,84 @@ mod tests {
                 Err(_) => panic!("timed out waiting for marker {marker:?} in {collected:?}"),
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_core_serves_quick_terminals_with_their_error_codes() {
+        use crate::quick_terminal::{
+            CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
+            QuickTerminalRecord, METHOD_CREATE, METHOD_DELETE, METHOD_LIST, METHOD_OPEN,
+        };
+        use crate::quick_terminal_commands::request;
+        // Durable directory creation refuses symlinked components (macOS `/var`).
+        let profile_dir = tempfile::tempdir().unwrap();
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let profile = profile_dir.path().canonicalize().unwrap();
+        let workspace = workspace_dir.path().canonicalize().unwrap();
+        let endpoint = CoreEndpoint::for_profile(&profile, CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let roots = (profile.clone(), workspace.clone());
+        let server =
+            tokio::spawn(async move { run_terminal_core_with(server_endpoint, Some(roots)).await });
+        let handle =
+            crate::core::TerminalServiceHandle::from_core_client(wait_for_client(&endpoint).await);
+        assert!(
+            handle.quick_terminals().is_none(),
+            "Core mode owns no local store"
+        );
+
+        let created: crate::commands::IpcResult<QuickTerminalRecord> = request(
+            &handle,
+            METHOD_CREATE,
+            &CreateQuickTerminal {
+                target: se_quick_terminal::QuickTerminalTarget::Workspace,
+                title: Some("core".to_string()),
+            },
+        )
+        .await;
+        let record = created.data.expect("created through Terminal Core");
+        assert!(record
+            .cwd
+            .starts_with(workspace.join("terminals").to_str().unwrap()));
+
+        let opened: crate::commands::IpcResult<QuickTerminalOpened> = request(
+            &handle,
+            METHOD_OPEN,
+            &OpenQuickTerminal {
+                id: record.id,
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .await;
+        let opened = opened.data.expect("opened through Terminal Core");
+        assert!(opened.spawned && opened.claim.is_some());
+
+        let missing: crate::commands::IpcResult<QuickTerminalOpened> = request(
+            &handle,
+            METHOD_OPEN,
+            &OpenQuickTerminal {
+                id: crate::quick_terminal::QuickTerminalId::new_v4(),
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .await;
+        assert!(!missing.success);
+        assert_eq!(missing.code.as_deref(), Some("QUICK_TERMINAL_NOT_FOUND"));
+
+        let deleted: crate::commands::IpcResult<()> = request(
+            &handle,
+            METHOD_DELETE,
+            &QuickTerminalIdParams { id: record.id },
+        )
+        .await;
+        assert!(deleted.success);
+        let listed: crate::commands::IpcResult<Vec<QuickTerminalRecord>> =
+            request(&handle, METHOD_LIST, &serde_json::Value::Null).await;
+        assert_eq!(listed.data.map(|records| records.len()), Some(0));
+        server.abort();
     }
 
     #[cfg(unix)]

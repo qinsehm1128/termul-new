@@ -1,6 +1,7 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useEffect, useRef } from 'react'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   pickDefaultSupportedAgent,
@@ -8,7 +9,6 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { persistenceApi } from '@/lib/api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
-import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 
 /**

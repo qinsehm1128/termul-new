@@ -1,9 +1,12 @@
 import type { ConversationHostStatus } from '@shared/types/conversation-api.types'
 import { useEffect } from 'react'
 import { create } from 'zustand'
+import {
+  applyConversationHostStatus,
+  useConversationStore
+} from '@/features/agent-session/stores/conversation-store'
 import { conversationApi } from '@/lib/conversation-api'
 import { logFrontendError } from '@/lib/log-api'
-import { applyConversationHostStatus, useConversationStore } from '@/stores/conversation-store'
 
 interface ConversationHostBootstrapState {
   status: ConversationHostStatus | null

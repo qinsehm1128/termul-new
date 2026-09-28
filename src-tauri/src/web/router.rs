@@ -40,6 +40,7 @@ use crate::web::mcp_servers_api;
 use crate::web::memory_index_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
+use crate::web::quick_terminal_api;
 use crate::web::scheduled_tasks_api;
 use crate::web::search_api;
 use crate::web::session_workspace_api;
@@ -236,14 +237,6 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 post(conversation_api::open),
             )
             .route(
-                "/conversations/prepare-terminal",
-                post(conversation_api::prepare_terminal),
-            )
-            .route(
-                "/conversations/{conversationId}/provision-terminal",
-                post(conversation_api::provision_terminal),
-            )
-            .route(
                 "/conversations/{conversationId}/rename",
                 post(conversation_api::rename),
             )
@@ -341,6 +334,17 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 get(scheduled_tasks_api::list_audit),
             ),
         RemoteRouteClass::ScheduledTask,
+    ))
+    .merge(classified_routes(
+        Router::<AppState>::new()
+            .route(
+                "/quick-terminals",
+                get(quick_terminal_api::list).post(quick_terminal_api::create),
+            )
+            .route("/quick-terminals/open", post(quick_terminal_api::open))
+            .route("/quick-terminals/rename", post(quick_terminal_api::rename))
+            .route("/quick-terminals/delete", post(quick_terminal_api::delete)),
+        RemoteRouteClass::QuickTerminal,
     ))
     .merge(classified_routes(
         Router::<AppState>::new()

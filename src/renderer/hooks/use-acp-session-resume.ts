@@ -1,11 +1,11 @@
 import { useEffect, useRef } from 'react'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import {
   getOrCreateProjectContinuityCorrelation,
   recordTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
-import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 
 /**

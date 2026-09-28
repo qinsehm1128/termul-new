@@ -13,6 +13,11 @@ rust-version = "1.88"
 # `cargo build --bin se-server --features standalone-server`.
 default-run = "se-manager"
 
+[workspace]
+members = ["crates/*"]
+# Plain `cargo test` / `cargo clippy` (as CI runs them) must cover every crate.
+default-members = [".", "crates/*"]
+
 [lib]
 name = "se_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -54,6 +59,16 @@ mcp-test-fixture = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Local IPC wire protocol shared with the Core processes.
+se-ipc = { path = "crates/se-ipc" }
+# Domain-free helpers (admission gate, path/shell utilities, session ids).
+se-foundation = { path = "crates/se-foundation" }
+# PTY runtime and terminal trackers.
+se-pty = { path = "crates/se-pty" }
+# Quick terminal sessions (folder + live PTY), hosted beside the PTYs.
+se-quick-terminal = { path = "crates/se-quick-terminal" }
+# Agent sessions (Conversations): contracts, storage, migration, lifecycle.
+se-agent-session = { path = "crates/se-agent-session" }
 # Recursive fs watching for `fs_watcher`. Pinned to the same major the fs plugin
 # already resolves, so this adds no new resolution to the lockfile.
 notify = "8"
@@ -213,6 +228,9 @@ cron = "0.17.0"
 chrono-tz = "0.10.4"
 
 [dev-dependencies]
+se-foundation = { path = "crates/se-foundation", features = ["test-support"] }
+se-pty = { path = "crates/se-pty", features = ["test-support"] }
+se-agent-session = { path = "crates/se-agent-session", features = ["test-support"] }
 tauri = { version = "2.0", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
 syn = { version = "2", features = ["full", "visit"] }

@@ -97,7 +97,7 @@ ALLOWED_PATHS+=(
   'src/renderer/lib/browser/terminal-url-navigation.brand.test.ts'
   'src/renderer/lib/tauri-stubs/plugin-store.brand.test.ts'
   'src/renderer/lib/themes/theme-id.brand.test.ts'
-  'src/renderer/stores/acp-store.brand.test.ts'
+  'src/renderer/features/agent-session/stores/acp-store.brand.test.ts'
   'src-tauri/tests/brand_migration_e2e.rs'
   'src-tauri/tests/brand_seam_thread_affinity.rs'
   'src-tauri/tests/legacy_brand_appdata_roots.rs'
@@ -144,7 +144,7 @@ ALLOWED_SITES=(
   #    constant character for character, so the exemption cannot drift apart
   #    from `brand.rs` without a red test.
   'src-tauri/src/skills/provisioner.rs:134:#[serde(alias = "managedByTermul")]'
-  'src-tauri/src/conversation/contracts.rs:314:#[serde(rename = "termul")]'
+  'src-tauri/crates/se-agent-session/src/contracts.rs:252:#[serde(rename = "termul")]'
 
   # -- iOS compatibility reads. Six `legacy*` constants, each read-only, each
   #    naming a key or directory already on a paired phone. Swift has no
@@ -187,7 +187,7 @@ ALLOWED_SITES=(
   #    the legacy binding hash is a domain separator over data already written;
   #    changing either makes existing user data unreachable.
   'src-tauri/src/migration_detect.rs:58:pub const PERSISTENCE_STORE_FILE: &str = "termul-data.json";'
-  'src-tauri/src/conversation/migration/legacy.rs:1380:hasher.update(b"termul-legacy-binding\0");'
+  'src-tauri/crates/se-agent-session/src/migration/legacy.rs:1379:hasher.update(b"termul-legacy-binding\0");'
 
   # -- explicit legacy spellings carried by `brandedStorageKey`, so a flipped
   #    web-storage key can still read the value the user already has. Write
@@ -214,7 +214,7 @@ ALLOWED_SITES=(
   'scripts/tests/ios-legacy-brand-parity.test.ts:345:// `CFBundleDisplayName = Termul` next to localized tables reading `Se`.'
   'scripts/tests/brand-mirror-parity.test.ts:7:* `termul-plan` in Rust while TypeScript — the side that actually writes the'
   'src/renderer/components/ProjectSidebar.tsx:150:// The footer label used to hard-code "Termul v0.4.10" — both the brand and'
-  'src/renderer/components/chat/ChatMessage.test.tsx:98:href="termul-file-path:src%2Frenderer%2FApp.tsx%3A42"'
+  'src/renderer/features/agent-session/chat/ChatMessage.test.tsx:98:href="termul-file-path:src%2Frenderer%2FApp.tsx%3A42"'
   'src/renderer/components/terminal/terminal-webgl-repair.ts:150:* See .workflow/sessions/20260824-ralph-termul-leftover-glyphs/dod-amendment-01.md'
 
   # -- the two on-disk store files are STILL named for the old brand, and are
@@ -259,7 +259,7 @@ ALLOWED_SITES=(
   'src/renderer/components/ProjectSidebar.tsx:1827:termul-ssh-panel-height'
   'src/renderer/lib/tauri-session-api.ts:29:termul-sessions.json'
   'src/renderer/lib/tauri-persistence-api.ts:4:termul-data.json'
-  'src/renderer/components/chat/chat-markdown-file-links.ts:15:termul-file-path:'
+  'src/renderer/features/agent-session/chat/chat-markdown-file-links.ts:15:termul-file-path:'
   'src/renderer/lib/parse-unified-diff.ts:214:termul.gitDiffViewMode'
   'src/renderer/lib/web-tab-session.ts:17:termul.web.focusedSessionId'
   'src/renderer/lib/__tests__/tauri-session-api.web.test.ts:7:* `termul-sessions.json::sessions/auto-save`), matching the spec'

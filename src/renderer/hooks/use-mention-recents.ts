@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { MentionMatch } from '@/components/chat/mention-menu-model'
+import type { MentionMatch } from '@/features/agent-session/chat/mention-menu-model'
 import {
   loadMentionRecents,
   pushRecent as pushRecentPure,

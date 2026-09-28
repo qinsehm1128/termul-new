@@ -5,7 +5,7 @@
 //!
 //! Finding F-01, and the reason it is CRITICAL. `ConversationCreator` carries
 //! `#[serde(rename_all = "snake_case")]` and one variant, `Termul`
-//! (`src/conversation/contracts.rs:302-306`). The identifier *is* the on-disk
+//! (`crates/se-agent-session/src/contracts.rs`). The identifier *is* the on-disk
 //! string `"termul"`. There is no literal anywhere in the crate to grep for, to
 //! put on a rename exclusion list, or to notice in a diff — so any execution
 //! shaped as "rename the identifiers, keep the listed literals" rewrites an
@@ -50,7 +50,7 @@ use syn::visit::{self, Visit};
 use syn::{Attribute, ItemEnum, ItemMod, Lit};
 
 /// Where the enum lives.
-const CONTRACTS_FILE: &str = "src/conversation/contracts.rs";
+const CONTRACTS_FILE: &str = "crates/se-agent-session/src/contracts.rs";
 const CREATOR_ENUM: &str = "ConversationCreator";
 
 /// The production write points this repo has today, **discovered** by
@@ -70,9 +70,9 @@ const CREATOR_ENUM: &str = "ConversationCreator";
 /// - `migration/legacy.rs::stage_one` — reached from the public
 ///   `stage_legacy_conversations`; stamps every record the migration writes.
 const KNOWN_PRODUCTION_WRITE_POINTS: &[&str] = &[
-    "src/conversation/compatibility.rs",
-    "src/conversation/creation.rs",
-    "src/conversation/migration/legacy.rs",
+    "crates/se-agent-session/src/compatibility.rs",
+    "crates/se-agent-session/src/creation.rs",
+    "crates/se-agent-session/src/migration/legacy.rs",
 ];
 
 /// The post-rename wire value.
@@ -185,16 +185,25 @@ fn creator_enum() -> ItemEnum {
         .unwrap_or_else(|| panic!("{CREATOR_ENUM} no longer exists in {CONTRACTS_FILE}; retarget"))
 }
 
-/// Every `.rs` file under `src/` that is *not* compiled out of a release build.
+/// Every `.rs` file under `src/` and the workspace crates' `src/` that is
+/// *not* compiled out of a release build.
 ///
 /// Two exclusions, both necessary and both derived rather than listed:
 /// files declared as `#[cfg(test)] mod <name>;` anywhere in the tree, and
 /// `src/brand.rs`, which `brand.rs` itself designates as one of the two files
 /// permitted to hold a legacy brand string.
 fn production_rust_files() -> Vec<String> {
-    let src = manifest_dir().join("src");
     let mut files = Vec::new();
-    collect_rust_files(&src, &mut files);
+    collect_rust_files(&manifest_dir().join("src"), &mut files);
+    let mut crates: Vec<PathBuf> = std::fs::read_dir(manifest_dir().join("crates"))
+        .expect("read the workspace crates")
+        .map(|entry| entry.expect("dir entry").path().join("src"))
+        .filter(|path| path.is_dir())
+        .collect();
+    crates.sort();
+    for source in crates {
+        collect_rust_files(&source, &mut files);
+    }
 
     let mut test_only_stems: BTreeSet<String> = BTreeSet::new();
     for relative in &files {

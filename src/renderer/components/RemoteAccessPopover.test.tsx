@@ -46,7 +46,7 @@ vi.mock('@/stores/project-store', () => ({
   }
 }))
 
-vi.mock('@/stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   useAcpStore: {
     getState: () => ({
       loadSessionIndex: vi.fn(async () => {}),

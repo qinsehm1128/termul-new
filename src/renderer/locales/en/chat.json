@@ -417,9 +417,5 @@
   },
   "launcher": {
     "startTerminal": "Start a terminal in this folder"
-  },
-  "terminalConversation": {
-    "prepareFailed": "Failed to create the conversation",
-    "provisionFailed": "The terminal started but the conversation could not be finalized"
   }
 }
