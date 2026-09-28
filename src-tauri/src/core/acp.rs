@@ -583,7 +583,7 @@ fn compose_acp_core(
     bootstrap
         .application
         .attach_lifecycle(
-            crate::conversation::ConversationLifecycleService::from_terminal(
+            crate::conversation_host::lifecycle_from_terminal(
                 Arc::clone(&manager),
                 terminal_service.clone(),
             )
@@ -1283,7 +1283,7 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 let terminal_runtime = manager
                     .terminal_runtime()
                     .ok_or_else(|| invalid("acp core terminal runtime is not configured"))?;
-                let service = crate::conversation::ConversationLifecycleService::from_terminal(
+                let service = crate::conversation_host::lifecycle_from_terminal(
                     Arc::clone(manager),
                     TerminalServiceHandle::from_runtime(terminal_runtime),
                 )

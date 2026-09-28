@@ -454,9 +454,9 @@ mod tests {
         MIGRATION_MAP_SCHEMA_VERSION,
     };
     use crate::conversation::{
-        ConversationApplicationService, ConversationCreationService, ConversationLifecycleService,
-        ConversationLocator, ConversationMutation, ConversationPersistenceAdapter,
-        ConversationReader, ConversationRepository, ConversationWriter, SessionWorkspaceLocator,
+        ConversationApplicationService, ConversationCreationService, ConversationLocator,
+        ConversationMutation, ConversationPersistenceAdapter, ConversationReader,
+        ConversationRepository, ConversationWriter, SessionWorkspaceLocator,
         SessionWorkspaceService,
     };
     use crate::web::ws::HistoryMode;
@@ -601,8 +601,11 @@ mod tests {
         ));
         conversation
             .attach_lifecycle(
-                ConversationLifecycleService::from_manager(Arc::clone(&acp), Arc::clone(&pty))
-                    .unwrap(),
+                crate::conversation_host::lifecycle_from_manager(
+                    Arc::clone(&acp),
+                    Arc::clone(&pty),
+                )
+                .unwrap(),
             )
             .unwrap();
         let revision = repository.get_conversation(id).unwrap().last_seq;

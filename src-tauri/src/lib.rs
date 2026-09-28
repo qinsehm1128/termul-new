@@ -19,6 +19,7 @@ pub mod credentials;
 mod editor_workspaces;
 mod fs_watcher;
 use se_foundation::host_admission;
+pub mod conversation_host;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
@@ -2843,7 +2844,7 @@ pub fn run() {
                 acp_manager.set_terminal_service(terminal_handle.clone());
                 let acp_handle = crate::core::AcpServiceHandle::in_process(Arc::clone(&acp_manager));
                 let lifecycle =
-                    crate::conversation::ConversationLifecycleService::from_terminal(
+                    crate::conversation_host::lifecycle_from_terminal(
                         Arc::clone(&acp_manager),
                         terminal_handle.clone(),
                     )

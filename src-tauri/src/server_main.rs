@@ -429,28 +429,27 @@ fn main() -> ExitCode {
         ));
         let _services =
             se_manager_lib::core::CoreServices::in_process(Arc::clone(&pty), Arc::clone(&acp));
-        let lifecycle =
-            match se_manager_lib::conversation::ConversationLifecycleService::from_manager(
-                Arc::clone(&acp),
-                Arc::clone(&pty),
+        let lifecycle = match se_manager_lib::conversation_host::lifecycle_from_manager(
+            Arc::clone(&acp),
+            Arc::clone(&pty),
+        ) {
+            Ok(service) => match se_manager_lib::conversation::LifecycleOperationJournal::open(
+                cfg.service_account_state_dir(),
             ) {
-                Ok(service) => match se_manager_lib::conversation::LifecycleOperationJournal::open(
-                    cfg.service_account_state_dir(),
-                ) {
-                    Ok(journal) => service.with_journal(std::sync::Arc::new(journal)),
-                    Err(error) => {
-                        error!(error = %error, "Conversation lifecycle journal open failed");
-                        service
-                    }
-                },
+                Ok(journal) => service.with_journal(std::sync::Arc::new(journal)),
                 Err(error) => {
-                    error!(
-                        code = error.code.as_str(),
-                        "Conversation lifecycle construction failed"
-                    );
-                    return ExitCode::from(1);
+                    error!(error = %error, "Conversation lifecycle journal open failed");
+                    service
                 }
-            };
+            },
+            Err(error) => {
+                error!(
+                    code = error.code.as_str(),
+                    "Conversation lifecycle construction failed"
+                );
+                return ExitCode::from(1);
+            }
+        };
         if let Err(error) = conversation_bootstrap
             .application
             .attach_lifecycle(lifecycle)

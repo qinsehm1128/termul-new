@@ -3133,11 +3133,10 @@ async fn handle_conversation_lifecycle(
             "bootstrap-published PtyManager is unavailable",
         );
     };
-    let service =
-        match crate::conversation::ConversationLifecycleService::from_manager(manager, pty) {
-            Ok(service) => service,
-            Err(error) => return WsReply::err_with_code(id, error.code.as_str(), error.detail),
-        };
+    let service = match crate::conversation_host::lifecycle_from_manager(manager, pty) {
+        Ok(service) => service,
+        Err(error) => return WsReply::err_with_code(id, error.code.as_str(), error.detail),
+    };
     let current_session_id = if matches!(mutation, ConversationWsMutation::Delete) {
         acp.conversation_creation()
             .and_then(|creation| creation.repository().current_binding(conversation_id).ok())
@@ -4931,11 +4930,10 @@ async fn handle_close_session(
                 "bootstrap-published PtyManager is unavailable",
             );
         };
-        let service =
-            match crate::conversation::ConversationLifecycleService::from_manager(manager, pty) {
-                Ok(service) => service,
-                Err(error) => return WsReply::err_with_code(id, error.code.as_str(), error.detail),
-            };
+        let service = match crate::conversation_host::lifecycle_from_manager(manager, pty) {
+            Ok(service) => service,
+            Err(error) => return WsReply::err_with_code(id, error.code.as_str(), error.detail),
+        };
         let expected_revision = match acp
             .conversation_creation()
             .and_then(|creation| creation.repository().get_conversation(conversation_id).ok())

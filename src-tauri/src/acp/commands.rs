@@ -475,29 +475,28 @@ pub async fn acp_close_session(
         .as_ref()
         .ok_or_else(|| "relay unavailable".to_string())?;
     let retirement_id = session_id.0.clone();
-    let result =
-        if let Some(conversation_id) = manager.conversation_id_for_current_session(&session_id.0) {
-            let service = crate::conversation::ConversationLifecycleService::from_manager(
-                manager.clone(),
-                pty.inner().clone(),
-            )
-            .map_err(|error| error.to_string())?;
-            let creation = manager
-                .conversation_creation()
-                .ok_or_else(|| "CONVERSATION_BOOTSTRAP_REQUIRED".to_string())?;
-            let expected_revision = creation
-                .repository()
-                .get_conversation(conversation_id)
-                .map_err(|error| error.to_string())?
-                .last_seq;
-            service
-                .suspend_agent_binding(conversation_id, expected_revision)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        } else {
-            manager.close_session(&agent_id, session_id).await
-        };
+    let result = if let Some(conversation_id) =
+        manager.conversation_id_for_current_session(&session_id.0)
+    {
+        let service =
+            crate::conversation_host::lifecycle_from_manager(manager.clone(), pty.inner().clone())
+                .map_err(|error| error.to_string())?;
+        let creation = manager
+            .conversation_creation()
+            .ok_or_else(|| "CONVERSATION_BOOTSTRAP_REQUIRED".to_string())?;
+        let expected_revision = creation
+            .repository()
+            .get_conversation(conversation_id)
+            .map_err(|error| error.to_string())?
+            .last_seq;
+        service
+            .suspend_agent_binding(conversation_id, expected_revision)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    } else {
+        manager.close_session(&agent_id, session_id).await
+    };
     retire_after_success(result, relay, &retirement_id).await
 }
 

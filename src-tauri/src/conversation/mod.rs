@@ -81,7 +81,7 @@ pub use lifecycle::{
     AgentLifecycleProviderError, AgentLifecycleProviderErrorKind, ConversationAgentLifecycle,
     ConversationDeleteBlocker, ConversationLifecycleAction, ConversationLifecycleError,
     ConversationLifecycleErrorCode, ConversationLifecycleOutcome, ConversationLifecycleService,
-    TerminalResourceInspector,
+    ProviderFuture, Result as LifecycleResult, TerminalResourceInspector,
 };
 pub use lifecycle_journal::{
     deterministic_operation_id, deterministic_recreate_operation_id, lifecycle_journal_root_for,
@@ -149,9 +149,4 @@ pub use workspace_projection::{
 };
 pub use write_authority::{ConversationMutation, ConversationWriteAuthority, ConversationWriter};
 
-// Bootstrap-owned delivery contract consumed by ACP producers. Final integration injects the
-// exact bootstrap coordinator Arc; these types remain transport-neutral and payload-free.
-pub use crate::acp::events::{
-    DeliveryError, DeliveryFailureClass, DeliveryReceipt, DeliveryTicket,
-};
 pub use terminal_intent::{TerminalCwdSource, TerminalSpawnIntentV1};
