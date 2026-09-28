@@ -120,6 +120,7 @@ VERIFICATION_CHECKLIST.md
 
 # Local-only reference checkouts for comparative analysis (never committed)
 /reference/
+/.research/
 
 # Frozen legacy-brand fixture: a fake user repo whose own tracked
 # `gitignore` file and `.termul/` tree are the contract under test. The
