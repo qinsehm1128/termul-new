@@ -55,6 +55,22 @@ impl CoreLaunchConfig {
     }
 }
 
+/// Where spawned Cores write their logs: the GUI's log directory plus the
+/// brand-derived file prefix, resolved once on the GUI's setup thread.
+static CORE_LOG_TARGET: OnceLock<(PathBuf, String)> = OnceLock::new();
+
+/// Record the log location for Cores spawned by this process. Unset (a test
+/// or a caller without a log dir) keeps the Core's stderr discarded.
+pub fn configure_core_logging(log_dir: PathBuf, file_prefix: &str) {
+    let _ = CORE_LOG_TARGET.set((log_dir, file_prefix.to_string()));
+}
+
+fn core_log_file(role: CoreRole) -> Option<PathBuf> {
+    CORE_LOG_TARGET
+        .get()
+        .map(|(dir, prefix)| dir.join(format!("{prefix}-{}.log", role.endpoint_name())))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeclaredCoreAction {
     Preserve,
@@ -714,6 +730,20 @@ pub async fn ensure_core(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(log_file) = core_log_file(role) {
+        match crate::logging::open_core_log_file(&log_file) {
+            Ok(file) => {
+                command
+                    .env(crate::logging::CORE_LOG_FILE_ENV, &log_file)
+                    .stderr(Stdio::from(file));
+            }
+            Err(error) => log::warn!(
+                target: "se_manager::core",
+                "operation=core_log_open role={} stable_code=CORE_LOG_UNAVAILABLE error={error}",
+                role.endpoint_name()
+            ),
+        }
+    }
     let child = command.spawn().map_err(|error| {
         log::error!(
             target: "se_manager::core",
@@ -770,6 +800,16 @@ pub fn profile_root_from_env() -> PathBuf {
 
 #[cfg(any(unix, windows))]
 pub fn run_core_process(role: CoreRole) -> i32 {
+    let logging_to_file = crate::logging::install_core_logger().is_some();
+    if logging_to_file {
+        log::info!(
+            target: "se_manager::core",
+            "operation=core_process_start role={} pid={} version={}",
+            role.endpoint_name(),
+            std::process::id(),
+            env!("CARGO_PKG_VERSION")
+        );
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -790,9 +830,24 @@ pub fn run_core_process(role: CoreRole) -> i32 {
         )),
     };
     match result {
-        Ok(()) => 0,
+        Ok(()) => {
+            log::info!(
+                target: "se_manager::core",
+                "operation=core_process_exit role={} stable_code=OK",
+                role.endpoint_name()
+            );
+            0
+        }
         Err(error) => {
-            eprintln!("{} process failed: {error}", role.endpoint_name());
+            log::error!(
+                target: "se_manager::core",
+                "operation=core_process_exit role={} stable_code={} error={error}",
+                role.endpoint_name(),
+                error.code()
+            );
+            if !logging_to_file {
+                eprintln!("{} process failed: {error}", role.endpoint_name());
+            }
             1
         }
     }

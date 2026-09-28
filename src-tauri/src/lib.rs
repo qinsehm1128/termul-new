@@ -2344,6 +2344,18 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
+            // Cores log next to the GUI log. The file prefix reads the brand
+            // seam, so it is resolved here on the setup thread (FORBID-07).
+            match handle.path().app_log_dir() {
+                Ok(log_dir) => crate::core::launcher::configure_core_logging(
+                    log_dir,
+                    logging::core_log_file_prefix(),
+                ),
+                Err(error) => log::warn!(
+                    target: "se_manager::core",
+                    "operation=core_log_dir stable_code=CORE_LOG_UNAVAILABLE error={error}"
+                ),
+            }
             let conversation_workspace_base = std::env::var("SE_CONVERSATION_WORKSPACE_ROOT")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
