@@ -5022,6 +5022,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "se-quick-terminal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "log",
+ "parking_lot",
+ "se-foundation",
+ "se-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "secret-service"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

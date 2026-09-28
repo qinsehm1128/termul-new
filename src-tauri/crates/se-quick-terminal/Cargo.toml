@@ -1,0 +1,22 @@
+[package]
+name = "se-quick-terminal"
+version = "0.1.0"
+description = "Quick terminal sessions: a folder and a live PTY, independent of agent sessions"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+se-foundation = { path = "../se-foundation" }
+se-pty = { path = "../se-pty" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+parking_lot = "0.12"
+tokio = { version = "1", features = ["sync"] }
+log = "0.4"
+
+[dev-dependencies]
+se-pty = { path = "../se-pty", features = ["test-support"] }
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
