@@ -1,7 +1,7 @@
 /**
  * Host-owned versioned workspace manifest contract (CAP-5 / Story 5).
  *
- * Mirrors the Rust serde shapes in `src-tauri/src/acp/workspace_manifest.rs`
+ * Mirrors the Rust serde shapes in `src-tauri/src/conversation/workspace_manifest.rs`
  * byte-for-byte (camelCase, `deny_unknown_fields` enforced at the host
  * boundary). The host owns one portable manifest per project; the renderer
  * reads/writes/conflict-renders through this contract (Story 6 wires the

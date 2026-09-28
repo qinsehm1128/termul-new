@@ -1,6 +1,7 @@
 //! Host-owned Conversation domain contracts and services.
 
 pub mod application;
+pub mod atomic_file;
 pub mod bootstrap;
 pub mod catalog;
 pub mod contracts;
@@ -14,9 +15,12 @@ pub mod migration;
 pub mod ordered_persistence;
 pub mod persistence_adapter;
 pub mod repository;
+pub mod session_payload;
+pub mod session_persistence;
 pub mod session_workspace;
 pub mod terminal_intent;
 pub mod usage_plan;
+pub mod workspace_manifest;
 pub mod workspace_projection;
 pub mod write_authority;
 

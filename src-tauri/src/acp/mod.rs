@@ -9,7 +9,6 @@
 //! `_bmad-output/implementation-artifacts/spec-adr-003-p0-rust-acp-core.md`.
 
 pub mod archive;
-pub mod atomic_file;
 pub mod catalog;
 pub mod chat_history_store;
 pub mod client;
@@ -25,10 +24,12 @@ pub mod mcp_router;
 pub mod npm_local;
 pub mod project_registry;
 pub mod session;
-pub mod session_payload;
-pub mod session_persistence;
 pub mod terminal;
-pub mod workspace_manifest;
+
+// Session persistence lives with the Conversation domain; the old paths stay.
+pub use crate::conversation::{
+    atomic_file, session_payload, session_persistence, workspace_manifest,
+};
 
 // Re-exported for the renderer bridge (P1+) and `lib.rs` wiring. `AcpManager`
 // is used now (managed in `lib.rs`); the config/id types are part of the public

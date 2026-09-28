@@ -10,7 +10,7 @@
 //! # Storage layout
 //!
 //! One JSON file per project at `<root>/<project_id>.json`, written via
-//! [`crate::acp::atomic_file::replace`] (same-directory temp + fsync + rename,
+//! [`crate::conversation::atomic_file::replace`] (same-directory temp + fsync + rename,
 //! plus Unix parent fsync). A schema-versioned envelope
 //! `{ schemaVersion, manifest }` wraps every file so future migrations route
 //! through a `migrate` hook (mirrors `FileProjectRegistry`). A corrupt file is
@@ -49,7 +49,7 @@ use parking_lot::Mutex as PlMutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::acp::atomic_file;
+use crate::conversation::atomic_file;
 
 /// Current on-disk manifest envelope schema version. Bump when the
 /// [`WorkspaceManifest`] shape changes; future versions route through a

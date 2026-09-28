@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::acp::atomic_file;
+use crate::conversation::atomic_file;
 
 pub const SESSION_SCHEMA_VERSION: u32 = 1;
 const INDEX_FILE: &str = "sessions.json";
@@ -827,13 +827,11 @@ impl SessionPersistence {
     pub async fn session_payload_async(
         self: &Arc<Self>,
         session_id: &str,
-    ) -> Result<crate::acp::session_payload::MaterializedSessionPayload> {
+    ) -> Result<crate::conversation::session_payload::MaterializedSessionPayload> {
         self.flush_session(session_id).await?;
         let metadata = self.metadata(session_id)?;
         let records = self.replay_after_async(session_id.to_string(), 0).await?;
-        Ok(crate::acp::session_payload::materialize_session_payload(
-            &metadata, &records,
-        ))
+        Ok(crate::conversation::session_payload::materialize_session_payload(&metadata, &records))
     }
 
     /// Completed client turn ids reconstructed from durable prompt-complete

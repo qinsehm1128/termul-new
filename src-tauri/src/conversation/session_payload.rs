@@ -32,11 +32,11 @@ use std::fmt;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::acp::session_persistence::{
-    PersistedEventRecord, PersistedSessionStatus, SessionMetadata,
-};
 use crate::conversation::contracts::{
     ConversationHistoryPageV1, ConversationHistoryPageValidationError, ConversationHistoryRecordV1,
+};
+use crate::conversation::session_persistence::{
+    PersistedEventRecord, PersistedSessionStatus, SessionMetadata,
 };
 
 /// The renderer session-metadata shape (`SessionIndexEntry` in
@@ -487,7 +487,7 @@ fn is_empty_text_block(block: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::session_persistence::SESSION_SCHEMA_VERSION;
+    use crate::conversation::session_persistence::SESSION_SCHEMA_VERSION;
     use crate::conversation::write_authority::ConversationMutation;
     use crate::conversation::{
         AgentSessionBinding, AgentSessionBindingState, ConversationCreator, ConversationEventType,

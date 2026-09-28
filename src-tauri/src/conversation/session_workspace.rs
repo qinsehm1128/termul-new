@@ -2084,14 +2084,14 @@ mod tests {
 
     #[tokio::test]
     async fn missing_workspace_projects_one_uniquely_attributable_legacy_manifest() {
-        use crate::acp::workspace_manifest::{
-            EditorDescriptor, LeafNode, PaneNode, TerminalDescriptor, WorkspaceManifest,
-            WorkspaceManifestFile,
-        };
         use crate::conversation::migration::{
             CreatedAtSource, IdentityDecision, LegacyInventoryFileV1, LegacyInventoryRootV1,
             LegacySourceKind, MigrationJournalV1, MigrationMapEntryV1, MigrationMapV1,
             LEGACY_INVENTORY_SCHEMA_VERSION, MIGRATION_MAP_SCHEMA_VERSION,
+        };
+        use crate::conversation::workspace_manifest::{
+            EditorDescriptor, LeafNode, PaneNode, TerminalDescriptor, WorkspaceManifest,
+            WorkspaceManifestFile,
         };
 
         let (_temp, repository, service) = fixture().await;

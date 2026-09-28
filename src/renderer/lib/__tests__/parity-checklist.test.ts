@@ -897,7 +897,7 @@ describe('Parity Checklist Automation', () => {
       const typesPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'workspace-manifest.types.ts')
       expect(existsSync(typesPath), 'workspace-manifest.types.ts should exist').toBe(true)
       const content = readFileSync(typesPath, 'utf-8')
-      // Core shapes mirrored from `src-tauri/src/acp/workspace_manifest.rs`.
+      // Core shapes mirrored from `src-tauri/src/conversation/workspace_manifest.rs`.
       expect(content).toMatch(/export\s+interface\s+WorkspaceManifest\b/)
       expect(content).toMatch(/export\s+type\s+WriteOutcome\b/)
       expect(content).toMatch(/export\s+interface\s+TerminalDescriptor\b/)

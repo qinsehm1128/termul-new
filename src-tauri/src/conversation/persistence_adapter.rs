@@ -14,10 +14,6 @@ use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use crate::acp::session_persistence::{
-    PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionMetadata, TitleSource,
-    SESSION_SCHEMA_VERSION,
-};
 use crate::conversation::contracts::{
     encoded_json_len_bounded, AgentSessionBinding, AgentSessionBindingState,
     ConversationHistoryPageV1, ConversationHistoryRecordV1, ConversationId,
@@ -30,6 +26,10 @@ use crate::conversation::event_log::ConversationEventType;
 use crate::conversation::migration::ConversationReader;
 use crate::conversation::repository::{
     CatalogFlushError, CatalogFlushReceipt, ConversationRepository,
+};
+use crate::conversation::session_persistence::{
+    PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionMetadata, TitleSource,
+    SESSION_SCHEMA_VERSION,
 };
 use crate::conversation::write_authority::{ConversationMutation, ConversationWriter};
 

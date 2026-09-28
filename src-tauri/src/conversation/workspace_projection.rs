@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::acp::workspace_manifest::{PaneNode as LegacyPaneNode, WorkspaceManifestFile};
 use crate::conversation::contracts::ConversationId;
 use crate::conversation::migration::{
     RecoveryItemV1, RecoveryKind, RecoveryProvenanceV1, RecoverySeverity,
@@ -19,6 +18,7 @@ use crate::conversation::session_workspace::{
     SessionWorkspaceResourceDescriptor, SessionWorkspaceSplitNode, SessionWorkspaceV1,
     SESSION_WORKSPACE_SCHEMA_VERSION,
 };
+use crate::conversation::workspace_manifest::{PaneNode as LegacyPaneNode, WorkspaceManifestFile};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -173,10 +173,10 @@ fn project_node(
         LegacyPaneNode::Split(split) => SessionWorkspacePaneNode::Split(SessionWorkspaceSplitNode {
             id: split.id.clone(),
             direction: match split.direction {
-                crate::acp::workspace_manifest::PaneDirection::Horizontal => {
+                crate::conversation::workspace_manifest::PaneDirection::Horizontal => {
                     crate::conversation::session_workspace::SessionWorkspacePaneDirection::Horizontal
                 }
-                crate::acp::workspace_manifest::PaneDirection::Vertical => {
+                crate::conversation::workspace_manifest::PaneDirection::Vertical => {
                     crate::conversation::session_workspace::SessionWorkspacePaneDirection::Vertical
                 }
             },
@@ -241,7 +241,7 @@ fn ambiguous_item(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::workspace_manifest::{
+    use crate::conversation::workspace_manifest::{
         EditorDescriptor, LeafNode, PaneNode, TerminalDescriptor, WorkspaceManifest,
         WorkspaceManifestFile,
     };
