@@ -18,7 +18,7 @@ pub mod core;
 pub mod credentials;
 mod editor_workspaces;
 mod fs_watcher;
-mod host_admission;
+use termul_foundation::host_admission;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
@@ -35,7 +35,7 @@ pub mod migration_detect;
 /// User-initiated merge orchestrator for the pre-rename roots (T-MIG-RUN).
 pub mod migration_run;
 mod migrations;
-mod path_validation;
+use termul_foundation::path_validation;
 mod pty;
 mod remote;
 pub mod scheduled_tasks;
@@ -45,7 +45,7 @@ mod secure_storage;
 // verification — runs under the spec's default `cargo test` gate. Only the
 // standalone binary wiring (server_main.rs) is gated by `standalone-server`.
 pub mod server_update;
-mod shell_paths;
+use termul_foundation::shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
 pub mod skills;

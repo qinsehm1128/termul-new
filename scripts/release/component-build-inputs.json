@@ -7,7 +7,8 @@
     "src-tauri/src/core/ipc.rs",
     "src-tauri/src/core/mod.rs",
     "src-tauri/src/core/transport.rs",
-    "src-tauri/crates/termul-ipc"
+    "src-tauri/crates/termul-ipc",
+    "src-tauri/crates/termul-foundation"
   ],
   "components": {
     "renderer": ["src/renderer", "src/shared", "package.json", "bun.lock"],
@@ -36,14 +37,11 @@
       "src-tauri/src/web/sink.rs",
       "src-tauri/src/web/permissions.rs",
       "src-tauri/src/web/project_registry.rs",
-      "src-tauri/src/host_admission.rs",
       "src-tauri/src/brand.rs",
       "src-tauri/src/legacy_appdata.rs",
       "src-tauri/src/acp_registry_snapshot.rs",
       "src-tauri/src/agent_registry.rs",
-      "src-tauri/src/cli_session",
-      "src-tauri/src/path_validation.rs",
-      "src-tauri/src/shell_paths.rs"
+      "src-tauri/src/cli_session"
     ],
     "terminalCore": [
       "src-tauri/src/core/handles.rs",
@@ -53,9 +51,6 @@
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
       "src-tauri/src/trackers",
-      "src-tauri/src/shell_paths.rs",
-      "src-tauri/src/path_validation.rs",
-      "src-tauri/src/host_admission.rs",
       "src-tauri/src/brand.rs",
       "src-tauri/src/conversation/contracts.rs"
     ]

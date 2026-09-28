@@ -104,7 +104,7 @@ impl HostAdmission {
         let _ = tokio::time::timeout_at(deadline, join).await;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn reopen_for_tests(&self) {
         self.open.store(true, Ordering::SeqCst);
     }

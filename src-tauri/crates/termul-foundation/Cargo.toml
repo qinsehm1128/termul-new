@@ -1,0 +1,20 @@
+[package]
+name = "termul-foundation"
+version = "0.1.0"
+description = "Domain-free building blocks shared by the Se Manager app and its Core crates"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "sync"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+# Test-only hooks (e.g. reopening host admission) for dependents' test builds.
+test-support = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
