@@ -71,14 +71,14 @@ vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
 vi.mock('@/components/workspace/DropZoneOverlay', () => ({
   DropZoneOverlay: () => null
 }))
-vi.mock('@/components/agents/AgentLauncher', () => ({
+vi.mock('@/features/agent-session/agents/AgentLauncher', () => ({
   AgentLauncher: () => <div data-testid="launcher-stub" />
 }))
-vi.mock('@/components/agents/AgentIcon', () => ({
+vi.mock('@/features/agent-session/agents/AgentIcon', () => ({
   AgentIcon: () => <span data-testid="agent-icon-stub" />
 }))
 
-import { useConversationStore } from '@/stores/conversation-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { PaneContent } from './PaneContent'
 
 const editorPane: LeafNode = {

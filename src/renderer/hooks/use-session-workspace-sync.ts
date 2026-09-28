@@ -12,11 +12,14 @@ import type {
   TerminalResourceDescriptor
 } from '@shared/types/session-workspace.types'
 import { useEffect } from 'react'
+import {
+  getCurrentConversation,
+  useConversationStore
+} from '@/features/agent-session/stores/conversation-store'
 import { isTerminalRestoreInProgress } from '@/hooks/useTerminalAutoSave'
 import { logFrontendError } from '@/lib/log-api'
 import { sessionWorkspaceApi } from '@/lib/session-workspace-api'
 import { randomUUID } from '@/lib/uuid'
-import { getCurrentConversation, useConversationStore } from '@/stores/conversation-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'

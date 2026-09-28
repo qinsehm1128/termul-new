@@ -136,7 +136,7 @@ vi.mock('@/stores/project-store', () => ({
 
 const mockConversationState = { activeConversationId: null as string | null }
 
-vi.mock('@/stores/conversation-store', () => ({
+vi.mock('@/features/agent-session/stores/conversation-store', () => ({
   useConversationStore: {
     getState: vi.fn(() => mockConversationState)
   }

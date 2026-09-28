@@ -1,8 +1,8 @@
 import type { ConversationId } from '@shared/types/conversation.types'
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ConversationRecoveryPanel } from '@/components/conversation/ConversationRecoveryPanel'
 import { Button } from '@/components/ui/button'
+import { ConversationRecoveryPanel } from '@/features/agent-session/conversation/ConversationRecoveryPanel'
 import { resolveSessionWorkspaceConflict } from '@/hooks/use-session-workspace-sync'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 

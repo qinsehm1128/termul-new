@@ -110,15 +110,36 @@
                   },
                   {
                     "group": [
-                      "@/stores/conversation-store",
-                      "@/stores/acp-store",
-                      "@/components/agents/**",
-                      "@/components/chat/**",
-                      "@/components/conversation/**",
+                      "@/features/agent-session/**",
+                      "**/agent-session/**",
                       "@/lib/conversation-*",
-                      "@/features/agent-session/**"
+                      "@/lib/acp-*"
                     ],
                     "message": "Quick terminals must not depend on agent sessions."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/renderer/features/agent-session/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@tauri-apps", "@tauri-apps/**"],
+                    "message": "Import Tauri APIs only via src/renderer/lib/ facades (Story 1.6)."
+                  },
+                  {
+                    "group": ["@/features/quick-terminal/**", "**/quick-terminal/**"],
+                    "message": "Agent sessions must not depend on quick terminals."
                   }
                 ]
               }

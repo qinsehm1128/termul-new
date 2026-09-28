@@ -5,8 +5,8 @@ import {
   parseQuickTerminalRecords,
   type QuickTerminalApi
 } from '@shared/types/quick-terminal.types'
-import { remoteAccessHeaders } from '@/lib/acp-transport'
 import { requestHttpIpcResult } from '@/lib/http-ipc-result'
+import { remoteAccessHeaders } from '@/lib/remote-access-credential'
 
 function request<T>(
   path: string,

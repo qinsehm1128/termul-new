@@ -44,6 +44,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { formatNumber } from '@/i18n/format'
 import { gitApi } from '@/lib/git-api'
@@ -53,7 +54,6 @@ import {
   saveGitDiffViewMode
 } from '@/lib/parse-unified-diff'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
 import { diffKey, useGitStatusStore } from '@/stores/git-status-store'
 
 const MAX_COMMIT_MESSAGE_DIFF_CHARS = 120_000

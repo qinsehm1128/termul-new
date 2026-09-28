@@ -2,7 +2,6 @@ import { Clipboard, Plus, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { CustomAcpAgentDialog, exportAgentConfig } from '@/components/agents/CustomAcpAgentDialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,6 +16,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import {
+  CustomAcpAgentDialog,
+  exportAgentConfig
+} from '@/features/agent-session/agents/CustomAcpAgentDialog'
+import { useAcpStore, useConfigWarmState } from '@/features/agent-session/stores/acp-store'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
@@ -28,7 +32,6 @@ import {
 import { dialogApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
-import { useAcpStore, useConfigWarmState } from '@/stores/acp-store'
 
 /** Render a bundled SVG icon string inline (theme-aware via currentColor). */
 function InlineIcon({ svg }: { svg: string }): React.JSX.Element {

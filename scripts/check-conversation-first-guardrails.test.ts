@@ -57,8 +57,8 @@ function root(): string {
   return `
 import { PortableAppEffects as Effects } from '@/app/PortableAppEffects'
 import { createPortableRouter as buildRouter } from '@/app/portable-router'
-import { ConversationHostStatus as Status } from '@/components/conversation/ConversationHostStatus'
-import { ConversationRecoveryPanel as Recovery } from '@/components/conversation/ConversationRecoveryPanel'
+import { ConversationHostStatus as Status } from '@/features/agent-session/conversation/ConversationHostStatus'
+import { ConversationRecoveryPanel as Recovery } from '@/features/agent-session/conversation/ConversationRecoveryPanel'
 const makeRouter = buildRouter
 const router = makeRouter()
 export default function Root() {
@@ -257,8 +257,8 @@ describe('Conversation-first semantic guardrails', () => {
     sources['src/renderer/App.tsx'] = `
 import { PortableAppEffects as Effects } from '@/app/PortableAppEffects'
 import { createPortableRouter as buildRouter } from '@/app/portable-router'
-import { ConversationHostStatus as Status } from '@/components/conversation/ConversationHostStatus'
-import { ConversationRecoveryPanel as Recovery } from '@/components/conversation/ConversationRecoveryPanel'
+import { ConversationHostStatus as Status } from '@/features/agent-session/conversation/ConversationHostStatus'
+import { ConversationRecoveryPanel as Recovery } from '@/features/agent-session/conversation/ConversationRecoveryPanel'
 function disconnected() { buildRouter(); return <Effects /> }
 export default function Root() {
   const Effects = () => null
@@ -461,7 +461,7 @@ export function selectProject() { return dispose('pty') }
   it('rejects a dashboard-owned recovery panel in addition to the real root owner', () => {
     const sources = validSources()
     sources['src/renderer/pages/WorkspaceDashboard.tsx'] = `
-import { ConversationRecoveryPanel } from '@/components/conversation/ConversationRecoveryPanel'
+import { ConversationRecoveryPanel } from '@/features/agent-session/conversation/ConversationRecoveryPanel'
 export default function WorkspaceDashboard() { return <ConversationRecoveryPanel /> }
 `
     expect(findings(sources, 'recovery-owner')).toEqual([

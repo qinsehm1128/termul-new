@@ -1,7 +1,7 @@
 import { MessageSquarePlus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { ConversationList } from '@/components/conversation/ConversationList'
-import { useConversationStore } from '@/stores/conversation-store'
+import { ConversationList } from '@/features/agent-session/conversation/ConversationList'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 export default function WorkspaceDashboard(): React.JSX.Element {

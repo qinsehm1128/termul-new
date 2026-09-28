@@ -1,5 +1,6 @@
 import type { TerminalStatus } from '@shared/types/ipc.types'
 import { useEffect, useRef, useState } from 'react'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { i18n } from '@/i18n'
 import { formatNumber } from '@/i18n/format'
 import { resolveAgentEnv } from '@/lib/agent-launch'
@@ -20,7 +21,6 @@ import type {
   PersistedTerminal,
   PersistedTerminalLayout
 } from '../../shared/types/persistence.types'
-import { useAcpStore } from '../stores/acp-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'

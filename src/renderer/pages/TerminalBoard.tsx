@@ -12,6 +12,7 @@ import {
   type ListRowStatusTone,
   pathBasename
 } from '@/components/lists'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { getColorClasses } from '@/lib/colors'
 import { buildConversationTerminalNames } from '@/lib/conversation-terminal-names'
 import {
@@ -22,7 +23,6 @@ import {
 } from '@/lib/terminal-board'
 import { openBoardProject, openBoardTerminal } from '@/lib/terminal-board-navigation'
 import { cn } from '@/lib/utils'
-import { useConversationStore } from '@/stores/conversation-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useAllTerminals } from '@/stores/terminal-store'
 import type { Terminal } from '@/types/project'

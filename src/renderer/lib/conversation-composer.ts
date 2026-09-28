@@ -7,7 +7,7 @@ import { PersistenceKeys } from '@shared/types/persistence.types'
 import {
   overlayPendingLauncherOptions,
   type PendingLauncherOptions
-} from '@/components/agents/pending-launcher-options'
+} from '@/features/agent-session/agents/pending-launcher-options'
 import type { SessionConfigOption, SessionModelState, SessionModeState } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'

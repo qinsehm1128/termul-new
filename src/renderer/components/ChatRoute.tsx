@@ -3,7 +3,7 @@ import { AlertTriangle, LoaderCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
-import { conversationRouteErrorKey } from '@/components/conversation/ConversationRoute'
+import { conversationRouteErrorKey } from '@/features/agent-session/conversation/ConversationRoute'
 import { conversationApi } from '@/lib/conversation-api'
 import { logFrontendError } from '@/lib/log-api'
 

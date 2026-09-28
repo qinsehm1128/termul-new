@@ -23,7 +23,7 @@ vi.mock('@/components/workspace/PaneRenderer', () => ({
   PaneRenderer: () => <div data-testid="pane-renderer" />
 }))
 
-vi.mock('@/components/conversation/ConversationRoute', () => ({
+vi.mock('@/features/agent-session/conversation/ConversationRoute', () => ({
   ConversationRoute: () => <div data-testid="canonical-conversation-route" />
 }))
 
@@ -53,11 +53,11 @@ vi.mock('./hooks/use-conversation-host-bootstrap', () => ({
   useConversationHostBootstrap: mockConversationHostBootstrap
 }))
 
-vi.mock('@/components/conversation/ConversationHostStatus', () => ({
+vi.mock('@/features/agent-session/conversation/ConversationHostStatus', () => ({
   ConversationHostStatus: () => <div data-testid="conversation-host-status" />
 }))
 
-vi.mock('@/components/conversation/ConversationRecoveryPanel', () => ({
+vi.mock('@/features/agent-session/conversation/ConversationRecoveryPanel', () => ({
   ConversationRecoveryPanel: () => (
     <aside aria-label="Conversation recovery" data-testid="conversation-recovery-panel">
       <button type="button">Inspect preserved source</button>

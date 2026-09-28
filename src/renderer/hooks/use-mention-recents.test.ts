@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MentionMatch } from '@/components/chat/mention-menu-model'
+import type { MentionMatch } from '@/features/agent-session/chat/mention-menu-model'
 import { useMentionRecents } from './use-mention-recents'
 
 const match = (relPath: string, ignored = false): MentionMatch => ({

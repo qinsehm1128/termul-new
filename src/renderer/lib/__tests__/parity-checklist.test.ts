@@ -549,14 +549,14 @@ describe('Parity Checklist Automation', () => {
         expect(
           hasImportedJsx(
             root,
-            '@/components/conversation/ConversationHostStatus',
+            '@/features/agent-session/conversation/ConversationHostStatus',
             'ConversationHostStatus'
           )
         ).toBe(true)
         expect(
           hasImportedJsx(
             root,
-            '@/components/conversation/ConversationRecoveryPanel',
+            '@/features/agent-session/conversation/ConversationRecoveryPanel',
             'ConversationRecoveryPanel'
           )
         ).toBe(true)
@@ -1287,7 +1287,10 @@ describe('Parity Checklist Automation', () => {
     })
 
     it('ACP session creation does not select the user MCP registry', () => {
-      const store = readFileSync(join(LIB_DIR, '..', 'stores', 'acp-store.ts'), 'utf-8')
+      const store = readFileSync(
+        join(LIB_DIR, '..', 'features', 'agent-session', 'stores', 'acp-store.ts'),
+        'utf-8'
+      )
       const manager = readFileSync(
         join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager.rs'),
         'utf-8'

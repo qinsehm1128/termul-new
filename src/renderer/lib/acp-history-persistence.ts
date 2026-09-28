@@ -10,6 +10,7 @@ import {
   conversationHistoryPageEncodedBytes,
   type PersistedSessionSummary
 } from '@shared/types/web-protocol.types'
+import type { ChatMessage, SessionStatus } from '@/features/agent-session/stores/acp-store'
 import { runtimeT } from '@/i18n/runtime'
 import type { ContentBlock, PlanEntry, SessionUsage, ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
@@ -21,7 +22,6 @@ import {
 import { persistenceApi } from '@/lib/api'
 import { conversationIdForIndexEntry } from '@/lib/conversation-binding'
 import { logFrontendError } from '@/lib/log-api'
-import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
 export const SESSION_INDEX_KEY = 'acp/sessions/index'
 export const WIPE_MIGRATION_KEY = 'acp/sessions/migrated-v2'

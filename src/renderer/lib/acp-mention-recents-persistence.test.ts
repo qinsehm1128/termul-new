@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MentionMatch } from '@/components/chat/mention-menu-model'
+import type { MentionMatch } from '@/features/agent-session/chat/mention-menu-model'
 import {
   ACP_MENTION_RECENTS_KEY,
   compositeKey,

@@ -5,17 +5,17 @@ import { useTranslation } from 'react-i18next'
 import { useLocation } from 'react-router-dom'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
-import { AgentIcon } from '@/components/agents/AgentIcon'
-import { AgentLauncher } from '@/components/agents/AgentLauncher'
 import { Skeleton } from '@/components/ui/skeleton'
+import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
+import { AgentLauncher } from '@/features/agent-session/agents/AgentLauncher'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useAddCommand } from '@/hooks/use-command-history'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { resolveConversationSessionId } from '@/lib/conversation-binding'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
-import { useConversationStore } from '@/stores/conversation-store'
 import { useTerminalActions, useTerminalStore } from '@/stores/terminal-store'
 import type { AgentChatTab, WorkspaceTab } from '@/stores/workspace-store'
 import { getAllLeafPanes, retireTerminalRecord, useWorkspaceStore } from '@/stores/workspace-store'
@@ -27,7 +27,9 @@ import { WorkspaceTabBar } from './WorkspaceTabBar'
 const INACTIVE_TAB_PANE_CLASS = 'w-full h-full absolute inset-0 invisible pointer-events-none'
 
 const AgentChatPanel = lazy(() =>
-  import('@/components/chat/AgentChatPanel').then((m) => ({ default: m.AgentChatPanel }))
+  import('@/features/agent-session/chat/AgentChatPanel').then((m) => ({
+    default: m.AgentChatPanel
+  }))
 )
 const BrowserPanel = lazy(() =>
   import('@/components/browser/BrowserPanel').then((m) => ({ default: m.BrowserPanel }))

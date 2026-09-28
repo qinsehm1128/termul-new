@@ -76,11 +76,11 @@ vi.mock('./hooks/use-conversation-host-bootstrap', () => ({
   useConversationHostBootstrap: mockConversationHostBootstrap
 }))
 
-vi.mock('@/components/conversation/ConversationHostStatus', () => ({
+vi.mock('@/features/agent-session/conversation/ConversationHostStatus', () => ({
   ConversationHostStatus: () => <div data-testid="conversation-host-status" />
 }))
 
-vi.mock('@/components/conversation/ConversationRecoveryPanel', () => ({
+vi.mock('@/features/agent-session/conversation/ConversationRecoveryPanel', () => ({
   ConversationRecoveryPanel: () => (
     <aside aria-label="Conversation recovery" data-testid="conversation-recovery-panel">
       <button type="button">Inspect preserved source</button>
@@ -113,7 +113,7 @@ vi.mock('@/lib/tauri-window', () => ({
 
 vi.mock('@/components/ActivityRail', () => ({ ActivityRail: () => null }))
 
-vi.mock('@/components/conversation/ConversationSidebar', () => ({
+vi.mock('@/features/agent-session/conversation/ConversationSidebar', () => ({
   ConversationSidebar: ({ onNewChat }: { onNewChat: () => void }) => (
     <button type="button" aria-label="New Chat" onClick={onNewChat}>
       New Chat
@@ -130,7 +130,7 @@ vi.mock('@/components/workspace/PaneRenderer', () => ({
   PaneRenderer: () => <div data-testid="pane-renderer" />
 }))
 
-vi.mock('@/components/conversation/ConversationRoute', () => ({
+vi.mock('@/features/agent-session/conversation/ConversationRoute', () => ({
   ConversationRoute: () => <div data-testid="canonical-conversation-route" />
 }))
 

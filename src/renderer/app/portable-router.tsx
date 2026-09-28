@@ -1,8 +1,8 @@
 import { lazy, Suspense } from 'react'
 import { createHashRouter, type RouteObject } from 'react-router-dom'
 import { ChatRoute } from '@/components/ChatRoute'
-import { ConversationRoute } from '@/components/conversation/ConversationRoute'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ConversationRoute } from '@/features/agent-session/conversation/ConversationRoute'
 import WorkspaceLayout from '@/layouts/WorkspaceLayout'
 
 const WorkspaceDashboard = lazy(() => import('@/pages/WorkspaceDashboard'))

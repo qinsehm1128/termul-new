@@ -35,7 +35,7 @@ vi.mock('@/stores/remote-status-store', () => ({
     subscribe: () => () => {}
   }
 }))
-vi.mock('@/stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   useAcpStore: { getState: () => ({ syncMcpRegistryToProjectFile: vi.fn() }) }
 }))
 vi.mock('@/stores/terminal-store', () => ({

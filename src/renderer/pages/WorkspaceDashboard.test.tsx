@@ -65,8 +65,8 @@ vi.mock('@/stores/app-settings-store', () => ({
   })
 }))
 
-import { ConversationRecoveryPanel } from '@/components/conversation/ConversationRecoveryPanel'
-import { useConversationStore } from '@/stores/conversation-store'
+import { ConversationRecoveryPanel } from '@/features/agent-session/conversation/ConversationRecoveryPanel'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import WorkspaceDashboard from './WorkspaceDashboard'
 
 const conversationId = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'

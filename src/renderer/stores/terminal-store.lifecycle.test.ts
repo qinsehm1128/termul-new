@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { terminalApi } from '@/lib/terminal-api'
-import { useAcpStore } from '@/stores/acp-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 

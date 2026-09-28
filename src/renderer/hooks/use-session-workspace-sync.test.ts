@@ -38,8 +38,8 @@ vi.mock('@/lib/terminal-api', () => ({
 vi.mock('@/hooks/useTerminalAutoSave', () => ({ isTerminalRestoreInProgress: () => false }))
 
 import type { SessionWorkspaceV1 } from '@shared/types/session-workspace.types'
-import { useAcpStore } from '@/stores/acp-store'
-import { useConversationStore } from '@/stores/conversation-store'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import { useTerminalStore } from '@/stores/terminal-store'

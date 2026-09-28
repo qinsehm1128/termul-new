@@ -79,7 +79,7 @@ const mockAcpState = {
   sessionIndex: [] as Array<{ id: string; projectId: string }>
 }
 
-vi.mock('../stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   useAcpStore: {
     getState: vi.fn(() => mockAcpState)
   }

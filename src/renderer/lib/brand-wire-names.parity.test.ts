@@ -20,7 +20,7 @@
  *
  * On the CSS-property contract, note what the scan actually finds:
  * `--se-keyboard-height` is written in `hooks/use-osk-viewport.ts` and read
- * in `components/chat/AgentChatPanel.tsx`. It is *not* in `index.css` —
+ * in `features/agent-session/chat/AgentChatPanel.tsx`. It is *not* in `index.css` —
  * `index.css` declares no brand-prefixed custom property at all. The stylesheet
  * is still read from disk and folded into the consumer scan so the pairing
  * follows the property if it ever moves into CSS, and so a brand-prefixed

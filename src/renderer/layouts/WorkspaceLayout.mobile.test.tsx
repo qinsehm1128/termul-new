@@ -183,7 +183,7 @@ vi.mock('@/lib/conversation-api', () => ({
   conversationApi: { resolveRecovery: resolveRecoveryMock }
 }))
 vi.mock('@/components/git/GitDiffView', () => ({ GitDiffView: () => null }))
-vi.mock('@/stores/acp-store', () => ({
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
   useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({ selectedAgentConfigId: 'cfg-1', agentConfigs: [{ id: 'cfg-1' }] })
 }))
@@ -275,10 +275,10 @@ vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</di
 vi.mock('@/pages/AppPreferences', () => ({ default: () => <div>preferences</div> }))
 vi.mock('@/pages/ProjectSettings', () => ({ default: () => <div>project-settings</div> }))
 vi.mock('@/components/SeMark', () => ({ SeMark: () => <span>mark</span> }))
-vi.mock('@/components/chat/ChatHistoryTab', () => ({
+vi.mock('@/features/agent-session/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
 }))
-vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
+vi.mock('@/features/agent-session/chat/ProjectSwitcherDrawer', () => ({
   ProjectSwitcherDrawer: () => null
 }))
 vi.mock('@/components/cli-sessions/CliSessionPanel', () => ({
@@ -361,9 +361,9 @@ vi.mock('@/components/ssh/SSHFileExplorer', () => ({
   SSHFileExplorer: () => <div data-testid="ssh-file-explorer-stub" />
 }))
 
-import { ConversationRecoveryPanel } from '@/components/conversation/ConversationRecoveryPanel'
+import { ConversationRecoveryPanel } from '@/features/agent-session/conversation/ConversationRecoveryPanel'
+import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import WorkspaceDashboard from '@/pages/WorkspaceDashboard'
-import { useConversationStore } from '@/stores/conversation-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import WorkspaceLayout from './WorkspaceLayout'
 
