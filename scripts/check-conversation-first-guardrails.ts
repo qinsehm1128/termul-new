@@ -1506,7 +1506,7 @@ function checkNativeCi(findings: GuardFinding[], validation: ParsedWorkflow): vo
     )
   )
   for (const required of [
-    'cargo test --locked conversation::native_durability_tests',
+    'cargo test --locked -p se-agent-session native_durability_tests',
     'cargo test --locked --test conversation_first_guardrails',
     'cargo build --locked --bin se-server --features standalone-server',
     'cargo clippy --locked --bin se-server --features standalone-server -- -D warnings',

@@ -110,7 +110,7 @@ jobs:
           - platform: macos
           - platform: windows
     steps:
-      - run: cargo test --locked conversation::native_durability_tests
+      - run: cargo test --locked -p se-agent-session native_durability_tests
   rust-checks:
     steps:
       - run: cargo test --locked --test conversation_first_guardrails

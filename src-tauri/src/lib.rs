@@ -10,7 +10,7 @@ pub mod brand;
 mod browser_tab_manager;
 mod cli_session;
 mod commands;
-pub mod conversation;
+pub use se_agent_session as conversation;
 pub mod core;
 /// The injectable seam every OS-keychain read/write goes through. Public
 /// because the brand-migration harness in `tests/` links this crate as an

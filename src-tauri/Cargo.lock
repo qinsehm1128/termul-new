@@ -4899,6 +4899,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "se-agent-session"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "chrono",
+ "fs2",
+ "futures",
+ "libc",
+ "log",
+ "parking_lot",
+ "se-foundation",
+ "se-pty",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "se-foundation"
 version = "0.1.0"
 dependencies = [
@@ -4955,6 +4976,7 @@ dependencies = [
  "rmcp",
  "rusqlite",
  "rust-embed",
+ "se-agent-session",
  "se-foundation",
  "se-ipc",
  "se-pty",

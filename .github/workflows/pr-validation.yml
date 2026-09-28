@@ -227,19 +227,19 @@ jobs:
 
       - name: Migration recovery matrix
         working-directory: src-tauri
-        run: cargo test --locked conversation::migration
+        run: "cargo test --locked -p se-agent-session migration::"
 
       - name: Repository recovery matrix
         working-directory: src-tauri
-        run: cargo test --locked conversation::repository
+        run: "cargo test --locked -p se-agent-session repository::"
 
       - name: SessionWorkspace recovery matrix
         working-directory: src-tauri
-        run: cargo test --locked conversation::session_workspace
+        run: "cargo test --locked -p se-agent-session session_workspace::"
 
       - name: Native replacement and restart matrix
         working-directory: src-tauri
-        run: cargo test --locked conversation::native_durability_tests
+        run: cargo test --locked -p se-agent-session native_durability_tests
 
   rust-checks:
     name: Rust Checks

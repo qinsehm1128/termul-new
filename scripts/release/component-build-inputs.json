@@ -22,7 +22,9 @@
       "src-tauri/src/core/acp.rs",
       "src-tauri/src/core/handles.rs",
       "src-tauri/src/acp",
-      "src-tauri/src/conversation",
+      "src-tauri/crates/se-agent-session",
+      "src-tauri/src/conversation_host.rs",
+      "src-tauri/src/conversation_roots.rs",
       "src-tauri/src/memory_index",
       "src-tauri/src/scheduled_tasks",
       "src-tauri/src/core/launcher.rs",
@@ -54,7 +56,7 @@
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
       "src-tauri/src/brand.rs",
-      "src-tauri/src/conversation/contracts.rs"
+      "src-tauri/crates/se-agent-session"
     ]
   },
   "acknowledgedExternalModules": {

@@ -144,7 +144,7 @@ ALLOWED_SITES=(
   #    constant character for character, so the exemption cannot drift apart
   #    from `brand.rs` without a red test.
   'src-tauri/src/skills/provisioner.rs:134:#[serde(alias = "managedByTermul")]'
-  'src-tauri/src/conversation/contracts.rs:314:#[serde(rename = "termul")]'
+  'src-tauri/crates/se-agent-session/src/contracts.rs:252:#[serde(rename = "termul")]'
 
   # -- iOS compatibility reads. Six `legacy*` constants, each read-only, each
   #    naming a key or directory already on a paired phone. Swift has no
@@ -187,7 +187,7 @@ ALLOWED_SITES=(
   #    the legacy binding hash is a domain separator over data already written;
   #    changing either makes existing user data unreachable.
   'src-tauri/src/migration_detect.rs:58:pub const PERSISTENCE_STORE_FILE: &str = "termul-data.json";'
-  'src-tauri/src/conversation/migration/legacy.rs:1380:hasher.update(b"termul-legacy-binding\0");'
+  'src-tauri/crates/se-agent-session/src/migration/legacy.rs:1379:hasher.update(b"termul-legacy-binding\0");'
 
   # -- explicit legacy spellings carried by `brandedStorageKey`, so a flipped
   #    web-storage key can still read the value the user already has. Write

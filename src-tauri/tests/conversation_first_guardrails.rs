@@ -91,15 +91,19 @@ const PROTECTED_AUTHORIZE_TYPES: &[&str] = &[
 ];
 const PROTECTED_AUTHORIZE_RECEIVERS: &[&str] = &["authority", "writer", "self"];
 
+/// `cfg(test)`, or a workspace crate's `cfg(any(test, feature = "test-support"))`:
+/// that feature is only ever enabled from dev-dependencies (see
+/// `test_support_features_are_enabled_only_from_dev_dependencies`), so both
+/// compile out of every release build.
 fn is_cfg_test(attributes: &[Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("test")
             || (attribute.path().is_ident("cfg")
                 && attribute.meta.require_list().is_ok_and(|list| {
-                    list.tokens
-                        .to_string()
-                        .split_whitespace()
-                        .any(|part| part == "test")
+                    let tokens = list.tokens.to_string();
+                    tokens.split_whitespace().any(|part| part == "test")
+                        || tokens.split_whitespace().collect::<String>()
+                            == r#"any(test,feature="test-support")"#
                 }))
     })
 }
@@ -649,6 +653,17 @@ fn rust_sources(root: &Path) -> Vec<PathBuf> {
 
     let mut paths = Vec::new();
     visit(&root.join("src"), &mut paths);
+    // Workspace crates are production code too: the agent-session crate holds
+    // the repository and its sole writer.
+    let mut crates = fs::read_dir(root.join("crates"))
+        .unwrap_or_else(|error| panic!("failed to read crates: {error}"))
+        .map(|entry| entry.expect("enumerate crates").path().join("src"))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    crates.sort();
+    for source in crates {
+        visit(&source, &mut paths);
+    }
     paths
 }
 
@@ -804,10 +819,10 @@ fn reachable_has_protected_authorize(module: &ModuleInfo, entry: &str) -> bool {
 }
 
 fn check_repository(modules: &[ModuleInfo], findings: &mut Vec<Finding>) {
-    let Some(repository) = module_by_suffix(modules, "conversation/repository.rs") else {
+    let Some(repository) = module_by_suffix(modules, "se-agent-session/src/repository.rs") else {
         findings.push(Finding {
             rule: "sole-writer",
-            file: "src/conversation/repository.rs".to_string(),
+            file: "crates/se-agent-session/src/repository.rs".to_string(),
             line: 1,
             message: "ConversationRepository source is missing".to_string(),
         });
@@ -838,8 +853,10 @@ fn check_repository(modules: &[ModuleInfo], findings: &mut Vec<Finding>) {
     }
 
     for module in modules {
-        if module.file.ends_with("conversation/repository.rs")
-            || module.file.ends_with("conversation/write_authority.rs")
+        if module.file.ends_with("se-agent-session/src/repository.rs")
+            || module
+                .file
+                .ends_with("se-agent-session/src/write_authority.rs")
         {
             continue;
         }
@@ -887,7 +904,8 @@ fn check_repository(modules: &[ModuleInfo], findings: &mut Vec<Finding>) {
         }
     }
 
-    let Some(authority) = module_by_suffix(modules, "conversation/write_authority.rs") else {
+    let Some(authority) = module_by_suffix(modules, "se-agent-session/src/write_authority.rs")
+    else {
         return;
     };
     for required in [
@@ -1120,6 +1138,72 @@ fn fixture(file: &str, source: &str) -> ModuleInfo {
     analyze_source(file.to_string(), source.to_string()).expect("fixture must parse")
 }
 
+/// Test hooks gated on a crate's `test-support` feature are only test-only
+/// while no production dependency table turns that feature on.
+#[test]
+fn test_support_features_are_enabled_only_from_dev_dependencies() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut manifests = vec![manifest_dir.join("Cargo.toml")];
+    let mut crates = fs::read_dir(manifest_dir.join("crates"))
+        .expect("read the workspace crates")
+        .map(|entry| entry.expect("enumerate crates").path().join("Cargo.toml"))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    crates.sort();
+    manifests.extend(crates);
+    let offending = manifests
+        .iter()
+        .flat_map(|path| {
+            let source = fs::read_to_string(path).expect("read a manifest");
+            production_lines_enabling_test_support(&source)
+                .into_iter()
+                .map(|line| format!("{}: {line}", path.display()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        offending.is_empty(),
+        "test-support may only be enabled from dev-dependencies:\n{}",
+        offending.join("\n")
+    );
+}
+
+/// Lines in non-dev dependency tables that turn on a `test-support` feature.
+fn production_lines_enabling_test_support(manifest: &str) -> Vec<String> {
+    let mut in_production_dependencies = false;
+    let mut found = Vec::new();
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_production_dependencies = (trimmed.ends_with("dependencies]")
+                && !trimmed.ends_with("dev-dependencies]"))
+                || trimmed.contains("dependencies.") && !trimmed.contains("dev-dependencies.");
+            continue;
+        }
+        if in_production_dependencies && trimmed.contains("test-support") {
+            found.push(trimmed.to_string());
+        }
+    }
+    found
+}
+
+#[test]
+fn a_production_dependency_enabling_test_support_is_caught() {
+    let manifest = r#"
+[dependencies]
+se-agent-session = { path = "crates/se-agent-session", features = ["test-support"] }
+
+[dev-dependencies]
+se-pty = { path = "crates/se-pty", features = ["test-support"] }
+"#;
+    assert_eq!(
+        production_lines_enabling_test_support(manifest),
+        vec![
+            r#"se-agent-session = { path = "crates/se-agent-session", features = ["test-support"] }"#
+        ]
+    );
+}
+
 #[test]
 fn production_conversation_first_rust_guardrails_are_semantic() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1187,7 +1271,7 @@ const DECOY: &str = "serve_router kill_all";
 #[test]
 fn repository_and_capability_aliases_remain_visible_to_the_ast_guard() {
     let repository = fixture(
-        "src/conversation/repository.rs",
+        "crates/se-agent-session/src/repository.rs",
         &format!(
             "pub struct ConversationRepository;\nstruct RepositoryWritePermit;\nimpl ConversationRepository {{ {} }}",
             REPOSITORY_MUTATORS
@@ -1198,7 +1282,7 @@ fn repository_and_capability_aliases_remain_visible_to_the_ast_guard() {
         ),
     );
     let authority = fixture(
-        "src/conversation/write_authority.rs",
+        "crates/se-agent-session/src/write_authority.rs",
         r#"
 pub struct ConversationWriteAuthority;
 pub struct ConversationWriter;
@@ -1208,7 +1292,7 @@ impl ConversationWriter { #[cfg(test)] fn for_test() {} }
 "#,
     );
     let bypass = fixture(
-        "src/conversation/moved_writer.rs",
+        "crates/se-agent-session/src/moved_writer.rs",
         "pub fn mutate(repo: &Repo) { repo.append_event(value); }",
     );
     let mut findings = Vec::new();
@@ -1277,7 +1361,7 @@ pub fn handler(_authority: &Authority, _principal: &Principal) { let _ = RemoteC
     }));
 
     let repository = fixture(
-        "src/conversation/repository.rs",
+        "crates/se-agent-session/src/repository.rs",
         &format!(
             "pub struct ConversationRepository;\nstruct RepositoryWritePermit;\nimpl ConversationRepository {{ {} }}",
             REPOSITORY_MUTATORS
@@ -1288,7 +1372,7 @@ pub fn handler(_authority: &Authority, _principal: &Principal) { let _ = RemoteC
         ),
     );
     let authority = fixture(
-        "src/conversation/write_authority.rs",
+        "crates/se-agent-session/src/write_authority.rs",
         r#"
 pub struct ConversationWriteAuthority;
 pub struct ConversationWriter;
@@ -1298,7 +1382,7 @@ impl ConversationWriter { #[cfg(test)] fn for_test() {} }
 "#,
     );
     let disconnected_writer = fixture(
-        "src/conversation/application.rs",
+        "crates/se-agent-session/src/application.rs",
         r#"
 fn decoy(writer: &Writer) { writer.authorize(); }
 fn mutate(repo: &Repo, permit: &Permit) { repo.append_event(permit, value); }
