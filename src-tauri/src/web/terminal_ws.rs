@@ -32,7 +32,8 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::conversation::ConversationId;
-use crate::pty::manager::{TerminalReplay, TerminalResumeRequest, TerminalSpawnIntentV1};
+use crate::conversation::TerminalSpawnIntentV1;
+use crate::pty::manager::{TerminalReplay, TerminalResumeRequest};
 use crate::trackers::TerminalDisplayMode;
 use crate::web::auth::{
     auth_error_response, RemoteAccessAuthority, RemoteAuthError, RemoteCapability, RemotePrincipal,
@@ -729,8 +730,8 @@ async fn handle(
                 .map_err(|error| ("VALIDATION_ERROR", error.to_string()))?;
             let conversation_id = intent.conversation_id;
             let cwd_source = match intent.cwd_source {
-                crate::pty::manager::TerminalCwdSource::Workspace => "workspace",
-                crate::pty::manager::TerminalCwdSource::ExecutionTarget => "executionTarget",
+                crate::conversation::TerminalCwdSource::Workspace => "workspace",
+                crate::conversation::TerminalCwdSource::ExecutionTarget => "executionTarget",
             };
             info!(
                 "[terminal-ws] spawn requested conversation_id={} project_attribution_present={} cwd_source={}",

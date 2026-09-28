@@ -46,7 +46,7 @@ use crate::conversation::session_workspace::{
     SESSION_WORKSPACE_SCHEMA_VERSION,
 };
 use crate::conversation::write_authority::{ConversationMutation, ConversationWriter};
-use crate::pty::manager::{TerminalCwdSource, TerminalSpawnIntentV1};
+use crate::conversation::{TerminalCwdSource, TerminalSpawnIntentV1};
 use crate::pty::PtyManager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -410,7 +410,8 @@ impl TerminalResourceInspector for PtyManager {
         conversation: &'a ConversationRecordV2,
     ) -> ProviderFuture<'a, std::result::Result<String, String>> {
         Box::pin(async move {
-            PtyManager::spawn_for_conversation(self, intent, conversation, None)
+            let options = intent.into_trusted_options(conversation)?;
+            PtyManager::spawn(self, options, None)
                 .await
                 .map(|spawned| spawned.info.id)
         })
@@ -473,8 +474,9 @@ impl TerminalResourceInspector for crate::core::TerminalServiceHandle {
         conversation: &'a ConversationRecordV2,
     ) -> ProviderFuture<'a, std::result::Result<String, String>> {
         Box::pin(async move {
+            let options = intent.into_trusted_options(conversation)?;
             self.runtime()
-                .spawn_for_conversation(intent, conversation)
+                .spawn_trusted(options)
                 .await
                 .map_err(|error| error.to_string())
         })
@@ -3711,18 +3713,17 @@ mod tests {
         )
         .with_journal(Arc::clone(&fixture.journal));
         let conversation = fixture.repository.get_conversation(fixture.id).unwrap();
+        let options = TerminalSpawnIntentV1 {
+            conversation_id: fixture.id,
+            project_id: None,
+            cwd_source: TerminalCwdSource::Workspace,
+            cols: 80,
+            rows: 24,
+        }
+        .into_trusted_options(&conversation)
+        .unwrap();
         let spawned = pty
-            .spawn_for_conversation(
-                TerminalSpawnIntentV1 {
-                    conversation_id: fixture.id,
-                    project_id: None,
-                    cwd_source: TerminalCwdSource::Workspace,
-                    cols: 80,
-                    rows: 24,
-                },
-                &conversation,
-                None,
-            )
+            .spawn(options, None)
             .await
             .expect("spawn original unix pty");
         let old_id = spawned.info.id.clone();

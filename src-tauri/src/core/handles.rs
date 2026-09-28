@@ -13,9 +13,8 @@ use super::acp::AcpCoreClient;
 use super::ipc::{CoreError, CoreErrorPayload, CoreRequest, CoreResponse};
 use super::terminal::TerminalCoreClient;
 use crate::acp::AcpManager;
-use crate::conversation::{ConversationId, ConversationRecordV2};
-use crate::pty::manager::TerminalSpawnIntentV1;
-use crate::pty::PtyManager;
+use crate::conversation::ConversationId;
+use crate::pty::{PtyManager, SpawnOptions};
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -70,12 +69,10 @@ pub trait TerminalRuntimeHandle: Send + Sync {
             "conversation-scoped terminal termination is unavailable".into(),
         ))
     }
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
-        let _ = (intent, conversation);
+    /// Spawn a terminal from options the caller already derived on the
+    /// trusted host side (see `conversation::TerminalSpawnIntentV1`).
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
+        let _ = options;
         Err(CoreError::InvalidRequest(
             "conversation terminal spawn is unavailable".into(),
         ))
@@ -261,14 +258,10 @@ impl TerminalRuntimeHandle for InProcessTerminalRuntime {
         })
     }
 
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
         let spawned = self
             .manager()?
-            .spawn_for_conversation(intent, conversation, None)
+            .spawn(options, None)
             .await
             .map_err(map_spawn_scope_error)?;
         Ok(spawned.info.id)
@@ -409,13 +402,9 @@ impl TerminalRuntimeHandle for SwitchableTerminalRuntime {
             .await
     }
 
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
         let runtime = Arc::clone(&self.current.read());
-        runtime.spawn_for_conversation(intent, conversation).await
+        runtime.spawn_trusted(options).await
     }
 
     fn is_live(&self, terminal_id: &str) -> bool {

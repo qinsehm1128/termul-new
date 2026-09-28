@@ -15,11 +15,10 @@ use super::ipc::{
     CURRENT_PROTOCOL_VERSION,
 };
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
-use crate::conversation::{ConversationId, ConversationRecordV2};
+use crate::conversation::ConversationId;
 use crate::pty::claims::RotatedClaim;
 use crate::pty::manager::{
     SpawnedTerminal, TerminalAttachResult, TerminalResumeGrant, TerminalResumeRequest,
-    TerminalSpawnIntentV1,
 };
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::trackers::{
@@ -1591,18 +1590,7 @@ impl TerminalRuntimeHandle for TerminalCoreClient {
         .await
     }
 
-    async fn spawn_for_conversation(
-        &self,
-        intent: TerminalSpawnIntentV1,
-        conversation: &ConversationRecordV2,
-    ) -> Result<String, CoreError> {
-        let options = intent.into_trusted_options(conversation).map_err(|error| {
-            if error.ends_with("scope is unauthorized") {
-                CoreError::Unauthorized
-            } else {
-                invalid(error)
-            }
-        })?;
+    async fn spawn_trusted(&self, options: SpawnOptions) -> Result<String, CoreError> {
         let spawned = TerminalCoreClient::spawn(self, options).await?;
         Ok(spawned.info.id)
     }

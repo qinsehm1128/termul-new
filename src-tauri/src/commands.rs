@@ -1,4 +1,5 @@
 use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManager};
+use crate::conversation::TerminalSpawnIntentV1;
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
@@ -7,7 +8,6 @@ use crate::pty::claims::{ClaimError, RotatedClaim};
 use crate::pty::manager::{
     SpawnedTerminal, TerminalAttachResult, TerminalCleanupFailure, TerminalCleanupStage,
     TerminalLifecycleState, TerminalReplay, TerminalResumeGrant, TerminalResumeRequest,
-    TerminalSpawnIntentV1,
 };
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::remote;
@@ -627,8 +627,8 @@ pub(crate) async fn terminal_spawn_resource_via_core(
 }
 
 /// Remote-only spawn path. The wire payload is already narrowed to
-/// [`TerminalSpawnIntentV1`]; `PtyManager` derives every executable, shell,
-/// environment, and cwd value from the host-owned Conversation record.
+/// [`TerminalSpawnIntentV1`]; every executable, shell, environment, and cwd
+/// value is derived from the host-owned Conversation record.
 pub(crate) async fn terminal_spawn_intent_resource(
     intent: TerminalSpawnIntentV1,
     conversation: &crate::conversation::ConversationRecordV2,
@@ -645,10 +645,11 @@ pub(crate) async fn terminal_spawn_intent_resource(
         return IpcResult::error(error.detail, error.code.as_str());
     }
 
-    let spawned = match pty_manager
-        .spawn_for_conversation(intent, conversation, None)
-        .await
-    {
+    let spawned = match intent.into_trusted_options(conversation) {
+        Ok(options) => pty_manager.spawn(options, None).await,
+        Err(error) => Err(error),
+    };
+    let spawned = match spawned {
         Ok(spawned) => spawned,
         Err(error) if error.ends_with("scope is unauthorized") => {
             return IpcResult::error("Unauthorized", "UNAUTHORIZED")

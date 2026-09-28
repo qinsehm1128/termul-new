@@ -15,6 +15,7 @@ pub mod ordered_persistence;
 pub mod persistence_adapter;
 pub mod repository;
 pub mod session_workspace;
+pub mod terminal_intent;
 pub mod usage_plan;
 pub mod workspace_projection;
 pub mod write_authority;
@@ -153,3 +154,4 @@ pub use write_authority::{ConversationMutation, ConversationWriteAuthority, Conv
 pub use crate::acp::events::{
     DeliveryError, DeliveryFailureClass, DeliveryReceipt, DeliveryTicket,
 };
+pub use terminal_intent::{TerminalCwdSource, TerminalSpawnIntentV1};
