@@ -251,3 +251,57 @@ async fn real_acp_core_process_serves_control_plane_and_survives_reconnect() {
     workspace.close().unwrap();
     profile.close().unwrap();
 }
+
+/// One GUI connection carries every call. An agent that never finishes its
+/// handshake keeps `spawnAgent` open; later calls on the same connection —
+/// here opening the Conversation list — must still be answered meanwhile.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_acp_core_answers_other_calls_while_an_agent_spawn_is_stalled() {
+    let profile = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::AcpCore);
+    let exe = env!("CARGO_BIN_EXE_se-manager");
+    let child = Command::new(exe)
+        .arg("--acp-core")
+        .env("TERMUL_CORE_PROFILE_ROOT", profile.path())
+        .env("TERMUL_CORE_WORKSPACE_ROOT", workspace.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn --acp-core");
+    let _child = CoreChild(child);
+
+    let client = std::sync::Arc::new(wait_for_client(&endpoint).await);
+    let stalled = {
+        let client = std::sync::Arc::clone(&client);
+        tokio::spawn(async move {
+            client
+                .request(
+                    "spawnAgent",
+                    json!({ "name": "stalled", "command": "sleep", "args": ["20"] }),
+                )
+                .await
+        })
+    };
+    // Let the spawn reach the Core and start waiting on the silent agent.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !stalled.is_finished(),
+        "the silent agent keeps spawnAgent open"
+    );
+
+    let conversations = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.request("conversationList", serde_json::Value::Null),
+    )
+    .await
+    .expect("conversationList is not held behind the stalled spawn")
+    .expect("conversationList");
+    assert!(conversations.is_array() || conversations.is_object());
+    assert!(!stalled.is_finished(), "the spawn was still in flight");
+
+    stalled.abort();
+    workspace.close().unwrap();
+    profile.close().unwrap();
+}

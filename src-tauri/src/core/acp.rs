@@ -764,25 +764,65 @@ async fn serve_connection_requests(
     writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
     state: &Arc<AcpCoreState>,
 ) -> Result<(), CoreError> {
+    let answer = {
+        let state = Arc::clone(state);
+        move |request: CoreRequest| {
+            let state = Arc::clone(&state);
+            async move { response(request.id, dispatch(&state, &request).await) }
+        }
+    };
+    if serve_requests_concurrently(reader, writer, answer).await? {
+        let _ = state.shutdown.send(true);
+    }
+    Ok(())
+}
+
+/// Answers each request on its own task. The GUI shares one connection for
+/// every call, and some calls stay open for a long time (`sendPrompt` lasts a
+/// whole agent turn, spawning waits for agent warm-up); answered in order,
+/// they held every later request — opening a Conversation, cancelling a
+/// prompt — until they finished. Replies carry the request id and the client
+/// matches them in any order. `shutdown` is answered inline and ends the loop;
+/// returns whether it did.
+async fn serve_requests_concurrently<A, F>(
+    reader: &mut CoreReadHalf,
+    writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
+    answer: A,
+) -> Result<bool, CoreError>
+where
+    A: Fn(CoreRequest) -> F,
+    F: std::future::Future<Output = CoreResponse> + Send + 'static,
+{
     loop {
         let payload = match read_frame(reader).await {
             Ok(payload) => payload,
-            Err(CoreError::Io(_)) => return Ok(()),
+            Err(CoreError::Io(_)) => return Ok(false),
             Err(error) => return Err(error),
         };
         let request: CoreRequest = serde_json::from_slice(&payload).map_err(|error| {
             CoreError::InvalidFrame(format!("invalid ACP core request: {error}"))
         })?;
-        let shutdown = request.method == METHOD_SHUTDOWN;
-        let reply = response(request.id, dispatch(state, &request).await);
-        {
+        if request.method == METHOD_SHUTDOWN {
+            let reply = answer(request).await;
             let mut writer = writer.lock().await;
             write_json_frame(&mut *writer, &reply).await?;
+            return Ok(true);
         }
-        if shutdown {
-            let _ = state.shutdown.send(true);
-            return Ok(());
-        }
+        let reply = answer(request);
+        let writer = Arc::clone(writer);
+        tokio::spawn(async move {
+            let reply = reply.await;
+            let mut writer = writer.lock().await;
+            if let Err(error) = write_json_frame(&mut *writer, &reply).await {
+                // The client hung up; the reader loop ends on its own.
+                log::debug!(
+                    target: "se_manager::core",
+                    "operation=acp_core_reply request_id={} stable_code={} error={error}",
+                    reply.id,
+                    error.code()
+                );
+            }
+        });
     }
 }
 
@@ -2631,6 +2671,63 @@ mod tests {
             METHOD_MEMORY_UNIVERSAL_MCP_INVOCATION,
             "memoryUniversalMcpInvocation"
         );
+    }
+
+    #[tokio::test]
+    async fn acp_core_answers_later_requests_while_an_earlier_one_is_still_running() {
+        let (server, mut client) = tokio::net::UnixStream::pair().expect("socket pair");
+        let (mut reader, writer) = CoreServerStream::Unix(server).into_split();
+        let writer = Arc::new(tokio::sync::Mutex::new(writer));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let answer = {
+            let release = Arc::clone(&release);
+            move |request: CoreRequest| {
+                let release = Arc::clone(&release);
+                async move {
+                    if request.method == "slow" {
+                        release.notified().await;
+                    }
+                    response(request.id, Ok(Value::Null))
+                }
+            }
+        };
+        let serving =
+            tokio::spawn(
+                async move { serve_requests_concurrently(&mut reader, &writer, answer).await },
+            );
+
+        for (id, method) in [(1, "slow"), (2, "fast")] {
+            let request = CoreRequest {
+                id,
+                method: method.to_string(),
+                params: Value::Null,
+            };
+            write_json_frame(&mut client, &request)
+                .await
+                .expect("request");
+        }
+        let first: CoreResponse =
+            tokio::time::timeout(Duration::from_secs(5), read_json_frame(&mut client))
+                .await
+                .expect("the fast request is not held behind the slow one")
+                .expect("reply");
+        assert_eq!(first.id, 2);
+
+        release.notify_one();
+        let second: CoreResponse =
+            tokio::time::timeout(Duration::from_secs(5), read_json_frame(&mut client))
+                .await
+                .expect("the slow request still gets its reply")
+                .expect("reply");
+        assert_eq!(second.id, 1);
+
+        drop(client);
+        let shutdown = tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .expect("loop ends after hang-up")
+            .expect("serving task")
+            .expect("clean hang-up");
+        assert!(!shutdown);
     }
 
     #[tokio::test]
