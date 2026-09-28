@@ -232,7 +232,7 @@ pub fn classify_core_identity(ack: &CoreHelloAck, role: CoreRole) -> CoreIdentit
     }
 }
 
-pub fn terminal_replacement_is_safe(active_resources: u32) -> bool {
+pub fn core_replacement_is_safe(active_resources: u32) -> bool {
     active_resources == 0
 }
 
@@ -251,10 +251,12 @@ pub(crate) enum LiveCoreReconcileDecision {
 /// Identity-aware decision for a live, compatible Core.
 ///
 /// No declared action (no plan) adopts. A matching build id always adopts,
-/// including a Terminal Core with active PTYs. Only a mismatched Terminal
-/// Core whose action is `defer-if-active` waits while PTYs are active.
-/// `preserve` still compares identity: a match adopts and a mismatch replaces.
-/// `restart` replaces on mismatch. Unsupported actions fail closed.
+/// including a Core with active PTYs or agent sessions. A mismatched Core whose
+/// action is `defer-if-active` waits while it still has active resources
+/// (Terminal Core: running PTYs; ACP Core: live agents), so an update never
+/// ends that work. `preserve` still compares identity: a match adopts and a
+/// mismatch replaces. `restart` replaces on mismatch. Unsupported actions fail
+/// closed.
 pub(crate) fn decide_live_core_reconciliation(
     role: CoreRole,
     action: Option<DeclaredCoreAction>,
@@ -270,10 +272,7 @@ pub(crate) fn decide_live_core_reconciliation(
     if identity_matches {
         return LiveCoreReconcileDecision::Adopt;
     }
-    if role == CoreRole::TerminalCore
-        && action == DeclaredCoreAction::DeferIfActive
-        && !terminal_replacement_is_safe(active_resources)
-    {
+    if action == DeclaredCoreAction::DeferIfActive && !core_replacement_is_safe(active_resources) {
         return LiveCoreReconcileDecision::Defer;
     }
     LiveCoreReconcileDecision::Replace
@@ -289,9 +288,9 @@ pub(crate) enum RequiredCoreIdentityAssessment {
 
 /// Whether one required Core identity may contribute to clearing the plan.
 ///
-/// Terminal idleness blocks completion only while that Core is still the one
-/// being replaced (`defer-if-active` + mismatched identity + active PTYs).
-/// A matching Terminal Core is satisfied even when PTYs are active.
+/// Activity blocks completion only while that Core is still the one being
+/// replaced (`defer-if-active` + mismatched identity + active PTYs or agents).
+/// A matching Core is satisfied even when it is busy.
 pub(crate) fn assess_required_core_identity(
     role: CoreRole,
     action: &str,
@@ -925,9 +924,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_replacement_is_safe_only_when_no_resources_are_active() {
-        assert!(terminal_replacement_is_safe(0));
-        assert!(!terminal_replacement_is_safe(1));
+    fn core_replacement_is_safe_only_when_no_resources_are_active() {
+        assert!(core_replacement_is_safe(0));
+        assert!(!core_replacement_is_safe(1));
     }
 
     fn lock_update_policy() -> std::sync::MutexGuard<'static, ()> {
@@ -1055,12 +1054,13 @@ mod tests {
                 1,
                 LiveCoreReconcileDecision::Adopt,
             ),
+            // An ACP Core with live agents waits instead of ending their sessions.
             (
                 CoreRole::AcpCore,
                 Some(DeclaredCoreAction::DeferIfActive),
                 false,
                 3,
-                LiveCoreReconcileDecision::Replace,
+                LiveCoreReconcileDecision::Defer,
             ),
             (
                 CoreRole::TerminalCore,
@@ -1111,6 +1111,20 @@ mod tests {
                 9,
                 LiveCoreReconcileDecision::Adopt,
             ),
+            (
+                CoreRole::AcpCore,
+                Some(DeclaredCoreAction::DeferIfActive),
+                false,
+                0,
+                LiveCoreReconcileDecision::Replace,
+            ),
+            (
+                CoreRole::AcpCore,
+                Some(DeclaredCoreAction::DeferIfActive),
+                true,
+                2,
+                LiveCoreReconcileDecision::Adopt,
+            ),
         ];
         for (role, action, identity_matches, active_resources, expected) in cases {
             assert_eq!(
@@ -1152,6 +1166,10 @@ mod tests {
         assert_eq!(
             assess_required_core_identity(CoreRole::AcpCore, "preserve", false, 1),
             RequiredCoreIdentityAssessment::PendingReplacement
+        );
+        assert_eq!(
+            assess_required_core_identity(CoreRole::AcpCore, "defer-if-active", false, 1),
+            RequiredCoreIdentityAssessment::Deferred
         );
         let failed = assess_required_core_identity(CoreRole::AcpCore, "unsupported", true, 0);
         assert_eq!(failed, RequiredCoreIdentityAssessment::FailedClosed);

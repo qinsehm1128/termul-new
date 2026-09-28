@@ -6,10 +6,12 @@ import { pathToFileURL } from 'node:url'
 
 export const identityComponents = ['renderer', 'guiNative', 'acpCore', 'terminalCore']
 
+// Both Cores wait while they are in use: replacing the ACP Core ends every
+// running agent session just as replacing the Terminal Core ends its shells.
 export const declaredComponentActions = {
   renderer: 'restart',
   guiNative: 'restart',
-  acpCore: 'restart',
+  acpCore: 'defer-if-active',
   terminalCore: 'defer-if-active'
 }
 

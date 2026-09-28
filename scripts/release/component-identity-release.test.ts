@@ -129,7 +129,7 @@ describe('component identity release propagation', () => {
       components: {
         renderer: { buildId: identity.components.renderer.buildId, action: 'restart' },
         guiNative: { buildId: identity.components.guiNative.buildId, action: 'restart' },
-        acpCore: { buildId: identity.components.acpCore.buildId, action: 'restart' },
+        acpCore: { buildId: identity.components.acpCore.buildId, action: 'defer-if-active' },
         terminalCore: {
           buildId: identity.components.terminalCore.buildId,
           action: 'defer-if-active'

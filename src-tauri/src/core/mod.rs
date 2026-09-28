@@ -30,7 +30,7 @@ pub use ipc::{
 };
 pub use launcher::{
     classify_core_identity, ensure_core, profile_root_from_env, run_core_process,
-    terminal_replacement_is_safe, CoreIdentityState, CoreLaunchConfig, CoreProcess,
+    core_replacement_is_safe, CoreIdentityState, CoreLaunchConfig, CoreProcess,
 };
 pub use terminal::{
     run_terminal_core, OutputFrame, OutputKind, TerminalAttachSession, TerminalCoreClient,
