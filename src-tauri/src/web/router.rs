@@ -237,14 +237,6 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 post(conversation_api::open),
             )
             .route(
-                "/conversations/prepare-terminal",
-                post(conversation_api::prepare_terminal),
-            )
-            .route(
-                "/conversations/{conversationId}/provision-terminal",
-                post(conversation_api::provision_terminal),
-            )
-            .route(
                 "/conversations/{conversationId}/rename",
                 post(conversation_api::rename),
             )

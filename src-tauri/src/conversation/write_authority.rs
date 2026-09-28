@@ -360,18 +360,6 @@ impl ConversationWriter {
             .await
     }
 
-    pub(crate) async fn provision_terminal_backend(
-        self: &Arc<Self>,
-        conversation_id: ConversationId,
-        terminal_id: &str,
-        recorded_at_utc: DateTime<Utc>,
-    ) -> Result<ConversationEventRecordV2> {
-        let permit = self.authorize(conversation_id, ConversationMutation::TerminalProvision)?;
-        self.repository
-            .provision_terminal_backend(&permit, conversation_id, terminal_id, recorded_at_utc)
-            .await
-    }
-
     // These single-mutation entry points remain part of the exhaustive authority surface and are
     // exercised directly by repository/adapter tests. Production lifecycle flows use compound
     // services that authorize once and hold the repository lifecycle lock across side effects.

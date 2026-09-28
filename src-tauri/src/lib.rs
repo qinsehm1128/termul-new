@@ -3472,8 +3472,6 @@ pub fn run() {
             quick_terminal_commands::quick_terminal_open,
             quick_terminal_commands::quick_terminal_rename,
             quick_terminal_commands::quick_terminal_delete,
-            commands::conversation_prepare_terminal,
-            commands::conversation_provision_terminal,
             commands::conversation_resolve_legacy_id,
             commands::conversation_attach_project,
             commands::conversation_detach_project,

@@ -5915,8 +5915,7 @@ pub struct HostConversationStore(
 );
 
 /// Optional in-process Conversation creation service. `None` in ACP-Core
-/// desktop mode; `conversation_prepare_terminal` / `conversation_provision_terminal`
-/// proxy those calls instead.
+/// desktop mode, where creation happens inside the Core.
 #[derive(Clone, Default)]
 pub struct HostConversationCreation(
     pub Option<Arc<crate::conversation::ConversationCreationService>>,
@@ -5927,14 +5926,6 @@ fn require_conversation_service(
 ) -> Result<&crate::conversation::ConversationApplicationService, String> {
     host.0
         .as_deref()
-        .ok_or_else(|| "conversation service unavailable".to_string())
-}
-
-fn require_conversation_creation(
-    host: &HostConversationCreation,
-) -> Result<&Arc<crate::conversation::ConversationCreationService>, String> {
-    host.0
-        .as_ref()
         .ok_or_else(|| "conversation service unavailable".to_string())
 }
 
@@ -7000,125 +6991,6 @@ pub(crate) async fn conversation_open_inner(
         Ok(outcome) => IpcResult::success(outcome),
         Err(error) => conversation_application_failure(error),
     }
-}
-
-fn conversation_creation_failure<T>(
-    error: crate::conversation::ConversationCreationError,
-) -> IpcResult<T> {
-    log::warn!(
-        "[conversation-command] operation={} conversation_id={} code={:?}",
-        error.operation,
-        error
-            .conversation_id
-            .map_or_else(|| "none".to_string(), |value| value.to_string()),
-        error.code
-    );
-    IpcResult::error(error.detail, format!("{:?}", error.code))
-}
-
-pub(crate) async fn conversation_prepare_terminal_inner(
-    creation: &Arc<crate::conversation::ConversationCreationService>,
-    request: serde_json::Value,
-) -> IpcResult<crate::conversation::PreparedConversation> {
-    let mut request: crate::conversation::PrepareConversationRequest =
-        match serde_json::from_value(request) {
-            Ok(value) => value,
-            Err(error) => {
-                return IpcResult::error(
-                    format!("payload validation failed: {error}"),
-                    "VALIDATION_ERROR",
-                )
-            }
-        };
-    // The caller names the folder; the backend is this command's identity and is
-    // never taken from the payload. A request that could ask for `agent` here
-    // would be a second, unaudited way to create an agent Conversation.
-    request.backend = crate::conversation::ConversationBackend::Terminal;
-    match creation.prepare_conversation(request).await {
-        Ok(prepared) => IpcResult::success(prepared),
-        Err(error) => conversation_creation_failure(error),
-    }
-}
-
-/// Allocate a terminal-backed Conversation and its workspace directory.
-///
-/// Deliberately stops before the terminal exists. Spawning stays in the
-/// renderer's existing path so the terminal gets its tab, its per-project
-/// limit, its project env and its worktree symlinks — a host-side spawn here
-/// would reproduce all of that and drift from it. The Conversation waits in
-/// `allocating_workspace` until `conversation_provision_terminal`; if the
-/// caller never gets there, the existing interrupted-creation sweep reconciles
-/// it instead of leaving a Conversation that claims to be ready with nothing
-/// running.
-#[tauri::command]
-pub async fn conversation_prepare_terminal(
-    request: serde_json::Value,
-    acp: State<'_, crate::core::AcpServiceHandle>,
-    creation: State<'_, HostConversationCreation>,
-) -> Result<IpcResult<crate::conversation::PreparedConversation>, String> {
-    if let Some(client) = acp.core_client() {
-        return Ok(acp_core_ipc(
-            client.as_ref(),
-            "conversationPrepareTerminal",
-            serde_json::json!({ "request": request }),
-        )
-        .await);
-    }
-    Ok(conversation_prepare_terminal_inner(
-        require_conversation_creation(creation.inner())?,
-        request,
-    )
-    .await)
-}
-
-pub(crate) async fn conversation_provision_terminal_inner(
-    creation: &Arc<crate::conversation::ConversationCreationService>,
-    conversation_id: &str,
-    terminal_id: &str,
-) -> IpcResult<()> {
-    let conversation_id = match crate::conversation::ConversationId::parse(conversation_id) {
-        Ok(value) => value,
-        Err(error) => {
-            return IpcResult::error(
-                format!("conversationId is not a UUID: {error}"),
-                "CONVERSATION_INVALID_ID",
-            )
-        }
-    };
-    match creation
-        .provision_terminal(conversation_id, terminal_id)
-        .await
-    {
-        Ok(()) => IpcResult::success(()),
-        Err(error) => conversation_creation_failure(error),
-    }
-}
-
-/// Carry a prepared terminal-backed Conversation to `Ready`.
-#[tauri::command]
-pub async fn conversation_provision_terminal(
-    conversation_id: String,
-    terminal_id: String,
-    acp: State<'_, crate::core::AcpServiceHandle>,
-    creation: State<'_, HostConversationCreation>,
-) -> Result<IpcResult<()>, String> {
-    if let Some(client) = acp.core_client() {
-        return Ok(acp_core_ipc(
-            client.as_ref(),
-            "conversationProvisionTerminal",
-            serde_json::json!({
-                "conversationId": conversation_id,
-                "terminalId": terminal_id,
-            }),
-        )
-        .await);
-    }
-    Ok(conversation_provision_terminal_inner(
-        require_conversation_creation(creation.inner())?,
-        &conversation_id,
-        &terminal_id,
-    )
-    .await)
 }
 
 #[tauri::command]

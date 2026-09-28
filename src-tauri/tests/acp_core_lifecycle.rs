@@ -35,13 +35,45 @@ async fn wait_for_client(endpoint: &CoreEndpoint) -> AcpCoreClient {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
-    let profile = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let terminal_endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+    let profile_dir = tempfile::tempdir().unwrap();
+    let workspace_dir = tempfile::tempdir().unwrap();
+    // Durable directory creation refuses symlinked components (macOS `/var`).
+    let profile = profile_dir.path().canonicalize().unwrap();
+    let workspace = workspace_dir.path().canonicalize().unwrap();
+
+    // An agent Conversation, bound and ready, seeded before the Core starts:
+    // no IPC creates one without a live agent.
+    let prepared = {
+        use se_manager_lib::conversation::{
+            AgentBindingResult, ConversationBootstrap, ExecutionTarget, HostConversationRoots,
+            MigrationHostMode, PrepareConversationRequest,
+        };
+        let bootstrap = ConversationBootstrap::run(
+            HostConversationRoots::desktop(profile.clone(), workspace.clone()),
+            MigrationHostMode::Desktop,
+        )
+        .expect("seed bootstrap");
+        bootstrap
+            .creation
+            .create_with_agent_gate(
+                PrepareConversationRequest::new(ExecutionTarget::Workspace),
+                |_| async {
+                    Ok(AgentBindingResult {
+                        agent_session_id: "seed-session".to_string(),
+                        runtime_agent_id: "seed-agent".to_string(),
+                        stable_agent_namespace: "seed".to_string(),
+                    })
+                },
+            )
+            .await
+            .expect("seed agent Conversation")
+    };
+
+    let terminal_endpoint = CoreEndpoint::for_profile(&profile, CoreRole::TerminalCore);
     let terminal_exe = env!("CARGO_BIN_EXE_se-manager");
     let terminal_child = Command::new(terminal_exe)
         .arg("--terminal-core")
-        .env("TERMUL_CORE_PROFILE_ROOT", profile.path())
+        .env("TERMUL_CORE_PROFILE_ROOT", &profile)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -50,11 +82,11 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
     let mut terminal_process = CoreChild(terminal_child);
     let terminal = wait_for_terminal_client(&terminal_endpoint).await;
 
-    let acp_endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::AcpCore);
+    let acp_endpoint = CoreEndpoint::for_profile(&profile, CoreRole::AcpCore);
     let acp_child = Command::new(terminal_exe)
         .arg("--acp-core")
-        .env("TERMUL_CORE_PROFILE_ROOT", profile.path())
-        .env("TERMUL_CORE_WORKSPACE_ROOT", workspace.path())
+        .env("TERMUL_CORE_PROFILE_ROOT", &profile)
+        .env("TERMUL_CORE_WORKSPACE_ROOT", &workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -63,28 +95,12 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
     let mut acp_process = CoreChild(acp_child);
     let acp = wait_for_client(&acp_endpoint).await;
 
-    let prepared = acp
-        .request(
-            "conversationPrepareTerminal",
-            json!({
-                "request": {
-                    "schemaVersion": 1,
-                    "executionTarget": { "kind": "workspace" },
-                    "backend": "terminal"
-                }
-            }),
-        )
-        .await
-        .expect("prepare terminal Conversation");
-    let conversation_id = prepared["conversationId"]
-        .as_str()
-        .expect("prepared Conversation id")
-        .to_string();
+    let conversation_id = prepared.conversation_id.to_string();
     let conversation_uuid = se_manager_lib::conversation::ConversationId::parse(&conversation_id)
         .expect("prepared Conversation UUID");
     let spawned = terminal
         .spawn(SpawnOptions {
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
             conversation_id: Some(conversation_uuid),
             cols: Some(80),
             rows: Some(24),
@@ -94,15 +110,6 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
         })
         .await
         .expect("spawn conversation terminal");
-    acp.request(
-        "conversationProvisionTerminal",
-        json!({
-            "conversationId": conversation_id,
-            "terminalId": spawned.info.id
-        }),
-    )
-    .await
-    .expect("provision terminal reference");
     acp.request(
         "workspaceEnsureTerminalRefWritable",
         json!({ "conversationId": conversation_id, "writable": true }),
@@ -121,7 +128,7 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
     let observed = terminal
         .observe_conversation(conversation_uuid, std::slice::from_ref(&spawned.info.id))
         .await
-        .expect("observe provisioned terminal");
+        .expect("observe conversation terminal");
     assert_eq!(observed.live_terminal_ids, vec![spawned.info.id.clone()]);
     let workspace_record = acp
         .request(
@@ -129,14 +136,14 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
             json!({ "conversationId": conversation_id }),
         )
         .await
-        .expect("get terminal Conversation workspace");
+        .expect("get Conversation workspace");
     assert!(
         workspace_record["workspace"]["resources"]
             .as_array()
             .is_some_and(|resources| resources
                 .iter()
                 .any(|resource| { resource["terminalId"] == spawned.info.id })),
-        "provision must persist the terminal workspace reference: {workspace_record}"
+        "the terminal workspace reference must be persisted: {workspace_record}"
     );
     let record = acp
         .request(
@@ -144,7 +151,7 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
             json!({ "conversationId": conversation_id }),
         )
         .await
-        .expect("get terminal Conversation");
+        .expect("get Conversation");
     let revision = record["lastSeq"].as_u64().expect("Conversation revision");
 
     let deleted = acp
@@ -156,7 +163,7 @@ async fn real_dual_core_delete_terminates_conversation_terminal_before_purge() {
             }),
         )
         .await
-        .expect("delete terminal Conversation");
+        .expect("delete Conversation");
     assert_eq!(deleted["status"], "updated");
     assert_eq!(deleted["lifecycleState"], "deleted");
     let terminal_list = terminal.list().await.expect("list terminals after cleanup");

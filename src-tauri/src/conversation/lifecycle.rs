@@ -573,6 +573,12 @@ impl ConversationLifecycleService {
             if conversation.lifecycle_state == ConversationLifecycleState::Deleted {
                 continue;
             }
+            // A terminal-backed Conversation's shell belongs to its quick
+            // terminal now, which reopens it on demand. Recreating it here
+            // would start shells nobody asked for.
+            if conversation.backend == crate::conversation::ConversationBackend::Terminal {
+                continue;
+            }
             let terminal_ids = match self.terminal_resource_ids(conversation.conversation_id) {
                 Ok(ids) => ids,
                 Err(error) => {
@@ -2310,6 +2316,17 @@ mod tests {
     }
 
     async fn fixture_with_catalog_flush_suppressed(suppress_auto_catalog_flush: bool) -> Fixture {
+        fixture_with(
+            suppress_auto_catalog_flush,
+            crate::conversation::ConversationBackend::Agent,
+        )
+        .await
+    }
+
+    async fn fixture_with(
+        suppress_auto_catalog_flush: bool,
+        backend: crate::conversation::ConversationBackend,
+    ) -> Fixture {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().canonicalize().unwrap();
         let private = base.join("private");
@@ -2336,7 +2353,7 @@ mod tests {
                     execution_target: ExecutionTarget::Workspace,
                     project_attachment: None,
                     lifecycle_state: ConversationLifecycleState::Ready,
-                    backend: crate::conversation::ConversationBackend::Agent,
+                    backend,
                     last_seq: 0,
                     created_by: ConversationCreator::Legacy,
                     title: None,
@@ -2346,23 +2363,26 @@ mod tests {
             )
             .await
             .unwrap();
-        writer
-            .bind_agent_session(
-                id,
-                AgentSessionBinding {
-                    schema_version: AGENT_SESSION_BINDING_SCHEMA_VERSION,
-                    binding_id: Uuid::new_v4(),
-                    agent_session_id: "opaque/original".to_string(),
-                    runtime_agent_id: "agent-runtime".to_string(),
-                    stable_agent_namespace: "config:test".to_string(),
-                    execution_cwd: workspace.to_string_lossy().into_owned(),
-                    bound_at_utc: Utc::now(),
-                    state: AgentSessionBindingState::Active,
-                },
-                Utc::now(),
-            )
-            .await
-            .unwrap();
+        // Legacy terminal-backed Conversations never had an agent binding.
+        if backend == crate::conversation::ConversationBackend::Agent {
+            writer
+                .bind_agent_session(
+                    id,
+                    AgentSessionBinding {
+                        schema_version: AGENT_SESSION_BINDING_SCHEMA_VERSION,
+                        binding_id: Uuid::new_v4(),
+                        agent_session_id: "opaque/original".to_string(),
+                        runtime_agent_id: "agent-runtime".to_string(),
+                        stable_agent_namespace: "config:test".to_string(),
+                        execution_cwd: workspace.to_string_lossy().into_owned(),
+                        bound_at_utc: Utc::now(),
+                        state: AgentSessionBindingState::Active,
+                    },
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
+        }
         let creation = Arc::new(
             ConversationCreationService::new(
                 Arc::clone(&writer),
@@ -3672,6 +3692,22 @@ mod tests {
             .unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_recreated(outcomes.into_iter().next().unwrap(), "term-old", "term-new");
+    }
+
+    #[tokio::test]
+    async fn recovery_leaves_terminal_backed_conversations_to_quick_terminals() {
+        let fixture = fixture_with(false, crate::conversation::ConversationBackend::Terminal).await;
+        write_terminal_workspace(&fixture, "term-old").await;
+        *fixture.terminals.next_spawn_id.lock() = Some("term-new".to_string());
+
+        let outcomes = fixture
+            .service
+            .recover_lost_conversation_terminals()
+            .await
+            .unwrap();
+
+        assert!(outcomes.is_empty());
+        assert_eq!(fixture.terminals.spawn_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

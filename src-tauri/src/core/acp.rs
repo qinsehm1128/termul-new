@@ -32,11 +32,11 @@ use crate::acp::manager::{
 };
 use crate::acp::session_persistence::SessionRegistration;
 use crate::conversation::{
-    ConversationApplicationService, ConversationBackend, ConversationBootstrap,
-    ConversationCreationService, ConversationId, ConversationLifecycleAction,
-    ConversationLifecycleOutcome, ConversationPersistenceAdapter, ExecutionTarget,
-    HostConversationRoots, LifecycleOperationJournal, MigrationHostMode,
-    PrepareConversationRequest, ProjectAttachment, SessionWorkspaceService,
+    ConversationApplicationService, ConversationBootstrap, ConversationCreationService,
+    ConversationId, ConversationLifecycleAction, ConversationLifecycleOutcome,
+    ConversationPersistenceAdapter, ExecutionTarget, HostConversationRoots,
+    LifecycleOperationJournal, MigrationHostMode, PrepareConversationRequest, ProjectAttachment,
+    SessionWorkspaceService,
 };
 use crate::memory_index::commands::{
     throttled, MemoryIndexBuildArgs, MemoryIndexListArgs, MemoryIndexScopeArgs,
@@ -117,8 +117,6 @@ pub const METHOD_CONVERSATION_HOST_STATUS: &str = "conversationHostStatus";
 pub const METHOD_CONVERSATION_LIST: &str = "conversationList";
 pub const METHOD_CONVERSATION_OPEN: &str = "conversationOpen";
 pub const METHOD_CONVERSATION_RENAME: &str = "conversationRename";
-pub const METHOD_CONVERSATION_PREPARE_TERMINAL: &str = "conversationPrepareTerminal";
-pub const METHOD_CONVERSATION_PROVISION_TERMINAL: &str = "conversationProvisionTerminal";
 pub const METHOD_CONVERSATION_RECOVERY_RESOLVE: &str = "conversationRecoveryResolve";
 pub const METHOD_CONVERSATION_ATTACH_PROJECT: &str = "conversationAttachProject";
 pub const METHOD_CONVERSATION_DETACH_PROJECT: &str = "conversationDetachProject";
@@ -1003,13 +1001,6 @@ struct ConversationRequestParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ConversationProvisionTerminalParams {
-    conversation_id: String,
-    terminal_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ConversationRevisionParams {
     conversation_id: String,
     expected_revision: u64,
@@ -1134,18 +1125,6 @@ fn conversation_application_err(
         error.code
     );
     invalid(format!("{}:{}", error.code, error.detail))
-}
-
-fn conversation_creation_err(error: crate::conversation::ConversationCreationError) -> CoreError {
-    log::warn!(
-        "[acp-core] operation={} conversation_id={} code={:?}",
-        error.operation,
-        error
-            .conversation_id
-            .map_or_else(|| "none".to_string(), |value| value.to_string()),
-        error.code
-    );
-    invalid(format!("{:?}:{}", error.code, error.detail))
 }
 
 fn to_json<T: Serialize>(value: T) -> Result<Value, CoreError> {
@@ -1714,32 +1693,6 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
                 .await
                 .map_err(conversation_application_err)?;
             to_json(record)
-        }
-        METHOD_CONVERSATION_PREPARE_TERMINAL => {
-            let params: ConversationRequestParams = parse_params(request)?;
-            let mut prepared_request: PrepareConversationRequest =
-                payload_from_value(params.request)?;
-            // The caller names the folder; the backend is this command's identity and is
-            // never taken from the payload. A request that could ask for `agent` here
-            // would be a second, unaudited way to create an agent Conversation.
-            prepared_request.backend = ConversationBackend::Terminal;
-            let prepared = state
-                .creation
-                .prepare_conversation(prepared_request)
-                .await
-                .map_err(conversation_creation_err)?;
-            to_json(prepared)
-        }
-        METHOD_CONVERSATION_PROVISION_TERMINAL => {
-            let params: ConversationProvisionTerminalParams = parse_params(request)?;
-            let conversation_id = ConversationId::parse(&params.conversation_id)
-                .map_err(|error| invalid(format!("conversationId is not a UUID: {error}")))?;
-            state
-                .creation
-                .provision_terminal(conversation_id, &params.terminal_id)
-                .await
-                .map_err(conversation_creation_err)?;
-            to_json(())
         }
         METHOD_CONVERSATION_RECOVERY_RESOLVE => {
             let params: ConversationRequestParams = parse_params(request)?;
@@ -2572,14 +2525,6 @@ mod tests {
         assert_eq!(METHOD_CONVERSATION_LIST, "conversationList");
         assert_eq!(METHOD_CONVERSATION_OPEN, "conversationOpen");
         assert_eq!(METHOD_CONVERSATION_RENAME, "conversationRename");
-        assert_eq!(
-            METHOD_CONVERSATION_PREPARE_TERMINAL,
-            "conversationPrepareTerminal"
-        );
-        assert_eq!(
-            METHOD_CONVERSATION_PROVISION_TERMINAL,
-            "conversationProvisionTerminal"
-        );
         assert_eq!(
             METHOD_CONVERSATION_RECOVERY_RESOLVE,
             "conversationRecoveryResolve"
