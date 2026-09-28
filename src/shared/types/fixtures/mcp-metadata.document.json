@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "revision": 7,
+  "servers": [
+    {
+      "serverId": "dbx",
+      "description": "Database tools",
+      "whenToUse": ["Read project data"],
+      "avoidWhen": ["Write or delete data"],
+      "tools": [
+        {
+          "name": "mongo_find_documents",
+          "description": "Find documents",
+          "whenToUse": "Read a collection",
+          "avoidWhen": "Mutating a collection"
+        }
+      ]
+    }
+  ]
+}

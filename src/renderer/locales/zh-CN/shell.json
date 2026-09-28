@@ -41,6 +41,8 @@
     "openConversations": "打开会话区",
     "skills": "技能",
     "openSkills": "打开技能",
+    "aiChannels": "AI 渠道",
+    "openAiChannels": "打开 AI 渠道",
     "mcp": "MCP",
     "openMcp": "打开 MCP",
     "scheduledTasks": "定时任务",
@@ -55,7 +57,16 @@
     "preferences": "偏好设置",
     "openPreferences": "打开偏好设置",
     "colorThemes": "颜色主题",
-    "failedSsh": "更新 SSH 面板可见性失败"
+    "failedSsh": "更新 SSH 面板可见性失败",
+    "dividerWorkspace": "工作区分组",
+    "dividerTools": "工具分组",
+    "reorderHint": "使用 Alt 加上向上或向下箭头移动图标，也可以拖动图标重新排序。",
+    "movedBefore": "{{item}} 已移动到 {{neighbor}} 前面",
+    "movedAfter": "{{item}} 已移动到 {{neighbor}} 后面",
+    "pinnedBottom": "{{item}} 已返回底部全局工具组",
+    "alreadyFirst": "{{item}} 已经是第一个",
+    "alreadyLast": "{{item}} 已经是最后一个",
+    "reorderUnchanged": "{{item}} 顺序未改变"
   },
   "contextBar": {
     "settings": "上下文栏设置",
@@ -166,6 +177,7 @@
       "terminalSearch": { "label": "终端搜索", "description": "搜索终端输出" },
       "commandHistory": { "label": "命令历史", "description": "搜索命令历史" },
       "newProject": { "label": "新建项目", "description": "创建新项目" },
+      "aiChannels": { "label": "AI 渠道", "description": "管理主机路由的 AI 提供商与回退顺序" },
       "newTerminal": { "label": "新建终端", "description": "在活动窗格中创建新终端" },
       "newBrowserTab": { "label": "新建浏览器标签页", "description": "创建新的浏览器标签页" },
       "nextTerminal": {

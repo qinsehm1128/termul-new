@@ -86,7 +86,17 @@
     "oauth": {
       "authorize": "使用 OAuth 授权 {{name}}",
       "started": "已在浏览器中打开 OAuth 授权页面。",
-      "failed": "无法启动 OAuth 授权。"
+      "failed": "无法启动 OAuth 授权。",
+      "completed": "OAuth 授权已完成。",
+      "exchangeFailed": "OAuth 授权失败。请重试。",
+      "pending": "正在等待浏览器完成授权。",
+      "retry": "重试 {{name}} 的 OAuth 授权",
+      "cancel": "取消 {{name}} 的 OAuth 授权",
+      "cancelLabel": "取消",
+      "cancelled": "已取消 OAuth 授权。已有凭据已保留。",
+      "cancelFailed": "无法取消 OAuth 授权。",
+      "desktopOnly": "{{name}} 的 OAuth 授权仅在桌面应用中可用。",
+      "sseUnsupported": "{{name}} 使用旧版 SSE，不能进行 OAuth。请将传输方式切换为 HTTP。"
     },
     "edit": "编辑 {{name}}",
     "delete": "删除 {{name}}",

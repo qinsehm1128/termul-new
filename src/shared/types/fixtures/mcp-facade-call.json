@@ -1,0 +1,5 @@
+{
+  "serverId": "dbx",
+  "toolName": "mongo_find_documents",
+  "arguments": { "collection": "docs" }
+}

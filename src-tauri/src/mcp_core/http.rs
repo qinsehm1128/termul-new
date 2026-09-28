@@ -16,9 +16,10 @@ use axum::{
 };
 use rmcp::{
     model::{
-        CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
-        ListPromptsResult, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
-        ReadResourceResponse, ServerCapabilities, ServerConfig,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        GetPromptRequestParams, GetPromptResponse, ListPromptsResult, ListResourcesResult,
+        ListToolsResult, ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities,
+        ServerConfig, Tool,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -30,7 +31,9 @@ use tokio::{net::TcpListener, sync::RwLock, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    AuthBootstrap, McpCore, McpDomainError, McpEndpointDescriptor, McpReadiness, McpReadinessStatus,
+    facade::{facade_tool_names, McpFacadeCatalog, McpFacadeListQuery, McpFacadeToolCall},
+    AuthBootstrap, McpCore, McpDomainError, McpEndpointDescriptor, McpReadiness,
+    McpReadinessStatus,
 };
 
 const HTTP_BOUNDARY_LOG_TARGET: &str = "se_manager::mcp_core::http";
@@ -125,10 +128,22 @@ impl ServerHandler for GatewayHandler {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let aggregate = self.core.list_tools().await.map_err(to_mcp_error)?;
-        Ok(ListToolsResult::with_all_items(
-            aggregate.items.into_iter().map(|item| item.tool).collect(),
-        ))
+        match self.mode {
+            GatewayMode::Aggregator => {
+                let aggregate = self.core.list_tools().await.map_err(to_mcp_error)?;
+                Ok(ListToolsResult::with_all_items(
+                    aggregate.items.into_iter().map(|item| item.tool).collect(),
+                ))
+            }
+            GatewayMode::Entry => {
+                let catalogs = self
+                    .core
+                    .list_facade_catalogs()
+                    .await
+                    .map_err(to_mcp_error)?;
+                Ok(ListToolsResult::with_all_items(facade_tools(&catalogs)))
+            }
+        }
     }
 
     async fn call_tool(
@@ -136,11 +151,15 @@ impl ServerHandler for GatewayHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        self.core
-            .call_tool_with_cancel(&request.name, request.arguments, context.ct)
-            .await
-            .map(Into::into)
-            .map_err(to_mcp_error)
+        match self.mode {
+            GatewayMode::Aggregator => self
+                .core
+                .call_tool_with_cancel(&request.name, request.arguments, context.ct)
+                .await
+                .map(Into::into)
+                .map_err(to_mcp_error),
+            GatewayMode::Entry => call_facade_tool(&self.core, request, context.ct).await,
+        }
     }
 
     async fn list_resources(
@@ -196,6 +215,173 @@ impl ServerHandler for GatewayHandler {
             .map(Into::into)
             .map_err(to_mcp_error)
     }
+}
+
+fn facade_tools(catalogs: &[McpFacadeCatalog]) -> Vec<Tool> {
+    let mut tools = Vec::with_capacity(catalogs.len() * 2);
+    for catalog in catalogs {
+        let Ok((list_name, call_name)) = facade_tool_names(&catalog.server_id) else {
+            continue;
+        };
+        tools.push(Tool::new(
+            list_name,
+            format!("List the tools exposed by MCP server {}", catalog.server_id),
+            Arc::new(
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1 },
+                        "includeSchema": { "type": "boolean" }
+                    }
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
+        ));
+        tools.push(Tool::new(
+            call_name,
+            format!("Call a named tool on MCP server {}", catalog.server_id),
+            Arc::new(
+                serde_json::json!({
+                    "type": "object",
+                    "required": ["serverId", "toolName", "arguments"],
+                    "properties": {
+                        "serverId": { "type": "string", "const": catalog.server_id },
+                        "toolName": { "type": "string" },
+                        "arguments": { "type": "object" },
+                        "catalogRevision": { "type": "integer", "minimum": 1 }
+                    }
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
+        ));
+    }
+    tools
+}
+
+async fn call_facade_tool(
+    core: &McpCore,
+    request: CallToolRequestParams,
+    cancellation: CancellationToken,
+) -> Result<CallToolResponse, ErrorData> {
+    let name = request.name.as_ref();
+    if let Some(server_id) = name.strip_suffix("_tool_list") {
+        let (expected, _) = facade_tool_names(server_id)
+            .map_err(|_| to_mcp_error(McpDomainError::ToolNotFound(name.to_string())))?;
+        if expected != name {
+            return Err(to_mcp_error(McpDomainError::ToolNotFound(name.to_string())));
+        }
+        let arguments = request.arguments.unwrap_or_default();
+        let query =
+            McpFacadeListQuery::from_value(serde_json::Value::Object(arguments)).map_err(|_| {
+                to_mcp_error(McpDomainError::InvalidArguments {
+                    server_id: server_id.to_string(),
+                    name: name.to_string(),
+                })
+            })?;
+        let catalogs = core.list_facade_catalogs().await.map_err(to_mcp_error)?;
+        let catalog = catalogs
+            .iter()
+            .find(|catalog| catalog.server_id == server_id)
+            .ok_or_else(|| to_mcp_error(McpDomainError::UpstreamNotFound(server_id.to_string())))?;
+        let mut result = catalog.clone();
+        if let Some(query) = query.query.as_deref() {
+            result
+                .tools
+                .retain(|tool| tool.name.contains(query) || tool.description.contains(query));
+        }
+        if let Some(limit) = query.limit {
+            result.tools.truncate(limit as usize);
+        }
+        if !query.include_schema {
+            for tool in &mut result.tools {
+                tool.input_schema = None;
+            }
+        }
+        return Ok(CallToolResponse::Complete(CallToolResult::success(vec![
+            ContentBlock::text(
+                serde_json::to_string(&result)
+                    .map_err(|_| to_mcp_error(McpDomainError::Serialization))?,
+            ),
+        ])));
+    }
+    if let Some(server_id) = name.strip_suffix("_tool_call") {
+        let (_, expected) = facade_tool_names(server_id)
+            .map_err(|_| to_mcp_error(McpDomainError::ToolNotFound(name.to_string())))?;
+        if expected != name {
+            return Err(to_mcp_error(McpDomainError::ToolNotFound(name.to_string())));
+        }
+        let arguments = request.arguments.unwrap_or_default();
+        let server_value = arguments.get("serverId").cloned().ok_or_else(|| {
+            to_mcp_error(McpDomainError::InvalidArguments {
+                server_id: server_id.to_string(),
+                name: name.to_string(),
+            })
+        })?;
+        let tool_value = arguments.get("toolName").cloned().ok_or_else(|| {
+            to_mcp_error(McpDomainError::InvalidArguments {
+                server_id: server_id.to_string(),
+                name: name.to_string(),
+            })
+        })?;
+        let nested = arguments
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+        let catalog_revision = arguments
+            .get("catalogRevision")
+            .and_then(|value| value.as_u64());
+        let requested_server = server_value.as_str().ok_or_else(|| {
+            to_mcp_error(McpDomainError::InvalidArguments {
+                server_id: server_id.to_string(),
+                name: name.to_string(),
+            })
+        })?;
+        if requested_server != server_id {
+            return Err(to_mcp_error(McpDomainError::InvalidArguments {
+                server_id: server_id.to_string(),
+                name: name.to_string(),
+            }));
+        }
+        let tool_name = tool_value.as_str().ok_or_else(|| {
+            to_mcp_error(McpDomainError::InvalidArguments {
+                server_id: server_id.to_string(),
+                name: name.to_string(),
+            })
+        })?;
+        let mut call_value = serde_json::json!({
+            "serverId": server_id,
+            "toolName": tool_name,
+            "arguments": nested,
+        });
+        if let Some(revision) = catalog_revision {
+            if let Some(object) = call_value.as_object_mut() {
+                object.insert("catalogRevision".into(), serde_json::json!(revision));
+            }
+        }
+        let call = McpFacadeToolCall::from_value(call_value).map_err(|_| {
+            to_mcp_error(McpDomainError::InvalidArguments {
+                server_id: server_id.to_string(),
+                name: tool_name.to_string(),
+            })
+        })?;
+        return core
+            .call_facade_tool_with_cancel(
+                &call.server_id,
+                &call.tool_name,
+                call.arguments.as_object().cloned(),
+                call.catalog_revision,
+                cancellation,
+            )
+            .await
+            .map(Into::into)
+            .map_err(to_mcp_error);
+    }
+    Err(to_mcp_error(McpDomainError::ToolNotFound(name.to_string())))
 }
 
 pub struct McpHttpGateway {
@@ -525,6 +711,20 @@ mod tests {
         assert!(constant_time_equal(b"secret", b"secret"));
         assert!(!constant_time_equal(b"secret", b"secret2"));
         assert!(!constant_time_equal(b"secret", b"SECRET"));
+    }
+
+    #[test]
+    fn entry_gateway_projects_exactly_two_namespaced_tools_per_catalog() {
+        let catalog = McpFacadeCatalog::from_json(include_str!(
+            "../../../src/shared/types/fixtures/mcp-facade-catalog.json"
+        ))
+        .unwrap();
+        let tools = facade_tools(&[catalog]);
+        assert_eq!(tools.len(), 2);
+        assert!(tools.iter().any(|tool| tool.name == "dbx_tool_list"));
+        assert!(tools.iter().any(|tool| tool.name == "dbx_tool_call"));
+        assert!(tools.iter().all(|tool| tool.input_schema.get("type")
+            == Some(&serde_json::Value::String("object".into()))));
     }
 
     #[tokio::test]

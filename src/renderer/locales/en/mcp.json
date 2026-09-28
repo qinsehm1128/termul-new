@@ -86,7 +86,17 @@
     "oauth": {
       "authorize": "Authorize {{name}} with OAuth",
       "started": "OAuth authorization opened in your browser.",
-      "failed": "Could not start OAuth authorization."
+      "failed": "Could not start OAuth authorization.",
+      "completed": "OAuth authorization completed.",
+      "exchangeFailed": "OAuth authorization failed. Retry to start again.",
+      "pending": "Waiting for the browser authorization to finish.",
+      "retry": "Retry OAuth authorization for {{name}}",
+      "cancel": "Cancel OAuth authorization for {{name}}",
+      "cancelLabel": "Cancel",
+      "cancelled": "OAuth authorization cancelled. Existing credentials were kept.",
+      "cancelFailed": "Could not cancel OAuth authorization.",
+      "desktopOnly": "OAuth authorization for {{name}} is available in the desktop app.",
+      "sseUnsupported": "Legacy SSE cannot use OAuth for {{name}}. Switch the transport to HTTP."
     },
     "edit": "Edit {{name}}",
     "delete": "Delete {{name}}",

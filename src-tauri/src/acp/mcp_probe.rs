@@ -275,10 +275,31 @@ fn classify_probe_error(error: impl std::fmt::Display) -> String {
         .replace("authorization: Bearer ", "authorization: Bearer <redacted>")
 }
 
-pub async fn probe(server: McpServerConfig) -> ProbeResult {
+fn classify_oauth_probe_error(error: impl std::fmt::Display) -> String {
+    let rendered = classify_probe_error(error);
+    if rendered.contains("requires a valid Authorization header") {
+        return "OAuth authorization is required or the stored grant was rejected; authorize the MCP server again"
+            .into();
+    }
+    rendered
+}
+
+#[cfg(test)]
+async fn probe(server: McpServerConfig) -> ProbeResult {
+    probe_for_project(server, None).await
+}
+
+/// Probe one MCP server using credentials owned by `project_root`.
+///
+/// `None` keeps static-header probes working and refuses OAuth credential
+/// lookup rather than falling back to a project-shared keyring account.
+pub async fn probe_for_project(
+    server: McpServerConfig,
+    project_root: Option<&std::path::Path>,
+) -> ProbeResult {
     let transport = server.transport();
     let name = server.name.clone();
-    let result = tokio::time::timeout(PROBE_TIMEOUT, probe_inner(&server)).await;
+    let result = tokio::time::timeout(PROBE_TIMEOUT, probe_inner(&server, project_root)).await;
     let outcome = match result {
         Ok(inner) => inner,
         Err(_elapsed) => ProbeResult::disconnected(format!(
@@ -304,11 +325,23 @@ pub async fn probe(server: McpServerConfig) -> ProbeResult {
     outcome
 }
 
-async fn probe_inner(server: &McpServerConfig) -> ProbeResult {
+async fn probe_inner(
+    server: &McpServerConfig,
+    project_root: Option<&std::path::Path>,
+) -> ProbeResult {
     let transport = server.transport();
     match transport.as_str() {
         "stdio" => probe_stdio(server).await,
-        "http" | "sse" => probe_http(server, &transport).await,
+        "sse"
+            if server.oauth.as_ref().is_some_and(|oauth| {
+                oauth.auth_mode == crate::mcp_core::oauth::McpAuthMode::OAuth
+            }) =>
+        {
+            ProbeResult::disconnected(
+                "legacy SSE upstreams are not supported for OAuth; use type=http",
+            )
+        }
+        "http" | "sse" => probe_http(server, &transport, project_root).await,
         other => ProbeResult::disconnected(format!("unsupported transport '{other}'")),
     }
 }
@@ -421,7 +454,11 @@ fn is_transport_managed_header(name: &str) -> bool {
     name.eq_ignore_ascii_case("accept")
 }
 
-async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
+async fn probe_http(
+    server: &McpServerConfig,
+    transport: &str,
+    project_root: Option<&std::path::Path>,
+) -> ProbeResult {
     let url = match server.url.as_deref() {
         Some(u) if !u.trim().is_empty() => u,
         _ => return ProbeResult::disconnected(format!("{transport} URL is required")),
@@ -445,17 +482,27 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
             .filter(|pair| !is_transport_managed_header(&pair.name))
             .map(|pair| (pair.name.clone(), pair.value.clone()))
             .collect::<BTreeMap<_, _>>();
-        let client =
-            match crate::mcp_core::oauth::oauth_transport(url, server_id, oauth, &headers).await {
-                Ok(client) => client,
-                Err(error) => return ProbeResult::disconnected(error),
-            };
+        let Some(project_root) = project_root else {
+            return ProbeResult::disconnected("OAuth credentials require an active project scope");
+        };
+        let client = match crate::mcp_core::oauth::oauth_transport(
+            url,
+            project_root,
+            server_id,
+            oauth,
+            &headers,
+        )
+        .await
+        {
+            Ok(client) => client,
+            Err(error) => return ProbeResult::disconnected(error),
+        };
         let running = match serve_client(ClientConfig::default(), client).await {
             Ok(service) => service,
             Err(error) => {
                 return ProbeResult::disconnected(format!(
                     "initialize failed: {}",
-                    classify_probe_error(error)
+                    classify_oauth_probe_error(error)
                 ))
             }
         };
@@ -615,6 +662,54 @@ mod tests {
         let result = rt.block_on(probe(config));
         assert_eq!(result.status, ProbeStatus::Disconnected);
         assert!(result.error.unwrap().contains("unsupported transport"));
+    }
+
+    fn oauth_probe_server(transport: &str) -> McpServerConfig {
+        McpServerConfig {
+            id: Some("remote".to_string()),
+            r#type: Some(transport.to_string()),
+            name: "Remote".to_string(),
+            command: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            url: Some("https://mcp.example.test/mcp".to_string()),
+            headers: Vec::new(),
+            oauth: Some(McpOAuthConfig {
+                auth_mode: crate::mcp_core::oauth::McpAuthMode::OAuth,
+                ..McpOAuthConfig::default()
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_probe_requires_http_and_project_scope_before_credential_lookup() {
+        let sse = probe_for_project(
+            oauth_probe_server("sse"),
+            Some(std::path::Path::new("/tmp")),
+        )
+        .await;
+        assert_eq!(sse.status, ProbeStatus::Disconnected);
+        let sse_error = sse.error.expect("sse oauth explains the transport");
+        assert!(sse_error.contains("SSE"), "{sse_error}");
+        assert!(!sse_error.contains("access_token"));
+
+        let missing_scope = probe_for_project(oauth_probe_server("http"), None).await;
+        assert_eq!(missing_scope.status, ProbeStatus::Disconnected);
+        let scope_error = missing_scope
+            .error
+            .expect("http oauth without a project is refused");
+        assert!(
+            scope_error.contains("active project scope"),
+            "{scope_error}"
+        );
+        assert!(!scope_error.contains("access_token"));
+    }
+
+    #[test]
+    fn oauth_probe_auth_failure_does_not_ask_for_a_static_bearer() {
+        let message = classify_oauth_probe_error("Auth required, when send initialize request");
+        assert!(message.contains("authorize the MCP server again"));
+        assert!(!message.contains("bearerToken"));
     }
 
     #[tokio::test]

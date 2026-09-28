@@ -139,14 +139,76 @@ fn type_names(ty: &Type, names: &mut HashSet<String>) {
     }
 }
 
-fn primary_type_name(ty: &Type) -> Option<String> {
+fn primary_type(ty: &Type) -> Option<&Type> {
     match ty {
-        Type::Path(path) => last_path_ident(&path.path),
-        Type::Reference(reference) => primary_type_name(&reference.elem),
-        Type::Paren(paren) => primary_type_name(&paren.elem),
-        Type::Group(group) => primary_type_name(&group.elem),
-        Type::Ptr(pointer) => primary_type_name(&pointer.elem),
+        Type::Path(_) => Some(ty),
+        Type::Reference(reference) => primary_type(&reference.elem),
+        Type::Paren(paren) => primary_type(&paren.elem),
+        Type::Group(group) => primary_type(&group.elem),
+        Type::Ptr(pointer) => primary_type(&pointer.elem),
         _ => None,
+    }
+}
+
+fn tuple_struct_element_type(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = primary_type(ty)? else {
+        return None;
+    };
+    let syn::PathArguments::AngleBracketed(arguments) = &path.path.segments.last()?.arguments
+    else {
+        return None;
+    };
+    arguments.args.iter().find_map(|argument| match argument {
+        syn::GenericArgument::Type(inner) => Some(inner),
+        _ => None,
+    })
+}
+
+fn primary_type_name(ty: &Type) -> Option<String> {
+    match primary_type(ty)? {
+        Type::Path(path) => last_path_ident(&path.path),
+        _ => None,
+    }
+}
+
+fn record_parameter_binding(
+    bindings: &mut HashMap<String, String>,
+    aliases: &HashMap<String, String>,
+    pattern: &Pat,
+    ty: &Type,
+) {
+    match pattern {
+        Pat::Ident(ident) => {
+            if let Some(name) = primary_type_name(ty) {
+                bindings.insert(ident.ident.to_string(), canonicalize_name(aliases, &name));
+            }
+            if let Some((_, nested_pattern)) = &ident.subpat {
+                record_parameter_binding(bindings, aliases, nested_pattern, ty);
+            }
+        }
+        Pat::Tuple(tuple) => {
+            if let Type::Tuple(types) = ty {
+                for (nested_pattern, nested_type) in tuple.elems.iter().zip(types.elems.iter()) {
+                    record_parameter_binding(bindings, aliases, nested_pattern, nested_type);
+                }
+            }
+        }
+        Pat::TupleStruct(tuple) => {
+            let Some(element_type) = tuple_struct_element_type(ty) else {
+                return;
+            };
+            for nested_pattern in &tuple.elems {
+                record_parameter_binding(bindings, aliases, nested_pattern, element_type);
+            }
+        }
+        Pat::Paren(paren) => record_parameter_binding(bindings, aliases, &paren.pat, ty),
+        Pat::Reference(reference) => {
+            let Type::Reference(reference_type) = ty else {
+                return;
+            };
+            record_parameter_binding(bindings, aliases, &reference.pat, &reference_type.elem);
+        }
+        _ => {}
     }
 }
 
@@ -389,14 +451,12 @@ impl ModuleCollector {
         for argument in &function.sig.inputs {
             if let FnArg::Typed(typed) = argument {
                 type_names(&typed.ty, &mut collector.info.parameter_types);
-                if let Pat::Ident(ident) = typed.pat.as_ref() {
-                    if let Some(name) = primary_type_name(&typed.ty) {
-                        collector.local_types.insert(
-                            ident.ident.to_string(),
-                            canonicalize_name(&self.info.aliases, &name),
-                        );
-                    }
-                }
+                record_parameter_binding(
+                    &mut collector.local_types,
+                    &self.info.aliases,
+                    typed.pat.as_ref(),
+                    &typed.ty,
+                );
             }
         }
         collector.info.parameter_types =
@@ -459,14 +519,12 @@ impl ModuleCollector {
             );
             for argument in &method.sig.inputs {
                 if let FnArg::Typed(typed) = argument {
-                    if let Pat::Ident(ident) = typed.pat.as_ref() {
-                        if let Some(name) = primary_type_name(&typed.ty) {
-                            collector.local_types.insert(
-                                ident.ident.to_string(),
-                                canonicalize_name(&self.info.aliases, &name),
-                            );
-                        }
-                    }
+                    record_parameter_binding(
+                        &mut collector.local_types,
+                        &self.info.aliases,
+                        typed.pat.as_ref(),
+                        &typed.ty,
+                    );
                 }
             }
             collector.info.parameter_types = self
@@ -885,15 +943,21 @@ fn check_authentication(modules: &[ModuleInfo], findings: &mut Vec<Finding>) {
             && !module.file.ends_with("web/auth.rs")
             && !module.file.ends_with("web/ws.rs")
     }) {
-        let protected_entries = module
-            .functions
-            .iter()
-            .filter(|(_, function)| {
-                function.production_entry
-                    && function.parameter_types.contains("RemoteAccessAuthority")
-                    && function.parameter_types.contains("RemotePrincipal")
+        let protected_entries = production_entries(module)
+            .into_iter()
+            .filter(|entry| {
+                let Some(function) = module.functions.get(entry) else {
+                    return false;
+                };
+                let has_authority = function.parameter_types.contains("RemoteAccessAuthority");
+                let has_principal = function.parameter_types.contains("RemotePrincipal")
+                    || reachable_has_any_method(
+                        module,
+                        entry,
+                        &HashSet::from(["verify_bearer_for_peer"]),
+                    );
+                has_authority && has_principal
             })
-            .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
         if protected_entries.is_empty() {
             findings.push(Finding {

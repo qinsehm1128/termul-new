@@ -8,6 +8,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    hash::{Hash, Hasher},
+    path::Path,
     process::Stdio,
     sync::Arc,
     time::Duration,
@@ -32,6 +34,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use super::builtins::{BuiltInRegistry, BuiltInRoute};
+use super::facade::{McpFacadeCatalog, McpFacadeFailure, McpFacadeFailureCode, McpFacadeTool};
 use super::{McpBuiltInConfig, McpConfigSnapshot, McpUpstreamServer, McpUpstreamTransport};
 
 const DEFAULT_MAX_CONCURRENCY: usize = 4;
@@ -196,6 +199,7 @@ pub struct McpCore {
     permission: Arc<dyn ToolPermission>,
     upstreams: Arc<RwLock<BTreeMap<String, Arc<UpstreamConnection>>>>,
     builtins: Arc<RwLock<BuiltInRegistry>>,
+    credential_scope: Arc<RwLock<Option<std::path::PathBuf>>>,
 }
 
 impl std::fmt::Debug for McpCore {
@@ -229,7 +233,16 @@ impl McpCore {
             permission,
             upstreams: Arc::new(RwLock::new(BTreeMap::new())),
             builtins: Arc::new(RwLock::new(builtins)),
+            credential_scope: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Bind OAuth credential reads to one canonical project root.
+    ///
+    /// The binding is replaced atomically before a project-scoped snapshot is
+    /// applied. A core with no binding cannot open an OAuth upstream.
+    pub async fn set_credential_scope(&self, project_root: Option<std::path::PathBuf>) {
+        *self.credential_scope.write().await = project_root;
     }
 
     pub async fn replace_builtins(&self, builtins: BuiltInRegistry) {
@@ -253,7 +266,8 @@ impl McpCore {
         if !server.enabled {
             return Ok(());
         }
-        let connection = Arc::new(connect_server(&server).await?);
+        let scope = self.credential_scope.read().await.clone();
+        let connection = Arc::new(connect_server(&server, scope.as_deref()).await?);
         let old = self.upstreams.write().await.insert(server.id, connection);
         if let Some(old) = old {
             old.close().await;
@@ -270,8 +284,9 @@ impl McpCore {
         // failed reload therefore leaves the previous last-known-good runtime
         // intact instead of partially replacing it.
         let mut replacement = BTreeMap::new();
+        let scope = self.credential_scope.read().await.clone();
         for server in snapshot.servers.iter().filter(|server| server.enabled) {
-            match connect_server(server).await {
+            match connect_server(server, scope.as_deref()).await {
                 Ok(connection) => {
                     replacement.insert(server.id.clone(), Arc::new(connection));
                 }
@@ -347,6 +362,138 @@ impl McpCore {
         aggregate.items = items;
         self.enforce_size(&aggregate.items)?;
         Ok(aggregate)
+    }
+
+    pub async fn list_facade_catalogs(&self) -> Result<Vec<McpFacadeCatalog>, McpDomainError> {
+        let aggregate = self.list_tools().await?;
+        let mut grouped: BTreeMap<String, McpFacadeCatalog> = BTreeMap::new();
+        for server_id in self
+            .built_in_ids()
+            .await
+            .into_iter()
+            .chain(self.upstream_ids().await)
+        {
+            grouped
+                .entry(server_id.clone())
+                .or_insert_with(|| McpFacadeCatalog {
+                    server_id,
+                    catalog_revision: 1,
+                    description: String::new(),
+                    when_to_use: Vec::new(),
+                    avoid_when: Vec::new(),
+                    tools: Vec::new(),
+                    failures: Vec::new(),
+                });
+        }
+        for item in aggregate.items {
+            let server_id = item.server_id.clone();
+            let catalog = grouped
+                .entry(server_id.clone())
+                .or_insert_with(|| McpFacadeCatalog {
+                    server_id,
+                    catalog_revision: 1,
+                    description: String::new(),
+                    when_to_use: Vec::new(),
+                    avoid_when: Vec::new(),
+                    tools: Vec::new(),
+                    failures: Vec::new(),
+                });
+            let annotations = item.tool.annotations.as_ref();
+            let read_only = annotations
+                .and_then(|value| value.read_only_hint)
+                .unwrap_or(false);
+            let destructive = annotations
+                .and_then(|value| value.destructive_hint)
+                .unwrap_or(!read_only);
+            catalog.tools.push(McpFacadeTool {
+                name: item
+                    .tool
+                    .name
+                    .strip_prefix(&format!("{}_", catalog.server_id))
+                    .unwrap_or(item.tool.name.as_ref())
+                    .to_string(),
+                description: item
+                    .tool
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string(),
+                when_to_use: String::new(),
+                avoid_when: String::new(),
+                input_schema: Some(serde_json::Value::Object((*item.tool.input_schema).clone())),
+                read_only,
+                destructive,
+                confirmation_required: destructive,
+                allowed: true,
+            });
+        }
+        for failure in aggregate.failures {
+            let catalog =
+                grouped
+                    .entry(failure.server_id.clone())
+                    .or_insert_with(|| McpFacadeCatalog {
+                        server_id: failure.server_id.clone(),
+                        catalog_revision: 1,
+                        description: String::new(),
+                        when_to_use: Vec::new(),
+                        avoid_when: Vec::new(),
+                        tools: Vec::new(),
+                        failures: Vec::new(),
+                    });
+            catalog.failures.push(McpFacadeFailure {
+                server_id: failure.server_id,
+                code: match failure.operation {
+                    Operation::ListTools => McpFacadeFailureCode::UpstreamUnavailable,
+                    Operation::CallTool => McpFacadeFailureCode::UpstreamUnavailable,
+                    _ => McpFacadeFailureCode::SchemaInvalid,
+                },
+                message: "MCP upstream did not provide a complete tool catalog".into(),
+            });
+        }
+        for catalog in grouped.values_mut() {
+            catalog.catalog_revision = facade_catalog_revision(catalog);
+        }
+        Ok(grouped.into_values().collect())
+    }
+
+    pub async fn call_facade_tool_with_cancel(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+        catalog_revision: Option<u64>,
+        cancellation: CancellationToken,
+    ) -> Result<CallToolResult, McpDomainError> {
+        // A facade call is direct when no revision is pinned. A pinned call
+        // validates the current catalog so stale clients fail before dispatch.
+        if let Some(requested_revision) = catalog_revision {
+            let catalogs = self.list_facade_catalogs().await?;
+            let catalog = catalogs
+                .iter()
+                .find(|catalog| catalog.server_id == server_id)
+                .ok_or_else(|| McpDomainError::UpstreamNotFound(server_id.to_string()))?;
+            super::facade::require_current_catalog_revision(
+                Some(requested_revision),
+                catalog.catalog_revision,
+            )
+            .map_err(|_| McpDomainError::InvalidConfiguration("stale MCP catalog".into()))?;
+            if !catalog
+                .tools
+                .iter()
+                .any(|tool| tool.name == tool_name && tool.allowed)
+            {
+                return Err(McpDomainError::PermissionDenied {
+                    server_id: server_id.to_string(),
+                    name: tool_name.to_string(),
+                });
+            }
+        }
+        self.call_tool_with_cancel(
+            &format_tool_name(server_id, tool_name),
+            arguments,
+            cancellation,
+        )
+        .await
     }
 
     pub async fn call_tool(
@@ -689,7 +836,10 @@ fn resolve_stdio_command_in_path(command: &str, path: &str) -> Option<String> {
     None
 }
 
-async fn connect_server(server: &McpUpstreamServer) -> Result<UpstreamConnection, McpDomainError> {
+async fn connect_server(
+    server: &McpUpstreamServer,
+    credential_scope: Option<&Path>,
+) -> Result<UpstreamConnection, McpDomainError> {
     let (kind, client) = match &server.transport {
         McpUpstreamTransport::Stdio { command, args, env } => {
             let mut env_map = HashMap::new();
@@ -742,8 +892,12 @@ async fn connect_server(server: &McpUpstreamServer) -> Result<UpstreamConnection
                     .iter()
                     .map(|(name, value)| (name.clone(), value.expose().to_owned()))
                     .collect::<BTreeMap<_, _>>();
+                let Some(project_root) = credential_scope else {
+                    return Err(McpDomainError::ConnectFailed(server.id.clone()));
+                };
                 let transport = crate::mcp_core::oauth::oauth_transport(
                     url.as_str(),
+                    project_root,
                     &server.id,
                     oauth.as_ref().expect("oauth config"),
                     &header_values,
@@ -789,6 +943,20 @@ async fn connect_server(server: &McpUpstreamServer) -> Result<UpstreamConnection
 
 pub(crate) fn format_tool_name(server_id: &str, name: &str) -> String {
     format!("{server_id}_{name}")
+}
+
+fn facade_catalog_revision(catalog: &McpFacadeCatalog) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    catalog.server_id.hash(&mut hasher);
+    for tool in &catalog.tools {
+        tool.name.hash(&mut hasher);
+        tool.description.hash(&mut hasher);
+        tool.read_only.hash(&mut hasher);
+        tool.destructive.hash(&mut hasher);
+        tool.confirmation_required.hash(&mut hasher);
+    }
+    let revision = hasher.finish() & ((1_u64 << 53) - 1);
+    revision.max(1)
 }
 
 impl CallTarget {

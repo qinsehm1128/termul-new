@@ -11,6 +11,7 @@ import {
   Save,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   SquareTerminal,
   Terminal
 } from 'lucide-react'
@@ -208,6 +209,15 @@ export function CommandPalette({
             }
           ]
         : []),
+      {
+        id: 'open-ai-channels',
+        category: 'navigation' as const,
+        icon: <Sparkles aria-hidden="true" size={16} />,
+        label: t('activityRail.aiChannels'),
+        description: t('shortcuts.items.aiChannels.description'),
+        keywords: ['ai', 'channels', 'provider', 'model', 'fallback'],
+        execute: () => navigateToPath('/ai-channels')
+      },
       {
         id: 'open-terminal-board',
         category: 'navigation' as const,

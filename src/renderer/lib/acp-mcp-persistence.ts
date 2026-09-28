@@ -23,6 +23,7 @@ export interface McpOAuthEndpoints {
   tokenEndpoint?: string
   registrationEndpoint?: string
   revocationEndpoint?: string
+  resource?: string
 }
 
 /** Unix `discoveredAt` is seconds. Secret fields are not part of this type. */
@@ -33,6 +34,7 @@ export interface McpOAuthConfig {
   clientMetadataUrl?: string
   scopes?: string[]
   endpoints?: McpOAuthEndpoints
+  redirectUri?: string
   discoveredAt?: number
 }
 
@@ -227,7 +229,8 @@ function normalizeEndpoints(value: unknown): McpOAuthEndpoints | undefined | nul
     ['authorizationEndpoint', ['authorizationEndpoint', 'authorization_endpoint']],
     ['tokenEndpoint', ['tokenEndpoint', 'token_endpoint']],
     ['registrationEndpoint', ['registrationEndpoint', 'registration_endpoint']],
-    ['revocationEndpoint', ['revocationEndpoint', 'revocation_endpoint']]
+    ['revocationEndpoint', ['revocationEndpoint', 'revocation_endpoint']],
+    ['resource', ['resource']]
   ]
   const endpoints: McpOAuthEndpoints = {}
   for (const [canonical, keys] of fields) {
@@ -282,6 +285,10 @@ export function normalizeOAuthConfig(value: unknown): McpOAuthConfig | undefined
   if (scopes === null) return null
   const endpoints = normalizeEndpoints(value.endpoints)
   if (endpoints === null) return null
+  const redirectRaw = readOptionalString(value, ['redirectUri', 'redirect_uri'])
+  if (redirectRaw === null) return null
+  const redirectUri = normalizeOptionalUrl(redirectRaw)
+  if (redirectUri === null) return null
   const discoveredRaw = readTimestamp(value, ['discoveredAt', 'discovered_at'])
   if (discoveredRaw === null) return null
   const config: McpOAuthConfig = {
@@ -291,6 +298,7 @@ export function normalizeOAuthConfig(value: unknown): McpOAuthConfig | undefined
     ...(clientMetadataUrl ? { clientMetadataUrl } : {}),
     ...(scopes ? { scopes } : {}),
     ...(endpoints ? { endpoints } : {}),
+    ...(redirectUri ? { redirectUri } : {}),
     ...(discoveredRaw !== undefined ? { discoveredAt: discoveredRaw } : {})
   }
   if (
@@ -300,6 +308,7 @@ export function normalizeOAuthConfig(value: unknown): McpOAuthConfig | undefined
     !config.clientMetadataUrl &&
     !config.scopes &&
     !config.endpoints &&
+    !config.redirectUri &&
     config.discoveredAt === undefined
   ) {
     return undefined

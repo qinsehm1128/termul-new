@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "wasm": true,
+  "jspi": false,
+  "native": false,
+  "server": false,
+  "selectedRuntime": "wasm",
+  "fallback": "aiRouter"
+}

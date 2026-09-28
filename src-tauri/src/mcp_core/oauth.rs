@@ -1,21 +1,26 @@
 //! MCP server credentials and credential-free OAuth metadata.
 //!
 //! Access tokens, refresh tokens, client secrets, and static bearer/header
-//! values live only in the process keyring under `mcp/oauth/{server_id}`.
+//! values live only in the process keyring. The account is scoped to one
+//! canonical project root and one MCP server id, so the same server id in
+//! another project cannot read the record.
 //! The project document may store [`McpOAuthConfig`] (mode, registration,
 //! public client id, metadata URL, scopes, and discovered endpoints) and must
-//! never store those secrets. This module does not perform discovery, token
-//! refresh, or HTTP injection.
+//! never store those secrets. Discovery, authorization, and HTTP injection are
+//! owned by the command and transport callers; this module persists their
+//! credential result and adapts it to rmcp.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Keyring account prefix. The full account is `{prefix}{server_id}`.
+/// Historical keyring account prefix. Current accounts use
+/// [`mcp_oauth_credential_key`] and include a project-root fingerprint.
 pub const MCP_OAUTH_KEY_PREFIX: &str = "mcp/oauth/";
 
-const CREDENTIAL_PAYLOAD_VERSION: u16 = 1;
+const CREDENTIAL_PAYLOAD_VERSION: u16 = 2;
 const MAX_SERVER_ID_LEN: usize = 256;
 const MAX_SECRET_LEN: usize = 64 * 1024;
 const MAX_CLIENT_ID_LEN: usize = 2_048;
@@ -140,6 +145,10 @@ pub struct McpOAuthEndpoints {
     pub registration_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation_endpoint: Option<String>,
+    /// RFC 8707 resource identifier from protected-resource metadata.
+    /// This is a public URL, never a token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
 }
 
 impl McpOAuthEndpoints {
@@ -151,6 +160,7 @@ impl McpOAuthEndpoints {
             && self.token_endpoint.is_none()
             && self.registration_endpoint.is_none()
             && self.revocation_endpoint.is_none()
+            && self.resource.is_none()
     }
 }
 
@@ -173,6 +183,11 @@ pub struct McpOAuthConfig {
     pub scopes: Vec<String>,
     #[serde(default, skip_serializing_if = "McpOAuthEndpoints::is_empty")]
     pub endpoints: McpOAuthEndpoints,
+    /// Loopback callback used for the authorization-code flow. The transport
+    /// must reuse this exact URI so the client registration and token requests
+    /// stay bound to the browser grant. It is not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect_uri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discovered_at: Option<i64>,
 }
@@ -185,6 +200,7 @@ impl McpOAuthConfig {
             && self.client_metadata_url.is_none()
             && self.scopes.is_empty()
             && self.endpoints.is_empty()
+            && self.redirect_uri.is_none()
             && self.discovered_at.is_none()
     }
 
@@ -223,6 +239,11 @@ impl McpOAuthConfig {
             &mut self.endpoints.revocation_endpoint,
             McpOAuthConfigError::InvalidEndpoint,
         )?;
+        normalize_optional_url(
+            &mut self.endpoints.resource,
+            McpOAuthConfigError::InvalidEndpoint,
+        )?;
+        normalize_optional_url(&mut self.redirect_uri, McpOAuthConfigError::InvalidEndpoint)?;
         if self.discovered_at.is_some_and(|value| value < 0) {
             return Err(McpOAuthConfigError::InvalidDiscoveredAt);
         }
@@ -375,6 +396,7 @@ pub struct OAuthSecretInput {
     pub scope: Option<String>,
     pub issued_at: Option<i64>,
     pub expires_at: Option<i64>,
+    pub issuer: Option<String>,
 }
 
 impl fmt::Debug for OAuthSecretInput {
@@ -394,6 +416,7 @@ pub struct OAuthSecret {
     scope: Option<String>,
     issued_at: Option<i64>,
     expires_at: Option<i64>,
+    issuer: Option<String>,
 }
 
 impl fmt::Debug for OAuthSecret {
@@ -414,6 +437,7 @@ impl fmt::Debug for OAuthSecret {
             .field("scope", &self.scope)
             .field("issued_at", &self.issued_at)
             .field("expires_at", &self.expires_at)
+            .field("issuer", &self.issuer.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -444,6 +468,7 @@ impl OAuthSecret {
         };
         let issued_at = validate_timestamp(input.issued_at)?;
         let expires_at = validate_timestamp(input.expires_at)?;
+        let issuer = normalize_optional_issuer(input.issuer)?;
         Ok(Self {
             client_id,
             client_secret,
@@ -453,6 +478,7 @@ impl OAuthSecret {
             scope,
             issued_at,
             expires_at,
+            issuer,
         })
     }
 
@@ -486,6 +512,10 @@ impl OAuthSecret {
 
     pub fn expires_at(&self) -> Option<i64> {
         self.expires_at
+    }
+
+    pub fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
     }
 
     /// True when `expires_at` is set and `now_unix_secs >= expires_at`.
@@ -613,8 +643,11 @@ impl McpServerSecrets {
 pub struct McpCredentialStore;
 
 impl McpCredentialStore {
-    pub fn load(server_id: &str) -> Result<Option<McpServerSecrets>, McpCredentialError> {
-        let key = mcp_oauth_credential_key(server_id)?;
+    pub fn load(
+        project_root: &Path,
+        server_id: &str,
+    ) -> Result<Option<McpServerSecrets>, McpCredentialError> {
+        let key = mcp_oauth_credential_key(project_root, server_id)?;
         match crate::keyring_get(&key) {
             Ok(None) => Ok(None),
             Ok(Some(payload)) => parse_payload(&payload),
@@ -622,35 +655,104 @@ impl McpCredentialStore {
         }
     }
 
-    pub fn save(server_id: &str, secrets: &McpServerSecrets) -> Result<(), McpCredentialError> {
+    pub fn save(
+        project_root: &Path,
+        server_id: &str,
+        secrets: &McpServerSecrets,
+    ) -> Result<(), McpCredentialError> {
         if secrets.is_empty() {
-            return Self::clear(server_id);
+            return Self::clear(project_root, server_id);
         }
-        let key = mcp_oauth_credential_key(server_id)?;
+        let key = mcp_oauth_credential_key(project_root, server_id)?;
         let payload = serde_json::to_string(&secrets.to_payload())
             .map_err(|_| McpCredentialError::InvalidCredential)?;
         crate::keyring_set(&key, &payload).map_err(|_| McpCredentialError::StorageUnavailable)
     }
 
-    pub fn clear(server_id: &str) -> Result<(), McpCredentialError> {
-        let key = mcp_oauth_credential_key(server_id)?;
+    pub fn clear(project_root: &Path, server_id: &str) -> Result<(), McpCredentialError> {
+        let key = mcp_oauth_credential_key(project_root, server_id)?;
         crate::keyring_delete(&key).map_err(|_| McpCredentialError::StorageUnavailable)
     }
 }
 
-pub fn clear_oauth_credentials(server_id: &str) -> Result<(), McpCredentialError> {
-    let mut secrets = McpCredentialStore::load(server_id)?.unwrap_or_default();
+pub fn clear_oauth_credentials(
+    project_root: &Path,
+    server_id: &str,
+) -> Result<(), McpCredentialError> {
+    let mut secrets = McpCredentialStore::load(project_root, server_id)?.unwrap_or_default();
     secrets.set_oauth(None);
     if secrets.is_empty() {
-        McpCredentialStore::clear(server_id)
+        McpCredentialStore::clear(project_root, server_id)
     } else {
-        McpCredentialStore::save(server_id, &secrets)
+        McpCredentialStore::save(project_root, server_id, &secrets)
     }
 }
 
-pub fn mcp_oauth_credential_key(server_id: &str) -> Result<String, McpCredentialError> {
+/// Drop a stored OAuth grant after the authorization server rejects refresh.
+///
+/// Static bearer and header credentials are preserved. A missing record is
+/// already invalidated and returns success.
+pub fn invalidate_rejected_oauth_grant(
+    project_root: &Path,
+    server_id: &str,
+    error: &AuthError,
+) -> Result<bool, McpCredentialError> {
+    if !oauth_grant_was_rejected(error) {
+        return Ok(false);
+    }
+    if McpCredentialStore::load(project_root, server_id)?.is_none() {
+        return Ok(true);
+    }
+    clear_oauth_credentials(project_root, server_id)?;
+    Ok(true)
+}
+
+fn oauth_grant_was_rejected(error: &AuthError) -> bool {
+    match error {
+        AuthError::AuthorizationRequired => true,
+        AuthError::TokenRefreshRejected(message) => {
+            message.to_ascii_lowercase().contains("invalid_grant")
+        }
+        AuthError::HttpError(error) => error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("invalid_grant"),
+        _ => false,
+    }
+}
+
+pub fn mcp_oauth_credential_key(
+    project_root: &Path,
+    server_id: &str,
+) -> Result<String, McpCredentialError> {
     validate_server_id(server_id)?;
-    Ok(format!("{MCP_OAUTH_KEY_PREFIX}{server_id}"))
+    let scope = project_credential_scope(project_root)?;
+    Ok(format!("{MCP_OAUTH_KEY_PREFIX}{scope}/{server_id}"))
+}
+
+fn project_credential_scope(project_root: &Path) -> Result<String, McpCredentialError> {
+    let canonical = project_root
+        .canonicalize()
+        .map_err(|_| McpCredentialError::InvalidServerId)?;
+    if !canonical.is_dir() {
+        return Err(McpCredentialError::InvalidServerId);
+    }
+    Ok(credential_scope_fingerprint(&canonical))
+}
+
+fn credential_scope_fingerprint(canonical_root: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let encoded = canonical_root
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\u{001f}");
+    let digest = Sha256::digest(encoded.as_bytes());
+    digest
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Remove credential fields from HTTP/SSE `oauth` objects in a stored document.
@@ -743,6 +845,7 @@ fn normalize_oauth_object(object: &mut Map<String, Value>) -> Result<(), McpOAut
     rename_alias(object, "registration_mode", "registrationMode");
     rename_alias(object, "client_id", "clientId");
     rename_alias(object, "client_metadata_url", "clientMetadataUrl");
+    rename_alias(object, "redirect_uri", "redirectUri");
     rename_alias(object, "discovered_at", "discoveredAt");
     if let Some(mode) = object.get("authMode") {
         require_enum(
@@ -764,6 +867,7 @@ fn normalize_oauth_object(object: &mut Map<String, Value>) -> Result<(), McpOAut
         "clientMetadataUrl",
         McpOAuthConfigError::InvalidClientMetadataUrl,
     )?;
+    require_optional_string(object, "redirectUri", McpOAuthConfigError::InvalidEndpoint)?;
     coerce_scopes(object)?;
     normalize_endpoints_value(object)?;
     validate_discovered_at(object)?;
@@ -803,6 +907,7 @@ fn normalize_endpoints_value(object: &mut Map<String, Value>) -> Result<(), McpO
         "tokenEndpoint",
         "registrationEndpoint",
         "revocationEndpoint",
+        "resource",
     ] {
         require_optional_string(endpoints, key, McpOAuthConfigError::InvalidEndpoint)?;
     }
@@ -1043,6 +1148,23 @@ fn validate_timestamp(value: Option<i64>) -> Result<Option<i64>, McpCredentialEr
     Ok(value)
 }
 
+fn normalize_optional_issuer(value: Option<String>) -> Result<Option<String>, McpCredentialError> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let Ok(url) = url::Url::parse(trimmed) else {
+        return Err(McpCredentialError::InvalidCredential);
+    };
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(McpCredentialError::InvalidCredential);
+    }
+    Ok(Some(url.to_string()))
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CredentialPayload {
@@ -1078,6 +1200,8 @@ struct OAuthPayload {
     issued_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issuer: Option<String>,
 }
 
 impl McpServerSecrets {
@@ -1105,6 +1229,7 @@ impl McpServerSecrets {
                 scope: secret.scope.clone(),
                 issued_at: secret.issued_at,
                 expires_at: secret.expires_at,
+                issuer: secret.issuer.clone(),
             }),
         }
     }
@@ -1138,6 +1263,7 @@ fn parse_payload(raw: &str) -> Result<Option<McpServerSecrets>, McpCredentialErr
                 scope: oauth.scope,
                 issued_at: oauth.issued_at,
                 expires_at: oauth.expires_at,
+                issuer: oauth.issuer,
             })
             .map_err(|_| McpCredentialError::Corrupt)?,
         );
@@ -1151,8 +1277,9 @@ fn parse_payload(raw: &str) -> Result<Option<McpServerSecrets>, McpCredentialErr
 
 use async_trait::async_trait;
 use rmcp::transport::auth::{
-    AuthClient, AuthError, AuthorizationManager, AuthorizationMetadata, AuthorizationSession,
-    CredentialStore, StoredCredentials,
+    AuthClient, AuthError, AuthorizationManager, AuthorizationMetadata,
+    AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession, CredentialStore,
+    OAuthClientConfig, StoredCredentials, WWWAuthenticateParams,
 };
 use std::collections::{BTreeMap, HashMap};
 use tokio::sync::Mutex;
@@ -1163,12 +1290,14 @@ use tokio::sync::Mutex;
 /// response in Termul's OS keyring record instead of rmcp's in-memory store.
 #[derive(Debug, Clone)]
 pub struct KeyringCredentialStore {
+    project_root: PathBuf,
     server_id: String,
 }
 
 impl KeyringCredentialStore {
-    pub fn new(server_id: impl Into<String>) -> Self {
+    pub fn new(project_root: impl Into<PathBuf>, server_id: impl Into<String>) -> Self {
         Self {
+            project_root: project_root.into(),
             server_id: server_id.into(),
         }
     }
@@ -1177,9 +1306,10 @@ impl KeyringCredentialStore {
 #[async_trait]
 impl CredentialStore for KeyringCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
-        let Some(secrets) = McpCredentialStore::load(&self.server_id).map_err(|_| {
-            AuthError::CredentialStoreError("MCP credential storage unavailable".into())
-        })?
+        let Some(secrets) =
+            McpCredentialStore::load(&self.project_root, &self.server_id).map_err(|_| {
+                AuthError::CredentialStoreError("MCP credential storage unavailable".into())
+            })?
         else {
             return Ok(None);
         };
@@ -1204,17 +1334,20 @@ impl CredentialStore for KeyringCredentialStore {
             serde_json::from_value(serde_json::Value::Object(token)).map_err(|_| {
                 AuthError::CredentialStoreError("stored MCP OAuth credentials are invalid".into())
             })?;
-        Ok(Some(StoredCredentials::new(
-            oauth.client_id().to_string(),
-            Some(token_response),
-            oauth
-                .scope()
-                .map(|scope| scope.split_whitespace().map(str::to_owned).collect())
-                .unwrap_or_default(),
-            oauth
-                .issued_at()
-                .and_then(|value| u64::try_from(value).ok()),
-        )))
+        Ok(Some(
+            StoredCredentials::new(
+                oauth.client_id().to_string(),
+                Some(token_response),
+                oauth
+                    .scope()
+                    .map(|scope| scope.split_whitespace().map(str::to_owned).collect())
+                    .unwrap_or_default(),
+                oauth
+                    .issued_at()
+                    .and_then(|value| u64::try_from(value).ok()),
+            )
+            .with_issuer(oauth.issuer().map(str::to_owned)),
+        ))
     }
 
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
@@ -1237,7 +1370,7 @@ impl CredentialStore for KeyringCredentialStore {
             .get("token_type")
             .and_then(|v| v.as_str())
             .unwrap_or("Bearer");
-        let refresh_token = object
+        let mut refresh_token = object
             .get("refresh_token")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
@@ -1251,47 +1384,40 @@ impl CredentialStore for KeyringCredentialStore {
             .and_then(|value| i64::try_from(value).ok());
         let expires_at =
             expires_in.and_then(|value| issued_at.map(|issued| issued.saturating_add(value)));
+        let existing = McpCredentialStore::load(&self.project_root, &self.server_id)
+            .ok()
+            .flatten();
+        let existing_oauth = existing.as_ref().and_then(McpServerSecrets::oauth);
+        if refresh_token.is_none() {
+            refresh_token =
+                existing_oauth.and_then(|oauth| oauth.refresh_token().map(str::to_owned));
+        }
         let oauth = OAuthSecret::try_new(OAuthSecretInput {
             client_id: credentials.client_id,
-            client_secret: McpCredentialStore::load(&self.server_id)
-                .ok()
-                .flatten()
-                .and_then(|s| s.oauth().and_then(|o| o.client_secret().map(str::to_owned))),
+            client_secret: existing_oauth
+                .and_then(|oauth| oauth.client_secret().map(str::to_owned)),
             access_token: access_token.to_string(),
             refresh_token,
             token_type: token_type.to_string(),
             scope,
             issued_at,
             expires_at,
+            issuer: credentials
+                .issuer
+                .or_else(|| existing_oauth.and_then(|oauth| oauth.issuer().map(str::to_owned))),
         })
         .map_err(|_| AuthError::CredentialStoreError("OAuth credentials are invalid".into()))?;
-        let mut secrets = McpCredentialStore::load(&self.server_id)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        let mut secrets = existing.unwrap_or_default();
         secrets.set_oauth(Some(oauth));
-        McpCredentialStore::save(&self.server_id, &secrets).map_err(|_| {
+        McpCredentialStore::save(&self.project_root, &self.server_id, &secrets).map_err(|_| {
             AuthError::CredentialStoreError("MCP credential storage unavailable".into())
         })
     }
 
     async fn clear(&self) -> Result<(), AuthError> {
-        let mut secrets = McpCredentialStore::load(&self.server_id)
-            .map_err(|_| {
-                AuthError::CredentialStoreError("MCP credential storage unavailable".into())
-            })?
-            .unwrap_or_default();
-        secrets.set_oauth(None);
-        if secrets.is_empty() {
-            McpCredentialStore::clear(&self.server_id).map_err(|_| {
-                AuthError::CredentialStoreError("MCP credential storage unavailable".into())
-            })?;
-        } else {
-            McpCredentialStore::save(&self.server_id, &secrets).map_err(|_| {
-                AuthError::CredentialStoreError("MCP credential storage unavailable".into())
-            })?;
-        }
-        Ok(())
+        clear_oauth_credentials(&self.project_root, &self.server_id).map_err(|_| {
+            AuthError::CredentialStoreError("MCP credential storage unavailable".into())
+        })
     }
 }
 
@@ -1333,6 +1459,12 @@ pub struct OAuthCoordinator {
     pending: Mutex<HashMap<String, PendingOAuthAuthorization>>,
 }
 
+impl Default for OAuthCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OAuthCoordinator {
     pub fn new() -> Self {
         Self {
@@ -1359,6 +1491,285 @@ impl OAuthCoordinator {
     pub async fn cancel(&self, server_id: &str) -> bool {
         self.pending.lock().await.remove(server_id).is_some()
     }
+}
+
+const DEFAULT_OAUTH_REDIRECT: &str = "http://127.0.0.1/oauth/callback";
+
+/// Client identity selected for one authorization or token request.
+///
+/// Client ID Metadata Documents stay ahead of a stored client id when that
+/// registration mode is explicit. The metadata URL is public; this value never
+/// carries a client secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthClientIdentity {
+    pub preregistered_client_id: Option<String>,
+    pub client_metadata_url: Option<String>,
+}
+
+impl OAuthClientIdentity {
+    pub fn transport_client_id(&self) -> Option<&str> {
+        self.preregistered_client_id
+            .as_deref()
+            .or(self.client_metadata_url.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct OAuthChallengeHints {
+    protected_resource_metadata_url: Option<String>,
+    scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ProtectedResourceBinding {
+    resource: Option<String>,
+    authorization_server: Option<String>,
+}
+
+/// Redirect registered for this server, or the stable loopback default before
+/// the first browser authorization chooses a port.
+pub fn oauth_redirect_uri(config: &McpOAuthConfig) -> String {
+    config
+        .redirect_uri
+        .clone()
+        .filter(|value| is_public_http_url(value))
+        .unwrap_or_else(|| DEFAULT_OAUTH_REDIRECT.to_owned())
+}
+
+pub fn oauth_client_identity(config: &McpOAuthConfig) -> OAuthClientIdentity {
+    match config.registration_mode {
+        McpOAuthRegistrationMode::ClientMetadata => OAuthClientIdentity {
+            preregistered_client_id: None,
+            client_metadata_url: config.client_metadata_url.clone().or_else(|| {
+                config
+                    .client_id
+                    .clone()
+                    .filter(|value| is_https_client_metadata_url(value))
+            }),
+        },
+        McpOAuthRegistrationMode::Preregistered
+        | McpOAuthRegistrationMode::Dynamic
+        | McpOAuthRegistrationMode::None => OAuthClientIdentity {
+            preregistered_client_id: config.client_id.clone(),
+            client_metadata_url: None,
+        },
+    }
+}
+
+/// Build the browser authorization request without replacing configured scopes
+/// or treating a Client ID Metadata URL as an ordinary pre-registered client.
+pub fn authorization_request(
+    config: &McpOAuthConfig,
+    redirect_uri: &str,
+    client_secret: Option<&str>,
+) -> AuthorizationRequest {
+    let identity = oauth_client_identity(config);
+    let mut request =
+        AuthorizationRequest::new(redirect_uri.to_owned()).with_client_name("Termul MCP");
+    if !config.scopes.is_empty() {
+        request = request.with_scopes(config.scopes.clone());
+    }
+    if let Some(url) = identity.client_metadata_url {
+        request = request.with_client_metadata_url(url);
+    }
+    if let Some(client_id) = identity.preregistered_client_id {
+        request = request.with_preregistered_client(client_id);
+        if let Some(secret) = client_secret.filter(|value| !value.is_empty()) {
+            request = request.with_client_secret(secret);
+        }
+    }
+    request
+}
+
+/// Keep an explicit scope list. A challenge scope is only a fallback when the
+/// user configured nothing; authorization-server `scopes_supported` is never
+/// copied into the project document.
+fn scopes_for_authorization(configured: &[String], challenge_scopes: &[String]) -> Vec<String> {
+    if !configured.is_empty() {
+        return configured.to_vec();
+    }
+    challenge_scopes.to_vec()
+}
+
+fn oauth_challenge_hints(endpoint: &str, challenge: &str) -> OAuthChallengeHints {
+    let Ok(base) = url::Url::parse(endpoint) else {
+        return OAuthChallengeHints::default();
+    };
+    let params = WWWAuthenticateParams::parse(challenge, &base);
+    let protected_resource_metadata_url = params
+        .resource_metadata_url
+        .as_ref()
+        .map(url::Url::to_string)
+        .filter(|value| public_same_origin(endpoint, value));
+    let mut scopes = params
+        .scope
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|scope| !scope.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if normalize_scopes(&mut scopes).is_err() {
+        scopes.clear();
+    }
+    OAuthChallengeHints {
+        protected_resource_metadata_url,
+        scopes,
+    }
+}
+
+/// Persist the challenge pointer, protected-resource binding, and configured
+/// scopes. Authorization-server advertisements do not replace the scope list.
+pub async fn record_oauth_discovery(
+    config: &mut McpOAuthConfig,
+    endpoint: &str,
+    challenge: Option<&str>,
+    redirect_uri: &str,
+    metadata: &AuthorizationMetadata,
+) -> Result<(), McpOAuthConfigError> {
+    let configured_scopes = config.scopes.clone();
+    let hints = challenge
+        .map(|value| oauth_challenge_hints(endpoint, value))
+        .unwrap_or_default();
+    if let Some(url) = hints.protected_resource_metadata_url.clone() {
+        config.endpoints.protected_resource_metadata_url = Some(url);
+    }
+    if let Some(url) = config
+        .endpoints
+        .protected_resource_metadata_url
+        .clone()
+        .filter(|url| public_same_origin(endpoint, url))
+    {
+        if let Ok(binding) = read_protected_resource_binding(&url).await {
+            if let Some(resource) = binding.resource {
+                config.endpoints.resource = Some(resource);
+            }
+            if let Some(server) = binding.authorization_server {
+                config.endpoints.authorization_server_metadata_url = Some(server);
+            }
+        } else if hints.protected_resource_metadata_url.is_some() {
+            return Err(McpOAuthConfigError::InvalidEndpoint);
+        }
+    }
+    config.endpoints.authorization_endpoint = Some(metadata.authorization_endpoint.clone());
+    config.endpoints.token_endpoint = Some(metadata.token_endpoint.clone());
+    config.endpoints.registration_endpoint = metadata.registration_endpoint.clone();
+    config.endpoints.issuer = metadata.issuer.clone();
+    config.scopes = scopes_for_authorization(&configured_scopes, &hints.scopes);
+    if is_public_http_url(redirect_uri) {
+        config.redirect_uri = Some(redirect_uri.to_owned());
+    }
+    config.auth_mode = McpAuthMode::OAuth;
+    config.discovered_at = Some(chrono::Utc::now().timestamp());
+    config.normalize()
+}
+
+async fn install_authorization_metadata(
+    manager: &mut AuthorizationManager,
+    endpoint: &str,
+    config: &McpOAuthConfig,
+) -> Result<(), AuthError> {
+    if let Some(url) = config
+        .endpoints
+        .protected_resource_metadata_url
+        .as_deref()
+        .filter(|url| public_same_origin(endpoint, url) && challenge_safe_metadata_url(url))
+    {
+        let challenge = format!("Bearer resource_metadata=\"{url}\"");
+        if let Ok(resolution) = manager
+            .resolve_metadata_from_challenge(Some(&challenge))
+            .await
+        {
+            if resolution.source == AuthorizationMetadataSource::ProtectedResourceMetadata {
+                manager.set_metadata(resolution.metadata);
+                return Ok(());
+            }
+        }
+    }
+    if let Ok(metadata) = authorization_metadata(config) {
+        manager.set_metadata(metadata);
+        return Ok(());
+    }
+    let resolution = manager.resolve_metadata().await?;
+    manager.set_metadata(resolution.metadata);
+    Ok(())
+}
+
+fn challenge_safe_metadata_url(url: &str) -> bool {
+    !url.chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\' | ','))
+}
+
+fn public_same_origin(endpoint: &str, candidate: &str) -> bool {
+    if !is_public_http_url(candidate) {
+        return false;
+    }
+    let Ok(base) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    let Ok(target) = url::Url::parse(candidate) else {
+        return false;
+    };
+    base.scheme() == target.scheme()
+        && base.host_str() == target.host_str()
+        && base.port_or_known_default() == target.port_or_known_default()
+}
+
+fn is_https_client_metadata_url(value: &str) -> bool {
+    url::Url::parse(value).ok().is_some_and(|url| {
+        url.scheme() == "https"
+            && url.path() != "/"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+
+async fn read_protected_resource_binding(
+    url: &str,
+) -> Result<ProtectedResourceBinding, McpOAuthConfigError> {
+    if !is_public_http_url(url) {
+        return Err(McpOAuthConfigError::InvalidEndpoint);
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|_| McpOAuthConfigError::InvalidEndpoint)?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| McpOAuthConfigError::InvalidEndpoint)?;
+    if !response.status().is_success() {
+        return Err(McpOAuthConfigError::InvalidEndpoint);
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| McpOAuthConfigError::InvalidEndpoint)?;
+    if bytes.len() > 65_536 {
+        return Err(McpOAuthConfigError::InvalidEndpoint);
+    }
+    let document: ProtectedResourceDocument =
+        serde_json::from_slice(&bytes).map_err(|_| McpOAuthConfigError::InvalidEndpoint)?;
+    let mut servers = Vec::new();
+    if let Some(server) = document.authorization_server {
+        servers.push(server);
+    }
+    if let Some(more) = document.authorization_servers {
+        servers.extend(more);
+    }
+    Ok(ProtectedResourceBinding {
+        resource: document.resource.filter(|value| is_public_http_url(value)),
+        authorization_server: servers.into_iter().find(|value| is_public_http_url(value)),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct ProtectedResourceDocument {
+    resource: Option<String>,
+    authorization_server: Option<String>,
+    authorization_servers: Option<Vec<String>>,
 }
 
 pub fn authorization_metadata(config: &McpOAuthConfig) -> Result<AuthorizationMetadata, AuthError> {
@@ -1389,23 +1800,23 @@ pub fn authorization_metadata(config: &McpOAuthConfig) -> Result<AuthorizationMe
 
 pub async fn configured_authorization_manager(
     endpoint: &str,
+    project_root: &Path,
     server_id: &str,
     config: &McpOAuthConfig,
     redirect_uri: &str,
 ) -> Result<AuthorizationManager, AuthError> {
     let mut manager = AuthorizationManager::new(endpoint).await?;
-    manager.set_credential_store(KeyringCredentialStore::new(server_id));
-    if let Ok(metadata) = authorization_metadata(config) {
-        manager.set_metadata(metadata);
-    } else if let Ok(resolution) = manager.resolve_metadata().await {
-        manager.set_metadata(resolution.metadata);
-    }
-    if let Some(client_id) = config.client_id.as_deref() {
-        let mut client = rmcp::transport::auth::OAuthClientConfig::new(client_id, redirect_uri)
+    manager.set_credential_store(KeyringCredentialStore::new(project_root, server_id));
+    install_authorization_metadata(&mut manager, endpoint, config).await?;
+    let identity = oauth_client_identity(config);
+    if let Some(client_id) = identity.transport_client_id() {
+        let mut client = OAuthClientConfig::new(client_id, redirect_uri.to_owned())
             .with_scopes(config.scopes.clone());
-        if let Ok(Some(secrets)) = McpCredentialStore::load(server_id) {
-            if let Some(secret) = secrets.oauth().and_then(|oauth| oauth.client_secret()) {
-                client = client.with_client_secret(secret);
+        if identity.preregistered_client_id.is_some() {
+            if let Ok(Some(secrets)) = McpCredentialStore::load(project_root, server_id) {
+                if let Some(secret) = secrets.oauth().and_then(|oauth| oauth.client_secret()) {
+                    client = client.with_client_secret(secret);
+                }
             }
         }
         manager.configure_client(client)?;
@@ -1419,15 +1830,17 @@ pub async fn configured_authorization_manager(
 /// rmcp sees an authentication challenge.
 pub async fn oauth_transport(
     endpoint: &str,
+    project_root: &Path,
     server_id: &str,
     config: &McpOAuthConfig,
     headers: &BTreeMap<String, String>,
 ) -> Result<rmcp::transport::StreamableHttpClientTransport<AuthClient<reqwest::Client>>, String> {
     let manager = configured_authorization_manager(
         endpoint,
+        project_root,
         server_id,
         config,
-        "http://127.0.0.1/oauth/callback",
+        &oauth_redirect_uri(config),
     )
     .await
     .map_err(|_| "OAuth client configuration failed".to_string())?;
@@ -1535,6 +1948,7 @@ mod tests {
                 scope: Some("mcp offline_access".into()),
                 issued_at: Some(1_700_000_000),
                 expires_at: Some(1_700_003_600),
+                issuer: Some("https://issuer.example".into()),
             })
             .unwrap(),
         ));
@@ -1561,10 +1975,13 @@ mod tests {
         let _guard =
             credentials::override_backend(Arc::clone(&backend) as Arc<dyn CredentialBackend>);
         let original = sample_secrets();
-        McpCredentialStore::save("remote", &original).unwrap();
+        let root = std::env::temp_dir();
+        McpCredentialStore::save(&root, "remote", &original).unwrap();
 
-        let key = mcp_oauth_credential_key("remote").unwrap();
-        assert_eq!(key, "mcp/oauth/remote");
+        let key = mcp_oauth_credential_key(&root, "remote").unwrap();
+        assert!(key.starts_with("mcp/oauth/"));
+        assert!(key.ends_with("/remote"));
+        assert_ne!(key, "mcp/oauth/remote");
         let stored = backend
             .entries
             .lock()
@@ -1584,7 +2001,7 @@ mod tests {
             "credential account must be the mcp/oauth/{{server_id}} key"
         );
 
-        let loaded = McpCredentialStore::load("remote").unwrap().unwrap();
+        let loaded = McpCredentialStore::load(&root, "remote").unwrap().unwrap();
         assert_eq!(loaded, original);
         assert_eq!(loaded.static_bearer().unwrap().token(), BEARER_CANARY);
         assert_eq!(
@@ -1601,7 +2018,44 @@ mod tests {
         assert_eq!(oauth.scope(), Some("mcp offline_access"));
         assert_eq!(oauth.issued_at(), Some(1_700_000_000));
         assert_eq!(oauth.expires_at(), Some(1_700_003_600));
-        assert!(McpCredentialStore::load("other").unwrap().is_none());
+        assert_eq!(oauth.issuer(), Some("https://issuer.example/"));
+        assert!(McpCredentialStore::load(&root, "other").unwrap().is_none());
+    }
+
+    #[test]
+    fn project_roots_do_not_share_the_same_server_id() {
+        let backend = Arc::new(MemoryBackend::default());
+        let _guard =
+            credentials::override_backend(Arc::clone(&backend) as Arc<dyn CredentialBackend>);
+        let left = std::env::temp_dir();
+        let right = std::env::current_dir().unwrap();
+        McpCredentialStore::save(&left, "remote", &sample_secrets()).unwrap();
+        assert!(McpCredentialStore::load(&right, "remote")
+            .unwrap()
+            .is_none());
+        let other = McpServerSecrets {
+            static_bearer: Some(StaticBearerSecret::new("other-project-token").unwrap()),
+            ..McpServerSecrets::empty()
+        };
+        McpCredentialStore::save(&right, "remote", &other).unwrap();
+        assert_eq!(
+            McpCredentialStore::load(&left, "remote")
+                .unwrap()
+                .unwrap()
+                .oauth()
+                .unwrap()
+                .access_token(),
+            ACCESS_CANARY
+        );
+        assert_eq!(
+            McpCredentialStore::load(&right, "remote")
+                .unwrap()
+                .unwrap()
+                .static_bearer()
+                .unwrap()
+                .token(),
+            "other-project-token"
+        );
     }
 
     #[test]
@@ -1609,17 +2063,18 @@ mod tests {
         let backend = Arc::new(MemoryBackend::default());
         let _guard =
             credentials::override_backend(Arc::clone(&backend) as Arc<dyn CredentialBackend>);
-        McpCredentialStore::save("remote", &sample_secrets()).unwrap();
+        let root = std::env::temp_dir();
+        McpCredentialStore::save(&root, "remote", &sample_secrets()).unwrap();
         let other = McpServerSecrets {
             static_bearer: Some(StaticBearerSecret::new("other-bearer-token").unwrap()),
             ..McpServerSecrets::empty()
         };
-        McpCredentialStore::save("other", &other).unwrap();
+        McpCredentialStore::save(&root, "other", &other).unwrap();
 
-        McpCredentialStore::clear("remote").unwrap();
-        assert!(McpCredentialStore::load("remote").unwrap().is_none());
+        McpCredentialStore::clear(&root, "remote").unwrap();
+        assert!(McpCredentialStore::load(&root, "remote").unwrap().is_none());
         assert_eq!(
-            McpCredentialStore::load("other")
+            McpCredentialStore::load(&root, "other")
                 .unwrap()
                 .unwrap()
                 .static_bearer()
@@ -1627,9 +2082,9 @@ mod tests {
                 .token(),
             "other-bearer-token"
         );
-        McpCredentialStore::clear("remote").unwrap();
-        McpCredentialStore::save("other", &McpServerSecrets::empty()).unwrap();
-        assert!(McpCredentialStore::load("other").unwrap().is_none());
+        McpCredentialStore::clear(&root, "remote").unwrap();
+        McpCredentialStore::save(&root, "other", &McpServerSecrets::empty()).unwrap();
+        assert!(McpCredentialStore::load(&root, "other").unwrap().is_none());
     }
 
     #[test]
@@ -1657,6 +2112,7 @@ mod tests {
                 scope: None,
                 issued_at: Some(10),
                 expires_at: None,
+                issuer: None,
             })
             .unwrap(),
         ));
@@ -1686,6 +2142,7 @@ mod tests {
                 scope: None,
                 issued_at: None,
                 expires_at: None,
+                issuer: None,
             }
         ));
 
@@ -1708,6 +2165,7 @@ mod tests {
             client_metadata_url: None,
             scopes: vec!["mcp".into()],
             endpoints: McpOAuthEndpoints::default(),
+            redirect_uri: None,
             discovered_at: Some(10),
         };
         let config_json = serde_json::to_string(&config).unwrap();
@@ -1718,7 +2176,7 @@ mod tests {
 
         let backend = Arc::new(FailingBackend);
         let _guard = credentials::override_backend(backend as Arc<dyn CredentialBackend>);
-        let error = McpCredentialStore::load("remote").unwrap_err();
+        let error = McpCredentialStore::load(&std::env::temp_dir(), "remote").unwrap_err();
         assert_eq!(error, McpCredentialError::StorageUnavailable);
         assert_no_canaries(&error.to_string());
         assert_no_canaries(&format!("{error:?}"));
@@ -1726,12 +2184,14 @@ mod tests {
         let backend = Arc::new(MemoryBackend::default());
         let _guard =
             credentials::override_backend(Arc::clone(&backend) as Arc<dyn CredentialBackend>);
+        let root = std::env::temp_dir();
+        let key = mcp_oauth_credential_key(&root, "remote").unwrap();
         crate::keyring_set(
-            "mcp/oauth/remote",
+            &key,
             r#"{"version":1,"accessToken":"access-token-canary","oauth":{"clientSecret":"client-secret-canary"}}"#,
         )
         .unwrap();
-        let error = McpCredentialStore::load("remote").unwrap_err();
+        let error = McpCredentialStore::load(&root, "remote").unwrap_err();
         assert_eq!(error, McpCredentialError::Corrupt);
         assert_no_canaries(&error.to_string());
         assert_no_canaries(&format!("{error:?}"));
@@ -1739,15 +2199,68 @@ mod tests {
 
     #[test]
     fn invalid_server_ids_are_rejected_without_echoing_the_id() {
-        let error = mcp_oauth_credential_key("").unwrap_err();
+        let root = std::env::temp_dir();
+        let error = mcp_oauth_credential_key(&root, "").unwrap_err();
         assert_eq!(error, McpCredentialError::InvalidServerId);
-        assert!(mcp_oauth_credential_key("remote/nested").is_err());
-        assert!(mcp_oauth_credential_key("bad\nid").is_err());
-        assert_eq!(
-            mcp_oauth_credential_key("remote.server_1").unwrap(),
-            "mcp/oauth/remote.server_1"
-        );
+        assert!(mcp_oauth_credential_key(&root, "remote/nested").is_err());
+        assert!(mcp_oauth_credential_key(&root, "bad\nid").is_err());
+        let key = mcp_oauth_credential_key(&root, "remote.server_1").unwrap();
+        assert!(key.starts_with("mcp/oauth/"));
+        assert!(key.ends_with("/remote.server_1"));
         assert!(!error.to_string().contains('/'));
+    }
+
+    #[tokio::test]
+    async fn refresh_save_preserves_secret_refresh_token_and_issuer() {
+        let backend = Arc::new(MemoryBackend::default());
+        let _guard =
+            credentials::override_backend(Arc::clone(&backend) as Arc<dyn CredentialBackend>);
+        let root = std::env::temp_dir();
+        McpCredentialStore::save(&root, "remote", &sample_secrets()).unwrap();
+        let store = KeyringCredentialStore::new(&root, "remote");
+        let mut stored = store.load().await.unwrap().unwrap();
+        let mut response = stored.token_response.take().unwrap();
+        response.set_refresh_token(None);
+        stored.token_response = Some(response);
+        stored.issuer = None;
+        store.save(stored).await.unwrap();
+
+        let loaded = McpCredentialStore::load(&root, "remote").unwrap().unwrap();
+        let oauth = loaded.oauth().unwrap();
+        assert_eq!(oauth.client_secret(), Some(SECRET_CANARY));
+        assert_eq!(oauth.refresh_token(), Some(REFRESH_CANARY));
+        assert_eq!(oauth.issuer(), Some("https://issuer.example/"));
+        let exposed = store.load().await.unwrap().unwrap();
+        assert_eq!(exposed.issuer.as_deref(), Some("https://issuer.example/"));
+    }
+
+    #[test]
+    fn rejected_refresh_clears_only_the_oauth_grant() {
+        let backend = Arc::new(MemoryBackend::default());
+        let _guard =
+            credentials::override_backend(Arc::clone(&backend) as Arc<dyn CredentialBackend>);
+        let root = std::env::temp_dir();
+        McpCredentialStore::save(&root, "remote", &sample_secrets()).unwrap();
+        assert!(invalidate_rejected_oauth_grant(
+            &root,
+            "remote",
+            &AuthError::TokenRefreshRejected("invalid_grant".into()),
+        )
+        .unwrap());
+        let loaded = McpCredentialStore::load(&root, "remote").unwrap().unwrap();
+        assert!(loaded.oauth().is_none());
+        assert!(loaded.static_bearer().is_some());
+        assert!(!invalidate_rejected_oauth_grant(
+            &root,
+            "remote",
+            &AuthError::TokenRefreshFailed("temporary".into()),
+        )
+        .unwrap());
+        assert!(McpCredentialStore::load(&root, "remote")
+            .unwrap()
+            .unwrap()
+            .static_bearer()
+            .is_some());
     }
 
     #[test]
@@ -1795,6 +2308,335 @@ mod tests {
         sanitize_mcp_oauth_metadata(&mut stdio).unwrap();
         assert!(!stdio.to_string().contains("oauth"));
         assert_no_canaries(&stdio.to_string());
+    }
+
+    #[test]
+    fn configured_scopes_survive_challenge_and_advertised_scopes() {
+        assert_eq!(
+            scopes_for_authorization(
+                &["mcp:read".to_owned()],
+                &["mcp:read".to_owned(), "mcp:admin".to_owned()]
+            ),
+            vec!["mcp:read".to_owned()]
+        );
+        assert_eq!(
+            scopes_for_authorization(&[], &["mcp:read".to_owned(), "mcp:admin".to_owned()]),
+            vec!["mcp:read".to_owned(), "mcp:admin".to_owned()]
+        );
+
+        let hints = oauth_challenge_hints(
+            "https://mcp.example/mcp",
+            r#"Bearer error="invalid_token", resource_metadata="/.well-known/oauth-protected-resource", scope="mcp:read mcp:admin""#,
+        );
+        assert_eq!(
+            hints.protected_resource_metadata_url.as_deref(),
+            Some("https://mcp.example/.well-known/oauth-protected-resource")
+        );
+        assert_eq!(
+            hints.scopes,
+            vec!["mcp:read".to_owned(), "mcp:admin".to_owned()]
+        );
+
+        let cross_origin = oauth_challenge_hints(
+            "https://mcp.example/mcp",
+            r#"Bearer resource_metadata="https://evil.example/metadata", scope="mcp:read""#,
+        );
+        assert!(cross_origin.protected_resource_metadata_url.is_none());
+        assert_eq!(cross_origin.scopes, vec!["mcp:read".to_owned()]);
+    }
+
+    #[test]
+    fn client_metadata_and_redirect_stay_bound_to_the_configured_client() {
+        let config = McpOAuthConfig {
+            registration_mode: McpOAuthRegistrationMode::ClientMetadata,
+            client_id: Some("issued-client".into()),
+            client_metadata_url: Some("https://client.example/oauth.json".into()),
+            scopes: vec!["mcp:read".into()],
+            redirect_uri: Some("http://127.0.0.1:43111/oauth/callback".into()),
+            ..McpOAuthConfig::default()
+        };
+        let identity = oauth_client_identity(&config);
+        assert!(identity.preregistered_client_id.is_none());
+        assert_eq!(
+            identity.transport_client_id(),
+            Some("https://client.example/oauth.json")
+        );
+        let request =
+            authorization_request(&config, &oauth_redirect_uri(&config), Some(SECRET_CANARY));
+        assert_eq!(
+            request.redirect_uri,
+            "http://127.0.0.1:43111/oauth/callback"
+        );
+        assert_eq!(
+            request.client_metadata_url.as_deref(),
+            Some("https://client.example/oauth.json")
+        );
+        assert!(request.client_id.is_none());
+        assert!(request.client_secret.is_none());
+        assert_eq!(request.scopes, vec!["mcp:read".to_owned()]);
+        assert_eq!(
+            oauth_redirect_uri(&McpOAuthConfig::default()),
+            "http://127.0.0.1/oauth/callback"
+        );
+
+        let preregistered = McpOAuthConfig {
+            registration_mode: McpOAuthRegistrationMode::Preregistered,
+            client_id: Some("issued-client".into()),
+            client_metadata_url: Some("https://client.example/oauth.json".into()),
+            ..McpOAuthConfig::default()
+        };
+        let request = authorization_request(
+            &preregistered,
+            &oauth_redirect_uri(&preregistered),
+            Some(SECRET_CANARY),
+        );
+        assert_eq!(request.client_id.as_deref(), Some("issued-client"));
+        assert_eq!(request.client_secret.as_deref(), Some(SECRET_CANARY));
+        assert!(request.client_metadata_url.is_none());
+        assert_eq!(request.redirect_uri, "http://127.0.0.1/oauth/callback");
+
+        let mut credential_url = McpOAuthConfig {
+            endpoints: McpOAuthEndpoints {
+                resource: Some("https://user:super-secret-password@example.test/mcp".into()),
+                ..McpOAuthEndpoints::default()
+            },
+            ..McpOAuthConfig::default()
+        };
+        let error = credential_url.normalize().unwrap_err();
+        assert_eq!(error, McpOAuthConfigError::InvalidEndpoint);
+        assert!(!error.to_string().contains("super-secret-password"));
+    }
+
+    #[tokio::test]
+    async fn challenge_resource_binding_is_reused_on_refresh() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let paths = Arc::new(Mutex::new(Vec::<String>::new()));
+        let token_bodies = Arc::new(Mutex::new(Vec::<String>::new()));
+        let paths_task = Arc::clone(&paths);
+        let bodies_task = Arc::clone(&token_bodies);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let paths_task = Arc::clone(&paths_task);
+                let bodies_task = Arc::clone(&bodies_task);
+                tokio::spawn(async move {
+                    let _ = answer_oauth_fixture(socket, port, paths_task, bodies_task).await;
+                });
+            }
+        });
+        let _stop = AbortOnDrop(server);
+
+        let origin = format!("http://127.0.0.1:{port}");
+        let endpoint = format!("{origin}/mcp?transport=stream");
+        let resource = format!("{origin}/mcp");
+        let challenge = format!(
+            "Bearer realm=\"mcp\", resource_metadata=\"{origin}/.well-known/oauth-protected-resource\", scope=\"mcp:read mcp:admin\""
+        );
+        let redirect = format!("{origin}/oauth/callback");
+        let manager = AuthorizationManager::new(&endpoint).await.unwrap();
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(&challenge))
+            .await
+            .unwrap();
+        assert_eq!(
+            resolution.source,
+            AuthorizationMetadataSource::ProtectedResourceMetadata
+        );
+
+        let mut config = McpOAuthConfig {
+            auth_mode: McpAuthMode::OAuth,
+            registration_mode: McpOAuthRegistrationMode::ClientMetadata,
+            client_id: Some("issued-client".into()),
+            client_metadata_url: Some("https://client.example/oauth.json".into()),
+            scopes: vec!["mcp:read".into()],
+            ..McpOAuthConfig::default()
+        };
+        record_oauth_discovery(
+            &mut config,
+            &endpoint,
+            Some(&challenge),
+            &redirect,
+            &resolution.metadata,
+        )
+        .await
+        .unwrap();
+        let prm_url = format!("{origin}/.well-known/oauth-protected-resource");
+        assert_eq!(config.scopes, vec!["mcp:read".to_owned()]);
+        assert_eq!(
+            config.endpoints.resource.as_deref(),
+            Some(resource.as_str())
+        );
+        assert_eq!(
+            config.endpoints.protected_resource_metadata_url.as_deref(),
+            Some(prm_url.as_str())
+        );
+        assert_eq!(
+            config
+                .endpoints
+                .authorization_server_metadata_url
+                .as_deref(),
+            Some(origin.as_str())
+        );
+        assert_eq!(config.redirect_uri.as_deref(), Some(redirect.as_str()));
+        let persisted = serde_json::to_string(&config).unwrap();
+        assert!(!persisted.contains("mcp:admin"));
+        assert!(!persisted.contains("access_token"));
+        assert!(!persisted.contains("refresh_token"));
+        assert!(!persisted.contains("client_secret"));
+        assert!(persisted.contains("\"resource\":"));
+
+        let root = std::env::temp_dir().join(format!(
+            "termul-oauth-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let backend = Arc::new(MemoryBackend::default());
+        let _guard =
+            credentials::override_backend(Arc::clone(&backend) as Arc<dyn CredentialBackend>);
+        let mut secrets = McpServerSecrets::default();
+        secrets.set_oauth(Some(
+            OAuthSecret::try_new(OAuthSecretInput {
+                client_id: "https://client.example/oauth.json".into(),
+                client_secret: None,
+                access_token: "resource-bound-access".into(),
+                refresh_token: Some("resource-bound-refresh".into()),
+                token_type: "Bearer".into(),
+                scope: Some("mcp:read".into()),
+                issued_at: Some(1_700_000_000),
+                expires_at: Some(1_700_003_600),
+                issuer: Some(origin.clone()),
+            })
+            .unwrap(),
+        ));
+        McpCredentialStore::save(&root, "discovery-server", &secrets).unwrap();
+        let transport = configured_authorization_manager(
+            &endpoint,
+            &root,
+            "discovery-server",
+            &config,
+            &oauth_redirect_uri(&config),
+        )
+        .await
+        .unwrap();
+        transport.refresh_token().await.unwrap();
+        let bodies = token_bodies.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 1, "token paths: {:?}", paths.lock().unwrap());
+        let fields = url::form_urlencoded::parse(bodies[0].as_bytes())
+            .into_owned()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            fields.get("resource").map(String::as_str),
+            Some(resource.as_str())
+        );
+        assert!(!bodies[0].contains("transport%3Dstream"));
+        assert!(!bodies[0].contains("transport=stream"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    async fn answer_oauth_fixture(
+        mut socket: tokio::net::TcpStream,
+        port: u16,
+        paths: Arc<Mutex<Vec<String>>>,
+        token_bodies: Arc<Mutex<Vec<String>>>,
+    ) -> std::io::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 2048];
+        loop {
+            let count =
+                tokio::time::timeout(std::time::Duration::from_secs(2), socket.read(&mut buffer))
+                    .await
+                    .map_err(std::io::Error::other)??;
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..count]);
+            if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&request[..end]).to_string();
+                let length = header
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                let header_end = end + 4;
+                while request.len() < header_end + length {
+                    let count = socket.read(&mut buffer).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                let body = String::from_utf8_lossy(
+                    &request[header_end..(header_end + length).min(request.len())],
+                )
+                .to_string();
+                let mut parts = header.lines().next().unwrap_or("").split_whitespace();
+                let method = parts.next().unwrap_or("");
+                let target = parts.next().unwrap_or("");
+                let path = url::Url::parse(target)
+                    .ok()
+                    .map(|url| url.path().to_owned())
+                    .unwrap_or_else(|| target.split('?').next().unwrap_or(target).to_owned());
+                paths.lock().expect("paths").push(path.clone());
+                let origin = format!("http://127.0.0.1:{port}");
+                let response = if method == "GET" && path == "/.well-known/oauth-protected-resource"
+                {
+                    fixture_json(&format!(
+                        r#"{{"resource":"{origin}/mcp","authorization_servers":["{origin}"],"scopes_supported":["mcp:read","mcp:admin","offline_access"]}}"#
+                    ))
+                } else if method == "GET"
+                    && (path == "/.well-known/oauth-authorization-server"
+                        || path == "/.well-known/openid-configuration")
+                {
+                    fixture_json(&format!(
+                        r#"{{"issuer":"{origin}","authorization_endpoint":"{origin}/authorize","token_endpoint":"{origin}/token","registration_endpoint":"{origin}/register","scopes_supported":["mcp:read","mcp:admin","offline_access"],"response_types_supported":["code"],"code_challenge_methods_supported":["S256"],"client_id_metadata_document_supported":true}}"#
+                    ))
+                } else if method == "POST" && path == "/token" {
+                    token_bodies.lock().expect("token bodies").push(body);
+                    fixture_json(
+                        r#"{"access_token":"resource-bound-access-2","token_type":"Bearer","expires_in":3600,"refresh_token":"resource-bound-refresh-2"}"#,
+                    )
+                } else {
+                    fixture_json_status("404 Not Found", "{}")
+                };
+                socket.write_all(response.as_bytes()).await?;
+                return Ok(());
+            }
+            if request.len() > 65_536 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn fixture_json(body: &str) -> String {
+        fixture_json_status("200 OK", body)
+    }
+
+    fn fixture_json_status(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+    impl Drop for AbortOnDrop {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
     }
 
     impl McpServerSecrets {

@@ -1,4 +1,5 @@
 import agentsEn from '@/locales/en/agents.json'
+import aiEn from '@/locales/en/ai.json'
 import browserEn from '@/locales/en/browser.json'
 import chatEn from '@/locales/en/chat.json'
 import commonEn from '@/locales/en/common.json'
@@ -13,6 +14,7 @@ import sshEn from '@/locales/en/ssh.json'
 import terminalEn from '@/locales/en/terminal.json'
 import workspaceEn from '@/locales/en/workspace.json'
 import agentsZhCn from '@/locales/zh-CN/agents.json'
+import aiZhCn from '@/locales/zh-CN/ai.json'
 import browserZhCn from '@/locales/zh-CN/browser.json'
 import chatZhCn from '@/locales/zh-CN/chat.json'
 import commonZhCn from '@/locales/zh-CN/common.json'
@@ -40,6 +42,7 @@ export const resources = {
     terminal: terminalEn,
     git: gitEn,
     agents: agentsEn,
+    ai: aiEn,
     chat: chatEn,
     mcp: mcpEn,
     ssh: sshEn,
@@ -56,6 +59,7 @@ export const resources = {
     terminal: terminalZhCn,
     git: gitZhCn,
     agents: agentsZhCn,
+    ai: aiZhCn,
     chat: chatZhCn,
     mcp: mcpZhCn,
     ssh: sshZhCn,

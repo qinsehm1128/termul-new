@@ -20,7 +20,8 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use se_manager_lib::mcp_core::{
-    AllowAllTools, BuiltInRegistry, McpCore, McpCoreConfig, McpHttpGateway, McpHttpGatewayConfig,
+    AllowAllTools, AuthBootstrap, BuiltInRegistry, McpCore, McpCoreConfig, McpHttpGateway,
+    McpHttpGatewayConfig,
 };
 use se_manager_lib::memory_index::service::MemoryIndexService;
 use se_manager_lib::server_update::{
@@ -44,36 +45,58 @@ async fn start_standalone_mcp_gateway(
     memory_index: Arc<MemoryIndexService>,
     acp: &AcpManager,
 ) -> Result<Option<McpHttpGateway>, String> {
-    let enabled = std::env::var("TERMUL_MCP_CORE_ENABLED")
+    let disabled = std::env::var("TERMUL_MCP_CORE_ENABLED")
         .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
-    if !enabled {
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        });
+    if disabled {
         info!(
             target: "se_manager::acp::mcp_router",
             operation = "mcp_router_apply",
             router = "unavailable",
             reason = "core_not_wired",
             stable_code = "UNAVAILABLE",
-            "standalone MCP Core HTTP is opt-in; ACP keeps host_mcp only"
+            "standalone MCP Core HTTP is explicitly disabled; ACP keeps host_mcp only"
         );
         return Ok(None);
     }
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let process = se_manager_lib::mcp_core::McpCoreProcessConfig::from_env(executable)
-        .map_err(|error| error.to_string())?;
+    let bind_address = std::env::var("TERMUL_MCP_CORE_BIND")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let port = std::env::var("TERMUL_MCP_CORE_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let generation = std::env::var("TERMUL_MCP_CORE_AUTH_GENERATION")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let token = std::env::var("TERMUL_MCP_CORE_AUTH_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("se-mcp-{}", Uuid::new_v4()));
+    let request_body_limit = std::env::var("TERMUL_MCP_CORE_REQUEST_LIMIT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8 * 1024 * 1024);
+    let auth = AuthBootstrap::new(generation, token).map_err(|error| error.message)?;
     let builtins = BuiltInRegistry::memory_backed(memory_index, None);
     let core =
         McpCore::new_with_builtins(McpCoreConfig::default(), Arc::new(AllowAllTools), builtins);
-    let auth = process.auth.clone();
     let gateway = McpHttpGateway::bind(
         Arc::new(core),
         McpHttpGatewayConfig {
-            bind_address: process.bind_address,
-            port: process.port,
+            bind_address,
+            port,
             path: "/mcp".into(),
-            generation: 1,
-            auth: process.auth,
-            request_body_limit: process.request_body_limit,
+            generation,
+            auth: auth.clone(),
+            request_body_limit,
         },
     )
     .await

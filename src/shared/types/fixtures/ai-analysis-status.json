@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "purpose": "descriptionAnalysis",
+  "state": "draftReady",
+  "channelId": "gateway",
+  "profileId": "profileA",
+  "serverId": "dbx",
+  "catalogRevision": 18,
+  "draftRevision": 4
+}

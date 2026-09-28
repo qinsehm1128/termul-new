@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "channels": [
+    {
+      "id": "local",
+      "displayName": "Local",
+      "provider": "ollama",
+      "enabled": true,
+      "credentialRef": {
+        "kind": "keyring",
+        "ref": "ai/channel/local",
+        "hasCredential": false
+      },
+      "modelIds": ["llama"]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "localLlama",
+      "channelId": "local",
+      "modelId": "llama",
+      "enabled": true,
+      "capabilities": {
+        "descriptionAnalysis": false,
+        "fxRuntime": true,
+        "structuredOutput": false,
+        "toolCalling": false
+      }
+    }
+  ],
+  "routes": []
+}

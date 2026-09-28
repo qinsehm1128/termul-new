@@ -159,7 +159,7 @@ fn build_server(
         } => McpUpstreamTransport::StreamableHttp {
             url: url.clone(),
             headers: resolve_secrets(&upstream.id, "headers", headers, resolver)?,
-            oauth: oauth.clone(),
+            oauth: oauth.clone().map(Box::new),
         },
         McpPersistedTransport::Sse { .. } => {
             return Err(SnapshotError::InvalidRegistry(
@@ -225,6 +225,10 @@ impl std::fmt::Debug for McpSnapshotController {
 }
 
 impl McpSnapshotController {
+    pub async fn set_credential_scope(&self, project_root: Option<std::path::PathBuf>) {
+        self.core.set_credential_scope(project_root).await;
+    }
+
     pub fn new(core: Arc<McpCore>) -> Self {
         Self {
             core,

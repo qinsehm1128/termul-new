@@ -25,7 +25,8 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/components/settings/SettingsLayout', () => ({
   SettingsLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SettingsSection: ({ children }: { children: React.ReactNode }) => <section>{children}</section>
+  SettingsSection: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,
+  SettingsDivider: ({ label }: { label: string }) => <div>{label}</div>
 }))
 
 vi.mock('@/components/NewProjectModal', () => ({ NewProjectModal: () => null }))

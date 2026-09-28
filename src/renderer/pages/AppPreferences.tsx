@@ -31,6 +31,7 @@ import { MacosPermissionsSettings } from '@/components/settings/MacosPermissions
 import { RemoteAccessSettings } from '@/components/settings/RemoteAccessSettings'
 import {
   type SettingsCategory,
+  SettingsDivider,
   SettingsLayout,
   SettingsSection
 } from '@/components/settings/SettingsLayout'
@@ -1271,6 +1272,8 @@ export default function AppPreferences(): React.JSX.Element {
             </div>
           </SettingsSection>
 
+          <SettingsDivider label="ACP" />
+
           {/* AI Agents Section */}
           <SettingsSection id="ai-agents">
             <div className="flex items-start gap-6 border-b border-border/70 pb-6">
@@ -1500,6 +1503,8 @@ export default function AppPreferences(): React.JSX.Element {
               </div>
             </div>
           </SettingsSection>
+
+          <SettingsDivider label="Remote & diagnostics" />
 
           {/* Keyboard Shortcuts Section */}
           <SettingsSection id="remote-access">
@@ -1883,6 +1888,8 @@ export default function AppPreferences(): React.JSX.Element {
               </div>
             </SettingsSection>
           )}
+
+          <SettingsDivider label="Diagnostics & reset" />
 
           <SettingsSection id="diagnostics">
             <div className="flex items-start gap-6 border-b border-border/70 pb-6">

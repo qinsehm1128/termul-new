@@ -259,6 +259,50 @@ describe('MCP registry helpers', () => {
       })
     ).toEqual({ id: 'stdio', type: 'stdio', name: 'Local', command: 'node' })
   })
+
+  it('keeps resource binding and redirect URI while dropping credential URLs', () => {
+    expect(
+      sanitizeMcpUpstream({
+        id: 'remote',
+        type: 'http',
+        name: 'Remote',
+        url: 'https://mcp.example.test/mcp',
+        oauth: {
+          authMode: 'oauth',
+          registrationMode: 'clientMetadata',
+          endpoints: {
+            resource: 'https://mcp.example.test/mcp',
+            protectedResourceMetadataUrl:
+              'https://mcp.example.test/.well-known/oauth-protected-resource'
+          },
+          redirectUri: 'http://127.0.0.1:43111/oauth/callback',
+          accessToken: 'access-token-canary'
+        }
+      })
+    ).toEqual({
+      id: 'remote',
+      type: 'http',
+      name: 'Remote',
+      url: 'https://mcp.example.test/mcp',
+      oauth: {
+        authMode: 'oauth',
+        registrationMode: 'clientMetadata',
+        endpoints: {
+          resource: 'https://mcp.example.test/mcp',
+          protectedResourceMetadataUrl:
+            'https://mcp.example.test/.well-known/oauth-protected-resource'
+        },
+        redirectUri: 'http://127.0.0.1:43111/oauth/callback'
+      }
+    })
+    expect(
+      normalizeOAuthConfig({
+        authMode: 'oauth',
+        endpoints: { resource: 'https://user:secret-canary@mcp.example.test/mcp' },
+        redirectUri: 'http://127.0.0.1:9/oauth/callback'
+      })
+    ).toBeNull()
+  })
 })
 
 describe('registry persistence parity', () => {

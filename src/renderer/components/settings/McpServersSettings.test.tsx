@@ -486,9 +486,7 @@ describe('McpServersSettings', () => {
     // The error detail lives behind the tools disclosure; expand via the
     // disconnected-specific trigger, then assert the redacted reason.
     fireEvent.click(screen.getByText(/probe failed — retry/i))
-    expect(
-      screen.getByText(/probe failed — check the server config or network/i)
-    ).toBeInTheDocument()
+    expect(screen.getByText(/probe failed — see the diagnostic details below/i)).toBeInTheDocument()
     expect(screen.getByText('initialize failed: connection refused')).toBeInTheDocument()
   })
 

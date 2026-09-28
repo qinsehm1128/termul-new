@@ -12,7 +12,9 @@ pub mod builtins;
 pub mod config;
 pub mod desktop;
 pub mod domain;
+pub mod facade;
 pub mod http;
+pub mod metadata;
 pub mod oauth;
 pub mod process;
 pub mod snapshot;
@@ -25,14 +27,25 @@ pub use config::{
     BUILTIN_SESSION_MEMORY, MCP_CONTROL_PLANE_SCHEMA_VERSION,
 };
 pub use desktop::{
-    DesktopMcpCoreAvailability, DesktopMcpCoreRuntime, DesktopMcpCoreStatus, MCP_CORE_ENABLED_ENV,
+    DesktopMcpCoreAvailability, DesktopMcpCoreClientConfig, DesktopMcpCoreRuntime,
+    DesktopMcpCoreStatus, MCP_CORE_ENABLED_ENV,
 };
 pub use domain::{
     Aggregate, AggregatedPrompt, AggregatedResource, AggregatedTool, AllowAllTools,
     DenyListedTools, McpCore, McpCoreConfig, McpDomainError, Operation, ToolPermission,
     UpstreamFailure, UpstreamKind,
 };
+pub use facade::{
+    facade_tool_names, require_current_catalog_revision, McpFacadeCatalog, McpFacadeError,
+    McpFacadeFailure, McpFacadeFailureCode, McpFacadeListQuery, McpFacadeTool, McpFacadeToolCall,
+};
 pub use http::{GatewayMode, McpHttpGateway, McpHttpGatewayConfig, McpHttpGatewayError};
+pub use metadata::{
+    apply_overlay, parse_analysis_output, validate_overlay, validate_overlay_at_revision,
+    McpAnalysisDraft, McpAnalysisDraftTool, McpDraftTrust, McpMetadataDocument, McpMetadataError,
+    McpMetadataServer, McpMetadataStore, McpMetadataStoreError, McpMetadataTool,
+    MetadataRevisionFence,
+};
 pub use oauth::{
     mcp_oauth_credential_key, McpAuthMode, McpCredentialError, McpCredentialStatus,
     McpCredentialStore, McpOAuthConfig, McpOAuthConfigError, McpOAuthEndpoints,
@@ -114,7 +127,7 @@ pub enum McpUpstreamTransport {
         #[serde(default)]
         headers: BTreeMap<String, RedactedSecret>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        oauth: Option<oauth::McpOAuthConfig>,
+        oauth: Option<Box<oauth::McpOAuthConfig>>,
     },
 }
 

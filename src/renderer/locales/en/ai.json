@@ -1,0 +1,42 @@
+{
+  "page": {
+    "title": "AI Channels",
+    "subtitle": "Manage host-routed AI providers, model profiles, and fallback routes.",
+    "security": "Credentials stay in the host keyring and are never included in settings exports.",
+    "addChannel": "Add channel",
+    "channelId": "Channel ID",
+    "displayName": "Display name",
+    "provider": "Provider",
+    "endpoint": "Endpoint",
+    "model": "Model",
+    "addModel": "Add model",
+    "save": "Save changes",
+    "delete": "Delete",
+    "enabled": "Enabled",
+    "credential": "Credential",
+    "credentialPresent": "Credential stored",
+    "credentialMissing": "No credential stored",
+    "setCredential": "Set credential",
+    "replaceCredential": "Replace credential",
+    "removeCredential": "Remove credential",
+    "secretPlaceholder": "Paste key; it is sent only to the host keyring",
+    "routes": "Purpose routes",
+    "descriptionAnalysis": "Description analysis",
+    "fxRuntime": "Fx runtime",
+    "noChannels": "No AI channels configured yet.",
+    "saved": "AI channel settings saved.",
+    "failed": "Unable to save AI channel settings.",
+    "invalid": "Please complete the required channel fields.",
+    "endpointRequired": "This provider requires an endpoint.",
+    "profile": "Model profile",
+    "capabilities": "Capabilities"
+  },
+  "providers": {
+    "vercelGateway": "Vercel Gateway",
+    "openAiCompatible": "OpenAI-compatible",
+    "openRouter": "OpenRouter",
+    "ollama": "Ollama",
+    "vllm": "vLLM",
+    "custom": "Custom"
+  }
+}

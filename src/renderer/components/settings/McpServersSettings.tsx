@@ -25,15 +25,118 @@ import {
 } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
-import { beginMcpOAuth } from '@/lib/mcp-api'
+import {
+  type McpOAuthConfig,
+  type McpTransport,
+  type StoredMcpServer,
+  transportOf
+} from '@/lib/acp-mcp-persistence'
+import { beginMcpOAuth, cancelMcpOAuth } from '@/lib/mcp-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { downloadMcpJsonExport, prepareMcpJsonImport } from '@/lib/mcp-json-transfer'
+import { listen } from '@/lib/tauri-event'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { useMcpStore } from '@/stores/mcp-store'
 
 type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer }
+
+function credentialFreeOAuth(oauth: McpOAuthConfig): McpOAuthConfig {
+  return {
+    authMode: oauth.authMode,
+    registrationMode: oauth.registrationMode,
+    ...(oauth.clientId ? { clientId: oauth.clientId } : {}),
+    ...(oauth.clientMetadataUrl ? { clientMetadataUrl: oauth.clientMetadataUrl } : {}),
+    ...(oauth.scopes && oauth.scopes.length > 0 ? { scopes: oauth.scopes } : {}),
+    ...(oauth.endpoints ? { endpoints: oauth.endpoints } : {}),
+    ...(oauth.redirectUri ? { redirectUri: oauth.redirectUri } : {}),
+    ...(oauth.discoveredAt !== undefined ? { discoveredAt: oauth.discoveredAt } : {})
+  }
+}
+
+function McpOAuthActions({
+  name,
+  transport,
+  pending,
+  failure,
+  onBegin,
+  onCancel
+}: {
+  name: string
+  transport: McpTransport
+  pending: boolean
+  failure?: string
+  onBegin: () => void
+  onCancel: () => void
+}): React.JSX.Element | null {
+  const { t } = useTranslation('mcp')
+  if (transport === 'stdio') return null
+  if (!isTauriContext()) {
+    return (
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        disabled
+        aria-label={t('settings.oauth.desktopOnly', { name })}
+        title={t('settings.oauth.desktopOnly', { name })}
+      >
+        <KeyRound size={14} />
+      </Button>
+    )
+  }
+  if (transport === 'sse') {
+    return (
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        disabled
+        aria-label={t('settings.oauth.sseUnsupported', { name })}
+        title={t('settings.oauth.sseUnsupported', { name })}
+      >
+        <KeyRound size={14} />
+      </Button>
+    )
+  }
+  return (
+    <>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        disabled={pending}
+        onClick={onBegin}
+        aria-label={
+          failure ? t('settings.oauth.retry', { name }) : t('settings.oauth.authorize', { name })
+        }
+        title={
+          pending
+            ? t('settings.oauth.pending')
+            : (failure ?? t('settings.oauth.authorize', { name }))
+        }
+      >
+        <KeyRound size={14} />
+      </Button>
+      {pending ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onCancel}
+          aria-label={t('settings.oauth.cancel', { name })}
+        >
+          {t('settings.oauth.cancelLabel')}
+        </Button>
+      ) : null}
+      {failure ? (
+        <span className="max-w-40 truncate text-3xs text-destructive" role="status">
+          {failure}
+        </span>
+      ) : null}
+    </>
+  )
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -73,6 +176,7 @@ function serverToJson(server: StoredMcpServer): string {
       name: server.name,
       url: remote.url,
       ...(remote.headers && remote.headers.length > 0 ? { headers: remote.headers } : {}),
+      ...(remote.oauth ? { oauth: credentialFreeOAuth(remote.oauth) } : {}),
       enabled
     },
     null,
@@ -90,6 +194,8 @@ export function McpServersSettings(): React.JSX.Element {
   const deleteMcpServer = useMcpStore((state) => state.deleteUpstream)
   const probeMcpServer = useMcpStore((state) => state.probe)
   const loadMcpTools = useMcpStore((state) => state.loadTools)
+  const reloadMcpConfig = useMcpStore((state) => state.load)
+  const reloadMcpStatus = useMcpStore((state) => state.loadStatus)
   const mcpProbeStatus = useMcpStore((state) => state.probeStatus)
   const mcpProbeError = useMcpStore((state) => state.probeError)
   const mcpTools = useMcpStore((state) => state.tools)
@@ -101,6 +207,69 @@ export function McpServersSettings(): React.JSX.Element {
   const [saving, setSaving] = useState(false)
   // Tracks which server rows have their tool list expanded (Settings surface).
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
+  const [oauthPending, setOauthPending] = useState<Record<string, boolean>>({})
+  const [oauthFailure, setOauthFailure] = useState<Record<string, string | undefined>>({})
+
+  const startOAuth = (id: string): void => {
+    setOauthPending((prev) => ({ ...prev, [id]: true }))
+    setOauthFailure((prev) => ({ ...prev, [id]: undefined }))
+    void beginMcpOAuth(id).then((result) => {
+      if (!result.success) {
+        setOauthPending((prev) => ({ ...prev, [id]: false }))
+        const message = result.error ?? t('settings.oauth.failed')
+        setOauthFailure((prev) => ({ ...prev, [id]: message }))
+        toast.error(message)
+        return
+      }
+      toast.success(t('settings.oauth.started'))
+    })
+  }
+
+  const cancelOAuth = (id: string): void => {
+    void cancelMcpOAuth(id).then((result) => {
+      setOauthPending((prev) => ({ ...prev, [id]: false }))
+      if (!result.success) {
+        const message = result.error ?? t('settings.oauth.cancelFailed')
+        setOauthFailure((prev) => ({ ...prev, [id]: message }))
+        toast.error(message)
+        return
+      }
+      toast.success(t('settings.oauth.cancelled'))
+    })
+  }
+
+  useEffect(() => {
+    if (!isTauriContext()) return
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    void listen<{ serverId?: string; success?: boolean }>('mcp-oauth-completed', (event) => {
+      const serverId = event.payload.serverId
+      if (!serverId) return
+      setOauthPending((prev) => ({ ...prev, [serverId]: false }))
+      if (event.payload.success) {
+        setOauthFailure((prev) => ({ ...prev, [serverId]: undefined }))
+        toast.success(t('settings.oauth.completed'))
+        void reloadMcpConfig().then(() => {
+          void reloadMcpStatus()
+          void probeMcpServer(serverId)
+        })
+        return
+      }
+      const message = t('settings.oauth.exchangeFailed')
+      setOauthFailure((prev) => ({ ...prev, [serverId]: message }))
+      toast.error(message)
+    }).then((dispose) => {
+      if (disposed) {
+        dispose()
+        return
+      }
+      unlisten = dispose
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [probeMcpServer, reloadMcpConfig, reloadMcpStatus, t])
 
   // On Settings mount, probe each configured server once (on-demand). Errors
   // are surfaced in the dot — never crashed. Re-runs when the registry list
@@ -395,26 +564,14 @@ export function McpServersSettings(): React.JSX.Element {
                         ? t('settings.probeRetry')
                         : t('common.showTools')}
                   </CollapsibleTrigger>
-                  {isTauriContext() && transportOf(server) !== 'stdio' ? (
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => {
-                        void beginMcpOAuth(server.id).then((result) => {
-                          if (!result.success) {
-                            toast.error(result.error ?? t('settings.oauth.failed'))
-                            return
-                          }
-                          toast.success(t('settings.oauth.started'))
-                        })
-                      }}
-                      aria-label={t('settings.oauth.authorize', { name: server.name })}
-                      title={t('settings.oauth.authorize', { name: server.name })}
-                    >
-                      <KeyRound size={14} />
-                    </Button>
-                  ) : null}
+                  <McpOAuthActions
+                    name={server.name}
+                    transport={transportOf(server)}
+                    pending={oauthPending[server.id] === true}
+                    failure={oauthFailure[server.id]}
+                    onBegin={() => startOAuth(server.id)}
+                    onCancel={() => cancelOAuth(server.id)}
+                  />
                   <Button
                     type="button"
                     size="icon"

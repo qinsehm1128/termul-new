@@ -34,6 +34,20 @@ interface SettingsLayoutProps {
  * scroll-spy. The `id` doubles as a stable DOM id (`settings-section-<id>`) for
  * anchor-based navigation.
  */
+export function SettingsDivider({ label }: { label?: string }): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-3 py-2" data-settings-divider="true">
+      <span className="h-px flex-1 bg-border/70" aria-hidden="true" />
+      {label ? (
+        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+          {label}
+        </span>
+      ) : null}
+      <span className="h-px flex-1 bg-border/70" aria-hidden="true" />
+    </div>
+  )
+}
+
 export function SettingsSection({
   id,
   children,

@@ -21,6 +21,7 @@ import { ImportEditorWorkspacesDialog } from '@/components/ImportEditorWorkspace
 import { NewProjectModal } from '@/components/NewProjectModal'
 import {
   type SettingsCategory,
+  SettingsDivider,
   SettingsLayout,
   SettingsSection
 } from '@/components/settings/SettingsLayout'
@@ -618,6 +619,8 @@ export default function ProjectSettings() {
             </div>
           </SettingsSection>
 
+          <SettingsDivider label="Project environment" />
+
           {/* Shell Settings Section */}
           <SettingsSection id="shell">
             <div className="flex items-start gap-6 border-b border-border/70 pb-6">
@@ -726,6 +729,8 @@ export default function ProjectSettings() {
               </div>
             </div>
           </SettingsSection>
+
+          <SettingsDivider label="Advanced" />
 
           {/* Emergency Mode & Expert Workflows Section */}
           <SettingsSection id="emergency">

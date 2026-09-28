@@ -3,6 +3,9 @@ mod acp;
 mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
+/// Runtime-neutral AI channel, credential, analysis, and Fx contracts.
+/// No provider I/O and no keyring access live in this skeleton.
+pub mod ai_channels;
 pub mod brand;
 mod browser_tab_manager;
 mod cli_session;
@@ -3256,6 +3259,7 @@ pub fn run() {
             commands::mcp_put_config,
             commands::mcp_get_status,
             commands::mcp_get_runtime_status,
+            commands::mcp_get_client_config,
             commands::begin_mcp_oauth,
             commands::complete_mcp_oauth,
             commands::cancel_mcp_oauth,

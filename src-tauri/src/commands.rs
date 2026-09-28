@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Emitter, State, Webview};
+use tauri::{AppHandle, Emitter, Manager, State, Webview};
 use tauri_plugin_opener::OpenerExt;
 
 /// Validate that the caller webview matches the expected tab_id.
@@ -5140,11 +5140,15 @@ fn mcp_oauth_coordinator() -> &'static Arc<crate::mcp_core::oauth::OAuthCoordina
     MCP_OAUTH_COORDINATOR.get_or_init(|| Arc::new(crate::mcp_core::oauth::OAuthCoordinator::new()))
 }
 
-fn oauth_endpoint(config: &crate::mcp_core::McpUpstreamConfig) -> Option<String> {
+fn oauth_http_endpoint(config: &crate::mcp_core::McpUpstreamConfig) -> Result<String, String> {
     match &config.transport {
-        crate::mcp_core::McpPersistedTransport::Http { url, .. }
-        | crate::mcp_core::McpPersistedTransport::Sse { url, .. } => Some(url.clone()),
-        crate::mcp_core::McpPersistedTransport::Stdio { .. } => None,
+        crate::mcp_core::McpPersistedTransport::Http { url, .. } => Ok(url.clone()),
+        crate::mcp_core::McpPersistedTransport::Sse { .. } => {
+            Err("Legacy SSE MCP servers cannot use OAuth; switch the transport to HTTP".into())
+        }
+        crate::mcp_core::McpPersistedTransport::Stdio { .. } => {
+            Err("OAuth is supported only for HTTP MCP servers".into())
+        }
     }
 }
 
@@ -5170,18 +5174,21 @@ async fn load_oauth_upstream(
         .into_iter()
         .find(|item| item.id == id)
         .ok_or_else(|| "MCP server was not found".to_string())?;
-    let oauth = match &upstream.transport {
-        crate::mcp_core::McpPersistedTransport::Http { oauth, .. }
-        | crate::mcp_core::McpPersistedTransport::Sse { oauth, .. } => oauth
-            .clone()
-            .unwrap_or_else(|| crate::mcp_core::oauth::McpOAuthConfig {
-                auth_mode: crate::mcp_core::oauth::McpAuthMode::OAuth,
-                ..Default::default()
-            }),
-        crate::mcp_core::McpPersistedTransport::Stdio { .. } => {
-            return Err("OAuth is supported only for HTTP MCP servers".into())
-        }
-    };
+    // Reject SSE and stdio before any listener, discovery, or credential use.
+    oauth_http_endpoint(&upstream)?;
+    let oauth =
+        match &upstream.transport {
+            crate::mcp_core::McpPersistedTransport::Http { oauth, .. } => oauth
+                .clone()
+                .unwrap_or_else(|| crate::mcp_core::oauth::McpOAuthConfig {
+                    auth_mode: crate::mcp_core::oauth::McpAuthMode::OAuth,
+                    ..Default::default()
+                }),
+            crate::mcp_core::McpPersistedTransport::Sse { .. }
+            | crate::mcp_core::McpPersistedTransport::Stdio { .. } => {
+                return Err("OAuth is supported only for HTTP MCP servers".into());
+            }
+        };
     Ok((upstream, oauth))
 }
 
@@ -5189,7 +5196,7 @@ async fn persist_oauth_config(
     project_registry: &crate::web::ProjectRegistry,
     id: &str,
     oauth: crate::mcp_core::oauth::McpOAuthConfig,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let loaded = load_mcp_registry_from_project_file(project_registry).await;
     let mut document = loaded
         .data
@@ -5220,7 +5227,11 @@ async fn persist_oauth_config(
         );
     }
     match write_mcp_control_plane(project_registry, document).await {
-        IpcResult { success: true, .. } => Ok(()),
+        IpcResult {
+            success: true,
+            data,
+            ..
+        } => data.ok_or_else(|| "Failed to persist OAuth metadata".into()),
         IpcResult {
             success: false,
             error,
@@ -5229,8 +5240,27 @@ async fn persist_oauth_config(
     }
 }
 
-fn oauth_status(id: String) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
-    let secrets = crate::mcp_core::oauth::McpCredentialStore::load(&id)
+/// Persist credential-free OAuth metadata, then apply that canonical document
+/// to the live desktop Core. A missing runtime still persists; connection
+/// failure stays in the runtime's redacted snapshot diagnostic.
+async fn persist_oauth_config_for_runtime(
+    project_registry: &crate::web::ProjectRegistry,
+    runtime: Option<&crate::mcp_core::DesktopMcpCoreRuntime>,
+    id: &str,
+    oauth: crate::mcp_core::oauth::McpOAuthConfig,
+) -> Result<(), String> {
+    let document = persist_oauth_config(project_registry, id, oauth).await?;
+    if let Some(runtime) = runtime {
+        refresh_live_mcp_snapshot(runtime, project_registry, &document).await;
+    }
+    Ok(())
+}
+
+fn oauth_status(
+    project_root: &std::path::Path,
+    id: String,
+) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
+    let secrets = crate::mcp_core::oauth::McpCredentialStore::load(project_root, &id)
         .map_err(|_| "MCP credential storage is unavailable".to_string())?;
     let Some(secrets) = secrets else {
         return Ok(crate::mcp_core::oauth::OAuthStatusResult {
@@ -5339,9 +5369,11 @@ async fn oauth_callback_listener(
             .and_then(parse_oauth_callback),
         _ => Err("OAuth callback request could not be read".into()),
     };
+    let runtime = app.try_state::<Arc<crate::mcp_core::DesktopMcpCoreRuntime>>();
     let success = if let Ok((code, state, issuer)) = result {
         complete_mcp_oauth_flow(
             project_registry.as_ref(),
+            runtime.as_ref().map(|managed| managed.inner().as_ref()),
             &server_id,
             &code,
             &state,
@@ -5374,6 +5406,7 @@ async fn oauth_callback_listener(
 
 async fn complete_mcp_oauth_flow(
     project_registry: &crate::web::ProjectRegistry,
+    runtime: Option<&crate::mcp_core::DesktopMcpCoreRuntime>,
     server_id: &str,
     code: &str,
     state: &str,
@@ -5406,8 +5439,10 @@ async fn complete_mcp_oauth_flow(
     oauth.auth_mode = crate::mcp_core::oauth::McpAuthMode::OAuth;
     oauth.client_id = Some(credentials.0);
     oauth.discovered_at = Some(chrono::Utc::now().timestamp());
-    persist_oauth_config(project_registry, &upstream.id, oauth).await?;
-    oauth_status(server_id.to_string())
+    persist_oauth_config_for_runtime(project_registry, runtime, &upstream.id, oauth).await?;
+    let project_root = active_mcp_project_root(project_registry)
+        .map_err(|_| "No active project root".to_string())?;
+    oauth_status(&project_root, server_id.to_string())
 }
 
 #[tauri::command]
@@ -5418,8 +5453,7 @@ pub async fn begin_mcp_oauth(
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<crate::mcp_core::oauth::OAuthBeginResult, String> {
     let (upstream, mut oauth) = load_oauth_upstream(project_registry.inner(), &id).await?;
-    let endpoint = oauth_endpoint(&upstream)
-        .ok_or_else(|| "OAuth is supported only for HTTP MCP servers".to_string())?;
+    let endpoint = oauth_http_endpoint(&upstream)?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|_| "Failed to bind OAuth callback".to_string())?;
@@ -5431,7 +5465,12 @@ pub async fn begin_mcp_oauth(
     let mut manager = rmcp::transport::auth::AuthorizationManager::new(&endpoint)
         .await
         .map_err(|_| "OAuth discovery failed".to_string())?;
-    manager.set_credential_store(crate::mcp_core::oauth::KeyringCredentialStore::new(&id));
+    let project_root = active_mcp_project_root(project_registry.inner())
+        .map_err(|_| "No active project root".to_string())?;
+    manager.set_credential_store(crate::mcp_core::oauth::KeyringCredentialStore::new(
+        project_root.clone(),
+        &id,
+    ));
     let resolution = match challenge.as_deref() {
         Some(challenge) => {
             manager
@@ -5441,33 +5480,39 @@ pub async fn begin_mcp_oauth(
         None => manager.resolve_metadata().await,
     }
     .map_err(|_| "OAuth discovery failed".to_string())?;
-    manager.set_metadata(resolution.metadata.clone());
-    oauth.auth_mode = crate::mcp_core::oauth::McpAuthMode::OAuth;
-    oauth.endpoints.authorization_endpoint =
-        Some(resolution.metadata.authorization_endpoint.clone());
-    oauth.endpoints.token_endpoint = Some(resolution.metadata.token_endpoint.clone());
-    oauth.endpoints.registration_endpoint = resolution.metadata.registration_endpoint.clone();
-    oauth.endpoints.issuer = resolution.metadata.issuer.clone();
-    oauth.scopes = resolution
-        .metadata
-        .scopes_supported
-        .clone()
-        .unwrap_or(oauth.scopes.clone());
-    oauth.discovered_at = Some(chrono::Utc::now().timestamp());
+    let metadata = resolution.metadata;
+    manager.set_metadata(metadata.clone());
+    crate::mcp_core::oauth::record_oauth_discovery(
+        &mut oauth,
+        &endpoint,
+        challenge.as_deref(),
+        &redirect_uri,
+        &metadata,
+    )
+    .await
+    .map_err(|_| "OAuth discovery failed".to_string())?;
+    // Discovery metadata is durable immediately. The live Core snapshot is
+    // refreshed only after the token exchange so an enabled upstream is not
+    // reconnected before the keyring grant exists.
     persist_oauth_config(project_registry.inner(), &id, oauth.clone()).await?;
-    let mut request = rmcp::transport::auth::AuthorizationRequest::new(redirect_uri.clone())
-        .with_client_name("Termul MCP");
-    if !oauth.scopes.is_empty() {
-        request = request.with_scopes(oauth.scopes.clone());
-    }
-    if let Some(client_id) = oauth.client_id.clone() {
-        request = request.with_preregistered_client(client_id);
-        if let Ok(Some(secrets)) = crate::mcp_core::oauth::McpCredentialStore::load(&id) {
-            if let Some(client_secret) = secrets.oauth().and_then(|value| value.client_secret()) {
-                request = request.with_client_secret(client_secret);
-            }
-        }
-    }
+    let identity = crate::mcp_core::oauth::oauth_client_identity(&oauth);
+    let client_secret = if identity.preregistered_client_id.is_some() {
+        crate::mcp_core::oauth::McpCredentialStore::load(&project_root, &id)
+            .ok()
+            .flatten()
+            .and_then(|secrets| {
+                secrets
+                    .oauth()
+                    .and_then(|value| value.client_secret().map(str::to_owned))
+            })
+    } else {
+        None
+    };
+    let request = crate::mcp_core::oauth::authorization_request(
+        &oauth,
+        &crate::mcp_core::oauth::oauth_redirect_uri(&oauth),
+        client_secret.as_deref(),
+    );
     let session = rmcp::transport::auth::AuthorizationSession::new(manager, request)
         .await
         .map_err(|_| "OAuth authorization setup failed".to_string())?;
@@ -5506,23 +5551,39 @@ pub async fn complete_mcp_oauth(
     code: String,
     state: String,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
-    complete_mcp_oauth_flow(project_registry.inner(), &id, &code, &state, None).await
+    complete_mcp_oauth_flow(
+        project_registry.inner(),
+        Some(mcp_runtime.inner()),
+        &id,
+        &code,
+        &state,
+        None,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn cancel_mcp_oauth(
     id: String,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
+    // Cancellation only drops the in-memory pending authorization. A previous
+    // valid grant remains in the project-scoped keyring record.
     mcp_oauth_coordinator().cancel(&id).await;
-    let _ = crate::mcp_core::oauth::clear_oauth_credentials(&id);
-    oauth_status(id)
+    let project_root = active_mcp_project_root(project_registry.inner())
+        .map_err(|_| "No active project root".to_string())?;
+    oauth_status(&project_root, id)
 }
 
 #[tauri::command]
 pub async fn get_mcp_oauth_status(
     id: String,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
+    let project_root = active_mcp_project_root(project_registry.inner())
+        .map_err(|_| "No active project root".to_string())?;
     if mcp_oauth_coordinator().is_pending(&id).await {
         return Ok(crate::mcp_core::oauth::OAuthStatusResult {
             server_id: id,
@@ -5533,7 +5594,7 @@ pub async fn get_mcp_oauth_status(
             authorization_required: false,
         });
     }
-    oauth_status(id)
+    oauth_status(&project_root, id)
 }
 
 /// Canonical desktop GET for the project MCP control-plane document.
@@ -5580,6 +5641,16 @@ pub async fn mcp_get_runtime_status(
     runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<IpcResult<crate::mcp_core::DesktopMcpCoreStatus>, String> {
     Ok(IpcResult::success(runtime.status().await))
+}
+
+/// Explicit user-invoked copy surface for the loopback MCP client config.
+/// Unlike runtime status, this response intentionally contains the bearer
+/// token and must never be logged or persisted by the host.
+#[tauri::command]
+pub async fn mcp_get_client_config(
+    runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
+) -> Result<IpcResult<Option<crate::mcp_core::DesktopMcpCoreClientConfig>>, String> {
+    Ok(IpcResult::success(runtime.client_config().await))
 }
 
 pub(crate) fn active_mcp_project_root(
@@ -9381,12 +9452,14 @@ mod remote_sync_projects_tests {
 #[cfg(test)]
 mod remote_sync_mcp_registry_tests {
     use super::{
-        load_mcp_registry_from_project_file, persist_oauth_config, refresh_live_mcp_snapshot,
+        load_mcp_registry_from_project_file, oauth_http_endpoint, persist_oauth_config,
+        persist_oauth_config_for_runtime, refresh_live_mcp_snapshot,
         sync_mcp_registry_to_project_file, write_mcp_control_plane,
     };
     use crate::mcp_core::{
-        oauth::{McpAuthMode, McpOAuthConfig},
-        AuthBootstrap, DesktopMcpCoreRuntime, McpHttpGatewayConfig,
+        oauth::{McpAuthMode, McpOAuthConfig, McpOAuthEndpoints},
+        AuthBootstrap, DesktopMcpCoreRuntime, McpCapabilityPolicy, McpHttpGatewayConfig,
+        McpPersistedTransport, McpUpstreamConfig,
     };
     use crate::memory_index::service::MemoryIndexService;
     use crate::web::mcp_servers_api::registry_path;
@@ -9522,6 +9595,113 @@ mod remote_sync_mcp_registry_tests {
         assert_eq!(document["revision"], 2);
         assert_eq!(document["upstreams"][0]["oauth"]["authMode"], "oauth");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oauth_http_endpoint_rejects_sse_before_authorization() {
+        let sse = McpUpstreamConfig {
+            id: "legacy".into(),
+            name: "Legacy".into(),
+            enabled: true,
+            transport: McpPersistedTransport::Sse {
+                url: "https://mcp.example.test/sse".into(),
+                headers: Vec::new(),
+                oauth: None,
+            },
+            policy: McpCapabilityPolicy::default(),
+        };
+        let error = oauth_http_endpoint(&sse).expect_err("sse must be rejected");
+        assert!(error.contains("SSE"), "{error}");
+        assert!(!error.contains("https://mcp.example.test/sse"));
+
+        let http = McpUpstreamConfig {
+            id: "remote".into(),
+            name: "Remote".into(),
+            enabled: true,
+            transport: McpPersistedTransport::Http {
+                url: "https://mcp.example.test/mcp".into(),
+                headers: Vec::new(),
+                oauth: None,
+            },
+            policy: McpCapabilityPolicy::default(),
+        };
+        assert_eq!(
+            oauth_http_endpoint(&http).expect("http is eligible"),
+            "https://mcp.example.test/mcp"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_metadata_refresh_applies_live_snapshot_without_connecting() {
+        let dir = temp_dir("oauth-live");
+        let reg = registry_with_default(&dir);
+        let memory = Arc::new(MemoryIndexService::new(dir.join("memory")));
+        let runtime = DesktopMcpCoreRuntime::start_with_config(
+            memory,
+            McpHttpGatewayConfig {
+                bind_address: "127.0.0.1".parse().unwrap(),
+                port: 0,
+                path: "/mcp".into(),
+                generation: 1,
+                auth: AuthBootstrap::new(1, "runtime-token").unwrap(),
+                request_body_limit: 64 * 1024,
+            },
+        )
+        .await;
+        let initial = sync_mcp_registry_to_project_file(
+            &reg,
+            json!([{
+                "id": "remote",
+                "type": "http",
+                "name": "Remote",
+                "url": "https://mcp.example.test/mcp",
+                "enabled": false
+            }]),
+        )
+        .await;
+        assert!(initial.success, "initial write failed: {:?}", initial.error);
+
+        persist_oauth_config_for_runtime(
+            &reg,
+            Some(&runtime),
+            "remote",
+            McpOAuthConfig {
+                auth_mode: McpAuthMode::OAuth,
+                endpoints: McpOAuthEndpoints {
+                    resource: Some("https://mcp.example.test/mcp".into()),
+                    ..McpOAuthEndpoints::default()
+                },
+                redirect_uri: Some("http://127.0.0.1:9/oauth/callback".into()),
+                ..McpOAuthConfig::default()
+            },
+        )
+        .await
+        .expect("oauth metadata should refresh the live snapshot");
+
+        let status = runtime.status().await;
+        assert_eq!(status.snapshot_revision, Some(2));
+        assert!(status.snapshot_diagnostic.is_none());
+        assert_eq!(
+            runtime.oauth_auth_mode_in_last_good("remote").await,
+            Some(McpAuthMode::OAuth)
+        );
+        let loaded = load_mcp_registry_from_project_file(&reg).await;
+        let document = loaded.data.expect("canonical document");
+        assert_eq!(
+            document["upstreams"][0]["oauth"]["endpoints"]["resource"],
+            "https://mcp.example.test/mcp"
+        );
+        assert_eq!(
+            document["upstreams"][0]["oauth"]["redirectUri"],
+            "http://127.0.0.1:9/oauth/callback"
+        );
+        let encoded = document.to_string();
+        assert!(!encoded.contains("access_token"));
+        assert!(!encoded.contains("refresh_token"));
+        assert!(!encoded.contains("client_secret"));
+
+        runtime.shutdown().await.expect("runtime shutdown");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

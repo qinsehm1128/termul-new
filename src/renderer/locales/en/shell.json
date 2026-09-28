@@ -41,6 +41,8 @@
     "openConversations": "Open the conversations area",
     "skills": "Skills",
     "openSkills": "Open skills",
+    "aiChannels": "AI Channels",
+    "openAiChannels": "Open AI Channels",
     "mcp": "MCP",
     "openMcp": "Open MCP",
     "scheduledTasks": "Scheduled tasks",
@@ -55,7 +57,16 @@
     "preferences": "Preferences",
     "openPreferences": "Open preferences",
     "colorThemes": "Color themes",
-    "failedSsh": "Failed to update SSH panel visibility"
+    "failedSsh": "Failed to update SSH panel visibility",
+    "dividerWorkspace": "workspace group",
+    "dividerTools": "tools group",
+    "reorderHint": "Use Alt plus Up or Down to move this icon. You can also drag icons to reorder them.",
+    "movedBefore": "{{item}} moved before {{neighbor}}",
+    "movedAfter": "{{item}} moved after {{neighbor}}",
+    "pinnedBottom": "{{item}} returned to the bottom utility group",
+    "alreadyFirst": "{{item}} is already first",
+    "alreadyLast": "{{item}} is already last",
+    "reorderUnchanged": "{{item}} order did not change"
   },
   "contextBar": {
     "settings": "Context bar settings",
@@ -172,6 +183,10 @@
       },
       "commandHistory": { "label": "Command History", "description": "Search command history" },
       "newProject": { "label": "New Project", "description": "Create a new project" },
+      "aiChannels": {
+        "label": "AI Channels",
+        "description": "Manage host-routed AI providers and fallback routes"
+      },
       "newTerminal": {
         "label": "New Terminal",
         "description": "Open a new shell in the active pane"

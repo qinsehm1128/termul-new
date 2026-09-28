@@ -1,0 +1,42 @@
+{
+  "page": {
+    "title": "AI 渠道",
+    "subtitle": "管理由主机路由的 AI 提供商、模型配置与故障回退顺序。",
+    "security": "凭据保留在主机密钥环中，不会进入设置导出。",
+    "addChannel": "添加渠道",
+    "channelId": "渠道 ID",
+    "displayName": "显示名称",
+    "provider": "提供商",
+    "endpoint": "端点",
+    "model": "模型",
+    "addModel": "添加模型",
+    "save": "保存更改",
+    "delete": "删除",
+    "enabled": "启用",
+    "credential": "凭据",
+    "credentialPresent": "已存储凭据",
+    "credentialMissing": "未存储凭据",
+    "setCredential": "设置凭据",
+    "replaceCredential": "替换凭据",
+    "removeCredential": "移除凭据",
+    "secretPlaceholder": "粘贴密钥；只会发送到主机密钥环",
+    "routes": "用途路由",
+    "descriptionAnalysis": "描述分析",
+    "fxRuntime": "Fx 运行时",
+    "noChannels": "尚未配置 AI 渠道。",
+    "saved": "AI 渠道设置已保存。",
+    "failed": "无法保存 AI 渠道设置。",
+    "invalid": "请填写必需的渠道字段。",
+    "endpointRequired": "此提供商需要端点。",
+    "profile": "模型配置",
+    "capabilities": "能力"
+  },
+  "providers": {
+    "vercelGateway": "Vercel Gateway",
+    "openAiCompatible": "OpenAI 兼容",
+    "openRouter": "OpenRouter",
+    "ollama": "Ollama",
+    "vllm": "vLLM",
+    "custom": "自定义"
+  }
+}

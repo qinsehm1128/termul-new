@@ -1,10 +1,10 @@
 //! Desktop-owned MCP Core runtime holder.
 //!
-//! The desktop does not start MCP Core by default. A desktop gateway requires
-//! an explicit bearer-token and port owner. When enabled, this holder owns one
-//! authenticated, loopback-only in-process gateway, publishes its endpoint to
-//! ACP, applies the canonical project snapshot through the secure-storage
-//! boundary, and reports disabled/failed state without guessing configuration.
+//! The desktop starts MCP Core by default unless explicitly disabled. When
+//! enabled, this holder owns one authenticated, loopback-only in-process
+//! gateway, publishes its endpoint to ACP, applies the canonical project
+//! snapshot through the secure-storage boundary, and reports disabled/failed
+//! state without exposing credentials.
 //!
 //! Standalone `se-server` keeps its existing composition in `server_main.rs`.
 //! This module is intentionally not part of the Terminal/ACP Core process-role
@@ -18,16 +18,23 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::{
     AllowAllTools, AuthBootstrap, BuiltInRegistry, McpControlPlaneConfig, McpCore, McpCoreConfig,
-    McpCoreProcessConfig, McpDiagnostic, McpEndpointDescriptor, McpHttpGateway,
-    McpHttpGatewayConfig, McpReadiness, McpSecretResolver, McpSnapshotController,
-    SnapshotApplyReceipt, SnapshotError,
+    McpDiagnostic, McpEndpointDescriptor, McpHttpGateway, McpHttpGatewayConfig, McpReadiness,
+    McpSecretResolver, McpSnapshotController, SnapshotApplyReceipt, SnapshotError,
 };
 use crate::mcp_core::NamedSecret;
 use crate::memory_index::service::MemoryIndexService;
+use uuid::Uuid;
 
-/// Desktop opt-in switch.  The default is disabled so an installation never
-/// binds a listener or invents an auth owner during normal startup.
+/// Desktop runtime switch. The default is enabled; set this explicitly to `0`,
+/// `false`, `off`, or `no` to disable the loopback gateway.
 pub const MCP_CORE_ENABLED_ENV: &str = "TERMUL_MCP_CORE_ENABLED";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopMcpCoreClientConfig {
+    pub endpoint: String,
+    pub bearer_token: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -121,52 +128,56 @@ impl DesktopMcpCoreRuntime {
         }
     }
 
-    /// Read the desktop opt-in and existing `TERMUL_MCP_CORE_*` auth/bind
-    /// configuration.  `TERMUL_MCP_CORE_ENABLED` must be truthy;
-    /// `TERMUL_MCP_CORE_PORT` and `TERMUL_MCP_CORE_AUTH_TOKEN` are required;
-    /// bind defaults to loopback and request limit/auth generation retain the
-    /// process-role defaults. Invalid or incomplete opt-in configuration
-    /// degrades to a typed failed state; it never aborts desktop startup.
+    /// Read optional desktop bind/auth configuration. Missing values receive
+    /// secure runtime defaults; explicit false-like values disable the runtime.
     pub async fn start_from_env(memory_index: Arc<MemoryIndexService>) -> Self {
-        if !env_truthy(std::env::var(MCP_CORE_ENABLED_ENV).ok().as_deref()) {
+        if env_disabled(std::env::var(MCP_CORE_ENABLED_ENV).ok().as_deref()) {
             log::info!(
                 target: "se_manager::mcp_core::desktop",
-                "operation=mcp_desktop_runtime state=disabled stable_code=OPT_IN_REQUIRED"
+                "operation=mcp_desktop_runtime state=disabled stable_code=EXPLICITLY_DISABLED"
             );
             return Self::disabled(
                 "MCP_CORE_DISABLED",
-                "desktop MCP Core is disabled; set TERMUL_MCP_CORE_ENABLED=1 with loopback auth configuration to opt in",
+                "desktop MCP Core is explicitly disabled by TERMUL_MCP_CORE_ENABLED",
             );
         }
 
-        let executable = match std::env::current_exe() {
-            Ok(executable) => executable,
-            Err(error) => {
-                return Self::failed_from_error(
-                    "MCP_CORE_EXECUTABLE_UNAVAILABLE",
-                    format!(
-                        "cannot resolve desktop executable for MCP Core configuration: {error}"
-                    ),
-                )
-            }
+        let bind_address = std::env::var(super::process::MCP_CORE_BIND_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let port = std::env::var(super::process::MCP_CORE_PORT_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let generation = std::env::var(super::process::MCP_CORE_AUTH_GENERATION_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1);
+        let token = std::env::var(super::process::MCP_CORE_AUTH_TOKEN_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| format!("se-mcp-{}", Uuid::new_v4()));
+        let request_body_limit = std::env::var(super::process::MCP_CORE_REQUEST_LIMIT_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(8 * 1024 * 1024);
+        let auth = match AuthBootstrap::new(generation, token) {
+            Ok(auth) => auth,
+            Err(error) => return Self::failed_from_error("MCP_CORE_CONFIG_INVALID", error.message),
         };
-        let process = match McpCoreProcessConfig::from_env(executable) {
-            Ok(process) => process,
-            Err(error) => {
-                return Self::failed_from_error("MCP_CORE_CONFIG_INVALID", error.to_string());
-            }
-        };
-        let config = McpHttpGatewayConfig {
-            bind_address: process.bind_address,
-            port: process.port,
-            path: "/mcp".into(),
-            // Keep endpoint and auth generations coherent.  ACP uses this
-            // descriptor as the generation-fenced router contract.
-            generation: process.auth.generation,
-            auth: process.auth,
-            request_body_limit: process.request_body_limit,
-        };
-        Self::start_with_config(memory_index, config).await
+        Self::start_with_config(
+            memory_index,
+            McpHttpGatewayConfig {
+                bind_address,
+                port,
+                path: "/mcp".into(),
+                generation,
+                auth,
+                request_body_limit,
+            },
+        )
+        .await
     }
 
     /// Start an authenticated loopback gateway with an already validated
@@ -245,8 +256,44 @@ impl DesktopMcpCoreRuntime {
         self.router.read().await.clone()
     }
 
+    /// Explicit user-invoked configuration copy surface. Credentials are never
+    /// included in status, diagnostics, logs, or ordinary runtime serialization.
+    pub async fn client_config(&self) -> Option<DesktopMcpCoreClientConfig> {
+        let (endpoint, auth) = self.router.read().await.clone()?;
+        let host = if endpoint.bind_address.contains(':') {
+            format!("[{}]", endpoint.bind_address)
+        } else {
+            endpoint.bind_address.clone()
+        };
+        Some(DesktopMcpCoreClientConfig {
+            endpoint: format!("http://{host}:{}{}", endpoint.port, endpoint.path),
+            bearer_token: auth.bearer_token().to_owned(),
+        })
+    }
+
     pub async fn status(&self) -> DesktopMcpCoreStatus {
         self.status.read().await.clone()
+    }
+
+    /// Auth mode stored in the last accepted snapshot. Test-only so OAuth
+    /// refresh can be asserted without exposing transport secrets.
+    #[cfg(test)]
+    pub async fn oauth_auth_mode_in_last_good(
+        &self,
+        server_id: &str,
+    ) -> Option<super::oauth::McpAuthMode> {
+        let controller = self.snapshot.as_ref()?;
+        let snapshot = controller.last_good().await?;
+        let server = snapshot
+            .servers
+            .iter()
+            .find(|server| server.id == server_id)?;
+        match &server.transport {
+            super::McpUpstreamTransport::StreamableHttp { oauth, .. } => {
+                oauth.as_ref().map(|config| config.auth_mode)
+            }
+            super::McpUpstreamTransport::Stdio { .. } => None,
+        }
     }
 
     /// Apply a canonical project document through the desktop-owned snapshot
@@ -393,6 +440,9 @@ impl DesktopMcpCoreRuntime {
             return self.apply_config(&config).await;
         };
         let scope_changed = self.project_scope.lock().await.as_ref() != Some(&project_root);
+        controller
+            .set_credential_scope(Some(project_root.clone()))
+            .await;
         if scope_changed {
             // Persisted revisions are project-scoped. Reset only the revision
             // fence when changing projects; the prior last-good snapshot stays
@@ -556,11 +606,11 @@ fn snapshot_diagnostic(error: &SnapshotError) -> McpDiagnostic {
     }
 }
 
-fn env_truthy(value: Option<&str>) -> bool {
+fn env_disabled(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
+            "0" | "false" | "no" | "off"
         )
     })
 }
@@ -612,13 +662,13 @@ mod tests {
     }
 
     #[test]
-    fn opt_in_parser_requires_an_explicit_truthy_value() {
-        assert!(!env_truthy(None));
-        assert!(!env_truthy(Some("0")));
-        assert!(!env_truthy(Some("false")));
-        assert!(env_truthy(Some("1")));
-        assert!(env_truthy(Some(" TRUE ")));
-        assert!(env_truthy(Some("on")));
+    fn runtime_switch_defaults_on_and_accepts_explicit_false_values() {
+        assert!(!env_disabled(None));
+        assert!(env_disabled(Some("0")));
+        assert!(env_disabled(Some("false")));
+        assert!(env_disabled(Some(" OFF ")));
+        assert!(!env_disabled(Some("1")));
+        assert!(!env_disabled(Some("true")));
     }
 
     #[tokio::test]
@@ -772,6 +822,20 @@ mod tests {
         );
         let redacted = serde_json::to_string(&status).unwrap();
         assert!(!redacted.contains("missing/mcp/token"));
+        holder.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_client_config_is_the_only_secret_copy_surface() {
+        let state = tempdir().unwrap();
+        let memory = Arc::new(MemoryIndexService::new(state.path().to_path_buf()));
+        let holder =
+            DesktopMcpCoreRuntime::start_with_config(memory, gateway_config("desktop-token")).await;
+        let status = serde_json::to_string(&holder.status().await).unwrap();
+        assert!(!status.contains("desktop-token"));
+        let config = holder.client_config().await.unwrap();
+        assert!(config.endpoint.starts_with("http://127.0.0.1:"));
+        assert_eq!(config.bearer_token, "desktop-token");
         holder.shutdown().await.unwrap();
     }
 

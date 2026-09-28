@@ -152,6 +152,7 @@ fn http_server(id: &str, url: String) -> McpUpstreamServer {
         transport: McpUpstreamTransport::StreamableHttp {
             url,
             headers: BTreeMap::new(),
+            oauth: None,
         },
     }
 }

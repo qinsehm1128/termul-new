@@ -120,6 +120,7 @@ async fn authenticated_http_gateway_supports_two_isolated_clients_and_both_paths
         transport: McpUpstreamTransport::StreamableHttp {
             url: upstream_url,
             headers: Default::default(),
+            oauth: None,
         },
     })
     .await
@@ -174,11 +175,39 @@ async fn authenticated_http_gateway_supports_two_isolated_clients_and_both_paths
 
     let first_tools = first.list_all_tools().await.unwrap();
     let second_tools = second.list_all_tools().await.unwrap();
-    assert!(first_tools.iter().any(|tool| tool.name == "fixture_echo"));
+    assert!(first_tools
+        .iter()
+        .any(|tool| tool.name == "fixture_tool_list"));
+    assert!(first_tools
+        .iter()
+        .any(|tool| tool.name == "fixture_tool_call"));
     assert!(second_tools.iter().any(|tool| tool.name == "fixture_echo"));
 
+    let first_catalog = first
+        .call_tool(
+            CallToolRequestParams::new("fixture_tool_list")
+                .with_arguments(serde_json::json!({}).as_object().cloned().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert!(first_catalog.content[0]
+        .as_text()
+        .unwrap()
+        .text
+        .contains("echo"));
     let first_result = first
-        .call_tool(CallToolRequestParams::new("fixture_echo"))
+        .call_tool(
+            CallToolRequestParams::new("fixture_tool_call").with_arguments(
+                serde_json::json!({
+                    "serverId": "fixture",
+                    "toolName": "echo",
+                    "arguments": {}
+                })
+                .as_object()
+                .cloned()
+                .unwrap(),
+            ),
+        )
         .await
         .unwrap();
     let second_result = second
