@@ -155,13 +155,16 @@ export interface TerminalState {
     conversationId?: string
   ) => Terminal
   adoptRemoteProjectTerminal: (event: TerminalSpawnedEvent) => string | null
-  /** Register (or refresh the claim of) the PTY a quick terminal is showing. */
+  /**
+   * Register the PTY a quick terminal is showing. Terminal Core started it, so
+   * the renderer holds no output channel: the record carries no claim and the
+   * mounted terminal attaches by watching, like a PTY that survived a restart.
+   */
   adoptQuickTerminal: (input: {
     quickTerminalId: string
     ptyId: string
     name: string
     cwd: string
-    claim?: string
   }) => Terminal
   /** Drop every record a quick terminal owns; the host already ended its PTY. */
   forgetQuickTerminal: (quickTerminalId: string) => void
@@ -350,12 +353,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return adopted.id
   },
 
-  adoptQuickTerminal: ({ quickTerminalId, ptyId, name, cwd, claim }) => {
+  adoptQuickTerminal: ({ quickTerminalId, ptyId, name, cwd }) => {
     const existing = get().findTerminalByPtyId(ptyId)
-    if (existing) {
-      if (claim) get().setTerminalClaim(ptyId, claim)
-      return existing
-    }
+    if (existing) return existing
     const adopted: Terminal = {
       id: ptyId,
       ptyId,
@@ -366,8 +366,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       output: [],
       healthStatus: 'running',
       viewState: 'visible',
-      isHidden: false,
-      ...(claim ? { claim } : {})
+      isHidden: false
     }
     set((state) => {
       const nextIndex = new Map(state.ptyIdIndex)

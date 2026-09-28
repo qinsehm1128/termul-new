@@ -12,7 +12,11 @@ vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
 
 import { useTerminalStore } from '@/stores/terminal-store'
-import { resetQuickTerminalStore, useQuickTerminalStore } from './quick-terminal-store'
+import {
+  quickTerminalName,
+  resetQuickTerminalStore,
+  useQuickTerminalStore
+} from './quick-terminal-store'
 
 const id = '11111111-1111-4111-8111-111111111111'
 const record = {
@@ -45,7 +49,9 @@ beforeEach(() => {
 })
 
 describe('quick terminal store', () => {
-  it('registers the shell without a project id so no project surface adopts it', async () => {
+  it('registers the shell to be watched, with no project and no claim', async () => {
+    // A claim makes the terminal believe the renderer already owns the output
+    // stream, so it never attaches. Terminal Core spawned this shell.
     api.open.mockResolvedValue(opened('pty-1', true))
 
     await useQuickTerminalStore.getState().open(id, 80, 24)
@@ -55,9 +61,9 @@ describe('quick terminal store', () => {
       id: 'pty-1',
       ptyId: 'pty-1',
       quickTerminalId: id,
-      name: 'build',
-      claim: 'claim-pty-1'
+      name: 'build'
     })
+    expect(terminal.claim).toBeUndefined()
     expect(terminal.projectId).toBeUndefined()
     expect(terminal.conversationId).toBeUndefined()
   })
@@ -101,5 +107,12 @@ describe('quick terminal store', () => {
 
     expect(result.success).toBe(false)
     expect(useQuickTerminalStore.getState().records).toHaveLength(1)
+  })
+
+  it('names an untitled private folder instead of showing its id', () => {
+    const untitled = { ...record, title: undefined, target: { kind: 'workspace' as const } }
+    expect(quickTerminalName(untitled)).toBe('Untitled terminal')
+    expect(quickTerminalName({ ...record, title: undefined })).toBe('p1')
+    expect(quickTerminalName(record)).toBe('build')
   })
 })

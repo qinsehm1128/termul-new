@@ -112,7 +112,7 @@ describe('QuickTerminalsPage', () => {
 
   it('lists again when the host reports new quick terminals', async () => {
     renderAt('/quick-terminals')
-    await screen.findByText('scratch')
+    await screen.findByText('Untitled terminal')
     const handler = api.onChanged.mock.calls[0]?.[0]
     api.list.mockResolvedValue({
       success: true,
@@ -132,7 +132,7 @@ describe('QuickTerminalsPage', () => {
       data: { record: created, terminalId: 'pty-9', spawned: true, claim: 'c9' }
     })
     renderAt('/quick-terminals')
-    await screen.findByText('scratch')
+    await screen.findByText('Untitled terminal')
 
     openMenu(/new quick terminal/i)
     fireEvent.click(await screen.findByRole('menuitem', { name: /in a new folder/i }))
@@ -146,7 +146,7 @@ describe('QuickTerminalsPage', () => {
   it('opens a project quick terminal in its active worktree', async () => {
     api.create.mockResolvedValue({ success: false, error: 'nope', code: 'X' })
     renderAt('/quick-terminals')
-    await screen.findByText('scratch')
+    await screen.findByText('Untitled terminal')
 
     openMenu(/new quick terminal/i)
     fireEvent.click(await screen.findByRole('menuitem', { name: /payments/i }))

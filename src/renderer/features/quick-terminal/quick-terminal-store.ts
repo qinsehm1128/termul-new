@@ -6,6 +6,7 @@ import type {
 } from '@shared/types/quick-terminal.types'
 import { create } from 'zustand'
 import { pathBasename } from '@/components/lists'
+import { runtimeT } from '@/i18n/runtime'
 import { logFrontendError } from '@/lib/log-api'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { quickTerminalApi } from './quick-terminal-api'
@@ -49,9 +50,17 @@ export function failureMessage(result: IpcResult<unknown>, fallback: string): st
   return result.success ? fallback : result.error || fallback
 }
 
-/** Display name: the user's title, else the folder the shell runs in. */
+/**
+ * Display name: the user's title; else, for a project shell, the folder it
+ * runs in. A private folder is named by its id, so it reads as untitled.
+ */
 export function quickTerminalName(record: QuickTerminalRecord): string {
-  return record.title?.trim() || pathBasename(record.cwd) || record.cwd
+  const title = record.title?.trim()
+  if (title) return title
+  if (record.target.kind === 'workspace') {
+    return runtimeT('quickTerminal', 'untitled', 'Untitled terminal')
+  }
+  return pathBasename(record.cwd) || record.cwd
 }
 
 export const useQuickTerminalStore = create<QuickTerminalState>((set, get) => ({
@@ -89,8 +98,7 @@ export const useQuickTerminalStore = create<QuickTerminalState>((set, get) => ({
       quickTerminalId: id,
       ptyId: opened.terminalId,
       name: quickTerminalName(opened.record),
-      cwd: opened.record.cwd,
-      ...(opened.claim ? { claim: opened.claim } : {})
+      cwd: opened.record.cwd
     })
     set({ records: upsert(get().records, opened.record) })
     return result

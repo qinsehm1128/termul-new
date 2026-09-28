@@ -33,5 +33,6 @@
   "loadFailed": "无法加载快捷终端",
   "createFailed": "无法新建快捷终端",
   "renameFailed": "重命名失败",
-  "deleteFailed": "删除失败"
+  "deleteFailed": "删除失败",
+  "untitled": "未命名终端"
 }

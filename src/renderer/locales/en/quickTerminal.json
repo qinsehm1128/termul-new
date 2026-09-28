@@ -33,5 +33,6 @@
   "loadFailed": "Could not load quick terminals",
   "createFailed": "Could not create a quick terminal",
   "renameFailed": "Rename failed",
-  "deleteFailed": "Delete failed"
+  "deleteFailed": "Delete failed",
+  "untitled": "Untitled terminal"
 }
