@@ -216,7 +216,10 @@ impl QuickTerminalService {
                 SpawnOptions {
                     cwd: Some(record.cwd.clone()),
                     conversation_id: Some(record.id),
-                    project_id: record.target.project_id().map(str::to_owned),
+                    // Project attribution stays on the quick terminal record. A
+                    // spawn carrying a project id is adopted into that project's
+                    // tab bar by the renderer's host terminal catalog.
+                    project_id: None,
                     cols: Some(request.cols),
                     rows: Some(request.rows),
                     ..Default::default()
@@ -578,6 +581,29 @@ mod tests {
             Path::new(&record.cwd),
             project.path().canonicalize().unwrap()
         );
+        assert_eq!(record.target.project_id(), Some("p1"));
+    }
+
+    #[tokio::test]
+    async fn project_shells_are_not_announced_as_project_terminals() {
+        let fixture = fixture();
+        let project = tempfile::tempdir().unwrap();
+        let record = fixture
+            .service
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::ProjectRoot {
+                    project_id: "p1".to_string(),
+                    project_root: project.path().to_str().unwrap().to_string(),
+                },
+                title: None,
+            })
+            .unwrap();
+        let opened = fixture.service.open(open(record.id)).await.unwrap();
+
+        let instance = fixture.pty.get(&opened.terminal_id).unwrap();
+        assert_eq!(instance.project_id, None);
+        assert_eq!(instance.cwd, record.cwd);
+        let _ = fixture.pty.terminate(&opened.terminal_id).await;
     }
 
     #[test]
