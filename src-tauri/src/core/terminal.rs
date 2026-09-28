@@ -431,7 +431,18 @@ pub async fn run_terminal_core_on_endpoint(endpoint: CoreEndpoint) -> Result<(),
                 }
             }
             accepted = listener.accept() => {
-                let stream = accepted?;
+                let stream = match accepted {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        log::error!(
+                            target: "se_manager::core",
+                            "operation=core_accept role=terminal-core stable_code={} error={error}",
+                            error.code()
+                        );
+                        tokio::time::sleep(super::transport::ACCEPT_RETRY_BACKOFF).await;
+                        continue;
+                    }
+                };
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
                     if let Err(error) = handle_connection(stream, state).await {

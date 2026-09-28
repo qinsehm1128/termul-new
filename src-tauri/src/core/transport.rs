@@ -284,6 +284,12 @@ pub async fn listen_core(
     }
 }
 
+/// Pause after a failed `accept` before trying again. A failed accept (EMFILE,
+/// a transient pipe error) concerns one incoming connection: the Core keeps
+/// serving the connections it already has instead of exiting and dropping
+/// every live terminal or agent session with it.
+pub const ACCEPT_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl CoreListener {
     /// Accept one client. On Windows this waits for `connect()`, then creates
     /// the next pipe instance so another client can attach while the accepted

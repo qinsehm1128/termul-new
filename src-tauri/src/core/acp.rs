@@ -472,7 +472,18 @@ pub async fn run_acp_core_with_roots(
                     }
                 }
                 accepted = listener.accept() => {
-                    let stream = accepted?;
+                    let stream = match accepted {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        log::error!(
+                            target: "se_manager::core",
+                            "operation=core_accept role=acp-core stable_code={} error={error}",
+                            error.code()
+                        );
+                        tokio::time::sleep(super::transport::ACCEPT_RETRY_BACKOFF).await;
+                        continue;
+                    }
+                };
                     let state = Arc::clone(&state);
                     tokio::spawn(async move {
                         if let Err(error) = handle_connection(stream, state).await {
@@ -685,6 +696,8 @@ async fn handle_connection(
     stream: CoreServerStream,
     state: Arc<AcpCoreState>,
 ) -> Result<(), CoreError> {
+    use tokio::io::AsyncWriteExt;
+
     let mut stream = stream;
     let hello: CoreHello = read_json_frame(&mut stream).await?;
     let active_resources = u32::try_from(state.manager.list_agents().len()).unwrap_or(u32::MAX);
@@ -696,8 +709,12 @@ async fn handle_connection(
 
     // Event forwarder: every admitted event reaches every connected client.
     // Frame-granular interleaving with responses is safe — the reader loop
-    // writes responses through the same mutex.
-    if let Some(events) = state.events.sender() {
+    // writes responses through the same mutex. The forwarder holds a clone of
+    // the write half, so it is aborted when the request loop ends: left alone
+    // it would keep the socket open until some later event failed its write,
+    // and an idle Core leaked one descriptor per supervisor probe until
+    // `accept` hit the fd limit.
+    let forwarder = state.events.sender().map(|events| {
         let mut events = events.subscribe();
         let writer = Arc::clone(&writer);
         let seq = Arc::clone(&state.events);
@@ -729,11 +746,26 @@ async fn handle_connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
-        });
-    }
+        })
+    });
 
+    let result = serve_connection_requests(&mut reader, &writer, &state).await;
+
+    if let Some(forwarder) = forwarder {
+        forwarder.abort();
+    }
+    let mut guard = writer.lock().await;
+    let _ = guard.shutdown().await;
+    result
+}
+
+async fn serve_connection_requests(
+    reader: &mut CoreReadHalf,
+    writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
+    state: &Arc<AcpCoreState>,
+) -> Result<(), CoreError> {
     loop {
-        let payload = match read_frame(&mut reader).await {
+        let payload = match read_frame(reader).await {
             Ok(payload) => payload,
             Err(CoreError::Io(_)) => return Ok(()),
             Err(error) => return Err(error),
@@ -742,7 +774,7 @@ async fn handle_connection(
             CoreError::InvalidFrame(format!("invalid ACP core request: {error}"))
         })?;
         let shutdown = request.method == METHOD_SHUTDOWN;
-        let reply = response(request.id, dispatch(&state, &request).await);
+        let reply = response(request.id, dispatch(state, &request).await);
         {
             let mut writer = writer.lock().await;
             write_json_frame(&mut *writer, &reply).await?;
@@ -2733,6 +2765,59 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(10), server).await;
         workspace.close().unwrap();
         profile.close().unwrap();
+    }
+
+    /// Regression: the per-connection event forwarder kept the write half alive
+    /// after the client hung up, so every supervisor probe of an idle Core
+    /// leaked one socket until `accept` hit the fd limit and the Core exited.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn acp_core_releases_the_event_forwarder_when_a_client_hangs_up() {
+        let profile = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let (shutdown, _shutdown_rx) = watch::channel(false);
+        let state = Arc::new(
+            compose_acp_core(
+                profile.path().to_path_buf(),
+                workspace.path().to_path_buf(),
+                shutdown,
+            )
+            .expect("compose acp core"),
+        );
+        let events = state.events.sender().expect("event sender installed");
+        assert_eq!(events.receiver_count(), 0);
+
+        for _ in 0..3 {
+            let (server, mut client) = tokio::net::UnixStream::pair().expect("socket pair");
+            let connection = tokio::spawn(handle_connection(
+                CoreServerStream::Unix(server),
+                Arc::clone(&state),
+            ));
+            let hello = CoreHello {
+                role: CoreRole::AcpCore,
+                protocol_versions: vec![super::super::ipc::CURRENT_PROTOCOL_VERSION],
+                client_name: "probe".to_string(),
+            };
+            write_json_frame(&mut client, &hello).await.expect("hello");
+            let _: super::super::ipc::CoreHelloAck =
+                read_json_frame(&mut client).await.expect("hello ack");
+            assert_eq!(events.receiver_count(), 1, "connection subscribes to events");
+
+            drop(client);
+            tokio::time::timeout(Duration::from_secs(5), connection)
+                .await
+                .expect("connection ends after hang-up")
+                .expect("connection task")
+                .expect("clean hang-up");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while events.receiver_count() != 0 {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "event forwarder outlived its hung-up client"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
     }
 
     #[cfg(unix)]
