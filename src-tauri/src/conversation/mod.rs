@@ -34,7 +34,7 @@ pub use application::{
     ConversationApplicationError, ConversationApplicationService, ConversationBindingSnapshot,
     ConversationHostKind, ConversationHostState, ConversationHostStatus,
     ConversationIdentitySnapshot, ConversationOpenOutcome, LegacyConversationKey,
-    LegacyConversationResolution, LegacyConversationSourceKind,
+    LegacyConversationResolution, LegacyConversationSourceKind, ManagedSkillProvisioner,
 };
 pub use bootstrap::{
     BootstrapError, BootstrapOutcome, ConversationBootstrap, HostConversationRoots,

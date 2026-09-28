@@ -2861,9 +2861,7 @@ pub fn run() {
                         lifecycle
                     }
                 };
-                conversation_bootstrap
-                    .application
-                    .attach_lifecycle(lifecycle)
+                crate::conversation_host::attach(&conversation_bootstrap.application, lifecycle)
                     .map_err(|error| error.to_string())?;
                 // Attach the server-side permission rendezvous so a phone can
                 // respond to `acp:permission_request` over WS. The desktop renderer

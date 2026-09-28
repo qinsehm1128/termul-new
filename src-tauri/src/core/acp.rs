@@ -580,17 +580,16 @@ fn compose_acp_core(
     ));
     relay.set_question_rendezvous(question_rendezvous);
 
-    bootstrap
-        .application
-        .attach_lifecycle(
-            crate::conversation_host::lifecycle_from_terminal(
-                Arc::clone(&manager),
-                terminal_service.clone(),
-            )
-            .map_err(|error| invalid(error.to_string()))?
-            .with_journal(Arc::clone(&lifecycle_journal)),
+    crate::conversation_host::attach(
+        &bootstrap.application,
+        crate::conversation_host::lifecycle_from_terminal(
+            Arc::clone(&manager),
+            terminal_service.clone(),
         )
-        .map_err(|error| invalid(error.to_string()))?;
+        .map_err(|error| invalid(error.to_string()))?
+        .with_journal(Arc::clone(&lifecycle_journal)),
+    )
+    .map_err(|error| invalid(error.to_string()))?;
 
     // DurableFileSystem rejects symlink path components (`/var` -> `/private/var` on
     // macOS). Canonicalize the existing state root before joining so tempfile-backed

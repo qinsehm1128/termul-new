@@ -450,10 +450,10 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        if let Err(error) = conversation_bootstrap
-            .application
-            .attach_lifecycle(lifecycle)
-        {
+        if let Err(error) = se_manager_lib::conversation_host::attach(
+            &conversation_bootstrap.application,
+            lifecycle,
+        ) {
             error!(code = error.code, "Conversation lifecycle admission failed");
             return ExitCode::from(1);
         }

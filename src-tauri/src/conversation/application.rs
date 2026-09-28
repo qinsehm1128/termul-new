@@ -273,12 +273,23 @@ impl std::error::Error for ConversationApplicationError {}
 
 pub type Result<T> = std::result::Result<T, ConversationApplicationError>;
 
+/// Writes the host's managed agent skills into a Conversation workspace. The
+/// host injects it, so this domain does not depend on the skills module.
+pub trait ManagedSkillProvisioner: Send + Sync {
+    fn provision(
+        &self,
+        workspace_cwd: &std::path::Path,
+        provider_key: &str,
+    ) -> std::result::Result<(), String>;
+}
+
 pub struct ConversationApplicationService {
     reader: Arc<ConversationReader>,
     writer: Arc<ConversationWriter>,
     workspace: Arc<SessionWorkspaceService>,
     legacy_index: HashMap<(LegacyConversationSourceKind, String), Vec<ConversationId>>,
     lifecycle: OnceLock<ConversationLifecycleService>,
+    skills: OnceLock<Arc<dyn ManagedSkillProvisioner>>,
     binding_generation: AtomicU64,
     host_kind: ConversationHostKind,
     migration_phase: MigrationPhase,
@@ -342,6 +353,7 @@ impl ConversationApplicationService {
             workspace,
             legacy_index,
             lifecycle: OnceLock::new(),
+            skills: OnceLock::new(),
             binding_generation: AtomicU64::new(0),
             host_kind: host_mode.into(),
             migration_phase,
@@ -391,6 +403,17 @@ impl ConversationApplicationService {
                 "attach_lifecycle",
                 None,
                 "Conversation lifecycle runtime was already attached",
+            )
+        })
+    }
+
+    pub fn attach_skill_provisioner(&self, skills: Arc<dyn ManagedSkillProvisioner>) -> Result<()> {
+        self.skills.set(skills).map_err(|_| {
+            application_error(
+                "CONVERSATION_SERVICE_ALREADY_ATTACHED",
+                "attach_skill_provisioner",
+                None,
+                "Conversation skill provisioner was already attached",
             )
         })
     }
@@ -541,6 +564,9 @@ impl ConversationApplicationService {
     }
 
     fn backfill_managed_skills(&self, conversation: &ConversationRecordV2) {
+        let Some(skills) = self.skills.get() else {
+            return;
+        };
         let binding = match self
             .writer
             .repository()
@@ -560,7 +586,7 @@ impl ConversationApplicationService {
             .stable_agent_namespace
             .strip_prefix("config:")
             .unwrap_or(binding.stable_agent_namespace.as_str());
-        if let Err(error) = crate::skills::ConversationSkillProvisioner::new().provision(
+        if let Err(error) = skills.provision(
             std::path::Path::new(&conversation.workspace_cwd),
             provider_key,
         ) {
@@ -1474,7 +1500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_an_existing_conversation_backfills_its_agent_skills_idempotently() {
+    async fn opening_an_existing_conversation_provisions_its_agent_skills_each_time() {
         let (_temp, _repository, service) = fixture().await;
         let conversation_id = ConversationId::parse(ID).unwrap();
         let conversation = service.get_conversation(conversation_id).unwrap();
@@ -1498,26 +1524,35 @@ mod tests {
             .await
             .unwrap();
 
-        service.open_conversation(conversation_id).await.unwrap();
-        // The directory name is the managed skill's name, which is a brand
-        // contract. Read through the same accessor the provisioner builds its
-        // paths from rather than spelled here — an inline copy silently stops
-        // matching the moment that contract is renamed, and this test would then
-        // report "the backfill did not run" for a backfill that ran fine.
-        let skill_name = crate::skills::provisioner::scheduled_task_skill_name();
-        let cross_tool = std::path::Path::new(&conversation.workspace_cwd)
-            .join(".agents/skills")
-            .join(skill_name)
-            .join("SKILL.md");
-        let provider = std::path::Path::new(&conversation.workspace_cwd)
-            .join(".claude/skills")
-            .join(skill_name)
-            .join("SKILL.md");
-        let first = std::fs::read_to_string(&cross_tool).unwrap();
-        assert!(provider.exists());
+        let calls = Arc::new(RecordingSkills::default());
+        service
+            .attach_skill_provisioner(Arc::clone(&calls) as Arc<dyn ManagedSkillProvisioner>)
+            .unwrap();
 
         service.open_conversation(conversation_id).await.unwrap();
-        assert_eq!(std::fs::read_to_string(cross_tool).unwrap(), first);
+        service.open_conversation(conversation_id).await.unwrap();
+        let expected = (
+            conversation.workspace_cwd.clone(),
+            "claude-agent-acp".to_string(),
+        );
+        assert_eq!(*calls.0.lock().unwrap(), vec![expected.clone(), expected]);
+    }
+
+    #[derive(Default)]
+    struct RecordingSkills(std::sync::Mutex<Vec<(String, String)>>);
+
+    impl ManagedSkillProvisioner for RecordingSkills {
+        fn provision(
+            &self,
+            workspace_cwd: &std::path::Path,
+            provider_key: &str,
+        ) -> std::result::Result<(), String> {
+            self.0.lock().unwrap().push((
+                workspace_cwd.to_string_lossy().into_owned(),
+                provider_key.to_string(),
+            ));
+            Ok(())
+        }
     }
 
     #[tokio::test]
