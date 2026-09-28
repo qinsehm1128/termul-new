@@ -5,7 +5,7 @@ pub mod bootstrap;
 pub mod catalog;
 pub mod contracts;
 pub mod creation;
-pub mod durable_fs;
+pub use se_foundation::durable_fs;
 pub mod event_log;
 pub mod lifecycle;
 pub mod lifecycle_journal;

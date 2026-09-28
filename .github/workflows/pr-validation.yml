@@ -223,7 +223,7 @@ jobs:
 
       - name: Durable filesystem replacement matrix
         working-directory: src-tauri
-        run: cargo test --locked conversation::durable_fs
+        run: cargo test --locked -p se-foundation durable_fs
 
       - name: Migration recovery matrix
         working-directory: src-tauri

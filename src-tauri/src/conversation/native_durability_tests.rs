@@ -245,7 +245,7 @@ fn native_platform_claim_is_explicit_and_never_ignored() {
     #[cfg(target_os = "windows")]
     assert_eq!(std::env::consts::OS, "windows");
 
-    let source = include_str!("durable_fs.rs");
+    let source = include_str!("../../crates/se-foundation/src/durable_fs.rs");
     #[cfg(target_os = "linux")]
     {
         assert!(source.contains("File::open(parent)?.sync_all()"));

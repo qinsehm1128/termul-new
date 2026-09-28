@@ -12,7 +12,7 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -159,7 +159,7 @@ impl std::error::Error for DurableFsError {
 
 pub type Result<T> = std::result::Result<T, DurableFsError>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Default)]
 struct DurableFsTestState {
     replace_count: AtomicU64,
@@ -171,7 +171,7 @@ struct DurableFsTestState {
 #[derive(Clone, Default)]
 pub struct DurableFileSystem {
     crash_injector: Option<Arc<dyn CrashInjector>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     test_state: Arc<DurableFsTestState>,
 }
 
@@ -194,28 +194,28 @@ impl DurableFileSystem {
     pub fn with_crash_injector(crash_injector: Arc<dyn CrashInjector>) -> Self {
         Self {
             crash_injector: Some(crash_injector),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             test_state: Arc::default(),
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn reset_replace_counters(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn reset_replace_counters(&self) {
         self.test_state.replace_count.store(0, Ordering::Release);
         self.test_state
             .catalog_replace_count
             .store(0, Ordering::Release);
     }
 
-    #[cfg(test)]
-    pub(crate) fn catalog_replace_count(&self) -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn catalog_replace_count(&self) -> u64 {
         self.test_state
             .catalog_replace_count
             .load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
-    pub(crate) fn fail_next_catalog_replaces(&self, count: usize) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fail_next_catalog_replaces(&self, count: usize) {
         self.test_state
             .fail_catalog_replaces_remaining
             .store(count, Ordering::Release);
@@ -225,7 +225,7 @@ impl DurableFileSystem {
     /// process id, and a UUID. Immediate success is reported only after the declared platform
     /// file and namespace durability steps complete.
     pub fn replace_bytes(&self, target: &Path, bytes: &[u8]) -> Result<DurableWriteOutcome> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.test_state.replace_count.fetch_add(1, Ordering::AcqRel);
             if target.file_name().and_then(|name| name.to_str()) == Some("catalog.json") {

@@ -4902,10 +4902,13 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 name = "se-foundation"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "log",
  "serde",
+ "serde_json",
  "tokio",
  "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
