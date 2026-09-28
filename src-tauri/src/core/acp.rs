@@ -398,36 +398,8 @@ fn response(id: u64, result: Result<Value, CoreError>) -> CoreResponse {
     }
 }
 
-/// Resolve the Conversation workspace base the same way the desktop does:
-/// explicit env override, else `<home>/Documents/<brand>`, else `<home>/<brand>`.
-/// The GUI launcher passes its own computed root via env so both processes
-/// always agree; the fallback keeps the Core runnable standalone in tests.
-fn workspace_base_from_env() -> PathBuf {
-    if let Some(root) = std::env::var_os("TERMUL_CORE_WORKSPACE_ROOT") {
-        let root = PathBuf::from(root);
-        if root.as_os_str().is_empty() {
-            // fall through to the derived default
-        } else {
-            return root;
-        }
-    }
-    #[cfg(unix)]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-    #[cfg(not(any(unix, windows)))]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let brand = crate::brand::canonical().display_name.to_string();
-    match home {
-        Some(home) => home.join("Documents").join(&brand),
-        None => std::env::temp_dir().join(brand),
-    }
-}
-
 pub async fn run_acp_core(profile_root: PathBuf) -> Result<(), CoreError> {
-    let workspace_base = workspace_base_from_env();
+    let workspace_base = super::launcher::workspace_base_from_env();
     run_acp_core_with_roots(profile_root, workspace_base).await
 }
 

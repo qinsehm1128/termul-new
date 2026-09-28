@@ -65,6 +65,8 @@ se-ipc = { path = "crates/se-ipc" }
 se-foundation = { path = "crates/se-foundation" }
 # PTY runtime and terminal trackers.
 se-pty = { path = "crates/se-pty" }
+# Quick terminal sessions (folder + live PTY), hosted beside the PTYs.
+se-quick-terminal = { path = "crates/se-quick-terminal" }
 # Recursive fs watching for `fs_watcher`. Pinned to the same major the fs plugin
 # already resolves, so this adds no new resolution to the lockfile.
 notify = "8"

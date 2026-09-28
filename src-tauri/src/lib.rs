@@ -35,6 +35,8 @@ pub mod migration_detect;
 /// User-initiated merge orchestrator for the pre-rename roots (T-MIG-RUN).
 pub mod migration_run;
 mod migrations;
+pub mod quick_terminal;
+mod quick_terminal_commands;
 use se_foundation::path_validation;
 use se_pty as pty;
 mod remote;
@@ -1964,6 +1966,7 @@ fn core_allows_in_process_fallback(app_data_dir: &Path, role: crate::core::CoreR
 
 fn desktop_terminal_service(
     app_data_dir: &Path,
+    workspace_base: &Path,
     local_pty: Arc<PtyManager>,
     app_handle: tauri::AppHandle,
 ) -> Result<crate::core::TerminalServiceHandle, String> {
@@ -2024,7 +2027,11 @@ fn desktop_terminal_service(
         );
         let _ = app_handle;
     }
-    Ok(crate::core::TerminalServiceHandle::in_process(local_pty))
+    Ok(crate::quick_terminal::with_local_service(
+        crate::core::TerminalServiceHandle::in_process(local_pty),
+        app_data_dir,
+        workspace_base,
+    ))
 }
 
 #[cfg(unix)]
@@ -2540,7 +2547,7 @@ pub fn run() {
                 let conversation_bootstrap = crate::conversation::ConversationBootstrap::run(
                     crate::conversation::HostConversationRoots::desktop(
                         app_data_dir.clone(),
-                        conversation_workspace_base,
+                        conversation_workspace_base.clone(),
                     ),
                     crate::conversation::MigrationHostMode::Desktop,
                 )
@@ -2622,6 +2629,7 @@ pub fn run() {
             ));
             let terminal_handle = desktop_terminal_service(
                 &app_data_dir,
+                &conversation_workspace_base,
                 Arc::clone(&pty_manager),
                 handle.clone(),
             )?;
@@ -3444,6 +3452,11 @@ pub fn run() {
             commands::conversation_get_binding,
             commands::conversation_rename,
             commands::conversation_open,
+            quick_terminal_commands::quick_terminal_list,
+            quick_terminal_commands::quick_terminal_create,
+            quick_terminal_commands::quick_terminal_open,
+            quick_terminal_commands::quick_terminal_rename,
+            quick_terminal_commands::quick_terminal_delete,
             commands::conversation_prepare_terminal,
             commands::conversation_provision_terminal,
             commands::conversation_resolve_legacy_id,

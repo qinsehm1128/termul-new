@@ -325,7 +325,11 @@ pub async fn serve(
     skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let terminal = crate::core::TerminalServiceHandle::in_process(pty.clone());
+    let terminal = crate::quick_terminal::with_local_service(
+        crate::core::TerminalServiceHandle::in_process(pty.clone()),
+        &cfg.service_account_state_dir(),
+        &cfg.conversation_workspace_root(),
+    );
     acp.set_terminal_service(terminal.clone());
     let host = crate::core::AcpWebHostHandle::in_process(acp.clone(), Arc::clone(&ws_relay));
     let (_addr, handle) = serve_router(

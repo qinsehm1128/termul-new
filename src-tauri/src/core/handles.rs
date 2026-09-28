@@ -285,6 +285,9 @@ pub struct TerminalServiceHandle {
     runtime: Arc<dyn TerminalRuntimeHandle>,
     in_process: Option<Arc<PtyManager>>,
     core: Option<Arc<TerminalCoreClient>>,
+    /// Quick terminals owned by this process. `None` in Core mode, where
+    /// Terminal Core owns them and requests go through `core`.
+    quick_terminals: Option<Arc<se_quick_terminal::QuickTerminalService>>,
 }
 
 impl TerminalServiceHandle {
@@ -293,6 +296,7 @@ impl TerminalServiceHandle {
             runtime: Arc::new(InProcessTerminalRuntime::new(Arc::clone(&pty))),
             in_process: Some(pty),
             core: None,
+            quick_terminals: None,
         }
     }
 
@@ -301,6 +305,7 @@ impl TerminalServiceHandle {
             runtime,
             in_process: None,
             core: None,
+            quick_terminals: None,
         }
     }
 
@@ -310,6 +315,7 @@ impl TerminalServiceHandle {
             runtime: Arc::clone(&client) as Arc<dyn TerminalRuntimeHandle>,
             in_process: None,
             core: Some(client),
+            quick_terminals: None,
         }
     }
 
@@ -342,6 +348,20 @@ impl TerminalServiceHandle {
 
     pub fn owns_core_process(&self) -> bool {
         self.core.is_some() && self.in_process.is_none()
+    }
+
+    /// Host quick terminals in this process (no Terminal Core).
+    #[must_use]
+    pub fn with_quick_terminals(
+        mut self,
+        service: Arc<se_quick_terminal::QuickTerminalService>,
+    ) -> Self {
+        self.quick_terminals = Some(service);
+        self
+    }
+
+    pub fn quick_terminals(&self) -> Option<Arc<se_quick_terminal::QuickTerminalService>> {
+        self.quick_terminals.clone()
     }
 }
 
