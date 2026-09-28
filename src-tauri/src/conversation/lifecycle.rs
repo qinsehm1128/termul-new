@@ -2154,6 +2154,20 @@ mod tests {
         }
     }
 
+    /// A runtime that can reach no PTY, as in an Agent Core with no Terminal
+    /// Core linked: nothing is observable and every terminal call fails.
+    fn detached_terminals() -> Arc<dyn TerminalResourceInspector> {
+        let terminals = FakeTerminals::default();
+        for flag in [
+            &terminals.cannot_observe_liveness,
+            &terminals.fail_terminate,
+            &terminals.fail_spawn,
+        ] {
+            flag.store(true, Ordering::SeqCst);
+        }
+        Arc::new(terminals)
+    }
+
     struct Fixture {
         _temp: tempfile::TempDir,
         repository: Arc<ConversationRepository>,
@@ -3029,9 +3043,7 @@ mod tests {
             Arc::clone(fixture.creation.writer()),
             Arc::clone(&fixture.creation),
             Arc::clone(&fixture.provider) as Arc<dyn ConversationAgentLifecycle>,
-            Arc::new(crate::core::TerminalServiceHandle::from_runtime(Arc::new(
-                crate::core::DetachedTerminalRuntime,
-            ))),
+            detached_terminals(),
         )
         .with_journal(Arc::clone(&fixture.journal));
 
@@ -3518,9 +3530,7 @@ mod tests {
             Arc::clone(fixture.creation.writer()),
             Arc::clone(&fixture.creation),
             Arc::clone(&fixture.provider) as Arc<dyn ConversationAgentLifecycle>,
-            Arc::new(crate::core::TerminalServiceHandle::from_runtime(Arc::new(
-                crate::core::DetachedTerminalRuntime,
-            ))),
+            detached_terminals(),
         )
         .with_journal(Arc::clone(&fixture.journal));
 
@@ -3594,7 +3604,7 @@ mod tests {
     #[tokio::test]
     async fn unix_lost_pty_is_replaced_from_host_owned_intent() {
         let fixture = fixture().await;
-        let pty = crate::web::test_pty_manager();
+        let pty = se_pty::test_pty_manager();
         let service = ConversationLifecycleService::new(
             Arc::clone(fixture.creation.writer()),
             Arc::clone(&fixture.creation),

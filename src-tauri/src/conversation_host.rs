@@ -231,6 +231,24 @@ mod tests {
         );
     }
 
+    /// An Agent Core with no Terminal Core linked must never let the lifecycle
+    /// believe a terminal is gone or claim a cleanup it could not do.
+    #[tokio::test]
+    async fn a_detached_terminal_runtime_is_an_inspector_that_fails_closed() {
+        let terminals =
+            TerminalServiceHandle::from_runtime(Arc::new(crate::core::DetachedTerminalRuntime));
+        let id = ConversationId::new_v4();
+
+        assert!(!terminals.observes_live_terminals());
+        assert!(!terminals.is_live("t1"));
+        assert!(terminals.observe_conversation(id, &[]).await.is_err());
+        assert!(terminals
+            .terminate_for_conversation(id, "t1", "op")
+            .await
+            .is_err());
+        assert!(terminals.terminate("t1").await.is_err());
+    }
+
     #[test]
     fn host_skill_provisioner_writes_the_managed_skill_idempotently() {
         let workspace = tempfile::tempdir().unwrap();

@@ -1358,128 +1358,21 @@ fn log_result<T>(
 mod tests {
     use super::*;
     use crate::conversation::contracts::{
-        parse_created_at_utc, AgentSessionBinding, AgentSessionBindingState, ConversationCreator,
-        ConversationLifecycleState, ConversationRecordV2, CreationPartition, ExecutionTarget,
-        AGENT_SESSION_BINDING_SCHEMA_VERSION, CONVERSATION_SCHEMA_VERSION,
+        parse_created_at_utc, AgentSessionBinding, AgentSessionBindingState,
+        ConversationLifecycleState, AGENT_SESSION_BINDING_SCHEMA_VERSION,
     };
     use crate::conversation::migration::{
         CreatedAtSource, IdentityDecision, MigrationMapEntryV1, MIGRATION_MAP_SCHEMA_VERSION,
     };
+    use crate::conversation::test_support::{application_fixture as fixture, ID};
     use crate::conversation::{
         ConversationRepository, LegacyConversationReader, SessionWorkspaceProjectionState,
     };
     use uuid::Uuid;
 
-    const ID: &str = "018f7a1c-1b4d-7c8a-9f01-0123456789ab";
-
-    async fn fixture() -> (
-        tempfile::TempDir,
-        Arc<ConversationRepository>,
-        ConversationApplicationService,
-    ) {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("state/conversations/v2");
-        let (repository, _) = ConversationRepository::open(root).unwrap();
-        let writer = ConversationWriter::for_test(Arc::clone(&repository));
-        let id = ConversationId::parse(ID).unwrap();
-        let created_at = parse_created_at_utc("2026-08-15T09:45:15.123Z").unwrap();
-        let workspace_cwd = temp.path().canonicalize().unwrap().join("workspace");
-        std::fs::create_dir_all(&workspace_cwd).unwrap();
-        writer
-            .create_conversation(
-                ConversationRecordV2 {
-                    schema_version: CONVERSATION_SCHEMA_VERSION,
-                    conversation_id: id,
-                    created_at_utc: created_at,
-                    creation_partition: CreationPartition::from_created_at(created_at),
-                    workspace_cwd: workspace_cwd.to_string_lossy().into_owned(),
-                    execution_target: ExecutionTarget::Workspace,
-                    project_attachment: None,
-                    lifecycle_state: ConversationLifecycleState::Ready,
-                    backend: crate::conversation::ConversationBackend::Agent,
-                    last_seq: 0,
-                    created_by: ConversationCreator::Legacy,
-                    title: None,
-                    title_source: None,
-                },
-                ConversationMutation::CreateConversation,
-            )
-            .await
-            .unwrap();
-        let reader = Arc::new(ConversationReader::new(
-            Arc::clone(&repository),
-            LegacyConversationReader::default(),
-            ReaderPrecedence::ConversationV2Only,
-        ));
-        let workspace = Arc::new(SessionWorkspaceService::new(Arc::clone(&writer)));
-        let map = MigrationMapV1 {
-            schema_version: MIGRATION_MAP_SCHEMA_VERSION,
-            operation_id: Uuid::new_v4(),
-            entries: vec![MigrationMapEntryV1 {
-                source_key: "legacy_chat_history:0:payloads/chat-history.json".to_string(),
-                legacy_storage_key: Some("legacy-storage".to_string()),
-                legacy_agent_session_id: Some("opaque-agent-session".to_string()),
-                conversation_id: id,
-                identity_decision: IdentityDecision::AllocatedInvalidUuid,
-                created_at_source: Some(CreatedAtSource::HostMetadata),
-                source_record_sha256: "a".repeat(64),
-            }],
-        };
-        (
-            temp,
-            repository,
-            ConversationApplicationService::new(
-                reader,
-                writer,
-                workspace,
-                &map,
-                MigrationHostMode::Desktop,
-                MigrationPhase::Finalized,
-                ReaderPrecedence::ConversationV2Only,
-            ),
-        )
-    }
-
     async fn service() -> (tempfile::TempDir, ConversationApplicationService) {
         let (temp, _repository, service) = fixture().await;
         (temp, service)
-    }
-
-    fn seed_recovery(repository: &ConversationRepository) -> RecoveryItemV1 {
-        use crate::conversation::migration::{
-            RecoveryKind, RecoveryProvenanceV1, RecoveryQueueV1, RecoverySeverity,
-        };
-        let item = RecoveryItemV1::new(
-            RecoveryKind::AmbiguousWorkspaceManifest,
-            RecoverySeverity::Warning,
-            vec!["legacy_workspace_manifests/0/shared.json".to_string()],
-            vec![ConversationId::parse(ID).unwrap()],
-            vec!["e".repeat(64)],
-            vec![serde_json::json!({"candidate":"preserved"})],
-            vec![RecoveryProvenanceV1 {
-                source_kind: "legacy_workspace_manifests".to_string(),
-                relative_path: "legacy_workspace_manifests/0/shared.json".to_string(),
-                sha256: "e".repeat(64),
-                preserved_read_only: true,
-            }],
-        );
-        let state_root = repository
-            .root()
-            .parent()
-            .and_then(std::path::Path::parent)
-            .unwrap();
-        RecoveryQueueV1::new(uuid::Uuid::new_v4(), vec![item.clone()])
-            .persist(
-                &state_root
-                    .join("conversation-migrations")
-                    .join("workspace-recovery-v1"),
-            )
-            .unwrap();
-        item
     }
 
     #[tokio::test]
@@ -1633,66 +1526,6 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error.code, "CONVERSATION_NOT_FOUND");
-    }
-
-    #[tokio::test]
-    async fn tauri_command_inners_preserve_legacy_and_recovery_golden_envelopes() {
-        let (_temp, repository, service) = fixture().await;
-        for (source_kind, value) in [
-            ("legacyStorageKey", "legacy-storage"),
-            ("legacyAgentSessionId", "opaque-agent-session"),
-            ("legacyChatHistoryId", "chat-history"),
-        ] {
-            let result = crate::commands::conversation_resolve_legacy_id_inner(
-                &service,
-                serde_json::json!({"sourceKind":source_kind,"value":value}),
-            );
-            assert!(result.success, "{source_kind}: {:?}", result.error);
-            assert_eq!(result.data.unwrap().canonical_route, format!("#/c/{ID}"));
-        }
-        let missing = crate::commands::conversation_resolve_legacy_id_inner(
-            &service,
-            serde_json::json!({"sourceKind":"legacyStorageKey","value":"missing"}),
-        );
-        assert_eq!(missing.code.as_deref(), Some("CONVERSATION_NOT_FOUND"));
-
-        let item = seed_recovery(&repository);
-        let result = crate::commands::conversation_recovery_resolve_inner(
-            &service,
-            serde_json::json!({
-                "recoveryId":item.recovery_id,
-                "expectedRevision":item.revision,
-                "action":"inspect",
-                "payload":{}
-            }),
-        )
-        .await;
-        assert!(result.success, "inspect: {:?}", result.error);
-        let result = result.data.unwrap();
-        assert_eq!(serde_json::to_value(result.action).unwrap(), "inspect");
-        assert_eq!(result.source_paths, item.source_paths);
-        assert_eq!(result.source_sha256, item.source_sha256);
-        assert_eq!(
-            service.host_status().unwrap().state,
-            ConversationHostState::Recovery
-        );
-
-        let associated = crate::commands::conversation_recovery_resolve_inner(
-            &service,
-            serde_json::json!({
-                "recoveryId":item.recovery_id,
-                "expectedRevision":item.revision,
-                "idempotencyKey":"21aee10a-56b8-4624-a5e7-586c25dc8d1f",
-                "action":"associateConversation",
-                "payload":{"conversationId":ID}
-            }),
-        )
-        .await;
-        assert!(associated.success, "associate: {:?}", associated.error);
-        assert_eq!(
-            service.host_status().unwrap().state,
-            ConversationHostState::Ready
-        );
     }
 
     #[tokio::test]

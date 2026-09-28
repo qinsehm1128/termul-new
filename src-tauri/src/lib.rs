@@ -20,6 +20,8 @@ mod editor_workspaces;
 mod fs_watcher;
 use se_foundation::host_admission;
 pub mod conversation_host;
+#[cfg(test)]
+mod conversation_host_tests;
 pub mod conversation_roots;
 pub mod legacy_appdata;
 mod logging;

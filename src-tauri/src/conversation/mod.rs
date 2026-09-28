@@ -27,6 +27,8 @@ pub mod write_authority;
 #[cfg(test)]
 mod native_durability_tests;
 #[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(test)]
 mod validation_tests;
 
 pub use application::{
