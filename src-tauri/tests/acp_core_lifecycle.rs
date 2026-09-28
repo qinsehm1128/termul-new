@@ -312,3 +312,70 @@ async fn real_acp_core_answers_other_calls_while_an_agent_spawn_is_stalled() {
     workspace.close().unwrap();
     profile.close().unwrap();
 }
+
+/// The Agent Core composes its application service through the host, so
+/// opening a Conversation there must write the host's managed skill.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_acp_core_opening_a_conversation_provisions_the_managed_skill() {
+    let profile_dir = tempfile::tempdir().unwrap();
+    let workspace_dir = tempfile::tempdir().unwrap();
+    let profile = profile_dir.path().canonicalize().unwrap();
+    let workspace = workspace_dir.path().canonicalize().unwrap();
+    let prepared = {
+        use se_manager_lib::conversation::{
+            AgentBindingResult, ConversationBootstrap, ExecutionTarget, MigrationHostMode,
+            PrepareConversationRequest,
+        };
+        let bootstrap = ConversationBootstrap::run(
+            se_manager_lib::conversation_roots::desktop(profile.clone(), workspace.clone()),
+            MigrationHostMode::Desktop,
+        )
+        .expect("seed bootstrap");
+        bootstrap
+            .creation
+            .create_with_agent_gate(
+                PrepareConversationRequest::new(ExecutionTarget::Workspace),
+                |_| async {
+                    Ok(AgentBindingResult {
+                        agent_session_id: "seed-session".to_string(),
+                        runtime_agent_id: "seed-agent".to_string(),
+                        // `codex-acp` maps to the cross-tool skills root only.
+                        stable_agent_namespace: "config:codex-acp".to_string(),
+                    })
+                },
+            )
+            .await
+            .expect("seed agent Conversation")
+    };
+    let skill = std::path::Path::new(&prepared.workspace_cwd)
+        .join(".agents/skills")
+        .join(se_manager_lib::skills::provisioner::scheduled_task_skill_name())
+        .join("SKILL.md");
+    assert!(!skill.exists(), "seeding must not provision the skill");
+
+    let endpoint = CoreEndpoint::for_profile(&profile, CoreRole::AcpCore);
+    let child = Command::new(env!("CARGO_BIN_EXE_se-manager"))
+        .arg("--acp-core")
+        .env("TERMUL_CORE_PROFILE_ROOT", &profile)
+        .env("TERMUL_CORE_WORKSPACE_ROOT", &workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn --acp-core");
+    let _process = CoreChild(child);
+    let acp = wait_for_client(&endpoint).await;
+
+    acp.request(
+        "conversationOpen",
+        json!({ "conversationId": prepared.conversation_id.to_string() }),
+    )
+    .await
+    .expect("open the Conversation in the Agent Core");
+
+    assert!(
+        skill.is_file(),
+        "the Agent Core must provision {}",
+        skill.display()
+    );
+}
