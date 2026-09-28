@@ -5,7 +5,8 @@ const api = vi.hoisted(() => ({
   create: vi.fn(),
   open: vi.fn(),
   rename: vi.fn(),
-  remove: vi.fn()
+  remove: vi.fn(),
+  onChanged: vi.fn((_handler: () => void) => () => undefined)
 }))
 vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))

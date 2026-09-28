@@ -37,6 +37,7 @@ pub mod migration_run;
 mod migrations;
 pub mod quick_terminal;
 mod quick_terminal_commands;
+mod quick_terminal_migration;
 use se_foundation::path_validation;
 use se_pty as pty;
 mod remote;
@@ -2953,6 +2954,13 @@ pub fn run() {
                 app.manage(commands::HostConversationStore(Some(Arc::clone(
                     &conversation_bootstrap.application,
                 ))));
+                quick_terminal_migration::spawn_startup_migration(
+                    handle.clone(),
+                    Arc::new(quick_terminal_migration::LocalConversations(Arc::clone(
+                        &conversation_bootstrap.application,
+                    ))),
+                    terminal_handle.clone(),
+                );
                 app.manage(commands::HostConversationCreation(Some(Arc::clone(
                     &conversation_bootstrap.creation,
                 ))));
@@ -2982,6 +2990,13 @@ pub fn run() {
                 // history refresh, shared-live subscribers) sees the same fan-out
                 // instead of each caller minting a divergent relay.
                 if let Some(client) = acp_core_handle.core_client() {
+                    quick_terminal_migration::spawn_startup_migration(
+                        handle.clone(),
+                        Arc::new(quick_terminal_migration::AcpCoreConversations(Arc::clone(
+                            &client,
+                        ))),
+                        terminal_handle.clone(),
+                    );
                     let live_relay = Arc::new(WsRelaySink::new());
                     crate::core::web_host::CoreRelayHost::start(client, Arc::clone(&live_relay));
                     app.manage(Option::<Arc<WsRelaySink>>::Some(live_relay));

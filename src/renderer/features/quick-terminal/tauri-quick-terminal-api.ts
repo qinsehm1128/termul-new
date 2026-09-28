@@ -4,6 +4,7 @@ import {
   parseQuickTerminalRecords,
   type QuickTerminalApi
 } from '@shared/types/quick-terminal.types'
+import { onHostEvent } from '@/lib/host-events'
 import { invokeDecodedIpcResult } from '@/lib/invoke-decoded-ipc-result'
 
 const decodeVoid = (): void => undefined
@@ -23,7 +24,9 @@ export function createTauriQuickTerminalApi(): QuickTerminalApi {
       invokeDecodedIpcResult('quick_terminal_rename', parseQuickTerminalRecord, {
         payload: { id, title }
       }),
-    remove: (id) => invokeDecodedIpcResult('quick_terminal_delete', decodeVoid, { payload: { id } })
+    remove: (id) =>
+      invokeDecodedIpcResult('quick_terminal_delete', decodeVoid, { payload: { id } }),
+    onChanged: (handler) => onHostEvent('quick-terminals-changed', () => handler())
   }
 }
 

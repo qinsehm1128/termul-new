@@ -37,6 +37,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 import { QuickTerminalView } from './QuickTerminalView'
+import { quickTerminalApi } from './quick-terminal-api'
 import { failureMessage, quickTerminalName, useQuickTerminalStore } from './quick-terminal-store'
 
 /**
@@ -97,6 +98,7 @@ export default function QuickTerminalsPage(): React.JSX.Element {
 
   useEffect(() => {
     void load()
+    return quickTerminalApi.onChanged(() => void load())
   }, [load])
 
   const openProjects = useMemo(

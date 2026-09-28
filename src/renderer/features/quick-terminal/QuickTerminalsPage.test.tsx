@@ -7,7 +7,8 @@ const api = vi.hoisted(() => ({
   create: vi.fn(),
   open: vi.fn(),
   rename: vi.fn(),
-  remove: vi.fn()
+  remove: vi.fn(),
+  onChanged: vi.fn((_handler: () => void) => () => undefined)
 }))
 vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
@@ -107,6 +108,20 @@ describe('QuickTerminalsPage', () => {
 
     await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-2'))
     expect(api.open).toHaveBeenCalledTimes(2)
+  })
+
+  it('lists again when the host reports new quick terminals', async () => {
+    renderAt('/quick-terminals')
+    await screen.findByText('scratch')
+    const handler = api.onChanged.mock.calls[0]?.[0]
+    api.list.mockResolvedValue({
+      success: true,
+      data: [record, { ...record, id: '33333333-3333-4333-8333-333333333333', title: 'migrated' }]
+    })
+
+    act(() => handler?.())
+
+    expect(await screen.findByText('migrated')).toBeTruthy()
   })
 
   it('creates a quick terminal in its own folder and navigates to it', async () => {
