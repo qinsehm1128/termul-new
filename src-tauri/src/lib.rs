@@ -3657,7 +3657,10 @@ pub fn run() {
                         .await
                     {
                         Ok(Ok(_)) => {}
-                        Ok(Err(_)) | Err(_) => log::error!(
+                        Ok(Err(error)) => log::error!(
+                            "[desktop-exit] shutdown_phase=stop_remote stable_code=REMOTE_STOP_FAILED result=FAILED error={error}"
+                        ),
+                        Err(_) => log::error!(
                             "[desktop-exit] shutdown_phase=stop_remote stable_code=REMOTE_STOP_TIMEOUT result=FAILED"
                         ),
                     }

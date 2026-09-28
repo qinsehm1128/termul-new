@@ -717,6 +717,9 @@ impl RemoteServerState {
                         stable_codes: Vec::new(),
                     }
                 }
+                // Desktop exit has nothing to drain when the server never
+                // started or was already stopped (e.g. a failed restore).
+                None if !retire => return Ok(RemoteStatus::stopped()),
                 None => return Err("Remote server is not running".to_string()),
             }
         };
@@ -1175,6 +1178,14 @@ mod tests {
         let err = state.stop().await;
         assert!(err.is_err(), "stop on an unstarted server must error");
         assert!(!state.status().running);
+    }
+
+    #[tokio::test]
+    async fn exit_shutdown_on_unstarted_server_is_a_no_op() {
+        let state = RemoteServerState::new();
+
+        let status = state.shutdown_keep_credential().await;
+        assert!(!status.expect("nothing to drain is not a failure").running);
     }
 
     #[tokio::test]
