@@ -81,6 +81,21 @@ describe('terminal-store', () => {
   })
 
   describe('selectTerminal', () => {
+    it('publishes no update when the active terminal is selected again', () => {
+      const { selectTerminal } = useTerminalStore.getState()
+      selectTerminal('t2')
+      const settled = useTerminalStore.getState()
+      const listener = vi.fn()
+      const unsubscribe = useTerminalStore.subscribe(listener)
+
+      selectTerminal('t2')
+      selectTerminal('t2')
+
+      unsubscribe()
+      expect(listener).not.toHaveBeenCalled()
+      expect(useTerminalStore.getState()).toBe(settled)
+    })
+
     it('should update activeTerminalId', () => {
       const { selectTerminal } = useTerminalStore.getState()
       selectTerminal('t2')

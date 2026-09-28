@@ -661,18 +661,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     setActiveTab: (paneId: string, tabId: string): void => {
-      const { root, fullscreenPaneId, agentLauncherPaneId } = get()
+      const { root, fullscreenPaneId, agentLauncherPaneId, activePaneId } = get()
       const pane = findPaneById(root, paneId)
       const tab = pane?.type === 'leaf' ? pane.tabs.find((t) => t.id === tabId) : undefined
-      const newRoot = updateLeaf(root, paneId, (l) => ({
-        ...l,
-        activeTabId: tabId
-      }))
-      set({
-        root: newRoot,
-        activePaneId: resolveActivePaneId(fullscreenPaneId, paneId),
-        agentLauncherPaneId: agentLauncherPaneId === paneId ? null : agentLauncherPaneId
-      })
+      const nextActivePaneId = resolveActivePaneId(fullscreenPaneId, paneId)
+      // Re-selecting the tab that is already active must not publish a new
+      // root: every root subscriber (terminal selection, editor focus, layout
+      // persistence) would re-run on each repeated click.
+      const alreadyActive =
+        pane?.type === 'leaf' &&
+        pane.activeTabId === tabId &&
+        activePaneId === nextActivePaneId &&
+        agentLauncherPaneId !== paneId
+      if (!alreadyActive) {
+        const newRoot = updateLeaf(root, paneId, (l) => ({
+          ...l,
+          activeTabId: tabId
+        }))
+        set({
+          root: newRoot,
+          activePaneId: nextActivePaneId,
+          agentLauncherPaneId: agentLauncherPaneId === paneId ? null : agentLauncherPaneId
+        })
+      }
       if (tab && tab.type === 'agent-chat') {
         if (tab.conversationId) navigateToConversation(tab.conversationId)
         else if (tab.sessionId) navigateToChatSession(tab.sessionId)

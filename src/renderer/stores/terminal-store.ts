@@ -216,11 +216,22 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   cleanupRecoveries: {},
 
   selectTerminal: (id: string): void => {
-    set((state) => ({
-      activeTerminalId: id,
-      recentTerminalIds: promoteRecentTerminal(state.recentTerminalIds, id),
-      terminals: state.terminals.map((t) => ({ ...t, isActive: t.id === id }))
-    }))
+    set((state) => {
+      // Re-selecting the active terminal keeps the same state object, so a
+      // repeated click does not rebuild every terminal record.
+      if (
+        state.activeTerminalId === id &&
+        state.recentTerminalIds[0] === id &&
+        state.terminals.every((t) => t.isActive === (t.id === id))
+      ) {
+        return state
+      }
+      return {
+        activeTerminalId: id,
+        recentTerminalIds: promoteRecentTerminal(state.recentTerminalIds, id),
+        terminals: state.terminals.map((t) => ({ ...t, isActive: t.id === id }))
+      }
+    })
   },
 
   getPreviousTerminalId: (): string | undefined => {

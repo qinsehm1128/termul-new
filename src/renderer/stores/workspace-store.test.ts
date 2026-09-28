@@ -213,6 +213,24 @@ describe('workspace-store split/move invariants', () => {
     expect(useWorkspaceStore.getState().activePaneId).toBe((split.children[0] as LeafNode).id)
   })
 
+  it('keeps the same root when the active tab is selected again', () => {
+    const store = useWorkspaceStore.getState()
+    const terminalA = createTerminalTab('term-a')
+    const terminalB = createTerminalTab('term-b')
+    store.addTabToPane('pane-root', terminalA)
+    store.addTabToPane('pane-root', terminalB)
+    store.setActiveTab('pane-root', terminalB.id)
+    const settledRoot = useWorkspaceStore.getState().root
+
+    store.setActiveTab('pane-root', terminalB.id)
+    expect(useWorkspaceStore.getState().root).toBe(settledRoot)
+
+    store.setActiveTab('pane-root', terminalA.id)
+    const switched = useWorkspaceStore.getState().root as LeafNode
+    expect(switched).not.toBe(settledRoot)
+    expect(switched.activeTabId).toBe(terminalA.id)
+  })
+
   it('remaps restored terminal ids without changing pane placement', () => {
     const store = useWorkspaceStore.getState()
     const terminalA = createTerminalTab('old-a')
