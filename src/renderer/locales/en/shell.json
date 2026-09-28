@@ -328,8 +328,8 @@
       "reconnect": "A replaced Core is reconnected. This is not a zero-interruption swap."
     },
     "reconciliation": {
-      "deferred": "Saved update plan: replacement is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them.",
-      "deferredComponents": "Saved update plan: replacement of {{components}} is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them.",
+      "deferred": "Saved update plan: replacement is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them; to apply it now, use “Quit Se and End All Terminals” and reopen the app.",
+      "deferredComponents": "Saved update plan: replacement of {{components}} is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them; to apply it now, use “Quit Se and End All Terminals” and reopen the app.",
       "failed": "Saved update plan failed. Review the error, then check again.",
       "reconciling": "Saved update plan: components are reconnecting. This is not a zero-interruption swap.",
       "completed": "Saved update plan finished. Matching Cores stayed running and were reconnected."

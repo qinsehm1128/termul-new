@@ -717,6 +717,10 @@ export type WindowMaximizeChangedCallback = (isMaximized: boolean) => void
 // App close coordination types
 export type AppCloseResponse = 'close' | 'cancel'
 export type AppCloseRequestedCallback = () => Promise<boolean>
+export interface AppCloseOptions {
+  /** Also shut down the desktop Cores, ending every terminal and agent session. */
+  endCoreSessions?: boolean
+}
 
 // Window API for renderer
 export interface WindowApi {
@@ -725,7 +729,7 @@ export interface WindowApi {
   close: () => void
   onMaximizeChange: (callback: WindowMaximizeChangedCallback) => () => void
   onCloseRequested: (callback: AppCloseRequestedCallback) => () => void
-  respondToClose: (response: AppCloseResponse) => void
+  respondToClose: (response: AppCloseResponse, options?: AppCloseOptions) => void
 }
 
 // Clipboard API for renderer

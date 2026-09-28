@@ -627,4 +627,67 @@ describe('WorkspaceLayout close persistence', () => {
       expect(mockRespondToClose).toHaveBeenCalledWith('close')
     })
   })
+
+  describe('Quit and End All Terminals', () => {
+    async function trayQuitHandler(): Promise<(event: unknown) => void> {
+      renderLayout()
+      await waitFor(() => {
+        expect(mockListen).toHaveBeenCalledWith('tray:quit-requested', expect.any(Function))
+      })
+      return mockListen.mock.calls.find(([event]) => event === 'tray:quit-requested')?.[1] as (
+        event: unknown
+      ) => void
+    }
+
+    it('asks the host to end every Core session when it closes the window', async () => {
+      const handler = await trayQuitHandler()
+
+      await act(async () => {
+        handler({ payload: { endCoreSessions: true } })
+      })
+
+      await waitFor(() => {
+        expect(mockFlushPendingWrites).toHaveBeenCalledTimes(1)
+        expect(mockRespondToClose).toHaveBeenCalledWith('close', { endCoreSessions: true })
+      })
+    })
+
+    it('keeps the Cores running for a plain tray quit', async () => {
+      const handler = await trayQuitHandler()
+
+      await act(async () => {
+        handler({ payload: { endCoreSessions: false } })
+      })
+
+      await waitFor(() => {
+        expect(mockRespondToClose).toHaveBeenCalledWith('close')
+      })
+      expect(mockRespondToClose).not.toHaveBeenCalledWith('close', expect.anything())
+    })
+
+    it('drops the end-all intent when the unsaved-file prompt is cancelled', async () => {
+      mockEditorStoreState.getDirtyFileCount.mockReturnValue(2)
+      const handler = await trayQuitHandler()
+
+      await act(async () => {
+        handler({ payload: { endCoreSessions: true } })
+      })
+      expect(await screen.findByText('Unsaved Changes')).toBeInTheDocument()
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      })
+
+      // A later ordinary quit (window close) must not end the sessions.
+      mockEditorStoreState.getDirtyFileCount.mockReturnValue(0)
+      const closeHandler = (mockCloseRequested.mock.calls as unknown as Array<[() => void]>)[0]?.[0]
+      await act(async () => {
+        closeHandler?.()
+      })
+
+      await waitFor(() => {
+        expect(mockRespondToClose).toHaveBeenCalledWith('close')
+      })
+      expect(mockRespondToClose).not.toHaveBeenCalledWith('close', { endCoreSessions: true })
+    })
+  })
 })

@@ -320,7 +320,7 @@ describe('StatusBar', () => {
       })
       expect(
         screen.getByRole('status', {
-          name: 'Saved update plan: replacement of Terminal Core is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them.'
+          name: 'Saved update plan: replacement of Terminal Core is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them; to apply it now, use “Quit Se and End All Terminals” and reopen the app.'
         })
       ).toBeInTheDocument()
       expect(screen.queryByText('live-build-not-for-ui')).not.toBeInTheDocument()

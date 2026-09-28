@@ -1,5 +1,12 @@
-import type { AppCloseRequestedCallback, IpcResult, WindowApi } from '@shared/types/ipc.types'
+import type {
+  AppCloseOptions,
+  AppCloseRequestedCallback,
+  IpcResult,
+  WindowApi
+} from '@shared/types/ipc.types'
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
+import { logFrontendError } from './log-api'
 import { isWindows } from './platform'
 
 /**
@@ -49,6 +56,28 @@ function isTauriContext(): boolean {
     typeof window !== 'undefined' &&
     typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
   )
+}
+
+/**
+ * Destroy the main window, first telling the host to also shut down the Cores
+ * when the user chose "Quit and End All Terminals". If that request fails the
+ * window still closes; the Cores then keep running, as after a plain quit.
+ */
+async function closeMainWindow(endCoreSessions: boolean): Promise<void> {
+  if (endCoreSessions) {
+    try {
+      await invoke('set_quit_ends_core_sessions', { enabled: true })
+    } catch (error) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'window-close.end-core-sessions',
+        message: `stable_code=QUIT_MODE_FAILED result=DEGRADED error=${
+          error instanceof Error ? error.message : String(error)
+        }`
+      })
+    }
+  }
+  await getCurrentWindow().destroy()
 }
 
 /**
@@ -130,10 +159,10 @@ export function createTauriWindowApi(): WindowApi {
       }
     },
 
-    respondToClose(response: 'close' | 'cancel'): void {
+    respondToClose(response: 'close' | 'cancel', options?: AppCloseOptions): void {
       if (!isTauriContext()) return
       if (response === 'close') {
-        void getCurrentWindow().destroy()
+        void closeMainWindow(options?.endCoreSessions === true)
       }
       // If 'cancel', do nothing - close already prevented by onCloseRequested
     }

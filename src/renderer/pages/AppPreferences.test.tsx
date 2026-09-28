@@ -399,7 +399,7 @@ describe('AppPreferences settings controls', () => {
     )
     expect(
       screen.getByText(
-        'Saved update plan: replacement of Terminal Core is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them.'
+        'Saved update plan: replacement of Terminal Core is waiting because a terminal or AI session is still running. Restarting the app window does not interrupt them; to apply it now, use “Quit Se and End All Terminals” and reopen the app.'
       )
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()

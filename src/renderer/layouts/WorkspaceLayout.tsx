@@ -1015,6 +1015,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [])
 
+  // Set by the native "Quit and End All Terminals" item; any other close keeps
+  // the Cores (and every terminal) running for the next launch to adopt.
+  const endCoreSessionsOnCloseRef = useRef(false)
+
   const closeAppWithPersistenceFlush = useCallback(async () => {
     try {
       // Each stage is individually bounded and never rejects — see
@@ -1062,7 +1066,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
         })
       }
     } finally {
-      windowApi.respondToClose('close')
+      if (endCoreSessionsOnCloseRef.current) {
+        windowApi.respondToClose('close', { endCoreSessions: true })
+      } else {
+        windowApi.respondToClose('close')
+      }
       setIsAppCloseDialogOpen(false)
     }
   }, [])
@@ -1070,6 +1078,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Intercept app close to check for unsaved files
   useEffect(() => {
     return windowApi.onCloseRequested(() => {
+      endCoreSessionsOnCloseRef.current = false
       const dirtyCount = useEditorStore.getState().getDirtyFileCount()
       if (dirtyCount > 0) {
         setAppCloseDirtyCount(dirtyCount)
@@ -1084,11 +1093,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Tray Quit is an explicit app-quit request. It reuses the renderer's
   // existing dirty-file prompt and persistence flush instead of bypassing it
-  // with a native app.exit(0).
+  // with a native app.exit(0). The payload says whether the quit also ends
+  // every terminal and agent session ("Quit and End All Terminals").
   useEffect(() => {
     let unlisten: UnlistenFn | undefined
     let disposed = false
-    listen<void>('tray:quit-requested', () => {
+    listen<{ endCoreSessions?: boolean } | null>('tray:quit-requested', (event) => {
+      endCoreSessionsOnCloseRef.current = event?.payload?.endCoreSessions === true
       const dirtyCount = useEditorStore.getState().getDirtyFileCount()
       if (dirtyCount > 0) {
         setAppCloseDirtyCount(dirtyCount)
@@ -2204,6 +2215,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [closeAppWithPersistenceFlush])
 
   const handleCancelAppClose = useCallback(() => {
+    endCoreSessionsOnCloseRef.current = false
     windowApi.respondToClose('cancel')
     setIsAppCloseDialogOpen(false)
   }, [])

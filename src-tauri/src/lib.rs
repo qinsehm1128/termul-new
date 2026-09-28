@@ -106,6 +106,12 @@ const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-
 const TRAY_ID: &str = "se-manager-tray";
 const TRAY_MENU_SHOW: &str = "tray-show";
 const TRAY_MENU_QUIT: &str = "tray-quit";
+/// Quits and also shuts down both Cores, ending every terminal and agent
+/// session. Plain quit leaves the Cores running for the next launch to adopt.
+#[cfg(unix)]
+const TRAY_MENU_QUIT_END_SESSIONS: &str = "tray-quit-end-sessions";
+#[cfg(target_os = "macos")]
+const MENU_ID_QUIT_END_SESSIONS: &str = "app-quit-end-sessions";
 const TRAY_QUIT_REQUESTED_EVENT: &str = "tray:quit-requested";
 const LEARN_MORE_URL: &str = "https://github.com/qinsehm1128/termul-new";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
@@ -156,8 +162,12 @@ const NATIVE_APP_MENU_LABEL_KEYS: &[&str] = &[
     "menu.hideOthers",
     "menu.showAll",
     "menu.quit",
+    "menu.quitKeepSessions",
+    "menu.quitEndSessions",
     "tray.show",
     "tray.quit",
+    "tray.quitKeepSessions",
+    "tray.quitEndSessions",
     "dialog.error",
     "dialog.success",
     "dialog.copied",
@@ -261,8 +271,12 @@ fn native_label_for(language: NativeUiLanguage, key: &str) -> &str {
         (NativeUiLanguage::ZhCn, "menu.hideOthers") => "隐藏其他应用",
         (NativeUiLanguage::ZhCn, "menu.showAll") => "全部显示",
         (NativeUiLanguage::ZhCn, "menu.quit") => "退出 Se",
+        (NativeUiLanguage::ZhCn, "menu.quitKeepSessions") => "退出 Se（保留终端）",
+        (NativeUiLanguage::ZhCn, "menu.quitEndSessions") => "退出 Se 并结束所有终端",
         (NativeUiLanguage::ZhCn, "tray.show") => "显示 Se",
         (NativeUiLanguage::ZhCn, "tray.quit") => "退出 Se",
+        (NativeUiLanguage::ZhCn, "tray.quitKeepSessions") => "退出 Se（保留终端）",
+        (NativeUiLanguage::ZhCn, "tray.quitEndSessions") => "退出 Se 并结束所有终端",
         (NativeUiLanguage::ZhCn, "dialog.error") => "错误",
         (NativeUiLanguage::ZhCn, "dialog.success") => "成功",
         (NativeUiLanguage::ZhCn, "dialog.copied") => "已复制",
@@ -308,8 +322,12 @@ fn native_label_for(language: NativeUiLanguage, key: &str) -> &str {
         (_, "menu.hideOthers") => "Hide Others",
         (_, "menu.showAll") => "Show All",
         (_, "menu.quit") => "Quit Se",
+        (_, "menu.quitKeepSessions") => "Quit Se (Keep Terminals Running)",
+        (_, "menu.quitEndSessions") => "Quit Se and End All Terminals",
         (_, "tray.show") => "Show Se",
         (_, "tray.quit") => "Quit Se",
+        (_, "tray.quitKeepSessions") => "Quit Se (Keep Terminals Running)",
+        (_, "tray.quitEndSessions") => "Quit Se and End All Terminals",
         (_, "dialog.error") => "Error",
         (_, "dialog.success") => "Success",
         (_, "dialog.copied") => "Copied",
@@ -942,15 +960,38 @@ fn build_tray_menu<R: tauri::Runtime>(
 
     let show_item =
         MenuItemBuilder::with_id(TRAY_MENU_SHOW, native_label("tray.show")).build(app)?;
-    let quit_item =
-        MenuItemBuilder::with_id(TRAY_MENU_QUIT, native_label("tray.quit")).build(app)?;
     let separator = PredefinedMenuItem::separator(app)?;
 
-    MenuBuilder::new(app)
-        .item(&show_item)
-        .item(&separator)
-        .item(&quit_item)
-        .build()
+    // Unix Cores outlive the GUI, so quitting offers keeping or ending their
+    // sessions. Windows runs the Cores in-process: quit always ends them.
+    #[cfg(unix)]
+    {
+        let quit_keep =
+            MenuItemBuilder::with_id(TRAY_MENU_QUIT, native_label("tray.quitKeepSessions"))
+                .build(app)?;
+        let quit_end = MenuItemBuilder::with_id(
+            TRAY_MENU_QUIT_END_SESSIONS,
+            native_label("tray.quitEndSessions"),
+        )
+        .build(app)?;
+        MenuBuilder::new(app)
+            .item(&show_item)
+            .item(&separator)
+            .item(&quit_keep)
+            .item(&quit_end)
+            .build()
+    }
+
+    #[cfg(not(unix))]
+    {
+        let quit_item =
+            MenuItemBuilder::with_id(TRAY_MENU_QUIT, native_label("tray.quit")).build(app)?;
+        MenuBuilder::new(app)
+            .item(&show_item)
+            .item(&separator)
+            .item(&quit_item)
+            .build()
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1078,6 +1119,13 @@ fn build_app_menu<R: tauri::Runtime>(
 
     #[cfg(target_os = "macos")]
     {
+        // Cmd+Q keeps the Cores (and every terminal) running; the second item
+        // ends them too. It goes through the renderer's dirty-file prompt.
+        let quit_end_sessions = MenuItemBuilder::with_id(
+            MENU_ID_QUIT_END_SESSIONS,
+            native_label("menu.quitEndSessions"),
+        )
+        .build(app)?;
         let app_menu = SubmenuBuilder::new(app, app.package_info().name.clone())
             .about_with_text(native_label("menu.about"), None)
             .separator()
@@ -1087,7 +1135,8 @@ fn build_app_menu<R: tauri::Runtime>(
             .hide_others_with_text(native_label("menu.hideOthers"))
             .show_all_with_text(native_label("menu.showAll"))
             .separator()
-            .quit_with_text(native_label("menu.quit"))
+            .quit_with_text(native_label("menu.quitKeepSessions"))
+            .item(&quit_end_sessions)
             .build()?;
 
         MenuBuilder::new(app)
@@ -1110,6 +1159,11 @@ fn build_app_menu<R: tauri::Runtime>(
 }
 
 fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
+    #[cfg(target_os = "macos")]
+    if event.id() == MENU_ID_QUIT_END_SESSIONS {
+        request_renderer_quit(app, true);
+        return;
+    }
     if event.id() == MENU_ID_CHECK_FOR_UPDATES {
         if let Err(error) = app.emit(MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED, ()) {
             log::error!("Failed to emit updater menu event: {}", error);
@@ -1468,6 +1522,82 @@ static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 // returns immediately via the check above.
 static CLEANUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// Set by "Quit and End All Terminals" right before the renderer closes the
+/// window: the graceful exit then shuts both Cores down as well. A plain quit
+/// leaves them running so the next launch adopts every terminal and agent.
+static QUIT_ENDS_CORE_SESSIONS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Per-Core budget for the "end all sessions" exit stage. The ACP Core's own
+/// shutdown bounds its catalog flush at 5s; this leaves room for the reply.
+const END_CORE_SESSION_BUDGET: std::time::Duration = std::time::Duration::from_secs(7);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuitRequestedPayload {
+    end_core_sessions: bool,
+}
+
+/// Hand a quit request to the renderer, which runs the dirty-file prompt and
+/// persistence flush before closing the window (a direct `app.exit` would
+/// bypass both). `end_core_sessions` travels with the request so the renderer
+/// can confirm it only once the user did not cancel.
+fn request_renderer_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>, end_core_sessions: bool) {
+    log::info!(
+        "[desktop-exit] operation=quit_requested end_core_sessions={end_core_sessions}"
+    );
+    let _ = app.emit_to(
+        "main",
+        TRAY_QUIT_REQUESTED_EVENT,
+        QuitRequestedPayload { end_core_sessions },
+    );
+}
+
+#[tauri::command]
+fn set_quit_ends_core_sessions(enabled: bool) {
+    QUIT_ENDS_CORE_SESSIONS.store(enabled, std::sync::atomic::Ordering::SeqCst);
+    log::info!("[desktop-exit] operation=quit_mode end_core_sessions={enabled}");
+}
+
+/// "Quit and End All Terminals": shut down both Cores before the GUI exits.
+/// ACP first, so agents stop before the terminals they may be driving.
+#[cfg(unix)]
+async fn end_core_sessions_on_exit(
+    acp_service: Option<&crate::core::AcpServiceHandle>,
+    terminal_service: Option<&crate::core::TerminalServiceHandle>,
+    deadline: tokio::time::Instant,
+) {
+    if let Some(client) = acp_service.and_then(|service| service.core_client()) {
+        let stage = deadline.min(tokio::time::Instant::now() + END_CORE_SESSION_BUDGET);
+        log_end_core_session("end_acp_core", tokio::time::timeout_at(stage, client.shutdown()).await);
+    }
+    if let Some(client) = terminal_service.and_then(|service| service.core_client()) {
+        let stage = deadline.min(tokio::time::Instant::now() + END_CORE_SESSION_BUDGET);
+        log_end_core_session(
+            "end_terminal_core",
+            tokio::time::timeout_at(stage, client.shutdown()).await,
+        );
+    }
+}
+
+#[cfg(unix)]
+fn log_end_core_session(
+    phase: &str,
+    outcome: Result<Result<(), crate::core::CoreError>, tokio::time::error::Elapsed>,
+) {
+    match outcome {
+        Ok(Ok(())) => {
+            log::info!("[desktop-exit] shutdown_phase={phase} stable_code=OK result=PASS")
+        }
+        Ok(Err(error)) => log::error!(
+            "[desktop-exit] shutdown_phase={phase} stable_code=CORE_SHUTDOWN_FAILED result=FAILED error={error}"
+        ),
+        Err(_) => log::error!(
+            "[desktop-exit] shutdown_phase={phase} stable_code=CORE_SHUTDOWN_FAILED result=TIMEOUT"
+        ),
+    }
+}
 
 /// Budget for the `RunEvent::Exit` reap. Deliberately tighter than the graceful
 /// path's five seconds: this runs inside the platform's terminate callback,
@@ -2050,6 +2180,12 @@ fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path
         ticker.tick().await;
         loop {
             ticker.tick().await;
+            // Once exit starts the GUI must not respawn a Core it is about to
+            // leave running — or, for "Quit and End All Terminals", one it is
+            // deliberately shutting down.
+            if CLEANUP_IN_PROGRESS.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
             supervise_one_core(
                 &app_handle,
                 &profile_root,
@@ -2997,11 +3133,11 @@ pub fn run() {
                                 // Let the renderer run the existing dirty-file
                                 // prompt and persistence flush before it destroys
                                 // the window. Direct app.exit(0) would bypass it.
-                                let _ = app_handle.emit_to(
-                                    "main",
-                                    TRAY_QUIT_REQUESTED_EVENT,
-                                    (),
-                                );
+                                request_renderer_quit(&app_handle, false);
+                            }
+                            #[cfg(unix)]
+                            id if id == TRAY_MENU_QUIT_END_SESSIONS => {
+                                request_renderer_quit(&app_handle, true);
                             }
                             _ => {}
                         }
@@ -3031,6 +3167,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Quit mode for "Quit and End All Terminals"
+            set_quit_ends_core_sessions,
             // Shell detection commands
             detect_shells,
             get_default_shell,
@@ -3529,6 +3667,16 @@ pub fn run() {
                     scheduled_tasks
                         .shutdown(deadline.saturating_duration_since(tokio::time::Instant::now()))
                         .await;
+                }
+
+                #[cfg(unix)]
+                if QUIT_ENDS_CORE_SESSIONS.load(std::sync::atomic::Ordering::SeqCst) {
+                    end_core_sessions_on_exit(
+                        acp_service.as_ref(),
+                        terminal_service.as_ref(),
+                        deadline,
+                    )
+                    .await;
                 }
 
                 let mut durability = if acp_service
