@@ -37,6 +37,7 @@ pub mod operation_policy;
 pub mod permissions;
 pub mod project_registry;
 pub mod projects_api;
+pub mod quick_terminal_api;
 pub mod router;
 pub mod scheduled_tasks_api;
 pub mod search_api;

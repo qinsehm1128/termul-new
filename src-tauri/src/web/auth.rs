@@ -143,6 +143,7 @@ pub enum RemoteRouteClass {
     Workspace,
     Conversation,
     ScheduledTask,
+    QuickTerminal,
     Recovery,
     AcpCatalog,
     AcpInstall,
@@ -168,6 +169,7 @@ impl RemoteRouteClass {
             Self::Workspace => "workspace",
             Self::Conversation => "conversation",
             Self::ScheduledTask => "scheduled_task",
+            Self::QuickTerminal => "quick_terminal",
             Self::Recovery => "recovery",
             Self::AcpCatalog => "acp_catalog",
             Self::AcpInstall => "acp_install",
@@ -231,6 +233,8 @@ impl RemoteRouteClass {
             Some(Self::Conversation)
         } else if path == "/scheduled-tasks" || path.starts_with("/scheduled-tasks/") {
             Some(Self::ScheduledTask)
+        } else if path == "/quick-terminals" || path.starts_with("/quick-terminals/") {
+            Some(Self::QuickTerminal)
         } else if path == "/acp/catalog" || path.starts_with("/acp/catalog/") {
             Some(Self::AcpCatalog)
         } else if path == "/acp/install" {
@@ -2331,6 +2335,7 @@ mod tests {
             ("/conversation-recovery/resolve", RemoteRouteClass::Recovery),
             ("/ws", RemoteRouteClass::AcpWebSocket),
             ("/terminal/ws", RemoteRouteClass::TerminalWebSocket),
+            ("/quick-terminals/open", RemoteRouteClass::QuickTerminal),
         ] {
             assert_eq!(RemoteRouteClass::from_path(path), Some(expected));
             assert!(!expected.as_str().contains("secret"));
