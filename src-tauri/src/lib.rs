@@ -1544,9 +1544,7 @@ struct QuitRequestedPayload {
 /// bypass both). `end_core_sessions` travels with the request so the renderer
 /// can confirm it only once the user did not cancel.
 fn request_renderer_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>, end_core_sessions: bool) {
-    log::info!(
-        "[desktop-exit] operation=quit_requested end_core_sessions={end_core_sessions}"
-    );
+    log::info!("[desktop-exit] operation=quit_requested end_core_sessions={end_core_sessions}");
     let _ = app.emit_to(
         "main",
         TRAY_QUIT_REQUESTED_EVENT,
@@ -1570,7 +1568,10 @@ async fn end_core_sessions_on_exit(
 ) {
     if let Some(client) = acp_service.and_then(|service| service.core_client()) {
         let stage = deadline.min(tokio::time::Instant::now() + END_CORE_SESSION_BUDGET);
-        log_end_core_session("end_acp_core", tokio::time::timeout_at(stage, client.shutdown()).await);
+        log_end_core_session(
+            "end_acp_core",
+            tokio::time::timeout_at(stage, client.shutdown()).await,
+        );
     }
     if let Some(client) = terminal_service.and_then(|service| service.core_client()) {
         let stage = deadline.min(tokio::time::Instant::now() + END_CORE_SESSION_BUDGET);
@@ -1915,7 +1916,6 @@ fn finalize_pending_core_update_plan(app_handle: &tauri::AppHandle, profile_root
                     })
             };
             assessments.push(crate::core::launcher::assess_required_core_identity(
-                role,
                 action,
                 identity_matches,
                 ack.active_resources,

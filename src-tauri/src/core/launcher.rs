@@ -258,7 +258,6 @@ pub(crate) enum LiveCoreReconcileDecision {
 /// mismatch replaces. `restart` replaces on mismatch. Unsupported actions fail
 /// closed.
 pub(crate) fn decide_live_core_reconciliation(
-    role: CoreRole,
     action: Option<DeclaredCoreAction>,
     identity_matches: bool,
     active_resources: u32,
@@ -292,13 +291,11 @@ pub(crate) enum RequiredCoreIdentityAssessment {
 /// replaced (`defer-if-active` + mismatched identity + active PTYs or agents).
 /// A matching Core is satisfied even when it is busy.
 pub(crate) fn assess_required_core_identity(
-    role: CoreRole,
     action: &str,
     identity_matches: bool,
     active_resources: u32,
 ) -> RequiredCoreIdentityAssessment {
     match decide_live_core_reconciliation(
-        role,
         Some(parse_declared_core_action(Some(action))),
         identity_matches,
         active_resources,
@@ -606,7 +603,6 @@ pub async fn ensure_core(
                 None => true,
             };
             let decision = decide_live_core_reconciliation(
-                role,
                 directive.as_ref().map(|directive| directive.action),
                 identity_matches,
                 ack.active_resources,
@@ -983,7 +979,7 @@ mod tests {
         assert!(!update_reconciliation_pending(CoreRole::AcpCore));
         assert!(!update_reconciliation_pending(CoreRole::TerminalCore));
         assert_eq!(
-            decide_live_core_reconciliation(CoreRole::TerminalCore, None, false, 4),
+            decide_live_core_reconciliation(None, false, 4),
             LiveCoreReconcileDecision::Adopt
         );
     }
@@ -1023,16 +1019,11 @@ mod tests {
         assert!(update_reconciliation_pending(CoreRole::AcpCore));
         assert!(update_reconciliation_pending(CoreRole::TerminalCore));
         assert_eq!(
-            decide_live_core_reconciliation(CoreRole::AcpCore, Some(acp.action), true, 2),
+            decide_live_core_reconciliation(Some(acp.action), true, 2),
             LiveCoreReconcileDecision::Adopt
         );
         assert_eq!(
-            decide_live_core_reconciliation(
-                CoreRole::TerminalCore,
-                Some(DeclaredCoreAction::Preserve),
-                false,
-                5
-            ),
+            decide_live_core_reconciliation(Some(DeclaredCoreAction::Preserve), false, 5),
             LiveCoreReconcileDecision::Replace
         );
     }
@@ -1129,7 +1120,6 @@ mod tests {
         for (role, action, identity_matches, active_resources, expected) in cases {
             assert_eq!(
                 decide_live_core_reconciliation(
-                    role,
                     action,
                     identity_matches,
                     active_resources
@@ -1142,36 +1132,33 @@ mod tests {
 
     #[test]
     fn finalization_requires_every_core_identity_and_not_terminal_idle_after_adopt() {
-        let satisfied =
-            assess_required_core_identity(CoreRole::TerminalCore, "defer-if-active", true, 3);
+        let satisfied = assess_required_core_identity("defer-if-active", true, 3);
         assert_eq!(satisfied, RequiredCoreIdentityAssessment::Satisfied);
         assert_eq!(
-            assess_required_core_identity(CoreRole::TerminalCore, "preserve", true, 6),
+            assess_required_core_identity("preserve", true, 6),
             RequiredCoreIdentityAssessment::Satisfied
         );
         assert_eq!(
-            assess_required_core_identity(CoreRole::AcpCore, "restart", true, 0),
+            assess_required_core_identity("restart", true, 0),
             RequiredCoreIdentityAssessment::Satisfied
         );
-        let deferred =
-            assess_required_core_identity(CoreRole::TerminalCore, "defer-if-active", false, 2);
+        let deferred = assess_required_core_identity("defer-if-active", false, 2);
         assert_eq!(deferred, RequiredCoreIdentityAssessment::Deferred);
-        let pending =
-            assess_required_core_identity(CoreRole::TerminalCore, "defer-if-active", false, 0);
+        let pending = assess_required_core_identity("defer-if-active", false, 0);
         assert_eq!(pending, RequiredCoreIdentityAssessment::PendingReplacement);
         assert_eq!(
-            assess_required_core_identity(CoreRole::AcpCore, "restart", false, 0),
+            assess_required_core_identity("restart", false, 0),
             RequiredCoreIdentityAssessment::PendingReplacement
         );
         assert_eq!(
-            assess_required_core_identity(CoreRole::AcpCore, "preserve", false, 1),
+            assess_required_core_identity("preserve", false, 1),
             RequiredCoreIdentityAssessment::PendingReplacement
         );
         assert_eq!(
-            assess_required_core_identity(CoreRole::AcpCore, "defer-if-active", false, 1),
+            assess_required_core_identity("defer-if-active", false, 1),
             RequiredCoreIdentityAssessment::Deferred
         );
-        let failed = assess_required_core_identity(CoreRole::AcpCore, "unsupported", true, 0);
+        let failed = assess_required_core_identity("unsupported", true, 0);
         assert_eq!(failed, RequiredCoreIdentityAssessment::FailedClosed);
 
         assert!(required_core_identities_allow_finalization(&[

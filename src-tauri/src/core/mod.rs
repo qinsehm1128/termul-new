@@ -29,8 +29,8 @@ pub use ipc::{
     CoreHelloAck, CoreRequest, CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 pub use launcher::{
-    classify_core_identity, ensure_core, profile_root_from_env, run_core_process,
-    core_replacement_is_safe, CoreIdentityState, CoreLaunchConfig, CoreProcess,
+    classify_core_identity, core_replacement_is_safe, ensure_core, profile_root_from_env,
+    run_core_process, CoreIdentityState, CoreLaunchConfig, CoreProcess,
 };
 pub use terminal::{
     run_terminal_core, OutputFrame, OutputKind, TerminalAttachSession, TerminalCoreClient,

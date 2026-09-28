@@ -2801,7 +2801,11 @@ mod tests {
             write_json_frame(&mut client, &hello).await.expect("hello");
             let _: super::super::ipc::CoreHelloAck =
                 read_json_frame(&mut client).await.expect("hello ack");
-            assert_eq!(events.receiver_count(), 1, "connection subscribes to events");
+            assert_eq!(
+                events.receiver_count(),
+                1,
+                "connection subscribes to events"
+            );
 
             drop(client);
             tokio::time::timeout(Duration::from_secs(5), connection)
