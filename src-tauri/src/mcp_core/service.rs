@@ -221,6 +221,8 @@ impl From<UpstreamStatus> for UpstreamStatusView {
 struct ServiceState {
     core: Arc<McpCore>,
     config_root: PathBuf,
+    /// Deleting this file (uninstall, a removed profile) stops the gateway.
+    settings_path: PathBuf,
     port: u16,
     started_at: u64,
     revision: RwLock<(Option<u64>, Option<String>)>,
@@ -434,6 +436,7 @@ async fn serve(settings_path: PathBuf) -> Result<(), ServeError> {
     let state = Arc::new(ServiceState {
         core: Arc::clone(&core),
         config_root,
+        settings_path: settings_path.clone(),
         port: settings.port,
         started_at: unix_millis(),
         revision: RwLock::new((None, None)),
@@ -507,6 +510,14 @@ async fn watch_config(state: Arc<ServiceState>) {
         tokio::select! {
             () = state.reload.notified() => {}
             () = tokio::time::sleep(CONFIG_POLL) => {
+                if !state.settings_path.exists() {
+                    log::info!(
+                        target: LOG_TARGET,
+                        "operation=mcp_service_stop reason=settings_removed stable_code=OK"
+                    );
+                    state.shutdown.cancel();
+                    return;
+                }
                 let current = stamp(&watched);
                 if current == seen {
                     continue;

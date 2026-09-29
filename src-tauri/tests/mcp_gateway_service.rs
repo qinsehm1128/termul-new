@@ -17,6 +17,10 @@ use serde_json::{json, Value};
 
 const TOKEN: &str = "se-mcp-service-test";
 
+/// Tests that start a gateway through a path which inherits this process's
+/// `SE_PROJECT_ROOT` take turns.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -283,6 +287,7 @@ async fn se_mcp_reaches_every_mode_through_the_settings_file() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn se_mcp_starts_the_gateway_when_nothing_listens() {
     let gateway = start_gateway(json!([fixture("alpha")]));
     wait_for(&gateway, |status| !upstream_states(status).is_empty()).await;
@@ -305,6 +310,9 @@ async fn se_mcp_starts_the_gateway_when_nothing_listens() {
 
     // The client finds nothing on the port and starts the recorded binary.
     // SE_PROJECT_ROOT is inherited by the gateway it starts.
+    let _env = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var(
         "SE_PROJECT_ROOT",
         gateway.root.path().canonicalize().unwrap(),
@@ -320,4 +328,75 @@ async fn se_mcp_starts_the_gateway_when_nothing_listens() {
         .bearer_auth(TOKEN)
         .send()
         .await;
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn the_desktop_handle_starts_the_gateway_and_moves_its_port() {
+    let _env = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().canonicalize().unwrap();
+    write_servers(&root_path, json!([fixture("alpha")]));
+    std::env::set_var("SE_PROJECT_ROOT", &root_path);
+    let settings_path = root_path.join(".se-manager").join("mcp-gateway.json");
+    let service = se_manager_lib::mcp_core::McpService::new(
+        settings_path.clone(),
+        env!("CARGO_BIN_EXE_se-manager").into(),
+        root_path.join("profile"),
+        None,
+    );
+    // The first start creates the settings (port, token) it then serves.
+    let first = free_port();
+    se_mcp_bridge::GatewaySettings {
+        schema_version: 1,
+        port: first,
+        token: TOKEN.into(),
+        executable: None,
+        profile_root: None,
+        log_file: None,
+    }
+    .save(&settings_path)
+    .unwrap();
+    let started = service.ensure_running().await.unwrap();
+    assert_eq!(started.port, first);
+    // Running already: a second call adopts it instead of starting another.
+    assert_eq!(service.ensure_running().await.unwrap().pid, started.pid);
+
+    let second = free_port();
+    let moved = service.set_port(second).await.unwrap();
+    assert_eq!(moved.port, second);
+    assert_ne!(moved.pid, started.pid);
+    assert!(std::net::TcpStream::connect(("127.0.0.1", first)).is_err());
+    assert_eq!(
+        se_mcp_bridge::GatewaySettings::load(&settings_path)
+            .unwrap()
+            .port,
+        second
+    );
+    let view = service.view().await;
+    assert_eq!(view.state, "running");
+
+    let _ = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{second}/control/shutdown"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await;
+}
+
+#[tokio::test]
+async fn the_gateway_exits_when_its_settings_file_is_removed() {
+    let mut gateway = start_gateway(json!([]));
+    wait_for(&gateway, |_| true).await;
+    std::fs::remove_file(&gateway.settings).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = gateway.child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "gateway kept running");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
