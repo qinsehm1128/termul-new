@@ -62,11 +62,8 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> i32 {
 fn parse(
     arguments: impl IntoIterator<Item = String>,
 ) -> Result<Option<bridge::BridgeOptions>, String> {
-    let mut mode = std::env::var("SE_MCP_MODE")
-        .ok()
-        .and_then(|value| Mode::parse(&value))
-        .unwrap_or(Mode::Grouped);
-    let mut settings_path = std::env::var_os("SE_MCP_CONFIG").map(PathBuf::from);
+    let mut mode = Mode::Grouped;
+    let mut settings_path: Option<PathBuf> = None;
     let mut url = None;
     let mut autostart = true;
     let mut arguments = arguments.into_iter();

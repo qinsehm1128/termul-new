@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, fmt, net::IpAddr, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 pub mod builtins;
+pub mod clients;
 pub mod config;
 pub mod domain;
 pub mod facade;

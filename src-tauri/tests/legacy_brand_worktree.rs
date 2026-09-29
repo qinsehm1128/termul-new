@@ -300,11 +300,8 @@ async fn legacy_mcp_registry_is_read_only_after_the_rename() {
 
     let _guard = brand::override_canonical(post_rename());
     let root = state.project_root.read().clone();
-    let Json(written) = mcp_servers_api::put_at(
-        root,
-        json!([{ "name": "filesystem", "command": "npx" }]),
-    )
-    .await;
+    let Json(written) =
+        mcp_servers_api::put_at(root, json!([{ "name": "filesystem", "command": "npx" }])).await;
     assert!(written.success, "mcp registry write: {written:?}");
 
     let after =

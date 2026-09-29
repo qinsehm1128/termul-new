@@ -3036,9 +3036,11 @@ pub fn run() {
                 std::env::current_exe(),
                 handle.path().app_data_dir(),
             ) {
-                let log_file = handle.path().app_log_dir().ok().map(|dir| {
-                    dir.join(format!("{}-mcp-gateway.log", logging::core_log_file_prefix()))
-                });
+                let log_file = handle
+                    .path()
+                    .app_log_dir()
+                    .ok()
+                    .map(|dir| crate::mcp_core::service::gateway_log_file(&dir));
                 let service = Arc::new(crate::mcp_core::McpService::new(
                     crate::mcp_core::gateway_settings_path(&root),
                     executable,
@@ -3434,6 +3436,10 @@ pub fn run() {
             commands::mcp_service_restart,
             commands::mcp_service_set_port,
             commands::mcp_service_server_tools,
+            commands::mcp_connection_info,
+            commands::mcp_clients_detect,
+            commands::mcp_client_sync,
+            commands::mcp_client_unsync,
             commands::begin_mcp_oauth,
             commands::complete_mcp_oauth,
             commands::cancel_mcp_oauth,

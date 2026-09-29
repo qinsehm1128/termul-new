@@ -2,6 +2,8 @@ import { Plug } from 'lucide-react'
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { McpControlPanel } from '@/components/settings/McpControlPanel'
+import { McpGatewayPanel } from '@/components/settings/McpGatewayPanel'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useMcpStore } from '@/stores/mcp-store'
 
 export default function McpPage(): React.JSX.Element {
@@ -22,6 +24,7 @@ export default function McpPage(): React.JSX.Element {
         <p className="mt-1 text-sm text-muted-foreground">{t('page.subtitle')}</p>
       </header>
       <div className="mx-auto w-full max-w-3xl space-y-6 p-6">
+        {isTauriContext() ? <McpGatewayPanel /> : null}
         <McpControlPanel />
       </div>
     </div>

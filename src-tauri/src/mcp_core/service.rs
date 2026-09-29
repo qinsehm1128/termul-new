@@ -69,6 +69,15 @@ pub fn gateway_settings_path(config_root: &Path) -> PathBuf {
         .join(file)
 }
 
+/// The gateway's log, next to the GUI and Core logs and sorted with them.
+/// Reads the brand seam: call it on the caller's own thread.
+pub fn gateway_log_file(log_dir: &Path) -> PathBuf {
+    log_dir.join(format!(
+        "{}-mcp-gateway.log",
+        crate::logging::core_log_file_prefix()
+    ))
+}
+
 pub fn default_port() -> u16 {
     let canary =
         crate::brand::canonical().workspace_dir == crate::brand::CANARY_CANONICAL.workspace_dir;
@@ -581,6 +590,20 @@ pub struct McpService {
     lifecycle: Mutex<()>,
 }
 
+/// How an agent reaches the gateway: the stdio command (recommended) or the
+/// HTTP endpoint with its bearer token.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Connection {
+    pub mode: &'static str,
+    pub bridge: super::clients::BridgeCommand,
+    pub bridge_available: bool,
+    pub url: String,
+    pub token: String,
+    pub port: u16,
+    pub settings_path: String,
+}
+
 /// What the MCP page shows about the gateway.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -612,6 +635,46 @@ impl McpService {
 
     pub fn settings_path(&self) -> &Path {
         &self.settings_path
+    }
+
+    /// `se-mcp` ships next to the app binary.
+    pub fn bridge_executable(&self) -> PathBuf {
+        self.executable
+            .with_file_name(format!("se-mcp{}", std::env::consts::EXE_SUFFIX))
+    }
+
+    /// The command an agent runs to reach this gateway in `mode`. Arguments
+    /// are left out when they are the client's defaults.
+    pub fn bridge_command(&self, mode: se_mcp_bridge::Mode) -> super::clients::BridgeCommand {
+        let mut args = Vec::new();
+        if mode != se_mcp_bridge::Mode::Grouped {
+            args.extend(["--mode".to_owned(), mode.as_str().to_owned()]);
+        }
+        if se_mcp_bridge::settings::default_path().as_deref() != Some(self.settings_path.as_path())
+        {
+            args.extend([
+                "--config".to_owned(),
+                self.settings_path.display().to_string(),
+            ]);
+        }
+        super::clients::BridgeCommand {
+            command: self.bridge_executable().display().to_string(),
+            args,
+        }
+    }
+
+    /// Everything the MCP page needs to show how an agent connects.
+    pub fn connection(&self, mode: se_mcp_bridge::Mode) -> io::Result<Connection> {
+        let settings = self.settings()?;
+        Ok(Connection {
+            mode: mode.as_str(),
+            bridge: self.bridge_command(mode),
+            bridge_available: self.bridge_executable().is_file(),
+            url: format!("{}{}", settings.base_url(), mode.path()),
+            token: settings.token,
+            port: settings.port,
+            settings_path: self.settings_path.display().to_string(),
+        })
     }
 
     pub fn settings(&self) -> io::Result<GatewaySettings> {

@@ -5628,6 +5628,95 @@ pub async fn mcp_service_set_port(
     })
 }
 
+fn parse_mcp_mode(mode: Option<&str>) -> Result<se_mcp_bridge::Mode, String> {
+    match mode {
+        None => Ok(se_mcp_bridge::Mode::Grouped),
+        Some(value) => {
+            se_mcp_bridge::Mode::parse(value).ok_or(format!("unknown MCP mode `{value}`"))
+        }
+    }
+}
+
+/// How an agent connects in `mode`: the `se-mcp` command and the HTTP
+/// endpoint. Contains the bearer token; never log the result.
+#[tauri::command]
+pub async fn mcp_connection_info(
+    mode: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::service::Connection>, String> {
+    let mode = match parse_mcp_mode(mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
+    };
+    Ok(match mcp_service.connection(mode) {
+        Ok(connection) => IpcResult::success(connection),
+        Err(error) => IpcResult::error(error.to_string(), "MCP_SERVICE_SETTINGS_FAILED"),
+    })
+}
+
+/// Local AI clients and whether each already launches `se-mcp` in `mode`.
+#[tauri::command]
+pub async fn mcp_clients_detect(
+    mode: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<Vec<crate::mcp_core::clients::DetectedClient>>, String> {
+    let mode = match parse_mcp_mode(mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
+    };
+    let Some(home) = se_mcp_bridge::settings::home_dir() else {
+        return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
+    };
+    let bridge = mcp_service.bridge_command(mode);
+    Ok(IpcResult::success(
+        tokio::task::spawn_blocking(move || crate::mcp_core::clients::detect(&home, &bridge))
+            .await
+            .unwrap_or_default(),
+    ))
+}
+
+/// Write (or refresh) the `se-mcp` entry into one client's MCP config.
+#[tauri::command]
+pub async fn mcp_client_sync(
+    id: String,
+    mode: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::clients::SyncOutcome>, String> {
+    let mode = match parse_mcp_mode(mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
+    };
+    let Some(home) = se_mcp_bridge::settings::home_dir() else {
+        return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
+    };
+    let bridge = mcp_service.bridge_command(mode);
+    let result =
+        tokio::task::spawn_blocking(move || crate::mcp_core::clients::sync(&home, &id, &bridge))
+            .await
+            .unwrap_or_else(|_| Err("client sync task failed".into()));
+    Ok(match result {
+        Ok(outcome) => IpcResult::success(outcome),
+        Err(error) => IpcResult::error(error, "MCP_CLIENT_SYNC_FAILED"),
+    })
+}
+
+/// Remove the `se-mcp` entry from one client's MCP config.
+#[tauri::command]
+pub async fn mcp_client_unsync(
+    id: String,
+) -> Result<IpcResult<crate::mcp_core::clients::SyncOutcome>, String> {
+    let Some(home) = se_mcp_bridge::settings::home_dir() else {
+        return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
+    };
+    let result = tokio::task::spawn_blocking(move || crate::mcp_core::clients::unsync(&home, &id))
+        .await
+        .unwrap_or_else(|_| Err("client sync task failed".into()));
+    Ok(match result {
+        Ok(outcome) => IpcResult::success(outcome),
+        Err(error) => IpcResult::error(error, "MCP_CLIENT_SYNC_FAILED"),
+    })
+}
+
 /// Tools of one aggregated server, as the gateway sees them.
 #[tauri::command]
 pub async fn mcp_service_server_tools(

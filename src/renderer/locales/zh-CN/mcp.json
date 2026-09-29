@@ -1,11 +1,11 @@
 {
   "page": {
     "title": "MCP",
-    "subtitle": "项目级内置能力与上游 MCP 服务器。",
-    "builtInsTitle": "Termul 能力",
-    "builtInsDescription": "Termul 通过统一 MCP 路由暴露的内置工具。",
+    "subtitle": "全局 MCP 网关：内置能力与上游 MCP 服务器，供所有 Agent 共用。",
+    "builtInsTitle": "内置能力",
+    "builtInsDescription": "Se Manager 自身通过网关提供的工具。",
     "upstreamsTitle": "上游 MCP 服务器",
-    "upstreamsDescription": "已启用的服务器由项目 MCP 路由聚合。",
+    "upstreamsDescription": "已启用的服务器由网关聚合。",
     "statusTitle": "运行状态",
     "statusDescription": "修订号与上游数量。不会显示密钥。",
     "revision": "修订号",
@@ -58,7 +58,7 @@
   },
   "settings": {
     "title": "上游 MCP 服务器",
-    "description": "已启用的服务器由项目 MCP 路由聚合。",
+    "description": "已启用的服务器由网关聚合。",
     "addServer": "添加服务器",
     "importExport": {
       "import": "导入 JSON",
@@ -124,7 +124,9 @@
       "saveOne": "无法保存 MCP 服务器，已恢复之前的设置。",
       "update": "无法更新 MCP 服务器，已恢复之前的设置。",
       "delete": "无法删除 MCP 服务器，已恢复之前的设置。"
-    }
+    },
+    "routeName": "Agent 通过网关使用的名称",
+    "gatewayFailed": "网关连接失败：{{error}}"
   },
   "validation": {
     "nameRequired": "名称为必填项。",
@@ -164,5 +166,59 @@
     "copied": "MCP 配置已复制",
     "copyFailed": "读取 MCP 配置失败",
     "unavailable": "浏览器端拿不到 MCP 配置：它指向宿主机的可执行文件与状态目录"
+  },
+  "gateway": {
+    "title": "连接 Agent",
+    "description": "一个网关聚合下面所有 MCP 服务器。Agent 只需添加一个 se-mcp 条目即可使用全部服务器；关闭 Se Manager 后网关仍会继续运行。",
+    "running": "运行中 · v{{version}}",
+    "stopped": "未运行",
+    "error": "不可用",
+    "counts": "已连接 {{connected}} · 失败 {{failed}} · 启动中 {{connecting}}",
+    "start": "启动",
+    "restart": "重启",
+    "configError": "MCP 配置无法应用：{{error}}",
+    "port": "端口",
+    "applyPort": "应用",
+    "recordedIn": "记录在 {{path}}",
+    "modeTitle": "Agent 看到的工具形式",
+    "modes": {
+      "grouped": {
+        "name": "分组（推荐）",
+        "description": "每个服务器两个工具：<服务器>_tool_list 和 <服务器>_tool_call。工具名即服务器，工具列表小。"
+      },
+      "entry": {
+        "name": "入口",
+        "description": "固定四个工具（list_mcp_servers、list_mcp_tools、call_mcp_tool、get_mcp_server_status），与 mcp-router 相同。工具列表最小，多一步。"
+      },
+      "direct": {
+        "name": "直连",
+        "description": "所有服务器的所有工具平铺为 <服务器>_<工具>。无需额外步骤，工具列表最大。"
+      }
+    },
+    "bridgeMissing": "在 {{path}} 未找到 se-mcp。开发构建需先执行 `cargo build --bin se-mcp`。",
+    "clients": {
+      "title": "本机的 AI 客户端",
+      "connect": "连接",
+      "update": "更新",
+      "remove": "移除",
+      "synced": "{{name}} 已接入 Se MCP 网关，重启该客户端后生效。",
+      "removed": "已从 {{name}} 移除 Se MCP 网关。",
+      "state": {
+        "connected": "已连接",
+        "stale": "需更新",
+        "notConnected": "未连接",
+        "notInstalled": "未安装"
+      }
+    },
+    "manual": {
+      "title": "手动配置",
+      "json": "mcpServers JSON（Claude Code、Claude Desktop、Cursor、Gemini CLI 等）",
+      "toml": "Codex config.toml",
+      "http": "Streamable HTTP（包含网关 token）",
+      "httpNote": "HTTP 条目内含 token，端口变化后会失效；推荐使用 se-mcp，它会从设置文件读取端口和 token。",
+      "copy": "复制",
+      "copied": "已复制",
+      "copyFailed": "复制失败"
+    }
   }
 }

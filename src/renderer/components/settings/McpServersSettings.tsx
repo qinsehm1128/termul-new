@@ -37,6 +37,7 @@ import { downloadMcpJsonExport, prepareMcpJsonImport } from '@/lib/mcp-json-tran
 import { listen } from '@/lib/tauri-event'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
+import { useMcpGatewayStore } from '@/stores/mcp-gateway-store'
 import { useMcpStore } from '@/stores/mcp-store'
 
 type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer }
@@ -197,6 +198,7 @@ export function McpServersSettings(): React.JSX.Element {
   const reloadMcpConfig = useMcpStore((state) => state.load)
   const reloadMcpStatus = useMcpStore((state) => state.loadStatus)
   const mcpProbeStatus = useMcpStore((state) => state.probeStatus)
+  const gatewayUpstreams = useMcpGatewayStore((state) => state.view?.status?.upstreams)
   const mcpProbeError = useMcpStore((state) => state.probeError)
   const mcpTools = useMcpStore((state) => state.tools)
   const mcpProbing = useMcpStore((state) => state.probing)
@@ -504,7 +506,15 @@ export function McpServersSettings(): React.JSX.Element {
       ) : (
         <div className="divide-y divide-border rounded-lg border border-border">
           {servers.map((server) => {
-            const probeStatus = mcpProbeStatus[server.id]
+            // The gateway's own connection state wins over a manual probe:
+            // it is what agents actually get.
+            const gateway = gatewayUpstreams?.find((item) => item.id === server.id)
+            const probeStatus =
+              gateway?.state === 'connected'
+                ? 'connected'
+                : gateway?.state === 'failed'
+                  ? 'disconnected'
+                  : mcpProbeStatus[server.id]
             const probing = Boolean(mcpProbing[server.id])
             const tools = mcpTools[server.id]
             const isOpen = Boolean(expandedTools[server.id])
@@ -550,6 +560,14 @@ export function McpServersSettings(): React.JSX.Element {
                     }
                   />
                   <span className="min-w-0 shrink truncate text-sm font-medium">{server.name}</span>
+                  {gateway && gateway.name !== server.name ? (
+                    <span
+                      className="shrink-0 font-mono text-3xs text-muted-foreground"
+                      title={t('settings.routeName')}
+                    >
+                      {gateway.name}
+                    </span>
+                  ) : null}
                   <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-3xs font-medium uppercase text-muted-foreground">
                     {transportOf(server)}
                   </span>
@@ -616,6 +634,11 @@ export function McpServersSettings(): React.JSX.Element {
                     <span className="sr-only">{t('settings.delete', { name: server.name })}</span>
                   </Button>
                 </div>
+                {gateway?.state === 'failed' && gateway.error ? (
+                  <p className="px-3 pb-2 font-mono text-3xs text-destructive/80">
+                    {t('settings.gatewayFailed', { error: gateway.error })}
+                  </p>
+                ) : null}
                 <CollapsibleContent className="px-3 pb-2">
                   {tools && tools.length > 0 ? (
                     <ul className="space-y-0.5">

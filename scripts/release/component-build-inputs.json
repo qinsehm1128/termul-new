@@ -34,6 +34,7 @@
       "src-tauri/src/commands.rs",
       "src-tauri/crates/se-pty",
       "src-tauri/crates/se-quick-terminal",
+      "src-tauri/crates/se-mcp-bridge",
       "src-tauri/src/quick_terminal.rs",
       "src-tauri/src/mcp_core",
       "src-tauri/src/skills",

@@ -1,11 +1,11 @@
 {
   "page": {
     "title": "MCP",
-    "subtitle": "Project-scoped built-in capabilities and upstream MCP servers.",
-    "builtInsTitle": "Termul capabilities",
-    "builtInsDescription": "Built-in tools Termul exposes through the unified MCP router.",
+    "subtitle": "Global MCP gateway: built-in capabilities and upstream MCP servers, shared by every agent.",
+    "builtInsTitle": "Built-in capabilities",
+    "builtInsDescription": "Tools Se Manager itself serves through the gateway.",
     "upstreamsTitle": "Upstream MCP servers",
-    "upstreamsDescription": "Enabled servers are aggregated by the project MCP router.",
+    "upstreamsDescription": "Enabled servers are aggregated by the gateway.",
     "statusTitle": "Runtime status",
     "statusDescription": "Revision and upstream counts. Secrets are never shown.",
     "revision": "Revision",
@@ -58,7 +58,7 @@
   },
   "settings": {
     "title": "Upstream MCP servers",
-    "description": "Enabled servers are aggregated by the project MCP router.",
+    "description": "Enabled servers are aggregated by the gateway.",
     "addServer": "Add server",
     "importExport": {
       "import": "Import JSON",
@@ -124,7 +124,9 @@
       "saveOne": "Could not save the MCP server. Your previous settings were restored.",
       "update": "Could not update the MCP server. Your previous setting was restored.",
       "delete": "Could not delete the MCP server. Your previous settings were restored."
-    }
+    },
+    "routeName": "Name agents use through the gateway",
+    "gatewayFailed": "Gateway could not connect: {{error}}"
   },
   "validation": {
     "nameRequired": "Name is required.",
@@ -164,5 +166,59 @@
     "copied": "MCP config copied",
     "copyFailed": "Could not read the MCP config",
     "unavailable": "The MCP config is not available in the browser: it names the host's executable and state directory"
+  },
+  "gateway": {
+    "title": "Connect agents",
+    "description": "One gateway serves every MCP server below. An agent adds a single se-mcp entry and reaches all of them; the gateway keeps running after Se Manager closes.",
+    "running": "Running · v{{version}}",
+    "stopped": "Not running",
+    "error": "Unavailable",
+    "counts": "{{connected}} connected · {{failed}} failed · {{connecting}} starting",
+    "start": "Start",
+    "restart": "Restart",
+    "configError": "The MCP configuration could not be applied: {{error}}",
+    "port": "Port",
+    "applyPort": "Apply",
+    "recordedIn": "Recorded in {{path}}",
+    "modeTitle": "How agents see the servers",
+    "modes": {
+      "grouped": {
+        "name": "Grouped (recommended)",
+        "description": "Two tools per server: <server>_tool_list and <server>_tool_call. The tool name already names the server; small tool list."
+      },
+      "entry": {
+        "name": "Entry",
+        "description": "Four fixed tools (list_mcp_servers, list_mcp_tools, call_mcp_tool, get_mcp_server_status), same as mcp-router. Smallest tool list, one extra step."
+      },
+      "direct": {
+        "name": "Direct",
+        "description": "Every tool of every server as <server>_<tool>. No extra step, largest tool list."
+      }
+    },
+    "bridgeMissing": "se-mcp was not found at {{path}}. Development builds need `cargo build --bin se-mcp`.",
+    "clients": {
+      "title": "AI clients on this computer",
+      "connect": "Connect",
+      "update": "Update",
+      "remove": "Remove",
+      "synced": "{{name}} now uses the Se MCP gateway. Restart it to load the change.",
+      "removed": "Removed the Se MCP gateway from {{name}}.",
+      "state": {
+        "connected": "Connected",
+        "stale": "Needs update",
+        "notConnected": "Not connected",
+        "notInstalled": "Not installed"
+      }
+    },
+    "manual": {
+      "title": "Manual setup",
+      "json": "mcpServers JSON (Claude Code, Claude Desktop, Cursor, Gemini CLI, …)",
+      "toml": "Codex config.toml",
+      "http": "Streamable HTTP (contains the gateway token)",
+      "httpNote": "The HTTP entry carries the token and breaks when the port changes; prefer se-mcp, which reads both from the settings file.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "copyFailed": "Could not copy"
+    }
   }
 }

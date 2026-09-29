@@ -96,8 +96,11 @@ tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: MCP client configs (e.g. ~/.claude.json) are rewritten
+# with their keys left in the user's order.
+serde_json = { version = "1", features = ["preserve_order"] }
 toml = "0.8"
+toml_edit = "0.25"
 chrono = "0.4"
 
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
