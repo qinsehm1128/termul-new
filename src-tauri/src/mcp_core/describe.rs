@@ -21,7 +21,6 @@ use crate::ai_channels::{self, AiError, ChatRequest};
 pub const MAX_STORED_CHARS: usize = 2000;
 const MAX_TOOL_DESCRIPTION_CHARS: usize = 10_000;
 const MAX_PROMPT_CHARS: usize = 20_000;
-const ANSWER_TOKENS: std::ops::RangeInclusive<u32> = 64..=64_000;
 const MIN_CHARS: usize = 20;
 
 /// Replaced in the prompt by [`DescribeSettings::max_chars`].
@@ -42,8 +41,6 @@ pub struct DescribeSettings {
     pub max_chars: usize,
     /// Each tool description in the prompt is cut to this; 0 keeps it whole.
     pub tool_description_chars: usize,
-    /// Output budget of one answer (reasoning models spend part of it).
-    pub max_answer_tokens: u32,
 }
 
 impl Default for DescribeSettings {
@@ -52,7 +49,6 @@ impl Default for DescribeSettings {
             prompt: DEFAULT_PROMPT.to_owned(),
             max_chars: 300,
             tool_description_chars: 0,
-            max_answer_tokens: 1024,
         }
     }
 }
@@ -75,13 +71,6 @@ impl DescribeSettings {
         if self.tool_description_chars > MAX_TOOL_DESCRIPTION_CHARS {
             return Err(format!(
                 "the tool description length must be 0–{MAX_TOOL_DESCRIPTION_CHARS} characters"
-            ));
-        }
-        if !ANSWER_TOKENS.contains(&self.max_answer_tokens) {
-            return Err(format!(
-                "the answer budget must be {}–{} tokens",
-                ANSWER_TOKENS.start(),
-                ANSWER_TOKENS.end()
             ));
         }
         Ok(())
@@ -184,7 +173,7 @@ pub async fn describe(
         ChatRequest {
             system: &system,
             user: &user,
-            max_tokens: settings.max_answer_tokens,
+            max_tokens: None,
         },
     )
     .await?;
@@ -268,12 +257,43 @@ mod tests {
             prompt: "Describe it in {maxChars} characters.".into(),
             max_chars: 120,
             tool_description_chars: 80,
-            max_answer_tokens: 2048,
         };
         save_settings(root.path(), &settings).unwrap();
         let loaded = load_settings(root.path()).unwrap();
         assert_eq!(loaded, settings);
         assert_eq!(loaded.system_prompt(), "Describe it in 120 characters.");
+    }
+
+    #[tokio::test]
+    async fn describing_sends_the_settings_and_leaves_the_answer_uncapped() {
+        use crate::ai_channels::{client::tests, AiApi};
+        let (base, seen) = tests::provider(vec![(
+            "/v1/chat/completions",
+            serde_json::json!({"choices": [{"message": {"content": "查询库文档。\n适合 API 问题。"}}]}),
+        )])
+        .await;
+        let resolved = ai_channels::Resolved {
+            channel: tests::channel(AiApi::OpenaiCompletions, format!("{base}/v1")),
+            key: "k".into(),
+            model: "m".into(),
+        };
+        let settings = DescribeSettings {
+            prompt: "At most {maxChars}.".into(),
+            max_chars: 20,
+            tool_description_chars: 0,
+        };
+        let tools = [("query".to_owned(), "Query docs".to_owned())];
+        let text = describe(&resolved, &settings, "context7", "Chinese", &tools)
+            .await
+            .unwrap();
+        assert_eq!(text, "查询库文档。 适合 API 问题。");
+        let (_, _, body) = seen.lock().unwrap()[0].clone();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+        assert_eq!(body["messages"][0]["content"], "At most 20.");
+        assert!(body["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("- query: Query docs"));
     }
 
     #[test]
@@ -295,10 +315,6 @@ mod tests {
             },
             DescribeSettings {
                 tool_description_chars: MAX_TOOL_DESCRIPTION_CHARS + 1,
-                ..base.clone()
-            },
-            DescribeSettings {
-                max_answer_tokens: 10,
                 ..base.clone()
             },
         ] {

@@ -245,8 +245,6 @@
     "maxCharsHint": "字符数，20–2000，超出会截断。",
     "toolDescriptionChars": "工具说明长度",
     "toolDescriptionCharsHint": "提示词里每个工具说明的字符数，0 表示完整保留。",
-    "maxAnswerTokens": "回答预算",
-    "maxAnswerTokensHint": "输出 token 数，64–64000；推理模型需要更多。",
     "save": "保存设置",
     "reset": "恢复默认",
     "saved": "生成设置已保存。",

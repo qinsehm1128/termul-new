@@ -93,7 +93,6 @@ export interface McpDescribeSettings {
   maxChars: number
   /** Each tool description in the prompt is cut to this; 0 keeps it whole. */
   toolDescriptionChars: number
-  maxAnswerTokens: number
 }
 
 /** Longest description stored, typed or generated. */

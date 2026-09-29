@@ -5834,7 +5834,7 @@ pub async fn ai_channel_test(
                 crate::ai_channels::ChatRequest {
                     system: "You are a connectivity check.",
                     user: "Reply with the single word OK.",
-                    max_tokens: 64,
+                    max_tokens: Some(64),
                 },
             )
             .await

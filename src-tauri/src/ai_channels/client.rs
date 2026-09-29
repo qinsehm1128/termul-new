@@ -49,8 +49,13 @@ impl std::error::Error for AiError {}
 pub struct ChatRequest<'a> {
     pub system: &'a str,
     pub user: &'a str,
-    pub max_tokens: u32,
+    /// Output cap; `None` leaves it to the provider where the API allows.
+    pub max_tokens: Option<u32>,
 }
+
+/// Anthropic Messages requires `max_tokens`; this is what an uncapped
+/// request sends, low enough for every Claude model to accept.
+const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// Trim trailing slashes and accept only http(s).
 pub fn normalize_base_url(base_url: &str) -> Result<String, String> {
@@ -134,31 +139,35 @@ pub async fn complete(
     let post = |url: String| request(&client, channel, key, reqwest::Method::POST, url);
     let text = match channel.api {
         AiApi::OpenaiCompletions => {
-            let body = json!({
+            let mut body = json!({
                 "model": model,
-                "max_tokens": chat.max_tokens,
                 "messages": [
                     { "role": "system", "content": chat.system },
                     { "role": "user", "content": chat.user }
                 ]
             });
+            if let Some(max_tokens) = chat.max_tokens {
+                body["max_tokens"] = json!(max_tokens);
+            }
             let reply = send(post(format!("{base}/chat/completions")).json(&body)).await?;
             completions_text(&reply)
         }
         AiApi::OpenaiResponses => {
-            let body = json!({
+            let mut body = json!({
                 "model": model,
                 "instructions": chat.system,
-                "input": chat.user,
-                "max_output_tokens": chat.max_tokens
+                "input": chat.user
             });
+            if let Some(max_tokens) = chat.max_tokens {
+                body["max_output_tokens"] = json!(max_tokens);
+            }
             let reply = send(post(format!("{base}/responses")).json(&body)).await?;
             responses_text(&reply)
         }
         AiApi::AnthropicMessages => {
             let body = json!({
                 "model": model,
-                "max_tokens": chat.max_tokens,
+                "max_tokens": chat.max_tokens.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS),
                 "system": chat.system,
                 "messages": [{ "role": "user", "content": chat.user }]
             });
@@ -256,7 +265,7 @@ fn anthropic_text(reply: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use axum::{
         http::{HeaderMap, StatusCode, Uri},
@@ -269,7 +278,7 @@ mod tests {
     type Seen = Arc<Mutex<Vec<(String, HeaderMap, Value)>>>;
 
     /// A provider that records each request and answers by path.
-    async fn provider(answers: Vec<(&'static str, Value)>) -> (String, Seen) {
+    pub(crate) async fn provider(answers: Vec<(&'static str, Value)>) -> (String, Seen) {
         let seen: Seen = Arc::default();
         let record = Arc::clone(&seen);
         let answers = Arc::new(answers);
@@ -294,7 +303,7 @@ mod tests {
         (format!("http://{address}"), seen)
     }
 
-    fn channel(api: AiApi, base_url: String) -> AiChannel {
+    pub(crate) fn channel(api: AiApi, base_url: String) -> AiChannel {
         AiChannel {
             id: "c".into(),
             name: "c".into(),
@@ -310,7 +319,14 @@ mod tests {
         ChatRequest {
             system: "be brief",
             user: "hi",
-            max_tokens: 64,
+            max_tokens: Some(64),
+        }
+    }
+
+    fn uncapped() -> ChatRequest<'static> {
+        ChatRequest {
+            max_tokens: None,
+            ..chat()
         }
     }
 
@@ -330,6 +346,13 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["content"], "hi");
         assert_eq!(body["model"], "gpt-5");
+        assert_eq!(body["max_tokens"], 64);
+
+        complete(&channel, "sk-1", "gpt-5", uncapped())
+            .await
+            .unwrap();
+        let (_, _, body) = seen.lock().unwrap()[1].clone();
+        assert!(body.get("max_tokens").is_none(), "{body}");
     }
 
     #[tokio::test]
@@ -351,6 +374,12 @@ mod tests {
         assert_eq!(body["instructions"], "be brief");
         assert_eq!(body["input"], "hi");
         assert_eq!(body["max_output_tokens"], 64);
+
+        complete(&channel, "sk-1", "gpt-5", uncapped())
+            .await
+            .unwrap();
+        let (_, _, body) = seen.lock().unwrap()[1].clone();
+        assert!(body.get("max_output_tokens").is_none(), "{body}");
     }
 
     #[tokio::test]
@@ -375,6 +404,14 @@ mod tests {
         assert!(headers.get("authorization").is_none());
         assert_eq!(body["system"], "be brief");
         assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["max_tokens"], 64);
+
+        let channel = channel(AiApi::AnthropicMessages, base);
+        complete(&channel, "ak-1", "claude-sonnet-5", uncapped())
+            .await
+            .unwrap();
+        let (_, _, body) = seen.lock().unwrap().last().unwrap().clone();
+        assert_eq!(body["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
     }
 
     #[tokio::test]

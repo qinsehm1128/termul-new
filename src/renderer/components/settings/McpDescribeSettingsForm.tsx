@@ -13,27 +13,21 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { type McpDescribeSettings, mcpGatewayApi } from '@/lib/mcp-gateway-api'
 
-type NumberField = 'maxChars' | 'toolDescriptionChars' | 'maxAnswerTokens'
+type NumberField = 'maxChars' | 'toolDescriptionChars'
 
-const NUMBER_FIELDS: readonly NumberField[] = [
-  'maxChars',
-  'toolDescriptionChars',
-  'maxAnswerTokens'
-]
+const NUMBER_FIELDS: readonly NumberField[] = ['maxChars', 'toolDescriptionChars']
 
 interface Draft {
   prompt: string
   maxChars: string
   toolDescriptionChars: string
-  maxAnswerTokens: string
 }
 
 function toDraft(settings: McpDescribeSettings): Draft {
   return {
     prompt: settings.prompt,
     maxChars: String(settings.maxChars),
-    toolDescriptionChars: String(settings.toolDescriptionChars),
-    maxAnswerTokens: String(settings.maxAnswerTokens)
+    toolDescriptionChars: String(settings.toolDescriptionChars)
   }
 }
 
@@ -41,8 +35,7 @@ function fromDraft(draft: Draft): McpDescribeSettings {
   return {
     prompt: draft.prompt,
     maxChars: Number(draft.maxChars),
-    toolDescriptionChars: Number(draft.toolDescriptionChars),
-    maxAnswerTokens: Number(draft.maxAnswerTokens)
+    toolDescriptionChars: Number(draft.toolDescriptionChars)
   }
 }
 
@@ -103,7 +96,7 @@ export function McpDescribeSettingsForm(): React.JSX.Element {
               />
               <p className="text-2xs text-muted-foreground">{t('describeSettings.promptHint')}</p>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               {NUMBER_FIELDS.map((field) => (
                 <div key={field} className="space-y-1">
                   <label

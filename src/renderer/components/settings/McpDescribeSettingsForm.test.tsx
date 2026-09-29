@@ -15,8 +15,7 @@ vi.mock('@/lib/mcp-gateway-api', async (importOriginal) => ({
 const defaults: McpDescribeSettings = {
   prompt: 'Default prompt, at most {maxChars} characters.',
   maxChars: 300,
-  toolDescriptionChars: 0,
-  maxAnswerTokens: 1024
+  toolDescriptionChars: 0
 }
 
 async function open(): Promise<void> {
@@ -42,14 +41,12 @@ describe('McpDescribeSettingsForm', () => {
     fireEvent.change(screen.getByLabelText('Tool description length'), {
       target: { value: '1a50' }
     })
-    fireEvent.change(screen.getByLabelText('Answer budget'), { target: { value: '4096' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
     await waitFor(() =>
       expect(api.putDescribeSettings).toHaveBeenCalledWith({
         prompt: 'Say it in {maxChars}',
         maxChars: 500,
-        toolDescriptionChars: 150,
-        maxAnswerTokens: 4096
+        toolDescriptionChars: 150
       })
     )
     expect(toast.success).toHaveBeenCalled()

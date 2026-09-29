@@ -245,8 +245,6 @@
     "maxCharsHint": "Characters, 20–2000. Longer answers are cut.",
     "toolDescriptionChars": "Tool description length",
     "toolDescriptionCharsHint": "Characters per tool in the prompt; 0 keeps them whole.",
-    "maxAnswerTokens": "Answer budget",
-    "maxAnswerTokensHint": "Output tokens, 64–64000; reasoning models need more.",
     "save": "Save settings",
     "reset": "Restore defaults",
     "saved": "Generation settings saved.",
