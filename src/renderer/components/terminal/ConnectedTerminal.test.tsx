@@ -1222,6 +1222,30 @@ describe('ConnectedTerminal', () => {
     expect(vi.mocked(terminalApi).spawn).not.toHaveBeenCalled()
   })
 
+  it('reports its fitted grid, once, when the caller starts the PTY itself', async () => {
+    const onInitialGrid = vi.fn()
+    render(<ConnectedTerminal autoSpawn={false} onInitialGrid={onInitialGrid} />)
+
+    await vi.waitFor(() => expect(onInitialGrid).toHaveBeenCalledWith(80, 24))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(onInitialGrid).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(terminalApi).spawn).not.toHaveBeenCalled()
+  })
+
+  it('does not report a grid for a terminal that is already attached', async () => {
+    const onInitialGrid = vi.fn()
+    render(
+      <ConnectedTerminal
+        terminalId="terminal-live"
+        autoSpawn={false}
+        onInitialGrid={onInitialGrid}
+      />
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(onInitialGrid).not.toHaveBeenCalled()
+  })
+
   it('should set up data listener BEFORE spawn to avoid race condition', async () => {
     // Track the order of calls
     const callOrder: string[] = []

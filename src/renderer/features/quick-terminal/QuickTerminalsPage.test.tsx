@@ -15,12 +15,23 @@ vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve(
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => true }))
 
 const terminalProps = vi.hoisted(() => ({ current: [] as Array<Record<string, unknown>> }))
-vi.mock('@/components/terminal/ConnectedTerminal', () => ({
-  ConnectedTerminal: (props: Record<string, unknown>) => {
-    terminalProps.current.push(props)
-    return <div data-testid="connected-terminal" data-pty={String(props.terminalId)} />
+/** The grid the mocked terminal "fits" to before a shell is attached. */
+const FITTED = { cols: 132, rows: 41 }
+vi.mock('@/components/terminal/ConnectedTerminal', async () => {
+  const { useEffect } = await vi.importActual<typeof import('react')>('react')
+  return {
+    ConnectedTerminal: (props: Record<string, unknown>) => {
+      terminalProps.current.push(props)
+      const onInitialGrid = props.onInitialGrid as
+        | ((cols: number, rows: number) => void)
+        | undefined
+      useEffect(() => {
+        if (!props.terminalId) onInitialGrid?.(FITTED.cols, FITTED.rows)
+      }, [])
+      return <div data-testid="connected-terminal" data-pty={String(props.terminalId)} />
+    }
   }
-}))
+})
 
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -96,8 +107,9 @@ describe('QuickTerminalsPage', () => {
       })
     renderAt(`/quick-terminals/${id}`)
 
-    const first = await screen.findByTestId('connected-terminal')
-    expect(first.dataset.pty).toBe('pty-1')
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-1'))
+    // The shell starts at the grid it is shown at, not at a placeholder size.
+    expect(api.open).toHaveBeenNthCalledWith(1, id, FITTED.cols, FITTED.rows)
     const props = terminalProps.current.at(-1) ?? {}
     expect(props).toMatchObject({ terminalId: 'pty-1', storeTerminalId: 'pty-1', autoSpawn: false })
 
@@ -108,6 +120,7 @@ describe('QuickTerminalsPage', () => {
 
     await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-2'))
     expect(api.open).toHaveBeenCalledTimes(2)
+    expect(api.open).toHaveBeenNthCalledWith(2, id, FITTED.cols, FITTED.rows)
   })
 
   it('lists again when the host reports new quick terminals', async () => {

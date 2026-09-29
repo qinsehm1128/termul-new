@@ -11,11 +11,12 @@ const ConnectedTerminal = lazy(() =>
   }))
 )
 
-/** The host resizes the PTY to the real viewport once the terminal mounts. */
-const INITIAL_COLS = 80
-const INITIAL_ROWS = 24
-
 type Phase =
+  // A throwaway terminal is mounted to learn the viewport's grid, so the shell
+  // starts at the size it is shown at. Starting it smaller and resizing it
+  // right after makes zsh redraw its prompt against text xterm has already
+  // reflowed, which leaves a duplicate prompt behind.
+  | { kind: 'measuring' }
   | { kind: 'opening' }
   | { kind: 'ready'; ptyId: string }
   | { kind: 'exited'; ptyId: string }
@@ -25,36 +26,53 @@ type Phase =
 export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): React.JSX.Element {
   const { t } = useTranslation('quickTerminal')
   const open = useQuickTerminalStore((state) => state.open)
-  const [phase, setPhase] = useState<Phase>({ kind: 'opening' })
+  const [phase, setPhase] = useState<Phase>({ kind: 'measuring' })
   const current = useRef(0)
 
-  const attach = useCallback(async () => {
-    const attempt = ++current.current
-    setPhase({ kind: 'opening' })
-    const result = await open(record.id, INITIAL_COLS, INITIAL_ROWS)
-    if (attempt !== current.current) return
-    if (result.success && result.data) {
-      setPhase({ kind: 'ready', ptyId: result.data.terminalId })
-    } else {
-      setPhase({ kind: 'failed', message: failureMessage(result, t('openFailed')) })
-    }
-  }, [open, record.id, t])
+  const attach = useCallback(
+    async (cols: number, rows: number) => {
+      const attempt = ++current.current
+      setPhase({ kind: 'opening' })
+      const result = await open(record.id, cols, rows)
+      if (attempt !== current.current) return
+      if (result.success && result.data) {
+        setPhase({ kind: 'ready', ptyId: result.data.terminalId })
+      } else {
+        setPhase({ kind: 'failed', message: failureMessage(result, t('openFailed')) })
+      }
+    },
+    [open, record.id, t]
+  )
 
-  useEffect(() => {
-    void attach()
-    return () => {
+  useEffect(
+    () => () => {
       current.current += 1
-    }
-  }, [attach])
+    },
+    []
+  )
 
-  if (phase.kind === 'opening') {
+  const reopen = (): void => setPhase({ kind: 'measuring' })
+
+  if (phase.kind === 'measuring' || phase.kind === 'opening') {
     return (
-      <div
-        role="status"
-        className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"
-      >
-        <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-        {t('opening')}
+      <div className="relative h-full min-h-0">
+        {phase.kind === 'measuring' ? (
+          <Suspense fallback={null}>
+            <ConnectedTerminal
+              autoSpawn={false}
+              isVisible
+              autoFocus={false}
+              onInitialGrid={(cols, rows) => void attach(cols, rows)}
+            />
+          </Suspense>
+        ) : null}
+        <div
+          role="status"
+          className="absolute inset-0 flex items-center justify-center gap-2 bg-background text-sm text-muted-foreground"
+        >
+          <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+          {t('opening')}
+        </div>
       </div>
     )
   }
@@ -62,7 +80,7 @@ export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): 
     return (
       <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 text-sm">
         <p className="text-destructive">{phase.message}</p>
-        <Button size="sm" variant="outline" onClick={() => void attach()}>
+        <Button size="sm" variant="outline" onClick={reopen}>
           <RotateCcw className="mr-1.5 size-3.5" aria-hidden="true" />
           {t('reopen')}
         </Button>
@@ -85,7 +103,7 @@ export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): 
       {phase.kind === 'exited' ? (
         <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t bg-background/95 px-4 py-2 text-sm">
           <span className="text-muted-foreground">{t('exited')}</span>
-          <Button size="sm" variant="outline" onClick={() => void attach()}>
+          <Button size="sm" variant="outline" onClick={reopen}>
             <RotateCcw className="mr-1.5 size-3.5" aria-hidden="true" />
             {t('reopen')}
           </Button>
