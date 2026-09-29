@@ -196,13 +196,7 @@ pub struct BuiltInRoute {
 }
 
 fn policy_allows(policy: &McpCapabilityPolicy, tool_name: &str) -> bool {
-    if policy.deny_tools.iter().any(|denied| denied == tool_name) {
-        return false;
-    }
-    match &policy.allow_tools {
-        Some(allow) => allow.iter().any(|name| name == tool_name),
-        None => true,
-    }
+    policy.allows(tool_name)
 }
 
 #[derive(Clone)]
@@ -1190,7 +1184,7 @@ mod tests {
 
         let allowed = McpCore::new(
             McpCoreConfig {
-                operation_timeout: Duration::from_millis(40),
+                call_timeout: Duration::from_millis(40),
                 max_response_bytes: 256,
                 ..Default::default()
             },

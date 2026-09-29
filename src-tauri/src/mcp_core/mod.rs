@@ -33,7 +33,7 @@ pub use desktop::{
 pub use domain::{
     Aggregate, AggregatedPrompt, AggregatedResource, AggregatedTool, AllowAllTools,
     DenyListedTools, McpCore, McpCoreConfig, McpDomainError, Operation, ToolPermission,
-    UpstreamFailure, UpstreamKind,
+    UpstreamFailure, UpstreamKind, UpstreamState, UpstreamStatus,
 };
 pub use facade::{
     facade_tool_names, require_current_catalog_revision, McpFacadeCatalog, McpFacadeError,
@@ -57,8 +57,9 @@ pub use process::{
     MCP_CORE_PROBE_MISSES,
 };
 pub use snapshot::{
-    build_snapshot, snapshot_from_config, InlineSecretResolver, McpSecretResolver,
-    McpSnapshotController, SnapshotApplyReceipt, SnapshotError,
+    build_snapshot, snapshot_from_config, snapshot_from_config_tolerant, InlineSecretResolver,
+    McpSecretResolver, McpSnapshotController, RejectedUpstream, SnapshotApplyReceipt,
+    SnapshotError,
 };
 
 pub const MCP_CORE_CONTRACT_VERSION: u16 = 1;
@@ -86,7 +87,14 @@ impl McpConfigSnapshot {
         }
 
         let mut ids = std::collections::BTreeSet::new();
+        let mut names = std::collections::BTreeSet::new();
         for server in &self.servers {
+            if !names.insert(server.route_name()) {
+                return Err(McpCoreError::invalid_snapshot(format!(
+                    "duplicate upstream route name {}",
+                    server.route_name()
+                )));
+            }
             if server.id.trim().is_empty() {
                 return Err(McpCoreError::invalid_snapshot(
                     "upstream server id must not be empty",
@@ -107,10 +115,52 @@ impl McpConfigSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpUpstreamServer {
+    /// Stable configuration id. OAuth credentials are keyed by it.
     pub id: String,
+    /// Name agents route by (`<name>_tool_list`, `<name>_<tool>`). Empty
+    /// falls back to `id`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     pub enabled: bool,
     pub transport: McpUpstreamTransport,
+    #[serde(default, skip_serializing_if = "McpCapabilityPolicy::is_empty")]
+    pub policy: McpCapabilityPolicy,
 }
+
+impl McpUpstreamServer {
+    pub fn route_name(&self) -> &str {
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
+    }
+}
+
+/// Turn a display name into a route name agents can type: ASCII letters,
+/// digits, `-` and `_`, at most [`ROUTE_NAME_MAX_LENGTH`] characters. Returns
+/// `None` when nothing usable is left.
+pub fn route_name_from_display(display: &str) -> Option<String> {
+    let mut name = String::new();
+    for character in display.trim().chars() {
+        let mapped = if character.is_ascii_alphanumeric() || character == '_' {
+            character.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+        if mapped == '-' && (name.is_empty() || name.ends_with('-')) {
+            continue;
+        }
+        name.push(mapped);
+        if name.len() == ROUTE_NAME_MAX_LENGTH {
+            break;
+        }
+    }
+    let name = name.trim_end_matches('-').to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+pub const ROUTE_NAME_MAX_LENGTH: usize = 40;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
@@ -452,6 +502,8 @@ mod tests {
             revision,
             servers: vec![McpUpstreamServer {
                 id: "local-tools".into(),
+                name: String::new(),
+                policy: Default::default(),
                 enabled: true,
                 transport: McpUpstreamTransport::Stdio {
                     command: "node".into(),

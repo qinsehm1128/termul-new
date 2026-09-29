@@ -21,7 +21,7 @@ use rmcp::{
         CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, Prompt,
         ReadResourceRequestParams, ReadResourceResult, Resource, Tool,
     },
-    service::{RoleClient, RunningService, ServiceExt},
+    service::{Peer, RoleClient, RunningService, ServiceExt},
     transport::{
         child_process::TokioChildProcess,
         streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
@@ -40,6 +40,9 @@ use super::{McpBuiltInConfig, McpConfigSnapshot, McpUpstreamServer, McpUpstreamT
 const DEFAULT_MAX_CONCURRENCY: usize = 4;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
+const CONNECT_CONCURRENCY: usize = 8;
 
 pub type ClientService = RunningService<RoleClient, ()>;
 
@@ -47,7 +50,12 @@ pub type ClientService = RunningService<RoleClient, ()>;
 pub struct McpCoreConfig {
     pub max_concurrency: usize,
     pub max_response_bytes: usize,
+    /// Listing and reading: fan-out steps that should fail fast.
     pub operation_timeout: Duration,
+    /// Tool calls: real work (crawls, builds, queries) that may run long.
+    pub call_timeout: Duration,
+    /// Starting one upstream (`npx` may download a package first).
+    pub connect_timeout: Duration,
 }
 
 impl Default for McpCoreConfig {
@@ -56,16 +64,21 @@ impl Default for McpCoreConfig {
             max_concurrency: DEFAULT_MAX_CONCURRENCY,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             operation_timeout: DEFAULT_OPERATION_TIMEOUT,
+            call_timeout: DEFAULT_CALL_TIMEOUT,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }
 }
 
 impl McpCoreConfig {
     fn normalized(&self) -> Self {
+        let floor = Duration::from_millis(1);
         Self {
             max_concurrency: self.max_concurrency.max(1),
             max_response_bytes: self.max_response_bytes.max(1),
-            operation_timeout: self.operation_timeout.max(Duration::from_millis(1)),
+            operation_timeout: self.operation_timeout.max(floor),
+            call_timeout: self.call_timeout.max(floor),
+            connect_timeout: self.connect_timeout.max(floor),
         }
     }
 }
@@ -159,9 +172,34 @@ pub enum UpstreamKind {
     StreamableHttp,
 }
 
+/// Live state of one configured upstream, keyed by its configuration id.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamStatus {
+    pub id: String,
+    pub name: String,
+    pub state: UpstreamState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpstreamState {
+    Disabled,
+    Connecting,
+    Connected,
+    Failed,
+}
+
 struct UpstreamConnection {
+    /// Route name agents use; the key of `McpCore::upstreams`.
     id: String,
+    server: McpUpstreamServer,
     kind: UpstreamKind,
+    /// Requests go through the peer so one slow call never queues the next.
+    peer: Peer<RoleClient>,
+    /// Held only to close the connection.
     client: Mutex<ClientService>,
 }
 
@@ -198,6 +236,7 @@ pub struct McpCore {
     config: McpCoreConfig,
     permission: Arc<dyn ToolPermission>,
     upstreams: Arc<RwLock<BTreeMap<String, Arc<UpstreamConnection>>>>,
+    statuses: Arc<RwLock<Vec<UpstreamStatus>>>,
     builtins: Arc<RwLock<BuiltInRegistry>>,
     credential_scope: Arc<RwLock<Option<std::path::PathBuf>>>,
 }
@@ -232,6 +271,7 @@ impl McpCore {
             config: config.normalized(),
             permission,
             upstreams: Arc::new(RwLock::new(BTreeMap::new())),
+            statuses: Arc::new(RwLock::new(Vec::new())),
             builtins: Arc::new(RwLock::new(builtins)),
             credential_scope: Arc::new(RwLock::new(None)),
         }
@@ -267,8 +307,16 @@ impl McpCore {
             return Ok(());
         }
         let scope = self.credential_scope.read().await.clone();
-        let connection = Arc::new(connect_server(&server, scope.as_deref()).await?);
-        let old = self.upstreams.write().await.insert(server.id, connection);
+        let connection = Arc::new(
+            connect_server(&server, scope.as_deref())
+                .await
+                .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
+        );
+        let old = self
+            .upstreams
+            .write()
+            .await
+            .insert(connection.id.clone(), connection);
         if let Some(old) = old {
             old.close().await;
         }
@@ -280,33 +328,89 @@ impl McpCore {
             .validate()
             .map_err(|error| McpDomainError::InvalidConfiguration(error.message))?;
 
-        // Build every replacement connection before touching the live map. A
-        // failed reload therefore leaves the previous last-known-good runtime
-        // intact instead of partially replacing it.
-        let mut replacement = BTreeMap::new();
+        // Unchanged upstreams keep their live connection; new or changed ones
+        // connect side by side. One that fails is reported in its status and
+        // left out, so it never takes the healthy ones down with it.
         let scope = self.credential_scope.read().await.clone();
-        for server in snapshot.servers.iter().filter(|server| server.enabled) {
-            match connect_server(server, scope.as_deref()).await {
-                Ok(connection) => {
-                    replacement.insert(server.id.clone(), Arc::new(connection));
+        let live = self.upstreams.read().await.clone();
+        let mut next = BTreeMap::new();
+        let mut statuses = Vec::with_capacity(snapshot.servers.len());
+        let mut pending = Vec::new();
+        for server in &snapshot.servers {
+            let status = |state| UpstreamStatus {
+                id: server.id.clone(),
+                name: server.route_name().to_owned(),
+                state,
+                error: None,
+            };
+            if !server.enabled {
+                statuses.push(status(UpstreamState::Disabled));
+            } else if let Some(connection) = live
+                .get(server.route_name())
+                .filter(|connection| connection.server == *server)
+            {
+                next.insert(connection.id.clone(), Arc::clone(connection));
+                statuses.push(status(UpstreamState::Connected));
+            } else {
+                statuses.push(status(UpstreamState::Connecting));
+                pending.push(server.clone());
+            }
+        }
+        *self.statuses.write().await = statuses.clone();
+
+        let timeout = self.config.connect_timeout;
+        let results = stream::iter(pending)
+            .map(|server| {
+                let scope = scope.clone();
+                async move {
+                    let result =
+                        tokio::time::timeout(timeout, connect_server(&server, scope.as_deref()))
+                            .await
+                            .unwrap_or_else(|_| Err("timed out while starting".to_owned()));
+                    (server.id, result)
                 }
-                Err(error) => {
-                    for (_, connection) in replacement {
-                        connection.close().await;
-                    }
-                    return Err(error);
+            })
+            .buffer_unordered(CONNECT_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        for (id, result) in results {
+            let Some(status) = statuses.iter_mut().find(|status| status.id == id) else {
+                continue;
+            };
+            match result {
+                Ok(connection) => {
+                    status.state = UpstreamState::Connected;
+                    next.insert(connection.id.clone(), Arc::new(connection));
+                }
+                Err(message) => {
+                    status.state = UpstreamState::Failed;
+                    status.error = Some(message);
                 }
             }
         }
 
-        let old = {
-            let mut current = self.upstreams.write().await;
-            std::mem::replace(&mut *current, replacement)
-        };
-        for (_, connection) in old {
-            connection.close().await;
+        let old = std::mem::replace(&mut *self.upstreams.write().await, next.clone());
+        *self.statuses.write().await = statuses;
+        for (name, connection) in old {
+            let kept = next
+                .get(&name)
+                .is_some_and(|current| Arc::ptr_eq(current, &connection));
+            if !kept {
+                connection.close().await;
+            }
         }
         Ok(())
+    }
+
+    /// Per-upstream state from the last applied snapshot, in config order.
+    pub async fn upstream_statuses(&self) -> Vec<UpstreamStatus> {
+        self.statuses.read().await.clone()
+    }
+
+    /// Record upstreams a tolerant snapshot left out, so they show up as
+    /// failed instead of silently missing.
+    pub async fn record_rejected(&self, rejected: impl IntoIterator<Item = UpstreamStatus>) {
+        self.statuses.write().await.extend(rejected);
     }
 
     pub async fn remove(&self, server_id: &str) -> bool {
@@ -339,13 +443,13 @@ impl McpCore {
             .collect();
         let mut aggregate = self
             .fanout(connections, Operation::ListTools, |connection| async move {
-                let client = connection.client.lock().await;
-                let tools = client.list_all_tools().await.map_err(|_| ())?;
+                let tools = connection.peer.list_all_tools().await.map_err(|_| ())?;
                 Ok(tools
                     .into_iter()
                     .filter(|tool| {
                         self.permission
                             .allows_tool(&connection.id, tool.name.as_ref())
+                            && connection.server.policy.allows(tool.name.as_ref())
                     })
                     .map(|mut tool| {
                         let original = tool.name.to_string();
@@ -531,7 +635,7 @@ impl McpCore {
                             operation: Operation::CallTool,
                         });
                     }
-                    result = tokio::time::timeout(self.config.operation_timeout, &mut request) => {
+                    result = tokio::time::timeout(self.config.call_timeout, &mut request) => {
                         result.map_err(|_| McpDomainError::Timeout {
                             server_id: server_id.clone(),
                             operation: Operation::CallTool,
@@ -542,7 +646,9 @@ impl McpCore {
                 Ok(result)
             }
             CallTarget::Upstream { connection, name } => {
-                if !self.permission.allows_tool(&connection.id, &name) {
+                if !self.permission.allows_tool(&connection.id, &name)
+                    || !connection.server.policy.allows(&name)
+                {
                     return Err(McpDomainError::PermissionDenied {
                         server_id: connection.id.clone(),
                         name,
@@ -552,8 +658,7 @@ impl McpCore {
                 if let Some(arguments) = arguments {
                     params = params.with_arguments(arguments);
                 }
-                let client = connection.client.lock().await;
-                let request = client.call_tool(params);
+                let request = connection.peer.call_tool(params);
                 tokio::pin!(request);
                 let result = tokio::select! {
                     _ = cancellation.cancelled() => {
@@ -562,7 +667,7 @@ impl McpCore {
                             operation: Operation::CallTool,
                         });
                     }
-                    result = tokio::time::timeout(self.config.operation_timeout, &mut request) => {
+                    result = tokio::time::timeout(self.config.call_timeout, &mut request) => {
                         result
                             .map_err(|_| McpDomainError::Timeout {
                                 server_id: connection.id.clone(),
@@ -587,8 +692,8 @@ impl McpCore {
                 connections,
                 Operation::ListResources,
                 |connection| async move {
-                    let client = connection.client.lock().await;
-                    client
+                    connection
+                        .peer
                         .list_all_resources()
                         .await
                         .map(|resources| {
@@ -628,10 +733,11 @@ impl McpCore {
         uri: impl Into<String>,
     ) -> Result<ReadResourceResult, McpDomainError> {
         let connection = self.connection(server_id).await?;
-        let client = connection.client.lock().await;
         let result = tokio::time::timeout(
             self.config.operation_timeout,
-            client.read_resource(ReadResourceRequestParams::new(uri)),
+            connection
+                .peer
+                .read_resource(ReadResourceRequestParams::new(uri)),
         )
         .await
         .map_err(|_| McpDomainError::Timeout {
@@ -653,8 +759,8 @@ impl McpCore {
                 connections,
                 Operation::ListPrompts,
                 |connection| async move {
-                    let client = connection.client.lock().await;
-                    client
+                    connection
+                        .peer
                         .list_all_prompts()
                         .await
                         .map(|prompts| {
@@ -688,17 +794,19 @@ impl McpCore {
         if let Some(arguments) = arguments {
             params = params.with_arguments(arguments);
         }
-        let client = connection.client.lock().await;
-        let result = tokio::time::timeout(self.config.operation_timeout, client.get_prompt(params))
-            .await
-            .map_err(|_| McpDomainError::Timeout {
-                server_id: connection.id.clone(),
-                operation: Operation::GetPrompt,
-            })?
-            .map_err(|_| McpDomainError::UpstreamUnavailable {
-                server_id: connection.id.clone(),
-                operation: Operation::GetPrompt,
-            })?;
+        let result = tokio::time::timeout(
+            self.config.operation_timeout,
+            connection.peer.get_prompt(params),
+        )
+        .await
+        .map_err(|_| McpDomainError::Timeout {
+            server_id: connection.id.clone(),
+            operation: Operation::GetPrompt,
+        })?
+        .map_err(|_| McpDomainError::UpstreamUnavailable {
+            server_id: connection.id.clone(),
+            operation: Operation::GetPrompt,
+        })?;
         self.enforce_size(&result)?;
         Ok(result)
     }
@@ -839,7 +947,7 @@ fn resolve_stdio_command_in_path(command: &str, path: &str) -> Option<String> {
 async fn connect_server(
     server: &McpUpstreamServer,
     credential_scope: Option<&Path>,
-) -> Result<UpstreamConnection, McpDomainError> {
+) -> Result<UpstreamConnection, String> {
     let (kind, client) = match &server.transport {
         McpUpstreamTransport::Stdio { command, args, env } => {
             let mut env_map = HashMap::new();
@@ -871,12 +979,12 @@ async fn connect_server(
             let (transport, _) = TokioChildProcess::builder(command_line)
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
+                .map_err(|error| format!("could not start `{command}`: {error}"))?;
             (
                 UpstreamKind::Stdio,
                 ().serve(transport)
                     .await
-                    .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
+                    .map_err(|error| format!("MCP handshake failed: {error}"))?,
             )
         }
         McpUpstreamTransport::StreamableHttp {
@@ -893,7 +1001,7 @@ async fn connect_server(
                     .map(|(name, value)| (name.clone(), value.expose().to_owned()))
                     .collect::<BTreeMap<_, _>>();
                 let Some(project_root) = credential_scope else {
-                    return Err(McpDomainError::ConnectFailed(server.id.clone()));
+                    return Err("OAuth credentials are not available to this runtime".into());
                 };
                 let transport = crate::mcp_core::oauth::oauth_transport(
                     url.as_str(),
@@ -903,12 +1011,12 @@ async fn connect_server(
                     &header_values,
                 )
                 .await
-                .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
+                .map_err(|_| "OAuth authorization is missing or expired".to_owned())?;
                 (
                     UpstreamKind::StreamableHttp,
                     ().serve(transport)
                         .await
-                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
+                        .map_err(|error| format!("MCP handshake failed: {error}"))?,
                 )
             } else {
                 let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
@@ -919,9 +1027,9 @@ async fn connect_server(
                 let mut custom = HashMap::new();
                 for (name, value) in headers {
                     let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
+                        .map_err(|_| format!("header name `{name}` is invalid"))?;
                     let value = reqwest::header::HeaderValue::from_str(value.expose())
-                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?;
+                        .map_err(|_| format!("header `{name}` has an invalid value"))?;
                     custom.insert(name, value);
                 }
                 config = config.custom_headers(custom);
@@ -929,14 +1037,16 @@ async fn connect_server(
                     UpstreamKind::StreamableHttp,
                     ().serve(StreamableHttpClientTransport::from_config(config))
                         .await
-                        .map_err(|_| McpDomainError::ConnectFailed(server.id.clone()))?,
+                        .map_err(|error| format!("MCP handshake failed: {error}"))?,
                 )
             }
         }
     };
     Ok(UpstreamConnection {
-        id: server.id.clone(),
+        id: server.route_name().to_owned(),
+        server: server.clone(),
         kind,
+        peer: client.peer().clone(),
         client: Mutex::new(client),
     })
 }
@@ -1075,10 +1185,14 @@ mod tests {
             max_concurrency: 0,
             max_response_bytes: 0,
             operation_timeout: Duration::ZERO,
+            call_timeout: Duration::ZERO,
+            connect_timeout: Duration::ZERO,
         }
         .normalized();
         assert_eq!(config.max_concurrency, 1);
         assert_eq!(config.max_response_bytes, 1);
         assert!(config.operation_timeout > Duration::ZERO);
+        assert!(config.call_timeout > Duration::ZERO);
+        assert!(config.connect_timeout > Duration::ZERO);
     }
 }

@@ -198,6 +198,17 @@ impl McpCapabilityPolicy {
     pub fn is_empty(&self) -> bool {
         self.allow_tools.is_none() && self.deny_tools.is_empty()
     }
+
+    /// A denied tool is always hidden; an allow list, when set, is exhaustive.
+    pub fn allows(&self, tool_name: &str) -> bool {
+        if self.deny_tools.iter().any(|denied| denied == tool_name) {
+            return false;
+        }
+        match &self.allow_tools {
+            Some(allow) => allow.iter().any(|name| name == tool_name),
+            None => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

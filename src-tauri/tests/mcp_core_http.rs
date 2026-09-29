@@ -116,6 +116,8 @@ async fn authenticated_http_gateway_supports_two_isolated_clients_and_both_paths
     let core = Arc::new(McpCore::default());
     core.connect_and_add(McpUpstreamServer {
         id: "fixture".into(),
+        name: String::new(),
+        policy: Default::default(),
         enabled: true,
         transport: McpUpstreamTransport::StreamableHttp {
             url: upstream_url,

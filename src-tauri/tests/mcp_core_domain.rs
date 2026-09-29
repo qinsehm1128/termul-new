@@ -20,7 +20,7 @@ use rmcp::{
 use se_manager_lib::mcp_core::{
     build_snapshot, AllowAllTools, BuiltInRegistry, DenyListedTools, InlineSecretResolver, McpCore,
     McpCoreConfig, McpDomainError, McpSnapshotController, McpUpstreamServer, McpUpstreamTransport,
-    Operation, SnapshotError, BUILTIN_SESSION_MEMORY,
+    Operation, SnapshotError, UpstreamState, BUILTIN_SESSION_MEMORY,
 };
 use se_manager_lib::memory_index::service::MemoryIndexService;
 use tokio_util::sync::CancellationToken;
@@ -148,6 +148,8 @@ async fn spawn_fixture() -> (String, CancellationToken) {
 fn http_server(id: &str, url: String) -> McpUpstreamServer {
     McpUpstreamServer {
         id: id.into(),
+        name: String::new(),
+        policy: Default::default(),
         enabled: true,
         transport: McpUpstreamTransport::StreamableHttp {
             url,
@@ -205,7 +207,7 @@ async fn permission_timeout_cancellation_and_response_limit_are_enforced() {
     let permission = Arc::new(DenyListedTools::new([("fixture".into(), "echo".into())]));
     let core = McpCore::new(
         McpCoreConfig {
-            operation_timeout: Duration::from_millis(40),
+            call_timeout: Duration::from_millis(40),
             max_response_bytes: 256,
             ..Default::default()
         },
@@ -260,6 +262,8 @@ async fn routes_local_stdio_upstream_through_the_same_core() {
     let core = McpCore::default();
     core.connect_and_add(McpUpstreamServer {
         id: "stdio".into(),
+        name: String::new(),
+        policy: Default::default(),
         enabled: true,
         transport: McpUpstreamTransport::Stdio {
             command: env!("CARGO_BIN_EXE_se-mcp-fixture").into(),
@@ -281,47 +285,93 @@ async fn routes_local_stdio_upstream_through_the_same_core() {
 }
 
 #[tokio::test]
-async fn rejected_snapshot_preserves_last_good_runtime_and_revision() {
+async fn a_failing_upstream_is_reported_without_taking_healthy_ones_down() {
     let core = Arc::new(McpCore::default());
     let controller = McpSnapshotController::new(core.clone());
-    let good = build_snapshot(
-        &json!([{
-            "id": "stdio",
-            "type": "stdio",
-            "command": env!("CARGO_BIN_EXE_se-mcp-fixture"),
-            "enabled": true
-        }]),
+    let snapshot = build_snapshot(
+        &json!([
+            {
+                "id": "stdio",
+                "type": "stdio",
+                "command": env!("CARGO_BIN_EXE_se-mcp-fixture"),
+                "enabled": true
+            },
+            {
+                "id": "broken",
+                "type": "stdio",
+                "command": "/definitely/missing/mcp-fixture",
+                "enabled": true
+            },
+            {
+                "id": "off",
+                "type": "stdio",
+                "command": "/definitely/missing/mcp-fixture",
+                "enabled": false
+            }
+        ]),
         1,
         &InlineSecretResolver,
     )
     .unwrap();
-    controller.apply(good).await.unwrap();
-    assert_eq!(controller.accepted_revision().await, 1);
-    assert_eq!(core.upstream_ids().await, vec!["stdio"]);
+    controller.apply(snapshot).await.unwrap();
 
-    let bad = build_snapshot(
-        &json!([{
-            "id": "broken",
-            "type": "stdio",
-            "command": "/definitely/missing/mcp-fixture",
-            "enabled": true
-        }]),
-        2,
-        &InlineSecretResolver,
-    )
-    .unwrap();
-    assert!(matches!(
-        controller.apply(bad).await,
-        Err(SnapshotError::ApplyFailed(McpDomainError::ConnectFailed(_)))
-    ));
-    assert_eq!(controller.accepted_revision().await, 1);
     assert_eq!(core.upstream_ids().await, vec!["stdio"]);
+    let states = core
+        .upstream_statuses()
+        .await
+        .into_iter()
+        .map(|status| (status.id, status.state, status.error.is_some()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        states,
+        vec![
+            ("stdio".into(), UpstreamState::Connected, false),
+            ("broken".into(), UpstreamState::Failed, true),
+            ("off".into(), UpstreamState::Disabled, false),
+        ]
+    );
     assert!(matches!(
         controller
             .apply_registry(&json!([]), 1, &InlineSecretResolver)
             .await,
         Err(SnapshotError::StaleRevision { .. })
     ));
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn reapplying_an_unchanged_upstream_keeps_its_live_connection() {
+    let (url, shutdown) = spawn_fixture().await;
+    let core = Arc::new(McpCore::default());
+    let controller = McpSnapshotController::new(core.clone());
+    let registry = |revision: u64, extra: bool| {
+        let mut servers = vec![json!({"id": "a", "name": "Fixture", "type": "http", "url": url})];
+        if extra {
+            servers.push(json!({
+                "id": "b",
+                "type": "stdio",
+                "command": env!("CARGO_BIN_EXE_se-mcp-fixture")
+            }));
+        }
+        build_snapshot(&json!(servers), revision, &InlineSecretResolver).unwrap()
+    };
+    controller.apply(registry(1, false)).await.unwrap();
+    assert_eq!(core.upstream_ids().await, vec!["fixture"]);
+    assert!(core.call_tool("fixture_echo", None).await.is_ok());
+
+    // Stop the fixture: reconnecting to it now fails, so the upstream stays
+    // connected only if the reapply kept the connection it already had.
+    shutdown.cancel();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    controller.apply(registry(2, true)).await.unwrap();
+    assert_eq!(core.upstream_ids().await, vec!["b", "fixture"]);
+    let fixture = core
+        .upstream_statuses()
+        .await
+        .into_iter()
+        .find(|status| status.id == "a")
+        .unwrap();
+    assert_eq!(fixture.state, UpstreamState::Connected);
     core.shutdown().await;
 }
 
