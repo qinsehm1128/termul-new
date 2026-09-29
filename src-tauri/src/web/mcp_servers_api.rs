@@ -192,10 +192,25 @@ fn log_control_plane_put_failure(stable_code: &str) {
     );
 }
 
-pub async fn get(State(state): State<AppState>) -> Json<IpcBody<Value>> {
-    // CAP-1: lock-read the live project_root so the MCP registry file
-    // (<workspace dir>/mcp-servers.json) follows the active project on a switch.
-    let project_root = state.project_root.read().clone();
+/// The MCP configuration is global — it lives under `$SE_PROJECT_ROOT` or the
+/// home directory, never the active project.
+fn global_root<T>() -> Result<PathBuf, Json<IpcBody<T>>> {
+    crate::mcp_core::config_root().ok_or_else(|| {
+        Json(IpcBody::err(
+            "No home directory is available for the MCP configuration",
+            "NO_MCP_CONFIG_ROOT",
+        ))
+    })
+}
+
+pub async fn get(_state: State<AppState>) -> Json<IpcBody<Value>> {
+    match global_root() {
+        Ok(root) => get_at(root).await,
+        Err(error) => error,
+    }
+}
+
+pub async fn get_at(project_root: PathBuf) -> Json<IpcBody<Value>> {
     let path = registry_read_path(&project_root);
     match fs::read(&path).await {
         Ok(bytes) if bytes.len() > MAX_REGISTRY_BYTES => Json(IpcBody::err(
@@ -235,8 +250,15 @@ pub async fn get(State(state): State<AppState>) -> Json<IpcBody<Value>> {
     }
 }
 
-pub async fn put(State(state): State<AppState>, Json(value): Json<Value>) -> Json<IpcBody<()>> {
-    match persist(&state, value).await {
+pub async fn put(_state: State<AppState>, Json(value): Json<Value>) -> Json<IpcBody<()>> {
+    match global_root() {
+        Ok(root) => put_at(root, value).await,
+        Err(error) => error,
+    }
+}
+
+pub async fn put_at(root: PathBuf, value: Value) -> Json<IpcBody<()>> {
+    match persist(root, value).await {
         Ok(_) => Json(IpcBody::ok(())),
         Err(error) => persist_error(error),
     }
@@ -244,11 +266,15 @@ pub async fn put(State(state): State<AppState>, Json(value): Json<Value>) -> Jso
 
 /// Canonical control-plane write: same persistence as `PUT /mcp-servers`, but
 /// returns the written document so clients can adopt the new revision.
-pub async fn put_config(
-    State(state): State<AppState>,
-    Json(value): Json<Value>,
-) -> Json<IpcBody<Value>> {
-    match persist(&state, value).await {
+pub async fn put_config(_state: State<AppState>, Json(value): Json<Value>) -> Json<IpcBody<Value>> {
+    match global_root() {
+        Ok(root) => put_config_at(root, value).await,
+        Err(error) => error,
+    }
+}
+
+pub async fn put_config_at(root: PathBuf, value: Value) -> Json<IpcBody<Value>> {
+    match persist(root, value).await {
         Ok(config) => match config.to_canonical_json() {
             Ok(document) => Json(IpcBody::ok(document)),
             Err(error) => Json(IpcBody::err(error.to_string(), "MCP_REGISTRY_INVALID")),
@@ -258,8 +284,14 @@ pub async fn put_config(
 }
 
 /// Redacted operator status for the canonical project document.
-pub async fn status(State(state): State<AppState>) -> Json<IpcBody<McpControlPlaneStatus>> {
-    let project_root = state.project_root.read().clone();
+pub async fn status(_state: State<AppState>) -> Json<IpcBody<McpControlPlaneStatus>> {
+    match global_root() {
+        Ok(root) => status_at(root).await,
+        Err(error) => error,
+    }
+}
+
+pub async fn status_at(project_root: PathBuf) -> Json<IpcBody<McpControlPlaneStatus>> {
     match tokio::task::spawn_blocking(move || read_document(&project_root)).await {
         Ok(Ok(Some(config))) => Json(IpcBody::ok(config.to_status())),
         Ok(Ok(None)) => Json(IpcBody::ok(McpControlPlaneConfig::empty().to_status())),
@@ -278,12 +310,10 @@ pub async fn status(State(state): State<AppState>) -> Json<IpcBody<McpControlPla
 }
 
 async fn persist(
-    state: &AppState,
+    project_root: PathBuf,
     value: Value,
 ) -> Result<McpControlPlaneConfig, RegistryDocumentError> {
-    // CAP-1: lock-read the live project_root (follows the active project).
-    let project_root = state.project_root.read().clone();
-    let write_root = project_root.clone();
+    let write_root = project_root;
     let write_result =
         tokio::task::spawn_blocking(move || write_document(&write_root, &value)).await;
     match write_result {
@@ -348,10 +378,20 @@ mod tests {
             skills_hub: None,
             store: None,
         };
+        let root = || state.project_root.read().clone();
+        let (a, b, c, d, e) = (root(), root(), root(), root(), root());
         axum::Router::new()
-            .route("/mcp-servers", get(super::get).put(super::put))
-            .route("/mcp/config", get(super::get).put(super::put_config))
-            .route("/mcp/status", get(super::status))
+            .route(
+                "/mcp-servers",
+                get(move || super::get_at(a.clone()))
+                    .put(move |Json(value): Json<Value>| super::put_at(b.clone(), value)),
+            )
+            .route(
+                "/mcp/config",
+                get(move || super::get_at(c.clone()))
+                    .put(move |Json(value): Json<Value>| super::put_config_at(d.clone(), value)),
+            )
+            .route("/mcp/status", get(move || super::status_at(e.clone())))
             .with_state(state)
     }
 

@@ -4979,6 +4979,7 @@ dependencies = [
  "se-agent-session",
  "se-foundation",
  "se-ipc",
+ "se-mcp-bridge",
  "se-pty",
  "se-quick-terminal",
  "serde",
@@ -5017,6 +5018,18 @@ dependencies = [
  "windows-sys 0.59.0",
  "winreg 0.55.0",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "se-mcp-bridge"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

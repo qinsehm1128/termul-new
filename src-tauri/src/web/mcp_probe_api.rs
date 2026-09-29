@@ -18,7 +18,10 @@ use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
 
 /// `POST /mcp-servers/probe` — body: `McpServerConfig` → `IpcBody<ProbeResult>`.
-pub async fn probe(state: State<AppState>, Json(value): Json<Value>) -> Json<IpcBody<ProbeResult>> {
+pub async fn probe(
+    _state: State<AppState>,
+    Json(value): Json<Value>,
+) -> Json<IpcBody<ProbeResult>> {
     let server: McpServerConfig = match serde_json::from_value(value) {
         Ok(server) => server,
         Err(error) => {
@@ -29,7 +32,8 @@ pub async fn probe(state: State<AppState>, Json(value): Json<Value>) -> Json<Ipc
             ));
         }
     };
-    let project_root = crate::commands::active_mcp_project_root(&state.registry).ok();
+    // OAuth grants are keyed by the global configuration root.
+    let project_root = crate::mcp_core::config_root();
     let result = mcp_probe::probe_for_project(server, project_root.as_deref()).await;
     Json(IpcBody::ok(result))
 }

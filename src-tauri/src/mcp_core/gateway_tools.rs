@@ -364,7 +364,7 @@ fn rank(tools: Vec<Tool>, query: Option<&str>) -> Vec<Tool> {
             (score > 0).then_some((score, tool))
         })
         .collect::<Vec<_>>();
-    scored.sort_by(|left, right| right.0.cmp(&left.0));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     scored.into_iter().map(|(_, tool)| tool).collect()
 }
 

@@ -32,6 +32,13 @@ name = "se-server"
 path = "src/server_main.rs"
 required-features = ["standalone-server"]
 
+# The stdio client agents configure to reach the MCP gateway. Bundled next
+# to the app binary (Tauri copies every [[bin]]), and small: it links only
+# the se-mcp-bridge crate, not the app library.
+[[bin]]
+name = "se-mcp"
+path = "src/se_mcp_main.rs"
+
 [[bin]]
 name = "se-mcp-fixture"
 path = "src/mcp_fixture_bin.rs"
@@ -67,6 +74,7 @@ se-foundation = { path = "crates/se-foundation" }
 se-pty = { path = "crates/se-pty" }
 # Quick terminal sessions (folder + live PTY), hosted beside the PTYs.
 se-quick-terminal = { path = "crates/se-quick-terminal" }
+se-mcp-bridge = { path = "crates/se-mcp-bridge" }
 # Agent sessions (Conversations): contracts, storage, migration, lifecycle.
 se-agent-session = { path = "crates/se-agent-session" }
 # Recursive fs watching for `fs_watcher`. Pinned to the same major the fs plugin

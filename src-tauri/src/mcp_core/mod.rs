@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 pub mod builtins;
 pub mod config;
-pub mod desktop;
 pub mod domain;
 pub mod facade;
 pub mod gateway_tools;
@@ -18,6 +17,7 @@ pub mod http;
 pub mod metadata;
 pub mod oauth;
 pub mod process;
+pub mod service;
 pub mod snapshot;
 pub use builtins::{BuiltInCapability, BuiltInRegistry};
 pub use config::{
@@ -26,10 +26,6 @@ pub use config::{
     McpPersistedTransport, McpRoutingConfig, McpUpstreamConfig, McpUpstreamStatus,
     NameCollisionPolicy, NamedSecret, ParsedControlPlane, BUILTIN_PROJECT_SCOPE,
     BUILTIN_SESSION_MEMORY, MCP_CONTROL_PLANE_SCHEMA_VERSION,
-};
-pub use desktop::{
-    DesktopMcpCoreAvailability, DesktopMcpCoreClientConfig, DesktopMcpCoreRuntime,
-    DesktopMcpCoreStatus, MCP_CORE_ENABLED_ENV,
 };
 pub use domain::{
     Aggregate, AggregatedPrompt, AggregatedResource, AggregatedTool, AllowAllTools,
@@ -57,6 +53,7 @@ pub use process::{
     run_mcp_core_process, McpCoreProcessConfig, McpCoreSupervisor, ProcessError,
     MCP_CORE_PROBE_MISSES,
 };
+pub use service::{config_root, gateway_settings_path, McpService, ServiceStatus, ServiceView};
 pub use snapshot::{
     build_snapshot, snapshot_from_config, snapshot_from_config_tolerant, InlineSecretResolver,
     McpSecretResolver, McpSnapshotController, RejectedUpstream, SnapshotApplyReceipt,

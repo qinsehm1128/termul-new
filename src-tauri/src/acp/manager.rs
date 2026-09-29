@@ -1082,6 +1082,10 @@ pub struct AcpManager {
     /// Default is explicit `core_not_wired` absence — callers never fall back
     /// to the user registry.
     mcp_router: Mutex<crate::acp::mcp_router::McpRouterAvailability>,
+    /// Settings file of the standalone MCP gateway. When set, each new session
+    /// reads the current port and token from it, so a moved port applies to
+    /// the next session without a restart.
+    mcp_gateway_file: Mutex<Option<std::path::PathBuf>>,
     /// Last advertised mode/model/configOptions per live session. Phone and
     /// web read this instead of reopening a session the driver already owns.
     composer_controls: Arc<ComposerControlCache>,
@@ -1201,6 +1205,7 @@ impl AcpManager {
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
             mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
+            mcp_gateway_file: Mutex::new(None),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1227,6 +1232,7 @@ impl AcpManager {
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
             mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
+            mcp_gateway_file: Mutex::new(None),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1255,6 +1261,7 @@ impl AcpManager {
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
             mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
+            mcp_gateway_file: Mutex::new(None),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1353,6 +1360,34 @@ impl AcpManager {
             }
         }
         *self.mcp_router.lock() = availability;
+    }
+
+    /// Route new sessions to the gateway described by `path` (read per
+    /// session). An unreadable file falls back to any applied endpoint.
+    pub fn use_mcp_gateway_file(&self, path: std::path::PathBuf) {
+        *self.mcp_gateway_file.lock() = Some(path);
+    }
+
+    fn current_mcp_router(&self) -> crate::acp::mcp_router::McpRouterAvailability {
+        let path = self.mcp_gateway_file.lock().clone();
+        let from_file = path
+            .and_then(|path| se_mcp_bridge::GatewaySettings::load(&path).ok())
+            .and_then(|settings| {
+                let auth = crate::mcp_core::AuthBootstrap::new(1, settings.token).ok()?;
+                let endpoint = crate::mcp_core::McpEndpointDescriptor {
+                    generation: 1,
+                    bind_address: "127.0.0.1".into(),
+                    port: settings.port,
+                    path: "/mcp".into(),
+                    auth_generation: 1,
+                };
+                Some(
+                    crate::acp::mcp_router::McpRouterAvailability::from_endpoint_auth(
+                        endpoint, auth,
+                    ),
+                )
+            });
+        from_file.unwrap_or_else(|| self.mcp_router.lock().clone())
     }
 
     #[must_use]
@@ -2372,7 +2407,7 @@ impl AcpManager {
         } else {
             (Vec::new(), None)
         };
-        let availability = self.mcp_router.lock().clone();
+        let availability = self.current_mcp_router();
         let apply = crate::acp::mcp_router::append_router_entry(&mut servers, &availability, caps);
         if let Err(error) = gate_mcp_servers(caps, &servers) {
             if let Some(token) = &token {

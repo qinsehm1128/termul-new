@@ -193,8 +193,12 @@ fn app_state(project_root: PathBuf) -> AppState {
     }
 }
 
+/// The MCP configuration is global (it lives under the home directory), so
+/// the routes are driven at the frozen repository as that root explicitly —
+/// the global handlers would read and write the real home directory.
 async fn read_registry(state: &AppState) -> se_manager_lib::web::fs_api::IpcBody<Value> {
-    mcp_servers_api::get(State(state.clone())).await.0
+    let root = state.project_root.read().clone();
+    mcp_servers_api::get_at(root).await.0
 }
 
 /// Control test — proves the harness itself is wired.
@@ -244,7 +248,7 @@ async fn harness_reaches_the_real_routes_over_the_frozen_legacy_repo() {
 /// A registry write under the post-rename brand must land in the *canonical*
 /// workspace directory.
 ///
-/// `mcp_servers_api::{get,put}` call `registry_path` on the request thread, so
+/// `mcp_servers_api::{get_at,put_at}` call `registry_path` on the request thread, so
 /// the thread-local override is in force at exactly the line that hardcodes
 /// `.termul` (`src/web/mcp_servers_api.rs:21`). Today the write goes to
 /// `.termul/` regardless of the seam, which is what this catches.
@@ -257,13 +261,14 @@ async fn mcp_registry_write_lands_under_the_canonical_workspace_dir() {
     let _guard = brand::override_canonical(post_rename());
     let canonical_dir = brand::canonical().workspace_dir;
 
-    let Json(written) = mcp_servers_api::put(
-        State(state.clone()),
-        Json(json!([{
+    let root = state.project_root.read().clone();
+    let Json(written) = mcp_servers_api::put_at(
+        root,
+        json!([{
             "name": "filesystem",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/example/code/acme-api"]
-        }])),
+        }]),
     )
     .await;
     assert!(written.success, "mcp registry write: {written:?}");
@@ -294,9 +299,10 @@ async fn legacy_mcp_registry_is_read_only_after_the_rename() {
     let before = std::fs::read_to_string(&legacy_registry).expect("fixture registry is present");
 
     let _guard = brand::override_canonical(post_rename());
-    let Json(written) = mcp_servers_api::put(
-        State(state.clone()),
-        Json(json!([{ "name": "filesystem", "command": "npx" }])),
+    let root = state.project_root.read().clone();
+    let Json(written) = mcp_servers_api::put_at(
+        root,
+        json!([{ "name": "filesystem", "command": "npx" }]),
     )
     .await;
     assert!(written.success, "mcp registry write: {written:?}");
