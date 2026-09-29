@@ -93,6 +93,7 @@ fn gateway_config(token: &str) -> McpHttpGatewayConfig {
         generation: 1,
         auth: AuthBootstrap::new(1, token).unwrap(),
         request_body_limit: 64 * 1024,
+        control: None,
     }
 }
 
@@ -116,6 +117,8 @@ async fn authenticated_http_gateway_supports_two_isolated_clients_and_both_paths
     let core = Arc::new(McpCore::default());
     core.connect_and_add(McpUpstreamServer {
         id: "fixture".into(),
+        name: String::new(),
+        policy: Default::default(),
         enabled: true,
         transport: McpUpstreamTransport::StreamableHttp {
             url: upstream_url,
@@ -224,6 +227,103 @@ async fn authenticated_http_gateway_supports_two_isolated_clients_and_both_paths
         .unwrap();
     assert_eq!(still_usable.content[0].as_text().unwrap().text, "fixture");
     second.cancel().await.unwrap();
+    gateway.shutdown().await;
+    upstream_shutdown.cancel();
+}
+
+#[tokio::test]
+async fn grouped_and_entry_modes_route_to_one_named_server() {
+    let (upstream_url, upstream_shutdown) = spawn_fixture().await;
+    let core = Arc::new(McpCore::default());
+    core.connect_and_add(McpUpstreamServer {
+        id: "0b84257e".into(),
+        name: "fixture".into(),
+        policy: Default::default(),
+        enabled: true,
+        transport: McpUpstreamTransport::StreamableHttp {
+            url: upstream_url,
+            headers: Default::default(),
+            oauth: None,
+        },
+    })
+    .await
+    .unwrap();
+    let gateway = McpHttpGateway::bind(core, gateway_config("token-m"))
+        .await
+        .unwrap();
+    let base = format!("http://127.0.0.1:{}", gateway.endpoint().port);
+    let arguments = |value: serde_json::Value| value.as_object().cloned().unwrap();
+    let text =
+        |result: &rmcp::model::CallToolResult| result.content[0].as_text().unwrap().text.clone();
+
+    let grouped = serve_client(
+        rmcp::model::ClientConfig::default(),
+        client_transport(&format!("{base}/mcp"), "token-m"),
+    )
+    .await
+    .unwrap();
+    let names = grouped
+        .list_all_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["fixture_tool_list", "fixture_tool_call"]);
+    let listed = grouped
+        .call_tool(
+            CallToolRequestParams::new("fixture_tool_list")
+                .with_arguments(arguments(serde_json::json!({ "query": "echo" }))),
+        )
+        .await
+        .unwrap();
+    let listed: serde_json::Value = serde_json::from_str(&text(&listed)).unwrap();
+    assert_eq!(listed["tools"][0]["name"], "echo");
+    assert!(listed["tools"][0]["inputSchema"].is_object());
+    let called = grouped
+        .call_tool(
+            CallToolRequestParams::new("fixture_tool_call")
+                .with_arguments(arguments(serde_json::json!({ "toolName": "echo" }))),
+        )
+        .await
+        .unwrap();
+    assert_eq!(text(&called), "fixture");
+    grouped.cancel().await.unwrap();
+
+    let entry = serve_client(
+        rmcp::model::ClientConfig::default(),
+        client_transport(&format!("{base}/mcp/entry"), "token-m"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(entry.list_all_tools().await.unwrap().len(), 4);
+    let servers = entry
+        .call_tool(CallToolRequestParams::new("list_mcp_servers"))
+        .await
+        .unwrap();
+    let servers: serde_json::Value = serde_json::from_str(&text(&servers)).unwrap();
+    assert_eq!(servers["servers"][0]["name"], "fixture");
+    let called = entry
+        .call_tool(
+            CallToolRequestParams::new("call_mcp_tool").with_arguments(arguments(
+                serde_json::json!({ "mcpName": "fixture", "toolName": "echo", "arguments": {} }),
+            )),
+        )
+        .await
+        .unwrap();
+    assert_eq!(text(&called), "fixture");
+    let missing = entry
+        .call_tool(
+            CallToolRequestParams::new("call_mcp_tool").with_arguments(arguments(
+                serde_json::json!({ "mcpName": "nope", "toolName": "echo" }),
+            )),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.is_error, Some(true));
+    assert!(text(&missing).contains("Available: fixture"));
+    entry.cancel().await.unwrap();
+
     gateway.shutdown().await;
     upstream_shutdown.cancel();
 }

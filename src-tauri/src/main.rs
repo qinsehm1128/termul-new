@@ -17,7 +17,17 @@ fn main() {
         .skip(1)
         .any(|argument| argument == "--mcp-core")
     {
-        std::process::exit(se_manager_lib::mcp_core::run_mcp_core_process());
+        // `--config <settings>`: the long-lived gateway service. Without it,
+        // the env-configured child of `McpCoreSupervisor`.
+        let arguments = std::env::args().collect::<Vec<_>>();
+        let settings = arguments
+            .iter()
+            .position(|argument| argument == "--config")
+            .and_then(|index| arguments.get(index + 1));
+        std::process::exit(match settings {
+            Some(path) => se_manager_lib::mcp_core::service::run_service(path.into()),
+            None => se_manager_lib::mcp_core::run_mcp_core_process(),
+        });
     }
 
     // Self-spawned `--internal-mcp-plan-server` child: the agent spawns this

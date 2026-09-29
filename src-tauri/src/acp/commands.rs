@@ -1169,9 +1169,8 @@ pub async fn acp_install_agent(
 #[tauri::command]
 pub async fn acp_probe_mcp_server(
     server: crate::acp::mcp_probe::McpServerConfig,
-    project_registry: tauri::State<'_, std::sync::Arc<crate::web::ProjectRegistry>>,
 ) -> Result<crate::acp::mcp_probe::ProbeResult, String> {
-    let project_root = crate::commands::active_mcp_project_root(project_registry.inner()).ok();
+    let project_root = crate::mcp_core::config_root();
     Ok(crate::acp::mcp_probe::probe_for_project(server, project_root.as_deref()).await)
 }
 

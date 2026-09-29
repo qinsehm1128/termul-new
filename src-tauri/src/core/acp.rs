@@ -621,6 +621,9 @@ fn compose_acp_core(
 
     let memory = Arc::new(MemoryIndexService::new(state_root));
     manager.set_memory_index(&memory);
+    if let Some(root) = crate::mcp_core::config_root() {
+        manager.use_mcp_gateway_file(crate::mcp_core::gateway_settings_path(&root));
+    }
 
     Ok(AcpCoreState {
         manager,

@@ -9,9 +9,10 @@ use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
 use super::{
-    ConfigError, McpConfigSnapshot, McpControlPlaneConfig, McpCore, McpCoreError, McpDomainError,
-    McpPersistedTransport, McpUpstreamConfig, McpUpstreamServer, McpUpstreamTransport, NamedSecret,
-    RedactedSecret, MCP_CORE_CONTRACT_VERSION,
+    route_name_from_display, ConfigError, McpConfigSnapshot, McpControlPlaneConfig, McpCore,
+    McpCoreError, McpDomainError, McpPersistedTransport, McpUpstreamConfig, McpUpstreamServer,
+    McpUpstreamTransport, NamedSecret, RedactedSecret, BUILTIN_PROJECT_SCOPE,
+    BUILTIN_SESSION_MEMORY, MCP_CORE_CONTRACT_VERSION,
 };
 
 pub trait McpSecretResolver: Send + Sync {
@@ -121,9 +122,41 @@ pub fn snapshot_from_config(
     revision: u64,
     resolver: &dyn McpSecretResolver,
 ) -> Result<McpConfigSnapshot, SnapshotError> {
+    let (snapshot, mut rejected) = snapshot_from_config_tolerant(config, revision, resolver)?;
+    match rejected.pop() {
+        Some(rejected) => Err(rejected.error),
+        None => Ok(snapshot),
+    }
+}
+
+/// One upstream a tolerant snapshot left out, with the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectedUpstream {
+    pub id: String,
+    pub name: String,
+    pub error: SnapshotError,
+}
+
+/// Like [`snapshot_from_config`], but an upstream whose secrets cannot be
+/// resolved or whose transport is unsupported is left out and reported,
+/// instead of taking every other upstream down with it.
+pub fn snapshot_from_config_tolerant(
+    config: &McpControlPlaneConfig,
+    revision: u64,
+    resolver: &dyn McpSecretResolver,
+) -> Result<(McpConfigSnapshot, Vec<RejectedUpstream>), SnapshotError> {
+    let names = route_names(&config.upstreams);
     let mut servers = Vec::with_capacity(config.upstreams.len());
-    for upstream in &config.upstreams {
-        servers.push(build_server(upstream, resolver)?);
+    let mut rejected = Vec::new();
+    for (upstream, name) in config.upstreams.iter().zip(names) {
+        match build_server(upstream, name.clone(), resolver) {
+            Ok(server) => servers.push(server),
+            Err(error) => rejected.push(RejectedUpstream {
+                id: upstream.id.clone(),
+                name,
+                error,
+            }),
+        }
     }
     let snapshot = McpConfigSnapshot {
         contract_version: MCP_CORE_CONTRACT_VERSION,
@@ -133,7 +166,34 @@ pub fn snapshot_from_config(
     snapshot
         .validate()
         .map_err(SnapshotError::InvalidSnapshot)?;
-    Ok(snapshot)
+    Ok((snapshot, rejected))
+}
+
+/// Route names in config order: the display name made typeable, falling back
+/// to the id, with a numeric suffix when an earlier upstream or a built-in
+/// already took it.
+fn route_names(upstreams: &[McpUpstreamConfig]) -> Vec<String> {
+    let mut taken: std::collections::BTreeSet<String> =
+        [BUILTIN_SESSION_MEMORY, BUILTIN_PROJECT_SCOPE]
+            .into_iter()
+            .map(String::from)
+            .collect();
+    upstreams
+        .iter()
+        .map(|upstream| {
+            let base = route_name_from_display(&upstream.name)
+                .or_else(|| route_name_from_display(&upstream.id))
+                .unwrap_or_else(|| "server".to_owned());
+            let mut name = base.clone();
+            let mut suffix = 2;
+            while taken.contains(&name) {
+                name = format!("{base}-{suffix}");
+                suffix += 1;
+            }
+            taken.insert(name.clone());
+            name
+        })
+        .collect()
 }
 
 fn config_error(error: ConfigError) -> SnapshotError {
@@ -142,6 +202,7 @@ fn config_error(error: ConfigError) -> SnapshotError {
 
 fn build_server(
     upstream: &McpUpstreamConfig,
+    name: String,
     resolver: &dyn McpSecretResolver,
 ) -> Result<McpUpstreamServer, SnapshotError> {
     let transport = match &upstream.transport {
@@ -169,8 +230,10 @@ fn build_server(
     };
     Ok(McpUpstreamServer {
         id: upstream.id.clone(),
+        name,
         enabled: upstream.enabled,
         transport,
+        policy: upstream.policy.clone(),
     })
 }
 
@@ -471,5 +534,46 @@ mod tests {
         );
         assert_eq!(snapshot.servers.len(), 1);
         assert!(!format!("{snapshot:?}").contains("mcp/remote/authorization"));
+    }
+
+    #[test]
+    fn route_names_are_typeable_unique_and_never_shadow_built_ins() {
+        let config = McpControlPlaneConfig::from_stored_json(&serde_json::json!([
+            {"id": "1e062b08-aaaa", "name": "Context7", "type": "stdio", "command": "x"},
+            {"id": "2", "name": "context7", "type": "stdio", "command": "x"},
+            {"id": "3", "name": "Session Memory", "type": "stdio", "command": "x"},
+            {"id": "4", "name": "网页 搜索", "type": "stdio", "command": "x"},
+            {"id": "5-plane", "name": "", "type": "stdio", "command": "x"}
+        ]))
+        .unwrap()
+        .config;
+        let snapshot = snapshot_from_config(&config, 1, &InlineSecretResolver).unwrap();
+        let names = snapshot
+            .servers
+            .iter()
+            .map(|server| server.route_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["context7", "context7-2", "session-memory-2", "4", "5-plane"]
+        );
+    }
+
+    #[test]
+    fn tolerant_snapshot_reports_a_bad_upstream_and_keeps_the_rest() {
+        let value = serde_json::json!([
+            {"id": "legacy", "type": "sse", "url": "http://127.0.0.1:43123/sse"},
+            {"id": "local", "type": "stdio", "command": "fixture"}
+        ]);
+        let config = McpControlPlaneConfig::from_stored_json(&value)
+            .unwrap()
+            .config;
+        let (snapshot, rejected) =
+            snapshot_from_config_tolerant(&config, 1, &InlineSecretResolver).unwrap();
+        assert_eq!(snapshot.servers.len(), 1);
+        assert_eq!(snapshot.servers[0].id, "local");
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].id, "legacy");
+        assert!(rejected[0].error.to_string().contains("legacy SSE"));
     }
 }

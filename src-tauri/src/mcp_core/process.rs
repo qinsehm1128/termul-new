@@ -343,6 +343,7 @@ pub fn run_mcp_core_process() -> i32 {
                 generation: process.auth.generation,
                 auth: process.auth,
                 request_body_limit: process.request_body_limit,
+                control: None,
             },
         )
         .await

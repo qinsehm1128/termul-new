@@ -4979,6 +4979,7 @@ dependencies = [
  "se-agent-session",
  "se-foundation",
  "se-ipc",
+ "se-mcp-bridge",
  "se-pty",
  "se-quick-terminal",
  "serde",
@@ -5007,6 +5008,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.8.2",
+ "toml_edit 0.25.13+spec-1.1.0",
  "tower",
  "tower-http",
  "tracing",
@@ -5017,6 +5019,18 @@ dependencies = [
  "windows-sys 0.59.0",
  "winreg 0.55.0",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "se-mcp-bridge"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -6640,6 +6654,7 @@ dependencies = [
  "indexmap 2.14.0",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

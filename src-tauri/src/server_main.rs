@@ -97,6 +97,7 @@ async fn start_standalone_mcp_gateway(
             generation,
             auth: auth.clone(),
             request_body_limit,
+            control: None,
         },
     )
     .await

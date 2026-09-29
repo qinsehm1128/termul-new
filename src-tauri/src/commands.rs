@@ -4943,7 +4943,6 @@ pub async fn remote_sync_projects(
     payload: SyncProjectsPayload,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
-    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<IpcResult<()>, String> {
     let project_count = payload.projects.len();
     let group_count = payload.groups.len();
@@ -4952,19 +4951,6 @@ pub async fn remote_sync_projects(
         payload.groups,
         payload.default_project_id.clone(),
     );
-    // The project mirror is now available/updated; refresh the live desktop
-    // snapshot from the canonical file for the new default project. A failed
-    // refresh is surfaced through typed runtime status while the command still
-    // acknowledges the durable project sync.
-    if let Err(error) = mcp_runtime
-        .refresh_from_project_registry(project_registry.inner())
-        .await
-    {
-        log::warn!(
-            target: "se_manager::remote_sync_projects",
-            "operation=mcp_snapshot_refresh stable_code=MCP_SNAPSHOT_REFRESH_FAILED error_code={error}"
-        );
-    }
     if let Some(relay) = ws_relay.inner().as_ref() {
         crate::web::broadcast_projects_changed(relay, payload.default_project_id.as_deref());
     }
@@ -4991,7 +4977,6 @@ pub async fn set_host_default_project(
     project_id: String,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Option<Arc<crate::web::WsRelaySink>>>,
-    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
 ) -> Result<IpcResult<()>, String> {
     // Validate via switch_context (unknown/archived/pathless → NOT_FOUND).
     if project_registry.switch_context(&project_id).is_none() {
@@ -5013,15 +4998,6 @@ pub async fn set_host_default_project(
             "target project became unavailable before commit".to_string(),
             "NOT_FOUND",
         ));
-    }
-    if let Err(error) = mcp_runtime
-        .refresh_from_project_registry(project_registry.inner())
-        .await
-    {
-        log::warn!(
-            target: "se_manager::set_host_default_project",
-            "operation=mcp_snapshot_refresh stable_code=MCP_SNAPSHOT_REFRESH_FAILED error_code={error}"
-        );
     }
     if let Some(relay) = ws_relay.inner().as_ref() {
         crate::web::broadcast_projects_changed(relay, Some(&project_id));
@@ -5084,29 +5060,19 @@ pub async fn remote_sync_chat_history(
     Ok(IpcResult::success(()))
 }
 
-/// Write the project MCP control-plane document to the active project's
-/// `<workspace dir>/mcp-servers.json`.
+/// Write the global MCP control-plane document
+/// (`~/<workspace dir>/mcp-servers.json`) and have the gateway apply it.
 ///
-/// This is the desktop write path for the single project-scoped MCP authority.
 /// Accepts the legacy server array or the versioned control-plane object and
-/// always persists the canonical object. Resolves the active project root via
-/// the same chain `RemoteServerState::start` uses: the registry's default-project
-/// path (canonicalized), falling back to `default_project_root()` (`$SE_PROJECT_ROOT`
-/// / `$HOME`) when the registry has no default.
+/// always persists the canonical object.
 #[tauri::command]
 pub async fn remote_sync_mcp_registry(
     registry: serde_json::Value,
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
 ) -> Result<IpcResult<()>, String> {
-    let written = write_mcp_control_plane(project_registry.inner(), registry).await;
-    if let IpcResult {
-        success: true,
-        data: Some(document),
-        ..
-    } = &written
-    {
-        refresh_live_mcp_snapshot(mcp_runtime.inner(), project_registry.inner(), document).await;
+    let written = write_global_mcp_config(registry).await;
+    if written.success {
+        mcp_service.reload().await;
     }
     match written {
         IpcResult { success: true, .. } => Ok(IpcResult::success(())),
@@ -5128,10 +5094,11 @@ pub async fn remote_sync_mcp_registry(
 /// fall back to the one-time `acp/mcp-servers` migration reader. Legacy arrays
 /// are migrated in memory only.
 #[tauri::command]
-pub async fn remote_load_mcp_registry(
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-) -> Result<IpcResult<serde_json::Value>, String> {
-    Ok(load_mcp_registry_from_project_file(project_registry.inner()).await)
+pub async fn remote_load_mcp_registry() -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(match mcp_config_root() {
+        Ok(root) => load_mcp_registry_from_project_file(&root).await,
+        Err(error) => error,
+    })
 }
 
 static MCP_OAUTH_COORDINATOR: std::sync::OnceLock<Arc<crate::mcp_core::oauth::OAuthCoordinator>> =
@@ -5154,7 +5121,7 @@ fn oauth_http_endpoint(config: &crate::mcp_core::McpUpstreamConfig) -> Result<St
 }
 
 async fn load_oauth_upstream(
-    project_registry: &crate::web::ProjectRegistry,
+    root: &std::path::Path,
     id: &str,
 ) -> Result<
     (
@@ -5163,7 +5130,7 @@ async fn load_oauth_upstream(
     ),
     String,
 > {
-    let loaded = load_mcp_registry_from_project_file(project_registry).await;
+    let loaded = load_mcp_registry_from_project_file(root).await;
     let document = loaded
         .data
         .ok_or_else(|| "MCP registry is unavailable".to_string())?;
@@ -5194,11 +5161,11 @@ async fn load_oauth_upstream(
 }
 
 async fn persist_oauth_config(
-    project_registry: &crate::web::ProjectRegistry,
+    root: &std::path::Path,
     id: &str,
     oauth: crate::mcp_core::oauth::McpOAuthConfig,
 ) -> Result<serde_json::Value, String> {
-    let loaded = load_mcp_registry_from_project_file(project_registry).await;
+    let loaded = load_mcp_registry_from_project_file(root).await;
     let mut document = loaded
         .data
         .ok_or_else(|| "MCP registry is unavailable".to_string())?;
@@ -5227,7 +5194,7 @@ async fn persist_oauth_config(
             serde_json::Value::from(revision.saturating_add(1).max(1)),
         );
     }
-    match write_mcp_control_plane(project_registry, document).await {
+    match write_mcp_control_plane(root, document).await {
         IpcResult {
             success: true,
             data,
@@ -5241,18 +5208,17 @@ async fn persist_oauth_config(
     }
 }
 
-/// Persist credential-free OAuth metadata, then apply that canonical document
-/// to the live desktop Core. A missing runtime still persists; connection
-/// failure stays in the runtime's redacted snapshot diagnostic.
+/// Persist credential-free OAuth metadata, then have the gateway reconnect
+/// with the new grant. Without a gateway the metadata still persists.
 async fn persist_oauth_config_for_runtime(
-    project_registry: &crate::web::ProjectRegistry,
-    runtime: Option<&crate::mcp_core::DesktopMcpCoreRuntime>,
+    root: &std::path::Path,
+    service: Option<&crate::mcp_core::McpService>,
     id: &str,
     oauth: crate::mcp_core::oauth::McpOAuthConfig,
 ) -> Result<(), String> {
-    let document = persist_oauth_config(project_registry, id, oauth).await?;
-    if let Some(runtime) = runtime {
-        refresh_live_mcp_snapshot(runtime, project_registry, &document).await;
+    persist_oauth_config(root, id, oauth).await?;
+    if let Some(service) = service {
+        service.reload().await;
     }
     Ok(())
 }
@@ -5330,7 +5296,7 @@ fn parse_oauth_callback(request: &str) -> Result<(String, String, Option<String>
 async fn oauth_callback_listener(
     listener: tokio::net::TcpListener,
     app: AppHandle,
-    project_registry: Arc<crate::web::ProjectRegistry>,
+    root: std::path::PathBuf,
     server_id: String,
     expires_at: i64,
 ) {
@@ -5370,11 +5336,11 @@ async fn oauth_callback_listener(
             .and_then(parse_oauth_callback),
         _ => Err("OAuth callback request could not be read".into()),
     };
-    let runtime = app.try_state::<Arc<crate::mcp_core::DesktopMcpCoreRuntime>>();
+    let service = app.try_state::<Arc<crate::mcp_core::McpService>>();
     let success = if let Ok((code, state, issuer)) = result {
         complete_mcp_oauth_flow(
-            project_registry.as_ref(),
-            runtime.as_ref().map(|managed| managed.inner().as_ref()),
+            &root,
+            service.as_ref().map(|managed| managed.inner().as_ref()),
             &server_id,
             &code,
             &state,
@@ -5406,8 +5372,8 @@ async fn oauth_callback_listener(
 }
 
 async fn complete_mcp_oauth_flow(
-    project_registry: &crate::web::ProjectRegistry,
-    runtime: Option<&crate::mcp_core::DesktopMcpCoreRuntime>,
+    root: &std::path::Path,
+    service: Option<&crate::mcp_core::McpService>,
     server_id: &str,
     code: &str,
     state: &str,
@@ -5436,14 +5402,12 @@ async fn complete_mcp_oauth_flow(
         .get_credentials()
         .await
         .map_err(|_| "OAuth credentials are unavailable".to_string())?;
-    let (upstream, mut oauth) = load_oauth_upstream(project_registry, server_id).await?;
+    let (upstream, mut oauth) = load_oauth_upstream(root, server_id).await?;
     oauth.auth_mode = crate::mcp_core::oauth::McpAuthMode::OAuth;
     oauth.client_id = Some(credentials.0);
     oauth.discovered_at = Some(chrono::Utc::now().timestamp());
-    persist_oauth_config_for_runtime(project_registry, runtime, &upstream.id, oauth).await?;
-    let project_root = active_mcp_project_root(project_registry)
-        .map_err(|_| "No active project root".to_string())?;
-    oauth_status(&project_root, server_id.to_string())
+    persist_oauth_config_for_runtime(root, service, &upstream.id, oauth).await?;
+    oauth_status(root, server_id.to_string())
 }
 
 #[tauri::command]
@@ -5451,9 +5415,9 @@ pub async fn begin_mcp_oauth(
     app: AppHandle,
     id: String,
     challenge: Option<String>,
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<crate::mcp_core::oauth::OAuthBeginResult, String> {
-    let (upstream, mut oauth) = load_oauth_upstream(project_registry.inner(), &id).await?;
+    let project_root = mcp_config_root_for_oauth()?;
+    let (upstream, mut oauth) = load_oauth_upstream(&project_root, &id).await?;
     let endpoint = oauth_http_endpoint(&upstream)?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -5466,8 +5430,6 @@ pub async fn begin_mcp_oauth(
     let mut manager = rmcp::transport::auth::AuthorizationManager::new(&endpoint)
         .await
         .map_err(|_| "OAuth discovery failed".to_string())?;
-    let project_root = active_mcp_project_root(project_registry.inner())
-        .map_err(|_| "No active project root".to_string())?;
     manager.set_credential_store(crate::mcp_core::oauth::KeyringCredentialStore::new(
         project_root.clone(),
         &id,
@@ -5495,7 +5457,7 @@ pub async fn begin_mcp_oauth(
     // Discovery metadata is durable immediately. The live Core snapshot is
     // refreshed only after the token exchange so an enabled upstream is not
     // reconnected before the keyring grant exists.
-    persist_oauth_config(project_registry.inner(), &id, oauth.clone()).await?;
+    persist_oauth_config(&project_root, &id, oauth.clone()).await?;
     let identity = crate::mcp_core::oauth::oauth_client_identity(&oauth);
     let client_secret = if identity.preregistered_client_id.is_some() {
         crate::mcp_core::oauth::McpCredentialStore::load(&project_root, &id)
@@ -5534,7 +5496,7 @@ pub async fn begin_mcp_oauth(
     tokio::spawn(oauth_callback_listener(
         listener,
         app,
-        Arc::clone(project_registry.inner()),
+        project_root.clone(),
         id.clone(),
         expires_at,
     ));
@@ -5551,12 +5513,11 @@ pub async fn complete_mcp_oauth(
     id: String,
     code: String,
     state: String,
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
 ) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
     complete_mcp_oauth_flow(
-        project_registry.inner(),
-        Some(mcp_runtime.inner()),
+        &mcp_config_root_for_oauth()?,
+        Some(mcp_service.inner()),
         &id,
         &code,
         &state,
@@ -5568,23 +5529,18 @@ pub async fn complete_mcp_oauth(
 #[tauri::command]
 pub async fn cancel_mcp_oauth(
     id: String,
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
     // Cancellation only drops the in-memory pending authorization. A previous
-    // valid grant remains in the project-scoped keyring record.
+    // valid grant remains in the keyring record.
     mcp_oauth_coordinator().cancel(&id).await;
-    let project_root = active_mcp_project_root(project_registry.inner())
-        .map_err(|_| "No active project root".to_string())?;
-    oauth_status(&project_root, id)
+    oauth_status(&mcp_config_root_for_oauth()?, id)
 }
 
 #[tauri::command]
 pub async fn get_mcp_oauth_status(
     id: String,
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
-    let project_root = active_mcp_project_root(project_registry.inner())
-        .map_err(|_| "No active project root".to_string())?;
+    let project_root = mcp_config_root_for_oauth()?;
     if mcp_oauth_coordinator().is_pending(&id).await {
         return Ok(crate::mcp_core::oauth::OAuthStatusResult {
             server_id: id,
@@ -5598,112 +5554,533 @@ pub async fn get_mcp_oauth_status(
     oauth_status(&project_root, id)
 }
 
-/// Canonical desktop GET for the project MCP control-plane document.
+/// Canonical desktop GET for the global MCP control-plane document.
 #[tauri::command]
-pub async fn mcp_get_config(
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-) -> Result<IpcResult<serde_json::Value>, String> {
-    Ok(load_mcp_registry_from_project_file(project_registry.inner()).await)
+pub async fn mcp_get_config() -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(match mcp_config_root() {
+        Ok(root) => load_mcp_registry_from_project_file(&root).await,
+        Err(error) => error,
+    })
 }
 
-/// Canonical desktop PUT. Returns the written document (including revision).
+/// Canonical desktop PUT. Returns the written document (including revision)
+/// after the gateway applied it.
 #[tauri::command]
 pub async fn mcp_put_config(
     config: serde_json::Value,
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    mcp_runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
 ) -> Result<IpcResult<serde_json::Value>, String> {
-    let written = write_mcp_control_plane(project_registry.inner(), config).await;
-    if let IpcResult {
-        success: true,
-        data: Some(document),
-        ..
-    } = &written
-    {
-        refresh_live_mcp_snapshot(mcp_runtime.inner(), project_registry.inner(), document).await;
+    let written = write_global_mcp_config(config).await;
+    if written.success {
+        mcp_service.reload().await;
     }
     Ok(written)
 }
 
 /// Redacted desktop MCP status. Missing files return the empty document status.
 #[tauri::command]
-pub async fn mcp_get_status(
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-) -> Result<IpcResult<crate::mcp_core::McpControlPlaneStatus>, String> {
-    Ok(load_mcp_status_from_project_file(project_registry.inner()).await)
+pub async fn mcp_get_status() -> Result<IpcResult<crate::mcp_core::McpControlPlaneStatus>, String> {
+    Ok(match mcp_config_root() {
+        Ok(root) => load_mcp_status_from_project_file(&root).await,
+        Err(error) => error,
+    })
 }
 
-/// Runtime availability for the desktop-owned MCP Core gateway. This is
-/// intentionally separate from `mcp_get_status`, which reports only the
-/// canonical project document. Disabled/failed runtime state is explicit and
-/// never falls back to the user registry.
+/// The gateway process: running or not, its port, and each upstream's state.
 #[tauri::command]
 pub async fn mcp_get_runtime_status(
-    runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
-) -> Result<IpcResult<crate::mcp_core::DesktopMcpCoreStatus>, String> {
-    Ok(IpcResult::success(runtime.status().await))
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
+    Ok(IpcResult::success(mcp_service.view().await))
 }
 
-/// Explicit user-invoked copy surface for the loopback MCP client config.
-/// Unlike runtime status, this response intentionally contains the bearer
-/// token and must never be logged or persisted by the host.
+/// Start the gateway if it is not running (or runs another version).
 #[tauri::command]
-pub async fn mcp_get_client_config(
-    runtime: State<'_, Arc<crate::mcp_core::DesktopMcpCoreRuntime>>,
-) -> Result<IpcResult<Option<crate::mcp_core::DesktopMcpCoreClientConfig>>, String> {
-    Ok(IpcResult::success(runtime.client_config().await))
+pub async fn mcp_service_start(
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
+    Ok(match mcp_service.ensure_running().await {
+        Ok(_) => IpcResult::success(mcp_service.view().await),
+        Err(error) => IpcResult::error(error, "MCP_SERVICE_START_FAILED"),
+    })
 }
 
-pub(crate) fn active_mcp_project_root(
-    project_registry: &crate::web::ProjectRegistry,
-) -> Result<std::path::PathBuf, IpcResult<()>> {
-    match project_registry.default_project_path() {
-        Some(p) => {
-            match crate::web::config::resolve_and_validate_project_root(std::path::Path::new(&p)) {
-                Ok(root) => Ok(root),
-                Err(e) => {
-                    log::error!(
-                        "mcp registry: default project path '{}' failed canonicalization: {}",
-                        p,
-                        e
-                    );
-                    Err(IpcResult::error(
-                        "No active project root available for MCP registry sync",
-                        "NO_ACTIVE_PROJECT_ROOT",
-                    ))
-                }
-            }
+#[tauri::command]
+pub async fn mcp_service_restart(
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
+    Ok(match mcp_service.restart().await {
+        Ok(_) => IpcResult::success(mcp_service.view().await),
+        Err(error) => IpcResult::error(error, "MCP_SERVICE_START_FAILED"),
+    })
+}
+
+/// Move the gateway to another port; connected agents follow on their next
+/// request because the stdio client rereads the settings file.
+#[tauri::command]
+pub async fn mcp_service_set_port(
+    port: u16,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
+    Ok(match mcp_service.set_port(port).await {
+        Ok(_) => IpcResult::success(mcp_service.view().await),
+        Err(error) => IpcResult::error(error, "MCP_SERVICE_PORT_FAILED"),
+    })
+}
+
+fn parse_mcp_mode(mode: Option<&str>) -> Result<se_mcp_bridge::Mode, String> {
+    match mode {
+        None => Ok(se_mcp_bridge::Mode::Grouped),
+        Some(value) => {
+            se_mcp_bridge::Mode::parse(value).ok_or(format!("unknown MCP mode `{value}`"))
         }
-        None => {
-            log::warn!(
-                "mcp registry: no active project path in registry; falling back to default_project_root"
-            );
-            match crate::web::config::default_project_root() {
-                Some(raw) => match crate::web::config::resolve_and_validate_project_root(&raw) {
-                    Ok(root) => Ok(root),
-                    Err(e) => {
-                        log::error!(
-                            "mcp registry: default project root '{}' failed canonicalization: {}",
-                            raw.display(),
-                            e
-                        );
-                        Err(IpcResult::error(
-                            "No active project root available for MCP registry sync",
-                            "NO_ACTIVE_PROJECT_ROOT",
-                        ))
-                    }
+    }
+}
+
+/// How an agent connects in `mode`: the `se-mcp` command and the HTTP
+/// endpoint. Contains the bearer token; never log the result.
+#[tauri::command]
+pub async fn mcp_connection_info(
+    mode: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::service::Connection>, String> {
+    let mode = match parse_mcp_mode(mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
+    };
+    Ok(match mcp_service.connection(mode) {
+        Ok(connection) => IpcResult::success(connection),
+        Err(error) => IpcResult::error(error.to_string(), "MCP_SERVICE_SETTINGS_FAILED"),
+    })
+}
+
+/// Local AI clients and whether each already launches `se-mcp` in `mode`.
+#[tauri::command]
+pub async fn mcp_clients_detect(
+    mode: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<Vec<crate::mcp_core::clients::DetectedClient>>, String> {
+    let mode = match parse_mcp_mode(mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
+    };
+    let Some(home) = se_mcp_bridge::settings::home_dir() else {
+        return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
+    };
+    let bridge = mcp_service.bridge_command(mode);
+    Ok(IpcResult::success(
+        tokio::task::spawn_blocking(move || crate::mcp_core::clients::detect(&home, &bridge))
+            .await
+            .unwrap_or_default(),
+    ))
+}
+
+/// Write (or refresh) the `se-mcp` entry into one client's MCP config.
+#[tauri::command]
+pub async fn mcp_client_sync(
+    id: String,
+    mode: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<crate::mcp_core::clients::SyncOutcome>, String> {
+    let mode = match parse_mcp_mode(mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
+    };
+    let Some(home) = se_mcp_bridge::settings::home_dir() else {
+        return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
+    };
+    let bridge = mcp_service.bridge_command(mode);
+    let result =
+        tokio::task::spawn_blocking(move || crate::mcp_core::clients::sync(&home, &id, &bridge))
+            .await
+            .unwrap_or_else(|_| Err("client sync task failed".into()));
+    Ok(match result {
+        Ok(outcome) => IpcResult::success(outcome),
+        Err(error) => IpcResult::error(error, "MCP_CLIENT_SYNC_FAILED"),
+    })
+}
+
+/// Remove the `se-mcp` entry from one client's MCP config.
+#[tauri::command]
+pub async fn mcp_client_unsync(
+    id: String,
+) -> Result<IpcResult<crate::mcp_core::clients::SyncOutcome>, String> {
+    let Some(home) = se_mcp_bridge::settings::home_dir() else {
+        return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
+    };
+    let result = tokio::task::spawn_blocking(move || crate::mcp_core::clients::unsync(&home, &id))
+        .await
+        .unwrap_or_else(|_| Err("client sync task failed".into()));
+    Ok(match result {
+        Ok(outcome) => IpcResult::success(outcome),
+        Err(error) => IpcResult::error(error, "MCP_CLIENT_SYNC_FAILED"),
+    })
+}
+
+fn ai_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| format!("no app data directory: {error}"))
+}
+
+/// AI channels plus, per channel id, whether its API key is stored.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChannelsView {
+    /// `None` until the first save (the renderer then offers to migrate).
+    document: Option<crate::ai_channels::AiChannelsDocument>,
+    keys: std::collections::BTreeMap<String, bool>,
+}
+
+#[tauri::command]
+pub async fn ai_channels_get(app: AppHandle) -> Result<IpcResult<AiChannelsView>, String> {
+    let dir = match ai_data_dir(&app) {
+        Ok(dir) => dir,
+        Err(error) => return Ok(IpcResult::error(error, "AI_CHANNELS_UNAVAILABLE")),
+    };
+    let document = match crate::ai_channels::load(&dir) {
+        Ok(document) => document,
+        Err(error) => return Ok(IpcResult::error(error, "AI_CHANNELS_INVALID")),
+    };
+    let keys = document
+        .iter()
+        .flat_map(|document| document.channels.iter())
+        .map(|channel| {
+            let stored = crate::keyring_get(&crate::ai_channels::credential_key(&channel.id))
+                .ok()
+                .flatten()
+                .is_some_and(|key| !key.is_empty());
+            (channel.id.clone(), stored)
+        })
+        .collect();
+    Ok(IpcResult::success(AiChannelsView { document, keys }))
+}
+
+#[tauri::command]
+pub async fn ai_channels_put(
+    app: AppHandle,
+    document: crate::ai_channels::AiChannelsDocument,
+) -> Result<IpcResult<()>, String> {
+    Ok(
+        match ai_data_dir(&app).and_then(|dir| crate::ai_channels::save(&dir, &document)) {
+            Ok(()) => IpcResult::success(()),
+            Err(error) => IpcResult::error(error, "AI_CHANNELS_INVALID"),
+        },
+    )
+}
+
+/// Store (or with `None`, forget) a channel's API key in the keychain.
+#[tauri::command]
+pub async fn ai_channel_set_key(id: String, key: Option<String>) -> Result<IpcResult<()>, String> {
+    if !crate::ai_channels::is_channel_id(&id) {
+        return Ok(IpcResult::error(
+            "channel id is invalid",
+            "AI_CHANNEL_INVALID",
+        ));
+    }
+    let name = crate::ai_channels::credential_key(&id);
+    let result = match key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+        Some(key) => crate::keyring_set(&name, key),
+        None => crate::keyring_delete(&name),
+    };
+    Ok(match result {
+        Ok(()) => IpcResult::success(()),
+        Err(error) => IpcResult::error(error, "AI_CREDENTIAL_STORAGE_UNAVAILABLE"),
+    })
+}
+
+fn stored_ai_key(channel_id: &str) -> Result<String, crate::ai_channels::AiError> {
+    crate::keyring_get(&crate::ai_channels::credential_key(channel_id))
+        .map_err(crate::ai_channels::AiError::Transport)?
+        .filter(|key| !key.is_empty())
+        .ok_or(crate::ai_channels::AiError::MissingKey)
+}
+
+/// Models the channel's endpoint serves, using its stored key.
+#[tauri::command]
+pub async fn ai_channel_models(
+    channel: crate::ai_channels::AiChannel,
+) -> Result<IpcResult<Vec<String>>, String> {
+    let result = match stored_ai_key(&channel.id) {
+        Ok(key) => crate::ai_channels::client::list_models(&channel, &key).await,
+        Err(error) => Err(error),
+    };
+    Ok(match result {
+        Ok(models) => IpcResult::success(models),
+        Err(error) => IpcResult::error(error.to_string(), "AI_CHANNEL_REQUEST_FAILED"),
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChannelTest {
+    reply: String,
+    millis: u64,
+}
+
+/// Send one tiny prompt through the channel to prove URL, key and model.
+#[tauri::command]
+pub async fn ai_channel_test(
+    channel: crate::ai_channels::AiChannel,
+    model: String,
+) -> Result<IpcResult<AiChannelTest>, String> {
+    let started = std::time::Instant::now();
+    let result = match stored_ai_key(&channel.id) {
+        Ok(key) => {
+            crate::ai_channels::client::complete(
+                &channel,
+                &key,
+                &model,
+                crate::ai_channels::ChatRequest {
+                    system: "You are a connectivity check.",
+                    user: "Reply with the single word OK.",
+                    max_tokens: Some(64),
                 },
-                None => {
-                    log::error!(
-                        "mcp registry: no active project root and default_project_root unavailable"
-                    );
-                    Err(IpcResult::error(
-                        "No active project root available for MCP registry sync",
-                        "NO_ACTIVE_PROJECT_ROOT",
-                    ))
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    Ok(match result {
+        Ok(reply) => IpcResult::success(AiChannelTest {
+            reply: reply.chars().take(200).collect(),
+            millis: started.elapsed().as_millis() as u64,
+        }),
+        Err(error) => IpcResult::error(error.to_string(), "AI_CHANNEL_REQUEST_FAILED"),
+    })
+}
+
+/// Stored server descriptions, config id → text.
+#[tauri::command]
+pub async fn mcp_descriptions_get(
+) -> Result<IpcResult<std::collections::BTreeMap<String, String>>, String> {
+    Ok(match mcp_config_root() {
+        Ok(root) => IpcResult::success(crate::mcp_core::service::load_descriptions(&root)),
+        Err(error) => error,
+    })
+}
+
+#[tauri::command]
+pub async fn mcp_descriptions_put(
+    descriptions: std::collections::BTreeMap<String, String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<()>, String> {
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    if let Err(error) = crate::mcp_core::describe::save(&root, &descriptions) {
+        return Ok(IpcResult::error(error, "MCP_DESCRIPTIONS_WRITE_FAILED"));
+    }
+    mcp_service.reload().await;
+    Ok(IpcResult::success(()))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDescribeSettingsView {
+    settings: crate::mcp_core::describe::DescribeSettings,
+    defaults: crate::mcp_core::describe::DescribeSettings,
+}
+
+/// How descriptions are written, and the built-in defaults.
+#[tauri::command]
+pub async fn mcp_describe_settings_get() -> Result<IpcResult<McpDescribeSettingsView>, String> {
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    Ok(match crate::mcp_core::describe::load_settings(&root) {
+        Ok(settings) => IpcResult::success(McpDescribeSettingsView {
+            settings,
+            defaults: Default::default(),
+        }),
+        Err(error) => IpcResult::error(error, "MCP_DESCRIBE_SETTINGS_INVALID"),
+    })
+}
+
+#[tauri::command]
+pub async fn mcp_describe_settings_put(
+    settings: crate::mcp_core::describe::DescribeSettings,
+) -> Result<IpcResult<()>, String> {
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    Ok(
+        match crate::mcp_core::describe::save_settings(&root, &settings) {
+            Ok(()) => IpcResult::success(()),
+            Err(error) => IpcResult::error(error, "MCP_DESCRIBE_SETTINGS_INVALID"),
+        },
+    )
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDescribed {
+    name: String,
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Have the MCP-summary model describe connected upstream servers (all, or
+/// the named ones), store the results and apply them to the gateway.
+#[tauri::command]
+pub async fn mcp_describe_servers(
+    app: AppHandle,
+    names: Option<Vec<String>>,
+    language: String,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<Vec<McpDescribed>>, String> {
+    use futures::StreamExt;
+
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    let document = match ai_data_dir(&app).and_then(|dir| crate::ai_channels::load(&dir)) {
+        Ok(document) => document.unwrap_or_default(),
+        Err(error) => return Ok(IpcResult::error(error, "AI_CHANNELS_INVALID")),
+    };
+    let resolved =
+        match crate::ai_channels::resolve(&document, document.purposes.mcp_summary.as_ref()) {
+            Ok(resolved) => resolved,
+            Err(error) => return Ok(IpcResult::error(error.to_string(), "AI_NOT_CONFIGURED")),
+        };
+    let settings = match crate::mcp_core::describe::load_settings(&root) {
+        Ok(settings) => settings,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_DESCRIBE_SETTINGS_INVALID")),
+    };
+    let view = mcp_service.view().await;
+    let Some(status) = view.status else {
+        return Ok(IpcResult::error(
+            "the MCP gateway is not running",
+            "MCP_SERVICE_UNAVAILABLE",
+        ));
+    };
+    let targets = status
+        .upstreams
+        .into_iter()
+        .filter(|upstream| upstream.state == "connected")
+        .filter(|upstream| {
+            names
+                .as_ref()
+                .is_none_or(|names| names.iter().any(|name| name == &upstream.name))
+        })
+        .collect::<Vec<_>>();
+    let service = Arc::clone(mcp_service.inner());
+    let resolved = &resolved;
+    let settings = &settings;
+    let language = language.as_str();
+    let described = futures::stream::iter(targets)
+        .map(|upstream| {
+            let service = Arc::clone(&service);
+            async move {
+                let tools = service.server_tools(&upstream.name).await.map(|listing| {
+                    listing["tools"]
+                        .as_array()
+                        .map(|tools| {
+                            tools
+                                .iter()
+                                .map(|tool| {
+                                    (
+                                        tool["name"].as_str().unwrap_or_default().to_owned(),
+                                        tool["description"].as_str().unwrap_or_default().to_owned(),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                });
+                let result = match tools {
+                    Ok(tools) => crate::mcp_core::describe::describe(
+                        resolved,
+                        settings,
+                        &upstream.name,
+                        language,
+                        &tools,
+                    )
+                    .await
+                    .map_err(|error| error.to_string()),
+                    Err(error) => Err(error),
+                };
+                let (description, error) = match result {
+                    Ok(description) => (Some(description), None),
+                    Err(error) => (None, Some(error)),
+                };
+                McpDescribed {
+                    name: upstream.name,
+                    id: upstream.id,
+                    description,
+                    error,
                 }
             }
+        })
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut stored = crate::mcp_core::service::load_descriptions(&root);
+    for item in &described {
+        if let Some(description) = &item.description {
+            stored.insert(item.id.clone(), description.clone());
         }
+    }
+    if let Err(error) = crate::mcp_core::describe::save(&root, &stored) {
+        return Ok(IpcResult::error(error, "MCP_DESCRIPTIONS_WRITE_FAILED"));
+    }
+    mcp_service.reload().await;
+    Ok(IpcResult::success(described))
+}
+
+/// Servers agents can route to, with the description they read.
+#[tauri::command]
+pub async fn mcp_service_servers(
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(match mcp_service.servers().await {
+        Ok(servers) => IpcResult::success(servers),
+        Err(error) => IpcResult::error(error, "MCP_SERVICE_UNAVAILABLE"),
+    })
+}
+
+/// Tools of one aggregated server, as the gateway sees them.
+#[tauri::command]
+pub async fn mcp_service_server_tools(
+    name: String,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(match mcp_service.server_tools(&name).await {
+        Ok(tools) => IpcResult::success(tools),
+        Err(error) => IpcResult::error(error, "MCP_SERVICE_UNAVAILABLE"),
+    })
+}
+
+/// Root of the global MCP configuration (`$SE_PROJECT_ROOT`, else home).
+pub(crate) fn mcp_config_root<T>() -> Result<std::path::PathBuf, IpcResult<T>> {
+    crate::mcp_core::config_root().ok_or_else(|| {
+        log::error!(
+            target: crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
+            "operation=mcp_config_root stable_code=NO_MCP_CONFIG_ROOT"
+        );
+        IpcResult::error(
+            "No home directory is available for the MCP configuration",
+            "NO_MCP_CONFIG_ROOT",
+        )
+    })
+}
+
+fn mcp_config_root_for_oauth() -> Result<std::path::PathBuf, String> {
+    mcp_config_root::<()>().map_err(|error| error.error.unwrap_or_default())
+}
+
+async fn write_global_mcp_config(config: serde_json::Value) -> IpcResult<serde_json::Value> {
+    match mcp_config_root() {
+        Ok(root) => write_mcp_control_plane(&root, config).await,
+        Err(error) => error,
     }
 }
 
@@ -5714,13 +6091,13 @@ fn mcp_document_error<T>(
 }
 
 /// Testable core of `remote_sync_mcp_registry`: writes the canonical control-plane
-/// document to `{active_project_root}/<workspace dir>/mcp-servers.json`.
+/// document to `{root}/<workspace dir>/mcp-servers.json`.
 #[allow(dead_code)]
 pub(crate) async fn sync_mcp_registry_to_project_file(
-    project_registry: &crate::web::ProjectRegistry,
+    root: &std::path::Path,
     registry: serde_json::Value,
 ) -> IpcResult<()> {
-    match write_mcp_control_plane(project_registry, registry).await {
+    match write_mcp_control_plane(root, registry).await {
         IpcResult { success: true, .. } => IpcResult::success(()),
         IpcResult {
             success: false,
@@ -5734,46 +6111,11 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
     }
 }
 
-async fn refresh_live_mcp_snapshot(
-    runtime: &crate::mcp_core::DesktopMcpCoreRuntime,
-    project_registry: &crate::web::ProjectRegistry,
-    document: &serde_json::Value,
-) {
-    if runtime
-        .apply_document_for_project_registry(document, project_registry)
-        .await
-        .is_err()
-    {
-        // Detailed failure state is retained in the runtime's redacted status;
-        // never log the document, resolver token, or resolved secret here.
-        log::warn!(
-            target: crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
-            "operation=mcp_snapshot_refresh stable_code=MCP_SNAPSHOT_REFRESH_FAILED"
-        );
-    }
-}
-
 pub(crate) async fn write_mcp_control_plane(
-    project_registry: &crate::web::ProjectRegistry,
+    project_root: &std::path::Path,
     registry: serde_json::Value,
 ) -> IpcResult<serde_json::Value> {
-    let project_root = match active_mcp_project_root(project_registry) {
-        Ok(root) => root,
-        Err(error) => {
-            log::error!(
-                target: crate::web::mcp_servers_api::CONTROL_PLANE_LOG_TARGET,
-                "operation=mcp_put_config stable_code=NO_ACTIVE_PROJECT_ROOT"
-            );
-            return IpcResult::error(
-                error
-                    .error
-                    .unwrap_or_else(|| "No active project root".into()),
-                error
-                    .code
-                    .unwrap_or_else(|| "NO_ACTIVE_PROJECT_ROOT".into()),
-            );
-        }
-    };
+    let project_root = project_root.to_path_buf();
     let incoming = registry.clone();
     let write_root = project_root.clone();
     let write_result = tokio::task::spawn_blocking(move || {
@@ -5804,21 +6146,9 @@ pub(crate) async fn write_mcp_control_plane(
 }
 
 pub(crate) async fn load_mcp_registry_from_project_file(
-    project_registry: &crate::web::ProjectRegistry,
+    project_root: &std::path::Path,
 ) -> IpcResult<serde_json::Value> {
-    let project_root = match active_mcp_project_root(project_registry) {
-        Ok(root) => root,
-        Err(error) => {
-            return IpcResult::error(
-                error
-                    .error
-                    .unwrap_or_else(|| "No active project root".into()),
-                error
-                    .code
-                    .unwrap_or_else(|| "NO_ACTIVE_PROJECT_ROOT".into()),
-            )
-        }
-    };
+    let project_root = project_root.to_path_buf();
     let read_root = project_root.clone();
     let read_result =
         tokio::task::spawn_blocking(move || crate::web::mcp_servers_api::read_document(&read_root))
@@ -5842,21 +6172,9 @@ pub(crate) async fn load_mcp_registry_from_project_file(
 }
 
 pub(crate) async fn load_mcp_status_from_project_file(
-    project_registry: &crate::web::ProjectRegistry,
+    project_root: &std::path::Path,
 ) -> IpcResult<crate::mcp_core::McpControlPlaneStatus> {
-    let project_root = match active_mcp_project_root(project_registry) {
-        Ok(root) => root,
-        Err(error) => {
-            return IpcResult::error(
-                error
-                    .error
-                    .unwrap_or_else(|| "No active project root".into()),
-                error
-                    .code
-                    .unwrap_or_else(|| "NO_ACTIVE_PROJECT_ROOT".into()),
-            )
-        }
-    };
+    let project_root = project_root.to_path_buf();
     let read_root = project_root.clone();
     let read_result =
         tokio::task::spawn_blocking(move || crate::web::mcp_servers_api::read_document(&read_root))
@@ -9326,20 +9644,16 @@ mod remote_sync_projects_tests {
 mod remote_sync_mcp_registry_tests {
     use super::{
         load_mcp_registry_from_project_file, oauth_http_endpoint, persist_oauth_config,
-        persist_oauth_config_for_runtime, refresh_live_mcp_snapshot,
-        sync_mcp_registry_to_project_file, write_mcp_control_plane,
+        persist_oauth_config_for_runtime, sync_mcp_registry_to_project_file,
+        write_global_mcp_config, write_mcp_control_plane,
     };
     use crate::mcp_core::{
         oauth::{McpAuthMode, McpOAuthConfig, McpOAuthEndpoints},
-        AuthBootstrap, DesktopMcpCoreRuntime, McpCapabilityPolicy, McpHttpGatewayConfig,
-        McpPersistedTransport, McpUpstreamConfig,
+        McpCapabilityPolicy, McpPersistedTransport, McpUpstreamConfig,
     };
-    use crate::memory_index::service::MemoryIndexService;
     use crate::web::mcp_servers_api::registry_path;
-    use crate::web::{ProjectRegistry, ProjectSummary};
     use serde_json::json;
-    use std::path::Path;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Serializes tests that mutate `SE_PROJECT_ROOT` (process-global env).
@@ -9358,61 +9672,10 @@ mod remote_sync_mcp_registry_tests {
         path
     }
 
-    fn registry_with_default(project_root: &Path) -> ProjectRegistry {
-        let reg = ProjectRegistry::new();
-        let project = ProjectSummary {
-            id: "p1".to_string(),
-            name: "P".to_string(),
-            color: "blue".to_string(),
-            path: Some(project_root.to_string_lossy().into_owned()),
-            is_archived: false,
-            is_default: false,
-            live_terminal_count: 0,
-        };
-        reg.set(vec![project], Some("p1".to_string()));
-        reg
-    }
-
-    #[tokio::test]
-    async fn canonical_write_refreshes_the_live_desktop_snapshot() {
-        let dir = temp_dir("runtime-refresh");
-        let reg = registry_with_default(&dir);
-        let memory = Arc::new(MemoryIndexService::new(dir.join("memory")));
-        let runtime = DesktopMcpCoreRuntime::start_with_config(
-            memory,
-            McpHttpGatewayConfig {
-                bind_address: "127.0.0.1".parse().unwrap(),
-                port: 0,
-                path: "/mcp".into(),
-                generation: 1,
-                auth: AuthBootstrap::new(1, "runtime-token").unwrap(),
-                request_body_limit: 64 * 1024,
-            },
-        )
-        .await;
-        let written = write_mcp_control_plane(
-            &reg,
-            json!({"schemaVersion": 1, "revision": 1, "upstreams": []}),
-        )
-        .await;
-        assert!(written.success, "write failed: {written:?}");
-        refresh_live_mcp_snapshot(
-            &runtime,
-            &reg,
-            written.data.as_ref().expect("canonical document"),
-        )
-        .await;
-        let status = runtime.status().await;
-        assert_eq!(status.snapshot_revision, Some(1));
-        assert!(status.snapshot_diagnostic.is_none());
-        runtime.shutdown().await.unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[tokio::test]
     async fn writes_registry_to_project_mcp_servers_file() {
         let dir = temp_dir("write");
-        let reg = registry_with_default(&dir);
+        let reg = dir.clone();
         let registry = json!([
             {"id":"one","type":"stdio","name":"fs","command":"npx","enabled":true}
         ]);
@@ -9437,7 +9700,7 @@ mod remote_sync_mcp_registry_tests {
     #[tokio::test]
     async fn oauth_metadata_persistence_advances_canonical_revision() {
         let dir = temp_dir("oauth-revision");
-        let reg = registry_with_default(&dir);
+        let reg = dir.clone();
         let initial = sync_mcp_registry_to_project_file(
             &reg,
             json!([{
@@ -9506,22 +9769,9 @@ mod remote_sync_mcp_registry_tests {
     }
 
     #[tokio::test]
-    async fn oauth_metadata_refresh_applies_live_snapshot_without_connecting() {
+    async fn oauth_metadata_persists_without_a_running_gateway() {
         let dir = temp_dir("oauth-live");
-        let reg = registry_with_default(&dir);
-        let memory = Arc::new(MemoryIndexService::new(dir.join("memory")));
-        let runtime = DesktopMcpCoreRuntime::start_with_config(
-            memory,
-            McpHttpGatewayConfig {
-                bind_address: "127.0.0.1".parse().unwrap(),
-                port: 0,
-                path: "/mcp".into(),
-                generation: 1,
-                auth: AuthBootstrap::new(1, "runtime-token").unwrap(),
-                request_body_limit: 64 * 1024,
-            },
-        )
-        .await;
+        let reg = dir.clone();
         let initial = sync_mcp_registry_to_project_file(
             &reg,
             json!([{
@@ -9537,7 +9787,7 @@ mod remote_sync_mcp_registry_tests {
 
         persist_oauth_config_for_runtime(
             &reg,
-            Some(&runtime),
+            None,
             "remote",
             McpOAuthConfig {
                 auth_mode: McpAuthMode::OAuth,
@@ -9550,15 +9800,8 @@ mod remote_sync_mcp_registry_tests {
             },
         )
         .await
-        .expect("oauth metadata should refresh the live snapshot");
+        .expect("oauth metadata should persist");
 
-        let status = runtime.status().await;
-        assert_eq!(status.snapshot_revision, Some(2));
-        assert!(status.snapshot_diagnostic.is_none());
-        assert_eq!(
-            runtime.oauth_auth_mode_in_last_good("remote").await,
-            Some(McpAuthMode::OAuth)
-        );
         let loaded = load_mcp_registry_from_project_file(&reg).await;
         let document = loaded.data.expect("canonical document");
         assert_eq!(
@@ -9574,14 +9817,13 @@ mod remote_sync_mcp_registry_tests {
         assert!(!encoded.contains("refresh_token"));
         assert!(!encoded.contains("client_secret"));
 
-        runtime.shutdown().await.expect("runtime shutdown");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
     async fn overwrites_previous_registry_atomically() {
         let dir = temp_dir("overwrite");
-        let reg = registry_with_default(&dir);
+        let reg = dir.clone();
 
         // First write — one entry.
         let one = json!([{"id":"a","type":"stdio","name":"a","command":"x","enabled":true}]);
@@ -9611,7 +9853,7 @@ mod remote_sync_mcp_registry_tests {
     #[tokio::test]
     async fn rejects_non_array_payload_without_writing() {
         let dir = temp_dir("reject");
-        let reg = registry_with_default(&dir);
+        let reg = dir.clone();
         let file = registry_path(&dir);
         assert!(!file.exists(), "precondition: no file yet");
 
@@ -9625,32 +9867,24 @@ mod remote_sync_mcp_registry_tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn falls_back_to_default_project_root_when_registry_has_no_default() {
+    async fn the_global_config_lives_under_se_project_root_or_home() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = temp_dir("fallback");
-        // Point SE_PROJECT_ROOT at the temp dir so the fallback path
-        // resolves there instead of the real home directory.
+        let dir = temp_dir("global");
+        // Point SE_PROJECT_ROOT at the temp dir so the global root resolves
+        // there instead of the real home directory.
         let prev = std::env::var_os("SE_PROJECT_ROOT");
         std::env::set_var("SE_PROJECT_ROOT", &dir);
 
-        let reg = ProjectRegistry::new(); // no default project set
-        let registry = json!([
-            {"id":"fb","type":"stdio","name":"fallback","command":"node","enabled":true}
-        ]);
+        let result = write_global_mcp_config(json!([
+            {"id":"fb","type":"stdio","name":"global","command":"node","enabled":true}
+        ]))
+        .await;
+        assert!(result.success, "write failed: {:?}", result.error);
 
-        let result = sync_mcp_registry_to_project_file(&reg, registry).await;
-        assert!(
-            result.success,
-            "fallback should succeed, got {:?}",
-            result.error
-        );
-
-        let file = registry_path(&dir);
-        let bytes = std::fs::read(&file).unwrap();
+        let bytes = std::fs::read(registry_path(&dir.canonicalize().unwrap())).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["upstreams"][0]["name"], "fallback");
+        assert_eq!(value["upstreams"][0]["name"], "global");
 
-        // Restore the env var.
         match prev {
             Some(v) => std::env::set_var("SE_PROJECT_ROOT", v),
             None => std::env::remove_var("SE_PROJECT_ROOT"),
@@ -9661,7 +9895,7 @@ mod remote_sync_mcp_registry_tests {
     #[tokio::test]
     async fn load_returns_not_found_until_canonical_write_exists() {
         let dir = temp_dir("load");
-        let reg = registry_with_default(&dir);
+        let reg = dir.clone();
         let missing = load_mcp_registry_from_project_file(&reg).await;
         assert!(!missing.success);
         assert_eq!(missing.code.as_deref(), Some("MCP_REGISTRY_NOT_FOUND"));
@@ -9685,7 +9919,7 @@ mod remote_sync_mcp_registry_tests {
     async fn control_plane_put_boundary_log_omits_path_and_secrets() {
         let _guard = crate::web::auth::test_tracing::lock().await;
         let dir = temp_dir("boundary-log");
-        let reg = registry_with_default(&dir);
+        let reg = dir.clone();
         let registry = json!({
             "schemaVersion": 1,
             "revision": 1,
