@@ -343,7 +343,8 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             )
             .route("/quick-terminals/open", post(quick_terminal_api::open))
             .route("/quick-terminals/rename", post(quick_terminal_api::rename))
-            .route("/quick-terminals/delete", post(quick_terminal_api::delete)),
+            .route("/quick-terminals/delete", post(quick_terminal_api::delete))
+            .route("/quick-terminals/close", post(quick_terminal_api::close)),
         RemoteRouteClass::QuickTerminal,
     ))
     .merge(classified_routes(
@@ -967,6 +968,32 @@ mod tests {
             .await
             .expect("router response");
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn quick_terminal_close_is_a_registered_route() {
+        let dir = TempDir::new("quick-terminal-close");
+        fs::write(dir.path().join("index.html"), "<html>fixture</html>").expect("index");
+        let status = |path: &'static str| {
+            let router = test_router_with_fixture(dir.path());
+            async move {
+                router
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(path)
+                            .header("content-type", "application/json")
+                            .body(Body::from("{}"))
+                            .expect("build request"),
+                    )
+                    .await
+                    .expect("router response")
+                    .status()
+            }
+        };
+        let registered = status("/quick-terminals/delete").await;
+        assert_ne!(registered, status("/quick-terminals/not-a-route").await);
+        assert_eq!(status("/quick-terminals/close").await, registered);
     }
 
     #[tokio::test]

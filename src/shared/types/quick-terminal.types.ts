@@ -49,6 +49,8 @@ export interface QuickTerminalApi {
   open(id: string, cols: number, rows: number): Promise<IpcResult<QuickTerminalOpened>>
   rename(id: string, title: string | null): Promise<IpcResult<QuickTerminalRecord>>
   remove(id: string): Promise<IpcResult<void>>
+  /** End the shell but keep the quick terminal; opening it again starts a new one. */
+  close(id: string): Promise<IpcResult<QuickTerminalRecord>>
   /** Quick terminals changed outside this renderer's own calls (e.g. migration). */
   onChanged(handler: () => void): () => void
 }

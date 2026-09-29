@@ -1,7 +1,8 @@
 import type { QuickTerminalRecord } from '@shared/types/quick-terminal.types'
-import { LoaderCircle, RotateCcw } from 'lucide-react'
+import { LoaderCircle, Power, RotateCcw } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { failureMessage, useQuickTerminalStore } from './quick-terminal-store'
 
@@ -20,13 +21,17 @@ type Phase =
   | { kind: 'opening' }
   | { kind: 'ready'; ptyId: string }
   | { kind: 'exited'; ptyId: string }
+  // The user closed the shell; the quick terminal stays until reopened.
+  | { kind: 'closed' }
   | { kind: 'failed'; message: string }
 
 /** The live shell of one quick terminal. Remount (via `key`) per quick terminal. */
 export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): React.JSX.Element {
   const { t } = useTranslation('quickTerminal')
   const open = useQuickTerminalStore((state) => state.open)
+  const close = useQuickTerminalStore((state) => state.close)
   const [phase, setPhase] = useState<Phase>({ kind: 'measuring' })
+  const [closing, setClosing] = useState(false)
   const current = useRef(0)
 
   const attach = useCallback(
@@ -51,11 +56,32 @@ export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): 
     []
   )
 
+  // Closed here or from the list: the record no longer names a shell.
+  const attached = phase.kind === 'ready' || phase.kind === 'exited'
+  useEffect(() => {
+    if (attached && !record.terminalId) setPhase({ kind: 'closed' })
+  }, [attached, record.terminalId])
+
   const reopen = (): void => setPhase({ kind: 'measuring' })
 
+  const closeShell = async (): Promise<void> => {
+    setClosing(true)
+    const result = await close(record.id)
+    setClosing(false)
+    if (!result.success) toast.error(failureMessage(result, t('closeFailed')))
+  }
+
+  const reopenButton = (
+    <Button size="sm" variant="outline" onClick={reopen}>
+      <RotateCcw className="mr-1.5 size-3.5" aria-hidden="true" />
+      {t('reopen')}
+    </Button>
+  )
+
+  let body: React.JSX.Element
   if (phase.kind === 'measuring' || phase.kind === 'opening') {
-    return (
-      <div className="relative h-full min-h-0">
+    body = (
+      <>
         {phase.kind === 'measuring' ? (
           <Suspense fallback={null}>
             <ConnectedTerminal
@@ -73,42 +99,64 @@ export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): 
           <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
           {t('opening')}
         </div>
+      </>
+    )
+  } else if (phase.kind === 'failed' || phase.kind === 'closed') {
+    body = (
+      <div
+        role={phase.kind === 'failed' ? 'alert' : 'status'}
+        className="flex h-full flex-col items-center justify-center gap-3 text-sm"
+      >
+        <p className={phase.kind === 'failed' ? 'text-destructive' : 'text-muted-foreground'}>
+          {phase.kind === 'failed' ? phase.message : t('closed')}
+        </p>
+        {reopenButton}
       </div>
     )
+  } else {
+    body = (
+      <>
+        <Suspense fallback={null}>
+          <ConnectedTerminal
+            key={phase.ptyId}
+            terminalId={phase.ptyId}
+            storeTerminalId={phase.ptyId}
+            autoSpawn={false}
+            isVisible
+            autoFocus
+            onExit={() => setPhase({ kind: 'exited', ptyId: phase.ptyId })}
+          />
+        </Suspense>
+        {phase.kind === 'exited' ? (
+          <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t bg-background/95 px-4 py-2 text-sm">
+            <span className="text-muted-foreground">{t('exited')}</span>
+            {reopenButton}
+          </div>
+        ) : null}
+      </>
+    )
   }
-  if (phase.kind === 'failed') {
-    return (
-      <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 text-sm">
-        <p className="text-destructive">{phase.message}</p>
-        <Button size="sm" variant="outline" onClick={reopen}>
-          <RotateCcw className="mr-1.5 size-3.5" aria-hidden="true" />
-          {t('reopen')}
+
+  // One frame for every phase: the grid measured before the shell starts has
+  // to match the one it is shown in, so the toolbar never comes and goes.
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b px-3">
+        <span className="truncate text-xs text-muted-foreground" title={record.cwd}>
+          {record.cwd}
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 shrink-0"
+          disabled={phase.kind !== 'ready' || closing}
+          onClick={() => void closeShell()}
+        >
+          <Power className="mr-1.5 size-3.5" aria-hidden="true" />
+          {t('close')}
         </Button>
       </div>
-    )
-  }
-  return (
-    <div className="relative h-full min-h-0">
-      <Suspense fallback={null}>
-        <ConnectedTerminal
-          key={phase.ptyId}
-          terminalId={phase.ptyId}
-          storeTerminalId={phase.ptyId}
-          autoSpawn={false}
-          isVisible
-          autoFocus
-          onExit={() => setPhase({ kind: 'exited', ptyId: phase.ptyId })}
-        />
-      </Suspense>
-      {phase.kind === 'exited' ? (
-        <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t bg-background/95 px-4 py-2 text-sm">
-          <span className="text-muted-foreground">{t('exited')}</span>
-          <Button size="sm" variant="outline" onClick={reopen}>
-            <RotateCcw className="mr-1.5 size-3.5" aria-hidden="true" />
-            {t('reopen')}
-          </Button>
-        </div>
-      ) : null}
+      <div className="relative min-h-0 flex-1">{body}</div>
     </div>
   )
 }

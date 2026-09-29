@@ -43,6 +43,7 @@ export function createWebQuickTerminalApi(): QuickTerminalApi {
       post('/quick-terminals/open', { id, cols, rows }, parseQuickTerminalOpened),
     rename: (id, title) => post('/quick-terminals/rename', { id, title }, parseQuickTerminalRecord),
     remove: (id) => post('/quick-terminals/delete', { id }, decodeVoid),
+    close: (id) => post('/quick-terminals/close', { id }, parseQuickTerminalRecord),
     // No push channel on the web; the page lists again whenever it mounts.
     onChanged: () => () => undefined
   }

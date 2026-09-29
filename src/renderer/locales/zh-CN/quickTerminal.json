@@ -16,6 +16,8 @@
   "opening": "正在打开…",
   "exited": "终端已退出。",
   "reopen": "重新打开",
+  "close": "关闭终端",
+  "closed": "终端已关闭，文件夹和名称都保留。",
   "openFailed": "无法打开快捷终端",
   "actions": "更多操作",
   "rename": "重命名",
@@ -34,5 +36,6 @@
   "createFailed": "无法新建快捷终端",
   "renameFailed": "重命名失败",
   "deleteFailed": "删除失败",
+  "closeFailed": "关闭终端失败",
   "untitled": "未命名终端"
 }

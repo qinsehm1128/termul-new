@@ -26,6 +26,10 @@ export function createTauriQuickTerminalApi(): QuickTerminalApi {
       }),
     remove: (id) =>
       invokeDecodedIpcResult('quick_terminal_delete', decodeVoid, { payload: { id } }),
+    close: (id) =>
+      invokeDecodedIpcResult('quick_terminal_close', parseQuickTerminalRecord, {
+        payload: { id }
+      }),
     onChanged: (handler) => onHostEvent('quick-terminals-changed', () => handler())
   }
 }

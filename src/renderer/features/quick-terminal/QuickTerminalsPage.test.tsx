@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   open: vi.fn(),
   rename: vi.fn(),
   remove: vi.fn(),
+  close: vi.fn(),
   onChanged: vi.fn((_handler: () => void) => () => undefined)
 }))
 vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
@@ -99,11 +100,21 @@ describe('QuickTerminalsPage', () => {
     api.open
       .mockResolvedValueOnce({
         success: true,
-        data: { record, terminalId: 'pty-1', claim: 'c1', spawned: true }
+        data: {
+          record: { ...record, terminalId: 'pty-1' },
+          terminalId: 'pty-1',
+          claim: 'c1',
+          spawned: true
+        }
       })
       .mockResolvedValueOnce({
         success: true,
-        data: { record, terminalId: 'pty-2', claim: 'c2', spawned: true }
+        data: {
+          record: { ...record, terminalId: 'pty-2' },
+          terminalId: 'pty-2',
+          claim: 'c2',
+          spawned: true
+        }
       })
     renderAt(`/quick-terminals/${id}`)
 
@@ -121,6 +132,47 @@ describe('QuickTerminalsPage', () => {
     await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-2'))
     expect(api.open).toHaveBeenCalledTimes(2)
     expect(api.open).toHaveBeenNthCalledWith(2, id, FITTED.cols, FITTED.rows)
+  })
+
+  it('closes the shell from the toolbar and keeps the quick terminal to reopen', async () => {
+    api.open
+      .mockResolvedValueOnce({
+        success: true,
+        data: { record: { ...record, terminalId: 'pty-1' }, terminalId: 'pty-1', spawned: true }
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { record: { ...record, terminalId: 'pty-2' }, terminalId: 'pty-2', spawned: true }
+      })
+    api.close.mockResolvedValue({ success: true, data: record })
+    renderAt(`/quick-terminals/${id}`)
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close terminal' }))
+
+    await screen.findByText(/The terminal is closed/)
+    expect(api.close).toHaveBeenCalledWith(id)
+    expect(screen.queryByTestId('connected-terminal')).toBeNull()
+    expect(screen.getByText('Untitled terminal')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-2'))
+  })
+
+  it('closes the shell from the list menu', async () => {
+    api.open.mockResolvedValue({
+      success: true,
+      data: { record: { ...record, terminalId: 'pty-1' }, terminalId: 'pty-1', spawned: true }
+    })
+    api.close.mockResolvedValue({ success: true, data: record })
+    renderAt(`/quick-terminals/${id}`)
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-1'))
+
+    openMenu(/more actions/i)
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close terminal' }))
+
+    await screen.findByText(/The terminal is closed/)
+    expect(api.close).toHaveBeenCalledWith(id)
   })
 
   it('lists again when the host reports new quick terminals', async () => {
@@ -142,7 +194,12 @@ describe('QuickTerminalsPage', () => {
     api.create.mockResolvedValue({ success: true, data: created })
     api.open.mockResolvedValue({
       success: true,
-      data: { record: created, terminalId: 'pty-9', spawned: true, claim: 'c9' }
+      data: {
+        record: { ...created, terminalId: 'pty-9' },
+        terminalId: 'pty-9',
+        spawned: true,
+        claim: 'c9'
+      }
     })
     renderAt('/quick-terminals')
     await screen.findByText('Untitled terminal')

@@ -27,6 +27,7 @@ pub const METHOD_CREATE: &str = "quickTerminalCreate";
 pub const METHOD_OPEN: &str = "quickTerminalOpen";
 pub const METHOD_RENAME: &str = "quickTerminalRename";
 pub const METHOD_DELETE: &str = "quickTerminalDelete";
+pub const METHOD_CLOSE: &str = "quickTerminalClose";
 /// Host-internal: adopt a record migrated from a legacy terminal Conversation.
 pub const METHOD_IMPORT: &str = "quickTerminalImport";
 
@@ -36,7 +37,13 @@ pub const INVALID_REQUEST: &str = "QUICK_TERMINAL_INVALID_REQUEST";
 pub fn is_quick_terminal_method(method: &str) -> bool {
     matches!(
         method,
-        METHOD_LIST | METHOD_CREATE | METHOD_OPEN | METHOD_RENAME | METHOD_DELETE | METHOD_IMPORT
+        METHOD_LIST
+            | METHOD_CREATE
+            | METHOD_OPEN
+            | METHOD_RENAME
+            | METHOD_DELETE
+            | METHOD_CLOSE
+            | METHOD_IMPORT
     )
 }
 
@@ -151,6 +158,10 @@ pub async fn dispatch(
             Ok(request) => QuickTerminalReply::from_result(service.delete(request.id).await),
             Err(reply) => reply,
         },
+        METHOD_CLOSE => match params::<QuickTerminalIdParams>(value) {
+            Ok(request) => QuickTerminalReply::from_result(service.close(request.id).await),
+            Err(reply) => reply,
+        },
         METHOD_IMPORT => match params::<QuickTerminalRecord>(value) {
             Ok(record) => QuickTerminalReply::from_result(service.import(record)),
             Err(reply) => reply,
@@ -167,4 +178,27 @@ pub async fn dispatch(
         );
     }
     reply
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Terminal Core only hands recognised methods to the quick terminal
+    /// service; a method missing here works in process and fails in the Core.
+    #[test]
+    fn every_quick_terminal_method_is_routed_to_the_service() {
+        for method in [
+            METHOD_LIST,
+            METHOD_CREATE,
+            METHOD_OPEN,
+            METHOD_RENAME,
+            METHOD_DELETE,
+            METHOD_CLOSE,
+            METHOD_IMPORT,
+        ] {
+            assert!(is_quick_terminal_method(method), "{method}");
+        }
+        assert!(!is_quick_terminal_method("terminalSpawn"));
+    }
 }
