@@ -5864,6 +5864,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sessions_follow_the_gateway_settings_file_and_its_port_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp-gateway.json");
+        let manager = AcpManager::new(vec![]);
+        manager.apply_mcp_router_endpoint(
+            crate::mcp_core::McpEndpointDescriptor {
+                generation: 1,
+                bind_address: "127.0.0.1".into(),
+                port: 17310,
+                path: "/mcp".into(),
+                auth_generation: 1,
+            },
+            crate::mcp_core::AuthBootstrap::new(1, "applied").unwrap(),
+        );
+        manager.use_mcp_gateway_file(path.clone());
+        let port = |manager: &AcpManager| match manager.current_mcp_router() {
+            crate::acp::mcp_router::McpRouterAvailability::Available { endpoint, auth } => {
+                (endpoint.port, auth.bearer_token().to_owned())
+            }
+            other => panic!("router unavailable: {other:?}"),
+        };
+        // No file yet: the applied endpoint still serves.
+        assert_eq!(port(&manager), (17310, "applied".into()));
+
+        let mut settings = se_mcp_bridge::GatewaySettings {
+            schema_version: 1,
+            port: 3290,
+            token: "se-mcp-file".into(),
+            executable: None,
+            profile_root: None,
+            log_file: None,
+        };
+        settings.save(&path).unwrap();
+        assert_eq!(port(&manager), (3290, "se-mcp-file".into()));
+        settings.port = 3301;
+        settings.save(&path).unwrap();
+        assert_eq!(port(&manager), (3301, "se-mcp-file".into()));
+    }
+
     #[tokio::test]
     async fn reopen_skips_router_without_http_capability() {
         let manager = AcpManager::new(vec![]);
