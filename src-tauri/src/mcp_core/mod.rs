@@ -13,6 +13,7 @@ pub mod config;
 pub mod desktop;
 pub mod domain;
 pub mod facade;
+pub mod gateway_tools;
 pub mod http;
 pub mod metadata;
 pub mod oauth;
@@ -32,8 +33,8 @@ pub use desktop::{
 };
 pub use domain::{
     Aggregate, AggregatedPrompt, AggregatedResource, AggregatedTool, AllowAllTools,
-    DenyListedTools, McpCore, McpCoreConfig, McpDomainError, Operation, ToolPermission,
-    UpstreamFailure, UpstreamKind, UpstreamState, UpstreamStatus,
+    DenyListedTools, McpCore, McpCoreConfig, McpDomainError, Operation, ServerSummary,
+    ToolPermission, UpstreamFailure, UpstreamKind, UpstreamState, UpstreamStatus,
 };
 pub use facade::{
     facade_tool_names, require_current_catalog_revision, McpFacadeCatalog, McpFacadeError,

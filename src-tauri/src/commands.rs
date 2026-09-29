@@ -9387,6 +9387,7 @@ mod remote_sync_mcp_registry_tests {
                 generation: 1,
                 auth: AuthBootstrap::new(1, "runtime-token").unwrap(),
                 request_body_limit: 64 * 1024,
+                control: None,
             },
         )
         .await;
@@ -9519,6 +9520,7 @@ mod remote_sync_mcp_registry_tests {
                 generation: 1,
                 auth: AuthBootstrap::new(1, "runtime-token").unwrap(),
                 request_body_limit: 64 * 1024,
+                control: None,
             },
         )
         .await;

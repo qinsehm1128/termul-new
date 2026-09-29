@@ -16,10 +16,9 @@ use axum::{
 };
 use rmcp::{
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-        GetPromptRequestParams, GetPromptResponse, ListPromptsResult, ListResourcesResult,
-        ListToolsResult, ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities,
-        ServerConfig, Tool,
+        CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
+        ListPromptsResult, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
+        ReadResourceResponse, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -31,17 +30,43 @@ use tokio::{net::TcpListener, sync::RwLock, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    facade::{facade_tool_names, McpFacadeCatalog, McpFacadeListQuery, McpFacadeToolCall},
-    AuthBootstrap, McpCore, McpDomainError, McpEndpointDescriptor, McpReadiness,
+    gateway_tools, AuthBootstrap, McpCore, McpDomainError, McpEndpointDescriptor, McpReadiness,
     McpReadinessStatus,
 };
 
 const HTTP_BOUNDARY_LOG_TARGET: &str = "se_manager::mcp_core::http";
 
+/// How aggregated servers are exposed; each mode has its own path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayMode {
+    /// `/mcp`: two tools per server, `<name>_tool_list` / `<name>_tool_call`.
+    Grouped,
+    /// `/mcp/entry`: four fixed tools, compatible with mcp-router's entry mode.
     Entry,
-    Aggregator,
+    /// `/mcp/aggregator` (alias `/mcp/direct`): every tool of every server,
+    /// as `<name>_<tool>`.
+    Direct,
+}
+
+impl GatewayMode {
+    pub const ALL: [Self; 3] = [Self::Grouped, Self::Entry, Self::Direct];
+
+    /// Path under the gateway root that serves this mode.
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Grouped => "/mcp",
+            Self::Entry => "/mcp/entry",
+            Self::Direct => "/mcp/aggregator",
+        }
+    }
+
+    fn instructions(self) -> &'static str {
+        match self {
+            Self::Grouped => "Se MCP gateway (grouped). Every MCP server appears as two tools: `<server>_tool_list` returns that server's tools with their inputSchema, `<server>_tool_call` runs one of them ({\"toolName\", \"arguments\"}). Pick the server whose description fits the task, list its tools, then call.",
+            Self::Entry => "Se MCP gateway (entry). Call list_mcp_servers to see the servers, list_mcp_tools with an mcpName to read tool schemas, then call_mcp_tool. Use get_mcp_server_status when a server is unavailable.",
+            Self::Direct => "Se MCP gateway (direct). Every tool of every MCP server is listed as `<server>_<tool>`.",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +77,9 @@ pub struct McpHttpGatewayConfig {
     pub generation: u64,
     pub auth: AuthBootstrap,
     pub request_body_limit: usize,
+    /// Extra routes that sit behind the same bearer check (the standalone
+    /// service's `/control/*`).
+    pub control: Option<Router>,
 }
 
 impl McpHttpGatewayConfig {
@@ -117,10 +145,7 @@ impl ServerHandler for GatewayHandler {
                 .enable_prompts()
                 .build(),
         )
-        .with_instructions(match self.mode {
-            GatewayMode::Entry => "Se MCP entry gateway",
-            GatewayMode::Aggregator => "Se MCP aggregator gateway",
-        })
+        .with_instructions(self.mode.instructions())
     }
 
     async fn list_tools(
@@ -129,20 +154,16 @@ impl ServerHandler for GatewayHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         match self.mode {
-            GatewayMode::Aggregator => {
+            GatewayMode::Direct => {
                 let aggregate = self.core.list_tools().await.map_err(to_mcp_error)?;
                 Ok(ListToolsResult::with_all_items(
                     aggregate.items.into_iter().map(|item| item.tool).collect(),
                 ))
             }
-            GatewayMode::Entry => {
-                let catalogs = self
-                    .core
-                    .list_facade_catalogs()
-                    .await
-                    .map_err(to_mcp_error)?;
-                Ok(ListToolsResult::with_all_items(facade_tools(&catalogs)))
-            }
+            GatewayMode::Grouped => Ok(ListToolsResult::with_all_items(
+                gateway_tools::grouped_tools(&self.core.server_summaries().await),
+            )),
+            GatewayMode::Entry => Ok(ListToolsResult::with_all_items(gateway_tools::entry_tools())),
         }
     }
 
@@ -151,15 +172,26 @@ impl ServerHandler for GatewayHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        match self.mode {
-            GatewayMode::Aggregator => self
-                .core
-                .call_tool_with_cancel(&request.name, request.arguments, context.ct)
-                .await
-                .map(Into::into)
-                .map_err(to_mcp_error),
-            GatewayMode::Entry => call_facade_tool(&self.core, request, context.ct).await,
-        }
+        let arguments = request.arguments.clone().unwrap_or_default();
+        let routed = match self.mode {
+            GatewayMode::Direct => {
+                return self
+                    .core
+                    .call_tool_with_cancel(&request.name, request.arguments, context.ct)
+                    .await
+                    .map(Into::into)
+                    .map_err(to_mcp_error)
+            }
+            GatewayMode::Grouped => {
+                gateway_tools::call_grouped(&self.core, &request.name, arguments, context.ct).await
+            }
+            GatewayMode::Entry => {
+                gateway_tools::call_entry(&self.core, &request.name, arguments, context.ct).await
+            }
+        };
+        routed
+            .map(Into::into)
+            .ok_or_else(|| to_mcp_error(McpDomainError::ToolNotFound(request.name.to_string())))
     }
 
     async fn list_resources(
@@ -215,173 +247,6 @@ impl ServerHandler for GatewayHandler {
             .map(Into::into)
             .map_err(to_mcp_error)
     }
-}
-
-fn facade_tools(catalogs: &[McpFacadeCatalog]) -> Vec<Tool> {
-    let mut tools = Vec::with_capacity(catalogs.len() * 2);
-    for catalog in catalogs {
-        let Ok((list_name, call_name)) = facade_tool_names(&catalog.server_id) else {
-            continue;
-        };
-        tools.push(Tool::new(
-            list_name,
-            format!("List the tools exposed by MCP server {}", catalog.server_id),
-            Arc::new(
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" },
-                        "limit": { "type": "integer", "minimum": 1 },
-                        "includeSchema": { "type": "boolean" }
-                    }
-                })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-            ),
-        ));
-        tools.push(Tool::new(
-            call_name,
-            format!("Call a named tool on MCP server {}", catalog.server_id),
-            Arc::new(
-                serde_json::json!({
-                    "type": "object",
-                    "required": ["serverId", "toolName", "arguments"],
-                    "properties": {
-                        "serverId": { "type": "string", "const": catalog.server_id },
-                        "toolName": { "type": "string" },
-                        "arguments": { "type": "object" },
-                        "catalogRevision": { "type": "integer", "minimum": 1 }
-                    }
-                })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-            ),
-        ));
-    }
-    tools
-}
-
-async fn call_facade_tool(
-    core: &McpCore,
-    request: CallToolRequestParams,
-    cancellation: CancellationToken,
-) -> Result<CallToolResponse, ErrorData> {
-    let name = request.name.as_ref();
-    if let Some(server_id) = name.strip_suffix("_tool_list") {
-        let (expected, _) = facade_tool_names(server_id)
-            .map_err(|_| to_mcp_error(McpDomainError::ToolNotFound(name.to_string())))?;
-        if expected != name {
-            return Err(to_mcp_error(McpDomainError::ToolNotFound(name.to_string())));
-        }
-        let arguments = request.arguments.unwrap_or_default();
-        let query =
-            McpFacadeListQuery::from_value(serde_json::Value::Object(arguments)).map_err(|_| {
-                to_mcp_error(McpDomainError::InvalidArguments {
-                    server_id: server_id.to_string(),
-                    name: name.to_string(),
-                })
-            })?;
-        let catalogs = core.list_facade_catalogs().await.map_err(to_mcp_error)?;
-        let catalog = catalogs
-            .iter()
-            .find(|catalog| catalog.server_id == server_id)
-            .ok_or_else(|| to_mcp_error(McpDomainError::UpstreamNotFound(server_id.to_string())))?;
-        let mut result = catalog.clone();
-        if let Some(query) = query.query.as_deref() {
-            result
-                .tools
-                .retain(|tool| tool.name.contains(query) || tool.description.contains(query));
-        }
-        if let Some(limit) = query.limit {
-            result.tools.truncate(limit as usize);
-        }
-        if !query.include_schema {
-            for tool in &mut result.tools {
-                tool.input_schema = None;
-            }
-        }
-        return Ok(CallToolResponse::Complete(CallToolResult::success(vec![
-            ContentBlock::text(
-                serde_json::to_string(&result)
-                    .map_err(|_| to_mcp_error(McpDomainError::Serialization))?,
-            ),
-        ])));
-    }
-    if let Some(server_id) = name.strip_suffix("_tool_call") {
-        let (_, expected) = facade_tool_names(server_id)
-            .map_err(|_| to_mcp_error(McpDomainError::ToolNotFound(name.to_string())))?;
-        if expected != name {
-            return Err(to_mcp_error(McpDomainError::ToolNotFound(name.to_string())));
-        }
-        let arguments = request.arguments.unwrap_or_default();
-        let server_value = arguments.get("serverId").cloned().ok_or_else(|| {
-            to_mcp_error(McpDomainError::InvalidArguments {
-                server_id: server_id.to_string(),
-                name: name.to_string(),
-            })
-        })?;
-        let tool_value = arguments.get("toolName").cloned().ok_or_else(|| {
-            to_mcp_error(McpDomainError::InvalidArguments {
-                server_id: server_id.to_string(),
-                name: name.to_string(),
-            })
-        })?;
-        let nested = arguments
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-        let catalog_revision = arguments
-            .get("catalogRevision")
-            .and_then(|value| value.as_u64());
-        let requested_server = server_value.as_str().ok_or_else(|| {
-            to_mcp_error(McpDomainError::InvalidArguments {
-                server_id: server_id.to_string(),
-                name: name.to_string(),
-            })
-        })?;
-        if requested_server != server_id {
-            return Err(to_mcp_error(McpDomainError::InvalidArguments {
-                server_id: server_id.to_string(),
-                name: name.to_string(),
-            }));
-        }
-        let tool_name = tool_value.as_str().ok_or_else(|| {
-            to_mcp_error(McpDomainError::InvalidArguments {
-                server_id: server_id.to_string(),
-                name: name.to_string(),
-            })
-        })?;
-        let mut call_value = serde_json::json!({
-            "serverId": server_id,
-            "toolName": tool_name,
-            "arguments": nested,
-        });
-        if let Some(revision) = catalog_revision {
-            if let Some(object) = call_value.as_object_mut() {
-                object.insert("catalogRevision".into(), serde_json::json!(revision));
-            }
-        }
-        let call = McpFacadeToolCall::from_value(call_value).map_err(|_| {
-            to_mcp_error(McpDomainError::InvalidArguments {
-                server_id: server_id.to_string(),
-                name: tool_name.to_string(),
-            })
-        })?;
-        return core
-            .call_facade_tool_with_cancel(
-                &call.server_id,
-                &call.tool_name,
-                call.arguments.as_object().cloned(),
-                call.catalog_revision,
-                cancellation,
-            )
-            .await
-            .map(Into::into)
-            .map_err(to_mcp_error);
-    }
-    Err(to_mcp_error(McpDomainError::ToolNotFound(name.to_string())))
 }
 
 pub struct McpHttpGateway {
@@ -461,44 +326,36 @@ impl McpHttpGateway {
                 .with_json_response(true)
                 .with_cancellation_token(shutdown.child_token())
         };
-        let entry_service = StreamableHttpService::new(
-            {
-                let handler = GatewayHandler {
-                    core: core.clone(),
-                    mode: GatewayMode::Entry,
-                };
-                move || Ok(handler.clone())
-            },
-            Arc::new(LocalSessionManager::default()),
-            server_config(),
-        );
-        let aggregator_service = StreamableHttpService::new(
-            {
-                let handler = GatewayHandler {
-                    core: core.clone(),
-                    mode: GatewayMode::Aggregator,
-                };
-                move || Ok(handler.clone())
-            },
-            Arc::new(LocalSessionManager::default()),
-            server_config(),
-        );
+        let service = |mode| {
+            let handler = GatewayHandler {
+                core: core.clone(),
+                mode,
+            };
+            StreamableHttpService::new(
+                move || Ok(handler.clone()),
+                Arc::new(LocalSessionManager::default()),
+                server_config(),
+            )
+        };
         let request_body_limit = config.request_body_limit;
         let auth_for_middleware = auth.clone();
         let protected = Router::new()
-            .nest_service("/mcp", entry_service)
-            .nest_service("/mcp/aggregator", aggregator_service)
+            .nest_service(GatewayMode::Grouped.path(), service(GatewayMode::Grouped))
+            .nest_service(GatewayMode::Entry.path(), service(GatewayMode::Entry))
+            .nest_service(GatewayMode::Direct.path(), service(GatewayMode::Direct))
+            .nest_service("/mcp/direct", service(GatewayMode::Direct))
+            .merge(config.control.clone().unwrap_or_default())
             .layer(DefaultBodyLimit::max(request_body_limit))
             .layer(middleware::from_fn(move |request, next| {
                 let auth = auth_for_middleware.clone();
                 async move { require_bearer(request, next, auth).await }
             }));
-        let app = Router::new()
-            .merge(protected)
+        let public = Router::new()
             .route("/health", get(health))
             .route("/ready", get(ready))
             .route("/mcp-core/status", get(ready_status))
             .with_state(readiness.clone());
+        let app = protected.merge(public);
         let shutdown_for_server = shutdown.clone();
         let readiness_for_task = readiness.clone();
         let generation = endpoint.generation;
@@ -699,6 +556,7 @@ mod tests {
             generation: 1,
             auth: AuthBootstrap::new(1, "token").unwrap(),
             request_body_limit: 1024,
+            control: None,
         };
         assert!(matches!(
             config.validate(),
@@ -713,20 +571,6 @@ mod tests {
         assert!(!constant_time_equal(b"secret", b"SECRET"));
     }
 
-    #[test]
-    fn entry_gateway_projects_exactly_two_namespaced_tools_per_catalog() {
-        let catalog = McpFacadeCatalog::from_json(include_str!(
-            "../../../src/shared/types/fixtures/mcp-facade-catalog.json"
-        ))
-        .unwrap();
-        let tools = facade_tools(&[catalog]);
-        assert_eq!(tools.len(), 2);
-        assert!(tools.iter().any(|tool| tool.name == "dbx_tool_list"));
-        assert!(tools.iter().any(|tool| tool.name == "dbx_tool_call"));
-        assert!(tools.iter().all(|tool| tool.input_schema.get("type")
-            == Some(&serde_json::Value::String("object".into()))));
-    }
-
     #[tokio::test]
     async fn bind_failure_logs_stable_code_without_bind_payload() {
         let _guard = crate::web::auth::test_tracing::lock().await;
@@ -739,6 +583,7 @@ mod tests {
                 generation: 1,
                 auth: AuthBootstrap::new(1, "token").unwrap(),
                 request_body_limit: 1024,
+                control: None,
             },
         )
         .await;
@@ -764,6 +609,7 @@ mod tests {
                 generation: 9,
                 auth: AuthBootstrap::new(1, "old-secret-token").unwrap(),
                 request_body_limit: 1024,
+                control: None,
             },
         )
         .await

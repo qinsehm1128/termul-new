@@ -172,6 +172,43 @@ pub enum UpstreamKind {
     StreamableHttp,
 }
 
+/// One routable server as agents see it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerSummary {
+    pub name: String,
+    pub description: String,
+    pub built_in: bool,
+}
+
+const ADVERTISED_DESCRIPTION_MAX_CHARS: usize = 240;
+
+/// What the upstream says about itself in `initialize`, trimmed to one short
+/// paragraph so it fits in a tool description.
+fn advertised_description(peer: &Peer<RoleClient>) -> String {
+    let Some(info) = peer.peer_info() else {
+        return String::new();
+    };
+    let text = info
+        .server_info
+        .as_ref()
+        .and_then(|server| server.description.as_deref())
+        .filter(|text| !text.trim().is_empty())
+        .or(info.instructions.as_deref())
+        .unwrap_or_default();
+    let paragraph = text.trim().split("\n\n").next().unwrap_or_default();
+    let flat = paragraph.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= ADVERTISED_DESCRIPTION_MAX_CHARS {
+        flat
+    } else {
+        let cut = flat
+            .chars()
+            .take(ADVERTISED_DESCRIPTION_MAX_CHARS)
+            .collect::<String>();
+        format!("{}…", cut.trim_end())
+    }
+}
+
 /// Live state of one configured upstream, keyed by its configuration id.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -237,6 +274,8 @@ pub struct McpCore {
     permission: Arc<dyn ToolPermission>,
     upstreams: Arc<RwLock<BTreeMap<String, Arc<UpstreamConnection>>>>,
     statuses: Arc<RwLock<Vec<UpstreamStatus>>>,
+    /// Curated "what is this server for" text, keyed by config or built-in id.
+    descriptions: Arc<RwLock<BTreeMap<String, String>>>,
     builtins: Arc<RwLock<BuiltInRegistry>>,
     credential_scope: Arc<RwLock<Option<std::path::PathBuf>>>,
 }
@@ -272,6 +311,7 @@ impl McpCore {
             permission,
             upstreams: Arc::new(RwLock::new(BTreeMap::new())),
             statuses: Arc::new(RwLock::new(Vec::new())),
+            descriptions: Arc::new(RwLock::new(BTreeMap::new())),
             builtins: Arc::new(RwLock::new(builtins)),
             credential_scope: Arc::new(RwLock::new(None)),
         }
@@ -400,6 +440,119 @@ impl McpCore {
             }
         }
         Ok(())
+    }
+
+    /// Replace the curated descriptions (config id or built-in id → text).
+    pub async fn set_descriptions(&self, descriptions: BTreeMap<String, String>) {
+        *self.descriptions.write().await = descriptions;
+    }
+
+    /// Every server an agent can route to right now: enabled built-ins, then
+    /// connected upstreams. Needs no upstream round trip.
+    pub async fn server_summaries(&self) -> Vec<ServerSummary> {
+        let descriptions = self.descriptions.read().await.clone();
+        let mut summaries = self.builtins.read().await.summaries();
+        for summary in &mut summaries {
+            if let Some(text) = descriptions.get(&summary.name) {
+                summary.description = text.clone();
+            }
+        }
+        let taken = summaries
+            .iter()
+            .map(|summary| summary.name.clone())
+            .collect::<BTreeSet<_>>();
+        for connection in self.connections().await {
+            if taken.contains(&connection.id) {
+                continue;
+            }
+            let description = descriptions
+                .get(&connection.server.id)
+                .cloned()
+                .unwrap_or_else(|| advertised_description(&connection.peer));
+            summaries.push(ServerSummary {
+                name: connection.id.clone(),
+                description,
+                built_in: false,
+            });
+        }
+        summaries
+    }
+
+    /// Tools of one server under their own (unprefixed) names. Only that
+    /// server is asked.
+    pub async fn list_server_tools(&self, name: &str) -> Result<Vec<Tool>, McpDomainError> {
+        let builtins = self.builtins.read().await;
+        if builtins.enabled_ids().contains(name) {
+            let prefix = format!("{name}_");
+            return Ok(builtins
+                .list_tools(&*self.permission)
+                .into_iter()
+                .filter(|item| item.server_id == name)
+                .map(|mut item| {
+                    if let Some(original) = item.tool.name.strip_prefix(&prefix) {
+                        item.tool.name = original.to_owned().into();
+                    }
+                    item.tool
+                })
+                .collect());
+        }
+        drop(builtins);
+        let connection = self.connection(name).await?;
+        let tools = tokio::time::timeout(
+            self.config.operation_timeout,
+            connection.peer.list_all_tools(),
+        )
+        .await
+        .map_err(|_| McpDomainError::Timeout {
+            server_id: name.to_owned(),
+            operation: Operation::ListTools,
+        })?
+        .map_err(|_| McpDomainError::UpstreamUnavailable {
+            server_id: name.to_owned(),
+            operation: Operation::ListTools,
+        })?;
+        let tools = tools
+            .into_iter()
+            .filter(|tool| {
+                self.permission.allows_tool(name, tool.name.as_ref())
+                    && connection.server.policy.allows(tool.name.as_ref())
+            })
+            .collect::<Vec<_>>();
+        self.enforce_size(&tools)?;
+        Ok(tools)
+    }
+
+    /// State of one routable server by name, built-ins included.
+    pub async fn server_status(&self, name: &str) -> Option<UpstreamStatus> {
+        if self.builtins.read().await.enabled_ids().contains(name) {
+            return Some(UpstreamStatus {
+                id: name.to_owned(),
+                name: name.to_owned(),
+                state: UpstreamState::Connected,
+                error: None,
+            });
+        }
+        let recorded = self
+            .statuses
+            .read()
+            .await
+            .iter()
+            .find(|status| status.name == name)
+            .cloned();
+        match recorded {
+            Some(status) => Some(status),
+            // Added directly, outside a snapshot.
+            None => self
+                .connection(name)
+                .await
+                .ok()
+                .map(|connection| UpstreamStatus {
+                    id: connection.server.id.clone(),
+                    name: name.to_owned(),
+                    state: UpstreamState::Connected,
+                    error: None,
+                }),
+        }
     }
 
     /// Per-upstream state from the last applied snapshot, in config order.
@@ -615,7 +768,42 @@ impl McpCore {
         arguments: Option<serde_json::Map<String, serde_json::Value>>,
         cancellation: CancellationToken,
     ) -> Result<CallToolResult, McpDomainError> {
-        match self.route_call(exposed_name).await? {
+        let target = self.route_call(exposed_name).await?;
+        self.dispatch(target, arguments, cancellation).await
+    }
+
+    /// Call `tool` on the server routed as `server`, without going through
+    /// prefix matching of an exposed name.
+    pub async fn call_server_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+        cancellation: CancellationToken,
+    ) -> Result<CallToolResult, McpDomainError> {
+        let builtin = self
+            .builtins
+            .read()
+            .await
+            .route(&format_tool_name(server, tool))
+            .filter(|route| route.server_id == server);
+        let target = match builtin {
+            Some(route) => CallTarget::from_builtin(route),
+            None => CallTarget::Upstream {
+                connection: self.connection(server).await?,
+                name: tool.to_owned(),
+            },
+        };
+        self.dispatch(target, arguments, cancellation).await
+    }
+
+    async fn dispatch(
+        &self,
+        target: CallTarget,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+        cancellation: CancellationToken,
+    ) -> Result<CallToolResult, McpDomainError> {
+        match target {
             CallTarget::BuiltIn {
                 server_id,
                 name,

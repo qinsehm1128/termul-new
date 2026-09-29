@@ -175,6 +175,7 @@ impl DesktopMcpCoreRuntime {
                 generation,
                 auth,
                 request_body_limit,
+                control: None,
             },
         )
         .await
@@ -658,6 +659,7 @@ mod tests {
             generation: 7,
             auth: AuthBootstrap::new(7, token).unwrap(),
             request_body_limit: 64 * 1024,
+            control: None,
         }
     }
 

@@ -18,7 +18,9 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::domain::{format_tool_name, AggregatedTool, McpDomainError, Operation, ToolPermission};
+use super::domain::{
+    format_tool_name, AggregatedTool, McpDomainError, Operation, ServerSummary, ToolPermission,
+};
 use super::{McpBuiltInConfig, McpCapabilityPolicy, BUILTIN_PROJECT_SCOPE, BUILTIN_SESSION_MEMORY};
 use crate::memory_index::{
     paths::{INDEX_DIR_NAME, INDEX_FILE_NAME},
@@ -44,6 +46,10 @@ const KEY_ALLOWED: &str = "abcdefghijklmnopqrstuvwxyz0123456789-";
 #[async_trait]
 pub trait BuiltInCapability: Send + Sync {
     fn id(&self) -> &str;
+    /// One line telling an agent what this server is for.
+    fn description(&self) -> &str {
+        ""
+    }
     fn tools(&self) -> Vec<Tool>;
     async fn call_tool(
         &self,
@@ -127,6 +133,18 @@ impl BuiltInRegistry {
                 entry.policy = config.policy.clone();
             }
         }
+    }
+
+    pub fn summaries(&self) -> Vec<ServerSummary> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| entry.enabled)
+            .map(|(id, entry)| ServerSummary {
+                name: id.clone(),
+                description: entry.provider.description().to_owned(),
+                built_in: true,
+            })
+            .collect()
     }
 
     pub fn enabled_ids(&self) -> BTreeSet<String> {
@@ -449,6 +467,10 @@ struct ProjectScopeProvider {
 
 #[async_trait]
 impl BuiltInCapability for SessionMemoryProvider {
+    fn description(&self) -> &str {
+        "Search and read past coding-agent conversations (Claude Code, Codex, pi) on a project."
+    }
+
     fn id(&self) -> &str {
         BUILTIN_SESSION_MEMORY
     }
@@ -710,6 +732,10 @@ struct ProjectListing {
 
 #[async_trait]
 impl BuiltInCapability for ProjectScopeProvider {
+    fn description(&self) -> &str {
+        "Resolve which project a caller is scoped to and list the projects whose memory can be searched."
+    }
+
     fn id(&self) -> &str {
         BUILTIN_PROJECT_SCOPE
     }
