@@ -85,6 +85,20 @@ export interface McpDescribed {
   error?: string
 }
 
+/** How the model writes descriptions. */
+export interface McpDescribeSettings {
+  /** System prompt; `{maxChars}` becomes `maxChars`. */
+  prompt: string
+  /** Longest description kept. */
+  maxChars: number
+  /** Each tool description in the prompt is cut to this; 0 keeps it whole. */
+  toolDescriptionChars: number
+  maxAnswerTokens: number
+}
+
+/** Longest description stored, typed or generated. */
+export const MCP_DESCRIPTION_MAX_CHARS = 2000
+
 export interface McpClientSyncOutcome {
   configPath: string
   backupPath?: string
@@ -124,6 +138,12 @@ export const mcpGatewayApi = {
   descriptions: () => call<Record<string, string>>('mcp_descriptions_get'),
   putDescriptions: (descriptions: Record<string, string>) =>
     call<void>('mcp_descriptions_put', { descriptions }),
+  describeSettings: () =>
+    call<{ settings: McpDescribeSettings; defaults: McpDescribeSettings }>(
+      'mcp_describe_settings_get'
+    ),
+  putDescribeSettings: (settings: McpDescribeSettings) =>
+    call<void>('mcp_describe_settings_put', { settings }),
   /** Have the configured model describe the named servers (all when omitted). */
   describe: (language: string, names?: string[]) =>
     call<McpDescribed[]>('mcp_describe_servers', { language, names: names ?? null })

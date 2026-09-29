@@ -3444,6 +3444,8 @@ pub fn run() {
             commands::mcp_descriptions_get,
             commands::mcp_descriptions_put,
             commands::mcp_describe_servers,
+            commands::mcp_describe_settings_get,
+            commands::mcp_describe_settings_put,
             commands::ai_channels_get,
             commands::ai_channels_put,
             commands::ai_channel_set_key,

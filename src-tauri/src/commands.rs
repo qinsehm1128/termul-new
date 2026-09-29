@@ -5878,6 +5878,45 @@ pub async fn mcp_descriptions_put(
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct McpDescribeSettingsView {
+    settings: crate::mcp_core::describe::DescribeSettings,
+    defaults: crate::mcp_core::describe::DescribeSettings,
+}
+
+/// How descriptions are written, and the built-in defaults.
+#[tauri::command]
+pub async fn mcp_describe_settings_get() -> Result<IpcResult<McpDescribeSettingsView>, String> {
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    Ok(match crate::mcp_core::describe::load_settings(&root) {
+        Ok(settings) => IpcResult::success(McpDescribeSettingsView {
+            settings,
+            defaults: Default::default(),
+        }),
+        Err(error) => IpcResult::error(error, "MCP_DESCRIBE_SETTINGS_INVALID"),
+    })
+}
+
+#[tauri::command]
+pub async fn mcp_describe_settings_put(
+    settings: crate::mcp_core::describe::DescribeSettings,
+) -> Result<IpcResult<()>, String> {
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    Ok(
+        match crate::mcp_core::describe::save_settings(&root, &settings) {
+            Ok(()) => IpcResult::success(()),
+            Err(error) => IpcResult::error(error, "MCP_DESCRIBE_SETTINGS_INVALID"),
+        },
+    )
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpDescribed {
     name: String,
     id: String,
@@ -5911,6 +5950,10 @@ pub async fn mcp_describe_servers(
             Ok(resolved) => resolved,
             Err(error) => return Ok(IpcResult::error(error.to_string(), "AI_NOT_CONFIGURED")),
         };
+    let settings = match crate::mcp_core::describe::load_settings(&root) {
+        Ok(settings) => settings,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_DESCRIBE_SETTINGS_INVALID")),
+    };
     let view = mcp_service.view().await;
     let Some(status) = view.status else {
         return Ok(IpcResult::error(
@@ -5930,6 +5973,7 @@ pub async fn mcp_describe_servers(
         .collect::<Vec<_>>();
     let service = Arc::clone(mcp_service.inner());
     let resolved = &resolved;
+    let settings = &settings;
     let language = language.as_str();
     let described = futures::stream::iter(targets)
         .map(|upstream| {
@@ -5954,6 +5998,7 @@ pub async fn mcp_describe_servers(
                 let result = match tools {
                     Ok(tools) => crate::mcp_core::describe::describe(
                         resolved,
+                        settings,
                         &upstream.name,
                         language,
                         &tools,

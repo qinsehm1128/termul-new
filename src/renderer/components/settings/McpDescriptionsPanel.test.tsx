@@ -7,7 +7,8 @@ const api = vi.hoisted(() => ({
   servers: vi.fn(),
   descriptions: vi.fn(),
   putDescriptions: vi.fn(),
-  describe: vi.fn()
+  describe: vi.fn(),
+  describeSettings: vi.fn()
 }))
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }))
 
@@ -54,6 +55,7 @@ describe('McpDescriptionsPanel', () => {
     })
     api.descriptions.mockResolvedValue({ success: true, data: {} })
     api.putDescriptions.mockResolvedValue({ success: true, data: undefined })
+    api.describeSettings.mockResolvedValue({ success: false, code: 'INVOKE_ERROR' })
     api.describe.mockResolvedValue({
       success: true,
       data: [{ name: 'context7', id: 'id-c7', description: '查询库文档' }]

@@ -236,5 +236,20 @@
     "notConfigured": "请先在「AI 渠道」页为「MCP 服务器说明」选择模型。",
     "someFailed": "部分服务器生成失败：{{names}}",
     "failed": "无法更新说明。"
+  },
+  "describeSettings": {
+    "title": "生成设置",
+    "prompt": "提示词",
+    "promptHint": "{maxChars} 会替换成下面的说明长度。每次请求还会附上界面语言、服务器名和它的全部工具。",
+    "maxChars": "说明长度",
+    "maxCharsHint": "字符数，20–2000，超出会截断。",
+    "toolDescriptionChars": "工具说明长度",
+    "toolDescriptionCharsHint": "提示词里每个工具说明的字符数，0 表示完整保留。",
+    "maxAnswerTokens": "回答预算",
+    "maxAnswerTokensHint": "输出 token 数，64–64000；推理模型需要更多。",
+    "save": "保存设置",
+    "reset": "恢复默认",
+    "saved": "生成设置已保存。",
+    "failed": "无法保存生成设置。"
   }
 }

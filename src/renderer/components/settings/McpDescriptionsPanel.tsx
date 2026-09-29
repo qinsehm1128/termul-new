@@ -9,9 +9,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { type McpServerSummary, mcpGatewayApi } from '@/lib/mcp-gateway-api'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  MCP_DESCRIPTION_MAX_CHARS,
+  type McpServerSummary,
+  mcpGatewayApi
+} from '@/lib/mcp-gateway-api'
 import { useMcpGatewayStore } from '@/stores/mcp-gateway-store'
+import { McpDescribeSettingsForm } from './McpDescribeSettingsForm'
 
 /** The language the model writes in, from the UI language. */
 export function descriptionLanguage(uiLanguage: string): string {
@@ -96,6 +101,7 @@ export function McpDescriptionsPanel(): React.JSX.Element {
           {t('descriptions.generateAll')}
         </Button>
       </div>
+      <McpDescribeSettingsForm />
       {servers.length === 0 ? (
         <p className="text-xs text-muted-foreground">{t('descriptions.empty')}</p>
       ) : (
@@ -143,16 +149,18 @@ export function McpDescriptionsPanel(): React.JSX.Element {
                 </div>
                 {isEditing && editing ? (
                   <form
-                    className="flex gap-2"
+                    className="flex items-start gap-2"
                     onSubmit={(event) => {
                       event.preventDefault()
                       void saveDescriptions({ ...stored, [editing.id]: editing.text })
                     }}
                   >
-                    <Input
+                    <Textarea
                       aria-label={t('descriptions.editLabel', { name: server.name })}
+                      rows={3}
+                      className="text-xs"
                       value={editing.text}
-                      maxLength={240}
+                      maxLength={MCP_DESCRIPTION_MAX_CHARS}
                       onChange={(event) => setEditing({ ...editing, text: event.target.value })}
                     />
                     <Button type="submit" size="sm" disabled={busy !== null}>

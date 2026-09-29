@@ -236,5 +236,20 @@
     "notConfigured": "Choose a model for “MCP server descriptions” on the AI channels page first.",
     "someFailed": "Some servers could not be described: {{names}}",
     "failed": "Could not update the descriptions."
+  },
+  "describeSettings": {
+    "title": "Generation settings",
+    "prompt": "Prompt",
+    "promptHint": "{maxChars} is replaced by the description length below. Each request also carries the UI language, the server name and all of its tools.",
+    "maxChars": "Description length",
+    "maxCharsHint": "Characters, 20–2000. Longer answers are cut.",
+    "toolDescriptionChars": "Tool description length",
+    "toolDescriptionCharsHint": "Characters per tool in the prompt; 0 keeps them whole.",
+    "maxAnswerTokens": "Answer budget",
+    "maxAnswerTokensHint": "Output tokens, 64–64000; reasoning models need more.",
+    "save": "Save settings",
+    "reset": "Restore defaults",
+    "saved": "Generation settings saved.",
+    "failed": "Could not save the generation settings."
   }
 }
