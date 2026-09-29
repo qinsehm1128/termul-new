@@ -220,5 +220,21 @@
       "copied": "已复制",
       "copyFailed": "复制失败"
     }
+  },
+  "descriptions": {
+    "title": "服务器说明",
+    "description": "Agent 靠这一行判断该用哪个服务器。可以让模型根据各服务器的工具生成，也可以手动编辑。",
+    "generateAll": "全部用 AI 生成",
+    "generate": "用 AI 生成 {{name}} 的说明",
+    "edit": "编辑 {{name}} 的说明",
+    "editLabel": "{{name}} 的说明",
+    "save": "保存",
+    "reset": "恢复服务器自带说明",
+    "custom": "已编辑",
+    "none": "暂无说明。",
+    "empty": "当前没有已连接的上游服务器。",
+    "notConfigured": "请先在「AI 渠道」页为「MCP 服务器说明」选择模型。",
+    "someFailed": "部分服务器生成失败：{{names}}",
+    "failed": "无法更新说明。"
   }
 }

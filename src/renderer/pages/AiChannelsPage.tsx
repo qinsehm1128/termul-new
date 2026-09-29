@@ -1,179 +1,362 @@
-import {
-  AI_PROVIDER_KINDS,
-  AI_PROVIDERS_REQUIRING_ENDPOINT,
-  type AiChannel,
-  type AiChannelsDocument,
-  type AiModelProfile,
-  type AiProviderKind,
-  type AiRoute
-} from '@shared/types/ai-channels.types'
-import { BrainCircuit, Plus, Save, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { BrainCircuit, Download, Loader2, Plus, Save, Trash2, X, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { SettingsDivider } from '@/components/settings/SettingsLayout'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import {
-  deleteAiChannelCredential,
-  emptyAiChannelsDocument,
-  getAiChannelCredentialStatus,
-  loadAiChannels,
-  saveAiChannels,
-  setAiChannelCredential
-} from '@/lib/ai-channels-persistence'
-import { cn } from '@/lib/utils'
+  AI_APIS,
+  AI_CHANNEL_PRESETS,
+  type AiApi,
+  type AiChannel,
+  type AiChannelPresetId,
+  type AiChannelsDocument,
+  aiChannelsApi,
+  emptyAiChannels,
+  newChannelId
+} from '@/lib/ai-channels-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
-function newChannel(index: number): AiChannel {
-  const id = `channel-${index}`
-  return {
-    id,
-    displayName: `AI Channel ${index}`,
-    provider: 'openAiCompatible',
-    baseUrl: 'https://api.openai.com/v1',
-    enabled: true,
-    credentialRef: { kind: 'keyring', ref: `ai/channel/${id}`, hasCredential: false },
-    modelIds: ['model']
-  }
-}
+const SELECT_CLASS =
+  'h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35'
 
-function newProfile(channel: AiChannel): AiModelProfile {
-  return {
-    id: `${channel.id}-profile`,
-    channelId: channel.id,
-    modelId: channel.modelIds[0] ?? 'model',
-    enabled: true,
-    capabilities: {
-      descriptionAnalysis: true,
-      fxRuntime: true,
-      structuredOutput: true,
-      toolCalling: true
-    },
-    maxOutputTokens: 8192,
-    temperature: 0.2
-  }
-}
+function ChannelCard({
+  channel,
+  hasKey,
+  onChange,
+  onRemove,
+  onKeyChange
+}: {
+  channel: AiChannel
+  hasKey: boolean
+  onChange: (next: AiChannel) => void
+  onRemove: () => void
+  onKeyChange: (stored: boolean) => void
+}): React.JSX.Element {
+  const { t } = useTranslation('ai')
+  const [keyDraft, setKeyDraft] = useState('')
+  const [modelDraft, setModelDraft] = useState('')
+  const [discovered, setDiscovered] = useState<string[] | null>(null)
+  const [testModel, setTestModel] = useState(channel.models[0] ?? '')
+  const [busy, setBusy] = useState<'key' | 'models' | 'test' | null>(null)
+  const [testResult, setTestResult] = useState<string | null>(null)
 
-function ensureRoutes(document: AiChannelsDocument, profile: AiModelProfile): AiRoute[] {
-  const routes = [...document.routes]
-  for (const purpose of ['descriptionAnalysis', 'fxRuntime'] as const) {
-    const existing = routes.find((route) => route.purpose === purpose)
-    if (existing) {
-      if (!existing.profileIds.includes(profile.id)) existing.profileIds.push(profile.id)
-    } else {
-      routes.push({ purpose, profileIds: [profile.id], maxAttempts: 1, timeoutMs: 30_000 })
+  const update = (patch: Partial<AiChannel>): void => onChange({ ...channel, ...patch })
+  const addModels = (models: string[]): void => {
+    const next = [...channel.models]
+    for (const model of models.map((value) => value.trim()).filter(Boolean)) {
+      if (!next.includes(model)) next.push(model)
     }
+    update({ models: next })
+    if (!testModel && next[0]) setTestModel(next[0])
   }
-  return routes
+
+  const storeKey = async (key: string | null): Promise<void> => {
+    setBusy('key')
+    const result = await aiChannelsApi.setKey(channel.id, key)
+    setBusy(null)
+    if (!result.success) {
+      toast.error(result.error ?? t('page.failed'))
+      return
+    }
+    setKeyDraft('')
+    onKeyChange(key !== null)
+  }
+
+  const discover = async (): Promise<void> => {
+    setBusy('models')
+    const result = await aiChannelsApi.models(channel)
+    setBusy(null)
+    if (!result.success) {
+      toast.error(result.error ?? t('page.failed'))
+      return
+    }
+    setDiscovered(result.data)
+  }
+
+  const test = async (): Promise<void> => {
+    setBusy('test')
+    setTestResult(null)
+    const result = await aiChannelsApi.test(channel, testModel)
+    setBusy(null)
+    setTestResult(
+      result.success
+        ? t('page.testOk', { millis: result.data.millis, reply: result.data.reply })
+        : t('page.testFailed', { error: result.error ?? '' })
+    )
+  }
+
+  return (
+    <section
+      aria-label={channel.name || t('page.untitled')}
+      className="space-y-4 rounded-lg border border-border bg-card p-4"
+    >
+      <div className="flex items-center gap-3">
+        <Switch
+          checked={channel.enabled}
+          aria-label={t('page.enabled')}
+          onCheckedChange={(enabled) => update({ enabled })}
+        />
+        <Input
+          aria-label={t('page.name')}
+          className="h-8 max-w-xs font-medium"
+          value={channel.name}
+          placeholder={t('page.untitled')}
+          onChange={(event) => update({ name: event.target.value })}
+        />
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="ml-auto"
+          aria-label={t('page.remove', { name: channel.name })}
+          onClick={onRemove}
+        >
+          <Trash2 />
+        </Button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-[14rem_1fr]">
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          {t('page.api')}
+          <select
+            className={SELECT_CLASS}
+            value={channel.api}
+            onChange={(event) => update({ api: event.target.value as AiApi })}
+          >
+            {AI_APIS.map((api) => (
+              <option key={api} value={api}>
+                {t(`apis.${api}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label
+          htmlFor={`ai-base-url-${channel.id}`}
+          className="grid gap-1 text-xs text-muted-foreground"
+        >
+          {t('page.baseUrl')}
+          <Input
+            id={`ai-base-url-${channel.id}`}
+            className="font-mono"
+            value={channel.baseUrl}
+            placeholder={t(`baseUrlHint.${channel.api}`)}
+            onChange={(event) => update({ baseUrl: event.target.value })}
+          />
+        </label>
+      </div>
+
+      <div className="grid gap-1 text-xs text-muted-foreground">
+        <span>
+          {t('page.apiKey')} ·{' '}
+          <span className={hasKey ? 'text-emerald-600 dark:text-emerald-400' : ''}>
+            {hasKey ? t('page.keyStored') : t('page.keyMissing')}
+          </span>
+        </span>
+        <div className="flex gap-2">
+          <Input
+            type="password"
+            autoComplete="off"
+            aria-label={t('page.apiKey')}
+            value={keyDraft}
+            placeholder={hasKey ? t('page.keyReplacePlaceholder') : t('page.keyPlaceholder')}
+            onChange={(event) => setKeyDraft(event.target.value)}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={keyDraft.trim() === '' || busy !== null}
+            onClick={() => void storeKey(keyDraft)}
+          >
+            {t('page.saveKey')}
+          </Button>
+          {hasKey ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy !== null}
+              onClick={() => void storeKey(null)}
+            >
+              {t('page.removeKey')}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{t('page.models')}</span>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={!hasKey || channel.baseUrl.trim() === '' || busy !== null}
+            onClick={() => void discover()}
+          >
+            {busy === 'models' ? <Loader2 className="animate-spin" /> : <Download />}
+            {t('page.discover')}
+          </Button>
+        </div>
+        <ul className="flex flex-wrap gap-1.5">
+          {channel.models.map((model) => (
+            <li
+              key={model}
+              className="inline-flex items-center gap-1 rounded bg-secondary px-2 py-0.5 font-mono text-2xs"
+            >
+              {model}
+              <button
+                type="button"
+                aria-label={t('page.removeModel', { model })}
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => update({ models: channel.models.filter((item) => item !== model) })}
+              >
+                <X className="size-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+        {discovered ? (
+          <div className="space-y-1 rounded-md border border-border p-2">
+            <p className="text-2xs text-muted-foreground">
+              {t('page.discovered', { count: discovered.length })}
+            </p>
+            <div className="flex max-h-40 flex-wrap gap-1 overflow-auto">
+              {discovered
+                .filter((model) => !channel.models.includes(model))
+                .map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    className="rounded border border-border px-1.5 py-0.5 font-mono text-2xs hover:bg-secondary"
+                    onClick={() => addModels([model])}
+                  >
+                    + {model}
+                  </button>
+                ))}
+            </div>
+          </div>
+        ) : null}
+        <form
+          className="flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            addModels(modelDraft.split(','))
+            setModelDraft('')
+          }}
+        >
+          <Input
+            aria-label={t('page.addModel')}
+            className="font-mono"
+            value={modelDraft}
+            placeholder={t('page.addModelPlaceholder')}
+            onChange={(event) => setModelDraft(event.target.value)}
+          />
+          <Button type="submit" size="sm" variant="outline" disabled={modelDraft.trim() === ''}>
+            <Plus />
+            {t('page.addModel')}
+          </Button>
+        </form>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <select
+          aria-label={t('page.testModel')}
+          className={`${SELECT_CLASS} max-w-xs`}
+          value={testModel}
+          onChange={(event) => setTestModel(event.target.value)}
+        >
+          {channel.models.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!hasKey || !testModel || busy !== null}
+          onClick={() => void test()}
+        >
+          {busy === 'test' ? <Loader2 className="animate-spin" /> : <Zap />}
+          {t('page.test')}
+        </Button>
+        {testResult ? (
+          <span className="min-w-0 truncate text-xs text-muted-foreground" title={testResult}>
+            {testResult}
+          </span>
+        ) : null}
+      </div>
+    </section>
+  )
 }
 
 export default function AiChannelsPage(): React.JSX.Element {
   const { t } = useTranslation('ai')
-  const [document, setDocument] = useState<AiChannelsDocument>(emptyAiChannelsDocument)
-  const [credentialStates, setCredentialStates] = useState<Record<string, boolean>>({})
-  const [secretDrafts, setSecretDrafts] = useState<Record<string, string>>({})
+  const [document, setDocument] = useState<AiChannelsDocument>(emptyAiChannels)
+  const [keys, setKeys] = useState<Record<string, boolean>>({})
+  const [dirty, setDirty] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    void loadAiChannels()
-      .then((loaded) => {
-        setDocument(loaded)
-        return Promise.all(
-          loaded.channels.map(async (channel) => {
-            const status = await getAiChannelCredentialStatus(channel.id)
-            return [channel.id, status.success ? status.data.hasCredential : false] as const
-          })
-        )
-      })
-      .then((states) => setCredentialStates(Object.fromEntries(states)))
-      .catch(() => toast.error(t('page.failed')))
-      .finally(() => setLoading(false))
+    void aiChannelsApi.load().then((result) => {
+      if (result.success) {
+        setDocument(result.data.document)
+        setKeys(result.data.keys)
+      } else if (result.code !== 'DESKTOP_ONLY') {
+        toast.error(result.error ?? t('page.failed'))
+      }
+      setLoading(false)
+    })
   }, [t])
 
-  const profilesByChannel = useMemo(() => {
-    const grouped = new Map<string, AiModelProfile[]>()
-    for (const profile of document.profiles) {
-      const profiles = grouped.get(profile.channelId) ?? []
-      profiles.push(profile)
-      grouped.set(profile.channelId, profiles)
-    }
-    return grouped
-  }, [document.profiles])
-
-  const updateChannel = (id: string, patch: Partial<AiChannel>): void => {
-    setDocument((current) => ({
-      ...current,
-      channels: current.channels.map((channel) =>
-        channel.id === id ? { ...channel, ...patch } : channel
-      )
-    }))
+  const change = (next: AiChannelsDocument): void => {
+    setDocument(next)
+    setDirty(true)
   }
 
-  const addChannel = (): void => {
-    setDocument((current) => {
-      const channel = newChannel(current.channels.length + 1)
-      const profile = newProfile(channel)
-      return {
-        ...current,
-        revision: current.revision + 1,
-        channels: [...current.channels, channel],
-        profiles: [...current.profiles, profile],
-        routes: ensureRoutes(current, profile)
-      }
+  const addChannel = (presetId: AiChannelPresetId): void => {
+    const preset = AI_CHANNEL_PRESETS.find((item) => item.id === presetId)
+    if (!preset) return
+    change({
+      ...document,
+      channels: [
+        ...document.channels,
+        {
+          id: newChannelId(),
+          name: preset.name,
+          api: preset.api,
+          baseUrl: preset.baseUrl,
+          enabled: true,
+          models: []
+        }
+      ]
     })
-  }
-
-  const removeChannel = (id: string): void => {
-    setDocument((current) => ({
-      ...current,
-      revision: current.revision + 1,
-      channels: current.channels.filter((channel) => channel.id !== id),
-      profiles: current.profiles.filter((profile) => profile.channelId !== id),
-      routes: current.routes
-        .map((route) => ({
-          ...route,
-          profileIds: route.profileIds.filter((profileId) =>
-            current.profiles.some((profile) => profile.id === profileId && profile.channelId !== id)
-          )
-        }))
-        .filter((route) => route.profileIds.length > 0)
-    }))
   }
 
   const save = async (): Promise<void> => {
     setSaving(true)
-    try {
-      await saveAiChannels({ ...document, revision: Math.max(1, document.revision + 1) })
-      setDocument((current) => ({ ...current, revision: current.revision + 1 }))
+    const result = await aiChannelsApi.save(document)
+    setSaving(false)
+    if (result.success) {
+      setDirty(false)
       toast.success(t('page.saved'))
-    } catch {
-      toast.error(t('page.failed'))
-    } finally {
-      setSaving(false)
+    } else {
+      toast.error(result.error ?? t('page.failed'))
     }
   }
 
-  const saveCredential = async (channel: AiChannel): Promise<void> => {
-    const value = secretDrafts[channel.id]?.trim()
-    if (!value) return
-    try {
-      await setAiChannelCredential(channel, value)
-      setCredentialStates((current) => ({ ...current, [channel.id]: true }))
-      setSecretDrafts((current) => ({ ...current, [channel.id]: '' }))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('page.failed'))
-    }
+  if (!isTauriContext()) {
+    return <div className="p-6 text-sm text-muted-foreground">{t('page.desktopOnly')}</div>
   }
+  if (loading) return <div className="p-6 text-sm text-muted-foreground">{t('page.loading')}</div>
 
-  const removeCredential = async (channel: AiChannel): Promise<void> => {
-    try {
-      await deleteAiChannelCredential(channel.id)
-      setCredentialStates((current) => ({ ...current, [channel.id]: false }))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('page.failed'))
-    }
-  }
-
-  if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+  const summary = document.purposes.mcpSummary
+  const summaryChannel = document.channels.find((channel) => channel.id === summary?.channelId)
 
   return (
     <div className="flex h-full flex-col overflow-auto bg-background">
@@ -183,184 +366,116 @@ export default function AiChannelsPage(): React.JSX.Element {
           <h1 className="text-lg font-medium text-foreground">{t('page.title')}</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">{t('page.subtitle')}</p>
-        <p className="mt-2 text-xs text-muted-foreground">{t('page.security')}</p>
       </header>
       <main className="mx-auto w-full max-w-4xl space-y-4 p-6">
-        <SettingsDivider label={t('page.title')} />
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-foreground">{t('page.title')}</h2>
-          <div className="flex gap-2">
-            <button type="button" className="btn-secondary" onClick={addChannel}>
-              <Plus size={14} /> {t('page.addChannel')}
-            </button>
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={saving}
-              onClick={() => void save()}
-            >
-              <Save size={14} /> {t('page.save')}
-            </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-foreground">{t('page.channels')}</span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            {AI_CHANNEL_PRESETS.map((preset) => (
+              <Button
+                key={preset.id}
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => addChannel(preset.id)}
+              >
+                <Plus />
+                {t(`presets.${preset.id}`)}
+              </Button>
+            ))}
+            <Button type="button" size="sm" disabled={!dirty || saving} onClick={() => void save()}>
+              {saving ? <Loader2 className="animate-spin" /> : <Save />}
+              {t('page.save')}
+            </Button>
           </div>
         </div>
+
         {document.channels.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
             {t('page.noChannels')}
           </div>
         ) : null}
-        {document.channels.map((channel) => {
-          const profiles = profilesByChannel.get(channel.id) ?? []
-          const requiresEndpoint = AI_PROVIDERS_REQUIRING_ENDPOINT.includes(channel.provider)
-          return (
-            <section
-              key={channel.id}
-              className="space-y-4 rounded-lg border border-border bg-card p-5"
+        {document.channels.map((channel) => (
+          <ChannelCard
+            key={channel.id}
+            channel={channel}
+            hasKey={keys[channel.id] === true}
+            onKeyChange={(stored) => setKeys((current) => ({ ...current, [channel.id]: stored }))}
+            onChange={(next) =>
+              change({
+                ...document,
+                channels: document.channels.map((item) => (item.id === next.id ? next : item))
+              })
+            }
+            onRemove={() =>
+              change({
+                ...document,
+                channels: document.channels.filter((item) => item.id !== channel.id),
+                purposes:
+                  summary?.channelId === channel.id
+                    ? { ...document.purposes, mcpSummary: undefined }
+                    : document.purposes
+              })
+            }
+          />
+        ))}
+
+        <section className="space-y-3 rounded-lg border border-border bg-secondary/20 p-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">{t('page.purposes')}</p>
+            <p className="text-xs text-muted-foreground">{t('page.purposesDescription')}</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-[12rem_1fr_1fr] sm:items-center">
+            <span className="text-sm text-foreground">{t('purposes.mcpSummary')}</span>
+            <select
+              aria-label={t('page.purposeChannel')}
+              className={SELECT_CLASS}
+              value={summary?.channelId ?? ''}
+              onChange={(event) => {
+                const channel = document.channels.find((item) => item.id === event.target.value)
+                change({
+                  ...document,
+                  purposes: {
+                    ...document.purposes,
+                    mcpSummary: channel
+                      ? { channelId: channel.id, model: channel.models[0] ?? '' }
+                      : undefined
+                  }
+                })
+              }}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="grid flex-1 gap-3 sm:grid-cols-2">
-                  <label className="grid gap-1 text-xs text-muted-foreground">
-                    {t('page.channelId')}
-                    <input className="input" value={channel.id} readOnly />
-                  </label>
-                  <label className="grid gap-1 text-xs text-muted-foreground">
-                    {t('page.displayName')}
-                    <input
-                      className="input"
-                      value={channel.displayName}
-                      onChange={(event) =>
-                        updateChannel(channel.id, { displayName: event.target.value })
-                      }
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs text-muted-foreground">
-                    {t('page.provider')}
-                    <select
-                      className="input"
-                      value={channel.provider}
-                      onChange={(event) =>
-                        updateChannel(channel.id, {
-                          provider: event.target.value as AiProviderKind
-                        })
-                      }
-                    >
-                      {AI_PROVIDER_KINDS.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {t(`providers.${provider}`)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex items-center gap-2 pt-5 text-sm text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={channel.enabled}
-                      onChange={(event) =>
-                        updateChannel(channel.id, { enabled: event.target.checked })
-                      }
-                    />
-                    {t('page.enabled')}
-                  </label>
-                  {requiresEndpoint ? (
-                    <label className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
-                      {t('page.endpoint')}
-                      <input
-                        className="input"
-                        value={channel.baseUrl ?? ''}
-                        onChange={(event) =>
-                          updateChannel(channel.id, { baseUrl: event.target.value })
-                        }
-                      />
-                    </label>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-destructive"
-                  aria-label={t('page.delete')}
-                  onClick={() => removeChannel(channel.id)}
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-              <div className="border-t border-border pt-4">
-                <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {t('page.profile')}
-                </h3>
-                {profiles.map((profile) => (
-                  <div key={profile.id} className="grid gap-3 sm:grid-cols-2">
-                    <label className="grid gap-1 text-xs text-muted-foreground">
-                      {t('page.model')}
-                      <input
-                        className="input"
-                        value={profile.modelId}
-                        onChange={(event) =>
-                          setDocument((current) => ({
-                            ...current,
-                            profiles: current.profiles.map((item) =>
-                              item.id === profile.id
-                                ? { ...item, modelId: event.target.value }
-                                : item
-                            )
-                          }))
-                        }
-                      />
-                    </label>
-                    <div className="grid gap-2 text-xs text-muted-foreground">
-                      {t('page.credential')}:{' '}
-                      {credentialStates[channel.id]
-                        ? t('page.credentialPresent')
-                        : t('page.credentialMissing')}
-                      <div className="flex gap-2">
-                        <input
-                          className="input flex-1"
-                          type="password"
-                          autoComplete="new-password"
-                          value={secretDrafts[channel.id] ?? ''}
-                          placeholder={t('page.secretPlaceholder')}
-                          onChange={(event) =>
-                            setSecretDrafts((current) => ({
-                              ...current,
-                              [channel.id]: event.target.value
-                            }))
-                          }
-                        />
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => void saveCredential(channel)}
-                        >
-                          {credentialStates[channel.id]
-                            ? t('page.replaceCredential')
-                            : t('page.setCredential')}
-                        </button>
-                        {credentialStates[channel.id] ? (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => void removeCredential(channel)}
-                          >
-                            {t('page.removeCredential')}
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div
-                className={cn(
-                  'border-t border-border pt-4 text-xs text-muted-foreground',
-                  !profiles.length && 'hidden'
-                )}
-              >
-                {t('page.routes')}:{' '}
-                {document.routes
-                  .map((route) => `${t(`page.${route.purpose}`)} (${route.profileIds.length})`)
-                  .join(' · ')}
-              </div>
-            </section>
-          )
-        })}
+              <option value="">{t('page.purposeNone')}</option>
+              {document.channels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name || t('page.untitled')}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label={t('page.purposeModel')}
+              className={SELECT_CLASS}
+              value={summary?.model ?? ''}
+              disabled={!summaryChannel}
+              onChange={(event) =>
+                summary &&
+                change({
+                  ...document,
+                  purposes: {
+                    ...document.purposes,
+                    mcpSummary: { ...summary, model: event.target.value }
+                  }
+                })
+              }
+            >
+              {(summaryChannel?.models ?? []).map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+        <p className="text-xs text-muted-foreground">{t('page.security')}</p>
       </main>
     </div>
   )

@@ -5717,6 +5717,291 @@ pub async fn mcp_client_unsync(
     })
 }
 
+fn ai_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| format!("no app data directory: {error}"))
+}
+
+/// AI channels plus, per channel id, whether its API key is stored.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChannelsView {
+    /// `None` until the first save (the renderer then offers to migrate).
+    document: Option<crate::ai_channels::AiChannelsDocument>,
+    keys: std::collections::BTreeMap<String, bool>,
+}
+
+#[tauri::command]
+pub async fn ai_channels_get(app: AppHandle) -> Result<IpcResult<AiChannelsView>, String> {
+    let dir = match ai_data_dir(&app) {
+        Ok(dir) => dir,
+        Err(error) => return Ok(IpcResult::error(error, "AI_CHANNELS_UNAVAILABLE")),
+    };
+    let document = match crate::ai_channels::load(&dir) {
+        Ok(document) => document,
+        Err(error) => return Ok(IpcResult::error(error, "AI_CHANNELS_INVALID")),
+    };
+    let keys = document
+        .iter()
+        .flat_map(|document| document.channels.iter())
+        .map(|channel| {
+            let stored = crate::keyring_get(&crate::ai_channels::credential_key(&channel.id))
+                .ok()
+                .flatten()
+                .is_some_and(|key| !key.is_empty());
+            (channel.id.clone(), stored)
+        })
+        .collect();
+    Ok(IpcResult::success(AiChannelsView { document, keys }))
+}
+
+#[tauri::command]
+pub async fn ai_channels_put(
+    app: AppHandle,
+    document: crate::ai_channels::AiChannelsDocument,
+) -> Result<IpcResult<()>, String> {
+    Ok(
+        match ai_data_dir(&app).and_then(|dir| crate::ai_channels::save(&dir, &document)) {
+            Ok(()) => IpcResult::success(()),
+            Err(error) => IpcResult::error(error, "AI_CHANNELS_INVALID"),
+        },
+    )
+}
+
+/// Store (or with `None`, forget) a channel's API key in the keychain.
+#[tauri::command]
+pub async fn ai_channel_set_key(id: String, key: Option<String>) -> Result<IpcResult<()>, String> {
+    if !crate::ai_channels::is_channel_id(&id) {
+        return Ok(IpcResult::error(
+            "channel id is invalid",
+            "AI_CHANNEL_INVALID",
+        ));
+    }
+    let name = crate::ai_channels::credential_key(&id);
+    let result = match key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+        Some(key) => crate::keyring_set(&name, key),
+        None => crate::keyring_delete(&name),
+    };
+    Ok(match result {
+        Ok(()) => IpcResult::success(()),
+        Err(error) => IpcResult::error(error, "AI_CREDENTIAL_STORAGE_UNAVAILABLE"),
+    })
+}
+
+fn stored_ai_key(channel_id: &str) -> Result<String, crate::ai_channels::AiError> {
+    crate::keyring_get(&crate::ai_channels::credential_key(channel_id))
+        .map_err(crate::ai_channels::AiError::Transport)?
+        .filter(|key| !key.is_empty())
+        .ok_or(crate::ai_channels::AiError::MissingKey)
+}
+
+/// Models the channel's endpoint serves, using its stored key.
+#[tauri::command]
+pub async fn ai_channel_models(
+    channel: crate::ai_channels::AiChannel,
+) -> Result<IpcResult<Vec<String>>, String> {
+    let result = match stored_ai_key(&channel.id) {
+        Ok(key) => crate::ai_channels::client::list_models(&channel, &key).await,
+        Err(error) => Err(error),
+    };
+    Ok(match result {
+        Ok(models) => IpcResult::success(models),
+        Err(error) => IpcResult::error(error.to_string(), "AI_CHANNEL_REQUEST_FAILED"),
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChannelTest {
+    reply: String,
+    millis: u64,
+}
+
+/// Send one tiny prompt through the channel to prove URL, key and model.
+#[tauri::command]
+pub async fn ai_channel_test(
+    channel: crate::ai_channels::AiChannel,
+    model: String,
+) -> Result<IpcResult<AiChannelTest>, String> {
+    let started = std::time::Instant::now();
+    let result = match stored_ai_key(&channel.id) {
+        Ok(key) => {
+            crate::ai_channels::client::complete(
+                &channel,
+                &key,
+                &model,
+                crate::ai_channels::ChatRequest {
+                    system: "You are a connectivity check.",
+                    user: "Reply with the single word OK.",
+                    max_tokens: 64,
+                },
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    Ok(match result {
+        Ok(reply) => IpcResult::success(AiChannelTest {
+            reply: reply.chars().take(200).collect(),
+            millis: started.elapsed().as_millis() as u64,
+        }),
+        Err(error) => IpcResult::error(error.to_string(), "AI_CHANNEL_REQUEST_FAILED"),
+    })
+}
+
+/// Stored server descriptions, config id → text.
+#[tauri::command]
+pub async fn mcp_descriptions_get(
+) -> Result<IpcResult<std::collections::BTreeMap<String, String>>, String> {
+    Ok(match mcp_config_root() {
+        Ok(root) => IpcResult::success(crate::mcp_core::service::load_descriptions(&root)),
+        Err(error) => error,
+    })
+}
+
+#[tauri::command]
+pub async fn mcp_descriptions_put(
+    descriptions: std::collections::BTreeMap<String, String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<()>, String> {
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    if let Err(error) = crate::mcp_core::describe::save(&root, &descriptions) {
+        return Ok(IpcResult::error(error, "MCP_DESCRIPTIONS_WRITE_FAILED"));
+    }
+    mcp_service.reload().await;
+    Ok(IpcResult::success(()))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDescribed {
+    name: String,
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Have the MCP-summary model describe connected upstream servers (all, or
+/// the named ones), store the results and apply them to the gateway.
+#[tauri::command]
+pub async fn mcp_describe_servers(
+    app: AppHandle,
+    names: Option<Vec<String>>,
+    language: String,
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<Vec<McpDescribed>>, String> {
+    use futures::StreamExt;
+
+    let root = match mcp_config_root() {
+        Ok(root) => root,
+        Err(error) => return Ok(error),
+    };
+    let document = match ai_data_dir(&app).and_then(|dir| crate::ai_channels::load(&dir)) {
+        Ok(document) => document.unwrap_or_default(),
+        Err(error) => return Ok(IpcResult::error(error, "AI_CHANNELS_INVALID")),
+    };
+    let resolved =
+        match crate::ai_channels::resolve(&document, document.purposes.mcp_summary.as_ref()) {
+            Ok(resolved) => resolved,
+            Err(error) => return Ok(IpcResult::error(error.to_string(), "AI_NOT_CONFIGURED")),
+        };
+    let view = mcp_service.view().await;
+    let Some(status) = view.status else {
+        return Ok(IpcResult::error(
+            "the MCP gateway is not running",
+            "MCP_SERVICE_UNAVAILABLE",
+        ));
+    };
+    let targets = status
+        .upstreams
+        .into_iter()
+        .filter(|upstream| upstream.state == "connected")
+        .filter(|upstream| {
+            names
+                .as_ref()
+                .is_none_or(|names| names.iter().any(|name| name == &upstream.name))
+        })
+        .collect::<Vec<_>>();
+    let service = Arc::clone(mcp_service.inner());
+    let resolved = &resolved;
+    let language = language.as_str();
+    let described = futures::stream::iter(targets)
+        .map(|upstream| {
+            let service = Arc::clone(&service);
+            async move {
+                let tools = service.server_tools(&upstream.name).await.map(|listing| {
+                    listing["tools"]
+                        .as_array()
+                        .map(|tools| {
+                            tools
+                                .iter()
+                                .map(|tool| {
+                                    (
+                                        tool["name"].as_str().unwrap_or_default().to_owned(),
+                                        tool["description"].as_str().unwrap_or_default().to_owned(),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                });
+                let result = match tools {
+                    Ok(tools) => crate::mcp_core::describe::describe(
+                        resolved,
+                        &upstream.name,
+                        language,
+                        &tools,
+                    )
+                    .await
+                    .map_err(|error| error.to_string()),
+                    Err(error) => Err(error),
+                };
+                let (description, error) = match result {
+                    Ok(description) => (Some(description), None),
+                    Err(error) => (None, Some(error)),
+                };
+                McpDescribed {
+                    name: upstream.name,
+                    id: upstream.id,
+                    description,
+                    error,
+                }
+            }
+        })
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut stored = crate::mcp_core::service::load_descriptions(&root);
+    for item in &described {
+        if let Some(description) = &item.description {
+            stored.insert(item.id.clone(), description.clone());
+        }
+    }
+    if let Err(error) = crate::mcp_core::describe::save(&root, &stored) {
+        return Ok(IpcResult::error(error, "MCP_DESCRIPTIONS_WRITE_FAILED"));
+    }
+    mcp_service.reload().await;
+    Ok(IpcResult::success(described))
+}
+
+/// Servers agents can route to, with the description they read.
+#[tauri::command]
+pub async fn mcp_service_servers(
+    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(match mcp_service.servers().await {
+        Ok(servers) => IpcResult::success(servers),
+        Err(error) => IpcResult::error(error, "MCP_SERVICE_UNAVAILABLE"),
+    })
+}
+
 /// Tools of one aggregated server, as the gateway sees them.
 #[tauri::command]
 pub async fn mcp_service_server_tools(

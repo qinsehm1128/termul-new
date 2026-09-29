@@ -71,6 +71,20 @@ export interface McpClient {
   error?: string
 }
 
+export interface McpServerSummary {
+  name: string
+  /** The description agents read: a stored one, else what the server says. */
+  description: string
+  builtIn: boolean
+}
+
+export interface McpDescribed {
+  name: string
+  id: string
+  description?: string
+  error?: string
+}
+
 export interface McpClientSyncOutcome {
   configPath: string
   backupPath?: string
@@ -104,7 +118,15 @@ export const mcpGatewayApi = {
   clients: (mode: McpGatewayMode) => call<McpClient[]>('mcp_clients_detect', { mode }),
   syncClient: (id: string, mode: McpGatewayMode) =>
     call<McpClientSyncOutcome>('mcp_client_sync', { id, mode }),
-  unsyncClient: (id: string) => call<McpClientSyncOutcome>('mcp_client_unsync', { id })
+  unsyncClient: (id: string) => call<McpClientSyncOutcome>('mcp_client_unsync', { id }),
+  servers: () => call<{ servers: McpServerSummary[] }>('mcp_service_servers'),
+  /** Stored descriptions, config id → text. */
+  descriptions: () => call<Record<string, string>>('mcp_descriptions_get'),
+  putDescriptions: (descriptions: Record<string, string>) =>
+    call<void>('mcp_descriptions_put', { descriptions }),
+  /** Have the configured model describe the named servers (all when omitted). */
+  describe: (language: string, names?: string[]) =>
+    call<McpDescribed[]>('mcp_describe_servers', { language, names: names ?? null })
 }
 
 /** The `mcpServers` JSON most clients (Claude Code, Cursor, …) accept. */

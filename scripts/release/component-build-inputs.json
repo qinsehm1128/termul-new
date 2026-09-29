@@ -65,6 +65,7 @@
       "acp": "core/handles.rs also holds the in-process ACP handle; the Terminal Core process never runs ACP code"
     },
     "acpCore": {
+      "ai_channels": "referenced only by mcp_core/describe.rs, which GUI Tauri commands call to describe MCP servers; the ACP Core never runs it",
       "browser_tab_manager": "referenced only by GUI Tauri commands in commands.rs; the ACP Core never runs them",
       "migrations": "referenced only by GUI Tauri commands in commands.rs; the ACP Core never runs them",
       "remote": "referenced only by GUI Tauri commands in commands.rs; the ACP Core never runs them",

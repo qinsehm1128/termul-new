@@ -220,5 +220,21 @@
       "copied": "Copied",
       "copyFailed": "Could not copy"
     }
+  },
+  "descriptions": {
+    "title": "Server descriptions",
+    "description": "The line an agent reads to pick a server. Let a model write them from each server's tools, or edit them yourself.",
+    "generateAll": "Describe all with AI",
+    "generate": "Describe {{name}} with AI",
+    "edit": "Edit the description of {{name}}",
+    "editLabel": "Description of {{name}}",
+    "save": "Save",
+    "reset": "Use the server's own",
+    "custom": "edited",
+    "none": "No description yet.",
+    "empty": "No upstream server is connected.",
+    "notConfigured": "Choose a model for “MCP server descriptions” on the AI channels page first.",
+    "someFailed": "Some servers could not be described: {{names}}",
+    "failed": "Could not update the descriptions."
   }
 }

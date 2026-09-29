@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub mod builtins;
 pub mod clients;
 pub mod config;
+pub mod describe;
 pub mod domain;
 pub mod facade;
 pub mod gateway_tools;
