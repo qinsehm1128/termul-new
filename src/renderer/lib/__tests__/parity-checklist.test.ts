@@ -377,7 +377,7 @@ const P1_DOMAINS: DomainCheck[] = [
     priority: 'P1',
     tauriAdapterFile: '../features/quick-terminal/tauri-quick-terminal-api.ts',
     adapterExportName: 'createTauriQuickTerminalApi',
-    methods: ['list', 'create', 'open', 'rename', 'remove'],
+    methods: ['list', 'create', 'open', 'rename', 'remove', 'close'],
     apiBridgeExport: 'quickTerminalApi',
     testFile: '../features/quick-terminal/tauri-quick-terminal-api.test.ts'
   },

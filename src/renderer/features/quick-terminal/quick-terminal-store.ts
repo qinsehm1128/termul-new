@@ -24,6 +24,8 @@ interface QuickTerminalState {
   open: (id: string, cols: number, rows: number) => Promise<IpcResult<QuickTerminalOpened>>
   rename: (id: string, title: string | null) => Promise<IpcResult<QuickTerminalRecord>>
   remove: (id: string) => Promise<IpcResult<void>>
+  /** End the shell, keep the quick terminal. */
+  close: (id: string) => Promise<IpcResult<QuickTerminalRecord>>
 }
 
 function logFailure(operation: string, result: IpcResult<unknown>): void {
@@ -109,6 +111,17 @@ export const useQuickTerminalStore = create<QuickTerminalState>((set, get) => ({
     logFailure('rename', result)
     const record = result.success ? result.data : undefined
     if (record) set({ records: upsert(get().records, record) })
+    return result
+  },
+
+  close: async (id) => {
+    const result = await quickTerminalApi.close(id)
+    logFailure('close', result)
+    const record = result.success ? result.data : undefined
+    if (record) {
+      useTerminalStore.getState().forgetQuickTerminal(id)
+      set({ records: upsert(get().records, record) })
+    }
     return result
   },
 

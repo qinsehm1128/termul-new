@@ -90,6 +90,7 @@ export default function QuickTerminalsPage(): React.JSX.Element {
   const createQuickTerminal = useQuickTerminalStore((state) => state.create)
   const rename = useQuickTerminalStore((state) => state.rename)
   const remove = useQuickTerminalStore((state) => state.remove)
+  const closeShell = useQuickTerminalStore((state) => state.close)
   const projects = useProjectStore((state) => state.projects)
   const [query, setQuery] = useState('')
   const [renaming, setRenaming] = useState<QuickTerminalRecord | null>(null)
@@ -125,6 +126,11 @@ export default function QuickTerminalsPage(): React.JSX.Element {
     const result = await rename(renaming.id, renameValue.trim() || null)
     if (!result.success) toast.error(failureMessage(result, t('renameFailed')))
     setRenaming(null)
+  }
+
+  const closeRecord = async (id: string): Promise<void> => {
+    const result = await closeShell(id)
+    if (!result.success) toast.error(failureMessage(result, t('closeFailed')))
   }
 
   const confirmDelete = async (): Promise<void> => {
@@ -237,6 +243,11 @@ export default function QuickTerminalsPage(): React.JSX.Element {
                     >
                       {t('rename')}
                     </DropdownMenuItem>
+                    {record.terminalId ? (
+                      <DropdownMenuItem onSelect={() => void closeRecord(record.id)}>
+                        {t('close')}
+                      </DropdownMenuItem>
+                    ) : null}
                     <DropdownMenuItem
                       className="text-destructive"
                       onSelect={() => setDeleting(record)}

@@ -356,6 +356,13 @@ export interface ConnectedTerminalProps {
   spawnOptions?: TerminalSpawnOptions
   onSpawned?: (terminalId: string) => void
   autoSpawn?: boolean
+  /**
+   * With `autoSpawn` off and no `terminalId`, called once with the grid the
+   * mounted terminal fitted to, so a caller that starts the PTY itself can
+   * start it at the real size. A PTY started at a placeholder size is resized
+   * right away, and shells redraw their prompt on that resize.
+   */
+  onInitialGrid?: (cols: number, rows: number) => void
   onBoundToStoreTerminal?: (ptyId: string) => void
   onExit?: (exitCode: number, signal?: number) => void
   onError?: (error: string) => void
@@ -546,6 +553,7 @@ function ConnectedTerminalComponent({
   spawnOptions,
   onSpawned,
   autoSpawn = true,
+  onInitialGrid,
   onExit,
   onError,
   onCommand,
@@ -662,6 +670,8 @@ function ConnectedTerminalComponent({
   onErrorRef.current = onError
   const onSpawnedRef = useRef(onSpawned)
   onSpawnedRef.current = onSpawned
+  const onInitialGridRef = useRef(onInitialGrid)
+  onInitialGridRef.current = onInitialGrid
   const onCommandRef = useRef(onCommand)
   onCommandRef.current = onCommand
   const onBoundToStoreTerminalRef = useRef(onBoundToStoreTerminal)
@@ -1693,6 +1703,7 @@ function ConnectedTerminalComponent({
       if (!externalTerminalId) {
         if (!autoSpawn) {
           devLog(`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: autoSpawn is false`)
+          onInitialGridRef.current?.(spawnCols, spawnRows)
           return
         }
         if (spawnInFlightRef.current || ptyIdRef.current) {

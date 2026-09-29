@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   open: vi.fn(),
   rename: vi.fn(),
   remove: vi.fn(),
+  close: vi.fn(),
   onChanged: vi.fn((_handler: () => void) => () => undefined)
 }))
 vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
@@ -15,12 +16,23 @@ vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve(
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => true }))
 
 const terminalProps = vi.hoisted(() => ({ current: [] as Array<Record<string, unknown>> }))
-vi.mock('@/components/terminal/ConnectedTerminal', () => ({
-  ConnectedTerminal: (props: Record<string, unknown>) => {
-    terminalProps.current.push(props)
-    return <div data-testid="connected-terminal" data-pty={String(props.terminalId)} />
+/** The grid the mocked terminal "fits" to before a shell is attached. */
+const FITTED = { cols: 132, rows: 41 }
+vi.mock('@/components/terminal/ConnectedTerminal', async () => {
+  const { useEffect } = await vi.importActual<typeof import('react')>('react')
+  return {
+    ConnectedTerminal: (props: Record<string, unknown>) => {
+      terminalProps.current.push(props)
+      const onInitialGrid = props.onInitialGrid as
+        | ((cols: number, rows: number) => void)
+        | undefined
+      useEffect(() => {
+        if (!props.terminalId) onInitialGrid?.(FITTED.cols, FITTED.rows)
+      }, [])
+      return <div data-testid="connected-terminal" data-pty={String(props.terminalId)} />
+    }
   }
-}))
+})
 
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -88,16 +100,27 @@ describe('QuickTerminalsPage', () => {
     api.open
       .mockResolvedValueOnce({
         success: true,
-        data: { record, terminalId: 'pty-1', claim: 'c1', spawned: true }
+        data: {
+          record: { ...record, terminalId: 'pty-1' },
+          terminalId: 'pty-1',
+          claim: 'c1',
+          spawned: true
+        }
       })
       .mockResolvedValueOnce({
         success: true,
-        data: { record, terminalId: 'pty-2', claim: 'c2', spawned: true }
+        data: {
+          record: { ...record, terminalId: 'pty-2' },
+          terminalId: 'pty-2',
+          claim: 'c2',
+          spawned: true
+        }
       })
     renderAt(`/quick-terminals/${id}`)
 
-    const first = await screen.findByTestId('connected-terminal')
-    expect(first.dataset.pty).toBe('pty-1')
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-1'))
+    // The shell starts at the grid it is shown at, not at a placeholder size.
+    expect(api.open).toHaveBeenNthCalledWith(1, id, FITTED.cols, FITTED.rows)
     const props = terminalProps.current.at(-1) ?? {}
     expect(props).toMatchObject({ terminalId: 'pty-1', storeTerminalId: 'pty-1', autoSpawn: false })
 
@@ -108,6 +131,48 @@ describe('QuickTerminalsPage', () => {
 
     await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-2'))
     expect(api.open).toHaveBeenCalledTimes(2)
+    expect(api.open).toHaveBeenNthCalledWith(2, id, FITTED.cols, FITTED.rows)
+  })
+
+  it('closes the shell from the toolbar and keeps the quick terminal to reopen', async () => {
+    api.open
+      .mockResolvedValueOnce({
+        success: true,
+        data: { record: { ...record, terminalId: 'pty-1' }, terminalId: 'pty-1', spawned: true }
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { record: { ...record, terminalId: 'pty-2' }, terminalId: 'pty-2', spawned: true }
+      })
+    api.close.mockResolvedValue({ success: true, data: record })
+    renderAt(`/quick-terminals/${id}`)
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close terminal' }))
+
+    await screen.findByText(/The terminal is closed/)
+    expect(api.close).toHaveBeenCalledWith(id)
+    expect(screen.queryByTestId('connected-terminal')).toBeNull()
+    expect(screen.getByText('Untitled terminal')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-2'))
+  })
+
+  it('closes the shell from the list menu', async () => {
+    api.open.mockResolvedValue({
+      success: true,
+      data: { record: { ...record, terminalId: 'pty-1' }, terminalId: 'pty-1', spawned: true }
+    })
+    api.close.mockResolvedValue({ success: true, data: record })
+    renderAt(`/quick-terminals/${id}`)
+    await waitFor(() => expect(screen.getByTestId('connected-terminal').dataset.pty).toBe('pty-1'))
+
+    openMenu(/more actions/i)
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close terminal' }))
+
+    await screen.findByText(/The terminal is closed/)
+    expect(api.close).toHaveBeenCalledWith(id)
   })
 
   it('lists again when the host reports new quick terminals', async () => {
@@ -129,7 +194,12 @@ describe('QuickTerminalsPage', () => {
     api.create.mockResolvedValue({ success: true, data: created })
     api.open.mockResolvedValue({
       success: true,
-      data: { record: created, terminalId: 'pty-9', spawned: true, claim: 'c9' }
+      data: {
+        record: { ...created, terminalId: 'pty-9' },
+        terminalId: 'pty-9',
+        spawned: true,
+        claim: 'c9'
+      }
     })
     renderAt('/quick-terminals')
     await screen.findByText('Untitled terminal')

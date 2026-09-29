@@ -262,6 +262,24 @@ impl QuickTerminalService {
         Ok(record)
     }
 
+    /// End the shell but keep the quick terminal; the next open starts a new
+    /// shell in the same folder. Closing one with no shell is a no-op.
+    pub async fn close(&self, id: QuickTerminalId) -> Result<QuickTerminalRecord> {
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().await;
+        let mut record = self.get(id)?;
+        let Some(terminal_id) = record.terminal_id.take() else {
+            return Ok(record);
+        };
+        self.end_shell(id, &terminal_id, "close").await?;
+        self.store.put(record.clone()).map_err(storage)?;
+        log::info!(
+            target: "se_manager::quick_terminal",
+            "operation=close id={id} terminal_id={terminal_id} stable_code=OK"
+        );
+        Ok(record)
+    }
+
     /// End the shell and forget the quick terminal. Its folder is kept: it may
     /// hold the user's files.
     pub async fn delete(&self, id: QuickTerminalId) -> Result<()> {
@@ -269,15 +287,7 @@ impl QuickTerminalService {
         let _guard = lock.lock().await;
         let record = self.get(id)?;
         if let Some(terminal_id) = record.terminal_id.as_deref() {
-            if self.pty.get(terminal_id).is_some() {
-                self.pty.terminate(terminal_id).await.map_err(|failure| {
-                    log::error!(
-                        target: "se_manager::quick_terminal",
-                        "operation=delete id={id} terminal_id={terminal_id} stable_code=QUICK_TERMINAL_TERMINATE_FAILED"
-                    );
-                    QuickTerminalError::Terminate(format!("{failure:?}"))
-                })?;
-            }
+            self.end_shell(id, terminal_id, "delete").await?;
         }
         self.store.remove(id).map_err(storage)?;
         self.locks.lock().remove(&id);
@@ -286,6 +296,24 @@ impl QuickTerminalService {
             "operation=delete id={id} stable_code=OK"
         );
         Ok(())
+    }
+
+    async fn end_shell(
+        &self,
+        id: QuickTerminalId,
+        terminal_id: &str,
+        operation: &str,
+    ) -> Result<()> {
+        if self.pty.get(terminal_id).is_none() {
+            return Ok(());
+        }
+        self.pty.terminate(terminal_id).await.map(|_| ()).map_err(|failure| {
+            log::error!(
+                target: "se_manager::quick_terminal",
+                "operation={operation} id={id} terminal_id={terminal_id} stable_code=QUICK_TERMINAL_TERMINATE_FAILED"
+            );
+            QuickTerminalError::Terminate(format!("{failure:?}"))
+        })
     }
 
     /// Adopt a record created elsewhere (migration). Idempotent: an existing
@@ -598,6 +626,36 @@ mod tests {
             Err(QuickTerminalError::NotFound)
         );
         assert!(Path::new(&record.cwd).is_dir());
+    }
+
+    #[tokio::test]
+    async fn close_ends_the_shell_keeps_the_record_and_reopen_starts_a_new_one() {
+        let fixture = fixture();
+        let record = fixture
+            .service
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::Workspace,
+                title: Some("build".to_string()),
+            })
+            .unwrap();
+        let opened = fixture.service.open(open(record.id)).await.unwrap();
+
+        let closed = fixture.service.close(record.id).await.unwrap();
+
+        assert!(fixture
+            .pty
+            .get(&opened.terminal_id)
+            .is_none_or(|instance| !instance.is_active()));
+        assert_eq!(closed.terminal_id, None);
+        assert_eq!(fixture.service.get(record.id).unwrap(), closed);
+        assert_eq!(closed.title.as_deref(), Some("build"));
+        // Closing again has nothing to end.
+        assert_eq!(fixture.service.close(record.id).await.unwrap(), closed);
+
+        let reopened = fixture.service.open(open(record.id)).await.unwrap();
+        assert!(reopened.spawned);
+        assert_ne!(reopened.terminal_id, opened.terminal_id);
+        fixture.service.delete(record.id).await.unwrap();
     }
 
     #[test]

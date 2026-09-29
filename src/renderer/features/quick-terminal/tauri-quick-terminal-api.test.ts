@@ -52,6 +52,13 @@ describe('tauri quick terminal api', () => {
     expect(invokeMock).toHaveBeenLastCalledWith('quick_terminal_delete', {
       payload: { id: record.id }
     })
+
+    invokeMock.mockResolvedValue({ success: true, data: record })
+    const closed = await api.close(record.id)
+    expect(invokeMock).toHaveBeenLastCalledWith('quick_terminal_close', {
+      payload: { id: record.id }
+    })
+    expect(closed.success && closed.data.id).toBe(record.id)
   })
 
   it('passes host error codes through unchanged', async () => {

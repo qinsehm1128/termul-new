@@ -16,6 +16,8 @@
   "opening": "Opening…",
   "exited": "The shell has exited.",
   "reopen": "Reopen",
+  "close": "Close terminal",
+  "closed": "The terminal is closed. Its folder and name are kept.",
   "openFailed": "Could not open the quick terminal",
   "actions": "More actions",
   "rename": "Rename",
@@ -34,5 +36,6 @@
   "createFailed": "Could not create a quick terminal",
   "renameFailed": "Rename failed",
   "deleteFailed": "Delete failed",
+  "closeFailed": "Could not close the terminal",
   "untitled": "Untitled terminal"
 }

@@ -11,8 +11,8 @@ use serde_json::Value;
 use crate::commands::IpcResult;
 use crate::quick_terminal::{
     CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
-    QuickTerminalRecord, RenameQuickTerminal, METHOD_CREATE, METHOD_DELETE, METHOD_LIST,
-    METHOD_OPEN, METHOD_RENAME,
+    QuickTerminalRecord, RenameQuickTerminal, METHOD_CLOSE, METHOD_CREATE, METHOD_DELETE,
+    METHOD_LIST, METHOD_OPEN, METHOD_RENAME,
 };
 use crate::quick_terminal_commands::request;
 use crate::web::ws::AppState;
@@ -77,6 +77,13 @@ pub async fn delete(
     Json(payload): Json<QuickTerminalIdParams>,
 ) -> Reply<()> {
     reply(request(&state.terminal, METHOD_DELETE, &payload).await)
+}
+
+pub async fn close(
+    State(state): State<AppState>,
+    Json(payload): Json<QuickTerminalIdParams>,
+) -> Reply<QuickTerminalRecord> {
+    reply(request(&state.terminal, METHOD_CLOSE, &payload).await)
 }
 
 #[cfg(all(test, unix))]

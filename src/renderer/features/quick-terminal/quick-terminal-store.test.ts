@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   open: vi.fn(),
   rename: vi.fn(),
   remove: vi.fn(),
+  close: vi.fn(),
   onChanged: vi.fn((_handler: () => void) => () => undefined)
 }))
 vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
@@ -107,6 +108,37 @@ describe('quick terminal store', () => {
 
     expect(result.success).toBe(false)
     expect(useQuickTerminalStore.getState().records).toHaveLength(1)
+  })
+
+  it('closing drops the shell but keeps the quick terminal', async () => {
+    api.open.mockResolvedValue(opened('pty-1', true))
+    api.list.mockResolvedValue({ success: true, data: [record] })
+    await useQuickTerminalStore.getState().load()
+    await useQuickTerminalStore.getState().open(id, 80, 24)
+    const closed = { ...record, updatedAtUtc: '2026-09-29T01:00:00.000Z' }
+    api.close.mockResolvedValue({ success: true, data: closed })
+
+    await useQuickTerminalStore.getState().close(id)
+
+    expect(useQuickTerminalStore.getState().records).toEqual([closed])
+    expect(useTerminalStore.getState().terminals).toEqual([])
+  })
+
+  it('keeps the shell when the host refuses to close it', async () => {
+    api.open.mockResolvedValue(opened('pty-1', true))
+    api.list.mockResolvedValue({ success: true, data: [record] })
+    await useQuickTerminalStore.getState().load()
+    await useQuickTerminalStore.getState().open(id, 80, 24)
+    api.close.mockResolvedValue({
+      success: false,
+      error: 'busy',
+      code: 'QUICK_TERMINAL_TERMINATE_FAILED'
+    })
+
+    const result = await useQuickTerminalStore.getState().close(id)
+
+    expect(result.success).toBe(false)
+    expect(useTerminalStore.getState().terminals).toHaveLength(1)
   })
 
   it('names an untitled private folder instead of showing its id', () => {

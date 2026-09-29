@@ -11,8 +11,8 @@ use crate::commands::IpcResult;
 use crate::core::TerminalServiceHandle;
 use crate::quick_terminal::{
     dispatch, CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
-    QuickTerminalRecord, QuickTerminalReply, RenameQuickTerminal, INVALID_REQUEST, METHOD_CREATE,
-    METHOD_DELETE, METHOD_LIST, METHOD_OPEN, METHOD_RENAME, UNAVAILABLE,
+    QuickTerminalRecord, QuickTerminalReply, RenameQuickTerminal, INVALID_REQUEST, METHOD_CLOSE,
+    METHOD_CREATE, METHOD_DELETE, METHOD_LIST, METHOD_OPEN, METHOD_RENAME, UNAVAILABLE,
 };
 
 fn into_ipc<T: DeserializeOwned>(reply: QuickTerminalReply) -> IpcResult<T> {
@@ -92,6 +92,14 @@ pub async fn quick_terminal_delete(
     Ok(request(terminal.inner(), METHOD_DELETE, &payload).await)
 }
 
+#[tauri::command]
+pub async fn quick_terminal_close(
+    terminal: State<'_, TerminalServiceHandle>,
+    payload: QuickTerminalIdParams,
+) -> Result<IpcResult<QuickTerminalRecord>, String> {
+    Ok(request(terminal.inner(), METHOD_CLOSE, &payload).await)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -134,6 +142,15 @@ mod tests {
             renamed.data.and_then(|record| record.title).as_deref(),
             Some("renamed")
         );
+
+        let closed: IpcResult<QuickTerminalRecord> = request(
+            &handle,
+            METHOD_CLOSE,
+            &QuickTerminalIdParams { id: record.id },
+        )
+        .await;
+        let closed = closed.data.expect("closed in process");
+        assert_eq!((closed.id, closed.terminal_id), (record.id, None));
 
         let bad: IpcResult<QuickTerminalRecord> =
             request(&handle, METHOD_RENAME, &serde_json::json!({ "id": "nope" })).await;
