@@ -2,7 +2,7 @@
   "page": {
     "title": "AI channels",
     "subtitle": "Model APIs Se Manager itself calls, for example to describe MCP servers. Each channel is one endpoint speaking one protocol.",
-    "security": "API keys stay in the system keychain; they are never written to a settings file or exported.",
+    "security": "API keys are kept in ~/.se-manager/credentials.json, readable only by you; they are never written to the channel settings or exported.",
     "desktopOnly": "AI channels are configured in the desktop app.",
     "loading": "Loading…",
     "channels": "Channels",

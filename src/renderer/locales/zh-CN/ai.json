@@ -2,7 +2,7 @@
   "page": {
     "title": "AI 渠道",
     "subtitle": "Se Manager 自身调用的模型接口，例如为 MCP 服务器生成用途说明。每个渠道对应一个接口地址和一种协议。",
-    "security": "API 密钥只保存在系统钥匙串，不会写入配置文件或导出。",
+    "security": "API 密钥保存在本机 ~/.se-manager/credentials.json（仅当前用户可读），不会写入渠道配置或导出。",
     "desktopOnly": "AI 渠道只能在桌面应用中配置。",
     "loading": "正在加载…",
     "channels": "渠道",

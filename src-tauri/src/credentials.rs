@@ -1,4 +1,5 @@
-//! The single seam through which host code reaches an OS credential store.
+//! The single seam through which host code reaches its credential store — a
+//! user-only file since secrets left the OS keychain (see [`FileBackend`]).
 //!
 //! Every credential the app owns lives under a brand-bearing keychain *service*
 //! name (`brand::canonical().keychain_service`,
@@ -28,12 +29,18 @@
 //! `set_default_credential_builder` is exactly such a process-global
 //! (`RwLock`), which is why it cannot serve as this seam.
 //!
-//! Production never calls [`override_backend`]; it always sees
-//! [`KeyringBackend`].
+//! Production never calls [`override_backend`]; it always sees the file at
+//! [`default_credentials_path`].
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+
+use serde::{Deserialize, Serialize};
 
 /// Why a credential operation could not be completed.
 ///
@@ -58,7 +65,7 @@ impl fmt::Display for CredentialError {
 
 impl std::error::Error for CredentialError {}
 
-/// Read/write access to one OS credential store, keyed by `(service, key)`.
+/// Read/write access to one credential store, keyed by `(service, key)`.
 ///
 /// `service` is passed on every call rather than captured at construction
 /// because a compatibility read has to consult two services — the canonical one
@@ -75,37 +82,164 @@ pub trait CredentialBackend: Send + Sync {
     fn delete(&self, service: &str, key: &str) -> Result<(), CredentialError>;
 }
 
-/// The shipped backend: `keyring::Entry` against whichever OS store the
-/// compile-time cargo feature selected.
-pub struct KeyringBackend;
+/// The shipped backend: one JSON file under the user's workspace dir
+/// (`~/.se-manager/credentials.json`), readable only by the user and shared by
+/// every process of the app — GUI, Cores and the MCP gateway.
+///
+/// Not the OS keychain: a keychain entry is bound to the signature of the
+/// binary that wrote it, so every update of an ad-hoc signed build made macOS
+/// ask for the login password again, and a gateway waiting on that dialog left
+/// every MCP server stuck connecting.
+pub struct FileBackend {
+    path: PathBuf,
+}
 
-impl KeyringBackend {
-    fn entry(service: &str, key: &str) -> Result<keyring::Entry, CredentialError> {
-        keyring::Entry::new(service, key)
-            .map_err(|error| CredentialError::Unavailable(error.to_string()))
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CredentialFile {
+    /// service → key → secret
+    #[serde(default)]
+    secrets: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl FileBackend {
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    fn read(&self) -> Result<CredentialFile, CredentialError> {
+        match fs::read(&self.path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+                CredentialError::Backend(format!("{}: {error}", self.path.display()))
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(CredentialFile::default()),
+            Err(error) => Err(CredentialError::Backend(format!(
+                "{}: {error}",
+                self.path.display()
+            ))),
+        }
+    }
+
+    /// Read, change and replace the file while holding its lock, so writes
+    /// from two processes cannot drop each other's entries. A file that does
+    /// not parse is left alone rather than overwritten.
+    fn update(
+        &self,
+        change: impl FnOnce(&mut CredentialFile) -> bool,
+    ) -> Result<(), CredentialError> {
+        let backend = |error: io::Error| {
+            CredentialError::Backend(format!("{}: {error}", self.path.display()))
+        };
+        let parent = self.path.parent().ok_or_else(|| {
+            CredentialError::Unavailable(format!("{} has no parent", self.path.display()))
+        })?;
+        fs::create_dir_all(parent).map_err(backend)?;
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.path.with_extension("json.lock"))
+            .map_err(backend)?;
+        lock.lock().map_err(backend)?;
+
+        let mut file = self.read()?;
+        if !change(&mut file) {
+            return Ok(());
+        }
+        let bytes = serde_json::to_vec_pretty(&file)
+            .map_err(|error| CredentialError::Backend(error.to_string()))?;
+        write_private(&self.path, &bytes).map_err(backend)
     }
 }
 
-impl CredentialBackend for KeyringBackend {
+/// Write `bytes` to a new user-only file and rename it over `path`.
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| {
+        let mut file = options.open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+impl CredentialBackend for FileBackend {
     fn get(&self, service: &str, key: &str) -> Result<Option<String>, CredentialError> {
-        match Self::entry(service, key)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(CredentialError::Backend(error.to_string())),
-        }
+        Ok(self
+            .read()?
+            .secrets
+            .get(service)
+            .and_then(|entries| entries.get(key))
+            .cloned())
     }
 
     fn set(&self, service: &str, key: &str, value: &str) -> Result<(), CredentialError> {
-        Self::entry(service, key)?
-            .set_password(value)
-            .map_err(|error| CredentialError::Backend(error.to_string()))
+        self.update(|file| {
+            file.secrets
+                .entry(service.to_owned())
+                .or_default()
+                .insert(key.to_owned(), value.to_owned());
+            true
+        })
     }
 
     fn delete(&self, service: &str, key: &str) -> Result<(), CredentialError> {
-        match Self::entry(service, key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(CredentialError::Backend(error.to_string())),
-        }
+        self.update(|file| {
+            let Some(entries) = file.secrets.get_mut(service) else {
+                return false;
+            };
+            if entries.remove(key).is_none() {
+                return false;
+            }
+            if entries.is_empty() {
+                file.secrets.remove(service);
+            }
+            true
+        })
+    }
+}
+
+/// `~/<workspace dir>/credentials.json`, or under `SE_PROJECT_ROOT` when set.
+/// Resolved on every call: it reads the brand seam on the caller's thread.
+pub fn default_credentials_path() -> Option<PathBuf> {
+    crate::mcp_core::config_root().map(|root| {
+        root.join(crate::brand::canonical().workspace_dir)
+            .join("credentials.json")
+    })
+}
+
+struct ShippedBackend;
+
+impl ShippedBackend {
+    fn file() -> Result<FileBackend, CredentialError> {
+        default_credentials_path()
+            .map(FileBackend::at)
+            .ok_or_else(|| CredentialError::Unavailable("no home directory".into()))
+    }
+}
+
+impl CredentialBackend for ShippedBackend {
+    fn get(&self, service: &str, key: &str) -> Result<Option<String>, CredentialError> {
+        Self::file()?.get(service, key)
+    }
+
+    fn set(&self, service: &str, key: &str, value: &str) -> Result<(), CredentialError> {
+        Self::file()?.set(service, key, value)
+    }
+
+    fn delete(&self, service: &str, key: &str) -> Result<(), CredentialError> {
+        Self::file()?.delete(service, key)
     }
 }
 
@@ -119,7 +253,7 @@ thread_local! {
 
 fn shipped_backend() -> &'static Arc<dyn CredentialBackend> {
     static SHIPPED: OnceLock<Arc<dyn CredentialBackend>> = OnceLock::new();
-    SHIPPED.get_or_init(|| Arc::new(KeyringBackend))
+    SHIPPED.get_or_init(|| Arc::new(ShippedBackend))
 }
 
 /// The credential backend in force on **this thread** right now.
@@ -232,6 +366,73 @@ mod tests {
             "a keychain is keyed by (service, key); collapsing the service would \
              make a compatibility read meaningless"
         );
+    }
+
+    #[test]
+    fn the_file_backend_keeps_secrets_per_service_for_every_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("credentials.json");
+        let writer = FileBackend::at(&path);
+        writer.set("svc", "k", "v1").unwrap();
+        writer.set("svc", "k", "v2").unwrap();
+        writer.set("other", "k", "o").unwrap();
+
+        // Another process opens the same file.
+        let reader = FileBackend::at(&path);
+        assert_eq!(reader.get("svc", "k").unwrap().as_deref(), Some("v2"));
+        assert_eq!(reader.get("other", "k").unwrap().as_deref(), Some("o"));
+        assert_eq!(reader.get("svc", "missing").unwrap(), None);
+
+        reader.delete("svc", "k").unwrap();
+        reader.delete("svc", "k").unwrap();
+        assert_eq!(writer.get("svc", "k").unwrap(), None);
+        assert_eq!(writer.get("other", "k").unwrap().as_deref(), Some("o"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "got {mode:o}");
+        }
+    }
+
+    #[test]
+    fn a_missing_file_is_empty_and_a_corrupt_one_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let backend = FileBackend::at(&path);
+        assert_eq!(backend.get("svc", "k").unwrap(), None);
+        backend.delete("svc", "k").unwrap();
+        assert!(!path.exists(), "deleting nothing must not create the file");
+
+        fs::write(&path, b"{not json").unwrap();
+        assert!(backend.get("svc", "k").is_err());
+        assert!(backend.set("svc", "k", "v").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"{not json");
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_drop_each_others_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let writers = (0..8)
+            .map(|writer| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let backend = FileBackend::at(path);
+                    for index in 0..20 {
+                        backend
+                            .set("svc", &format!("w{writer}-{index}"), "v")
+                            .unwrap();
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let file: CredentialFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(file.secrets["svc"].len(), 160);
     }
 
     /// The whole reason this seam is thread-local rather than process-global.
