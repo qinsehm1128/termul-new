@@ -635,7 +635,7 @@ export function McpServersSettings(): React.JSX.Element {
                   </Button>
                 </div>
                 {gateway?.state === 'failed' && gateway.error ? (
-                  <p className="px-3 pb-2 font-mono text-3xs text-destructive/80">
+                  <p className="px-3 pb-2 font-mono text-3xs text-destructive/80 wrap-anywhere">
                     {t('settings.gatewayFailed', { error: gateway.error })}
                   </p>
                 ) : null}

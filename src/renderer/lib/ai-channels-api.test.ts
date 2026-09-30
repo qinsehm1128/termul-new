@@ -27,7 +27,7 @@ describe('aiChannelsApi.load', () => {
     })
   })
 
-  it('carries channels from the old document over once, keeping their key ids', async () => {
+  it('carries channels the user gave a key over once, keeping their ids', async () => {
     persistence.read.mockResolvedValue({
       success: true,
       data: {
@@ -39,9 +39,25 @@ describe('aiChannelsApi.load', () => {
             provider: 'openAiCompatible',
             baseUrl: 'https://relay.test/v1',
             enabled: true,
-            modelIds: ['gpt-5']
+            modelIds: ['gpt-5'],
+            credentialRef: { kind: 'keyring', ref: 'ai/channel/old', hasCredential: true }
           },
-          { id: 'no-url', displayName: 'Broken', provider: 'openRouter' }
+          // What the old page seeded on its own: never given a key.
+          {
+            id: 'channel-1',
+            displayName: 'AI Channel 1',
+            provider: 'openAiCompatible',
+            baseUrl: 'https://api.openai.com/v1',
+            enabled: true,
+            modelIds: ['model'],
+            credentialRef: { kind: 'keyring', ref: 'ai/channel/channel-1', hasCredential: false }
+          },
+          {
+            id: 'no-url',
+            displayName: 'Broken',
+            provider: 'openRouter',
+            credentialRef: { hasCredential: true }
+          }
         ]
       }
     })
