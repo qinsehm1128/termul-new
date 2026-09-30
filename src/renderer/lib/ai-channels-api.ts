@@ -92,11 +92,15 @@ interface LegacyChannel {
   baseUrl?: unknown
   enabled?: unknown
   modelIds?: unknown
+  credentialRef?: { hasCredential?: unknown }
 }
 
 /**
  * The first document built from the old channel list, if there was one worth
- * keeping. Keys stay where they were: both versions use `ai/channel/<id>`.
+ * keeping: channels the user gave a key. The old page seeded a placeholder
+ * ("AI Channel 1", model `model`) that never had one; carrying it over only
+ * produced a channel that fails its first request. Keys are entered again —
+ * they now live in the credentials file, not the keychain the old page used.
  */
 async function migrateLegacy(): Promise<AiChannelsDocument | null> {
   const legacy = await persistenceApi.read<{ channels?: LegacyChannel[] }>(LEGACY_KEY)
@@ -104,6 +108,7 @@ async function migrateLegacy(): Promise<AiChannelsDocument | null> {
   const channels = legacy.data.channels.flatMap((entry): AiChannel[] => {
     if (typeof entry.id !== 'string' || typeof entry.baseUrl !== 'string') return []
     if (!/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(entry.id) || entry.baseUrl.trim() === '') return []
+    if (entry.credentialRef?.hasCredential !== true) return []
     const models = Array.isArray(entry.modelIds)
       ? entry.modelIds.filter((model): model is string => typeof model === 'string')
       : []
