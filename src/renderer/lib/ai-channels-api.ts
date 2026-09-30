@@ -1,6 +1,6 @@
 /**
  * AI channels: model APIs Se Manager itself calls. The document lives in the
- * desktop host (`ai-channels.json`); API keys live in the OS keychain and
+ * desktop host (`ai-channels.json`); API keys live in the user-only credentials file and
  * never reach the renderer after they are entered.
  */
 

@@ -77,11 +77,11 @@
     "browsePrivateKey": "浏览私钥文件",
     "passphrase": "私钥口令",
     "passphrasePlaceholder": "没有口令时请留空",
-    "passphraseStored": "🔒 口令已安全存储在操作系统钥匙串中。留空可保留现有值。",
+    "passphraseStored": "🔒 口令已保存在本机凭据文件中（仅当前用户可读）。留空可保留现有值。",
     "password": "密码",
     "passwordPlaceholder": "输入密码",
-    "passwordStored": "🔒 密码已安全存储在操作系统钥匙串中。留空可保留现有值。",
-    "passwordStorageHint": "🔒 密码将存储在操作系统钥匙串中（Windows 凭据管理器/macOS 钥匙串）。"
+    "passwordStored": "🔒 密码已保存在本机凭据文件中（仅当前用户可读）。留空可保留现有值。",
+    "passwordStorageHint": "🔒 密码将保存在 ~/.se-manager/credentials.json 中（仅当前用户可读）。"
   },
   "portForward": {
     "title": "端口转发",

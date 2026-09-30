@@ -77,11 +77,11 @@
     "browsePrivateKey": "Browse for private key file",
     "passphrase": "Key Passphrase",
     "passphrasePlaceholder": "Leave empty if no passphrase",
-    "passphraseStored": "🔒 Passphrase stored securely in the OS keychain. Leave blank to keep the existing value.",
+    "passphraseStored": "🔒 Passphrase stored in your local credentials file, readable only by you. Leave blank to keep the existing value.",
     "password": "Password",
     "passwordPlaceholder": "Enter password",
-    "passwordStored": "🔒 Password stored securely in the OS keychain. Leave blank to keep the existing value.",
-    "passwordStorageHint": "🔒 Password will be stored in your OS keychain (Windows Credential Manager / macOS Keychain)."
+    "passwordStored": "🔒 Password stored in your local credentials file, readable only by you. Leave blank to keep the existing value.",
+    "passwordStorageHint": "🔒 Password will be stored in ~/.se-manager/credentials.json, readable only by you."
   },
   "portForward": {
     "title": "Port Forwards",
