@@ -95,9 +95,9 @@ function GatewayStatus(): React.JSX.Element {
           )}
         </div>
       </div>
-      {view?.error ? <p className="text-xs text-destructive">{view.error}</p> : null}
+      {view?.error ? <p className="text-xs text-destructive wrap-anywhere">{view.error}</p> : null}
       {view?.status?.configError ? (
-        <p className="text-xs text-destructive">
+        <p className="text-xs text-destructive wrap-anywhere">
           {t('gateway.configError', { error: view.status.configError })}
         </p>
       ) : null}
