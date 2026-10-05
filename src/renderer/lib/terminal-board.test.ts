@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { Project, ProjectGroup, Terminal } from '@/types/project'
+import {
+  type Project,
+  type ProjectGroup,
+  sshTerminalProjectId,
+  type Terminal
+} from '@/types/project'
 import {
   buildTerminalBoard,
   countBoardTerminals,
@@ -53,6 +58,38 @@ describe('buildTerminalBoard', () => {
     expect(board[1].projects[0].projectId).toBe('p-loose')
     expect(board[2].projects[0].terminals.map((item) => item.id)).toEqual(['t-chat'])
     expect(countBoardTerminals(board)).toBe(3)
+  })
+
+  it('leaves quick terminals off the board instead of filing them as unassigned', () => {
+    // A quick terminal has no project, so it used to land in the unassigned
+    // block. It is managed on its own page and has no place on the board.
+    const board = buildTerminalBoard(
+      [
+        terminal('t-cost', { projectId: 'p-cost' }),
+        terminal('t-quick', { quickTerminalId: 'q1', ptyId: 'pty-q' })
+      ],
+      projects,
+      groups
+    )
+
+    expect(board.map((group) => group.groupId)).toEqual(['g-ns'])
+    expect(countBoardTerminals(board)).toBe(1)
+  })
+
+  it('leaves SSH terminals off the board instead of listing their synthetic project', () => {
+    // An SSH terminal carries `ssh-<profile>` as its project id. No such project
+    // exists, so the board showed a block named after the raw id.
+    const board = buildTerminalBoard(
+      [
+        terminal('t-cost', { projectId: 'p-cost' }),
+        terminal('t-ssh', { projectId: sshTerminalProjectId('profile-1'), ptyId: 'pty-s' })
+      ],
+      projects,
+      groups
+    )
+
+    expect(board.map((group) => group.groupId)).toEqual(['g-ns'])
+    expect(countBoardTerminals(board)).toBe(1)
   })
 
   it('lists a Conversation terminal under its Conversation, not its project', () => {

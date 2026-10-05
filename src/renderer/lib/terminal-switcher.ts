@@ -2,6 +2,7 @@ import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
 import { terminalBoardStatus } from '@/lib/terminal-board'
 import {
   isConversationScopedTerminal,
+  isManagedOnOwnPage,
   isProjectScopedTerminal,
   type Project,
   type ProjectGroup,
@@ -36,7 +37,8 @@ export function scopeTerminals(
 ): Terminal[] {
   const { terminals, activeProjectId, activeGroup } = context
 
-  if (scope === 'all') return [...terminals]
+  // Quick and SSH terminals are managed on their own pages, so no scope offers them.
+  if (scope === 'all') return terminals.filter((terminal) => !isManagedOnOwnPage(terminal))
 
   if (scope === 'group' && activeGroup) {
     // Widened so an unassigned terminal's `undefined` can be probed directly.
