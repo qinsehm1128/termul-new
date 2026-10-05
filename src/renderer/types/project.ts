@@ -189,6 +189,14 @@ export function isConversationScopedTerminal(terminal: Pick<Terminal, 'conversat
 }
 
 /**
+ * A terminal owned by the quick-terminal page. It has no project, so terminal
+ * lists that group by project must skip it rather than file it as unassigned.
+ */
+export function isQuickTerminal(terminal: Pick<Terminal, 'quickTerminalId'>): boolean {
+  return Boolean(terminal.quickTerminalId)
+}
+
+/**
  * A terminal that belongs to a project — the *only* definition of that.
  *
  * `projectId` alone is not it. A Conversation's terminal also carries a project

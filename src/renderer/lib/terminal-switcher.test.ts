@@ -65,6 +65,18 @@ describe('scopeTerminals', () => {
     expect(scopeTerminals('all', context).map((t) => t.id)).toEqual(['t1', 't2', 't3', 't4'])
   })
 
+  it('should leave quick terminals out of every scope', () => {
+    // A quick terminal has no project, so it used to surface at `all` scope as
+    // an "unassigned project" chip. It lives on its own page instead.
+    const withQuick: TerminalSwitcherContext = {
+      ...context,
+      terminals: [...context.terminals, { ...terminal('tq'), quickTerminalId: 'q1' }]
+    }
+    expect(scopeTerminals('all', withQuick).map((t) => t.id)).toEqual(['t1', 't2', 't3', 't4'])
+    expect(scopeTerminals('group', withQuick).map((t) => t.id)).toEqual(['t1', 't2'])
+    expect(scopeTerminals('project', withQuick).map((t) => t.id)).toEqual(['t1'])
+  })
+
   it('should degrade group scope to the project list when no group is selected', () => {
     // Reachable when the selected group is deleted while the row is on group
     // scope. Falling back beats blanking the row.

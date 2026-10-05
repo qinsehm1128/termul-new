@@ -3,6 +3,7 @@ import { terminalBoardStatus } from '@/lib/terminal-board'
 import {
   isConversationScopedTerminal,
   isProjectScopedTerminal,
+  isQuickTerminal,
   type Project,
   type ProjectGroup,
   type Terminal
@@ -36,7 +37,8 @@ export function scopeTerminals(
 ): Terminal[] {
   const { terminals, activeProjectId, activeGroup } = context
 
-  if (scope === 'all') return [...terminals]
+  // Quick terminals are managed on their own page, so no scope offers them.
+  if (scope === 'all') return terminals.filter((terminal) => !isQuickTerminal(terminal))
 
   if (scope === 'group' && activeGroup) {
     // Widened so an unassigned terminal's `undefined` can be probed directly.

@@ -55,6 +55,22 @@ describe('buildTerminalBoard', () => {
     expect(countBoardTerminals(board)).toBe(3)
   })
 
+  it('leaves quick terminals off the board instead of filing them as unassigned', () => {
+    // A quick terminal has no project, so it used to land in the unassigned
+    // block. It is managed on its own page and has no place on the board.
+    const board = buildTerminalBoard(
+      [
+        terminal('t-cost', { projectId: 'p-cost' }),
+        terminal('t-quick', { quickTerminalId: 'q1', ptyId: 'pty-q' })
+      ],
+      projects,
+      groups
+    )
+
+    expect(board.map((group) => group.groupId)).toEqual(['g-ns'])
+    expect(countBoardTerminals(board)).toBe(1)
+  })
+
   it('lists a Conversation terminal under its Conversation, not its project', () => {
     // The board showed these inside the project they are attributed to, with
     // the Conversation's own sandbox as their cwd — so the project appeared to
