@@ -1460,8 +1460,13 @@ function ConnectedTerminalComponent({
       // full repaint), so the write burst's leading edge fires constantly and
       // every cell would be re-uploaded each time. `refresh` still runs, so the
       // screen is still repainted — only the model is kept.
-      rebuildSurface: (terminal) => {
-        if (terminalRef.current?.buffer.active.type === 'alternate') return
+      //
+      // Except after an atlas merge. A merge a sibling terminal triggered moves
+      // glyphs to other pages, and a kept model then draws them from the wrong
+      // page: garbled glyphs that only a resize cleared. Merges are rare next
+      // to writes, so rebuilding for them does not bring the cost back.
+      rebuildSurface: (terminal, { atlasPagesMoved }) => {
+        if (!atlasPagesMoved && terminalRef.current?.buffer.active.type === 'alternate') return
         clearWebglRenderModel(terminal, !!webglAddonRef.current)
       }
     })

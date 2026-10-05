@@ -275,6 +275,48 @@ describe('createWebglScrollRepair', () => {
     repair.dispose()
   })
 
+  // A merge moves glyphs to other atlas pages for every terminal sharing the
+  // atlas, but xterm only tells the one renderer that happens to draw next. The
+  // rest keep cell models pointing at the old pages, so the rebuild has to know
+  // this one cannot be skipped.
+  it('tells the rebuild that atlas pages moved after a merge', () => {
+    vi.useFakeTimers()
+    const terminal = { refresh: vi.fn(), rows: 24 }
+    const rebuildSurface = vi.fn()
+    const repair = createWebglScrollRepair({ getTerminal: () => terminal, rebuildSurface })
+
+    repair.noteAtlasMerged()
+
+    expect(rebuildSurface).toHaveBeenCalledWith(terminal, { atlasPagesMoved: true })
+    repair.dispose()
+  })
+
+  it('does not claim moved atlas pages for a write burst', () => {
+    vi.useFakeTimers()
+    const terminal = { refresh: vi.fn(), rows: 24 }
+    const rebuildSurface = vi.fn()
+    const repair = createWebglScrollRepair({ getTerminal: () => terminal, rebuildSurface })
+
+    repair.onWrite(true)
+
+    expect(rebuildSurface).toHaveBeenCalledWith(terminal, { atlasPagesMoved: false })
+    repair.dispose()
+  })
+
+  it('keeps the moved-pages signal when a merge lands inside a write burst', async () => {
+    vi.useFakeTimers()
+    const terminal = { refresh: vi.fn(), rows: 24 }
+    const rebuildSurface = vi.fn()
+    const repair = createWebglScrollRepair({ getTerminal: () => terminal, rebuildSurface })
+
+    repair.onWrite(true)
+    repair.noteAtlasMerged()
+    await vi.advanceTimersByTimeAsync(WEBGL_SCROLL_REPAIR_IDLE_MS)
+
+    expect(rebuildSurface).toHaveBeenLastCalledWith(terminal, { atlasPagesMoved: true })
+    repair.dispose()
+  })
+
   it('logs and continues when rebuild throws', () => {
     const refresh = vi.fn()
     const repair = createWebglScrollRepair({
