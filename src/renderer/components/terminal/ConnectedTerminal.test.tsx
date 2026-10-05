@@ -3131,6 +3131,27 @@ describe('ConnectedTerminal', () => {
       mockTerminalInstance.buffer.active.type = 'normal'
     })
 
+    it('rebuilds the render model after an atlas merge even on the alternate screen', async () => {
+      // A merge started by a sibling terminal moves glyphs to other atlas pages;
+      // a kept model then draws them from the wrong page — garbled glyphs that
+      // persist until a resize. Only a model rebuild clears it.
+      vi.mocked(useTerminalRenderer).mockReturnValue('webgl')
+
+      render(<ConnectedTerminal />)
+      await vi.waitFor(() => {
+        expect(webglAddonCreateCount).toBe(1)
+      })
+
+      mockTerminalInstance.buffer.active.type = 'alternate'
+      mockTerminalInstance._core._renderService.clear.mockClear()
+
+      capturedAtlasRemoveCallback?.()
+
+      expect(mockTerminalInstance._core._renderService.clear).toHaveBeenCalled()
+
+      mockTerminalInstance.buffer.active.type = 'normal'
+    })
+
     it('should still load WebGL when renderer preference is webgl', async () => {
       vi.mocked(useTerminalRenderer).mockReturnValue('webgl')
 

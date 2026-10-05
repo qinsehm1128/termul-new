@@ -65,6 +65,7 @@
     "check:conversation-first": "bun scripts/check-conversation-first-guardrails.ts",
     "test:conversation-first": "bun scripts/check-conversation-first-guardrails.ts && vitest run scripts/check-conversation-first-guardrails.test.ts src/renderer/__tests__/conversation-first-flows.test.tsx src/renderer/__tests__/conversation-first-mobile.test.tsx src/renderer/__tests__/renderer-root-parity.test.tsx src/renderer/lib/__tests__/conversation-parity-golden.test.ts src/renderer/lib/__tests__/parity-checklist.test.ts",
     "test:mobile-probe": "bun scripts/mobile-host-probe.ts",
+    "test:webgl-atlas": "bun scripts/webgl-atlas-repro/check.ts",
     "test:shell": "bats scripts/tests",
     "test:watch": "vitest",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",

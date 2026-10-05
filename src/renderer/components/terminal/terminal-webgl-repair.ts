@@ -133,17 +133,31 @@ export interface WebglScrollRepair {
   dispose: () => void
 }
 
+export interface WebglRebuildContext {
+  /**
+   * An atlas merge moved glyphs to other pages. xterm only flags that to the
+   * renderer that draws next, so every other terminal sharing the atlas keeps
+   * cells that sample the old pages — garbled glyphs until a resize. A rebuild
+   * skipped elsewhere for cost must still run when this is set.
+   */
+  atlasPagesMoved: boolean
+}
+
 /**
  * Rebuild this terminal's WebGL model after scroll, writes, or atlas merges.
  *
  * Do not call `clearTextureAtlas`. xterm's WebGL addon shares one atlas
  * across matching terminals; clearing it leaves sibling render models with
- * stale UVs and leftover glyphs. Hide/show already disposes and recreates
- * the addon, which builds a fresh renderer model.
+ * stale UVs and leftover glyphs. A hidden tab keeps its renderer (the WebGL
+ * budget evicts by LRU, not on hide), so it is not rebuilt for free on show:
+ * an atlas merge must reach it through `rebuildSurface` like any other.
  */
 export function createWebglScrollRepair(args: {
   getTerminal: () => Pick<Terminal, 'refresh' | 'rows'> | null
-  rebuildSurface?: (terminal: Pick<Terminal, 'refresh' | 'rows'>) => void
+  rebuildSurface?: (
+    terminal: Pick<Terminal, 'refresh' | 'rows'>,
+    context: WebglRebuildContext
+  ) => void
   idleMs?: number
   maxWaitMs?: number
 }): WebglScrollRepair {
@@ -151,6 +165,7 @@ export function createWebglScrollRepair(args: {
   let maxWaitTimer: ReturnType<typeof setTimeout> | null = null
   let trailingPending = false
   let rebuildPending = false
+  let atlasPagesMovedPending = false
   const idleMs = args.idleMs ?? WEBGL_SCROLL_REPAIR_IDLE_MS
   const maxWaitMs = args.maxWaitMs ?? WEBGL_SCROLL_REPAIR_MAX_WAIT_MS
 
@@ -168,8 +183,11 @@ export function createWebglScrollRepair(args: {
     const terminal = args.getTerminal()
     if (!terminal) return
     if (requiresModelRebuild && args.rebuildSurface) {
+      // Consumed only by a rebuild, so a refresh-only repair cannot drop it.
+      const atlasPagesMoved = atlasPagesMovedPending
+      atlasPagesMovedPending = false
       try {
-        args.rebuildSurface(terminal)
+        args.rebuildSurface(terminal, { atlasPagesMoved })
       } catch (error) {
         reportFailure('rebuild', error)
       }
@@ -280,6 +298,7 @@ export function createWebglScrollRepair(args: {
       scheduleIdleRepair(true)
     },
     noteAtlasMerged(): void {
+      atlasPagesMovedPending = true
       scheduleIdleRepair(true)
     },
     onScroll(): void {
@@ -293,6 +312,7 @@ export function createWebglScrollRepair(args: {
       clearTimers()
       trailingPending = false
       rebuildPending = false
+      atlasPagesMovedPending = false
     }
   }
 }
