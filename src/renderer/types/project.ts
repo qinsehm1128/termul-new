@@ -196,6 +196,30 @@ export function isQuickTerminal(terminal: Pick<Terminal, 'quickTerminalId'>): bo
   return Boolean(terminal.quickTerminalId)
 }
 
+const SSH_TERMINAL_PROJECT_PREFIX = 'ssh-'
+
+/**
+ * Project id an SSH profile's terminal is filed under. It names no real
+ * project — real ids are UUIDs, which never start with this prefix.
+ */
+export function sshTerminalProjectId(profileId: string): string {
+  return `${SSH_TERMINAL_PROJECT_PREFIX}${profileId}`
+}
+
+export function isSshTerminal(terminal: Pick<Terminal, 'projectId'>): boolean {
+  return terminal.projectId?.startsWith(SSH_TERMINAL_PROJECT_PREFIX) ?? false
+}
+
+/**
+ * Quick and SSH terminals are reached from their own pages, so terminal lists
+ * that group by project skip them instead of inventing a project for them.
+ */
+export function isManagedOnOwnPage(
+  terminal: Pick<Terminal, 'quickTerminalId' | 'projectId'>
+): boolean {
+  return isQuickTerminal(terminal) || isSshTerminal(terminal)
+}
+
 /**
  * A terminal that belongs to a project — the *only* definition of that.
  *

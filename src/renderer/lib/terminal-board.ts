@@ -1,5 +1,9 @@
 import type { Project, ProjectColor, ProjectGroup, Terminal } from '@/types/project'
-import { isConversationScopedTerminal, isOpenTerminalView, isQuickTerminal } from '@/types/project'
+import {
+  isConversationScopedTerminal,
+  isManagedOnOwnPage,
+  isOpenTerminalView
+} from '@/types/project'
 
 export interface TerminalBoardProjectBlock {
   projectId: string
@@ -53,9 +57,9 @@ export function buildTerminalBoard(
   const conversationOrder: string[] = []
 
   for (const terminal of terminals) {
-    // Quick terminals are managed on their own page; without a project they
-    // would otherwise fall into the unassigned block.
-    if (isQuickTerminal(terminal)) continue
+    // Quick and SSH terminals are managed on their own pages. Without a real
+    // project they would otherwise be filed as unassigned or under a synthetic id.
+    if (isManagedOnOwnPage(terminal)) continue
     // A Conversation's terminal is listed under its Conversation, never under
     // the project it is attributed to. Filing it by project made the board
     // report shells the project does not own — and, with the Conversation's

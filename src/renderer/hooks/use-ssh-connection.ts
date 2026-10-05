@@ -6,6 +6,7 @@ import { createAskpassScript, sshApi, terminalApi } from '@/lib/api'
 import { isWindows } from '@/lib/platform'
 import { useSSHActions, useSSHConnections } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { sshTerminalProjectId } from '@/types/project'
 
 const sshT = (key: string, fallback: string, values?: TranslationValues) =>
   runtimeT('ssh', key, fallback, values)
@@ -228,7 +229,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
       const terminalStore = useTerminalStore.getState()
       const terminal = terminalStore.addTerminal(
         `SSH: ${profile.name}`,
-        `ssh-${profile.id}`,
+        sshTerminalProjectId(profile.id),
         spawnResult.data.shell,
         spawnResult.data.cwd
       )

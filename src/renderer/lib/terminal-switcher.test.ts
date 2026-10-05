@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { Project, ProjectGroup, Terminal } from '@/types/project'
+import {
+  type Project,
+  type ProjectGroup,
+  sshTerminalProjectId,
+  type Terminal
+} from '@/types/project'
 import {
   availableScopes,
   groupTerminalsByProject,
@@ -75,6 +80,16 @@ describe('scopeTerminals', () => {
     expect(scopeTerminals('all', withQuick).map((t) => t.id)).toEqual(['t1', 't2', 't3', 't4'])
     expect(scopeTerminals('group', withQuick).map((t) => t.id)).toEqual(['t1', 't2'])
     expect(scopeTerminals('project', withQuick).map((t) => t.id)).toEqual(['t1'])
+  })
+
+  it('should leave SSH terminals out of every scope', () => {
+    // An SSH terminal is filed under a synthetic `ssh-<profile>` project id, so
+    // it surfaced at `all` scope as a chip named after that raw id.
+    const withSsh: TerminalSwitcherContext = {
+      ...context,
+      terminals: [...context.terminals, terminal('ts', sshTerminalProjectId('profile-1'))]
+    }
+    expect(scopeTerminals('all', withSsh).map((t) => t.id)).toEqual(['t1', 't2', 't3', 't4'])
   })
 
   it('should degrade group scope to the project list when no group is selected', () => {
