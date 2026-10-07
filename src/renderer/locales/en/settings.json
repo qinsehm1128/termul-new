@@ -55,19 +55,10 @@
     "symbolFont": "Symbol font (terminal icons/glyphs)",
     "symbolFontHint": "Nerd Font used to render prompt icons and powerline glyphs; Auto picks installed Nerd Fonts.",
     "sidebarFontSize": "Sidebar text size",
-    "sidebarFontSizeHint": "Text size of the project list and file tree. The rest of the interface and the terminal are unchanged.",
-    "sidebarFontSizes": {
-      "small": "Small",
-      "default": "Default",
-      "large": "Large",
-      "xlarge": "Extra large"
-    },
+    "sidebarFontSizeHint": "Text size of the project list; the file tree stays 2px larger. The rest of the interface and the terminal are unchanged.",
     "uiContrast": "Text contrast",
-    "uiContrastHint": "Standard keeps each theme's look but never lets sidebar and secondary text fade below a readable level. High brightens all interface text further. Terminal colors are unchanged.",
-    "uiContrasts": {
-      "standard": "Standard",
-      "high": "High"
-    }
+    "uiContrastHint": "0% keeps each theme's look but never lets sidebar and secondary text fade below a readable level. Drag right to brighten all interface text. Terminal colors are unchanged.",
+    "resetToDefault": "Reset to default"
   },
   "editor": {
     "source": "Source",

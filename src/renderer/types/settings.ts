@@ -51,30 +51,43 @@ export function isUiLanguagePreference(value: unknown): value is UiLanguagePrefe
 /** Which interface the remote terminal HTTP server binds to when started. */
 export type RemoteBindMode = 'localhost' | 'all'
 
-/** Text size of the project list and file tree rows, as a step off their defaults. */
-export type SidebarFontSize = 'small' | 'default' | 'large' | 'xlarge'
+/** Project list row text size in px; the file tree rows run 2px larger. */
+export const SIDEBAR_FONT_SIZE_DEFAULT = 12
+export const SIDEBAR_FONT_SIZE_MIN = 10
+export const SIDEBAR_FONT_SIZE_MAX = 20
 
-/** Pixels each step adds to the default row sizes (project list 12px, file tree 14px). */
-export const SIDEBAR_FONT_SIZE_OFFSETS: Record<SidebarFontSize, number> = {
-  small: -1,
-  default: 0,
-  large: 1,
-  xlarge: 2
+// 0.14.7 stored a preset name; each still reads back as the size it showed.
+const LEGACY_SIDEBAR_FONT_SIZES: Record<string, number> = {
+  small: 11,
+  default: 12,
+  large: 13,
+  xlarge: 14
 }
 
-export function isSidebarFontSize(value: unknown): value is SidebarFontSize {
-  return typeof value === 'string' && Object.hasOwn(SIDEBAR_FONT_SIZE_OFFSETS, value)
+/** A persisted sidebar font size as a valid px value, or null when unusable. */
+export function normalizeSidebarFontSize(value: unknown): number | null {
+  if (typeof value === 'string') return LEGACY_SIDEBAR_FONT_SIZES[value] ?? null
+  if (typeof value !== 'number' || !Number.isInteger(value)) return null
+  return value >= SIDEBAR_FONT_SIZE_MIN && value <= SIDEBAR_FONT_SIZE_MAX ? value : null
 }
 
 /**
  * How far secondary UI text (sidebar, muted labels) may fade toward the
- * background. `standard` keeps each theme's look but never drops below a
- * readable floor; `high` lifts every UI text tone further.
+ * background, 0–100. 0 keeps each theme's look but never drops below a
+ * readable floor; higher values lift every UI text tone further.
  */
-export type UiContrast = 'standard' | 'high'
+export const UI_CONTRAST_DEFAULT = 0
+export const UI_CONTRAST_MIN = 0
+export const UI_CONTRAST_MAX = 100
 
-export function isUiContrast(value: unknown): value is UiContrast {
-  return value === 'standard' || value === 'high'
+// 0.14.7 stored a preset name; `high` matched the slider's midpoint.
+const LEGACY_UI_CONTRASTS: Record<string, number> = { standard: 0, high: 50 }
+
+/** A persisted UI contrast as a valid 0–100 value, or null when unusable. */
+export function normalizeUiContrast(value: unknown): number | null {
+  if (typeof value === 'string') return LEGACY_UI_CONTRASTS[value] ?? null
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return value >= UI_CONTRAST_MIN && value <= UI_CONTRAST_MAX ? value : null
 }
 
 // Application-wide settings
@@ -128,10 +141,10 @@ export interface AppSettings {
   terminalColorTheme: string | null
   /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
   uiZoomLevel: number
-  /** Project list and file tree text size; leaves the rest of the UI alone. */
-  sidebarFontSize: SidebarFontSize
-  /** Contrast of secondary UI text against its surface. Terminals are unaffected. */
-  uiContrast: UiContrast
+  /** Project list text size in px (file tree +2px); leaves the rest of the UI alone. */
+  sidebarFontSize: number
+  /** Contrast of UI text against its surface, 0–100. Terminals are unaffected. */
+  uiContrast: number
   /** User-selected interface language, or follow the operating system. */
   uiLanguage: UiLanguagePreference
   /** ACP turn hard-cap timeout in seconds, or null = use the env var / Rust
@@ -395,8 +408,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   appearanceMode: 'dark',
   terminalColorTheme: null,
   uiZoomLevel: UI_ZOOM_DEFAULT,
-  sidebarFontSize: 'default',
-  uiContrast: 'standard',
+  sidebarFontSize: SIDEBAR_FONT_SIZE_DEFAULT,
+  uiContrast: UI_CONTRAST_DEFAULT,
   uiLanguage: 'system',
   acpTurnTimeoutSecs: null,
   editorAutoSave: false,

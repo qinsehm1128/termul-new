@@ -7,7 +7,7 @@ describe('applySidebarFontSize', () => {
   })
 
   it("keeps today's sizes at the default step", () => {
-    applySidebarFontSize('default')
+    applySidebarFontSize(12)
 
     const style = document.documentElement.style
     expect(style.getPropertyValue('--sidebar-row-font-size')).toBe('12px')
@@ -15,10 +15,10 @@ describe('applySidebarFontSize', () => {
   })
 
   it('moves the project list and the file tree together', () => {
-    applySidebarFontSize('xlarge')
+    applySidebarFontSize(17)
 
     const style = document.documentElement.style
-    expect(style.getPropertyValue('--sidebar-row-font-size')).toBe('14px')
-    expect(style.getPropertyValue('--tree-row-font-size')).toBe('16px')
+    expect(style.getPropertyValue('--sidebar-row-font-size')).toBe('17px')
+    expect(style.getPropertyValue('--tree-row-font-size')).toBe('19px')
   })
 })

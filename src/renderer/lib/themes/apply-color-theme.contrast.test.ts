@@ -31,7 +31,7 @@ describe('UI text contrast floors', () => {
     // The fixed 35% fade this replaces.
     expect(minContrast(mixHex(palette.ink, palette.neutral, 0.35), surfaces)).toBeLessThan(4)
 
-    const tones = deriveUiTextTones(palette, 'dark', 'standard')
+    const tones = deriveUiTextTones(palette, 'dark', 0)
 
     expect(minContrast(tones.secondary, surfaces)).toBeGreaterThanOrEqual(4.5)
     expect(tones.ink).toBe(palette.ink)
@@ -39,9 +39,9 @@ describe('UI text contrast floors', () => {
 
   it.each(
     themes.map((theme) => [theme.id])
-  )('keeps %s secondary text readable at standard contrast', (id) => {
+  )('keeps %s secondary text readable at 0% contrast', (id) => {
     const theme = BUNDLED_COLOR_THEMES[id]
-    const tones = deriveUiTextTones(theme.dark.palette, theme.appearance, 'standard')
+    const tones = deriveUiTextTones(theme.dark.palette, theme.appearance, 0)
     const surfaces = surfacesOf(id)
     // A floor the theme's own ink cannot reach falls back to the ink itself.
     const reachable = (floor: number) =>
@@ -54,7 +54,7 @@ describe('UI text contrast floors', () => {
   it('leaves a theme that already clears the floors exactly as it was', () => {
     const { palette } = BUNDLED_COLOR_THEMES[brandCanonical().themeId].dark
 
-    const tones = deriveUiTextTones(palette, 'dark', 'standard')
+    const tones = deriveUiTextTones(palette, 'dark', 0)
 
     expect(tones).toEqual({
       ink: palette.ink,
@@ -64,12 +64,14 @@ describe('UI text contrast floors', () => {
     })
   })
 
-  it.each(themes.map((theme) => [theme.id]))('raises every tone of %s at high contrast', (id) => {
+  it.each(
+    themes.map((theme) => [theme.id])
+  )('raises every tone of %s at the 50% midpoint (0.14.7 "high")', (id) => {
     const theme = BUNDLED_COLOR_THEMES[id]
     const surfaces = surfacesOf(id)
-    const standard = deriveUiTextTones(theme.dark.palette, theme.appearance, 'standard')
+    const standard = deriveUiTextTones(theme.dark.palette, theme.appearance, 0)
 
-    const high = deriveUiTextTones(theme.dark.palette, theme.appearance, 'high')
+    const high = deriveUiTextTones(theme.dark.palette, theme.appearance, 50)
 
     expect(minContrast(high.ink, surfaces)).toBeGreaterThanOrEqual(7)
     expect(minContrast(high.secondary, surfaces)).toBeGreaterThanOrEqual(
@@ -80,10 +82,10 @@ describe('UI text contrast floors', () => {
 
   it('applies the contrast setting to UI text but never to the terminal', () => {
     useAppSettingsStore.setState({
-      settings: { ...DEFAULT_APP_SETTINGS, uiContrast: 'high' }
+      settings: { ...DEFAULT_APP_SETTINGS, uiContrast: 50 }
     })
     const { palette } = BUNDLED_COLOR_THEMES['one-dark'].dark
-    const high = deriveUiTextTones(palette, 'dark', 'high')
+    const high = deriveUiTextTones(palette, 'dark', 50)
 
     applyColorTheme('one-dark')
 
@@ -91,5 +93,34 @@ describe('UI text contrast floors', () => {
     expect(style.getPropertyValue('--sidebar-foreground')).toBe(hexToHslComponents(high.secondary))
     expect(style.getPropertyValue('--foreground')).toBe(hexToHslComponents(high.ink))
     expect(style.getPropertyValue('--terminal-fg')).toBe(hexToHslComponents(palette.ink))
+  })
+
+  it.each(
+    themes.map((theme) => [theme.id])
+  )('never lowers %s contrast as the slider moves right', (id) => {
+    const theme = BUNDLED_COLOR_THEMES[id]
+    const surfaces = surfacesOf(id)
+    let previous = deriveUiTextTones(theme.dark.palette, theme.appearance, 0)
+    for (let level = 10; level <= 100; level += 10) {
+      const tones = deriveUiTextTones(theme.dark.palette, theme.appearance, level)
+      for (const key of ['ink', 'secondary', 'muted'] as const) {
+        expect(minContrast(tones[key], surfaces)).toBeGreaterThanOrEqual(
+          minContrast(previous[key], surfaces) - 0.01
+        )
+      }
+      previous = tones
+    }
+  })
+
+  it('brightens One Dark sidebar text further at 100% than at 50%', () => {
+    const { palette } = BUNDLED_COLOR_THEMES['one-dark'].dark
+    const surfaces = surfacesOf('one-dark')
+
+    const mid = deriveUiTextTones(palette, 'dark', 50)
+    const max = deriveUiTextTones(palette, 'dark', 100)
+
+    expect(minContrast(max.secondary, surfaces)).toBeGreaterThan(
+      minContrast(mid.secondary, surfaces) + 1
+    )
   })
 })
