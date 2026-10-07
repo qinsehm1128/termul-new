@@ -218,6 +218,21 @@ describe('AppPreferences settings controls', () => {
     })
   })
 
+  it('writes the sidebar text size and text contrast picks', async () => {
+    renderPage()
+
+    fireEvent.change(await screen.findByLabelText('Sidebar text size'), {
+      target: { value: 'large' }
+    })
+    fireEvent.change(screen.getByLabelText('Text contrast'), { target: { value: 'high' } })
+
+    await waitFor(() => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.sidebarFontSize).toBe('large')
+      expect(settings.uiContrast).toBe('high')
+    })
+  })
+
   it('changing the delay select writes editorAutoSaveDelayMs and is disabled while off', async () => {
     renderPage()
 

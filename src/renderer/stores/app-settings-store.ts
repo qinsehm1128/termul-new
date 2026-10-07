@@ -70,6 +70,9 @@ export const useAppearanceMode = () => useAppSettingsStore((state) => state.sett
 export const useTerminalColorThemeSetting = () =>
   useAppSettingsStore((state) => state.settings.terminalColorTheme)
 export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)
+export const useSidebarFontSize = () =>
+  useAppSettingsStore((state) => state.settings.sidebarFontSize)
+export const useUiContrast = () => useAppSettingsStore((state) => state.settings.uiContrast)
 export const useUiLanguage = () => useAppSettingsStore((state) => state.settings.uiLanguage)
 export const useAcpTurnTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpTurnTimeoutSecs)

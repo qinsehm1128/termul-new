@@ -10,7 +10,13 @@ import { useSidebarStore } from '@/stores/sidebar-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import { useTerminalListPanelStore } from '@/stores/terminal-list-panel-store'
 import type { AppPanelVisibilitySettingKey, AppSettings, AppSettingsUpdate } from '@/types/settings'
-import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS, isUiLanguagePreference } from '@/types/settings'
+import {
+  APP_SETTINGS_KEY,
+  DEFAULT_APP_SETTINGS,
+  isSidebarFontSize,
+  isUiContrast,
+  isUiLanguagePreference
+} from '@/types/settings'
 
 type PanelSettingKey = AppPanelVisibilitySettingKey
 
@@ -197,6 +203,17 @@ export function useAppSettingsLoader(): void {
 
         if (!isUiLanguagePreference(result.data.uiLanguage)) {
           settings = { ...settings, uiLanguage: 'system' }
+          shouldPersistSettings = true
+        }
+
+        // Absent in blobs older than these settings; that alone is not worth a
+        // write, but an unknown value is.
+        if (!isSidebarFontSize(settings.sidebarFontSize)) {
+          settings = { ...settings, sidebarFontSize: DEFAULT_APP_SETTINGS.sidebarFontSize }
+          shouldPersistSettings = true
+        }
+        if (!isUiContrast(settings.uiContrast)) {
+          settings = { ...settings, uiContrast: DEFAULT_APP_SETTINGS.uiContrast }
           shouldPersistSettings = true
         }
 

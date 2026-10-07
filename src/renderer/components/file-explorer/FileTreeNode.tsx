@@ -235,7 +235,7 @@ export function FileTreeNode({
           <div
             data-path={entry.path}
             className={cn(
-              'group relative flex h-7 min-w-0 cursor-pointer select-none items-center text-sm transition-colors duration-150 ease-[var(--ease-out)]',
+              'group relative flex h-7 min-w-0 cursor-pointer select-none items-center text-tree-row transition-colors duration-150 ease-[var(--ease-out)]',
               isIgnored && 'opacity-50',
               isRenaming && 'hidden',
               isDropTarget || longPress.hoverTarget?.path === entry.path

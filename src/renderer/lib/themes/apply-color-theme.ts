@@ -1,5 +1,6 @@
 import type { ITheme } from '@xterm/xterm'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import type { UiContrast } from '@/types/settings'
 import { forEachTerminal } from '@/utils/terminal-registry'
 import { ansi16FromPalette } from './ansi-palette'
 import { applyThemeToTerminal } from './apply-theme-to-terminal'
@@ -8,7 +9,14 @@ import {
   getColorThemeDefinition,
   hasColorThemeDefinition
 } from './bundled-themes'
-import { darkenHex, hexToHslComponents, lightenHex, mixHex } from './color-utils'
+import {
+  contrastRatio,
+  darkenHex,
+  hexToHslComponents,
+  lightenHex,
+  mixHex,
+  mixHexWithContrastFloor
+} from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
 import {
@@ -36,10 +44,68 @@ function applyDocumentAppearance(appearance: ThemeAppearance): void {
   }
 }
 
+/**
+ * WCAG contrast floors per `uiContrast` level. Secondary tones are the theme
+ * ink faded toward the background; a theme whose ink is already soft (One
+ * Dark) used to fade below readability, so each fade stops at its floor.
+ * `ink: 0` keeps the theme's own ink untouched.
+ */
+const TEXT_CONTRAST_FLOORS: Record<UiContrast, { ink: number; secondary: number; muted: number }> =
+  {
+    standard: { ink: 0, secondary: 4.5, muted: 3 },
+    high: { ink: 7, secondary: 7, muted: 4.5 }
+  }
+
+export interface UiTextTones {
+  /** Primary UI text. */
+  ink: string
+  /** Sidebar and secondary-surface text (a light fade of `ink`). */
+  secondary: string
+  /** Muted labels, hints, counts (a stronger fade). */
+  muted: string
+  statusBar: string
+}
+
+/** Derive the UI text tones of a palette under a contrast level. Terminals keep `palette.ink`. */
+export function deriveUiTextTones(
+  palette: ThemePalette,
+  appearance: ThemeAppearance,
+  contrast: UiContrast
+): UiTextTones {
+  const { card, secondary, sidebar } = deriveSurfaces(palette, appearance)
+  const floors = TEXT_CONTRAST_FLOORS[contrast]
+  const surfaces = [palette.neutral, sidebar, card, secondary]
+
+  // High contrast moves the ink itself away from the background until it clears its floor.
+  const extreme = appearance === 'light' ? '#000000' : '#ffffff'
+  let ink = palette.ink
+  for (
+    let w = 0.05;
+    w <= 1 && surfaces.some((s) => contrastRatio(ink, s) < floors.ink);
+    w += 0.05
+  ) {
+    ink = mixHex(palette.ink, extreme, w)
+  }
+
+  const fade = (weight: number, minContrast: number): string =>
+    mixHexWithContrastFloor(ink, palette.neutral, weight, surfaces, minContrast)
+  return {
+    ink,
+    secondary: fade(0.35, floors.secondary),
+    muted: fade(0.5, floors.muted),
+    statusBar: fade(0.45, floors.muted)
+  }
+}
+
 function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): void {
   const root = document.documentElement
   const surfaces = deriveSurfaces(palette, appearance)
   const { card, popover, secondary, muted, border, sidebar } = surfaces
+  const text = deriveUiTextTones(
+    palette,
+    appearance,
+    useAppSettingsStore.getState().settings.uiContrast
+  )
   const primaryForeground =
     appearance === 'light'
       ? hexToHslComponents(lightenHex(palette.primary, 0.98))
@@ -51,17 +117,17 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
 
   const vars: Record<string, string> = {
     '--background': hexToHslComponents(palette.neutral),
-    '--foreground': hexToHslComponents(palette.ink),
+    '--foreground': hexToHslComponents(text.ink),
     '--card': hexToHslComponents(card),
-    '--card-foreground': hexToHslComponents(palette.ink),
+    '--card-foreground': hexToHslComponents(text.ink),
     '--popover': hexToHslComponents(popover),
-    '--popover-foreground': hexToHslComponents(palette.ink),
+    '--popover-foreground': hexToHslComponents(text.ink),
     '--primary': hexToHslComponents(palette.primary),
     '--primary-foreground': primaryForeground,
     '--secondary': hexToHslComponents(secondary),
-    '--secondary-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.35)),
+    '--secondary-foreground': hexToHslComponents(text.secondary),
     '--muted': hexToHslComponents(muted),
-    '--muted-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.5)),
+    '--muted-foreground': hexToHslComponents(text.muted),
     '--accent': hexToHslComponents(palette.accent),
     '--accent-foreground': accentForeground,
     '--destructive': hexToHslComponents(palette.error),
@@ -81,13 +147,13 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--surface-dark': hexToHslComponents(card),
     '--surface-darker': hexToHslComponents(palette.neutral),
     '--status-bar': hexToHslComponents(secondary),
-    '--status-bar-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.45)),
+    '--status-bar-foreground': hexToHslComponents(text.statusBar),
     '--sidebar-background': hexToHslComponents(sidebar),
-    '--sidebar-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.35)),
+    '--sidebar-foreground': hexToHslComponents(text.secondary),
     '--sidebar-primary': hexToHslComponents(palette.primary),
     '--sidebar-primary-foreground': hexToHslComponents('#ffffff'),
     '--sidebar-accent': hexToHslComponents(secondary),
-    '--sidebar-accent-foreground': hexToHslComponents(palette.ink),
+    '--sidebar-accent-foreground': hexToHslComponents(text.ink),
     '--sidebar-border': hexToHslComponents(border),
     '--sidebar-ring': hexToHslComponents(palette.primary)
   }

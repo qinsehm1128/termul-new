@@ -302,6 +302,14 @@ const renderWithRouter = (props = {}) => {
   )
 }
 
+describe('ProjectSidebar text size', () => {
+  it('sizes project names by the sidebar text size setting', () => {
+    renderWithRouter()
+
+    expect(screen.getByText('Project One')).toHaveClass('text-sidebar-row')
+  })
+})
+
 describe('ProjectSidebar Context Menu', () => {
   it('should open context menu on right-click', () => {
     renderWithRouter()
