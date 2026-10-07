@@ -100,7 +100,12 @@ export default {
         // so existing `leading-*` and inherited line-heights are preserved.
         '2xs': '0.6875rem', // 11px
         '3xs': '0.625rem', // 10px
-        '4xs': '0.5625rem' // 9px
+        '4xs': '0.5625rem', // 9px
+        // Row text of the project list and file tree, sized by the
+        // `sidebarFontSize` setting (use-sidebar-font-size.ts); the fallbacks
+        // are the default step.
+        'sidebar-row': 'var(--sidebar-row-font-size, 0.75rem)',
+        'tree-row': 'var(--tree-row-font-size, 0.875rem)'
       },
       fontFamily: {
         // Apple: named SF Pro, then -apple-system so San Francisco still wins

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   useAppSettingsLoaded: vi.fn(),
   useColorTheme: vi.fn(),
   useAppearanceMode: vi.fn(),
+  useUiContrast: vi.fn(),
   useThemePickerOpen: vi.fn(),
   applyColorTheme: vi.fn()
 }))
@@ -20,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/stores/app-settings-store', () => ({
   useAppSettingsLoaded: mocks.useAppSettingsLoaded,
   useColorTheme: mocks.useColorTheme,
-  useAppearanceMode: mocks.useAppearanceMode
+  useAppearanceMode: mocks.useAppearanceMode,
+  useUiContrast: mocks.useUiContrast
 }))
 
 vi.mock('@/stores/theme-picker-store', () => ({
@@ -41,7 +43,18 @@ describe('useAppliedColorThemeSync', () => {
     mocks.useAppSettingsLoaded.mockReturnValue(true)
     mocks.useColorTheme.mockReturnValue(brandCanonical().themeId)
     mocks.useAppearanceMode.mockReturnValue('dark')
+    mocks.useUiContrast.mockReturnValue('standard')
     mocks.useThemePickerOpen.mockReturnValue(false)
+  })
+
+  it('re-applies the theme when the text contrast setting changes', async () => {
+    const { rerender } = renderHook(() => useAppliedColorThemeSync())
+    await waitFor(() => expect(applyColorTheme).toHaveBeenCalledTimes(1))
+
+    mocks.useUiContrast.mockReturnValue('high')
+    rerender()
+
+    await waitFor(() => expect(applyColorTheme).toHaveBeenCalledTimes(2))
   })
 
   it('does not apply the persisted theme while the picker is previewing', async () => {

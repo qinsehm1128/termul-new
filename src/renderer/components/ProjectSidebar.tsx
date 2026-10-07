@@ -1207,7 +1207,7 @@ export function ProjectSidebar({
                                       }
                                       setEditingGroupId(null)
                                     }}
-                                    className="mr-2 min-w-0 flex-1 bg-transparent px-1 text-xs text-foreground outline-none ring-1 ring-inset ring-ring/50"
+                                    className="mr-2 min-w-0 flex-1 bg-transparent px-1 text-sidebar-row text-foreground outline-none ring-1 ring-inset ring-ring/50"
                                     onClick={(e) => e.stopPropagation()}
                                   />
                                   <span className="px-1.5 text-2xs font-normal text-muted-foreground/70">
@@ -1234,7 +1234,7 @@ export function ProjectSidebar({
                                   </span>
                                   <span
                                     className={cn(
-                                      'min-w-0 flex-1 truncate text-xs leading-4',
+                                      'min-w-0 flex-1 truncate text-sidebar-row leading-4',
                                       isActiveGroup
                                         ? 'font-medium text-foreground'
                                         : 'text-sidebar-foreground'
@@ -1851,13 +1851,13 @@ const ProjectItem = memo(function ProjectItem({
                 onChange={(e) => onEditNameChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onBlur={onSaveRename}
-                className="mx-1 min-w-0 flex-1 bg-transparent px-1 text-xs text-foreground outline-none ring-1 ring-inset ring-ring/50"
+                className="mx-1 min-w-0 flex-1 bg-transparent px-1 text-sidebar-row text-foreground outline-none ring-1 ring-inset ring-ring/50"
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
               <span
                 className={cn(
-                  'min-w-0 flex-1 truncate text-xs leading-4 transition-colors',
+                  'min-w-0 flex-1 truncate text-sidebar-row leading-4 transition-colors',
                   // flex-1 min-w-0 is required for truncate to clip inside a flex row
                   isActive
                     ? 'text-foreground'
@@ -1973,7 +1973,7 @@ function ArchivedProjectItem({
             className={cn('mr-1.5 size-1.5 shrink-0 rounded-[1px] opacity-40', colors.bg)}
           />
           <span
-            className="min-w-0 flex-1 truncate text-xs leading-4 text-muted-foreground group-hover:text-foreground"
+            className="min-w-0 flex-1 truncate text-sidebar-row leading-4 text-muted-foreground group-hover:text-foreground"
             title={project.name}
           >
             {project.name}

@@ -53,7 +53,21 @@
     "screenReaderHint": "Expose terminal output to NVDA and VoiceOver. Enable only when needed because accessibility rendering can reduce throughput.",
     "preview": "Preview",
     "symbolFont": "Symbol font (terminal icons/glyphs)",
-    "symbolFontHint": "Nerd Font used to render prompt icons and powerline glyphs; Auto picks installed Nerd Fonts."
+    "symbolFontHint": "Nerd Font used to render prompt icons and powerline glyphs; Auto picks installed Nerd Fonts.",
+    "sidebarFontSize": "Sidebar text size",
+    "sidebarFontSizeHint": "Text size of the project list and file tree. The rest of the interface and the terminal are unchanged.",
+    "sidebarFontSizes": {
+      "small": "Small",
+      "default": "Default",
+      "large": "Large",
+      "xlarge": "Extra large"
+    },
+    "uiContrast": "Text contrast",
+    "uiContrastHint": "Standard keeps each theme's look but never lets sidebar and secondary text fade below a readable level. High brightens all interface text further. Terminal colors are unchanged.",
+    "uiContrasts": {
+      "standard": "Standard",
+      "high": "High"
+    }
   },
   "editor": {
     "source": "Source",

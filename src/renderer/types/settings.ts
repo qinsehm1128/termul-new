@@ -51,6 +51,32 @@ export function isUiLanguagePreference(value: unknown): value is UiLanguagePrefe
 /** Which interface the remote terminal HTTP server binds to when started. */
 export type RemoteBindMode = 'localhost' | 'all'
 
+/** Text size of the project list and file tree rows, as a step off their defaults. */
+export type SidebarFontSize = 'small' | 'default' | 'large' | 'xlarge'
+
+/** Pixels each step adds to the default row sizes (project list 12px, file tree 14px). */
+export const SIDEBAR_FONT_SIZE_OFFSETS: Record<SidebarFontSize, number> = {
+  small: -1,
+  default: 0,
+  large: 1,
+  xlarge: 2
+}
+
+export function isSidebarFontSize(value: unknown): value is SidebarFontSize {
+  return typeof value === 'string' && Object.hasOwn(SIDEBAR_FONT_SIZE_OFFSETS, value)
+}
+
+/**
+ * How far secondary UI text (sidebar, muted labels) may fade toward the
+ * background. `standard` keeps each theme's look but never drops below a
+ * readable floor; `high` lifts every UI text tone further.
+ */
+export type UiContrast = 'standard' | 'high'
+
+export function isUiContrast(value: unknown): value is UiContrast {
+  return value === 'standard' || value === 'high'
+}
+
 // Application-wide settings
 export interface AppSettings {
   terminalFontFamily: string
@@ -102,6 +128,10 @@ export interface AppSettings {
   terminalColorTheme: string | null
   /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
   uiZoomLevel: number
+  /** Project list and file tree text size; leaves the rest of the UI alone. */
+  sidebarFontSize: SidebarFontSize
+  /** Contrast of secondary UI text against its surface. Terminals are unaffected. */
+  uiContrast: UiContrast
   /** User-selected interface language, or follow the operating system. */
   uiLanguage: UiLanguagePreference
   /** ACP turn hard-cap timeout in seconds, or null = use the env var / Rust
@@ -365,6 +395,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   appearanceMode: 'dark',
   terminalColorTheme: null,
   uiZoomLevel: UI_ZOOM_DEFAULT,
+  sidebarFontSize: 'default',
+  uiContrast: 'standard',
   uiLanguage: 'system',
   acpTurnTimeoutSecs: null,
   editorAutoSave: false,

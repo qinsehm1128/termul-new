@@ -211,6 +211,39 @@ describe('use-app-settings', () => {
     })
   })
 
+  it('defaults the readability settings for blobs written before them, without a write', async () => {
+    const {
+      sidebarFontSize: _sidebarFontSize,
+      uiContrast: _uiContrast,
+      ...legacySettings
+    } = DEFAULT_APP_SETTINGS
+    mockPersistenceRead.mockResolvedValueOnce({ success: true, data: legacySettings })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => expect(useAppSettingsStore.getState().isLoaded).toBe(true))
+    const { settings } = useAppSettingsStore.getState()
+    expect(settings.sidebarFontSize).toBe('default')
+    expect(settings.uiContrast).toBe('standard')
+    expect(mockPersistenceWriteDebounced).not.toHaveBeenCalled()
+  })
+
+  it('replaces unknown readability values with the defaults and persists them', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: { ...DEFAULT_APP_SETTINGS, sidebarFontSize: 'huge', uiContrast: 'max' }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+        APP_SETTINGS_KEY,
+        expect.objectContaining({ sidebarFontSize: 'default', uiContrast: 'standard' })
+      )
+    })
+  })
+
   it('persists terminal renderer migration from canvas to dom', async () => {
     mockPersistenceRead.mockResolvedValueOnce({
       success: true,

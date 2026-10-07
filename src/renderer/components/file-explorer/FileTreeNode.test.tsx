@@ -103,6 +103,31 @@ describe('FileTreeNode', () => {
     expect(nameEl.parentElement).toHaveClass('min-w-0', 'overflow-hidden')
   })
 
+  it('sizes the row by the sidebar text size setting', () => {
+    render(
+      <FileTreeNode
+        entry={{
+          path: '/project/app.ts',
+          name: 'app.ts',
+          type: 'file',
+          extension: 'ts',
+          size: 1,
+          modifiedAt: 0
+        }}
+        depth={0}
+        isExpanded={false}
+        // Selected rows add a text color, which must not merge the size away.
+        isSelected
+        isLoading={false}
+        onToggle={vi.fn()}
+        onSelect={vi.fn()}
+        onContextMenu={vi.fn()}
+      />
+    )
+
+    expect(document.querySelector('[data-path="/project/app.ts"]')).toHaveClass('text-tree-row')
+  })
+
   it('marks the selected row with sidebar-accent and a lichen inset ring', () => {
     render(
       <FileTreeNode

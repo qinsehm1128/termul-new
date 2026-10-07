@@ -1225,7 +1225,7 @@ export function FileExplorer({
             }
           }}
           onBlur={handleInlineInputCancel}
-          className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-xs text-foreground outline-none ring-1 ring-inset ring-ring/50"
+          className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-tree-row text-foreground outline-none ring-1 ring-inset ring-ring/50"
           placeholder={
             inlineInput.mode === 'create'
               ? inlineInput.type === 'file'
@@ -1436,7 +1436,7 @@ export function FileExplorer({
               >
                 <div
                   className={cn(
-                    'group mx-1 flex h-7 min-w-0 items-center gap-1 rounded-sm px-1.5 text-xs transition-colors duration-150 ease-[var(--ease-out)]',
+                    'group mx-1 flex h-7 min-w-0 items-center gap-1 rounded-sm px-1.5 text-sidebar-row transition-colors duration-150 ease-[var(--ease-out)]',
                     focused
                       ? 'bg-sidebar-accent text-foreground ring-1 ring-inset ring-primary/35'
                       : 'text-sidebar-foreground hover:bg-sidebar-accent/50'

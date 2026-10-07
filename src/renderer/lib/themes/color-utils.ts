@@ -76,6 +76,41 @@ export function mixHex(colorA: string, colorB: string, weightB: number): string 
   return `#${[r, g, blue].map((v) => v.toString(16).padStart(2, '0')).join('')}`
 }
 
+/** WCAG relative luminance (0 = black, 1 = white). */
+export function relativeLuminance(hex: string): number {
+  const { r, g, b } = parseHexColor(hex)
+  const channel = (value: number): number => {
+    const v = value / 255
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/** WCAG contrast ratio between two colors, from 1 (none) to 21. */
+export function contrastRatio(a: string, b: string): number {
+  const [light, dark] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x)
+  return (light + 0.05) / (dark + 0.05)
+}
+
+/**
+ * `ink` faded toward `toward` by `weight`, backing the fade off in small steps
+ * until the result reaches `minContrast` against every surface it sits on.
+ * Returns `ink` itself when even no fade cannot reach the floor.
+ */
+export function mixHexWithContrastFloor(
+  ink: string,
+  toward: string,
+  weight: number,
+  surfaces: string[],
+  minContrast: number
+): string {
+  for (let w = weight; w > 0; w = Math.round((w - 0.025) * 1000) / 1000) {
+    const mixed = mixHex(ink, toward, w)
+    if (surfaces.every((surface) => contrastRatio(mixed, surface) >= minContrast)) return mixed
+  }
+  return ink
+}
+
 export function lightenHex(hex: string, amount: number): string {
   return mixHex(hex, '#ffffff', amount)
 }

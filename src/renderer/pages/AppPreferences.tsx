@@ -75,6 +75,7 @@ import {
   useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout,
+  useSidebarFontSize,
   useTerminalBufferSize,
   useTerminalFontFamily,
   useTerminalFontSize,
@@ -82,6 +83,7 @@ import {
   useTerminalScreenReaderMode,
   useTerminalSymbolFontFamily,
   useTerminalUrlOpenMode,
+  useUiContrast,
   useUiLanguage,
   useUiZoomLevel
 } from '@/stores/app-settings-store'
@@ -98,6 +100,8 @@ import {
   DEFAULT_APP_SETTINGS,
   EDITOR_AUTO_SAVE_DELAY_OPTIONS,
   FONT_FAMILY_OPTIONS,
+  isSidebarFontSize,
+  isUiContrast,
   MAX_TERMINALS_OPTIONS,
   normalizeTerminalUrlOpenMode,
   ORPHAN_TIMEOUT_OPTIONS,
@@ -161,6 +165,18 @@ const APP_PREF_SEARCH_DEFS = [
     labelKey: 'appearance.uiZoom',
     descriptionKey: 'appearance.zoomHint',
     keywords: ['ui zoom', 'zoom', 'interface scale', 'window zoom', 'magnify']
+  },
+  {
+    categoryId: 'appearance',
+    labelKey: 'appearance.sidebarFontSize',
+    descriptionKey: 'appearance.sidebarFontSizeHint',
+    keywords: ['sidebar', 'file tree', 'project list', 'text size', 'font size']
+  },
+  {
+    categoryId: 'appearance',
+    labelKey: 'appearance.uiContrast',
+    descriptionKey: 'appearance.uiContrastHint',
+    keywords: ['contrast', 'readability', 'dim', 'brightness', 'accessibility']
   },
   {
     categoryId: 'appearance',
@@ -393,6 +409,8 @@ export default function AppPreferences(): React.JSX.Element {
   const symbolFontFamily = useTerminalSymbolFontFamily()
   const fontSize = useTerminalFontSize()
   const uiZoomLevel = useUiZoomLevel()
+  const sidebarFontSize = useSidebarFontSize()
+  const uiContrast = useUiContrast()
   const languagePreference = useUiLanguage()
   const bufferSize = useTerminalBufferSize()
   const terminalRenderer = useTerminalRenderer()
@@ -507,6 +525,14 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleUiZoomReset = () => {
     updateSetting('uiZoomLevel', UI_ZOOM_DEFAULT)
+  }
+
+  const handleSidebarFontSizeChange = (value: string) => {
+    if (isSidebarFontSize(value)) updateSetting('sidebarFontSize', value)
+  }
+
+  const handleUiContrastChange = (value: string) => {
+    if (isUiContrast(value)) updateSetting('uiContrast', value)
   }
 
   const handleLanguageChange = (value: string) => {
@@ -762,6 +788,56 @@ export default function AppPreferences(): React.JSX.Element {
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     {tSettings('appearance.zoomHint')}
+                  </p>
+                </div>
+
+                {/* Project list / file tree text size */}
+                <div>
+                  <label
+                    htmlFor="sidebar-font-size"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
+                    {tSettings('appearance.sidebarFontSize')}
+                  </label>
+                  <select
+                    id="sidebar-font-size"
+                    value={sidebarFontSize}
+                    onChange={(e) => handleSidebarFontSizeChange(e.target.value)}
+                    className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
+                  >
+                    <option value="small">{tSettings('appearance.sidebarFontSizes.small')}</option>
+                    <option value="default">
+                      {tSettings('appearance.sidebarFontSizes.default')}
+                    </option>
+                    <option value="large">{tSettings('appearance.sidebarFontSizes.large')}</option>
+                    <option value="xlarge">
+                      {tSettings('appearance.sidebarFontSizes.xlarge')}
+                    </option>
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {tSettings('appearance.sidebarFontSizeHint')}
+                  </p>
+                </div>
+
+                {/* Secondary text contrast */}
+                <div>
+                  <label
+                    htmlFor="ui-contrast"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
+                    {tSettings('appearance.uiContrast')}
+                  </label>
+                  <select
+                    id="ui-contrast"
+                    value={uiContrast}
+                    onChange={(e) => handleUiContrastChange(e.target.value)}
+                    className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
+                  >
+                    <option value="standard">{tSettings('appearance.uiContrasts.standard')}</option>
+                    <option value="high">{tSettings('appearance.uiContrasts.high')}</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {tSettings('appearance.uiContrastHint')}
                   </p>
                 </div>
 

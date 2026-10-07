@@ -27,6 +27,7 @@ import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-
 import { useProjectsAutoSave, useProjectsLoader } from '@/hooks/use-projects-persistence'
 import { useRemoteProjects } from '@/hooks/use-remote-projects'
 import { useSessionWorkspaceBootstrap } from '@/hooks/use-session-workspace-sync'
+import { useAppliedSidebarFontSizeSync } from '@/hooks/use-sidebar-font-size'
 import { useTerminalDetachedOutput } from '@/hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from '@/hooks/use-terminal-exit-notification'
 import { useTerminalResourceLifecycle } from '@/hooks/use-terminal-resource-lifecycle'
@@ -78,6 +79,7 @@ export function PortableAppEffects(): React.JSX.Element | null {
   useAppliedLanguageSync()
   useAppliedColorThemeSync()
   useAppliedUiZoomSync()
+  useAppliedSidebarFontSizeSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
