@@ -3,6 +3,11 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { runtimeT } from '@/i18n/runtime'
 import { filesystemApi } from '@/lib/api'
+import {
+  readDragPasteboardFilePaths,
+  readPasteboardFilePaths,
+  writePasteboardFilePaths
+} from '@/lib/file-pasteboard'
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/')
@@ -38,25 +43,24 @@ export function isRejectedMove(sourcePath: string, targetDirectory: string): boo
 }
 
 /**
- * Copy a file or directory to a new location.
- *
- * Uses binary-safe `copyFile` to avoid UTF-8 round-trip corruption on binary
- * files (images, fonts, compiled artifacts). When `copyFile` fails, verifies
- * the source is actually a directory before creating one at the destination —
- * this avoids masking real failures (permissions, missing source, disk full)
- * behind an empty directory. Note: recursive directory copy is not yet
- * supported; only an empty directory is created.
+ * Move one entry into `targetDir` unless that would replace something there:
+ * `rename` silently overwrites a same-name file. Resolves an error message for
+ * the user, or null on success.
  */
-async function copyPath(srcPath: string, destPath: string): Promise<void> {
-  const result = await filesystemApi.copyFile(srcPath, destPath)
-  if (!result.success) {
-    // copyFile fails on directories — confirm the source is actually a
-    // directory before creating one, so we don't mask real copy failures.
-    const info = await filesystemApi.getFileInfo(srcPath)
-    if (info.success && info.data.type === 'directory') {
-      await filesystemApi.createDirectory(destPath)
-    }
+async function moveInto(source: string, targetDir: string): Promise<string | null> {
+  const name = basenameOf(source)
+  const destination = `${targetDir}/${name}`
+  const existing = await filesystemApi.getFileInfo(destination)
+  if (existing.success) {
+    return runtimeT(
+      'projects',
+      'filesystemErrors.nameTaken',
+      '"{{name}}" already exists in the destination folder',
+      { name }
+    )
   }
+  const result = await filesystemApi.renameFile(source, destination)
+  return result.success ? null : (result.error ?? `Failed to move ${name}`)
 }
 
 export interface FileExplorerRootError {
@@ -74,6 +78,25 @@ export interface FileExplorerRoot {
 export interface FileClipboard {
   type: 'copy' | 'cut'
   paths: string[]
+  /**
+   * The system pasteboard's change count when this clipboard was taken. A
+   * different count at paste time means something was copied elsewhere since
+   * (Finder, another app), and that copy wins, as it would in Finder.
+   */
+  changeCount?: number
+}
+
+// Settles once the latest copy/cut has stamped its pasteboard change count;
+// paste waits on it so a quick Cmd+C, Cmd+V never compares a stale count.
+let clipboardStamp: Promise<void> = Promise.resolve()
+
+function stampClipboard(clipboard: FileClipboard, changeCount: Promise<number | null>): void {
+  clipboardStamp = changeCount.then((count) => {
+    const store = useFileExplorerStore.getState()
+    if (count !== null && store.clipboard === clipboard) {
+      useFileExplorerStore.setState({ clipboard: { ...clipboard, changeCount: count } })
+    }
+  })
 }
 
 interface PendingDirectoryCollapse {
@@ -142,9 +165,19 @@ export interface FileExplorerState {
   clearSelection: () => void
   copySelected: () => void
   cutSelected: () => void
-  paste: (destinationPath: string) => Promise<void>
-  /** Move entries into a directory, as a drag-and-drop drop does. */
-  moveEntries: (sourcePaths: string[], targetDirectory: string) => Promise<void>
+  /** Resolves an error message for the user, or null. */
+  paste: (destinationPath: string) => Promise<string | null>
+  /**
+   * Move entries into a directory, as a drag-and-drop drop does. Resolves an
+   * error message for the user, or null.
+   */
+  moveEntries: (sourcePaths: string[], targetDirectory: string) => Promise<string | null>
+  /**
+   * Copy what was just dropped from outside the app (Finder) into a directory.
+   * `droppedNames` are the drop's file names, to confirm the drag pasteboard
+   * holds this drop. Resolves an error message for the user, or null.
+   */
+  importDroppedFiles: (targetDirectory: string, droppedNames: string[]) => Promise<string | null>
   /**
    * Paths currently being dragged inside the tree.
    *
@@ -692,19 +725,35 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     const { selectedPaths } = get()
     if (selectedPaths.size === 0) return
 
-    set({ clipboard: { type: 'copy', paths: Array.from(selectedPaths) } })
+    const clipboard: FileClipboard = { type: 'copy', paths: Array.from(selectedPaths) }
+    set({ clipboard })
+    // Also as files on the system pasteboard, so Finder or a chat app can paste them.
+    stampClipboard(clipboard, writePasteboardFilePaths(clipboard.paths))
   },
 
   cutSelected: (): void => {
     const { selectedPaths } = get()
     if (selectedPaths.size === 0) return
 
-    set({ clipboard: { type: 'cut', paths: Array.from(selectedPaths) } })
+    // Finder has no file cut, so a cut stays in-app; its stamp lets a later
+    // copy elsewhere take over paste.
+    const clipboard: FileClipboard = { type: 'cut', paths: Array.from(selectedPaths) }
+    set({ clipboard })
+    stampClipboard(
+      clipboard,
+      readPasteboardFilePaths().then((files) => files?.changeCount ?? null)
+    )
   },
 
-  paste: async (destinationPath: string): Promise<void> => {
+  paste: async (destinationPath: string): Promise<string | null> => {
+    await clipboardStamp
     const { clipboard, refreshDirectory } = get()
-    if (!clipboard || clipboard.paths.length === 0) return
+    const system = await readPasteboardFilePaths()
+    const source: FileClipboard | null =
+      system && system.paths.length > 0 && system.changeCount !== clipboard?.changeCount
+        ? { type: 'copy', paths: system.paths }
+        : clipboard
+    if (!source || source.paths.length === 0) return null
 
     const normalizedDest = normalizePath(destinationPath)
     const isDirectory = await (async () => {
@@ -720,29 +769,27 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       ? normalizedDest
       : normalizedDest.substring(0, normalizedDest.lastIndexOf('/'))
 
-    for (const srcPath of clipboard.paths) {
-      const normalizedSrc = normalizePath(srcPath)
-      const fileName = normalizedSrc.substring(normalizedSrc.lastIndexOf('/') + 1)
-      const destPath = `${targetDir}/${fileName}`
+    if (source.type === 'copy') {
+      const result = await filesystemApi.copyEntries(source.paths.map(normalizePath), targetDir)
+      await refreshDirectory(targetDir)
+      return result.success ? null : (result.error ?? 'Copy failed')
+    }
 
-      if (clipboard.type === 'copy') {
-        // Copy file/folder
-        await copyPath(normalizedSrc, destPath)
-      } else {
-        // Move file/folder
-        const renameResult = await filesystemApi.renameFile(normalizedSrc, destPath)
-        if (!renameResult.success) {
-          console.error('Failed to move:', renameResult.error)
-        }
+    let firstError: string | null = null
+    for (const srcPath of source.paths) {
+      const normalizedSrc = normalizePath(srcPath)
+      // Already there: moving onto itself is a no-op.
+      if (parentDirectoryOf(normalizedSrc) === targetDir) continue
+      const error = await moveInto(normalizedSrc, targetDir)
+      if (error) {
+        console.error('Failed to move:', error)
+        firstError ??= error
       }
     }
 
-    // Clear clipboard after cut operation
-    if (clipboard.type === 'cut') {
-      set({ clipboard: null })
-    }
-
+    set({ clipboard: null })
     await refreshDirectory(targetDir)
+    return firstError
   },
 
   beginEntryDrag: (paths: string[]): void => {
@@ -753,7 +800,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     set({ dragPaths: [] })
   },
 
-  moveEntries: async (sourcePaths: string[], targetDirectory: string): Promise<void> => {
+  moveEntries: async (sourcePaths: string[], targetDirectory: string): Promise<string | null> => {
     const { refreshDirectory } = get()
     const target = normalizePath(targetDirectory)
 
@@ -762,28 +809,56 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     // is still looking at.
     const touched = new Set<string>()
     let moved = false
+    let firstError: string | null = null
 
     for (const sourcePath of sourcePaths) {
       const source = normalizePath(sourcePath)
       if (isRejectedMove(source, target)) continue
 
-      const result = await filesystemApi.renameFile(source, `${target}/${basenameOf(source)}`)
-      if (!result.success) {
+      const error = await moveInto(source, target)
+      if (error) {
         // Keep going: one unwritable entry must not strand the rest of a
-        // multi-select drop half-moved and unreported.
-        console.error('Failed to move:', result.error)
+        // multi-select drop half-moved.
+        console.error('Failed to move:', error)
+        firstError ??= error
         continue
       }
       moved = true
       touched.add(parentDirectoryOf(source))
     }
 
-    if (!moved) return
+    if (!moved) return firstError
 
     touched.add(target)
     for (const directory of touched) {
       if (directory) await refreshDirectory(directory)
     }
+    return firstError
+  },
+
+  importDroppedFiles: async (
+    targetDirectory: string,
+    droppedNames: string[]
+  ): Promise<string | null> => {
+    const paths = await readDragPasteboardFilePaths()
+    // The drag pasteboard is shared by every drag; make sure it holds this one.
+    // One shared name is enough: WebKit's name for a dropped folder is not
+    // guaranteed to match the folder's, but a stale pasteboard shares none.
+    const names = new Set(paths.map((path) => basenameOf(normalizePath(path))))
+    if (
+      paths.length === 0 ||
+      (droppedNames.length > 0 && !droppedNames.some((name) => names.has(name)))
+    ) {
+      return runtimeT(
+        'projects',
+        'filesystemErrors.droppedPathsUnavailable',
+        'Could not read where the dropped files are'
+      )
+    }
+    const target = normalizePath(targetDirectory)
+    const result = await filesystemApi.copyEntries(paths, target)
+    await get().refreshDirectory(target)
+    return result.success ? null : (result.error ?? 'Copy failed')
   },
 
   duplicateSelected: async (): Promise<void> => {
@@ -792,22 +867,13 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
     for (const path of selectedPaths) {
       const normalized = normalizePath(path)
-      const lastSlash = normalized.lastIndexOf('/')
-      const dir = lastSlash > 0 ? normalized.substring(0, lastSlash) : ''
-      const fileName = normalized.substring(lastSlash + 1)
+      const dir = parentDirectoryOf(normalized) || '/'
 
-      // Generate duplicate name
-      const dotIndex = fileName.lastIndexOf('.')
-      const baseName = dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName
-      const ext = dotIndex > 0 ? fileName.substring(dotIndex) : ''
-      const newName = `${baseName} (copy)${ext}`
-      const destPath = `${dir}/${newName}`
+      // Copying into its own folder yields a Finder-style "name copy" sibling.
+      const result = await filesystemApi.copyEntries([normalized], dir)
+      if (!result.success) console.error('Failed to duplicate:', result.error)
 
-      await copyPath(normalized, destPath)
-
-      if (dir) {
-        await refreshDirectory(dir)
-      }
+      await refreshDirectory(dir)
     }
   },
 

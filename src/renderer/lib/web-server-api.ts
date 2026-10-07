@@ -206,6 +206,10 @@ export const webServerFilesystem = {
 
   async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
     return postJson<void>('/fs/copy', { from: srcPath, to: destPath })
+  },
+
+  async copyEntries(sources: string[], targetDir: string): Promise<IpcResult<string[]>> {
+    return postJson<string[]>('/fs/copy-into', { sources, targetDir })
   }
 }
 

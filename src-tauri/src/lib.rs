@@ -17,6 +17,8 @@ pub mod core;
 /// external dependency and has to be able to substitute the backend.
 pub mod credentials;
 mod editor_workspaces;
+mod file_pasteboard;
+mod fs_copy;
 mod fs_watcher;
 use se_foundation::host_admission;
 pub mod conversation_host;
@@ -3457,6 +3459,10 @@ pub fn run() {
             commands::get_mcp_oauth_status,
             fs_watcher::fs_watcher_subscribe,
             fs_watcher::fs_watcher_set_roots,
+            fs_copy::fs_copy_entries,
+            file_pasteboard::pasteboard_write_file_paths,
+            file_pasteboard::pasteboard_read_file_paths,
+            file_pasteboard::drag_pasteboard_file_paths,
             // Desktop ACP renderer-history storage
             commands::acp_history_list,
             commands::acp_history_get,

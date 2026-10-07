@@ -78,7 +78,9 @@
     "gitIgnored": "{{name}} (git-ignored)",
     "defaultTerminalName": "Terminal",
     "noProjectSelected": "No project selected",
-    "noPath": "(no path)"
+    "noPath": "(no path)",
+    "moveFailed": "Move failed",
+    "dropFailed": "Could not add the dropped files"
   },
   "filesystemErrors": {
     "fileTooLarge": "File too large ({{size}} bytes, max {{max}})",
@@ -91,7 +93,9 @@
     "cancelFileNamesStream": "Failed to cancel file names stream",
     "loadProjectFiles": "Failed to load project files",
     "searchFailed": "Search failed",
-    "watchProjectDirectory": "Failed to watch project directory"
+    "watchProjectDirectory": "Failed to watch project directory",
+    "nameTaken": "\"{{name}}\" already exists in the destination folder",
+    "droppedPathsUnavailable": "Could not read where the dropped files are"
   },
   "webUnsupported": {
     "worktrees": "Worktrees are not available in the web client",

@@ -3,10 +3,12 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { useTreeLongPressDrag } from '@/hooks/use-tree-long-press-drag'
+import { isFilePasteboardSupported } from '@/lib/file-pasteboard'
 import { cn } from '@/lib/utils'
 import { isRejectedMove, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { MaterialFileIcon } from './MaterialFileIcon'
@@ -31,6 +33,18 @@ export const InlineInputContext = createContext<InlineInputPlacement | null>(nul
 
 export function isSameTreePath(a: string, b: string): boolean {
   return a.replace(/\\/g, '/') === b.replace(/\\/g, '/')
+}
+
+/**
+ * A drag of files from outside the app (Finder). In-tree drags always carry
+ * `dragPaths`, so an external one is a file drag without them.
+ */
+export function isExternalFileDrag(e: React.DragEvent, dragPaths: string[]): boolean {
+  return (
+    dragPaths.length === 0 &&
+    isFilePasteboardSupported() &&
+    Array.from(e.dataTransfer.types).includes('Files')
+  )
 }
 
 interface FileTreeNodeProps {
@@ -77,6 +91,7 @@ export function FileTreeNode({
   const beginEntryDrag = useFileExplorerStore((state) => state.beginEntryDrag)
   const endEntryDrag = useFileExplorerStore((state) => state.endEntryDrag)
   const moveEntries = useFileExplorerStore((state) => state.moveEntries)
+  const importDroppedFiles = useFileExplorerStore((state) => state.importDroppedFiles)
   const inlineInput = useContext(InlineInputContext)
   const isRenaming = !!inlineInput?.renaming && isSameTreePath(inlineInput.renaming, entry.path)
   const createSlot =
@@ -140,14 +155,27 @@ export function FileTreeNode({
     onDragStart: beginEntryDrag,
     onDrop: (paths, target) => {
       endEntryDrag()
-      void moveEntries(paths, target.path)
+      void moveEntries(paths, target.path).then(reportMoveError)
     },
     onCancel: endEntryDrag
   })
 
   const acceptsDrop = isDir && dragPaths.some((path) => !isRejectedMove(path, entry.path))
+  // Files dropped from Finder land in this folder, or beside this file.
+  const externalDropTarget = isDir ? entry.path : entry.path.slice(0, entry.path.lastIndexOf('/'))
+
+  function reportMoveError(error: string | null): void {
+    if (error) toast.error(t('fileContext.moveFailed'), { description: error })
+  }
 
   const handleDragOver = (e: React.DragEvent): void => {
+    if (isExternalFileDrag(e, dragPaths)) {
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'copy'
+      setIsDropTarget(true)
+      return
+    }
     if (!acceptsDrop) return
     // dataTransfer is in protected mode during dragover, so the decision has
     // to come from the store payload, not from reading the transfer.
@@ -162,13 +190,23 @@ export function FileTreeNode({
   }
 
   const handleDrop = (e: React.DragEvent): void => {
+    if (isExternalFileDrag(e, dragPaths)) {
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDropTarget(false)
+      const names = Array.from(e.dataTransfer.files, (file) => file.name)
+      void importDroppedFiles(externalDropTarget, names).then((error) => {
+        if (error) toast.error(t('fileContext.dropFailed'), { description: error })
+      })
+      return
+    }
     if (!acceptsDrop) return
     e.preventDefault()
     e.stopPropagation()
     const paths = dragPaths
     endEntryDrag()
     setIsDropTarget(false)
-    void moveEntries(paths, entry.path)
+    void moveEntries(paths, entry.path).then(reportMoveError)
   }
 
   const handleMouseEnter = (): void => {

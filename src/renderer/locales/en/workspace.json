@@ -172,7 +172,9 @@
     "deleteConfirmMany": "Delete {{count}} items? This cannot be undone.",
     "cancel": "Cancel",
     "delete": "Delete",
-    "deleteFailed": "Failed to delete {{path}}: {{message}}"
+    "deleteFailed": "Failed to delete {{path}}: {{message}}",
+    "pasteFailed": "Paste failed",
+    "dropFailed": "Could not add the dropped files"
   },
   "tabs": {
     "savingFile": "Saving file",

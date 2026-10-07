@@ -605,6 +605,29 @@ describe('tauriFilesystemApi', () => {
     })
   })
 
+  describe('copyEntries', () => {
+    it('copies through the never-overwriting host command', async () => {
+      mockInvoke.mockResolvedValueOnce(['/test/a copy.txt'])
+
+      const result = await tauriFilesystemApi.copyEntries(['/test/a.txt'], '/test')
+
+      expect(result).toEqual({ success: true, data: ['/test/a copy.txt'] })
+      expect(mockInvoke).toHaveBeenCalledWith('fs_copy_entries', {
+        sources: ['/test/a.txt'],
+        targetDir: '/test'
+      })
+    })
+
+    it('reports a host failure as COPY_ERROR', async () => {
+      mockInvoke.mockRejectedValueOnce('cannot copy /test/src into itself')
+
+      const result = await tauriFilesystemApi.copyEntries(['/test/src'], '/test/src/inner')
+
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.code).toBe('COPY_ERROR')
+    })
+  })
+
   describe('setWatchRoots (the watched set is roots, not directories)', () => {
     it('hands the host exactly the roots it was given', async () => {
       const result = await tauriFilesystemApi.setWatchRoots(['/proj/a', '/proj/b'])

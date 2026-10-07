@@ -95,6 +95,21 @@ describe('tauriFilesystemApi (web branch)', () => {
     )
   })
 
+  it('copyEntries delegates to webServerFilesystem (/fs/copy-into) when !isTauriContext()', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: ['/web/lib/a copy.ts'] }))
+
+    const result = await tauriFilesystemApi.copyEntries(['/web/lib/a.ts'], '/web/lib')
+
+    expect(result).toEqual({ success: true, data: ['/web/lib/a copy.ts'] })
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/fs/copy-into`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ sources: ['/web/lib/a.ts'], targetDir: '/web/lib' })
+      })
+    )
+  })
+
   it('readDirectory delegates to webServerFilesystem (/fs/ls) when !isTauriContext()', async () => {
     const entries = [
       { name: 'src', path: '/web/src', type: 'directory', extension: null, size: 0, modifiedAt: 1 }

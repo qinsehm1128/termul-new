@@ -9,13 +9,16 @@ import { FileTreeNode, InlineInputContext, type InlineInputPlacement } from './F
 
 // The store's own suite covers moveEntries; here the question is only whether
 // the row decides to call it.
-const moveEntries = vi.fn()
+const moveEntries = vi.fn(async () => null)
 
 vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: () => ({
     startFileDrag: vi.fn()
   })
 }))
+
+// The macOS desktop path; elsewhere Finder drops are not accepted at all.
+vi.mock('@/lib/file-pasteboard', () => ({ isFilePasteboardSupported: () => true }))
 
 vi.mock('./file-icon-map', () => ({
   getFileIcon: () => (props: SVGProps<SVGSVGElement>) => <svg data-testid="file-icon" {...props} />
@@ -428,6 +431,87 @@ describe('FileTreeNode', () => {
       }
 
       expect(moveEntries).toHaveBeenCalledWith(['/project/a.ts'], '/project/lib')
+    })
+  })
+
+  describe('drops from Finder', () => {
+    const importDroppedFiles = vi.fn(async () => null)
+
+    function finderTransfer(names: string[]): DataTransfer {
+      return {
+        types: ['Files'],
+        files: names.map((name) => new File([''], name)),
+        dropEffect: 'none'
+      } as unknown as DataTransfer
+    }
+
+    function renderEntry(entry: DirectoryEntry): HTMLElement {
+      render(
+        <FileTreeNode
+          entry={entry}
+          depth={0}
+          isExpanded={false}
+          isSelected={false}
+          isLoading={false}
+          onToggle={vi.fn()}
+          onSelect={vi.fn()}
+          onContextMenu={vi.fn()}
+        />
+      )
+      return document.querySelector(`[data-path="${entry.path}"]`) as HTMLElement
+    }
+
+    beforeEach(() => {
+      importDroppedFiles.mockClear()
+      useFileExplorerStore.setState({ dragPaths: [], importDroppedFiles })
+    })
+
+    it('copies files dropped on a folder into that folder', () => {
+      const row = renderEntry({
+        path: '/project/src',
+        name: 'src',
+        type: 'directory',
+        size: 0,
+        modifiedAt: 0
+      })
+      const transfer = finderTransfer(['a.png', 'docs'])
+
+      expect(fireEvent.dragOver(row, { dataTransfer: transfer })).toBe(false)
+      expect(transfer.dropEffect).toBe('copy')
+      fireEvent.drop(row, { dataTransfer: transfer })
+
+      expect(importDroppedFiles).toHaveBeenCalledWith('/project/src', ['a.png', 'docs'])
+    })
+
+    it('copies files dropped on a file into the folder beside it', () => {
+      const row = renderEntry({
+        path: '/project/src/app.ts',
+        name: 'app.ts',
+        type: 'file',
+        extension: 'ts',
+        size: 1,
+        modifiedAt: 0
+      })
+
+      fireEvent.drop(row, { dataTransfer: finderTransfer(['a.png']) })
+
+      expect(importDroppedFiles).toHaveBeenCalledWith('/project/src', ['a.png'])
+    })
+
+    it('leaves an in-tree drag to the move logic', () => {
+      useFileExplorerStore.setState({ dragPaths: ['/project/b.ts'] })
+      const row = renderEntry({
+        path: '/project/src',
+        name: 'src',
+        type: 'directory',
+        size: 0,
+        modifiedAt: 0
+      })
+
+      fireEvent.drop(row, { dataTransfer: finderTransfer(['b.ts']) })
+
+      expect(importDroppedFiles).not.toHaveBeenCalled()
+      expect(moveEntries).toHaveBeenCalledWith(['/project/b.ts'], '/project/src')
     })
   })
 

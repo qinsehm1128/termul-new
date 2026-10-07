@@ -25,6 +25,7 @@ import {
   PENDING_REVEAL_LINE_GLOBAL,
   type PendingRevealLineWindow
 } from '@/lib/editor-events'
+import { readPasteboardFilePaths } from '@/lib/file-pasteboard'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -41,6 +42,7 @@ import {
   FileTreeNodeWrapper,
   InlineInputContext,
   type InlineInputPlacement,
+  isExternalFileDrag,
   isSameTreePath
 } from './FileTreeNode'
 
@@ -124,6 +126,9 @@ export function FileExplorer({
   } = useFileExplorerActions()
 
   const [inlineInput, setInlineInput] = useState<InlineInputState | null>(null)
+  // Files copied in Finder are pasteable too, so the menu's Paste also asks
+  // the system pasteboard; refreshed whenever a row's menu opens.
+  const [pasteboardHasFiles, setPasteboardHasFiles] = useState(false)
   const [inputValue, setInputValue] = useState('')
   // A list, not a single entry: the confirm dialog reports `selectedPaths.size`,
   // so holding one entry made it promise "delete 3" and then delete one.
@@ -425,6 +430,9 @@ export function FileExplorer({
       if (!selectedPaths.has(entry.path)) {
         selectPath(entry.path)
       }
+      void readPasteboardFilePaths().then((files) =>
+        setPasteboardHasFiles((files?.paths.length ?? 0) > 0)
+      )
     },
     [selectPath, selectedPaths]
   )
@@ -453,6 +461,36 @@ export function FileExplorer({
     [togglePathSelection, selectPathRange, selectPath, toggleDirectory, handleSelect]
   )
 
+  const pasteWithFeedback = useCallback(
+    async (destinationPath: string) => {
+      const error = await paste(destinationPath)
+      if (error) toast.error(t('fileExplorer.pasteFailed'), { description: error })
+    },
+    [paste, t]
+  )
+
+  // Finder files dropped on the tree's empty space land in the project root.
+  const handleTreeDragOver = useCallback((e: React.DragEvent) => {
+    if (!isExternalFileDrag(e, useFileExplorerStore.getState().dragPaths)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleTreeDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!rootPath || !isExternalFileDrag(e, useFileExplorerStore.getState().dragPaths)) return
+      e.preventDefault()
+      const names = Array.from(e.dataTransfer.files, (file) => file.name)
+      void useFileExplorerStore
+        .getState()
+        .importDroppedFiles(rootPath, names)
+        .then((error) => {
+          if (error) toast.error(t('fileExplorer.dropFailed'), { description: error })
+        })
+    },
+    [rootPath, t]
+  )
+
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -476,15 +514,19 @@ export function FileExplorer({
         return
       }
 
+      // Selected page text (body focus counts as the tree's) copies as text:
+      // the tree's copy now also replaces the system clipboard.
+      const hasTextSelection = !(document.getSelection()?.isCollapsed ?? true)
+
       // Ctrl+C: Copy
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !hasTextSelection) {
         e.preventDefault()
         copySelected()
         return
       }
 
       // Ctrl+X: Cut
-      if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'x' && !hasTextSelection) {
         e.preventDefault()
         cutSelected()
         return
@@ -517,7 +559,7 @@ export function FileExplorer({
           targetPath = rootPath
         }
         if (targetPath) {
-          void paste(targetPath)
+          void pasteWithFeedback(targetPath)
         }
         return
       }
@@ -577,7 +619,7 @@ export function FileExplorer({
     selectAll,
     copySelected,
     cutSelected,
-    paste,
+    pasteWithFeedback,
     selectedPaths,
     directoryContents,
     clearSelection,
@@ -1103,12 +1145,7 @@ export function FileExplorer({
   }, [cutSelected])
 
   // Paste handler
-  const handlePaste = useCallback(
-    async (destinationPath: string) => {
-      await paste(destinationPath)
-    },
-    [paste]
-  )
+  const handlePaste = pasteWithFeedback
 
   // Duplicate handler
   const handleDuplicate = useCallback(async () => {
@@ -1138,7 +1175,7 @@ export function FileExplorer({
         onOpenWithExternal={handleOpenWithExternal}
         onShowInFileManager={handleShowInFileManager}
         selectedCount={selectedPaths.size}
-        hasClipboardContent={clipboard !== null}
+        hasClipboardContent={clipboard !== null || pasteboardHasFiles}
       />
     ),
     [
@@ -1155,7 +1192,8 @@ export function FileExplorer({
       handleOpenWithExternal,
       handleShowInFileManager,
       selectedPaths,
-      clipboard
+      clipboard,
+      pasteboardHasFiles
     ]
   )
 
@@ -1329,7 +1367,11 @@ export function FileExplorer({
       </div>
 
       {/* Tree / Search Results */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
+      <div
+        className="flex-1 overflow-y-auto overflow-x-hidden py-1"
+        onDragOver={handleTreeDragOver}
+        onDrop={handleTreeDrop}
+      >
         {roots.length === 0 && !rootPath && (
           <div className="px-3 py-5" role="status">
             <p className="text-xs leading-relaxed text-muted-foreground">
