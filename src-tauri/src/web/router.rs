@@ -119,6 +119,7 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             .route("/fs/delete", post(fs_api::delete))
             .route("/fs/rename", post(fs_api::rename))
             .route("/fs/copy", post(fs_api::copy))
+            .route("/fs/copy-into", post(fs_api::copy_into))
             .route("/shells", get(fs_api::shells)),
         RemoteRouteClass::Filesystem,
     ))

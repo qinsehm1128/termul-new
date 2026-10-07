@@ -262,6 +262,10 @@ libc = "0.2"
 # Self-contained SSH/OpenSSL linkage for packaged macOS apps
 [target.'cfg(target_os = "macos")'.dependencies]
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+# File URLs on the pasteboards (`file_pasteboard.rs`); already in the tree via wry.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
 
 # Preserve the existing system/default SSH native dependency behavior outside
 # macOS. Global vendoring breaks common Windows/MSYS development environments.

@@ -177,6 +177,14 @@ pub struct CopyRequest {
     pub to: String,
 }
 
+/// `POST /fs/copy-into` body. Mirrors the desktop `fs_copy_entries` command.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyIntoRequest {
+    pub sources: Vec<String>,
+    pub target_dir: String,
+}
+
 // Names commonly git-ignored; entries matching these are surfaced with
 // `ignored: true` (shown dimmed in the tree, same as the Tauri path).
 const ALWAYS_IGNORE: &[&str] = &[
@@ -854,6 +862,55 @@ pub async fn copy(
     (StatusCode::OK, Json(body))
 }
 
+/// `POST /fs/copy-into` — copy files/folders into `targetDir` without ever
+/// overwriting (taken names get a "name copy" sibling; see `fs_copy`). Returns
+/// the created paths. Same path resolution and loopback guard as `/fs/copy`.
+pub async fn copy_into(
+    State(_state): State<AppState>,
+    axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    Json(req): Json<CopyIntoRequest>,
+) -> impl IntoResponse {
+    if let Some(forbidden) = check_local_only::<Vec<String>>(provenance) {
+        return (StatusCode::OK, Json(forbidden));
+    }
+    let resolved: Result<Vec<_>, _> = req
+        .sources
+        .iter()
+        .chain(std::iter::once(&req.target_dir))
+        .map(|path| resolve_request_path(Path::new(path)))
+        .collect();
+    let mut paths = match resolved {
+        Ok(paths) => paths,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<Vec<String>>::err(msg, code)));
+        }
+    };
+    let target_dir = paths.pop().expect("target_dir was chained last");
+    let result =
+        tokio::task::spawn_blocking(move || crate::fs_copy::copy_entries_into(&paths, &target_dir))
+            .await
+            .map_err(|e| format!("copy task failed: {e}"));
+    let body = match result {
+        // Report under the caller's spelling of the target (resolution
+        // canonicalizes), so the paths match the tree the caller renders.
+        Ok(Ok(created)) => IpcBody::ok(
+            created
+                .iter()
+                .filter_map(|path| path.file_name())
+                .map(|name| {
+                    Path::new(&req.target_dir)
+                        .join(name)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect(),
+        ),
+        Ok(Err(e)) => IpcBody::<Vec<String>>::err(format!("{e}"), "COPY_ERROR"),
+        Err(e) => IpcBody::<Vec<String>>::err(e, "COPY_ERROR"),
+    };
+    (StatusCode::OK, Json(body))
+}
+
 /// `POST /git/init` — initialize a git repository in `cwd`. Reuses
 /// `GitTracker::run_git_command(&cwd, &["init"])` (same call the
 /// `#[tauri::command] git_init` makes). Returns `{ success: true }` or
@@ -1105,6 +1162,7 @@ mod tests {
             .route("/fs/delete", axum::routing::post(delete))
             .route("/fs/rename", axum::routing::post(rename))
             .route("/fs/copy", axum::routing::post(copy))
+            .route("/fs/copy-into", axum::routing::post(copy_into))
             .route("/git/init", axum::routing::post(git_init))
             .route(
                 "/git/status",
@@ -2180,6 +2238,51 @@ mod tests {
         assert!(from.exists(), "source must remain after copy");
         assert!(to.exists(), "destination must exist after copy");
         assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    /// `/fs/copy-into` pastes a file back into its own folder as a copy,
+    /// leaving the original intact (`fs::copy(a, a)` would truncate it).
+    #[tokio::test]
+    async fn copy_into_never_overwrites() {
+        let root = TempDir::new("copy-into-root");
+        let file = root.path().join("orig.txt");
+        fs::write(&file, "payload").expect("write file");
+        let req_body = serde_json::json!({
+            "sources": [file.to_string_lossy()],
+            "targetDir": root.path().to_string_lossy()
+        });
+        let resp = post_json(
+            test_state_with_root(root.path()),
+            "/fs/copy-into",
+            &req_body,
+        )
+        .await;
+        let body: IpcBody<Vec<String>> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "copy-into must succeed: {:?}", body.error);
+        let copy = root.path().join("orig copy.txt");
+        assert_eq!(body.data, Some(vec![copy.to_string_lossy().into_owned()]));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "payload");
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "payload");
+    }
+
+    /// `/fs/copy-into` rejects `..` in any source with `PATH_TRAVERSAL`.
+    #[tokio::test]
+    async fn copy_into_rejects_traversal_sequence_in_path() {
+        let root = TempDir::new("copy-into-trav-root");
+        let traversal = root.path().join("sub").join("..").join("..").join("etc");
+        let req_body = serde_json::json!({
+            "sources": [traversal.to_string_lossy()],
+            "targetDir": root.path().to_string_lossy()
+        });
+        let resp = post_json(
+            test_state_with_root(root.path()),
+            "/fs/copy-into",
+            &req_body,
+        )
+        .await;
+        let body: IpcBody<Vec<String>> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal copy-into must be refused");
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
     }
 
     /// `/fs/delete` rejects explicit `..` components with `PATH_TRAVERSAL`

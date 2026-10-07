@@ -1,18 +1,51 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { useTreeLongPressDrag } from '@/hooks/use-tree-long-press-drag'
+import { isFilePasteboardSupported } from '@/lib/file-pasteboard'
 import { cn } from '@/lib/utils'
 import { isRejectedMove, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { MaterialFileIcon } from './MaterialFileIcon'
 
 /** Distinct from the pane DnD payload so neither drop target claims the other's drag. */
 const TREE_MOVE_MIME = 'application/x-se-tree-move'
+
+/**
+ * Where the explorer's single inline name input sits in the tree, so it
+ * appears inside the folder being created in (or over the row being renamed)
+ * instead of trailing the whole tree.
+ */
+export interface InlineInputPlacement {
+  /** Directory a new entry is being created in; the input leads its children. */
+  createIn?: string
+  /** Entry being renamed; the input replaces its row. */
+  renaming?: string
+  render: (depth: number) => ReactNode
+}
+
+export const InlineInputContext = createContext<InlineInputPlacement | null>(null)
+
+export function isSameTreePath(a: string, b: string): boolean {
+  return a.replace(/\\/g, '/') === b.replace(/\\/g, '/')
+}
+
+/**
+ * A drag of files from outside the app (Finder). In-tree drags always carry
+ * `dragPaths`, so an external one is a file drag without them.
+ */
+export function isExternalFileDrag(e: React.DragEvent, dragPaths: string[]): boolean {
+  return (
+    dragPaths.length === 0 &&
+    isFilePasteboardSupported() &&
+    Array.from(e.dataTransfer.types).includes('Files')
+  )
+}
 
 interface FileTreeNodeProps {
   entry: DirectoryEntry
@@ -58,6 +91,13 @@ export function FileTreeNode({
   const beginEntryDrag = useFileExplorerStore((state) => state.beginEntryDrag)
   const endEntryDrag = useFileExplorerStore((state) => state.endEntryDrag)
   const moveEntries = useFileExplorerStore((state) => state.moveEntries)
+  const importDroppedFiles = useFileExplorerStore((state) => state.importDroppedFiles)
+  const inlineInput = useContext(InlineInputContext)
+  const isRenaming = !!inlineInput?.renaming && isSameTreePath(inlineInput.renaming, entry.path)
+  const createSlot =
+    isDir && inlineInput?.createIn && isSameTreePath(inlineInput.createIn, entry.path)
+      ? inlineInput.render(depth + 1)
+      : null
   const [isDropTarget, setIsDropTarget] = useState(false)
   const [showTooltip, setShowTooltip] = useState(false)
   const tooltipTimerRef = useRef<number | null>(null)
@@ -115,14 +155,27 @@ export function FileTreeNode({
     onDragStart: beginEntryDrag,
     onDrop: (paths, target) => {
       endEntryDrag()
-      void moveEntries(paths, target.path)
+      void moveEntries(paths, target.path).then(reportMoveError)
     },
     onCancel: endEntryDrag
   })
 
   const acceptsDrop = isDir && dragPaths.some((path) => !isRejectedMove(path, entry.path))
+  // Files dropped from Finder land in this folder, or beside this file.
+  const externalDropTarget = isDir ? entry.path : entry.path.slice(0, entry.path.lastIndexOf('/'))
+
+  function reportMoveError(error: string | null): void {
+    if (error) toast.error(t('fileContext.moveFailed'), { description: error })
+  }
 
   const handleDragOver = (e: React.DragEvent): void => {
+    if (isExternalFileDrag(e, dragPaths)) {
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'copy'
+      setIsDropTarget(true)
+      return
+    }
     if (!acceptsDrop) return
     // dataTransfer is in protected mode during dragover, so the decision has
     // to come from the store payload, not from reading the transfer.
@@ -137,13 +190,23 @@ export function FileTreeNode({
   }
 
   const handleDrop = (e: React.DragEvent): void => {
+    if (isExternalFileDrag(e, dragPaths)) {
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDropTarget(false)
+      const names = Array.from(e.dataTransfer.files, (file) => file.name)
+      void importDroppedFiles(externalDropTarget, names).then((error) => {
+        if (error) toast.error(t('fileContext.dropFailed'), { description: error })
+      })
+      return
+    }
     if (!acceptsDrop) return
     e.preventDefault()
     e.stopPropagation()
     const paths = dragPaths
     endEntryDrag()
     setIsDropTarget(false)
-    void moveEntries(paths, entry.path)
+    void moveEntries(paths, entry.path).then(reportMoveError)
   }
 
   const handleMouseEnter = (): void => {
@@ -166,6 +229,7 @@ export function FileTreeNode({
 
   return (
     <>
+      {isRenaming && inlineInput?.render(depth)}
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
@@ -173,6 +237,7 @@ export function FileTreeNode({
             className={cn(
               'group relative flex h-7 min-w-0 cursor-pointer select-none items-center text-sm transition-colors duration-150 ease-[var(--ease-out)]',
               isIgnored && 'opacity-50',
+              isRenaming && 'hidden',
               isDropTarget || longPress.hoverTarget?.path === entry.path
                 ? 'bg-primary/15 ring-1 ring-inset ring-primary'
                 : isSelected
@@ -231,24 +296,29 @@ export function FileTreeNode({
 
       {isDir &&
         (suppressTreeAnimations ? (
-          isExpanded &&
-          children?.map((child) => (
-            <FileTreeNodeWrapper
-              key={child.path}
-              entry={child}
-              depth={depth + 1}
-              onToggle={onToggle}
-              onSelect={onSelect}
-              onContextMenu={onContextMenu}
-              onClick={onClick}
-              renderContextMenu={renderContextMenu}
-            />
-          ))
+          isExpanded && (
+            <>
+              {createSlot}
+              {children?.map((child) => (
+                <FileTreeNodeWrapper
+                  key={child.path}
+                  entry={child}
+                  depth={depth + 1}
+                  onToggle={onToggle}
+                  onSelect={onSelect}
+                  onContextMenu={onContextMenu}
+                  onClick={onClick}
+                  renderContextMenu={renderContextMenu}
+                />
+              ))}
+            </>
+          )
         ) : (
           <CollapseExpandMotion
             open={isExpanded}
             onExitComplete={() => finalizeDirectoryCollapse(entry.path)}
           >
+            {createSlot}
             {children?.map((child) => (
               <FileTreeNodeWrapper
                 key={child.path}

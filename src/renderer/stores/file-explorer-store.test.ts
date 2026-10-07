@@ -20,11 +20,18 @@ const mockEntries: DirectoryEntry[] = [
   }
 ]
 
-const { mockApi } = vi.hoisted(() => ({
+const { mockApi, mockPasteboard } = vi.hoisted(() => ({
+  mockPasteboard: {
+    writePasteboardFilePaths: vi.fn(),
+    readPasteboardFilePaths: vi.fn(),
+    readDragPasteboardFilePaths: vi.fn()
+  },
   mockApi: {
     filesystem: {
       readDirectory: vi.fn(),
       renameFile: vi.fn(),
+      getFileInfo: vi.fn(),
+      copyEntries: vi.fn(),
       setWatchRoots: vi.fn(async () => ({ success: true })),
       watchDirectory: vi.fn(),
       unwatchDirectory: vi.fn(),
@@ -42,6 +49,8 @@ vi.mock('@/lib/api', () => ({
   filesystemApi: mockApi.filesystem
 }))
 
+vi.mock('@/lib/file-pasteboard', () => mockPasteboard)
+
 import { i18n } from '@/i18n'
 import { isRejectedMove, useFileExplorerStore } from './file-explorer-store'
 
@@ -51,6 +60,12 @@ beforeEach(async () => {
     .mockReset()
     .mockResolvedValue({ success: true, data: mockEntries })
   mockApi.filesystem.renameFile.mockReset().mockResolvedValue({ success: true, data: undefined })
+  // Nothing exists unless a test says so (a missing path fails getFileInfo).
+  mockApi.filesystem.getFileInfo.mockReset().mockResolvedValue({ success: false, error: 'ENOENT' })
+  mockApi.filesystem.copyEntries.mockReset().mockResolvedValue({ success: true, data: [] })
+  mockPasteboard.writePasteboardFilePaths.mockReset().mockResolvedValue(null)
+  mockPasteboard.readPasteboardFilePaths.mockReset().mockResolvedValue(null)
+  mockPasteboard.readDragPasteboardFilePaths.mockReset().mockResolvedValue([])
   mockApi.filesystem.watchDirectory.mockReset().mockResolvedValue({ success: true })
   mockApi.filesystem.unwatchDirectory.mockReset().mockResolvedValue({ success: true })
 
@@ -759,5 +774,155 @@ describe('moveEntries', () => {
     await useFileExplorerStore.getState().moveEntries(['/project/src'], '/project/src')
 
     expect(mockApi.filesystem.readDirectory).not.toHaveBeenCalled()
+  })
+})
+
+describe('never overwriting on move', () => {
+  it('should leave a same-name entry in the target alone and report it', async () => {
+    mockApi.filesystem.getFileInfo.mockImplementation(async (path: string) =>
+      path === '/project/src/index.ts'
+        ? { success: true, data: { type: 'file' } }
+        : { success: false, error: 'ENOENT' }
+    )
+
+    const error = await useFileExplorerStore
+      .getState()
+      .moveEntries(['/project/index.ts', '/project/readme.md'], '/project/src')
+
+    expect(mockApi.filesystem.renameFile).not.toHaveBeenCalledWith(
+      '/project/index.ts',
+      '/project/src/index.ts'
+    )
+    expect(mockApi.filesystem.renameFile).toHaveBeenCalledWith(
+      '/project/readme.md',
+      '/project/src/readme.md'
+    )
+    expect(error).toContain('index.ts')
+  })
+})
+
+describe('copy and paste', () => {
+  const directory = { success: true, data: { type: 'directory' } }
+
+  function selectAndCopy(paths: string[]): void {
+    useFileExplorerStore.setState({ selectedPaths: new Set(paths) })
+    useFileExplorerStore.getState().copySelected()
+  }
+
+  beforeEach(() => {
+    mockApi.filesystem.getFileInfo.mockImplementation(async (path: string) =>
+      path === '/project/lib' || path === '/project/src'
+        ? directory
+        : { success: false, error: 'ENOENT' }
+    )
+  })
+
+  it('should put copied files on the system pasteboard too', () => {
+    selectAndCopy(['/project/index.ts'])
+
+    expect(mockPasteboard.writePasteboardFilePaths).toHaveBeenCalledWith(['/project/index.ts'])
+  })
+
+  it('should paste a copy through the never-overwriting copy', async () => {
+    selectAndCopy(['/project/index.ts', '/project/src'])
+
+    const error = await useFileExplorerStore.getState().paste('/project/lib')
+
+    expect(error).toBeNull()
+    expect(mockApi.filesystem.copyEntries).toHaveBeenCalledWith(
+      ['/project/index.ts', '/project/src'],
+      '/project/lib'
+    )
+  })
+
+  it('should paste what was copied elsewhere since, as Finder would', async () => {
+    mockPasteboard.writePasteboardFilePaths.mockResolvedValue(7)
+    selectAndCopy(['/project/index.ts'])
+    mockPasteboard.readPasteboardFilePaths.mockResolvedValue({
+      changeCount: 8,
+      paths: ['/Users/me/Desktop/photo.png']
+    })
+
+    await useFileExplorerStore.getState().paste('/project/lib')
+
+    expect(mockApi.filesystem.copyEntries).toHaveBeenCalledWith(
+      ['/Users/me/Desktop/photo.png'],
+      '/project/lib'
+    )
+  })
+
+  it('should keep pasting its own copy while the pasteboard is unchanged', async () => {
+    mockPasteboard.writePasteboardFilePaths.mockResolvedValue(7)
+    selectAndCopy(['/project/index.ts'])
+    mockPasteboard.readPasteboardFilePaths.mockResolvedValue({
+      changeCount: 7,
+      paths: ['/project/index.ts']
+    })
+    useFileExplorerStore.setState({ selectedPaths: new Set(['/project/src']) })
+    useFileExplorerStore.getState().cutSelected()
+
+    await useFileExplorerStore.getState().paste('/project/lib')
+
+    // The cut came after the copy and nothing was copied elsewhere: it moves.
+    expect(mockApi.filesystem.copyEntries).not.toHaveBeenCalled()
+    expect(mockApi.filesystem.renameFile).toHaveBeenCalledWith('/project/src', '/project/lib/src')
+  })
+
+  it('should not move a cut entry onto itself or over a same-name entry', async () => {
+    mockApi.filesystem.getFileInfo.mockImplementation(async (path: string) =>
+      path === '/project/lib' || path === '/project/lib/b.ts'
+        ? directory
+        : { success: false, error: 'ENOENT' }
+    )
+    useFileExplorerStore.setState({
+      selectedPaths: new Set(['/project/lib/a.ts', '/project/b.ts'])
+    })
+    useFileExplorerStore.getState().cutSelected()
+
+    const error = await useFileExplorerStore.getState().paste('/project/lib')
+
+    expect(mockApi.filesystem.renameFile).not.toHaveBeenCalled()
+    expect(error).toContain('b.ts')
+  })
+
+  it("should duplicate into the entry's own folder", async () => {
+    useFileExplorerStore.setState({ selectedPaths: new Set(['/project/src/app.ts']) })
+
+    await useFileExplorerStore.getState().duplicateSelected()
+
+    expect(mockApi.filesystem.copyEntries).toHaveBeenCalledWith(
+      ['/project/src/app.ts'],
+      '/project/src'
+    )
+  })
+})
+
+describe('importDroppedFiles', () => {
+  it('should copy the dropped Finder paths into the target', async () => {
+    mockPasteboard.readDragPasteboardFilePaths.mockResolvedValue([
+      '/Users/me/Desktop/a.png',
+      '/Users/me/Desktop/docs'
+    ])
+
+    const error = await useFileExplorerStore
+      .getState()
+      .importDroppedFiles('/project/src', ['a.png', 'docs'])
+
+    expect(error).toBeNull()
+    expect(mockApi.filesystem.copyEntries).toHaveBeenCalledWith(
+      ['/Users/me/Desktop/a.png', '/Users/me/Desktop/docs'],
+      '/project/src'
+    )
+  })
+
+  it('should refuse a drag pasteboard that does not hold this drop', async () => {
+    mockPasteboard.readDragPasteboardFilePaths.mockResolvedValue(['/Users/me/old-drag.txt'])
+
+    const error = await useFileExplorerStore
+      .getState()
+      .importDroppedFiles('/project/src', ['a.png'])
+
+    expect(error).not.toBeNull()
+    expect(mockApi.filesystem.copyEntries).not.toHaveBeenCalled()
   })
 })

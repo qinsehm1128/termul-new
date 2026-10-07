@@ -944,6 +944,11 @@ export interface FilesystemApi {
   renameFile: (oldPath: string, newPath: string) => Promise<IpcResult<void>>
   copyFile: (srcPath: string, destPath: string) => Promise<IpcResult<void>>
   /**
+   * Copy files/folders (recursively) into `targetDir`, never overwriting: a
+   * taken name gets a Finder-style "name copy" sibling. Resolves the created paths.
+   */
+  copyEntries: (sources: string[], targetDir: string) => Promise<IpcResult<string[]>>
+  /**
    * Replace the watched root set. Each root is watched recursively by the host,
    * so directories below one need no registration of their own — expanding a
    * folder in the tree is a UI operation, not an OS-resource operation.

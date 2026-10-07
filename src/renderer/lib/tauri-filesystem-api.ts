@@ -912,6 +912,18 @@ export function createTauriFilesystemApi(): FilesystemApi {
       }
     },
 
+    async copyEntries(sources: string[], targetDir: string): Promise<IpcResult<string[]>> {
+      if (!isTauriContext()) {
+        return webServerFilesystem.copyEntries(sources, targetDir)
+      }
+      try {
+        const created = await invoke<string[]>('fs_copy_entries', { sources, targetDir })
+        return { success: true, data: created }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'COPY_ERROR' }
+      }
+    },
+
     /**
      * Replace the watched root set in one call — the primitive this model rests on.
      *

@@ -1,6 +1,7 @@
+import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PENDING_REVEAL_LINE_GLOBAL, type PendingRevealLineWindow } from '@/lib/editor-events'
 import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { FileExplorer } from './FileExplorer'
@@ -60,14 +61,22 @@ const mockExplorerState = {
   searchTruncated: false,
   searchScannedFiles: 0,
   searchFailedFiles: 0,
-  searchLastCompletedQuery: ''
+  searchLastCompletedQuery: '',
+  // The hook and getState() read one store; share the set the expand-chain mutates.
+  get expandedDirs(): Set<string> {
+    return mockStoreGetState.expandedDirs
+  }
 }
 
 /** Live object returned by the mocked useFileExplorerStore.getState(). */
 const mockDeletePath = vi.fn(async () => ({ success: true, data: undefined }))
 const mockUnwatchDirectory = vi.fn(async () => ({ success: true, data: undefined }))
 
+const mockImportDroppedFiles = vi.fn(async () => null)
+
 const mockStoreGetState = {
+  dragPaths: [] as string[],
+  importDroppedFiles: mockImportDroppedFiles,
   expandedDirs: new Set<string>(),
   selectedPaths: new Set<string>(),
   loadingDirs: new Set<string>(),
@@ -139,14 +148,62 @@ vi.mock('@/stores/workspace-store', () => ({
   editorTabId: (path: string) => `edit-${path}`
 }))
 
-vi.mock('./FileTreeNode', () => ({
-  FileTreeNodeWrapper: ({ entry }: { entry: { name: string } }) => (
-    <div data-testid="tree-node">{entry.name}</div>
-  )
+// The stub mirrors the real node's shape: an expanded folder renders the
+// inline create input as its first child, then its children; the folder menu's
+// New File is exposed as a button.
+vi.mock('./FileTreeNode', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./FileTreeNode')>()
+  const { useContext } = await import('react')
+  function StubNode({
+    entry,
+    depth,
+    renderContextMenu
+  }: {
+    entry: DirectoryEntry
+    depth: number
+    renderContextMenu?: (entry: DirectoryEntry) => React.ReactNode
+  }): React.JSX.Element {
+    const placement = useContext(actual.InlineInputContext)
+    const expanded = mockStoreGetState.expandedDirs.has(entry.path)
+    const children = expanded ? (mockExplorerState.directoryContents.get(entry.path) ?? []) : []
+    return (
+      <div data-testid="tree-node">
+        {entry.name}
+        {renderContextMenu?.(entry)}
+        {expanded && placement?.createIn === entry.path && placement.render(depth + 1)}
+        {children.map((child) => (
+          <StubNode
+            key={child.path}
+            entry={child as DirectoryEntry}
+            depth={depth + 1}
+            renderContextMenu={renderContextMenu}
+          />
+        ))}
+      </div>
+    )
+  }
+  return { ...actual, FileTreeNodeWrapper: StubNode }
+})
+
+// The macOS desktop path, where Finder drops are accepted.
+vi.mock('@/lib/file-pasteboard', () => ({
+  isFilePasteboardSupported: () => true,
+  readPasteboardFilePaths: async () => null
 }))
 
 vi.mock('./FileTreeContextMenu', () => ({
-  FileTreeContextMenuContent: () => null
+  FileTreeContextMenuContent: ({
+    entry,
+    onNewFile
+  }: {
+    entry: DirectoryEntry
+    onNewFile: (dirPath: string) => void
+  }) =>
+    entry.type === 'directory' ? (
+      <button type="button" onClick={() => onNewFile(entry.path)}>
+        {`menu-new-file:${entry.name}`}
+      </button>
+    ) : null
 }))
 
 beforeEach(() => {
@@ -735,6 +792,42 @@ describe('FileExplorer header toolbar (GH-540)', () => {
     await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/src/main.ts'))
   })
 
+  it('opens the folder context-menu input inside that folder, expanding it first', async () => {
+    openProjectWithRootEntries([
+      { path: '/project/src', name: 'src', type: 'directory' },
+      { path: '/project/z.txt', name: 'z.txt', type: 'file' }
+    ])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'menu-new-file:src' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    const [srcNode] = screen.getAllByTestId('tree-node')
+    expect(srcNode).toHaveTextContent('src')
+    expect(srcNode).toContainElement(input)
+    expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src')
+
+    fireEvent.change(input, { target: { value: 'main.ts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/src/main.ts'))
+  })
+
+  it('copies Finder files dropped on empty tree space into the project root', () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+
+    render(<FileExplorer />)
+    const tree = screen.getAllByTestId('tree-node')[0].parentElement as HTMLElement
+    const transfer = {
+      types: ['Files'],
+      files: [new File([''], 'photo.png')],
+      dropEffect: 'none'
+    } as unknown as DataTransfer
+    expect(fireEvent.dragOver(tree, { dataTransfer: transfer })).toBe(false)
+    fireEvent.drop(tree, { dataTransfer: transfer })
+
+    expect(mockImportDroppedFiles).toHaveBeenCalledWith('/project', ['photo.png'])
+  })
+
   it('targets the parent directory of the selected file', async () => {
     setProjectRoot('/project')
     mockExplorerState.directoryContents = new Map([
@@ -1009,5 +1102,40 @@ describe('FileExplorer header toolbar (GH-540)', () => {
     expect(mockCollapseAll).not.toHaveBeenCalled()
     expect(mockToggleDirectory).not.toHaveBeenCalled()
     expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
+  })
+})
+
+describe('FileExplorer clipboard shortcuts', () => {
+  beforeEach(() => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+  })
+
+  afterEach(() => {
+    document.getSelection()?.removeAllRanges()
+  })
+
+  it('copies the tree selection on Cmd+C', () => {
+    render(<FileExplorer />)
+
+    fireEvent.keyDown(document, { key: 'c', metaKey: true })
+
+    expect(mockCopySelected).toHaveBeenCalled()
+  })
+
+  it('leaves Cmd+C to selected page text', () => {
+    const text = document.createElement('p')
+    text.textContent = 'a chat message'
+    document.body.appendChild(text)
+    const range = document.createRange()
+    range.selectNodeContents(text)
+    document.getSelection()?.addRange(range)
+    render(<FileExplorer />)
+
+    const notPrevented = fireEvent.keyDown(document, { key: 'c', metaKey: true })
+
+    expect(notPrevented).toBe(true)
+    expect(mockCopySelected).not.toHaveBeenCalled()
+    text.remove()
   })
 })
