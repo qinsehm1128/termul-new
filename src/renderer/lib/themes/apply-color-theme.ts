@@ -1,6 +1,6 @@
 import type { ITheme } from '@xterm/xterm'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
-import type { UiContrast } from '@/types/settings'
+import { UI_CONTRAST_MAX } from '@/types/settings'
 import { forEachTerminal } from '@/utils/terminal-registry'
 import { ansi16FromPalette } from './ansi-palette'
 import { applyThemeToTerminal } from './apply-theme-to-terminal'
@@ -45,16 +45,21 @@ function applyDocumentAppearance(appearance: ThemeAppearance): void {
 }
 
 /**
- * WCAG contrast floors per `uiContrast` level. Secondary tones are the theme
- * ink faded toward the background; a theme whose ink is already soft (One
- * Dark) used to fade below readability, so each fade stops at its floor.
- * `ink: 0` keeps the theme's own ink untouched.
+ * WCAG contrast floors at both ends of the `uiContrast` slider; values in
+ * between interpolate. Secondary tones are the theme ink faded toward the
+ * background; a theme whose ink is already soft (One Dark) used to fade below
+ * readability, so each fade stops at its floor. `ink: 0` keeps the theme's own
+ * ink untouched. The midpoint (7 / 7 / 4.5) is what 0.14.7's "high" was.
  */
-const TEXT_CONTRAST_FLOORS: Record<UiContrast, { ink: number; secondary: number; muted: number }> =
-  {
-    standard: { ink: 0, secondary: 4.5, muted: 3 },
-    high: { ink: 7, secondary: 7, muted: 4.5 }
-  }
+const FLOORS_AT_MIN = { ink: 0, secondary: 4.5, muted: 3 }
+const FLOORS_AT_MAX = { ink: 14, secondary: 9.5, muted: 6 }
+
+function contrastFloors(contrast: number): typeof FLOORS_AT_MIN {
+  const t = Math.min(Math.max(contrast / UI_CONTRAST_MAX, 0), 1)
+  const lerp = (key: keyof typeof FLOORS_AT_MIN) =>
+    FLOORS_AT_MIN[key] + (FLOORS_AT_MAX[key] - FLOORS_AT_MIN[key]) * t
+  return { ink: lerp('ink'), secondary: lerp('secondary'), muted: lerp('muted') }
+}
 
 export interface UiTextTones {
   /** Primary UI text. */
@@ -70,21 +75,22 @@ export interface UiTextTones {
 export function deriveUiTextTones(
   palette: ThemePalette,
   appearance: ThemeAppearance,
-  contrast: UiContrast
+  contrast: number
 ): UiTextTones {
   const { card, secondary, sidebar } = deriveSurfaces(palette, appearance)
-  const floors = TEXT_CONTRAST_FLOORS[contrast]
+  const floors = contrastFloors(contrast)
   const surfaces = [palette.neutral, sidebar, card, secondary]
 
-  // High contrast moves the ink itself away from the background until it clears its floor.
+  // Raised contrast moves the ink itself away from the background until it
+  // clears its floor, in fine steps so the slider moves it smoothly.
   const extreme = appearance === 'light' ? '#000000' : '#ffffff'
   let ink = palette.ink
   for (
-    let w = 0.05;
-    w <= 1 && surfaces.some((s) => contrastRatio(ink, s) < floors.ink);
-    w += 0.05
+    let step = 1;
+    step <= 100 && surfaces.some((s) => contrastRatio(ink, s) < floors.ink);
+    step++
   ) {
-    ink = mixHex(palette.ink, extreme, w)
+    ink = mixHex(palette.ink, extreme, step / 100)
   }
 
   const fade = (weight: number, minContrast: number): string =>

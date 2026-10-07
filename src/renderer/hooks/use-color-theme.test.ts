@@ -43,7 +43,7 @@ describe('useAppliedColorThemeSync', () => {
     mocks.useAppSettingsLoaded.mockReturnValue(true)
     mocks.useColorTheme.mockReturnValue(brandCanonical().themeId)
     mocks.useAppearanceMode.mockReturnValue('dark')
-    mocks.useUiContrast.mockReturnValue('standard')
+    mocks.useUiContrast.mockReturnValue(0)
     mocks.useThemePickerOpen.mockReturnValue(false)
   })
 
@@ -51,7 +51,7 @@ describe('useAppliedColorThemeSync', () => {
     const { rerender } = renderHook(() => useAppliedColorThemeSync())
     await waitFor(() => expect(applyColorTheme).toHaveBeenCalledTimes(1))
 
-    mocks.useUiContrast.mockReturnValue('high')
+    mocks.useUiContrast.mockReturnValue(50)
     rerender()
 
     await waitFor(() => expect(applyColorTheme).toHaveBeenCalledTimes(2))

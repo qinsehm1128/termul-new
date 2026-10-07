@@ -13,9 +13,9 @@ import type { AppPanelVisibilitySettingKey, AppSettings, AppSettingsUpdate } fro
 import {
   APP_SETTINGS_KEY,
   DEFAULT_APP_SETTINGS,
-  isSidebarFontSize,
-  isUiContrast,
-  isUiLanguagePreference
+  isUiLanguagePreference,
+  normalizeSidebarFontSize,
+  normalizeUiContrast
 } from '@/types/settings'
 
 type PanelSettingKey = AppPanelVisibilitySettingKey
@@ -206,14 +206,19 @@ export function useAppSettingsLoader(): void {
           shouldPersistSettings = true
         }
 
-        // Absent in blobs older than these settings; that alone is not worth a
-        // write, but an unknown value is.
-        if (!isSidebarFontSize(settings.sidebarFontSize)) {
-          settings = { ...settings, sidebarFontSize: DEFAULT_APP_SETTINGS.sidebarFontSize }
+        // Absent in blobs older than these settings, which is not worth a
+        // write; a 0.14.7 preset name or an unusable value is rewritten.
+        const sidebarFontSize = normalizeSidebarFontSize(settings.sidebarFontSize)
+        if (sidebarFontSize !== settings.sidebarFontSize) {
+          settings = {
+            ...settings,
+            sidebarFontSize: sidebarFontSize ?? DEFAULT_APP_SETTINGS.sidebarFontSize
+          }
           shouldPersistSettings = true
         }
-        if (!isUiContrast(settings.uiContrast)) {
-          settings = { ...settings, uiContrast: DEFAULT_APP_SETTINGS.uiContrast }
+        const uiContrast = normalizeUiContrast(settings.uiContrast)
+        if (uiContrast !== settings.uiContrast) {
+          settings = { ...settings, uiContrast: uiContrast ?? DEFAULT_APP_SETTINGS.uiContrast }
           shouldPersistSettings = true
         }
 

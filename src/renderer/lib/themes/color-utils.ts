@@ -104,7 +104,7 @@ export function mixHexWithContrastFloor(
   surfaces: string[],
   minContrast: number
 ): string {
-  for (let w = weight; w > 0; w = Math.round((w - 0.025) * 1000) / 1000) {
+  for (let w = weight; w > 0; w = Math.round((w - 0.01) * 1000) / 1000) {
     const mixed = mixHex(ink, toward, w)
     if (surfaces.every((surface) => contrastRatio(mixed, surface) >= minContrast)) return mixed
   }

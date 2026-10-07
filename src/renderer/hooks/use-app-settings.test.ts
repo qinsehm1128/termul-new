@@ -223,15 +223,15 @@ describe('use-app-settings', () => {
 
     await waitFor(() => expect(useAppSettingsStore.getState().isLoaded).toBe(true))
     const { settings } = useAppSettingsStore.getState()
-    expect(settings.sidebarFontSize).toBe('default')
-    expect(settings.uiContrast).toBe('standard')
+    expect(settings.sidebarFontSize).toBe(12)
+    expect(settings.uiContrast).toBe(0)
     expect(mockPersistenceWriteDebounced).not.toHaveBeenCalled()
   })
 
-  it('replaces unknown readability values with the defaults and persists them', async () => {
+  it('replaces unusable readability values with the defaults and persists them', async () => {
     mockPersistenceRead.mockResolvedValueOnce({
       success: true,
-      data: { ...DEFAULT_APP_SETTINGS, sidebarFontSize: 'huge', uiContrast: 'max' }
+      data: { ...DEFAULT_APP_SETTINGS, sidebarFontSize: 99, uiContrast: 'max' }
     })
 
     renderHook(() => useAppSettingsLoader())
@@ -239,7 +239,23 @@ describe('use-app-settings', () => {
     await waitFor(() => {
       expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
         APP_SETTINGS_KEY,
-        expect.objectContaining({ sidebarFontSize: 'default', uiContrast: 'standard' })
+        expect.objectContaining({ sidebarFontSize: 12, uiContrast: 0 })
+      )
+    })
+  })
+
+  it('carries a 0.14.7 preset over to the slider value it showed', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: { ...DEFAULT_APP_SETTINGS, sidebarFontSize: 'large', uiContrast: 'high' }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+        APP_SETTINGS_KEY,
+        expect.objectContaining({ sidebarFontSize: 13, uiContrast: 50 })
       )
     })
   })

@@ -55,19 +55,10 @@
     "symbolFont": "符号字体（终端图标/字形）",
     "symbolFontHint": "用于渲染提示符图标与 powerline 符号的 Nerd Font；Auto 自动回退到已安装的 Nerd 字体。",
     "sidebarFontSize": "侧边栏字号",
-    "sidebarFontSizeHint": "项目列表和文件树的文字大小，不影响其他界面和终端。",
-    "sidebarFontSizes": {
-      "small": "小",
-      "default": "标准",
-      "large": "大",
-      "xlarge": "特大"
-    },
+    "sidebarFontSizeHint": "项目列表的文字大小，文件树始终比它大 2px。不影响其他界面和终端。",
     "uiContrast": "文字对比度",
-    "uiContrastHint": "标准：保留主题原有风格，但侧边栏和次要文字不会淡到难以阅读。高：整体文字更亮更清晰。不影响终端颜色。",
-    "uiContrasts": {
-      "standard": "标准",
-      "high": "高"
-    }
+    "uiContrastHint": "0%：保留主题原有风格，但侧边栏和次要文字不会淡到难以阅读。往右拖动整体文字更亮更清晰。不影响终端颜色。",
+    "resetToDefault": "恢复默认"
   },
   "editor": {
     "source": "源代码",

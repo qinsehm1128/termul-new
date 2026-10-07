@@ -218,18 +218,18 @@ describe('AppPreferences settings controls', () => {
     })
   })
 
-  it('writes the sidebar text size and text contrast picks', async () => {
+  it('writes the dragged sidebar text size and text contrast', async () => {
     renderPage()
 
-    fireEvent.change(await screen.findByLabelText('Sidebar text size'), {
-      target: { value: 'large' }
-    })
-    fireEvent.change(screen.getByLabelText('Text contrast'), { target: { value: 'high' } })
+    const size = await screen.findByLabelText('Sidebar text size')
+    expect(size).toHaveAttribute('type', 'range')
+    fireEvent.change(size, { target: { value: '15' } })
+    fireEvent.change(screen.getByLabelText('Text contrast'), { target: { value: '35' } })
 
     await waitFor(() => {
       const { settings } = useAppSettingsStore.getState()
-      expect(settings.sidebarFontSize).toBe('large')
-      expect(settings.uiContrast).toBe('high')
+      expect(settings.sidebarFontSize).toBe(15)
+      expect(settings.uiContrast).toBe(35)
     })
   })
 
