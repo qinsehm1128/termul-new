@@ -1,3 +1,4 @@
+import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -60,7 +61,11 @@ const mockExplorerState = {
   searchTruncated: false,
   searchScannedFiles: 0,
   searchFailedFiles: 0,
-  searchLastCompletedQuery: ''
+  searchLastCompletedQuery: '',
+  // The hook and getState() read one store; share the set the expand-chain mutates.
+  get expandedDirs(): Set<string> {
+    return mockStoreGetState.expandedDirs
+  }
 }
 
 /** Live object returned by the mocked useFileExplorerStore.getState(). */
@@ -139,14 +144,56 @@ vi.mock('@/stores/workspace-store', () => ({
   editorTabId: (path: string) => `edit-${path}`
 }))
 
-vi.mock('./FileTreeNode', () => ({
-  FileTreeNodeWrapper: ({ entry }: { entry: { name: string } }) => (
-    <div data-testid="tree-node">{entry.name}</div>
-  )
-}))
+// The stub mirrors the real node's shape: an expanded folder renders the
+// inline create input as its first child, then its children; the folder menu's
+// New File is exposed as a button.
+vi.mock('./FileTreeNode', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./FileTreeNode')>()
+  const { useContext } = await import('react')
+  function StubNode({
+    entry,
+    depth,
+    renderContextMenu
+  }: {
+    entry: DirectoryEntry
+    depth: number
+    renderContextMenu?: (entry: DirectoryEntry) => React.ReactNode
+  }): React.JSX.Element {
+    const placement = useContext(actual.InlineInputContext)
+    const expanded = mockStoreGetState.expandedDirs.has(entry.path)
+    const children = expanded ? (mockExplorerState.directoryContents.get(entry.path) ?? []) : []
+    return (
+      <div data-testid="tree-node">
+        {entry.name}
+        {renderContextMenu?.(entry)}
+        {expanded && placement?.createIn === entry.path && placement.render(depth + 1)}
+        {children.map((child) => (
+          <StubNode
+            key={child.path}
+            entry={child as DirectoryEntry}
+            depth={depth + 1}
+            renderContextMenu={renderContextMenu}
+          />
+        ))}
+      </div>
+    )
+  }
+  return { ...actual, FileTreeNodeWrapper: StubNode }
+})
 
 vi.mock('./FileTreeContextMenu', () => ({
-  FileTreeContextMenuContent: () => null
+  FileTreeContextMenuContent: ({
+    entry,
+    onNewFile
+  }: {
+    entry: DirectoryEntry
+    onNewFile: (dirPath: string) => void
+  }) =>
+    entry.type === 'directory' ? (
+      <button type="button" onClick={() => onNewFile(entry.path)}>
+        {`menu-new-file:${entry.name}`}
+      </button>
+    ) : null
 }))
 
 beforeEach(() => {
@@ -733,6 +780,26 @@ describe('FileExplorer header toolbar (GH-540)', () => {
 
     await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/src/main.ts'))
     await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/src/main.ts'))
+  })
+
+  it('opens the folder context-menu input inside that folder, expanding it first', async () => {
+    openProjectWithRootEntries([
+      { path: '/project/src', name: 'src', type: 'directory' },
+      { path: '/project/z.txt', name: 'z.txt', type: 'file' }
+    ])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'menu-new-file:src' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    const [srcNode] = screen.getAllByTestId('tree-node')
+    expect(srcNode).toHaveTextContent('src')
+    expect(srcNode).toContainElement(input)
+    expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src')
+
+    fireEvent.change(input, { target: { value: 'main.ts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/src/main.ts'))
   })
 
   it('targets the parent directory of the selected file', async () => {

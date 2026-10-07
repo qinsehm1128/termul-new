@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContextMenuContent } from '@/components/ui/context-menu'
 import { LONG_PRESS_MS } from '@/hooks/use-tree-long-press-drag'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
-import { FileTreeNode } from './FileTreeNode'
+import { FileTreeNode, InlineInputContext, type InlineInputPlacement } from './FileTreeNode'
 
 // The store's own suite covers moveEntries; here the question is only whether
 // the row decides to call it.
@@ -428,6 +428,72 @@ describe('FileTreeNode', () => {
       }
 
       expect(moveEntries).toHaveBeenCalledWith(['/project/a.ts'], '/project/lib')
+    })
+  })
+
+  describe('inline name input placement', () => {
+    const src: DirectoryEntry = {
+      path: '/project/src',
+      name: 'src',
+      type: 'directory',
+      size: 0,
+      modifiedAt: 0
+    }
+    const child: DirectoryEntry = {
+      path: '/project/src/app.ts',
+      name: 'app.ts',
+      type: 'file',
+      extension: 'ts',
+      size: 1,
+      modifiedAt: 0
+    }
+    const renderInput = (depth: number) => <input aria-label="entry name" data-depth={depth} />
+
+    function renderFolder(placement: InlineInputPlacement, suppressTreeAnimations: boolean): void {
+      useFileExplorerStore.setState({ suppressTreeAnimations })
+      render(
+        <InlineInputContext.Provider value={placement}>
+          <FileTreeNode
+            entry={src}
+            depth={0}
+            isExpanded
+            isSelected={false}
+            isLoading={false}
+            // biome-ignore lint/correctness/noChildrenProp: typed directory-data prop
+            children={[child]}
+            onToggle={vi.fn()}
+            onSelect={vi.fn()}
+            onContextMenu={vi.fn()}
+          />
+        </InlineInputContext.Provider>
+      )
+    }
+
+    it.each([
+      true,
+      false
+    ])('leads the folder children with the create input (suppressed animations: %s)', (suppressTreeAnimations) => {
+      renderFolder({ createIn: '/project/src', render: renderInput }, suppressTreeAnimations)
+
+      const input = screen.getByRole('textbox', { name: 'entry name' })
+      expect(input).toHaveAttribute('data-depth', '1')
+      expect(
+        input.compareDocumentPosition(screen.getByText('app.ts')) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    })
+
+    it('leaves a folder alone when the input belongs elsewhere', () => {
+      renderFolder({ createIn: '/project/lib', render: renderInput }, true)
+
+      expect(screen.queryByRole('textbox', { name: 'entry name' })).not.toBeInTheDocument()
+    })
+
+    it('swaps the renamed row for the input', () => {
+      renderFolder({ renaming: '/project/src', render: renderInput }, true)
+
+      expect(screen.getByRole('textbox', { name: 'entry name' })).toHaveAttribute('data-depth', '0')
+      expect(document.querySelector('[data-path="/project/src"]')).toHaveClass('hidden')
+      expect(document.querySelector('[data-path="/project/src/app.ts"]')).not.toHaveClass('hidden')
     })
   })
 })

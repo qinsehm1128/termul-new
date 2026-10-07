@@ -37,7 +37,12 @@ import { useProjectStore } from '@/stores/project-store'
 
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { FileTreeContextMenuContent } from './FileTreeContextMenu'
-import { FileTreeNodeWrapper } from './FileTreeNode'
+import {
+  FileTreeNodeWrapper,
+  InlineInputContext,
+  type InlineInputPlacement,
+  isSameTreePath
+} from './FileTreeNode'
 
 /**
  * The canonical prefix (T-A08): the width is read and written under one key, so
@@ -579,16 +584,6 @@ export function FileExplorer({
     rootPath
   ])
 
-  const handleNewFile = useCallback((dirPath: string) => {
-    setInlineInput({ parentPath: dirPath, type: 'file', mode: 'create' })
-    setInputValue('')
-  }, [])
-
-  const handleNewFolder = useCallback((dirPath: string) => {
-    setInlineInput({ parentPath: dirPath, type: 'folder', mode: 'create' })
-    setInputValue('')
-  }, [])
-
   /** Find a directory entry by absolute path across all loaded directories. */
   const findEntryByPath = useCallback(
     (path: string): DirectoryEntry | undefined => {
@@ -680,15 +675,16 @@ export function FileExplorer({
   )
 
   /**
-   * Header New File / New Folder (GH-540): resolve + expand + reveal the
-   * target directory, then start the existing inline create flow.
+   * New File / New Folder (GH-540): expand + reveal the target directory, then
+   * start the inline create flow inside it. Shared by the header buttons and
+   * the folder context menu, which would otherwise open the input inside a
+   * collapsed folder.
    */
-  const startHeaderCreate = useCallback(
-    async (type: 'file' | 'folder') => {
+  const startCreate = useCallback(
+    async (type: 'file' | 'folder', targetDir: string) => {
       // Never clobber an in-progress create/rename input, and serialize
-      // header requests while the chain expansion is awaiting.
+      // requests while the chain expansion is awaiting.
       if (inlineInputRef.current || headerCreateInFlightRef.current) return
-      const targetDir = getCreateTargetDir()
       if (!targetDir) return
       headerCreateInFlightRef.current = true
       try {
@@ -710,7 +706,22 @@ export function FileExplorer({
         headerCreateInFlightRef.current = false
       }
     },
-    [getCreateTargetDir, expandDirectoryChain, revealTreePath, t]
+    [expandDirectoryChain, revealTreePath, t]
+  )
+
+  const startHeaderCreate = useCallback(
+    (type: 'file' | 'folder') => startCreate(type, getCreateTargetDir()),
+    [startCreate, getCreateTargetDir]
+  )
+
+  const handleNewFile = useCallback(
+    (dirPath: string) => void startCreate('file', dirPath),
+    [startCreate]
+  )
+
+  const handleNewFolder = useCallback(
+    (dirPath: string) => void startCreate('folder', dirPath),
+    [startCreate]
   )
 
   /** Header Refresh (GH-540): re-read root + expanded dirs, keeping state. */
@@ -1148,6 +1159,80 @@ export function FileExplorer({
     ]
   )
 
+  // Mirrors the single-root tree's render condition; multi-root hides the
+  // tree for any active search.
+  const isTreeVisible = isMultiRoot
+    ? !isSearchActive
+    : !isSearchActive ||
+      isSearchTooShort ||
+      (searchLoading && searchLastCompletedQuery !== trimmedSearchQuery)
+
+  /** The inline create/rename input as a tree row, indented to `depth`. */
+  const renderInlineInput = (depth: number): React.JSX.Element | null =>
+    inlineInput && (
+      <div className="flex items-center px-2 py-0.5" style={{ paddingLeft: depth * 16 + 22 }}>
+        <input
+          ref={inputRef}
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              void handleInlineInputSubmit().catch((error) => {
+                console.error('Inline input submit failed:', error)
+              })
+            } else if (e.key === 'Escape') {
+              handleInlineInputCancel()
+            }
+          }}
+          onBlur={handleInlineInputCancel}
+          className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-xs text-foreground outline-none ring-1 ring-inset ring-ring/50"
+          placeholder={
+            inlineInput.mode === 'create'
+              ? inlineInput.type === 'file'
+                ? t('fileExplorer.fileNamePlaceholder')
+                : t('fileExplorer.folderNamePlaceholder')
+              : t('fileExplorer.newNamePlaceholder')
+          }
+        />
+      </div>
+    )
+
+  const inlineInputPlacement: InlineInputPlacement | null = inlineInput && {
+    createIn: inlineInput.mode === 'create' ? inlineInput.parentPath : undefined,
+    renaming: inlineInput.mode === 'rename' ? inlineInput.existingEntry?.path : undefined,
+    render: renderInlineInput
+  }
+
+  /** Whether `dir`'s children are on screen, i.e. a create input there would mount. */
+  const isShowingChildren = (dir: string): boolean => {
+    if (isMultiRoot ? roots.some((root) => isSameTreePath(root.path, dir)) : rootPath === dir) {
+      return !!directoryContents.get(dir) && (!isMultiRoot || expandedDirs.has(dir))
+    }
+    return expandedDirs.has(dir) && isRowInTree(dir)
+  }
+
+  /** Whether `path`'s row is on screen, i.e. a rename input there would mount. */
+  const isRowInTree = (path: string): boolean => {
+    const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+    if (cut < 0) return false
+    const parent = cut === 0 ? '/' : path.slice(0, cut)
+    return (
+      !!directoryContents.get(parent)?.some((entry) => entry.path === path) &&
+      isShowingChildren(parent)
+    )
+  }
+
+  // Without its anchor row (search hides the tree, or the folder vanished
+  // underneath) the input falls back to the end of the list, so it can still
+  // be seen and dismissed.
+  const isInlineInputAnchored =
+    isTreeVisible &&
+    (inlineInputPlacement?.createIn
+      ? isShowingChildren(inlineInputPlacement.createIn)
+      : !!inlineInputPlacement?.renaming && isRowInTree(inlineInputPlacement.renaming))
+
   return (
     <div
       id="file-explorer-panel"
@@ -1274,25 +1359,25 @@ export function FileExplorer({
           </div>
         )}
 
-        {!isMultiRoot &&
-          rootPath &&
-          rootEntries &&
-          !rootLoadError &&
-          (!isSearchActive ||
-            isSearchTooShort ||
-            (searchLoading && searchLastCompletedQuery !== trimmedSearchQuery)) &&
-          rootEntries.map((entry) => (
-            <FileTreeNodeWrapper
-              key={entry.path}
-              entry={entry}
-              depth={0}
-              onToggle={toggleDirectory}
-              onSelect={handleSelect}
-              onContextMenu={handleContextMenu}
-              onClick={handleNodeClick}
-              renderContextMenu={renderFileTreeContextMenu}
-            />
-          ))}
+        {!isMultiRoot && rootPath && rootEntries && !rootLoadError && isTreeVisible && (
+          <InlineInputContext.Provider value={inlineInputPlacement}>
+            {inlineInputPlacement?.createIn &&
+              isSameTreePath(inlineInputPlacement.createIn, rootPath) &&
+              renderInlineInput(0)}
+            {rootEntries.map((entry) => (
+              <FileTreeNodeWrapper
+                key={entry.path}
+                entry={entry}
+                depth={0}
+                onToggle={toggleDirectory}
+                onSelect={handleSelect}
+                onContextMenu={handleContextMenu}
+                onClick={handleNodeClick}
+                renderContextMenu={renderFileTreeContextMenu}
+              />
+            ))}
+          </InlineInputContext.Provider>
+        )}
 
         {isMultiRoot &&
           !isSearchActive &&
@@ -1359,18 +1444,23 @@ export function FileExplorer({
                     </button>
                   </div>
                 ) : expanded && entries ? (
-                  entries.map((entry) => (
-                    <FileTreeNodeWrapper
-                      key={entry.path}
-                      entry={entry}
-                      depth={1}
-                      onToggle={toggleDirectory}
-                      onSelect={handleSelect}
-                      onContextMenu={handleContextMenu}
-                      onClick={handleNodeClick}
-                      renderContextMenu={renderFileTreeContextMenu}
-                    />
-                  ))
+                  <InlineInputContext.Provider value={inlineInputPlacement}>
+                    {inlineInputPlacement?.createIn &&
+                      isSameTreePath(inlineInputPlacement.createIn, root.path) &&
+                      renderInlineInput(1)}
+                    {entries.map((entry) => (
+                      <FileTreeNodeWrapper
+                        key={entry.path}
+                        entry={entry}
+                        depth={1}
+                        onToggle={toggleDirectory}
+                        onSelect={handleSelect}
+                        onContextMenu={handleContextMenu}
+                        onClick={handleNodeClick}
+                        renderContextMenu={renderFileTreeContextMenu}
+                      />
+                    ))}
+                  </InlineInputContext.Provider>
                 ) : !entries && loading ? (
                   <div className="px-3 py-2 text-xs text-muted-foreground">
                     {t('fileExplorer.loading')}
@@ -1574,36 +1664,7 @@ export function FileExplorer({
           </div>
         )}
 
-        {/* Inline input for new file/folder/rename */}
-        {inlineInput && (
-          <div className="flex items-center px-2 py-0.5" style={{ paddingLeft: 20 }}>
-            <input
-              ref={inputRef}
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  void handleInlineInputSubmit().catch((error) => {
-                    console.error('Inline input submit failed:', error)
-                  })
-                } else if (e.key === 'Escape') {
-                  handleInlineInputCancel()
-                }
-              }}
-              onBlur={handleInlineInputCancel}
-              className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-xs text-foreground outline-none ring-1 ring-inset ring-ring/50"
-              placeholder={
-                inlineInput.mode === 'create'
-                  ? inlineInput.type === 'file'
-                    ? t('fileExplorer.fileNamePlaceholder')
-                    : t('fileExplorer.folderNamePlaceholder')
-                  : t('fileExplorer.newNamePlaceholder')
-              }
-            />
-          </div>
-        )}
+        {inlineInput && !isInlineInputAnchored && renderInlineInput(0)}
       </div>
 
       {fillContainer ? null : (
