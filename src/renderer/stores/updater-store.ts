@@ -81,6 +81,8 @@ export interface UpdaterStoreState {
   checkForUpdates: () => Promise<void>
   downloadUpdate: () => Promise<void>
   installAndRestart: () => Promise<void>
+  /** Install and replace every mismatched Core, ending its running terminals and agents. */
+  forceInstallAndRestart: () => Promise<void>
   skipVersion: (version: string) => Promise<void>
   setError: (error: string | null) => void
   setAutoUpdateEnabled: (enabled: boolean) => Promise<void>
@@ -96,6 +98,40 @@ export interface UpdaterStoreState {
   _setDownloadProgress: (progress: DownloadProgress) => void
   _setUpdaterError: (error: string, code?: string) => void
   _initializeState: (state: UpdateState) => void
+}
+
+/**
+ * Install the downloaded update and restart. `force` replaces every mismatched
+ * Core even while it still runs terminals or agents.
+ */
+async function installDownloadedUpdate(
+  get: () => UpdaterStoreState,
+  set: (partial: Partial<UpdaterStoreState>) => void,
+  force: boolean
+): Promise<void> {
+  const { downloaded } = get()
+  if (!downloaded) return
+
+  set({ error: null })
+
+  try {
+    const result = force
+      ? await tauriInstallAndRestart({ force: true })
+      : await tauriInstallAndRestart()
+    if (!result.success) {
+      set({
+        error:
+          result.error ??
+          runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
+      })
+    }
+  } catch (err) {
+    const errorMessage =
+      err instanceof Error
+        ? err.message
+        : runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
+    set({ error: errorMessage })
+  }
 }
 
 /**
@@ -240,27 +276,11 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Install the downloaded update and restart the application
    */
   installAndRestart: async (): Promise<void> => {
-    const { downloaded } = get()
-    if (!downloaded) return
+    await installDownloadedUpdate(get, set, false)
+  },
 
-    set({ error: null })
-
-    try {
-      const result = await tauriInstallAndRestart()
-      if (!result.success) {
-        set({
-          error:
-            result.error ??
-            runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
-        })
-      }
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error
-          ? err.message
-          : runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
-      set({ error: errorMessage })
-    }
+  forceInstallAndRestart: async (): Promise<void> => {
+    await installDownloadedUpdate(get, set, true)
   },
 
   /**
@@ -765,6 +785,7 @@ export function useUpdaterActions() {
       checkForUpdates: state.checkForUpdates,
       downloadUpdate: state.downloadUpdate,
       installAndRestart: state.installAndRestart,
+      forceInstallAndRestart: state.forceInstallAndRestart,
       skipVersion: state.skipVersion,
       setError: state.setError,
       setAutoUpdateEnabled: state.setAutoUpdateEnabled,

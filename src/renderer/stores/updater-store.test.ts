@@ -257,6 +257,20 @@ describe('updater-store', () => {
       expect(useUpdaterStore.getState().error).toBe('tauri install failed')
     })
 
+    it('asks for a forced install only from forceInstallAndRestart', async () => {
+      useUpdaterStore.setState({ downloaded: true, error: null })
+      vi.mocked(tauriUpdaterApi.installAndRestart).mockResolvedValue({
+        success: true,
+        data: undefined
+      })
+
+      await useUpdaterStore.getState().installAndRestart()
+      expect(tauriUpdaterApi.installAndRestart).toHaveBeenLastCalledWith()
+
+      await useUpdaterStore.getState().forceInstallAndRestart()
+      expect(tauriUpdaterApi.installAndRestart).toHaveBeenLastCalledWith({ force: true })
+    })
+
     it('should set skippedVersion and clear updateAvailable', async () => {
       useUpdaterStore.setState({ updateAvailable: true, version: '2.0.0' })
 
