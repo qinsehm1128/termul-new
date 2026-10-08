@@ -35,6 +35,7 @@ import {
   SettingsLayout,
   SettingsSection
 } from '@/components/settings/SettingsLayout'
+import { UpdateComponentDiff } from '@/components/settings/UpdateComponentDiff'
 import { useResetAppSettings, useUpdateAppSetting } from '@/hooks/use-app-settings'
 import {
   useResetAllShortcuts,
@@ -45,6 +46,7 @@ import { formatDateTime, formatNumber } from '@/i18n/format'
 import { acpApi, logApi, shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
+import { logFrontendError } from '@/lib/log-api'
 import { isMac } from '@/lib/platform'
 import { isSettingsCategoryAvailable } from '@/lib/settings-categories'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
@@ -52,6 +54,11 @@ import { confirm } from '@/lib/tauri-dialog'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import {
+  buildComponentDiff,
+  fetchComponentRuntimeIdentities,
+  forcedUpdateCasualties
+} from '@/lib/update-component-diff'
 import {
   buildUpdateInstallConfirmation,
   getUpdateImpactLines,
@@ -469,10 +476,18 @@ export default function AppPreferences(): React.JSX.Element {
     isManualUpdateMode,
     updateChannel,
     componentPolicy,
-    pendingUpdatePlan
+    pendingUpdatePlan,
+    isDownloading,
+    downloadProgress
   } = useUpdaterState()
-  const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
-    useUpdaterActions()
+  const {
+    checkForUpdates,
+    downloadUpdate,
+    installAndRestart,
+    forceInstallAndRestart,
+    setAutoUpdateEnabled,
+    setUpdateChannel
+  } = useUpdaterActions()
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
   const pendingUpdate = presentPendingUpdate(pendingUpdatePlan, translateUpdateCopy)
 
@@ -499,6 +514,49 @@ export default function AppPreferences(): React.JSX.Element {
     setIsInstallingUpdate(true)
     try {
       await installAndRestart()
+    } finally {
+      setIsInstallingUpdate(false)
+    }
+  }
+
+  const handleForceInstallAndRestart = async (): Promise<void> => {
+    if (!downloaded || isInstallingUpdate || !componentPolicy) return
+
+    // Read the Cores again: the counts the user confirms must be current. An
+    // unreadable Core shows "?" rather than a reassuring zero.
+    let terminals = '?'
+    let agents = '?'
+    try {
+      const casualties = forcedUpdateCasualties(
+        buildComponentDiff(componentPolicy, await fetchComponentRuntimeIdentities())
+      )
+      terminals = String(casualties.terminals)
+      agents = String(casualties.agentSessions)
+    } catch (error) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'AppPreferences.forceInstall',
+        message: `code=RUNTIME_IDENTITIES_UNAVAILABLE ${error instanceof Error ? error.message : String(error)}`
+      })
+    }
+    const confirmed = await confirm(
+      tShell('updates.forceInstallConfirm', {
+        version: version ?? '',
+        terminals,
+        agents
+      }),
+      {
+        title: tShell('updates.forceInstallTitle'),
+        kind: 'warning',
+        okLabel: tShell('updates.forceInstall'),
+        cancelLabel: tShell('updates.notNow')
+      }
+    )
+    if (!confirmed) return
+
+    setIsInstallingUpdate(true)
+    try {
+      await forceInstallAndRestart()
     } finally {
       setIsInstallingUpdate(false)
     }
@@ -1827,6 +1885,49 @@ export default function AppPreferences(): React.JSX.Element {
                   </div>
                 )}
 
+                {updateAvailable &&
+                  version &&
+                  !downloaded &&
+                  !isManualUpdateMode &&
+                  !isAurUpdater && (
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => void downloadUpdate()}
+                        disabled={isDownloading}
+                        className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-sm text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-primary/50"
+                      >
+                        <HardDriveDownload size={16} />
+                        {isDownloading
+                          ? tShell('updates.complete', {
+                              progress: String(Math.round(downloadProgress))
+                            })
+                          : tShell('updates.downloadUpdate')}
+                      </button>
+                      {isDownloading && (
+                        <div
+                          className="h-1.5 w-full overflow-hidden rounded-full bg-secondary"
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={Math.round(downloadProgress)}
+                        >
+                          <div
+                            className="h-full bg-primary transition-[width] duration-150"
+                            style={{ width: `${downloadProgress}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                {downloaded && !isManualUpdateMode && componentPolicy && isTauriContext() && (
+                  <UpdateComponentDiff
+                    key={componentPolicy.targetVersion}
+                    policy={componentPolicy}
+                  />
+                )}
+
                 {updateAvailable && version && (
                   <div>
                     <label className="block text-sm font-medium text-secondary-foreground mb-2">
@@ -1930,10 +2031,26 @@ export default function AppPreferences(): React.JSX.Element {
                         {tShell('updates.safeInstallRestart')}
                       </button>
                     )}
+                    {downloaded && !isManualUpdateMode && componentPolicy && (
+                      <button
+                        type="button"
+                        onClick={() => void handleForceInstallAndRestart()}
+                        disabled={isInstallingUpdate}
+                        className="inline-flex h-8 items-center gap-2 rounded-md bg-red-500 px-3 text-sm text-white transition-colors duration-150 hover:bg-red-500/90 disabled:cursor-not-allowed disabled:bg-red-500/50"
+                      >
+                        <AlertCircle size={16} />
+                        {tShell('updates.forceInstall')}
+                      </button>
+                    )}
                   </div>
                   {downloaded && !isManualUpdateMode && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       {tShell('updates.safeRestartHint')}
+                    </p>
+                  )}
+                  {downloaded && !isManualUpdateMode && componentPolicy && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {tShell('updates.forceInstallHint')}
                     </p>
                   )}
                   {lastChecked && (
