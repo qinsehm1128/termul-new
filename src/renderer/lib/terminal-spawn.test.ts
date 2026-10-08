@@ -62,6 +62,10 @@ vi.mock('@/stores/workspace-store', () => ({
       moveTabToNewSplit: mockMoveTabToNewSplit
     })
   },
+  // The pane tree is not modelled here: the split then moves the tab from the
+  // pane it was spawned into. Where the tab really sits is covered against the
+  // real store in terminal-spawn.split-target.test.ts.
+  findPaneContainingTab: () => null,
   terminalTabId: (terminalId: string) => `term-${terminalId}`
 }))
 

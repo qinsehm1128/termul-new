@@ -367,7 +367,11 @@ export function PaneContent({
           'shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.34)]',
         isFullscreenPane && 'overflow-hidden shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.34)]'
       )}
-      onMouseDown={handleFocus}
+      // Capture, not bubble: the terminal surface stops `mousedown` from
+      // propagating, so a bubble listener never heard a click (or the
+      // right-click that opens the split menu) inside a terminal and the store
+      // kept naming some other pane active.
+      onMouseDownCapture={handleFocus}
       onKeyDownCapture={handleKeyDownCapture}
     >
       {!isMobileWebShell && (

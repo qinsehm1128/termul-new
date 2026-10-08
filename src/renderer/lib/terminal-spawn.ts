@@ -16,7 +16,7 @@ import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { terminalTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import { findPaneContainingTab, terminalTabId, useWorkspaceStore } from '@/stores/workspace-store'
 
 let localSpawnInFlight = 0
 const localSpawnedTerminalIds = new Set<string>()
@@ -309,7 +309,13 @@ export async function spawnTerminalInSplit(
   const result = await spawnTerminalInPane(paneId, projectId, cwd, options)
   if (!result.success) return result
 
+  // Move the tab from wherever it actually is. It is usually `paneId`, but a
+  // PTY the host catalog adopted first was filed under the active pane, and
+  // moving it "from `paneId`" then silently did nothing — the new terminal
+  // stayed a tab in that other pane and focus jumped there.
+  const tabId = terminalTabId(result.terminalId)
   const workspaceStore = useWorkspaceStore.getState()
-  workspaceStore.moveTabToNewSplit(terminalTabId(result.terminalId), paneId, paneId, position)
+  const sourcePaneId = findPaneContainingTab(workspaceStore.root, tabId)?.id ?? paneId
+  workspaceStore.moveTabToNewSplit(tabId, sourcePaneId, paneId, position)
   return result
 }
