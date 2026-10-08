@@ -173,4 +173,96 @@ mod tests {
             request(&handle, METHOD_LIST, &Value::Null).await;
         assert_eq!(listed.code.as_deref(), Some(UNAVAILABLE));
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_core_serves_quick_terminals_with_their_error_codes() {
+        use crate::quick_terminal::{
+            CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
+            QuickTerminalRecord, METHOD_CREATE, METHOD_DELETE, METHOD_LIST, METHOD_OPEN,
+        };
+        use crate::core::{CoreEndpoint, CoreRole, TerminalCoreClient};
+        // Durable directory creation refuses symlinked components (macOS `/var`).
+        let profile_dir = tempfile::tempdir().unwrap();
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let profile = profile_dir.path().canonicalize().unwrap();
+        let workspace = workspace_dir.path().canonicalize().unwrap();
+        let endpoint = CoreEndpoint::for_profile(&profile, CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let roots = (profile.clone(), workspace.clone());
+        let server = tokio::spawn(async move {
+            crate::core::terminal::run_terminal_core_with(
+                server_endpoint,
+                Some(roots),
+                crate::terminal_program(),
+            )
+            .await
+        });
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let client = loop {
+            match TerminalCoreClient::connect(&endpoint).await {
+                Ok(client) => break client,
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(error) => panic!("terminal core did not become ready: {error}"),
+            }
+        };
+        let handle = TerminalServiceHandle::from_core_client(client);
+        assert!(
+            handle.quick_terminals().is_none(),
+            "Core mode owns no local store"
+        );
+
+        let created: crate::commands::IpcResult<QuickTerminalRecord> = request(
+            &handle,
+            METHOD_CREATE,
+            &CreateQuickTerminal {
+                target: se_quick_terminal::QuickTerminalTarget::Workspace,
+                title: Some("core".to_string()),
+            },
+        )
+        .await;
+        let record = created.data.expect("created through Terminal Core");
+        assert!(record
+            .cwd
+            .starts_with(workspace.join("terminals").to_str().unwrap()));
+
+        let opened: crate::commands::IpcResult<QuickTerminalOpened> = request(
+            &handle,
+            METHOD_OPEN,
+            &OpenQuickTerminal {
+                id: record.id,
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .await;
+        let opened = opened.data.expect("opened through Terminal Core");
+        assert!(opened.spawned && opened.claim.is_some());
+
+        let missing: crate::commands::IpcResult<QuickTerminalOpened> = request(
+            &handle,
+            METHOD_OPEN,
+            &OpenQuickTerminal {
+                id: crate::quick_terminal::QuickTerminalId::new_v4(),
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .await;
+        assert!(!missing.success);
+        assert_eq!(missing.code.as_deref(), Some("QUICK_TERMINAL_NOT_FOUND"));
+
+        let deleted: crate::commands::IpcResult<()> = request(
+            &handle,
+            METHOD_DELETE,
+            &QuickTerminalIdParams { id: record.id },
+        )
+        .await;
+        assert!(deleted.success);
+        let listed: crate::commands::IpcResult<Vec<QuickTerminalRecord>> =
+            request(&handle, METHOD_LIST, &serde_json::Value::Null).await;
+        assert_eq!(listed.data.map(|records| records.len()), Some(0));
+        server.abort();
+    }
 }

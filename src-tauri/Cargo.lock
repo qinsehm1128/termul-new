@@ -4849,6 +4849,7 @@ dependencies = [
  "se-mcp-bridge",
  "se-pty",
  "se-quick-terminal",
+ "se-terminal-core",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4933,6 +4934,23 @@ dependencies = [
  "parking_lot",
  "se-foundation",
  "se-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "se-terminal-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "log",
+ "parking_lot",
+ "se-foundation",
+ "se-ipc",
+ "se-pty",
+ "se-quick-terminal",
  "serde",
  "serde_json",
  "tempfile",

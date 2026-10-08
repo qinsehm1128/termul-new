@@ -14,8 +14,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::TerminalServiceHandle;
-use crate::pty::PtyManager;
+use crate::handles::TerminalServiceHandle;
+use se_pty::PtyManager;
 
 pub use se_quick_terminal::{
     CreateQuickTerminal, OpenQuickTerminal, QuickTerminalError, QuickTerminalId,

@@ -365,7 +365,7 @@ jobs:
             --report component-identity/baked-component-identity.json
           # option_env! is not a Cargo env dependency. Touch the crate that
           # reads it so a restored rust cache cannot keep version-derived IDs.
-          touch src-tauri/src/core/ipc.rs
+          touch src-tauri/crates/se-terminal-core/src/ipc.rs
 
       - name: Build platform artifacts locally
         id: tauri

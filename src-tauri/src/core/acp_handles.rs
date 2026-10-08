@@ -153,7 +153,7 @@ impl CoreServices {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::handles::tests::test_pty;
+    use se_pty::test_pty_manager as test_pty;
 
     #[tokio::test]
     async fn in_process_acp_runtime_returns_stable_unknown_method() {

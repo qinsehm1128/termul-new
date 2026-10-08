@@ -55,9 +55,18 @@ async fn collect_until_marker(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_core_process_survives_client_disconnect() {
+    survives_client_disconnect(env!("CARGO_BIN_EXE_se-manager")).await;
+}
+
+/// The standalone executable the launcher prefers serves the same contract.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn standalone_core_executable_survives_client_disconnect() {
+    survives_client_disconnect(env!("CARGO_BIN_EXE_se-terminal-core")).await;
+}
+
+async fn survives_client_disconnect(exe: &str) {
     let profile = tempfile::tempdir().unwrap();
     let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
-    let exe = env!("CARGO_BIN_EXE_se-manager");
     let child = Command::new(exe)
         .arg("--terminal-core")
         .env("TERMUL_CORE_PROFILE_ROOT", profile.path())

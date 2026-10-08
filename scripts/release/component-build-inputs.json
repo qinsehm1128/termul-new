@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "sharedFiles": [
     "src-tauri/build.rs",
-    "src-tauri/src/core/ipc.rs",
+    "src-tauri/crates/se-terminal-core/src/ipc.rs",
     "src-tauri/src/core/mod.rs",
-    "src-tauri/src/core/transport.rs",
+    "src-tauri/crates/se-terminal-core/src/transport.rs",
     "src-tauri/crates/se-ipc",
     "src-tauri/crates/se-foundation"
   ],
@@ -25,11 +25,11 @@
       "src-tauri/src/main.rs",
       "src-tauri/tauri.conf.json",
       "src-tauri/tauri.conf.prod.json",
-      "src-tauri/src/core/launcher.rs"
+      "src-tauri/src/core/launcher.rs",
+      "src-tauri/crates/se-terminal-core"
     ],
     "acpCore": [
       "src-tauri/src/core/acp.rs",
-      "src-tauri/src/core/handles.rs",
       "src-tauri/src/core/acp_handles.rs",
       "src-tauri/src/acp",
       "src-tauri/crates/se-agent-session",
@@ -38,14 +38,12 @@
       "src-tauri/src/memory_index",
       "src-tauri/src/scheduled_tasks",
       "src-tauri/src/core/process.rs",
-      "src-tauri/src/core/terminal.rs",
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
       "src-tauri/src/commands.rs",
       "src-tauri/crates/se-pty",
       "src-tauri/crates/se-quick-terminal",
       "src-tauri/crates/se-mcp-bridge",
-      "src-tauri/src/quick_terminal.rs",
       "src-tauri/src/mcp_core",
       "src-tauri/src/skills",
       "src-tauri/src/web/sink.rs",
@@ -54,17 +52,16 @@
       "src-tauri/src/legacy_appdata.rs",
       "src-tauri/src/acp_registry_snapshot.rs",
       "src-tauri/src/agent_registry.rs",
-      "src-tauri/src/cli_session"
+      "src-tauri/src/cli_session",
+      "src-tauri/crates/se-terminal-core"
     ],
     "terminalCore": [
-      "src-tauri/src/core/handles.rs",
-      "src-tauri/src/core/terminal.rs",
       "src-tauri/crates/se-pty",
       "src-tauri/crates/se-quick-terminal",
-      "src-tauri/src/quick_terminal.rs",
       "src-tauri/src/core/process.rs",
       "src-tauri/src/main.rs",
-      "src-tauri/src/logging.rs"
+      "src-tauri/src/logging.rs",
+      "src-tauri/crates/se-terminal-core"
     ]
   },
   "acknowledgedExternalModules": {

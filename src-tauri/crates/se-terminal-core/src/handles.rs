@@ -11,7 +11,7 @@
 
 use super::ipc::CoreError;
 use super::terminal::TerminalCoreClient;
-use crate::pty::{PtyManager, SpawnOptions};
+use se_pty::{PtyManager, SpawnOptions};
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use se_foundation::ids::ConversationId;
@@ -493,23 +493,9 @@ mod switchable_tests {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
-
-    pub(crate) fn test_pty() -> Arc<PtyManager> {
-        let events = TerminalEventHub::standalone();
-        let cwd = Arc::new(CwdTracker::new(events.clone()));
-        let git = Arc::new(GitTracker::new(events.clone()));
-        let exit = Arc::new(ExitCodeTracker::new(events.clone()));
-        Arc::new(PtyManager::new(
-            events,
-            cwd,
-            git,
-            exit,
-            crate::terminal_program(),
-        ))
-    }
+    use se_pty::test_pty_manager as test_pty;
 
     #[tokio::test]
     async fn in_process_terminal_runtime_returns_stable_errors() {

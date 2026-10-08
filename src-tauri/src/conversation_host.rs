@@ -33,8 +33,16 @@ pub fn lifecycle_from_terminal(
     acp: Arc<AcpManager>,
     terminal: TerminalServiceHandle,
 ) -> LifecycleResult<ConversationLifecycleService> {
-    ConversationLifecycleService::for_creation(acp.conversation_creation(), acp, Arc::new(terminal))
+    ConversationLifecycleService::for_creation(
+        acp.conversation_creation(),
+        acp,
+        Arc::new(TerminalInspector(terminal)),
+    )
 }
+
+/// The terminal service as the lifecycle sees it. A newtype because both the
+/// trait and the handle live in other crates.
+struct TerminalInspector(TerminalServiceHandle);
 
 /// Give an application service everything the host provides: the lifecycle
 /// runtime and the managed-skill provisioner.
@@ -130,13 +138,13 @@ impl ConversationAgentLifecycle for AcpManager {
     }
 }
 
-impl TerminalResourceInspector for TerminalServiceHandle {
+impl TerminalResourceInspector for TerminalInspector {
     fn is_live(&self, terminal_id: &str) -> bool {
-        self.runtime().is_live(terminal_id)
+        self.0.runtime().is_live(terminal_id)
     }
 
     fn observes_live_terminals(&self) -> bool {
-        self.runtime().observes_live_terminals()
+        self.0.runtime().observes_live_terminals()
     }
 
     fn observe_conversation<'a>(
@@ -145,7 +153,7 @@ impl TerminalResourceInspector for TerminalServiceHandle {
         terminal_ids: &'a [String],
     ) -> ProviderFuture<'a, Result<Vec<String>, String>> {
         Box::pin(async move {
-            self.runtime()
+            self.0.runtime()
                 .observe_conversation(conversation_id, terminal_ids)
                 .await
                 .map(|observation| observation.live_terminal_ids)
@@ -160,7 +168,7 @@ impl TerminalResourceInspector for TerminalServiceHandle {
         operation_id: &'a str,
     ) -> ProviderFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.runtime()
+            self.0.runtime()
                 .terminate_for_conversation(conversation_id, terminal_id, operation_id)
                 .await
                 .map(|_| ())
@@ -170,7 +178,7 @@ impl TerminalResourceInspector for TerminalServiceHandle {
 
     fn terminate<'a>(&'a self, terminal_id: &'a str) -> ProviderFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.runtime()
+            self.0.runtime()
                 .terminate(terminal_id)
                 .await
                 .map_err(|error| error.to_string())
@@ -184,7 +192,7 @@ impl TerminalResourceInspector for TerminalServiceHandle {
     ) -> ProviderFuture<'a, Result<String, String>> {
         Box::pin(async move {
             let options = intent.into_trusted_options(conversation)?;
-            self.runtime()
+            self.0.runtime()
                 .spawn_trusted(options)
                 .await
                 .map_err(|error| error.to_string())
@@ -235,8 +243,9 @@ mod tests {
     /// believe a terminal is gone or claim a cleanup it could not do.
     #[tokio::test]
     async fn a_detached_terminal_runtime_is_an_inspector_that_fails_closed() {
-        let terminals =
-            TerminalServiceHandle::from_runtime(Arc::new(crate::core::DetachedTerminalRuntime));
+        let terminals = TerminalInspector(TerminalServiceHandle::from_runtime(Arc::new(
+            crate::core::DetachedTerminalRuntime,
+        )));
         let id = ConversationId::new_v4();
 
         assert!(!terminals.observes_live_terminals());

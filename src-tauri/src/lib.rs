@@ -43,7 +43,7 @@ pub mod migration_detect;
 pub mod migration_run;
 mod migrations;
 mod pty_tauri;
-pub mod quick_terminal;
+pub use se_terminal_core::quick_terminal;
 mod quick_terminal_commands;
 mod quick_terminal_migration;
 use se_foundation::path_validation;

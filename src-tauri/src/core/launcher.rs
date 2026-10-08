@@ -10,9 +10,7 @@ use super::ipc::{
 };
 use super::transport::connect_core;
 use std::collections::HashMap;
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -53,6 +51,26 @@ impl CoreLaunchConfig {
             ready_timeout: Duration::from_secs(5),
         })
     }
+}
+
+/// File name of the standalone Terminal Core executable bundled beside the app.
+const TERMINAL_CORE_EXECUTABLE: &str = if cfg!(windows) {
+    "se-terminal-core.exe"
+} else {
+    "se-terminal-core"
+};
+
+/// What to run for `role`: the bundled `se-terminal-core` beside the app
+/// executable when it is there, else the app executable itself, which still
+/// serves `--terminal-core` / `--acp-core`.
+fn core_executable(app_executable: &Path, role: CoreRole) -> PathBuf {
+    if role == CoreRole::TerminalCore {
+        let standalone = app_executable.with_file_name(TERMINAL_CORE_EXECUTABLE);
+        if standalone.is_file() {
+            return standalone;
+        }
+    }
+    app_executable.to_path_buf()
 }
 
 /// Where spawned Cores write their logs: the GUI's log directory plus the
@@ -726,7 +744,14 @@ pub async fn ensure_core(
         }
     };
 
-    let mut command = Command::new(&config.executable);
+    let executable = core_executable(&config.executable, role);
+    log::info!(
+        target: "se_manager::core",
+        "operation=core_spawn role={} executable={}",
+        role.endpoint_name(),
+        executable.display()
+    );
+    let mut command = Command::new(&executable);
     command
         .arg(role_arg)
         .env("TERMUL_CORE_PROFILE_ROOT", &config.profile_root)
@@ -804,6 +829,20 @@ mod tests {
         let config = CoreLaunchConfig::for_current_executable("/tmp/termul-profile").unwrap();
         assert!(config.executable.is_absolute());
         assert_eq!(config.profile_root, Path::new("/tmp/termul-profile"));
+    }
+
+    #[test]
+    fn terminal_core_runs_the_standalone_executable_when_it_is_bundled() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("se-manager");
+        std::fs::write(&app, b"").unwrap();
+
+        assert_eq!(core_executable(&app, CoreRole::TerminalCore), app);
+
+        let standalone = dir.path().join(TERMINAL_CORE_EXECUTABLE);
+        std::fs::write(&standalone, b"").unwrap();
+        assert_eq!(core_executable(&app, CoreRole::TerminalCore), standalone);
+        assert_eq!(core_executable(&app, CoreRole::AcpCore), app);
     }
 
     #[test]

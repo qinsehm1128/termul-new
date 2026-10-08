@@ -39,6 +39,13 @@ required-features = ["standalone-server"]
 name = "se-mcp"
 path = "src/se_mcp_main.rs"
 
+# The Terminal Core process. Bundled beside the app binary like `se-mcp` and
+# just as lean: it links only the se-terminal-core crate, so a GUI or ACP
+# change changes neither what it runs nor its build identity.
+[[bin]]
+name = "se-terminal-core"
+path = "src/terminal_core_main.rs"
+
 [[bin]]
 name = "se-mcp-fixture"
 path = "src/mcp_fixture_bin.rs"
@@ -74,6 +81,7 @@ se-foundation = { path = "crates/se-foundation" }
 se-pty = { path = "crates/se-pty" }
 # Quick terminal sessions (folder + live PTY), hosted beside the PTYs.
 se-quick-terminal = { path = "crates/se-quick-terminal" }
+se-terminal-core = { path = "crates/se-terminal-core" }
 se-mcp-bridge = { path = "crates/se-mcp-bridge" }
 # Agent sessions (Conversations): contracts, storage, migration, lifecycle.
 se-agent-session = { path = "crates/se-agent-session" }
