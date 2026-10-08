@@ -94,6 +94,42 @@ function shortcutsEqual(left: string, right: string): boolean {
   return canonicalizeShortcutKey(left) === canonicalizeShortcutKey(right)
 }
 
+// Physical keys whose character changes under ⇧ ('[' → '{', '1' → '!').
+const PUNCTUATION_CODES: Record<string, string> = {
+  BracketLeft: '[',
+  BracketRight: ']',
+  Minus: '-',
+  Equal: '=',
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Semicolon: ';',
+  Quote: "'",
+  Backquote: '`',
+  Backslash: '\\'
+}
+
+function keyFromCode(code: string): string | undefined {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase()
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5)
+  return PUNCTUATION_CODES[code]
+}
+
+// The key a shortcut names. ⌥ composes another character on macOS (⌥N → '˜')
+// and ⇧ turns symbols into their shifted form, so `e.key` alone would never
+// match 'alt+n' or 'shift+]'. A plain letter or digit keeps `e.key`, which
+// follows the user's layout; only a composed or shifted character falls back
+// to the physical key.
+function shortcutKeyName(e: KeyboardEvent): string {
+  const key = e.key.toLowerCase()
+  if (/^[a-z0-9]$/.test(key)) return key
+  if (e.altKey || e.shiftKey) {
+    const physical = keyFromCode(e.code)
+    if (physical) return physical
+  }
+  return key
+}
+
 // Helper: Normalize a keyboard event to our key format.
 //
 // Modifier tokens (preserved in output):
@@ -122,7 +158,7 @@ export function normalizeKeyEvent(e: KeyboardEvent): string {
   if (e.altKey) parts.push('alt')
 
   // Add the key itself (lowercase)
-  let key = e.key.toLowerCase()
+  let key = shortcutKeyName(e)
 
   // Handle special keys
   if (key === ' ') key = 'space'
@@ -145,12 +181,16 @@ export function normalizeKeyEvent(e: KeyboardEvent): string {
 export function formatKeyForDisplay(key: string): string {
   if (!key) return ''
 
-  return key
-    .split('+')
+  const parts = key.split('+')
+  // On macOS a lone ctrl modifier is matched as ⌘ (⌃ stays with the shell),
+  // so show the key that actually fires the shortcut.
+  const primaryIsCmd = isMac && parts.includes('ctrl') && !parts.includes('cmd')
+
+  return parts
     .map((part) => {
       switch (part) {
         case 'ctrl':
-          return isMac ? '⌃' : 'Ctrl'
+          return isMac ? (primaryIsCmd ? '⌘' : '⌃') : 'Ctrl'
         case 'cmd':
           return isMac ? '⌘' : 'Meta'
         case 'alt':
@@ -167,6 +207,24 @@ export function formatKeyForDisplay(key: string): string {
           return 'PageUp'
         case 'pagedown':
           return 'PageDown'
+        case 'arrowup':
+          return '↑'
+        case 'arrowdown':
+          return '↓'
+        case 'arrowleft':
+          return '←'
+        case 'arrowright':
+          return '→'
+        case 'enter':
+          return isMac ? '↩' : 'Enter'
+        case 'home':
+          return 'Home'
+        case 'end':
+          return 'End'
+        case 'delete':
+          return isMac ? '⌦' : 'Delete'
+        case 'backspace':
+          return isMac ? '⌫' : 'Backspace'
         default:
           return part.toUpperCase()
       }

@@ -586,13 +586,13 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     id: 'worktreeSwitchNext',
     label: 'Switch to Next Worktree',
     description: 'Cycle to the next worktree in the sidebar',
-    defaultKey: 'ctrl+shift+downarrow'
+    defaultKey: 'ctrl+shift+arrowdown'
   },
   worktreeSwitchPrev: {
     id: 'worktreeSwitchPrev',
     label: 'Switch to Previous Worktree',
     description: 'Cycle to the previous worktree in the sidebar',
-    defaultKey: 'ctrl+shift+uparrow'
+    defaultKey: 'ctrl+shift+arrowup'
   },
   worktreeOpenTerminal: {
     id: 'worktreeOpenTerminal',

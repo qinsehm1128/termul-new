@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { isMac as isMacPlatform } from '@/lib/platform'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 import {
   findConflictingShortcut,
@@ -388,6 +389,7 @@ describe('matchesShortcut', () => {
 describe('macOS multi-modifier normalization (platform mocked)', () => {
   let normalizeKeyEvent: typeof import('./keyboard-shortcuts-store').normalizeKeyEvent
   let matchesShortcut: typeof import('./keyboard-shortcuts-store').matchesShortcut
+  let formatKeyForDisplay: typeof import('./keyboard-shortcuts-store').formatKeyForDisplay
 
   beforeAll(async () => {
     vi.resetModules()
@@ -398,6 +400,7 @@ describe('macOS multi-modifier normalization (platform mocked)', () => {
     const mod = await import('./keyboard-shortcuts-store')
     normalizeKeyEvent = mod.normalizeKeyEvent
     matchesShortcut = mod.matchesShortcut
+    formatKeyForDisplay = mod.formatKeyForDisplay
   })
 
   afterAll(() => {
@@ -427,5 +430,82 @@ describe('macOS multi-modifier normalization (platform mocked)', () => {
     // The cross-modifier alias must not fire for multi-modifier combos.
     expect(matchesShortcut(event, 'cmd+t')).toBe(false)
     expect(matchesShortcut(event, 'ctrl+t')).toBe(false)
+  })
+
+  it('names an ⌥ combo by its physical key, not the composed character', () => {
+    // ⌘⌥T on a US layout reports key '†'; ⌘⇧⌥N reports '˜'.
+    const themePicker = new KeyboardEvent('keydown', {
+      key: '†',
+      code: 'KeyT',
+      metaKey: true,
+      altKey: true
+    })
+    expect(normalizeKeyEvent(themePicker)).toBe('cmd+alt+t')
+    expect(
+      matchesShortcut(themePicker, DEFAULT_KEYBOARD_SHORTCUTS.colorThemePicker.defaultKey)
+    ).toBe(true)
+
+    const createWorktree = new KeyboardEvent('keydown', {
+      key: '˜',
+      code: 'KeyN',
+      metaKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(
+      matchesShortcut(createWorktree, DEFAULT_KEYBOARD_SHORTCUTS.worktreeCreate.defaultKey)
+    ).toBe(true)
+  })
+
+  it('names a ⇧ symbol combo by its unshifted key', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: '}',
+      code: 'BracketRight',
+      metaKey: true,
+      shiftKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('cmd+shift+]')
+  })
+
+  it('keeps the layout letter when it is a plain letter', () => {
+    // AZERTY: the key labelled A sits where QWERTY has Q.
+    const event = new KeyboardEvent('keydown', {
+      key: 'A',
+      code: 'KeyQ',
+      metaKey: true,
+      shiftKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('cmd+shift+a')
+  })
+
+  it('shows a lone ctrl modifier as ⌘ because only ⌘ fires it', () => {
+    expect(formatKeyForDisplay('ctrl+shift+b')).toBe('⌘⇧B')
+    expect(formatKeyForDisplay('ctrl+cmd+t')).toBe('⌃⌘T')
+    expect(formatKeyForDisplay('ctrl+shift+arrowup')).toBe('⌘⇧↑')
+  })
+})
+
+describe('worktree arrow defaults', () => {
+  it('match the arrow keys the browser reports', () => {
+    // ⌃-only combos stay with the shell on macOS; ⌘ is the mac primary.
+    const primary = { metaKey: isMacPlatform, ctrlKey: !isMacPlatform }
+    const next = new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      code: 'ArrowDown',
+      shiftKey: true,
+      ...primary
+    })
+    const prev = new KeyboardEvent('keydown', {
+      key: 'ArrowUp',
+      code: 'ArrowUp',
+      shiftKey: true,
+      ...primary
+    })
+    expect(matchesShortcut(next, DEFAULT_KEYBOARD_SHORTCUTS.worktreeSwitchNext.defaultKey)).toBe(
+      true
+    )
+    expect(matchesShortcut(prev, DEFAULT_KEYBOARD_SHORTCUTS.worktreeSwitchPrev.defaultKey)).toBe(
+      true
+    )
   })
 })
