@@ -16,18 +16,20 @@
       "src-tauri/src/lib.rs",
       "src-tauri/src/main.rs",
       "src-tauri/tauri.conf.json",
-      "src-tauri/tauri.conf.prod.json"
+      "src-tauri/tauri.conf.prod.json",
+      "src-tauri/src/core/launcher.rs"
     ],
     "acpCore": [
       "src-tauri/src/core/acp.rs",
       "src-tauri/src/core/handles.rs",
+      "src-tauri/src/core/acp_handles.rs",
       "src-tauri/src/acp",
       "src-tauri/crates/se-agent-session",
       "src-tauri/src/conversation_host.rs",
       "src-tauri/src/conversation_roots.rs",
       "src-tauri/src/memory_index",
       "src-tauri/src/scheduled_tasks",
-      "src-tauri/src/core/launcher.rs",
+      "src-tauri/src/core/process.rs",
       "src-tauri/src/core/terminal.rs",
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
@@ -53,16 +55,15 @@
       "src-tauri/crates/se-pty",
       "src-tauri/crates/se-quick-terminal",
       "src-tauri/src/quick_terminal.rs",
-      "src-tauri/src/core/launcher.rs",
+      "src-tauri/src/core/process.rs",
       "src-tauri/src/main.rs",
       "src-tauri/src/logging.rs",
-      "src-tauri/src/brand.rs",
-      "src-tauri/crates/se-agent-session"
+      "src-tauri/src/brand.rs"
     ]
   },
   "acknowledgedExternalModules": {
     "terminalCore": {
-      "acp": "core/handles.rs also holds the in-process ACP handle; the Terminal Core process never runs ACP code"
+      "core::acp": "core/process.rs dispatches --acp-core to core/acp.rs; the Terminal Core process never runs it"
     },
     "acpCore": {
       "ai_channels": "referenced only by mcp_core/describe.rs, which GUI Tauri commands call to describe MCP servers; the ACP Core never runs it",

@@ -106,13 +106,39 @@ function isCovered(module: string, paths: string[]): boolean {
   )
 }
 
+const coreDir = `${srcRoot}/core`
+const coreModules = new Set(
+  readdirSync(join(repoRoot, coreDir))
+    .filter((entry) => entry.endsWith('.rs') && entry !== 'mod.rs')
+    .map((entry) => entry.replace(/\.rs$/, ''))
+)
+
+/**
+ * Sibling `core/` modules a file inside `core/` uses (`super::launcher::…`,
+ * `crate::core::launcher::…`). `core/` is one top-level module, so the
+ * `crate::` check above sees it as covered as soon as any `core/` file is
+ * listed; this keeps a Core from quietly depending on a GUI-only sibling.
+ */
+function referencedCoreSiblings(file: string, source: string): Set<string> {
+  const siblings = new Set<string>()
+  if (!file.startsWith(`${coreDir}/`)) return siblings
+  for (const match of source.matchAll(/\b(?:super|crate::core)::([a-z_0-9]+)/g)) {
+    if (coreModules.has(match[1])) siblings.add(match[1])
+  }
+  return siblings
+}
+
 function uncoveredReferences(core: (typeof CORES)[number]): Map<string, string[]> {
   const paths = [...inputs.components[core], ...inputs.sharedFiles]
   const found = new Map<string, string[]>()
+  const note = (key: string, file: string) => found.set(key, [...(found.get(key) ?? []), file])
   for (const file of inputs.components[core].flatMap(rustFiles)) {
-    for (const module of referencedModules(productionSource(file))) {
-      if (isCovered(module, paths)) continue
-      found.set(module, [...(found.get(module) ?? []), file])
+    const source = productionSource(file)
+    for (const module of referencedModules(source)) {
+      if (!isCovered(module, paths)) note(module, file)
+    }
+    for (const sibling of referencedCoreSiblings(file, source)) {
+      if (!paths.includes(`${coreDir}/${sibling}.rs`)) note(`core::${sibling}`, file)
     }
   }
   return found

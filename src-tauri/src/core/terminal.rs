@@ -15,7 +15,6 @@ use super::ipc::{
     CURRENT_PROTOCOL_VERSION,
 };
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
-use crate::conversation::ConversationId;
 use crate::pty::claims::RotatedClaim;
 use crate::pty::manager::{
     SpawnedTerminal, TerminalAttachResult, TerminalResumeGrant, TerminalResumeRequest,
@@ -26,6 +25,7 @@ use crate::trackers::{
 };
 use async_trait::async_trait;
 use parking_lot::Mutex;
+use se_foundation::ids::ConversationId;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -404,7 +404,7 @@ pub async fn run_terminal_core(profile_root: PathBuf) -> Result<(), CoreError> {
     #[cfg(any(unix, windows))]
     {
         let endpoint = CoreEndpoint::for_profile(&profile_root, CoreRole::TerminalCore);
-        let workspace_base = super::launcher::workspace_base_from_env();
+        let workspace_base = super::process::workspace_base_from_env();
         run_terminal_core_with(endpoint, Some((profile_root, workspace_base))).await
     }
     #[cfg(not(any(unix, windows)))]

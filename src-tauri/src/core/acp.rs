@@ -396,7 +396,7 @@ fn response(id: u64, result: Result<Value, CoreError>) -> CoreResponse {
 }
 
 pub async fn run_acp_core(profile_root: PathBuf) -> Result<(), CoreError> {
-    let workspace_base = super::launcher::workspace_base_from_env();
+    let workspace_base = super::process::workspace_base_from_env();
     run_acp_core_with_roots(profile_root, workspace_base).await
 }
 
