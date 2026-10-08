@@ -3,6 +3,7 @@ import type { ComponentProps, ReactElement } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsStore from '@/stores/app-settings-store'
+import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { clearScrollPosition } from '@/utils/terminal-registry'
 import { createXtermTerminalMock } from './__tests__/xterm-terminal-mock'
 
@@ -2627,6 +2628,55 @@ describe('ConnectedTerminal', () => {
       const result = handler(event)
 
       expect(result).toBe(true)
+    })
+  })
+
+  describe('Scoped shortcuts', () => {
+    afterEach(() => {
+      useKeyboardShortcutsStore.getState().resetAllShortcuts()
+    })
+
+    it('lets a file-explorer key such as Delete reach the shell', async () => {
+      render(<ConnectedTerminal />)
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', { key: 'Delete', code: 'Delete', bubbles: true })
+      expect(handler(event)).toBe(true)
+    })
+
+    it('clears the terminal on the clear shortcut and keeps the key from xterm', async () => {
+      useKeyboardShortcutsStore.getState().updateShortcut('clearTerminal', 'ctrl+shift+k')
+      render(<ConnectedTerminal />)
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'K',
+        code: 'KeyK',
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      })
+      expect(handler(event)).toBe(false)
+      expect(mockTerminalInstance.clear).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(true)
+    })
+
+    it('leaves an unbound clear shortcut alone', async () => {
+      render(<ConnectedTerminal />)
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      handler(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', bubbles: true }))
+      expect(mockTerminalInstance.clear).not.toHaveBeenCalled()
     })
   })
 

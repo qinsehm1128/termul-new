@@ -34,10 +34,18 @@ import {
   useFileExplorerActions,
   useFileExplorerStore
 } from '@/stores/file-explorer-store'
+import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { FileTreeContextMenuContent } from './FileTreeContextMenu'
+
+// Read at keydown time so a key recorded in settings applies at once.
+function getShortcutKey(id: string): string {
+  const shortcut = useKeyboardShortcutsStore.getState().shortcuts[id]
+  return shortcut ? (shortcut.customKey ?? shortcut.defaultKey) : ''
+}
+
 import {
   FileTreeNodeWrapper,
   InlineInputContext,
@@ -564,8 +572,8 @@ export function FileExplorer({
         return
       }
 
-      // F2: Rename
-      if (e.key === 'F2' && selectedPaths.size === 1) {
+      // Rename (F2 by default)
+      if (matchesShortcut(e, getShortcutKey('fileExplorerRename')) && selectedPaths.size === 1) {
         e.preventDefault()
         const [path] = selectedPaths
         const normalizedPath = path.replace(/\\/g, '/')
@@ -589,8 +597,8 @@ export function FileExplorer({
         return
       }
 
-      // Delete: Move to trash (for now, permanent delete)
-      if (e.key === 'Delete' && selectedPaths.size > 0) {
+      // Delete (Delete by default): move to trash (for now, permanent delete)
+      if (matchesShortcut(e, getShortcutKey('fileExplorerDelete')) && selectedPaths.size > 0) {
         e.preventDefault()
         const seen = new Set<string>()
         const targets: DirectoryEntry[] = []

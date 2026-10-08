@@ -91,6 +91,7 @@ import { runCloseFlush } from '@/lib/close-flush'
 import { getColorClasses } from '@/lib/colors'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
+import { handlePaneShortcut } from '@/lib/pane-navigation'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { isConversationAreaPath, setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
@@ -124,7 +125,11 @@ import { useCliSessionPanelVisible } from '@/stores/cli-session-panel-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
-import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import {
+  formatKeyForDisplay,
+  matchesShortcut,
+  useKeyboardShortcutsStore
+} from '@/stores/keyboard-shortcuts-store'
 import { useLastSessionStore } from '@/stores/last-session-store'
 import {
   useActiveProject,
@@ -1279,17 +1284,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const getShortcutLabel = useCallback(
     (id: string): string | undefined => {
       const shortcut = shortcuts[id]
-      return shortcut ? (shortcut.customKey ?? shortcut.defaultKey) : undefined
+      const key = shortcut ? (shortcut.customKey ?? shortcut.defaultKey) : ''
+      return key ? formatKeyForDisplay(key) : undefined
     },
     [shortcuts]
   )
 
+  // ⌘1–9 / Ctrl+1–9 switch projects; fixed, not part of the shortcut table.
   const getProjectShortcutLabel = useCallback(
-    (index: number): string | undefined => {
-      const shortcut = shortcuts[`project-${index + 1}`]
-      return shortcut ? (shortcut.customKey ?? shortcut.defaultKey) : undefined
-    },
-    [shortcuts]
+    (index: number): string | undefined => formatKeyForDisplay(`ctrl+${index + 1}`),
+    []
   )
 
   const uiZoomLevel = useUiZoomLevel()
@@ -1941,6 +1945,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
+      // Pane actions (iTerm2 / Ghostty style): split, move focus, maximize.
+      if (isWorkspaceRoute && handlePaneShortcut(e, getActiveKey, handleSplitTerminal)) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+
       // Zoom in/out/reset — whole-UI zoom (VS Code style)
       if (matchesShortcut(e, getActiveKey('zoomIn'))) {
         e.preventDefault()
@@ -1999,6 +2010,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     cycleTab,
     activeTab,
     handleCreateTerminalInPane,
+    handleSplitTerminal,
     handleNewBrowserTab,
     updatePanelVisibility,
     isExplorerVisible,

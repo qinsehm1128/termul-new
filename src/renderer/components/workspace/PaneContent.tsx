@@ -359,6 +359,7 @@ export function PaneContent({
 
   return (
     <div
+      data-pane-id={pane.id}
       className={cn(
         'flex flex-col h-full relative',
         isActivePane &&

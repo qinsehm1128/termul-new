@@ -152,7 +152,16 @@
     "description": "Customize keyboard shortcuts to match your workflow.",
     "resetAll": "Reset all shortcuts",
     "resetTitle": "Reset Keyboard Shortcuts",
-    "resetMessage": "Are you sure you want to reset all keyboard shortcuts to their default values?"
+    "resetMessage": "Are you sure you want to reset all keyboard shortcuts to their default values?",
+    "scheme": "Keybinding scheme",
+    "defaultScheme": "Se (default)",
+    "userScheme": "{{name}} (custom)",
+    "schemeHint": "Switching schemes keeps every shortcut you recorded yourself. ⌘1–9 project switching is fixed.",
+    "schemeFileHint": "Add your own scheme: put a JSON file in ~/.se-manager/keybindings/",
+    "reloadSchemes": "Reload",
+    "openSchemeDir": "Open folder",
+    "schemesReloaded": "Keybinding schemes reloaded",
+    "schemeSaveFailed": "Failed to save keybinding scheme"
   },
   "updates": {
     "description": "Manage application updates and version information.",

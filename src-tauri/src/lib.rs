@@ -25,6 +25,7 @@ pub mod conversation_host;
 #[cfg(test)]
 mod conversation_host_tests;
 pub mod conversation_roots;
+mod keybinding_schemes;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
@@ -3507,6 +3508,7 @@ pub fn run() {
             commands::mcp_clients_detect,
             commands::mcp_client_sync,
             commands::mcp_client_unsync,
+            keybinding_schemes::keybinding_schemes_load,
             commands::mcp_descriptions_get,
             commands::mcp_descriptions_put,
             commands::mcp_describe_servers,

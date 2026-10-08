@@ -431,13 +431,19 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 // Persistence key for app settings
 export const APP_SETTINGS_KEY = 'settings/app'
 
+// Where a shortcut is listened for. Global shortcuts fire from any focus
+// (including the terminal); scoped ones only while that surface has focus, so
+// the same key may mean different things in different scopes.
+export type ShortcutScope = 'global' | 'terminal' | 'fileExplorer'
+
 // Keyboard shortcut definition
 export interface KeyboardShortcut {
   id: string
   label: string
   description: string
-  defaultKey: string // Normalized format: "ctrl+k", "ctrl+shift+p"
+  defaultKey: string // Normalized format: "ctrl+k", "ctrl+shift+p"; '' = unbound
   customKey?: string // User's custom binding, undefined = use default
+  scope?: ShortcutScope // undefined = 'global'
 }
 
 // All keyboard shortcuts configuration
@@ -566,13 +572,79 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     id: 'fileExplorerRename',
     label: 'Rename File',
     description: 'Rename selected file',
-    defaultKey: 'f2'
+    defaultKey: 'f2',
+    scope: 'fileExplorer'
   },
   fileExplorerDelete: {
     id: 'fileExplorerDelete',
     label: 'Delete Files',
     description: 'Delete selected files',
-    defaultKey: 'delete'
+    defaultKey: 'delete',
+    scope: 'fileExplorer'
+  },
+
+  // Pane shortcuts. `cmd+` (not `ctrl+`) keeps them macOS-only by default:
+  // on Windows/Linux ctrl+d is the shell's EOF and must reach the terminal.
+  splitRight: {
+    id: 'splitRight',
+    label: 'Split Right',
+    description: 'Open a new terminal in a pane to the right',
+    defaultKey: 'cmd+d'
+  },
+  splitDown: {
+    id: 'splitDown',
+    label: 'Split Down',
+    description: 'Open a new terminal in a pane below',
+    defaultKey: 'cmd+shift+d'
+  },
+  focusPaneLeft: {
+    id: 'focusPaneLeft',
+    label: 'Focus Pane Left',
+    description: 'Move focus to the pane on the left',
+    defaultKey: 'cmd+alt+arrowleft'
+  },
+  focusPaneRight: {
+    id: 'focusPaneRight',
+    label: 'Focus Pane Right',
+    description: 'Move focus to the pane on the right',
+    defaultKey: 'cmd+alt+arrowright'
+  },
+  focusPaneUp: {
+    id: 'focusPaneUp',
+    label: 'Focus Pane Above',
+    description: 'Move focus to the pane above',
+    defaultKey: 'cmd+alt+arrowup'
+  },
+  focusPaneDown: {
+    id: 'focusPaneDown',
+    label: 'Focus Pane Below',
+    description: 'Move focus to the pane below',
+    defaultKey: 'cmd+alt+arrowdown'
+  },
+  focusPaneNext: {
+    id: 'focusPaneNext',
+    label: 'Next Pane',
+    description: 'Move focus to the next pane',
+    defaultKey: 'cmd+]'
+  },
+  focusPanePrev: {
+    id: 'focusPanePrev',
+    label: 'Previous Pane',
+    description: 'Move focus to the previous pane',
+    defaultKey: 'cmd+['
+  },
+  togglePaneZoom: {
+    id: 'togglePaneZoom',
+    label: 'Maximize Pane',
+    description: 'Maximize the active pane or restore the split layout',
+    defaultKey: 'cmd+shift+enter'
+  },
+  clearTerminal: {
+    id: 'clearTerminal',
+    label: 'Clear Terminal',
+    description: 'Clear the focused terminal screen and scrollback',
+    defaultKey: '',
+    scope: 'terminal'
   },
 
   // Worktree shortcuts
@@ -586,13 +658,13 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     id: 'worktreeSwitchNext',
     label: 'Switch to Next Worktree',
     description: 'Cycle to the next worktree in the sidebar',
-    defaultKey: 'ctrl+shift+downarrow'
+    defaultKey: 'ctrl+shift+arrowdown'
   },
   worktreeSwitchPrev: {
     id: 'worktreeSwitchPrev',
     label: 'Switch to Previous Worktree',
     description: 'Cycle to the previous worktree in the sidebar',
-    defaultKey: 'ctrl+shift+uparrow'
+    defaultKey: 'ctrl+shift+arrowup'
   },
   worktreeOpenTerminal: {
     id: 'worktreeOpenTerminal',
@@ -634,3 +706,6 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 
 // Persistence key for keyboard shortcuts
 export const KEYBOARD_SHORTCUTS_KEY = 'settings/keyboard-shortcuts'
+
+// Persistence key for the selected keybinding scheme id
+export const KEYBINDING_SCHEME_KEY = 'settings/keybinding-scheme'

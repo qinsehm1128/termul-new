@@ -176,6 +176,15 @@
     "pressKeys": "Press keys...",
     "conflict": "Conflicts with \"{{label}}\".",
     "useAnyway": "Use anyway",
+    "unbound": "Not set",
+    "reservedConflict": "Same key as {{label}}, which Se keeps fixed",
+    "reserved": {
+      "projectSwitch": "project switching (⌘1–9)",
+      "systemEdit": "the system edit keys (copy, paste, cut, select all, undo)",
+      "macQuit": "Quit",
+      "macHide": "Hide",
+      "macMinimize": "Minimize"
+    },
     "items": {
       "commandPalette": {
         "label": "Command Palette",
@@ -227,6 +236,37 @@
       },
       "fileExplorerRename": { "label": "Rename File", "description": "Rename selected file" },
       "fileExplorerDelete": { "label": "Delete Files", "description": "Delete selected files" },
+      "splitRight": {
+        "label": "Split Right",
+        "description": "Open a new terminal in a pane to the right"
+      },
+      "splitDown": { "label": "Split Down", "description": "Open a new terminal in a pane below" },
+      "focusPaneLeft": {
+        "label": "Focus Pane Left",
+        "description": "Move focus to the pane on the left"
+      },
+      "focusPaneRight": {
+        "label": "Focus Pane Right",
+        "description": "Move focus to the pane on the right"
+      },
+      "focusPaneUp": { "label": "Focus Pane Above", "description": "Move focus to the pane above" },
+      "focusPaneDown": {
+        "label": "Focus Pane Below",
+        "description": "Move focus to the pane below"
+      },
+      "focusPaneNext": { "label": "Next Pane", "description": "Move focus to the next pane" },
+      "focusPanePrev": {
+        "label": "Previous Pane",
+        "description": "Move focus to the previous pane"
+      },
+      "togglePaneZoom": {
+        "label": "Maximize Pane",
+        "description": "Maximize the active pane or restore the split layout"
+      },
+      "clearTerminal": {
+        "label": "Clear Terminal",
+        "description": "Clear the focused terminal screen and scrollback"
+      },
       "worktreeCreate": {
         "label": "Create Worktree",
         "description": "Open the new worktree creation modal"

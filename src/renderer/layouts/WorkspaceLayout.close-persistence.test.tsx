@@ -200,7 +200,8 @@ vi.mock('@/stores/keyboard-shortcuts-store', () => ({
       colorThemePicker: { customKey: 'Ctrl+Alt+T', defaultKey: 'Ctrl+Alt+T' }
     }
   }),
-  matchesShortcut: () => false
+  matchesShortcut: () => false,
+  formatKeyForDisplay: (key: string) => key
 }))
 
 vi.mock('@/stores/app-settings-store', () => ({
