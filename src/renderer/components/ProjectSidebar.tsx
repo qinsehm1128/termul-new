@@ -71,6 +71,7 @@ import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
 import { NewGroupModal } from './NewGroupModal'
 import { NewWorktreeModal } from './NewWorktreeModal'
+import { ProjectWorktreeMenu } from './ProjectWorktreeMenu'
 import { SSHPanel } from './ssh/SSHPanel'
 
 interface ColorPickerState {
@@ -83,8 +84,7 @@ interface ColorPickerState {
 
 interface DeleteConfirmState {
   isOpen: boolean
-  projectId: string
-  projectName: string
+  projectIds: string[]
 }
 
 interface SettingsDialogState {
@@ -110,6 +110,8 @@ interface ProjectSidebarProps {
   onArchiveProject: (id: string) => void
   onRestoreProject: (id: string) => void
   onReorderProjects: (projectIds: string[]) => void
+  /** Desktop only: opens a terminal in a worktree (`null` = the main checkout). */
+  onOpenWorktreeTerminal?: (projectId: string, worktreeId: string | null) => void
   onSSHConnect?: (profileId: string) => void
   onSelectSSHProfile?: (profileId: string) => void
   activeSSHProfileId?: string | null
@@ -128,6 +130,7 @@ export function ProjectSidebar({
   onArchiveProject,
   onRestoreProject,
   onReorderProjects,
+  onOpenWorktreeTerminal,
   onSSHConnect,
   onSelectSSHProfile,
   activeSSHProfileId
@@ -248,9 +251,13 @@ export function ProjectSidebar({
   // Delete confirmation state
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({
     isOpen: false,
-    projectId: '',
-    projectName: ''
+    projectIds: []
   })
+
+  // Projects picked for a batch action. Cmd/Ctrl-click toggles one, Shift-click
+  // extends from the last one clicked; a plain click leaves selection mode.
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
+  const selectionAnchorRef = useRef<string | null>(null)
 
   // Settings dialog state
   const [settingsDialog, setSettingsDialog] = useState<SettingsDialogState>({
@@ -498,30 +505,25 @@ export function ProjectSidebar({
     setEditName('')
   }, [])
 
-  const handleConfirmDelete = useCallback(
-    (projectId: string): void => {
-      const project = projects.find((p) => p.id === projectId)
-      if (project) {
-        setDeleteConfirm({
-          isOpen: true,
-          projectId,
-          projectName: project.name
-        })
-      }
-    },
-    [projects]
-  )
+  const handleConfirmDelete = useCallback((projectIds: string[]): void => {
+    if (projectIds.length > 0) setDeleteConfirm({ isOpen: true, projectIds })
+  }, [])
 
   const handleDelete = useCallback((): void => {
-    if (deleteConfirm.projectId) {
-      onDeleteProject(deleteConfirm.projectId)
+    for (const projectId of deleteConfirm.projectIds) {
+      onDeleteProject(projectId)
     }
-    setDeleteConfirm({ isOpen: false, projectId: '', projectName: '' })
-  }, [deleteConfirm.projectId, onDeleteProject])
+    setDeleteConfirm({ isOpen: false, projectIds: [] })
+    setSelectedProjectIds([])
+  }, [deleteConfirm.projectIds, onDeleteProject])
 
   const handleCancelDelete = useCallback((): void => {
-    setDeleteConfirm({ isOpen: false, projectId: '', projectName: '' })
+    setDeleteConfirm({ isOpen: false, projectIds: [] })
   }, [])
+
+  const deleteConfirmNames = deleteConfirm.projectIds
+    .map((id) => projects.find((p) => p.id === id)?.name)
+    .filter((name): name is string => name !== undefined)
 
   const handleOpenSettings = useCallback((projectId: string): void => {
     setSettingsDialog({ isOpen: true, projectId })
@@ -826,7 +828,7 @@ export function ProjectSidebar({
           <ContextMenuItem onSelect={() => onArchiveProject(project.id)}>
             <Archive className="mr-2 h-4 w-4" /> {t('archive')}
           </ContextMenuItem>
-          <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete(project.id)}>
+          <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete([project.id])}>
             <Trash2 className="mr-2 h-4 w-4" /> {t('delete')}
           </ContextMenuItem>
         </ContextMenuContent>
@@ -859,7 +861,7 @@ export function ProjectSidebar({
           <ContextMenuItem onSelect={() => onRestoreProject(project.id)}>
             <RotateCcw className="mr-2 h-4 w-4" /> {t('restore')}
           </ContextMenuItem>
-          <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete(project.id)}>
+          <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete([project.id])}>
             <Trash2 className="mr-2 h-4 w-4" /> {t('delete')}
           </ContextMenuItem>
         </ContextMenuContent>
@@ -960,6 +962,96 @@ export function ProjectSidebar({
   const visibleGroups = useMemo(() => {
     return groupProjectsMap.filter((gp) => gp.projects.length > 0 || !isSearching)
   }, [groupProjectsMap, isSearching])
+
+  // Rows in on-screen order, for Shift-click ranges. Projects inside a
+  // collapsed group are not on screen, so a range never reaches into one.
+  const visibleProjectOrder = useMemo(
+    () => [
+      ...visibleGroups.flatMap(({ group, projects: groupProjects }) =>
+        !group.isCollapsed || isSearching ? groupProjects.map((p) => p.id) : []
+      ),
+      ...ungroupedActiveProjects.map((p) => p.id)
+    ],
+    [visibleGroups, ungroupedActiveProjects, isSearching]
+  )
+
+  // Only what is still on screen counts: a project deleted, archived or
+  // filtered away since it was picked must not ride along into a batch delete.
+  const selection = useMemo(
+    () => selectedProjectIds.filter((id) => visibleProjectOrder.includes(id)),
+    [selectedProjectIds, visibleProjectOrder]
+  )
+
+  const handleProjectClick = useCallback(
+    (projectId: string, e: React.MouseEvent | React.KeyboardEvent): void => {
+      if (e.metaKey || e.ctrlKey) {
+        setSelectedProjectIds((prev) =>
+          prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId]
+        )
+        selectionAnchorRef.current = projectId
+        return
+      }
+      if (e.shiftKey) {
+        const from = visibleProjectOrder.indexOf(selectionAnchorRef.current ?? activeProjectId)
+        const to = visibleProjectOrder.indexOf(projectId)
+        if (from >= 0 && to >= 0) {
+          setSelectedProjectIds(
+            visibleProjectOrder.slice(Math.min(from, to), Math.max(from, to) + 1)
+          )
+          return
+        }
+      }
+      setSelectedProjectIds([])
+      selectionAnchorRef.current = projectId
+      onSelectProject(projectId)
+    },
+    [visibleProjectOrder, activeProjectId, onSelectProject]
+  )
+
+  useEffect(() => {
+    if (selection.length === 0) return
+    const onKeyDown = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setSelectedProjectIds([])
+        return
+      }
+      // Finder's delete key, but only while a project row has focus: the same
+      // key in a terminal or an input belongs to them.
+      const onProjectRow =
+        e.target instanceof Element && e.target.closest('[data-project-row]') !== null
+      if (onProjectRow && (e.key === 'Backspace' || e.key === 'Delete')) {
+        e.preventDefault()
+        handleConfirmDelete(selection)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [selection, handleConfirmDelete])
+
+  // Right-clicking inside a multi-selection acts on all of it; anywhere else
+  // the row's own menu applies.
+  const renderProjectMenu = useCallback(
+    (project: Project): React.ReactNode => {
+      if (selection.length < 2 || !selection.includes(project.id)) {
+        return renderProjectContextMenu(project)
+      }
+      return (
+        <ContextMenuContent className="w-56">
+          <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete(selection)}>
+            <Trash2 className="mr-2 h-4 w-4" /> {t('deleteSelected', { count: selection.length })}
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => setSelectedProjectIds([])}>
+            <X className="mr-2 h-4 w-4" /> {t('clearSelection')}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      )
+    },
+    [selection, renderProjectContextMenu, handleConfirmDelete, t]
+  )
+
+  const handleCreateWorktree = useCallback((projectId: string): void => {
+    setNewWorktreeModal({ isOpen: true, projectId })
+  }, [])
 
   // Reset a lingering query if the search box is no longer shown.
   useEffect(() => {
@@ -1319,6 +1411,9 @@ export function ProjectSidebar({
                                 >
                                   <ProjectItem
                                     project={project}
+                                    isSelected={selection.includes(project.id)}
+                                    onOpenWorktreeTerminal={onOpenWorktreeTerminal}
+                                    onCreateWorktree={handleCreateWorktree}
                                     isActive={
                                       activeGroupId === null && project.id === activeProjectId
                                     }
@@ -1331,10 +1426,10 @@ export function ProjectSidebar({
                                     }
                                     hasActivity={hasActivity}
                                     hasError={projectErrorIds.has(project.id)}
-                                    onClick={() => onSelectProject(project.id)}
+                                    onClick={(e) => handleProjectClick(project.id, e)}
                                     onTerminalClick={() => onOpenProjectTerminal(project.id)}
                                     onContextMenu={handleContextMenu}
-                                    renderContextMenu={renderProjectContextMenu}
+                                    renderContextMenu={renderProjectMenu}
                                     onEditNameChange={setEditName}
                                     onSaveRename={() => handleSaveRename(project.id)}
                                     onCancelRename={handleCancelRename}
@@ -1412,6 +1507,9 @@ export function ProjectSidebar({
                       >
                         <ProjectItem
                           project={project}
+                          isSelected={selection.includes(project.id)}
+                          onOpenWorktreeTerminal={onOpenWorktreeTerminal}
+                          onCreateWorktree={handleCreateWorktree}
                           isActive={activeGroupId === null && project.id === activeProjectId}
                           isEditing={editingId === project.id}
                           editName={editName}
@@ -1422,10 +1520,10 @@ export function ProjectSidebar({
                           }
                           hasActivity={hasActivity}
                           hasError={projectErrorIds.has(project.id)}
-                          onClick={() => onSelectProject(project.id)}
+                          onClick={(e) => handleProjectClick(project.id, e)}
                           onTerminalClick={() => onOpenProjectTerminal(project.id)}
                           onContextMenu={handleContextMenu}
-                          renderContextMenu={renderProjectContextMenu}
+                          renderContextMenu={renderProjectMenu}
                           onEditNameChange={setEditName}
                           onSaveRename={() => handleSaveRename(project.id)}
                           onCancelRename={handleCancelRename}
@@ -1681,8 +1779,19 @@ export function ProjectSidebar({
       {/* Delete Confirmation Dialog */}
       <ConfirmDialog
         isOpen={deleteConfirm.isOpen}
-        title={t('deleteProject')}
-        message={t('deleteProjectConfirm', { name: deleteConfirm.projectName })}
+        title={
+          deleteConfirmNames.length > 1
+            ? t('deleteProjects', { count: deleteConfirmNames.length })
+            : t('deleteProject')
+        }
+        message={
+          deleteConfirmNames.length > 1
+            ? t('deleteProjectsConfirm', {
+                count: deleteConfirmNames.length,
+                names: deleteConfirmNames.join(t('nameSeparator'))
+              })
+            : t('deleteProjectConfirm', { name: deleteConfirmNames[0] ?? '' })
+        }
         confirmLabel={t('delete')}
         cancelLabel={t('cancel')}
         variant="danger"
@@ -1710,18 +1819,22 @@ export function ProjectSidebar({
 interface ProjectItemProps {
   project: Project
   isActive: boolean
+  /** Part of a multi-selection (batch delete). */
+  isSelected: boolean
   isEditing: boolean
   editName: string
   shortcut?: string
   hasActivity: boolean
   hasError?: boolean
-  onClick: () => void
+  onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
   onContextMenu: (e: React.MouseEvent) => void
   onEditNameChange: (name: string) => void
   onSaveRename: () => void
   onCancelRename: () => void
   onSettingsClick: () => void
   onTerminalClick: () => void
+  onOpenWorktreeTerminal?: (projectId: string, worktreeId: string | null) => void
+  onCreateWorktree: (projectId: string) => void
   renderContextMenu?: (project: Project) => React.ReactNode
 }
 
@@ -1733,6 +1846,7 @@ function normalizeProjectPath(path: string): string {
 const ProjectItem = memo(function ProjectItem({
   project,
   isActive,
+  isSelected,
   isEditing,
   editName,
   shortcut,
@@ -1745,6 +1859,8 @@ const ProjectItem = memo(function ProjectItem({
   onCancelRename,
   onSettingsClick,
   onTerminalClick,
+  onOpenWorktreeTerminal,
+  onCreateWorktree,
   renderContextMenu
 }: ProjectItemProps): React.JSX.Element {
   const { t } = useTranslation('projects')
@@ -1805,6 +1921,8 @@ const ProjectItem = memo(function ProjectItem({
           <div
             onClick={isEditing ? undefined : onClick}
             onContextMenu={onContextMenu}
+            data-project-row=""
+            data-selected={isSelected || undefined}
             data-project-path={project.path ? normalizeProjectPath(project.path) : undefined}
             onDragOver={handleEntryDragOver}
             onDragLeave={() => setIsEntryDropTarget(false)}
@@ -1814,16 +1932,18 @@ const ProjectItem = memo(function ProjectItem({
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
-                if (!isEditing) onClick()
+                if (!isEditing) onClick(e)
               }
             }}
             className={cn(
               'group mx-1 flex h-7 w-[calc(100%-0.5rem)] cursor-pointer select-none items-center rounded-sm px-1.5 text-left transition-colors duration-150 ease-[var(--ease-out)]',
               isEntryDropTarget
                 ? 'bg-primary/15 ring-1 ring-inset ring-primary'
-                : isActive
-                  ? 'bg-sidebar-accent text-foreground ring-1 ring-inset ring-primary/35'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-foreground'
+                : isSelected
+                  ? 'bg-primary/10 text-foreground ring-1 ring-inset ring-primary/60'
+                  : isActive
+                    ? 'bg-sidebar-accent text-foreground ring-1 ring-inset ring-primary/35'
+                    : 'text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-foreground'
             )}
             aria-current={isActive ? 'page' : undefined}
             aria-label={
@@ -1832,6 +1952,13 @@ const ProjectItem = memo(function ProjectItem({
                 : t('projectAria', { name: project.name })
             }
           >
+            {!isEditing && project.isGitRepo && onOpenWorktreeTerminal && (
+              <ProjectWorktreeMenu
+                project={project}
+                onOpenWorktreeTerminal={onOpenWorktreeTerminal}
+                onCreateWorktree={onCreateWorktree}
+              />
+            )}
             {!isEditing && (
               <span
                 aria-hidden="true"

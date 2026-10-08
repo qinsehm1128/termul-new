@@ -93,13 +93,18 @@ import { logFrontendError } from '@/lib/log-api'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { isConversationAreaPath, setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   applyPendingTerminalFocus,
   openBoardTerminal,
   peekPendingTerminalFocus
 } from '@/lib/terminal-board-navigation'
 import { terminalCloseIntent } from '@/lib/terminal-close-intent'
-import { spawnTerminalInPane, spawnTerminalInSplit } from '@/lib/terminal-spawn'
+import {
+  activateAndOpenTerminal,
+  spawnTerminalInPane,
+  spawnTerminalInSplit
+} from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
@@ -600,7 +605,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         navigate('/')
         return
       }
-      void restoreProjectWorkspace(id).then((restored) => {
+      // Returned so a caller can act on the project's own layout once it has
+      // replaced the previous one.
+      return restoreProjectWorkspace(id).then((restored) => {
         useConversationStore.getState().setActiveConversationId(null)
         if (!restored) useWorkspaceStore.getState().resetLayout()
       })
@@ -614,6 +621,39 @@ export default function WorkspaceLayout(): React.JSX.Element {
     (id: string) => {
       if (useProjectStore.getState().activeProjectId !== id) handleSelectProject(id)
       setTimeout(() => ensureVisibleProjectTerminalRef.current(id, { explicit: true }), 0)
+    },
+    [handleSelectProject]
+  )
+
+  // A pick in the row's worktree menu: always a new shell, rooted in that
+  // worktree (`null` = the main checkout), which also becomes the active one.
+  // Switching projects first waits for that project's layout to land, or the
+  // restore would replace the pane the new terminal was just put in.
+  const handleOpenWorktreeTerminal = useCallback(
+    (projectId: string, worktreeId: string | null) => {
+      const switching = useProjectStore.getState().activeProjectId !== projectId
+      const ready = switching ? handleSelectProject(projectId) : undefined
+      void Promise.resolve(ready).then(async () => {
+        const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+        const cwd = worktreeId
+          ? project?.worktrees?.find((w) => w.id === worktreeId)?.path
+          : project?.path
+        if (!cwd) return
+        useWorkspaceStore.getState().hideAgentLauncher()
+        const outcome = await activateAndOpenTerminal(projectId, worktreeId, cwd)
+        if (outcome.status !== 'opened') {
+          toast.error(
+            runtimeT(
+              'projects',
+              'worktreeMenu.openFailed',
+              'Could not open a terminal in this worktree'
+            ),
+            outcome.status === 'spawn-failed' && outcome.error
+              ? { description: outcome.error }
+              : undefined
+          )
+        }
+      })
     },
     [handleSelectProject]
   )
@@ -2791,6 +2831,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
                       onArchiveProject={archiveProject}
                       onRestoreProject={restoreProject}
                       onReorderProjects={reorderProjects}
+                      onOpenWorktreeTerminal={
+                        isTauriContext() ? handleOpenWorktreeTerminal : undefined
+                      }
                       onSSHConnect={handleSSHConnect}
                       onSelectSSHProfile={handleSelectSSHProfile}
                       activeSSHProfileId={activeSSHProfileId}
