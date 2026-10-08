@@ -1,8 +1,6 @@
 {
   "schemaVersion": 1,
   "sharedFiles": [
-    "src-tauri/Cargo.toml",
-    "src-tauri/Cargo.lock",
     "src-tauri/build.rs",
     "src-tauri/src/core/ipc.rs",
     "src-tauri/src/core/mod.rs",
@@ -10,9 +8,19 @@
     "src-tauri/crates/se-ipc",
     "src-tauri/crates/se-foundation"
   ],
+  "cargo": {
+    "manifest": "src-tauri/Cargo.toml",
+    "lock": "src-tauri/Cargo.lock",
+    "package": "se-manager",
+    "crateSource": "src-tauri/src",
+    "workspaceCrates": "src-tauri/crates",
+    "scopedComponents": ["acpCore", "terminalCore"]
+  },
   "components": {
     "renderer": ["src/renderer", "src/shared", "package.json", "bun.lock"],
     "guiNative": [
+      "src-tauri/Cargo.toml",
+      "src-tauri/Cargo.lock",
       "src-tauri/src/lib.rs",
       "src-tauri/src/main.rs",
       "src-tauri/tauri.conf.json",

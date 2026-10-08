@@ -164,6 +164,28 @@ jobs:
             --report component-identity/baked-component-identity.json
           echo "commit_sha=$sha" >> "$GITHUB_OUTPUT"
 
+      # Diagnostic only: list the inputs behind every component identity that
+      # differs from the previous release, so an unexpected Core replacement
+      # (an update that defers or restarts a Core) names its cause in the log.
+      - name: Explain component identity changes
+        continue-on-error: true
+        shell: bash
+        env:
+          CURRENT_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          previous="$(
+            { git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' \
+                | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$'; echo "$CURRENT_TAG"; } \
+              | sort -uV | awk -v current="$CURRENT_TAG" '$0 == current { print last; exit } { last = $0 }'
+          )"
+          if [[ -z "$previous" ]]; then
+            echo "No earlier release tag before $CURRENT_TAG; nothing to compare."
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "refs/tags/$previous:refs/tags/$previous"
+          node scripts/release/component-build-id.mjs --explain-against "$previous"
+
       - name: Upload component identity
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:

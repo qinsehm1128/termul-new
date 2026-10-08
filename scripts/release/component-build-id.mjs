@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readdir, readFile, writeFile } from 'node:fs/promises'
-import { relative, resolve, sep } from 'node:path'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
@@ -65,6 +67,18 @@ async function readInputs(root, inputs) {
     throw new Error('component identity sharedFiles must be an array of strings')
   }
   assertPlainObject(inputs.components, 'component identity components')
+  if (inputs.cargo !== undefined) {
+    assertPlainObject(inputs.cargo, 'component identity cargo')
+    for (const key of ['manifest', 'lock', 'package', 'crateSource', 'workspaceCrates']) {
+      if (typeof inputs.cargo[key] !== 'string') {
+        throw new Error(`component identity cargo.${key} must be a string`)
+      }
+    }
+    const scoped = inputs.cargo.scopedComponents
+    if (!Array.isArray(scoped) || !scoped.every((value) => COMPONENTS.includes(value))) {
+      throw new Error('component identity cargo.scopedComponents must name components')
+    }
+  }
 
   const expanded = new Map()
   const add = async (path) => {
@@ -89,6 +103,178 @@ async function readInputs(root, inputs) {
   }
 
   return { fileDigests }
+}
+
+const CARGO_PACKAGE_VERSION = 'version = "<package-version>"'
+
+/** Drop a TOML `#` comment that is not inside a string. */
+function stripTomlComment(line) {
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (char === '"' && line[index - 1] !== '\\') quoted = !quoted
+    else if (char === '#' && !quoted) return line.slice(0, index)
+  }
+  return line
+}
+
+function bracketDepth(text) {
+  let depth = 0
+  let quoted = false
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '"' && text[index - 1] !== '\\') quoted = !quoted
+    else if (!quoted && (char === '[' || char === '{')) depth += 1
+    else if (!quoted && (char === ']' || char === '}')) depth -= 1
+  }
+  return depth
+}
+
+/**
+ * Split a Cargo manifest into the part every Core shares (package, features,
+ * profiles, build dependencies, ...) and its runtime dependency entries.
+ * Comments and the package version are dropped: neither changes a binary.
+ * Dev-dependencies are dropped too; they never reach a release build.
+ */
+export function parseCargoManifest(text) {
+  const shared = []
+  const dependencies = []
+  let table = ''
+  let pending = null
+  const lines = text.replaceAll('\r\n', '\n').split('\n')
+  for (const raw of lines) {
+    const line = stripTomlComment(raw).trimEnd()
+    if (pending) {
+      pending.text += ` ${line.trim()}`
+      if (bracketDepth(pending.text) <= 0) {
+        dependencies.push(pending)
+        pending = null
+      }
+      continue
+    }
+    if (line.trim() === '') continue
+    const header = /^\s*\[{1,2}([^\]]+)\]{1,2}\s*$/.exec(line)
+    if (header) {
+      table = header[1].trim()
+      if (!isDependencyTable(table)) shared.push(line.trim())
+      continue
+    }
+    if (isDevDependencyTable(table)) continue
+    if (isDependencyTable(table)) {
+      const entry = /^\s*([A-Za-z0-9_-]+)\s*=/.exec(line)
+      if (!entry) continue
+      const item = { table, name: entry[1], text: line.trim() }
+      if (bracketDepth(item.text) > 0) pending = item
+      else dependencies.push(item)
+      continue
+    }
+    shared.push(
+      table === 'package' && /^version\s*=/.test(line.trim()) ? CARGO_PACKAGE_VERSION : line.trim()
+    )
+  }
+  return { shared, dependencies }
+}
+
+function isDevDependencyTable(table) {
+  return /(^|\.)dev-dependencies$/.test(table)
+}
+
+function isDependencyTable(table) {
+  return /(^|\.)(dev-)?dependencies$/.test(table)
+}
+
+/** `[[package]]` entries of a Cargo.lock, keyed by name. */
+export function parseCargoLock(text) {
+  const packages = new Map()
+  for (const block of text.replaceAll('\r\n', '\n').split('\n[[package]]\n').slice(1)) {
+    const field = (name) => new RegExp(`^${name} = "([^"]*)"$`, 'm').exec(block)?.[1]
+    const list = /^dependencies = \[\n([\s\S]*?)\n\]$/m.exec(block)?.[1] ?? ''
+    const entry = {
+      name: field('name'),
+      version: field('version'),
+      source: field('source') ?? '',
+      checksum: field('checksum') ?? '',
+      dependencies: [...list.matchAll(/^ "([^"]+)",?$/gm)].map((match) => match[1])
+    }
+    packages.set(entry.name, [...(packages.get(entry.name) ?? []), entry])
+  }
+  return packages
+}
+
+/** A lock dependency spec is `name`, `name version` or `name version (source)`. */
+function resolveLockSpec(packages, spec) {
+  const [name, version] = spec.split(' ')
+  const candidates = packages.get(name) ?? []
+  const match = version ? candidates.find((entry) => entry.version === version) : candidates[0]
+  if (!match) throw new Error(`Cargo.lock has no package for dependency "${spec}"`)
+  return match
+}
+
+/** Every lock package reachable from `roots`, as stable text lines. */
+function lockClosure(packages, rootSpecs) {
+  const seen = new Map()
+  const queue = rootSpecs.map((spec) => resolveLockSpec(packages, spec))
+  while (queue.length > 0) {
+    const entry = queue.pop()
+    const key = `${entry.name} ${entry.version}`
+    if (seen.has(key)) continue
+    seen.set(key, entry)
+    for (const spec of entry.dependencies) queue.push(resolveLockSpec(packages, spec))
+  }
+  return [...seen.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([key, entry]) =>
+        `${key} ${entry.source} ${entry.checksum} [${[...entry.dependencies].sort().join(', ')}]`
+    )
+}
+
+/**
+ * Cargo material a scoped Core's identity hashes: the shared manifest part,
+ * the manifest entries of the dependencies the Core's own code names (plus
+ * the workspace crates it lists), and the Cargo.lock closure under them. A
+ * dependency only the GUI uses then leaves the Core's identity alone.
+ */
+async function scopedCargoMaterial(root, cargo, componentPaths) {
+  const manifest = parseCargoManifest(await readFile(resolve(root, cargo.manifest), 'utf8'))
+  const packages = parseCargoLock(await readFile(resolve(root, cargo.lock), 'utf8'))
+
+  const sources = []
+  const workspaceCrates = new Set()
+  for (const path of componentPaths) {
+    for (const file of await expandInput(root, path)) {
+      if (file.startsWith(`${cargo.crateSource}/`) && file.endsWith('.rs')) {
+        sources.push(await readFile(resolve(root, file), 'utf8'))
+      }
+      const crate = new RegExp(`^${cargo.workspaceCrates}/([^/]+)/Cargo\\.toml$`).exec(file)
+      if (crate) {
+        const toml = await readFile(resolve(root, file), 'utf8')
+        const name = /^name = "([^"]+)"$/m.exec(toml)?.[1]
+        if (name) workspaceCrates.add(name)
+      }
+    }
+  }
+  const code = sources.join('\n')
+  const roots = new Set(workspaceCrates)
+  for (const { name } of manifest.dependencies) {
+    const ident = name.replaceAll('-', '_')
+    if (new RegExp(`\\b${ident}::|\\buse ${ident}\\b`).test(code)) roots.add(name)
+  }
+
+  const own = (packages.get(cargo.package) ?? [])[0]
+  if (!own) throw new Error(`Cargo.lock has no package ${cargo.package}`)
+  const rootSpecs = own.dependencies.filter((spec) => roots.has(spec.split(' ')[0]))
+
+  const entries = manifest.dependencies
+    .filter((entry) => roots.has(entry.name))
+    .map((entry) => `[${entry.table}] ${entry.text}`)
+    .sort()
+  const digest = (lines) => createHash('sha256').update(lines.join('\n'), 'utf8').digest('hex')
+  return {
+    roots: [...roots].sort(),
+    manifestSha256: digest([...manifest.shared, ...entries]),
+    lockSha256: digest(lockClosure(packages, rootSpecs))
+  }
 }
 
 function componentPayload(component, inputs, fileDigests) {
@@ -118,6 +304,13 @@ export async function generateComponentIdentities({ root = process.cwd(), inputs
 
   for (const component of COMPONENTS) {
     const payload = componentPayload(component, source, fileDigests)
+    if (source.cargo?.scopedComponents?.includes(component)) {
+      payload.cargo = await scopedCargoMaterial(
+        normalizedRoot,
+        source.cargo,
+        source.components[component]
+      )
+    }
     const digest = createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')
     components[component] = {
       buildId: `termul-${component}-v${ID_SCHEMA_VERSION}-sha256:${digest}`
@@ -138,15 +331,82 @@ export async function generateComponentIdentities({ root = process.cwd(), inputs
   }
 }
 
+/**
+ * Why each component's identity differs between two `generateComponentIdentities`
+ * results: the input files added, removed or modified, and for scoped Cores
+ * the Cargo dependency roots and material that moved. Release logs print this
+ * so an unexpected Core replacement names its cause.
+ */
+export function explainIdentityChange(previous, current) {
+  const lines = []
+  for (const component of COMPONENTS) {
+    if (previous.components[component]?.buildId === current.components[component].buildId) {
+      lines.push(`${component}: unchanged`)
+      continue
+    }
+    lines.push(`${component}: changed`)
+    const before = new Map(
+      (previous.payloads?.[component]?.files ?? []).map((file) => [file.path, file.sha256])
+    )
+    const after = new Map(current.payloads[component].files.map((file) => [file.path, file.sha256]))
+    for (const [path, sha256] of after) {
+      if (!before.has(path)) lines.push(`  + ${path}`)
+      else if (before.get(path) !== sha256) lines.push(`  ~ ${path}`)
+    }
+    for (const path of before.keys()) if (!after.has(path)) lines.push(`  - ${path}`)
+
+    const oldCargo = previous.payloads?.[component]?.cargo
+    const newCargo = current.payloads[component].cargo
+    if (oldCargo || newCargo) {
+      const oldRoots = new Set(oldCargo?.roots ?? [])
+      const newRoots = new Set(newCargo?.roots ?? [])
+      for (const name of newRoots)
+        if (!oldRoots.has(name)) lines.push(`  + cargo dependency ${name}`)
+      for (const name of oldRoots)
+        if (!newRoots.has(name)) lines.push(`  - cargo dependency ${name}`)
+      if (oldCargo?.manifestSha256 !== newCargo?.manifestSha256) {
+        lines.push('  ~ Cargo.toml (scoped part)')
+      }
+      if (oldCargo?.lockSha256 !== newCargo?.lockSha256) lines.push('  ~ Cargo.lock (scoped part)')
+    }
+  }
+  return lines
+}
+
+/** Identities of `revision`, computed from its own tree and its own input list. */
+async function identitiesAtRevision(revision) {
+  const directory = await mkdtemp(join(tmpdir(), 'se-component-identity-'))
+  try {
+    const archive = spawnSync('git', ['archive', '--format=tar', revision], {
+      maxBuffer: 1024 * 1024 * 1024
+    })
+    if (archive.status !== 0) {
+      throw new Error(`git archive ${revision} failed: ${archive.stderr.toString().trim()}`)
+    }
+    const extract = spawnSync('tar', ['-x', '-C', directory], { input: archive.stdout })
+    if (extract.status !== 0) throw new Error(`tar failed: ${extract.stderr.toString().trim()}`)
+    const inputs = JSON.parse(
+      await readFile(join(directory, 'scripts/release/component-build-inputs.json'), 'utf8')
+    )
+    return await generateComponentIdentities({ root: directory, inputs })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
 async function runCli(argv) {
   let inputsPath = DEFAULT_INPUTS
   let outputPath = null
+  let explainRevision = null
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--inputs') inputsPath = resolve(argv[++index])
     else if (argument === '--output') outputPath = resolve(argv[++index])
+    else if (argument === '--explain-against') explainRevision = argv[++index]
     else if (argument === '--help') {
-      process.stdout.write('Usage: component-build-id.mjs [--inputs <path>] [--output <path>]\n')
+      process.stdout.write(
+        'Usage: component-build-id.mjs [--inputs <path>] [--output <path>] [--explain-against <git-rev>]\n'
+      )
       return
     } else throw new Error(`Unknown argument: ${argument}`)
   }
@@ -155,6 +415,13 @@ async function runCli(argv) {
     root: process.cwd(),
     inputs: JSON.parse(await readFile(inputsPath, 'utf8'))
   })
+  if (explainRevision) {
+    const previous = await identitiesAtRevision(explainRevision)
+    process.stdout.write(
+      `Component identity changes since ${explainRevision}:\n${explainIdentityChange(previous, result).join('\n')}\n`
+    )
+    return
+  }
   const serialized = `${JSON.stringify(result, null, 2)}\n`
   if (outputPath) await writeFile(outputPath, serialized)
   else process.stdout.write(serialized)
