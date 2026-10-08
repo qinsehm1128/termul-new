@@ -29,6 +29,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::conversation::ConversationId;
@@ -38,6 +39,7 @@ use crate::trackers::TerminalDisplayMode;
 use crate::web::auth::{
     auth_error_response, RemoteAccessAuthority, RemoteAuthError, RemoteCapability, RemotePrincipal,
 };
+use crate::web::upgraded_connections::{UpgradedConnectionKind, UpgradedConnectionRegistry};
 use crate::web::ws::AppState;
 
 const MAX_RECONNECT_FRAMES: usize = 64;
@@ -180,6 +182,7 @@ async fn core_claim_generation(
 pub async fn terminal_ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    registry: Option<Extension<Arc<UpgradedConnectionRegistry>>>,
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
@@ -213,8 +216,26 @@ pub async fn terminal_ws_upgrade(
         binary_output,
         "terminal WebSocket output protocol selected"
     );
-    ws.on_upgrade(move |socket| run(socket, state, authority, admitted, peer_ip, binary_output))
-        .into_response()
+    let registry = registry.map_or_else(UpgradedConnectionRegistry::global, |Extension(r)| r);
+    ws.on_upgrade(move |socket| async move {
+        // Registered only once upgraded, so a rejected upgrade leaves nothing
+        // behind; refused outright once the host has begun shutting down.
+        let Some(ticket) = registry.admit(UpgradedConnectionKind::Terminal) else {
+            return;
+        };
+        let cancel = ticket.cancel_token();
+        run(
+            socket,
+            state,
+            authority,
+            admitted,
+            peer_ip,
+            binary_output,
+            cancel,
+        )
+        .await;
+    })
+    .into_response()
 }
 
 fn supports_binary_subprotocol(headers: &HeaderMap) -> bool {
@@ -329,6 +350,7 @@ async fn run(
     mut principal: Option<RemotePrincipal>,
     peer: IpAddr,
     binary_output: bool,
+    cancel: CancellationToken,
 ) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
@@ -377,6 +399,15 @@ async fn run(
             break;
         }
         tokio::select! {
+            () = cancel.cancelled() => {
+                info!(
+                    target: "se_manager::web::terminal_ws",
+                    lifecycle_phase = "host_shutdown",
+                    stable_code = "OK",
+                    "terminal WebSocket closing for host shutdown"
+                );
+                break;
+            }
             changed = generation_rx.changed() => {
                 if changed.is_err() || principal_generation_mismatch(&authority, principal.as_ref()) {
                     info!(
@@ -3139,5 +3170,127 @@ mod tests {
         );
 
         state.pty.terminate(&terminal_id).await.unwrap();
+    }
+
+    mod upgraded_connection_shutdown {
+        use super::*;
+        use crate::web::auth::IngressProvenance;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        const ORIGIN: &str = "https://terminal.example.test";
+
+        /// Serve both upgrade routes on loopback, admitting into `registry`.
+        async fn serve(registry: Arc<UpgradedConnectionRegistry>) -> SocketAddr {
+            let app = axum::Router::new()
+                .route("/terminal/ws", axum::routing::get(terminal_ws_upgrade))
+                .route("/ws", axum::routing::get(crate::web::ws::ws_upgrade))
+                .with_state(terminal_test_state())
+                .layer(Extension(IngressProvenance::LocalOperator))
+                .layer(Extension(terminal_authority()))
+                .layer(Extension(registry));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await
+            });
+            addr
+        }
+
+        type Client = tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >;
+
+        async fn connect(addr: SocketAddr, path: &str, origin: &str) -> Result<Client, String> {
+            let mut request = format!("ws://{addr}{path}").into_client_request().unwrap();
+            request
+                .headers_mut()
+                .insert(header::ORIGIN, origin.parse().unwrap());
+            tokio_tungstenite::connect_async(request)
+                .await
+                .map(|(client, _)| client)
+                .map_err(|error| error.to_string())
+        }
+
+        async fn wait_for_active(registry: &UpgradedConnectionRegistry, active: u64) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            while registry.receipt().active != active {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "registry stayed at {} active, expected {active}",
+                    registry.receipt().active
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+
+        /// The server ended the socket: the stream closes instead of idling.
+        async fn assert_closed_by_server(client: &mut Client) {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    match client.next().await {
+                        None | Some(Err(_)) => return,
+                        Some(Ok(message)) if message.is_close() => return,
+                        Some(Ok(_)) => continue,
+                    }
+                }
+            })
+            .await;
+            assert!(next.is_ok(), "the server left the socket open");
+        }
+
+        #[tokio::test]
+        async fn shutdown_closes_live_terminal_and_acp_sockets_before_join_returns() {
+            let registry = Arc::new(UpgradedConnectionRegistry::new());
+            let addr = serve(Arc::clone(&registry)).await;
+            let mut terminal = connect(addr, "/terminal/ws", ORIGIN).await.unwrap();
+            let mut acp = connect(addr, "/ws", ORIGIN).await.unwrap();
+            wait_for_active(&registry, 2).await;
+
+            let receipt = registry.join_all(std::time::Duration::from_secs(5)).await;
+
+            assert_eq!(receipt.active, 0);
+            assert_eq!(receipt.cancelled, 2);
+            assert_eq!(receipt.timed_out, 0);
+            assert_closed_by_server(&mut terminal).await;
+            assert_closed_by_server(&mut acp).await;
+        }
+
+        #[tokio::test]
+        async fn a_closed_or_rejected_terminal_socket_leaves_no_registration() {
+            let registry = Arc::new(UpgradedConnectionRegistry::new());
+            let addr = serve(Arc::clone(&registry)).await;
+
+            let mut terminal = connect(addr, "/terminal/ws", ORIGIN).await.unwrap();
+            wait_for_active(&registry, 1).await;
+            terminal.close(None).await.unwrap();
+            wait_for_active(&registry, 0).await;
+
+            assert!(connect(addr, "/terminal/ws", "https://evil.example.test")
+                .await
+                .is_err());
+            assert_eq!(registry.receipt().active, 0);
+        }
+
+        #[tokio::test]
+        async fn no_socket_is_served_once_shutdown_has_begun() {
+            let registry = Arc::new(UpgradedConnectionRegistry::new());
+            let addr = serve(Arc::clone(&registry)).await;
+            let _ = registry
+                .join_all(std::time::Duration::from_millis(10))
+                .await;
+
+            let mut terminal = connect(addr, "/terminal/ws", ORIGIN).await.unwrap();
+            let mut acp = connect(addr, "/ws", ORIGIN).await.unwrap();
+
+            assert_closed_by_server(&mut terminal).await;
+            assert_closed_by_server(&mut acp).await;
+            let receipt = registry.receipt();
+            assert_eq!(receipt.active, 0);
+            assert_eq!(receipt.failed, 2);
+        }
     }
 }

@@ -245,6 +245,9 @@ se-pty = { path = "crates/se-pty", features = ["test-support"] }
 se-agent-session = { path = "crates/se-agent-session", features = ["test-support"] }
 tauri = { version = "2.0", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
+# A real WebSocket client for the upgraded-connection shutdown tests; the same
+# version axum's `ws` feature already pulls in.
+tokio-tungstenite = "0.29"
 syn = { version = "2", features = ["full", "visit"] }
 # Swap/rollback file tests in `server_update` use a temp dir so they never
 # touch the real binary path.
