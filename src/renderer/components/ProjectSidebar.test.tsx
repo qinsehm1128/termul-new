@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import { worktreeApi } from '@/lib/api'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -1426,5 +1427,208 @@ describe('ProjectSidebar ordering', () => {
     await waitFor(() => {
       expect(useAppSettingsStore.getState().settings.projectSortMode).toBe('manual')
     })
+  })
+})
+
+describe('ProjectSidebar multi-select delete', () => {
+  const threeProjects: Project[] = [
+    { id: '1', name: 'Project One', color: 'blue' },
+    { id: '2', name: 'Project Two', color: 'green' },
+    { id: '3', name: 'Project Three', color: 'red' }
+  ]
+  const row = (id: string): HTMLElement => {
+    const element = screen.getByTestId(`project-item-${id}`).querySelector('[data-project-row]')
+    if (!(element instanceof HTMLElement)) throw new Error(`no row for ${id}`)
+    return element
+  }
+  const selectedIds = (): string[] =>
+    ['1', '2', '3'].filter((id) => row(id).hasAttribute('data-selected'))
+
+  it('Cmd-click picks projects without switching to them', () => {
+    const onSelectProject = vi.fn()
+    renderWithRouter({ projects: threeProjects, onSelectProject })
+
+    fireEvent.click(row('2'), { metaKey: true })
+    fireEvent.click(row('3'), { metaKey: true })
+
+    expect(selectedIds()).toEqual(['2', '3'])
+    expect(onSelectProject).not.toHaveBeenCalled()
+
+    fireEvent.click(row('2'), { metaKey: true })
+    expect(selectedIds()).toEqual(['3'])
+  })
+
+  it('Shift-click selects the range from the last clicked project', () => {
+    renderWithRouter({ projects: threeProjects })
+
+    fireEvent.click(row('1'))
+    fireEvent.click(row('3'), { shiftKey: true })
+
+    expect(selectedIds()).toEqual(['1', '2', '3'])
+  })
+
+  it('a plain click leaves selection mode and opens that project', () => {
+    const onSelectProject = vi.fn()
+    renderWithRouter({ projects: threeProjects, onSelectProject })
+
+    fireEvent.click(row('2'), { metaKey: true })
+    fireEvent.click(row('3'))
+
+    expect(selectedIds()).toEqual([])
+    expect(onSelectProject).toHaveBeenCalledWith('3')
+  })
+
+  it('deletes every selected project after one confirmation', async () => {
+    const onDeleteProject = vi.fn()
+    renderWithRouter({ projects: threeProjects, onDeleteProject })
+
+    fireEvent.click(row('2'), { metaKey: true })
+    fireEvent.click(row('3'), { metaKey: true })
+    fireEvent.contextMenu(screen.getByText('Project Two'))
+    fireEvent.click(screen.getByText('Delete 2 Selected Projects'))
+
+    await waitFor(() => expect(screen.getByText('Delete 2 Projects')).toBeInTheDocument())
+    expect(screen.getByText(/Project Two, Project Three/)).toBeInTheDocument()
+    const confirmButtons = screen.getAllByText('Delete')
+    fireEvent.click(confirmButtons[confirmButtons.length - 1])
+
+    expect(onDeleteProject.mock.calls).toEqual([['2'], ['3']])
+    expect(selectedIds()).toEqual([])
+  })
+
+  it('right-clicking outside the selection shows that row’s own menu', () => {
+    renderWithRouter({ projects: threeProjects })
+
+    fireEvent.click(row('2'), { metaKey: true })
+    fireEvent.click(row('3'), { metaKey: true })
+    fireEvent.contextMenu(screen.getByText('Project One'))
+
+    expect(screen.queryByText('Delete 2 Selected Projects')).not.toBeInTheDocument()
+    expect(screen.getByText('Delete')).toBeInTheDocument()
+  })
+
+  it('the delete key asks to delete the selection only from a project row', async () => {
+    renderWithRouter({ projects: threeProjects })
+
+    fireEvent.click(row('2'), { metaKey: true })
+    fireEvent.click(row('3'), { metaKey: true })
+    fireEvent.keyDown(document.body, { key: 'Backspace' })
+    expect(screen.queryByText('Delete 2 Projects')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(row('3'), { key: 'Backspace' })
+    await waitFor(() => expect(screen.getByText('Delete 2 Projects')).toBeInTheDocument())
+  })
+
+  it('drops a project from the selection once it leaves the list', () => {
+    const { rerender } = renderWithRouter({ projects: threeProjects })
+
+    fireEvent.click(row('2'), { metaKey: true })
+    fireEvent.click(row('3'), { metaKey: true })
+    rerender(
+      <MemoryRouter>
+        <ProjectSidebar
+          {...defaultProps}
+          projects={threeProjects.map((p) => (p.id === '3' ? { ...p, isArchived: true } : p))}
+        />
+      </MemoryRouter>
+    )
+    fireEvent.contextMenu(screen.getByText('Project Two'))
+
+    expect(screen.queryByText(/Selected Projects/)).not.toBeInTheDocument()
+  })
+
+  it('Escape clears the selection', () => {
+    renderWithRouter({ projects: threeProjects })
+
+    fireEvent.click(row('2'), { metaKey: true })
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(selectedIds()).toEqual([])
+  })
+})
+
+describe('ProjectSidebar worktree menu', () => {
+  const gitProject: Project = {
+    id: '1',
+    name: 'Repo',
+    color: 'blue',
+    path: '/repo',
+    isGitRepo: true,
+    worktrees: [
+      { id: 'main', name: 'repo', branch: 'main', path: '/repo', createdAt: '' },
+      {
+        id: 'w1',
+        name: 'feature-x',
+        branch: 'feat/x',
+        path: '/repo/.se-manager/worktrees/feature-x/',
+        createdAt: ''
+      }
+    ]
+  }
+  const plainProject: Project = { id: '2', name: 'Plain', color: 'green', path: '/plain' }
+
+  function openWorktreeMenu(projectId: string): void {
+    const trigger = screen.getByTestId(`project-worktree-menu-${projectId}`)
+    // Radix opens on pointerdown, not click.
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+    fireEvent.click(trigger)
+  }
+
+  it('is offered for git projects only, and only where worktree terminals can open', () => {
+    const { unmount } = renderWithRouter({
+      projects: [gitProject, plainProject],
+      onOpenWorktreeTerminal: vi.fn()
+    })
+    expect(screen.getByTestId('project-worktree-menu-1')).toBeInTheDocument()
+    expect(screen.queryByTestId('project-worktree-menu-2')).not.toBeInTheDocument()
+    unmount()
+
+    renderWithRouter({ projects: [gitProject, plainProject] })
+    expect(screen.queryByTestId('project-worktree-menu-1')).not.toBeInTheDocument()
+  })
+
+  it('lists the linked worktrees under the main checkout', async () => {
+    renderWithRouter({ projects: [gitProject], onOpenWorktreeTerminal: vi.fn() })
+
+    openWorktreeMenu('1')
+
+    expect(await screen.findByRole('menuitem', { name: /Main checkout/ })).toHaveTextContent('main')
+    expect(screen.getByRole('menuitem', { name: /feature-x/ })).toHaveTextContent('feat/x')
+    // `git worktree list` includes the main checkout itself; it is not a second row.
+    expect(screen.queryByRole('menuitem', { name: /^repo/ })).not.toBeInTheDocument()
+  })
+
+  it('opens a terminal in the picked worktree without selecting the row', async () => {
+    const onOpenWorktreeTerminal = vi.fn()
+    const onSelectProject = vi.fn()
+    renderWithRouter({ projects: [gitProject], onOpenWorktreeTerminal, onSelectProject })
+
+    openWorktreeMenu('1')
+    fireEvent.click(await screen.findByRole('menuitem', { name: /feature-x/ }))
+    expect(onOpenWorktreeTerminal).toHaveBeenLastCalledWith('1', 'w1')
+
+    openWorktreeMenu('1')
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Main checkout/ }))
+    expect(onOpenWorktreeTerminal).toHaveBeenLastCalledWith('1', null)
+    expect(onSelectProject).not.toHaveBeenCalled()
+  })
+
+  it('looks for worktrees made outside the app when opened', async () => {
+    useProjectStore.setState({ projects: [gitProject] })
+    vi.mocked(worktreeApi.list).mockClear()
+    renderWithRouter({ projects: [gitProject], onOpenWorktreeTerminal: vi.fn() })
+
+    openWorktreeMenu('1')
+
+    await waitFor(() => expect(worktreeApi.list).toHaveBeenCalledWith('/repo'))
+  })
+
+  it('starts the new-worktree flow from the menu', async () => {
+    renderWithRouter({ projects: [gitProject], onOpenWorktreeTerminal: vi.fn() })
+
+    openWorktreeMenu('1')
+    fireEvent.click(await screen.findByRole('menuitem', { name: /New Worktree/ }))
+
+    expect(await screen.findByText('New Worktree')).toBeInTheDocument()
   })
 })
