@@ -4,13 +4,13 @@
 //! host deadline: stop admission, revoke generations, cancel and await, then
 //! stop producers and drain.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,9 +30,7 @@ pub struct UpgradedConnectionReceipt {
 struct RegisteredConnection {
     id: Uuid,
     kind: UpgradedConnectionKind,
-    cancel: Arc<Notify>,
-    cancelled: Arc<AtomicBool>,
-    join: Option<JoinHandle<()>>,
+    cancel: CancellationToken,
 }
 
 struct RegistryInner {
@@ -46,6 +44,31 @@ struct RegistryInner {
 pub struct UpgradedConnectionRegistry {
     inner: Mutex<RegistryInner>,
     generation: AtomicU64,
+    /// Signalled whenever a connection completes, so `join_all` can wait.
+    completed: Notify,
+}
+
+/// One admitted upgraded connection. The connection task holds it for its
+/// whole life and stops when its token is cancelled; dropping it, however the
+/// task ends, completes the connection.
+pub struct UpgradedConnectionTicket {
+    registry: Arc<UpgradedConnectionRegistry>,
+    id: Uuid,
+    cancel: CancellationToken,
+}
+
+impl UpgradedConnectionTicket {
+    /// Cancelled when the host shuts down; the connection must then end.
+    #[must_use]
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+}
+
+impl Drop for UpgradedConnectionTicket {
+    fn drop(&mut self) {
+        self.registry.complete(self.id, false);
+    }
 }
 
 impl Default for UpgradedConnectionRegistry {
@@ -66,6 +89,7 @@ impl UpgradedConnectionRegistry {
                 admitting: true,
             }),
             generation: AtomicU64::new(1),
+            completed: Notify::new(),
         }
     }
 
@@ -93,11 +117,12 @@ impl UpgradedConnectionRegistry {
         self.generation.load(Ordering::Acquire)
     }
 
-    pub fn register(
-        &self,
+    /// Admit an upgraded connection, or `None` once the host has stopped
+    /// admission; the caller must then drop the socket without serving it.
+    pub fn admit(
+        self: &Arc<Self>,
         kind: UpgradedConnectionKind,
-        join: Option<JoinHandle<()>>,
-    ) -> Option<Uuid> {
+    ) -> Option<UpgradedConnectionTicket> {
         let mut inner = self.inner.lock();
         if !inner.admitting {
             inner.failed = inner.failed.saturating_add(1);
@@ -109,14 +134,17 @@ impl UpgradedConnectionRegistry {
             return None;
         }
         let id = Uuid::new_v4();
+        let cancel = CancellationToken::new();
         inner.connections.push(RegisteredConnection {
             id,
             kind,
-            cancel: Arc::new(Notify::new()),
-            cancelled: Arc::new(AtomicBool::new(false)),
-            join,
+            cancel: cancel.clone(),
         });
-        Some(id)
+        Some(UpgradedConnectionTicket {
+            registry: Arc::clone(self),
+            id,
+            cancel,
+        })
     }
 
     pub fn cancel(&self, id: Uuid) -> bool {
@@ -128,13 +156,10 @@ impl UpgradedConnectionRegistry {
         else {
             return false;
         };
-        if connection.cancelled.swap(true, Ordering::AcqRel) {
+        if connection.cancel.is_cancelled() {
             return true;
         }
-        connection.cancel.notify_waiters();
-        if let Some(join) = connection.join.as_ref() {
-            join.abort();
-        }
+        connection.cancel.cancel();
         inner.cancelled = inner.cancelled.saturating_add(1);
         true
     }
@@ -174,21 +199,8 @@ impl UpgradedConnectionRegistry {
         if failed {
             inner.failed = inner.failed.saturating_add(1);
         }
-    }
-
-    pub fn mark_timed_out(&self, id: Uuid) {
-        let mut inner = self.inner.lock();
-        inner.connections.retain(|connection| connection.id != id);
-        inner.timed_out = inner.timed_out.saturating_add(1);
-    }
-
-    pub fn cancel_token(&self, id: Uuid) -> Option<Arc<Notify>> {
-        self.inner
-            .lock()
-            .connections
-            .iter()
-            .find(|connection| connection.id == id)
-            .map(|connection| Arc::clone(&connection.cancel))
+        drop(inner);
+        self.completed.notify_waiters();
     }
 
     #[must_use]
@@ -202,35 +214,32 @@ impl UpgradedConnectionRegistry {
         }
     }
 
+    /// Stop admission, cancel every connection and wait, up to `deadline`, for
+    /// each to complete. Connections still open at the deadline stay counted
+    /// as active and are added to `timed_out`.
     pub async fn join_all(&self, deadline: Duration) -> UpgradedConnectionReceipt {
         self.stop_admission();
         self.revoke_generations();
         self.cancel_all();
-        let handles: Vec<JoinHandle<()>> = {
-            let mut inner = self.inner.lock();
-            inner
-                .connections
-                .iter_mut()
-                .filter_map(|connection| connection.join.take())
-                .collect()
-        };
-        let join = async {
-            for handle in handles {
-                let _ = handle.await;
+        let drained = async {
+            loop {
+                let notified = self.completed.notified();
+                tokio::pin!(notified);
+                // Register before checking, so a completion in between is not missed.
+                notified.as_mut().enable();
+                if self.inner.lock().connections.is_empty() {
+                    return;
+                }
+                notified.await;
             }
         };
-        if tokio::time::timeout(deadline, join).await.is_err() {
+        if tokio::time::timeout(deadline, drained).await.is_err() {
             let mut inner = self.inner.lock();
-            inner.timed_out = inner.timed_out.saturating_add(1);
+            inner.timed_out = inner
+                .timed_out
+                .saturating_add(inner.connections.len() as u64);
         }
-        let mut inner = self.inner.lock();
-        inner.connections.clear();
-        UpgradedConnectionReceipt {
-            active: 0,
-            failed: inner.failed,
-            timed_out: inner.timed_out,
-            cancelled: inner.cancelled,
-        }
+        self.receipt()
     }
 }
 
@@ -238,35 +247,71 @@ impl UpgradedConnectionRegistry {
 mod tests {
     use super::*;
 
+    /// A connection task that ends when its ticket is cancelled.
+    fn cooperative(ticket: UpgradedConnectionTicket) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            ticket.cancel_token().cancelled().await;
+            drop(ticket);
+        })
+    }
+
     #[tokio::test]
-    async fn registry_tracks_cancel_and_counts_upgraded_connections() {
-        let registry = UpgradedConnectionRegistry::new();
-        let acp = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        });
-        let terminal = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        });
-        let acp_id = registry
-            .register(UpgradedConnectionKind::Acp, Some(acp))
-            .expect("acp admitted");
-        let terminal_id = registry
-            .register(UpgradedConnectionKind::Terminal, Some(terminal))
-            .expect("terminal admitted");
+    async fn a_ticket_counts_while_held_and_completes_when_dropped() {
+        let registry = Arc::new(UpgradedConnectionRegistry::new());
+        let acp = registry
+            .admit(UpgradedConnectionKind::Acp)
+            .expect("admitted");
+        let terminal = registry
+            .admit(UpgradedConnectionKind::Terminal)
+            .expect("admitted");
         assert_eq!(registry.receipt().active, 2);
-        assert!(registry.cancel(acp_id));
-        assert_eq!(registry.receipt().cancelled, 1);
-        registry.complete(terminal_id, false);
-        let receipt = registry.receipt();
+        drop(terminal);
+        assert_eq!(registry.receipt().active, 1);
+        drop(acp);
+        assert_eq!(registry.receipt().active, 0);
+    }
+
+    #[tokio::test]
+    async fn join_all_cancels_and_waits_for_every_connection_to_end() {
+        let registry = Arc::new(UpgradedConnectionRegistry::new());
+        let tasks = [
+            cooperative(registry.admit(UpgradedConnectionKind::Acp).unwrap()),
+            cooperative(registry.admit(UpgradedConnectionKind::Terminal).unwrap()),
+        ];
+
+        let receipt = registry.join_all(Duration::from_secs(2)).await;
+
+        assert_eq!(receipt.active, 0);
+        assert_eq!(receipt.cancelled, 2);
+        assert_eq!(receipt.timed_out, 0);
+        for task in tasks {
+            assert!(
+                task.is_finished(),
+                "join_all returned before the task ended"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_ignores_cancel_is_reported_still_active() {
+        let registry = Arc::new(UpgradedConnectionRegistry::new());
+        let stuck = registry.admit(UpgradedConnectionKind::Terminal).unwrap();
+
+        let receipt = registry.join_all(Duration::from_millis(50)).await;
+
         assert_eq!(receipt.active, 1);
-        assert_eq!(receipt.failed, 0);
-        registry.stop_admission();
-        assert!(registry
-            .register(UpgradedConnectionKind::Acp, None)
-            .is_none());
+        assert_eq!(receipt.timed_out, 1);
+        drop(stuck);
+        assert_eq!(registry.receipt().active, 0);
+    }
+
+    #[tokio::test]
+    async fn no_connection_is_admitted_after_shutdown_begins() {
+        let registry = Arc::new(UpgradedConnectionRegistry::new());
+        let _ = registry.join_all(Duration::from_millis(10)).await;
+
+        assert!(registry.admit(UpgradedConnectionKind::Acp).is_none());
         assert_eq!(registry.receipt().failed, 1);
-        let joined = registry.join_all(Duration::from_secs(1)).await;
-        assert_eq!(joined.active, 0);
-        assert!(joined.cancelled >= 1);
+        assert_eq!(registry.receipt().active, 0);
     }
 }

@@ -40,6 +40,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, Notify, OwnedSemaphorePermit, Semaphore};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::acp::config::{AgentConfig, PermissionPolicy};
@@ -699,6 +700,7 @@ fn reauthentication_required_event() -> SequencedEvent {
 pub async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    registry: Option<Extension<Arc<UpgradedConnectionRegistry>>>,
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
     Extension(provenance): Extension<IngressProvenance>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -726,13 +728,14 @@ pub async fn ws_upgrade(
         "WebSocket upgrade Origin accepted"
     );
     let _ = provenance;
+    let registry = registry.map_or_else(UpgradedConnectionRegistry::global, |Extension(r)| r);
     ws.on_upgrade(move |socket| async move {
-        let registry = UpgradedConnectionRegistry::global();
-        let id = registry.register(UpgradedConnectionKind::Acp, None);
-        run_relay(socket, state, authority, peer).await;
-        if let Some(id) = id {
-            registry.complete(id, false);
-        }
+        // Admission closes when the host shuts down; a socket that arrives
+        // after that is dropped rather than relayed past the shutdown join.
+        let Some(ticket) = registry.admit(UpgradedConnectionKind::Acp) else {
+            return;
+        };
+        run_relay(socket, state, authority, peer, ticket.cancel_token()).await;
     })
     .into_response()
 }
@@ -861,6 +864,7 @@ async fn run_relay(
     state: AppState,
     authority: Arc<RemoteAccessAuthority>,
     peer: SocketAddr,
+    cancel: CancellationToken,
 ) {
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = outbound_channel();
@@ -1122,6 +1126,13 @@ async fn run_relay(
         _ = &mut read_task => {
             write_task.abort();
             // Write is the loser — await its abort to avoid orphaning.
+            let _ = write_task.await;
+        }
+        // Host shutdown: end both halves so the shutdown join sees it gone.
+        () = cancel.cancelled() => {
+            read_task.abort();
+            write_task.abort();
+            let _ = read_task.await;
             let _ = write_task.await;
         }
     }

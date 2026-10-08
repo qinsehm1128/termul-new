@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, ConnectInfo, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    extract::{ConnectInfo, Request},
+    http::{header, StatusCode},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -48,7 +48,6 @@ use crate::web::sink::WsRelaySink;
 use crate::web::skills_api;
 use crate::web::store::WebStore;
 use crate::web::terminal_ws::terminal_ws_upgrade;
-use crate::web::upgraded_connections::{UpgradedConnectionKind, UpgradedConnectionRegistry};
 use crate::web::workspace_api;
 use crate::web::worktree_api;
 use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
@@ -93,7 +92,7 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
         RemoteRouteClass::AcpWebSocket,
     ))
     .merge(classified_routes(
-        Router::<AppState>::new().route("/terminal/ws", get(terminal_ws_upgrade_registered)),
+        Router::<AppState>::new().route("/terminal/ws", get(terminal_ws_upgrade)),
         RemoteRouteClass::TerminalWebSocket,
     ))
     .merge(classified_routes(
@@ -530,22 +529,6 @@ pub fn router_with_static(
         })
         .layer(Extension(IngressProvenance::LocalOperator))
         .layer(Extension(Arc::new(RemoteAccessAuthority::unconfigured())))
-}
-
-/// Register every upgraded terminal socket in the host-owned registry.
-/// Host-controlled IngressProvenance is injected by the router layer and is
-/// not reconstructed from the TCP peer.
-async fn terminal_ws_upgrade_registered(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-    Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
-    Extension(_provenance): Extension<IngressProvenance>,
-    peer: axum::extract::ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let registry = UpgradedConnectionRegistry::global();
-    let _ticket = registry.register(UpgradedConnectionKind::Terminal, None);
-    terminal_ws_upgrade(ws, State(state), Extension(authority), peer, headers).await
 }
 
 /// Liveness probe. Loopback (and tests without ConnectInfo) stay open so the

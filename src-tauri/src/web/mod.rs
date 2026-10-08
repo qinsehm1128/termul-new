@@ -159,6 +159,7 @@ async fn shutdown_standalone_resources_until(
     acp: &AcpManager,
     pty: &PtyManager,
     ws_relay: &WsRelaySink,
+    connections: &crate::web::upgraded_connections::UpgradedConnectionRegistry,
     deadline: tokio::time::Instant,
 ) -> Result<StandaloneShutdownReceipt, StandaloneShutdownError> {
     let mut failures = Vec::new();
@@ -167,11 +168,8 @@ async fn shutdown_standalone_resources_until(
     crate::host_admission::HostAdmission::global()
         .drain_until(deadline)
         .await;
-    let registry = crate::web::upgraded_connections::UpgradedConnectionRegistry::global();
-    registry.stop_admission();
-    let _ = registry.revoke_generations();
     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-    let connection_receipt = registry.join_all(remaining).await;
+    let connection_receipt = connections.join_all(remaining).await;
     info!(
         target: "se_manager::web::shutdown",
         stable_code = "OK",
@@ -360,7 +358,8 @@ pub async fn serve(
 
     let serve_result = handle.await;
     let deadline = tokio::time::Instant::now() + crate::conversation::DEFAULT_DRAIN_TIMEOUT;
-    shutdown_standalone_resources_until(&acp, &pty, &ws_relay, deadline).await?;
+    let connections = crate::web::upgraded_connections::UpgradedConnectionRegistry::global();
+    shutdown_standalone_resources_until(&acp, &pty, &ws_relay, &connections, deadline).await?;
 
     match serve_result {
         Ok(()) => {
@@ -709,6 +708,7 @@ mod tests {
             &acp,
             &pty,
             &relay,
+            &crate::web::upgraded_connections::UpgradedConnectionRegistry::new(),
             tokio::time::Instant::now() + Duration::from_secs(5),
         )
         .await
@@ -782,6 +782,7 @@ mod tests {
             &acp,
             &pty,
             &relay,
+            &crate::web::upgraded_connections::UpgradedConnectionRegistry::new(),
             tokio::time::Instant::now() + Duration::from_secs(5),
         )
         .await
@@ -979,6 +980,7 @@ mod tests {
             &acp,
             &pty,
             &relay,
+            &crate::web::upgraded_connections::UpgradedConnectionRegistry::new(),
             tokio::time::Instant::now() + Duration::from_secs(5),
         )
         .await
@@ -992,14 +994,18 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_joins_upgraded_connections_under_host_deadline() {
-        let registry = crate::web::upgraded_connections::UpgradedConnectionRegistry::global();
-        let handle = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+        use crate::web::upgraded_connections::{
+            UpgradedConnectionKind, UpgradedConnectionRegistry,
+        };
+        let registry = Arc::new(UpgradedConnectionRegistry::new());
+        let ticket = registry
+            .admit(UpgradedConnectionKind::Acp)
+            .expect("admitted");
+        // A live socket: it only ends once the host cancels it.
+        let connection = tokio::spawn(async move {
+            ticket.cancel_token().cancelled().await;
+            drop(ticket);
         });
-        let _ = registry.register(
-            crate::web::upgraded_connections::UpgradedConnectionKind::Acp,
-            Some(handle),
-        );
         let pty = test_pty_manager();
         let acp = Arc::new(AcpManager::new(vec![]));
         let relay = Arc::new(WsRelaySink::new());
@@ -1007,6 +1013,7 @@ mod tests {
             &acp,
             &pty,
             &relay,
+            &registry,
             tokio::time::Instant::now() + Duration::from_secs(2),
         )
         .await;
@@ -1015,6 +1022,10 @@ mod tests {
             Err(error) => error.receipt,
         };
         assert_eq!(receipt.connections_active, 0);
+        assert!(
+            connection.is_finished(),
+            "shutdown returned while the socket ran"
+        );
     }
 
     #[tokio::test]
@@ -1035,6 +1046,7 @@ mod tests {
             &acp,
             &pty,
             &relay,
+            &crate::web::upgraded_connections::UpgradedConnectionRegistry::new(),
             started + Duration::from_millis(50),
         )
         .await;
