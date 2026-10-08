@@ -67,15 +67,31 @@ pub fn materialize_npx_config(mut config: AgentConfig) -> AgentConfig {
         return config;
     };
     let prefix = root().join(slug);
-    if let Some((command, args)) = resolve_local_launch(&prefix, &package, &extra_args) {
-        log::info!(
-            "[acp-npm] using local install package={} command={}",
+    if repair_bin_links(&prefix) {
+        if let Some((command, args)) = resolve_local_launch(&prefix, &package, &extra_args) {
+            log::info!(
+                "[acp-npm] using local install package={} command={}",
+                package,
+                command
+            );
+            config.command = command;
+            config.args = args;
+            return config;
+        }
+    }
+    // Whatever is left here is not a working install. Installing over it is not
+    // a repair: npm re-extracts the missing files but keeps the `.bin` links it
+    // finds, so the result is exactly the state `repair_bin_links` has to fix.
+    // Start from an empty prefix instead.
+    if prefix.exists() {
+        log::warn!(
+            "[acp-npm] discarding damaged local install package={} prefix={}",
             package,
-            command
+            prefix.display()
         );
-        config.command = command;
-        config.args = args;
-        return config;
+        if let Err(error) = std::fs::remove_dir_all(&prefix) {
+            log::warn!("[acp-npm] could not remove damaged prefix detail={error}");
+        }
     }
     match install_package(&prefix, &package) {
         Ok(()) => {
@@ -175,6 +191,47 @@ fn resolve_local_launch(
     let mut args = vec![bin.to_string_lossy().into_owned()];
     args.extend(extra_args.iter().cloned());
     Some((node, args))
+}
+
+/// Make every `node_modules/.bin` entry runnable again; `false` if one cannot be.
+///
+/// npm marks a bin target executable only when it creates the link. Files that
+/// went missing after install (macOS empties a temp dir in place) and were later
+/// re-extracted by `npm install` come back with the tarball's `0644` while the
+/// old link is kept, and the agent then fails to start with EACCES. Restoring
+/// the execute bit is the step npm skipped. A dangling entry has nothing to
+/// restore and means the install lost files. No `.bin` at all is fine: the
+/// launch then goes through `node <bin>`, which needs no execute bit.
+fn repair_bin_links(prefix: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(prefix.join("node_modules").join(".bin")) else {
+        return true;
+    };
+    entries
+        .flatten()
+        .all(|entry| ensure_runnable(&entry.path()))
+}
+
+#[cfg(unix)]
+fn ensure_runnable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    // `metadata` follows the link, so this is the target's mode, not the link's.
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    let mode = meta.permissions().mode();
+    if mode & 0o111 != 0 {
+        return true;
+    }
+    log::warn!("[acp-npm] restoring execute bit path={}", path.display());
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o111)).is_ok()
+}
+
+#[cfg(not(unix))]
+fn ensure_runnable(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn resolve_local_shim(prefix: &Path, spec: &str) -> Option<PathBuf> {
@@ -442,6 +499,17 @@ mod tests {
         std::env::remove_var("SE_ACP_NPM_ROOT");
         assert_eq!(next.command, shim.to_string_lossy());
         assert!(next.args.is_empty());
+        // Written without an execute bit, as a re-extracted npm file comes back.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&shim).unwrap().permissions().mode();
+            assert_ne!(
+                mode & 0o111,
+                0,
+                "the launch must not be handed a file it cannot exec"
+            );
+        }
     }
 
     #[test]
@@ -464,6 +532,43 @@ mod tests {
             next.args,
             vec!["-y".to_string(), "@zed-industries/codex-acp".to_string()]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_restores_execute_bit_npm_left_off() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let dist = temp.path().join("node_modules").join("pkg").join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        let target = dist.join("index.js");
+        std::fs::write(&target, "#!/usr/bin/env node\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let bin_dir = temp.path().join("node_modules").join(".bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::os::unix::fs::symlink("../pkg/dist/index.js", bin_dir.join("pkg")).unwrap();
+
+        assert!(repair_bin_links(temp.path()));
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_rejects_bin_link_whose_target_is_gone() {
+        let temp = tempfile::tempdir().unwrap();
+        let bin_dir = temp.path().join("node_modules").join(".bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::os::unix::fs::symlink("../pkg/dist/index.js", bin_dir.join("pkg")).unwrap();
+
+        assert!(!repair_bin_links(temp.path()));
+    }
+
+    #[test]
+    fn repair_accepts_install_without_bin_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("node_modules")).unwrap();
+        assert!(repair_bin_links(temp.path()));
     }
 
     #[test]

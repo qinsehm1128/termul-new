@@ -479,6 +479,11 @@ fn compose_acp_core(
     workspace_base: PathBuf,
     shutdown: watch::Sender<bool>,
 ) -> Result<AcpCoreState, CoreError> {
+    // This process spawns the ACP agents, and the desktop's own `set_root` call
+    // does not reach it. Without one the npm prefix falls back to the OS temp
+    // dir, where macOS deletes files nobody has opened for a few days and the
+    // agents are left half-installed.
+    crate::acp::npm_local::set_root(state_root.join("acp-npm-packages"));
     let bootstrap = ConversationBootstrap::run(
         crate::conversation_roots::desktop(state_root.clone(), workspace_base),
         MigrationHostMode::Desktop,
