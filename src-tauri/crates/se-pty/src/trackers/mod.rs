@@ -18,4 +18,4 @@ pub use git_tracker::{GitCommit, GitStatus, GitStatusDetail, GitTracker};
 pub use osc_title_tracker::OscTitleTracker;
 #[allow(unused_imports)]
 pub use terminal_events::TerminalStateSnapshot;
-pub use terminal_events::{TerminalDisplayMode, TerminalEvent, TerminalEventHub};
+pub use terminal_events::{DesktopEventSink, TerminalDisplayMode, TerminalEvent, TerminalEventHub};

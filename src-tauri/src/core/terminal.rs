@@ -381,7 +381,7 @@ pub(crate) fn list_terminal_statuses(pty: &PtyManager) -> Vec<TerminalStatus> {
 fn construct_pty_manager() -> Arc<PtyManager> {
     let events = TerminalEventHub::standalone();
     let cwd = Arc::new(CwdTracker::new(events.clone()));
-    let git = Arc::new(GitTracker::new(None, events.clone()));
+    let git = Arc::new(GitTracker::new(events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
     Arc::new(PtyManager::new(
         events,
