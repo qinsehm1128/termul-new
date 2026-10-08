@@ -471,7 +471,15 @@ fn qin_session(
 }
 
 fn qin_clients_map() -> Vec<QinClient> {
-    let Ok(output) = Command::new(crate::trackers::git_tracker::resolve_executable("qin-code"))
+    // The app's own PATH (from launchd) rarely has the user's bin dirs; look
+    // the command up on the login shell's PATH, as terminals do.
+    let mut env = HashMap::new();
+    crate::pty::env_refresh::apply_fresh_path(&mut env);
+    let mut command = Command::new("qin-code");
+    if let Some(path) = env.get("PATH") {
+        command.env("PATH", path);
+    }
+    let Ok(output) = command
         .args(["debug", "clients:map"])
         .stdin(std::process::Stdio::null())
         .output()
