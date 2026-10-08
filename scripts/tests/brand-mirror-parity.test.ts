@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 /**
- * `src/shared/brand.ts` and `src-tauri/src/brand.rs` hold the same two tables in
+ * `src/shared/brand.ts` and `src-tauri/crates/se-foundation/src/brand.rs` hold the same two tables in
  * two languages. Nothing kept them equal, and they drifted: `plan_fence` said
  * `termul-plan` in Rust while TypeScript — the side that actually writes the
  * fence — had already flipped to `se-plan`, and seven Rust-owned contracts
@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
  */
 
 const TS_SOURCE = readFileSync('src/shared/brand.ts', 'utf8')
-const RS_SOURCE = readFileSync('src-tauri/src/brand.rs', 'utf8')
+const RS_SOURCE = readFileSync('src-tauri/crates/se-foundation/src/brand.rs', 'utf8')
 
 function camelToSnake(name: string): string {
   return name.replace(/(?<!^)(?=[A-Z])/g, '_').toLowerCase()

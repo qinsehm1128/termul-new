@@ -94,7 +94,7 @@ const SCANNED_EXTENSIONS = new Set([
  */
 const NON_PARTICIPATING_FILES = new Set([
   'src/shared/brand.ts',
-  'src-tauri/src/brand.rs',
+  'src-tauri/crates/se-foundation/src/brand.rs',
   'scripts/tests/env-name-parity.test.ts'
 ])
 

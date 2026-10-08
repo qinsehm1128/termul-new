@@ -1,5 +1,6 @@
 //! Domain-free building blocks shared by the app and its Core crates.
 
+pub mod brand;
 pub mod durable_fs;
 pub mod host_admission;
 pub mod ids;

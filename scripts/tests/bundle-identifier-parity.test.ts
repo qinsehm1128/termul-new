@@ -37,7 +37,7 @@ const read = (relativePath: string): string => readFileSync(join(repoRoot, relat
 const BASE_CONFIG = 'src-tauri/tauri.conf.json'
 const PROD_CONFIG = 'src-tauri/tauri.conf.prod.json'
 const DEV_CONFIG = 'src-tauri/tauri.conf.dev.json'
-const RUST_BRAND = 'src-tauri/src/brand.rs'
+const RUST_BRAND = 'src-tauri/crates/se-foundation/src/brand.rs'
 const HOMEBREW = 'scripts/release/homebrew.sh'
 
 /** The one value Tauri turns into every per-user root. */

@@ -51,7 +51,6 @@
       "src-tauri/src/web/sink.rs",
       "src-tauri/src/web/permissions.rs",
       "src-tauri/src/web/project_registry.rs",
-      "src-tauri/src/brand.rs",
       "src-tauri/src/legacy_appdata.rs",
       "src-tauri/src/acp_registry_snapshot.rs",
       "src-tauri/src/agent_registry.rs",
@@ -65,8 +64,7 @@
       "src-tauri/src/quick_terminal.rs",
       "src-tauri/src/core/process.rs",
       "src-tauri/src/main.rs",
-      "src-tauri/src/logging.rs",
-      "src-tauri/src/brand.rs"
+      "src-tauri/src/logging.rs"
     ]
   },
   "acknowledgedExternalModules": {

@@ -3,7 +3,7 @@
  *
  * The prefixes are the only brand contract carried by *both* runtimes for the
  * same bytes. `src/shared/brand.ts` decides what the renderer writes; the Rust
- * copy in `src-tauri/src/brand.rs` is what `webview_storage_handoff::
+ * copy in `src-tauri/crates/se-foundation/src/brand.rs` is what `webview_storage_handoff::
  * is_app_owned_key` matches against when it decides which `localStorage` keys
  * to carry across a bundle-identifier rename. On macOS the WebView data store
  * is partitioned by identifier and cannot be moved, so that replay is the only
@@ -31,7 +31,7 @@ import { join } from 'node:path'
 import { __resetBrandCanonicalOverride, brandCanonical, LEGACY } from '@shared/brand'
 import { afterEach, describe, expect, it } from 'vitest'
 
-const BRAND_RS = 'src-tauri/src/brand.rs'
+const BRAND_RS = 'src-tauri/crates/se-foundation/src/brand.rs'
 
 /** The Rust field names, paired with the TypeScript ones they mirror. */
 const FIELDS = [

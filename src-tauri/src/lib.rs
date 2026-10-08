@@ -6,7 +6,7 @@ mod agent_registry;
 /// Runtime-neutral AI channel, credential, analysis, and Fx contracts.
 /// No provider I/O and no keyring access live in this skeleton.
 pub mod ai_channels;
-pub mod brand;
+pub use se_foundation::brand;
 mod browser_tab_manager;
 mod cli_session;
 mod commands;
