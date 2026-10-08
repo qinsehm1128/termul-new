@@ -14,7 +14,10 @@
     "package": "se-manager",
     "crateSource": "src-tauri/src",
     "workspaceCrates": "src-tauri/crates",
-    "scopedComponents": ["acpCore", "terminalCore"]
+    "scopedComponents": ["acpCore"],
+    "crateComponents": {
+      "terminalCore": "se-terminal-core"
+    }
   },
   "components": {
     "renderer": ["src/renderer", "src/shared", "package.json", "bun.lock"],
@@ -55,19 +58,9 @@
       "src-tauri/src/cli_session",
       "src-tauri/crates/se-terminal-core"
     ],
-    "terminalCore": [
-      "src-tauri/crates/se-pty",
-      "src-tauri/crates/se-quick-terminal",
-      "src-tauri/src/core/process.rs",
-      "src-tauri/src/main.rs",
-      "src-tauri/src/logging.rs",
-      "src-tauri/crates/se-terminal-core"
-    ]
+    "terminalCore": ["src-tauri/src/terminal_core_main.rs", "src-tauri/build.rs"]
   },
   "acknowledgedExternalModules": {
-    "terminalCore": {
-      "core::acp": "core/process.rs dispatches --acp-core to core/acp.rs; the Terminal Core process never runs it"
-    },
     "acpCore": {
       "ai_channels": "referenced only by mcp_core/describe.rs, which GUI Tauri commands call to describe MCP servers; the ACP Core never runs it",
       "browser_tab_manager": "referenced only by GUI Tauri commands in commands.rs; the ACP Core never runs them",

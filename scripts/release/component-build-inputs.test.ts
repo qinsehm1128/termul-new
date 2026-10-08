@@ -13,9 +13,13 @@ import { describe, expect, test } from 'vitest'
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..')
 const srcRoot = 'src-tauri/src'
 const CORES = ['terminalCore', 'acpCore'] as const
+// Cores built inside the app crate, whose input files are listed by hand.
+// The Terminal Core is built from its own crate; Cargo.lock names its inputs.
+const SCOPED_CORES = ['acpCore'] as const
 
 type Inputs = {
   sharedFiles: string[]
+  cargo: { lock: string; crateComponents: Record<string, string> }
   components: Record<string, string[]>
   acknowledgedExternalModules: Record<string, Record<string, string>>
 }
@@ -107,6 +111,21 @@ function isCovered(module: string, paths: string[]): boolean {
 }
 
 const coreDir = `${srcRoot}/core`
+
+/**
+ * `core/mod.rs` re-exports crate modules as `core` siblings
+ * (`pub use se_terminal_core::{handles, terminal};`), so `super::terminal`
+ * in a `core/` file means that crate.
+ */
+const coreReexports = new Map<string, string>()
+for (const match of readFileSync(join(repoRoot, coreDir, 'mod.rs'), 'utf8').matchAll(
+  /^pub use (se_[a-z_0-9]+)::\{?([a-z_0-9, ]+)\}?;/gm
+)) {
+  for (const name of match[2].split(',').map((part) => part.trim())) {
+    coreReexports.set(name, match[1].replaceAll('_', '-'))
+  }
+}
+
 const coreModules = new Set(
   readdirSync(join(repoRoot, coreDir))
     .filter((entry) => entry.endsWith('.rs') && entry !== 'mod.rs')
@@ -128,7 +147,18 @@ function referencedCoreSiblings(file: string, source: string): Set<string> {
   return siblings
 }
 
-function uncoveredReferences(core: (typeof CORES)[number]): Map<string, string[]> {
+/** Workspace crates a file uses through `core/mod.rs` re-exports. */
+function referencedCoreCrates(file: string, source: string): Set<string> {
+  const crates = new Set<string>()
+  if (!file.startsWith(`${coreDir}/`)) return crates
+  for (const match of source.matchAll(/\b(?:super|crate::core)::([a-z_0-9]+)/g)) {
+    const name = coreReexports.get(match[1])
+    if (name) crates.add(name)
+  }
+  return crates
+}
+
+function uncoveredReferences(core: (typeof SCOPED_CORES)[number]): Map<string, string[]> {
   const paths = [...inputs.components[core], ...inputs.sharedFiles]
   const found = new Map<string, string[]>()
   const note = (key: string, file: string) => found.set(key, [...(found.get(key) ?? []), file])
@@ -151,7 +181,7 @@ describe('component build inputs', () => {
   })
 
   test.each(
-    CORES
+    SCOPED_CORES
   )('%s identity covers every module its code references, or acknowledges why not', (core) => {
     const acknowledged = inputs.acknowledgedExternalModules[core] ?? {}
     const unaccounted = [...uncoveredReferences(core)]
@@ -170,12 +200,20 @@ describe('component build inputs', () => {
     )
   })
 
-  test.each(CORES)('%s identity covers every workspace crate its code uses', (core) => {
+  test('reads crate modules that core/mod.rs re-exports as siblings', () => {
+    expect(coreReexports.get('terminal')).toBe('se-terminal-core')
+    expect(referencedCoreCrates(`${coreDir}/acp.rs`, 'use super::terminal::Client;')).toEqual(
+      new Set(['se-terminal-core'])
+    )
+  })
+
+  test.each(SCOPED_CORES)('%s identity covers every workspace crate its code uses', (core) => {
     const paths = [...inputs.components[core], ...inputs.sharedFiles]
     const uncovered = new Set<string>()
-    // Shared files run in every Core too (e.g. `core/ipc.rs` re-exports the IPC crate).
+    // Shared files run in every Core too (e.g. `core/mod.rs` re-exports the Terminal Core crate).
     for (const file of paths.flatMap(rustFiles)) {
-      for (const name of referencedCrates(productionSource(file))) {
+      const source = productionSource(file)
+      for (const name of [...referencedCrates(source), ...referencedCoreCrates(file, source)]) {
         const dir = `${crateRoot}/${name}`
         if (!paths.some((path) => path === dir || dir.startsWith(`${path}/`))) uncovered.add(name)
       }
@@ -183,11 +221,28 @@ describe('component build inputs', () => {
     expect([...uncovered]).toEqual([])
   })
 
-  test.each(CORES)('%s acknowledges only modules it still references', (core) => {
+  test.each(SCOPED_CORES)('%s acknowledges only modules it still references', (core) => {
     const referenced = uncoveredReferences(core)
     const stale = Object.keys(inputs.acknowledgedExternalModules[core] ?? {}).filter(
       (module) => !referenced.has(module)
     )
     expect(stale).toEqual([])
+  })
+
+  test.each(
+    Object.entries(inputs.cargo.crateComponents)
+  )('%s entry links only its own crate, not the app library', (core, crate) => {
+    // The executable's identity is its crate's Cargo.lock closure. Code that
+    // reached into the app library would run without being hashed.
+    const crateIdent = crate.replaceAll('-', '_')
+    const entries = inputs.components[core]
+      .flatMap(rustFiles)
+      .filter((file) => file.startsWith(`${srcRoot}/`))
+    expect(entries.length).toBeGreaterThan(0)
+    for (const file of entries) {
+      const source = productionSource(file)
+      expect(source, file).not.toMatch(/\bcrate::|\bse_manager_lib\b/)
+      expect(source, file).toContain(`${crateIdent}::`)
+    }
   })
 })

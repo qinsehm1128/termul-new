@@ -354,6 +354,162 @@ describe('scoped Cargo material for Core identities', () => {
   })
 })
 
+describe('crate-built Core identities', () => {
+  const crateInputs = {
+    schemaVersion: 1,
+    sharedFiles: ['src-tauri/src/core/ipc.rs'],
+    cargo: {
+      manifest: 'src-tauri/Cargo.toml',
+      lock: 'src-tauri/Cargo.lock',
+      package: 'se-manager',
+      crateSource: 'src-tauri/src',
+      workspaceCrates: 'src-tauri/crates',
+      scopedComponents: [],
+      crateComponents: { terminalCore: 'se-terminal-core' }
+    },
+    components: {
+      renderer: [],
+      guiNative: ['src-tauri/Cargo.toml', 'src-tauri/Cargo.lock'],
+      acpCore: [],
+      terminalCore: ['src-tauri/src/terminal_core_main.rs']
+    }
+  }
+
+  const manifest = ({ tokio = '["rt"]', extra = '', profile = 'opt-level = 3' } = {}) =>
+    [
+      '[package]',
+      'name = "se-manager"',
+      'version = "0.14.10"',
+      '',
+      '[profile.release]',
+      profile,
+      '',
+      '[dependencies]',
+      'se-terminal-core = { path = "crates/se-terminal-core" }',
+      'se-gui-only = { path = "crates/se-gui-only" }',
+      `tokio = { version = "1", features = ${tokio} }`,
+      'tauri = "2"',
+      extra,
+      ''
+    ].join('\n')
+
+  const lock = ({ mio = '1.0.0', extra = [] as string[] } = {}) => {
+    const packages: Array<[string, string, string[]]> = [
+      ['se-manager', '0.14.10', ['se-terminal-core', 'se-gui-only', 'tokio', 'tauri', ...extra]],
+      ['se-terminal-core', '0.1.0', ['se-pty', 'tokio']],
+      ['se-pty', '0.1.0', ['tokio']],
+      ['se-gui-only', '0.1.0', ['tauri']],
+      ['tokio', '1.40.0', ['mio']],
+      ['mio', mio, []],
+      ['tauri', '2.0.0', []],
+      ...extra.map((name): [string, string, string[]] => [name, '0.6.4', []])
+    ]
+    return [
+      'version = 4',
+      ...packages.map(([name, version, deps]) =>
+        [
+          '',
+          '[[package]]',
+          `name = "${name}"`,
+          `version = "${version}"`,
+          ...(deps.length ? ['dependencies = [', ...deps.map((dep) => ` "${dep}",`), ']'] : [])
+        ].join('\n')
+      ),
+      ''
+    ].join('\n')
+  }
+
+  async function crateRoot() {
+    const root = await mkdtemp(join(tmpdir(), 'se-component-crate-'))
+    await mkdir(join(root, 'src-tauri/src/core'), { recursive: true })
+    for (const name of ['se-terminal-core', 'se-pty', 'se-gui-only']) {
+      await mkdir(join(root, `src-tauri/crates/${name}/src`), { recursive: true })
+      await writeFile(
+        join(root, `src-tauri/crates/${name}/Cargo.toml`),
+        `[package]\nname = "${name}"\nversion = "0.1.0"\n`
+      )
+      await writeFile(join(root, `src-tauri/crates/${name}/src/lib.rs`), 'pub fn run() {}\n')
+    }
+    await writeFile(join(root, 'src-tauri/Cargo.toml'), manifest())
+    await writeFile(join(root, 'src-tauri/Cargo.lock'), lock())
+    await writeFile(join(root, 'src-tauri/src/core/ipc.rs'), 'pub const PROTOCOL: u8 = 1;\n')
+    await writeFile(
+      join(root, 'src-tauri/src/terminal_core_main.rs'),
+      'fn main() { se_terminal_core::run() }\n'
+    )
+    return root
+  }
+
+  const terminalId = async (root: string) =>
+    (await generateComponentIdentities({ root, inputs: crateInputs })).components.terminalCore
+      .buildId
+
+  test('hashes its entry files and the workspace crates in its closure, not shared files', async () => {
+    const root = await crateRoot()
+    try {
+      const result = await generateComponentIdentities({ root, inputs: crateInputs })
+      expect(result.payloads.terminalCore.files.map((file: { path: string }) => file.path)).toEqual(
+        [
+          'src-tauri/crates/se-pty/Cargo.toml',
+          'src-tauri/crates/se-pty/src/lib.rs',
+          'src-tauri/crates/se-terminal-core/Cargo.toml',
+          'src-tauri/crates/se-terminal-core/src/lib.rs',
+          'src-tauri/src/terminal_core_main.rs'
+        ]
+      )
+      expect(result.payloads.terminalCore.cargo.crate).toBe('se-terminal-core')
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  test('a crate outside its closure, a GUI-only dependency or a shared file leaves it alone', async () => {
+    const root = await crateRoot()
+    try {
+      const before = await terminalId(root)
+      await writeFile(join(root, 'src-tauri/crates/se-gui-only/src/lib.rs'), 'pub fn gui() {}\n')
+      await writeFile(join(root, 'src-tauri/src/core/ipc.rs'), 'pub const PROTOCOL: u8 = 2;\n')
+      await writeFile(join(root, 'src-tauri/Cargo.toml'), manifest({ extra: 'objc2 = "0.6"' }))
+      await writeFile(join(root, 'src-tauri/Cargo.lock'), lock({ extra: ['objc2'] }))
+      expect(await terminalId(root)).toBe(before)
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  test.each([
+    ['a crate in its closure', 'src-tauri/crates/se-pty/src/lib.rs', 'pub fn spawn() {}\n'],
+    ['its entry file', 'src-tauri/src/terminal_core_main.rs', 'fn main() {}\n'],
+    ['a lock change in its closure', 'src-tauri/Cargo.lock', lock({ mio: '1.0.1' })],
+    ['features of a closure package', 'src-tauri/Cargo.toml', manifest({ tokio: '["rt", "net"]' })],
+    ['the release profile', 'src-tauri/Cargo.toml', manifest({ profile: 'opt-level = 2' })]
+  ])('%s changes it', async (_case, path, content) => {
+    const root = await crateRoot()
+    try {
+      const before = await terminalId(root)
+      await writeFile(join(root, path), content)
+      expect(await terminalId(root)).not.toBe(before)
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  test('rejects a component that is both scoped and crate-built', async () => {
+    const root = await crateRoot()
+    try {
+      const inputs = {
+        ...crateInputs,
+        cargo: { ...crateInputs.cargo, scopedComponents: ['terminalCore'] }
+      }
+      await expect(generateComponentIdentities({ root, inputs })).rejects.toThrow(
+        'cannot be both scoped and crate-built'
+      )
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+})
+
 describe('explainIdentityChange', () => {
   const identity = (
     terminalFiles: Array<[string, string]>,

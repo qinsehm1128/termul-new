@@ -78,11 +78,27 @@ async function readInputs(root, inputs) {
     if (!Array.isArray(scoped) || !scoped.every((value) => COMPONENTS.includes(value))) {
       throw new Error('component identity cargo.scopedComponents must name components')
     }
+    const crates = inputs.cargo.crateComponents ?? {}
+    assertPlainObject(crates, 'component identity cargo.crateComponents')
+    for (const [component, name] of Object.entries(crates)) {
+      if (!COMPONENTS.includes(component) || typeof name !== 'string') {
+        throw new Error('component identity cargo.crateComponents must map components to crates')
+      }
+      if (scoped.includes(component)) {
+        throw new Error(`component identity ${component} cannot be both scoped and crate-built`)
+      }
+    }
   }
 
   const expanded = new Map()
   const add = async (path) => {
     for (const file of await expandInput(root, path)) expanded.set(file, true)
+  }
+
+  const crateMaterial = {}
+  for (const [component, name] of Object.entries(inputs.cargo?.crateComponents ?? {})) {
+    crateMaterial[component] = await crateComponentMaterial(root, inputs.cargo, name)
+    for (const dir of crateMaterial[component].crateDirs) await add(dir)
   }
 
   for (const path of inputs.sharedFiles) await add(path)
@@ -102,7 +118,7 @@ async function readInputs(root, inputs) {
     fileDigests.set(path, digest)
   }
 
-  return { fileDigests }
+  return { fileDigests, crateMaterial }
 }
 
 const CARGO_PACKAGE_VERSION = 'version = "<package-version>"'
@@ -210,8 +226,8 @@ function resolveLockSpec(packages, spec) {
   return match
 }
 
-/** Every lock package reachable from `roots`, as stable text lines. */
-function lockClosure(packages, rootSpecs) {
+/** Every lock package reachable from `roots`, keyed `name version`. */
+function lockClosureEntries(packages, rootSpecs) {
   const seen = new Map()
   const queue = rootSpecs.map((spec) => resolveLockSpec(packages, spec))
   while (queue.length > 0) {
@@ -221,7 +237,12 @@ function lockClosure(packages, rootSpecs) {
     seen.set(key, entry)
     for (const spec of entry.dependencies) queue.push(resolveLockSpec(packages, spec))
   }
-  return [...seen.entries()]
+  return seen
+}
+
+/** Every lock package reachable from `roots`, as stable text lines. */
+function lockClosure(packages, rootSpecs) {
+  return [...lockClosureEntries(packages, rootSpecs).entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(
       ([key, entry]) =>
@@ -277,9 +298,59 @@ async function scopedCargoMaterial(root, cargo, componentPaths) {
   }
 }
 
-function componentPayload(component, inputs, fileDigests) {
-  const shared = [...inputs.sharedFiles].sort()
-  const own = [...inputs.components[component]].sort()
+/** Workspace crate directories under `cargo.workspaceCrates`, by package name. */
+async function workspaceCrateDirs(root, cargo) {
+  const dirs = new Map()
+  const entries = await readdir(resolve(root, cargo.workspaceCrates), { withFileTypes: true })
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue
+    const dir = `${cargo.workspaceCrates}/${entry.name}`
+    const toml = await readFile(resolve(root, dir, 'Cargo.toml'), 'utf8').catch(() => null)
+    const name = toml && /^name = "([^"]+)"$/m.exec(toml)?.[1]
+    if (name) dirs.set(name, dir)
+  }
+  return dirs
+}
+
+/**
+ * Material for a Core whose executable links a single workspace crate, so
+ * Cargo.lock names everything it runs: the workspace crates in that crate's
+ * dependency closure (their directories are hashed as files), the shared
+ * manifest part, the root manifest's entries for packages in the closure
+ * (their features unify with the app's in one build), and the closure.
+ */
+async function crateComponentMaterial(root, cargo, crateName) {
+  const manifest = parseCargoManifest(await readFile(resolve(root, cargo.manifest), 'utf8'))
+  const packages = parseCargoLock(await readFile(resolve(root, cargo.lock), 'utf8'))
+  const closure = lockClosureEntries(packages, [crateName])
+  const names = new Set([...closure.values()].map((entry) => entry.name))
+  const dirs = await workspaceCrateDirs(root, cargo)
+  const crateDirs = [...names]
+    .filter((name) => dirs.has(name))
+    .map((name) => dirs.get(name))
+    .sort()
+  const entries = manifest.dependencies
+    .filter((entry) => names.has(entry.name))
+    .map((entry) => `[${entry.table}] ${entry.text}`)
+    .sort()
+  const digest = (lines) => createHash('sha256').update(lines.join('\n'), 'utf8').digest('hex')
+  return {
+    crateDirs,
+    cargo: {
+      crate: crateName,
+      manifestSha256: digest([...manifest.shared, ...entries]),
+      lockSha256: digest(lockClosure(packages, [crateName]))
+    }
+  }
+}
+
+/**
+ * The files a component's identity hashes. A crate-built Core takes no shared
+ * files: what it runs is its own entry files plus its crate closure.
+ */
+function componentPayload(component, inputs, fileDigests, crateMaterial) {
+  const shared = crateMaterial ? [] : [...inputs.sharedFiles].sort()
+  const own = [...inputs.components[component], ...(crateMaterial?.crateDirs ?? [])].sort()
   const paths = new Set([...shared, ...own])
   const files = [...fileDigests.entries()]
     .filter(
@@ -298,12 +369,13 @@ function componentPayload(component, inputs, fileDigests) {
 export async function generateComponentIdentities({ root = process.cwd(), inputs }) {
   const normalizedRoot = resolve(root)
   const source = inputs ?? JSON.parse(await readFile(DEFAULT_INPUTS, 'utf8'))
-  const { fileDigests } = await readInputs(normalizedRoot, source)
+  const { fileDigests, crateMaterial } = await readInputs(normalizedRoot, source)
   const components = {}
   const payloads = {}
 
   for (const component of COMPONENTS) {
-    const payload = componentPayload(component, source, fileDigests)
+    const payload = componentPayload(component, source, fileDigests, crateMaterial[component])
+    if (crateMaterial[component]) payload.cargo = crateMaterial[component].cargo
     if (source.cargo?.scopedComponents?.includes(component)) {
       payload.cargo = await scopedCargoMaterial(
         normalizedRoot,
