@@ -176,6 +176,15 @@
     "pressKeys": "请按快捷键...",
     "conflict": "与“{{label}}”冲突。",
     "useAnyway": "仍然使用",
+    "unbound": "未设置",
+    "reservedConflict": "与 {{label}} 相同，这个键由 Se 固定占用",
+    "reserved": {
+      "projectSwitch": "切换项目（⌘1–9）",
+      "systemEdit": "系统编辑键（复制、粘贴、剪切、全选、撤销）",
+      "macQuit": "退出",
+      "macHide": "隐藏",
+      "macMinimize": "最小化"
+    },
     "items": {
       "commandPalette": { "label": "命令面板", "description": "打开命令面板以执行快速操作" },
       "commandPaletteAlt": {

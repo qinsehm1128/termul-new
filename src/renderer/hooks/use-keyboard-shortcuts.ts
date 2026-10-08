@@ -86,10 +86,7 @@ export function useApplyKeybindingScheme(): (schemeId: string) => Promise<void> 
   return useCallback(
     async (schemeId: string) => {
       applyScheme(schemeId)
-      await persistenceApi.write(
-        KEYBINDING_SCHEME_KEY,
-        useKeyboardShortcutsStore.getState().schemeId
-      )
+      await persistenceApi.write(KEYBINDING_SCHEME_KEY, schemeId)
     },
     [applyScheme]
   )

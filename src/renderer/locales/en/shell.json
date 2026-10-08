@@ -176,6 +176,15 @@
     "pressKeys": "Press keys...",
     "conflict": "Conflicts with \"{{label}}\".",
     "useAnyway": "Use anyway",
+    "unbound": "Not set",
+    "reservedConflict": "Same key as {{label}}, which Se keeps fixed",
+    "reserved": {
+      "projectSwitch": "project switching (⌘1–9)",
+      "systemEdit": "the system edit keys (copy, paste, cut, select all, undo)",
+      "macQuit": "Quit",
+      "macHide": "Hide",
+      "macMinimize": "Minimize"
+    },
     "items": {
       "commandPalette": {
         "label": "Command Palette",

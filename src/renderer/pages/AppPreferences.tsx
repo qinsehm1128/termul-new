@@ -23,6 +23,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { KeybindingSchemePicker } from '@/components/KeybindingSchemePicker'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
 import { CliResumeDefaultsSettings } from '@/components/settings/CliResumeDefaultsSettings'
@@ -88,7 +89,10 @@ import {
   useUiLanguage,
   useUiZoomLevel
 } from '@/stores/app-settings-store'
-import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import {
+  detectShortcutConflicts,
+  useKeyboardShortcutsStore
+} from '@/stores/keyboard-shortcuts-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
@@ -452,6 +456,7 @@ export default function AppPreferences(): React.JSX.Element {
 
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
+  const shortcutConflicts = useMemo(() => detectShortcutConflicts(shortcuts), [shortcuts])
   const updateShortcut = useUpdateShortcut()
   const resetShortcut = useResetShortcut()
   const resetAllShortcuts = useResetAllShortcuts()
@@ -1696,6 +1701,7 @@ export default function AppPreferences(): React.JSX.Element {
                 </button>
               </div>
               <div className="w-2/3 space-y-4">
+                <KeybindingSchemePicker />
                 {Object.values(shortcuts).map((shortcut) => (
                   <ShortcutRecorder
                     key={shortcut.id}
@@ -1703,6 +1709,7 @@ export default function AppPreferences(): React.JSX.Element {
                     allShortcuts={shortcuts}
                     onUpdate={updateShortcut}
                     onReset={resetShortcut}
+                    conflicts={shortcutConflicts[shortcut.id]}
                   />
                 ))}
               </div>

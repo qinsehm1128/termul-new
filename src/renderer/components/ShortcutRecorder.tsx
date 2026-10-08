@@ -4,8 +4,11 @@ import { useTranslation } from 'react-i18next'
 import { beginShortcutCapture, endShortcutCapture } from '@/lib/shortcut-capture'
 import {
   findConflictingShortcut,
+  findReservedShortcut,
   formatKeyForDisplay,
-  normalizeKeyEvent
+  normalizeKeyEvent,
+  type ReservedShortcutId,
+  type ShortcutConflict
 } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcut, KeyboardShortcutsConfig } from '@/types/settings'
 
@@ -15,6 +18,8 @@ interface ShortcutRecorderProps {
   onUpdate: (id: string, customKey: string) => void
   onReset: (id: string) => void
   variant?: 'default' | 'compact'
+  /** Conflicts of the saved key, from `detectShortcutConflicts`. */
+  conflicts?: ShortcutConflict[]
 }
 
 export function ShortcutRecorder({
@@ -22,12 +27,14 @@ export function ShortcutRecorder({
   allShortcuts,
   onUpdate,
   onReset,
-  variant = 'default'
+  variant = 'default',
+  conflicts = []
 }: ShortcutRecorderProps): React.JSX.Element {
   const { t } = useTranslation('shell')
   const [isRecording, setIsRecording] = useState(false)
   const [pendingKey, setPendingKey] = useState<string | null>(null)
   const [conflict, setConflict] = useState<KeyboardShortcut | null>(null)
+  const [reservedConflict, setReservedConflict] = useState<ReservedShortcutId | null>(null)
   const inputRef = useRef<HTMLDivElement>(null)
 
   const activeKey = shortcut.customKey ?? shortcut.defaultKey
@@ -39,6 +46,22 @@ export function ShortcutRecorder({
   const shortcutDescription = t(`shortcuts.items.${shortcut.id}.description`, {
     defaultValue: shortcut.description
   })
+  const keyLabel = displayKey ? formatKeyForDisplay(displayKey) : t('shortcuts.unbound')
+  const conflictMessage = (item: ShortcutConflict) =>
+    item.kind === 'duplicate'
+      ? t('shortcuts.conflict', {
+          label: t(`shortcuts.items.${item.otherId}.label`, {
+            defaultValue: allShortcuts[item.otherId]?.label ?? item.otherId
+          })
+        })
+      : t('shortcuts.reservedConflict', { label: t(`shortcuts.reserved.${item.reservedId}`) })
+  // While recording, the pending key's conflicts replace the saved key's.
+  const savedConflictMessages = isRecording && pendingKey ? [] : conflicts.map(conflictMessage)
+  const pendingConflictMessage = conflict
+    ? conflictMessage({ kind: 'duplicate', otherId: conflict.id })
+    : reservedConflict
+      ? conflictMessage({ kind: 'reserved', reservedId: reservedConflict })
+      : null
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -50,6 +73,7 @@ export function ShortcutRecorder({
         setIsRecording(false)
         setPendingKey(null)
         setConflict(null)
+        setReservedConflict(null)
         return
       }
 
@@ -67,9 +91,11 @@ export function ShortcutRecorder({
 
       // Check for conflicts
       const conflicting = findConflictingShortcut(allShortcuts, normalized, shortcut.id)
+      const reserved = findReservedShortcut(normalized)
       setConflict(conflicting ?? null)
+      setReservedConflict(reserved ?? null)
 
-      if (!conflicting) {
+      if (!conflicting && !reserved) {
         onUpdate(shortcut.id, normalized)
         setIsRecording(false)
         setPendingKey(null)
@@ -83,6 +109,7 @@ export function ShortcutRecorder({
     setIsRecording(false)
     setPendingKey(null)
     setConflict(null)
+    setReservedConflict(null)
   }, [handleKeyDown])
 
   const handleClick = useCallback(() => {
@@ -90,6 +117,7 @@ export function ShortcutRecorder({
       setIsRecording(true)
       setPendingKey(null)
       setConflict(null)
+      setReservedConflict(null)
     }
   }, [isRecording])
 
@@ -100,6 +128,7 @@ export function ShortcutRecorder({
     setIsRecording(false)
     setPendingKey(null)
     setConflict(null)
+    setReservedConflict(null)
   }, [pendingKey, onUpdate, shortcut.id])
 
   const handleReset = useCallback(
@@ -181,23 +210,27 @@ export function ShortcutRecorder({
                   ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
                   : 'border-border bg-secondary/50 hover:bg-secondary'
               }
-              ${conflict ? 'border-red-500' : ''}
+              ${conflict || reservedConflict ? 'border-red-500' : savedConflictMessages.length > 0 ? 'border-amber-500' : ''}
               ${isCustomized ? 'text-primary' : 'text-foreground'}
             `}
           >
             {isRecording && !pendingKey ? (
               <span className="text-muted-foreground">{t('shortcuts.pressKeys')}</span>
             ) : (
-              formatKeyForDisplay(displayKey)
+              keyLabel
             )}
           </div>
         </div>
 
-        {conflict && (
+        {savedConflictMessages.map((message) => (
+          <div key={message} className="mt-1 text-2xs text-amber-600 dark:text-amber-400">
+            {message}
+          </div>
+        ))}
+
+        {pendingConflictMessage && (
           <div className="mt-1 text-2xs text-red-500">
-            {t('shortcuts.conflict', {
-              label: t(`shortcuts.items.${conflict.id}.label`, { defaultValue: conflict.label })
-            })}{' '}
+            {pendingConflictMessage}{' '}
             <button
               type="button"
               onMouseDown={(event) => event.preventDefault()}
@@ -247,22 +280,26 @@ export function ShortcutRecorder({
                 ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
                 : 'border-border bg-secondary/50 hover:bg-secondary'
             }
-            ${conflict ? 'border-red-500' : ''}
+            ${conflict || reservedConflict ? 'border-red-500' : savedConflictMessages.length > 0 ? 'border-amber-500' : ''}
             ${isCustomized ? 'text-primary' : 'text-foreground'}
           `}
         >
           {isRecording && !pendingKey ? (
             <span className="text-muted-foreground">{t('shortcuts.pressKeys')}</span>
           ) : (
-            formatKeyForDisplay(displayKey)
+            keyLabel
           )}
         </div>
 
-        {conflict && (
+        {savedConflictMessages.map((message) => (
+          <div key={message} className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+            {message}
+          </div>
+        ))}
+
+        {pendingConflictMessage && (
           <div className="mt-2 text-xs text-red-500">
-            {t('shortcuts.conflict', {
-              label: t(`shortcuts.items.${conflict.id}.label`, { defaultValue: conflict.label })
-            })}{' '}
+            {pendingConflictMessage}{' '}
             <button
               type="button"
               onMouseDown={(event) => event.preventDefault()}

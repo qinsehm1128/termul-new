@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useWorkspaceStore } from '@/stores/workspace-store'
+import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 import type { LeafNode, PaneNode } from '@/types/workspace.types'
-import { findAdjacentPane, findPaneInDirection } from './pane-navigation'
+import { findAdjacentPane, findPaneInDirection, handlePaneShortcut } from './pane-navigation'
 
 const leaf = (id: string): LeafNode => ({ type: 'leaf', id, tabs: [], activeTabId: null })
 
@@ -79,5 +81,82 @@ describe('findAdjacentPane', () => {
 
   it('has nowhere to go with a single pane', () => {
     expect(findAdjacentPane(leaf('A'), 'A', 1)).toBeNull()
+  })
+})
+
+describe('handlePaneShortcut', () => {
+  const initial = useWorkspaceStore.getState()
+  // Bind the pane actions to plain ctrl keys so the test is platform-neutral.
+  const keys: Record<string, string> = {
+    splitRight: 'ctrl+d',
+    splitDown: 'ctrl+shift+d',
+    focusPaneRight: 'ctrl+alt+arrowright',
+    focusPaneNext: 'ctrl+]',
+    togglePaneZoom: 'ctrl+shift+enter'
+  }
+  const getKey = (id: string) => keys[id] ?? ''
+  const press = (init: KeyboardEventInit) =>
+    new KeyboardEvent('keydown', { ctrlKey: true, ...init })
+
+  afterEach(() => {
+    useWorkspaceStore.setState({
+      root: initial.root,
+      activePaneId: initial.activePaneId,
+      fullscreenPaneId: null
+    })
+    document.body.innerHTML = ''
+  })
+
+  it('splits the active pane right or down', () => {
+    useWorkspaceStore.setState({ root: layout, activePaneId: 'B' })
+    const split = vi.fn()
+    expect(handlePaneShortcut(press({ key: 'd', code: 'KeyD' }), getKey, split)).toBe(true)
+    expect(
+      handlePaneShortcut(press({ key: 'D', code: 'KeyD', shiftKey: true }), getKey, split)
+    ).toBe(true)
+    expect(split.mock.calls).toEqual([
+      ['B', 'right'],
+      ['B', 'bottom']
+    ])
+  })
+
+  it('moves the active pane and keyboard focus to the neighbour', () => {
+    useWorkspaceStore.setState({ root: layout, activePaneId: 'A' })
+    document.body.innerHTML =
+      '<div data-pane-id="B"><div class="invisible"><textarea id="hidden"></textarea></div>' +
+      '<textarea id="visible"></textarea></div>'
+    const handled = handlePaneShortcut(
+      press({ key: 'ArrowRight', code: 'ArrowRight', altKey: true }),
+      getKey,
+      vi.fn()
+    )
+    expect(handled).toBe(true)
+    expect(useWorkspaceStore.getState().activePaneId).toBe('B')
+    expect(document.activeElement?.id).toBe('visible')
+  })
+
+  it('cycles to the next pane', () => {
+    useWorkspaceStore.setState({ root: layout, activePaneId: 'C' })
+    handlePaneShortcut(press({ key: ']', code: 'BracketRight' }), getKey, vi.fn())
+    expect(useWorkspaceStore.getState().activePaneId).toBe('A')
+  })
+
+  it('toggles the active pane fullscreen', () => {
+    useWorkspaceStore.setState({ root: layout, activePaneId: 'B', fullscreenPaneId: null })
+    handlePaneShortcut(press({ key: 'Enter', code: 'Enter', shiftKey: true }), getKey, vi.fn())
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBe('B')
+  })
+
+  it('leaves other keys alone', () => {
+    useWorkspaceStore.setState({ root: layout, activePaneId: 'B' })
+    const split = vi.fn()
+    expect(handlePaneShortcut(press({ key: 'k', code: 'KeyK' }), getKey, split)).toBe(false)
+    expect(split).not.toHaveBeenCalled()
+  })
+
+  it('ships macOS defaults that are ⌘ only', () => {
+    // ctrl+d is the shell's EOF on Windows/Linux and must stay with the shell.
+    expect(DEFAULT_KEYBOARD_SHORTCUTS.splitRight.defaultKey).toBe('cmd+d')
+    expect(DEFAULT_KEYBOARD_SHORTCUTS.splitDown.defaultKey).toBe('cmd+shift+d')
   })
 })

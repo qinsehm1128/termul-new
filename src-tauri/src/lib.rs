@@ -25,9 +25,9 @@ pub mod conversation_host;
 #[cfg(test)]
 mod conversation_host_tests;
 pub mod conversation_roots;
+mod keybinding_schemes;
 pub mod legacy_appdata;
 mod logging;
-mod keybinding_schemes;
 mod macos_permissions;
 /// Runtime-neutral contracts for the independent HTTP-first MCP Core.
 pub mod mcp_core;

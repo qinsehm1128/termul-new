@@ -115,8 +115,11 @@ vi.mock('@/stores/updater-store', () => ({
 vi.mock('@/stores/keyboard-shortcuts-store', () => ({
   useKeyboardShortcutsStore: vi.fn((selector: (s: { shortcuts: unknown[] }) => unknown) =>
     selector({ shortcuts: [] })
-  )
+  ),
+  detectShortcutConflicts: () => ({})
 }))
+
+vi.mock('@/components/KeybindingSchemePicker', () => ({ KeybindingSchemePicker: () => null }))
 
 const mockResetAllShortcuts = vi.fn().mockResolvedValue(undefined)
 vi.mock('@/hooks/use-keyboard-shortcuts', () => ({

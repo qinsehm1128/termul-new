@@ -1,4 +1,5 @@
-import { getAllLeafPanes } from '@/stores/workspace-store'
+import { matchesShortcut } from '@/stores/keyboard-shortcuts-store'
+import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import type { PaneNode } from '@/types/workspace.types'
 
 export type PaneFocusDirection = 'left' | 'right' | 'up' | 'down'
@@ -104,4 +105,61 @@ export function focusPaneSurface(paneId: string): void {
     pane.querySelectorAll<HTMLElement>('textarea, [contenteditable="true"]')
   ).find((element) => !element.closest('.invisible'))
   target?.focus()
+}
+
+// Pane focus shortcuts and where each one moves focus.
+const PANE_FOCUS_SHORTCUTS: readonly {
+  id: string
+  direction: PaneFocusDirection | 'next' | 'prev'
+}[] = [
+  { id: 'focusPaneLeft', direction: 'left' },
+  { id: 'focusPaneRight', direction: 'right' },
+  { id: 'focusPaneUp', direction: 'up' },
+  { id: 'focusPaneDown', direction: 'down' },
+  { id: 'focusPaneNext', direction: 'next' },
+  { id: 'focusPanePrev', direction: 'prev' }
+]
+
+/**
+ * Run the pane shortcut `event` names, if any: split the active pane, move
+ * focus to a neighbour, or maximize. Returns whether the event was a pane
+ * shortcut, so the caller can claim it.
+ */
+export function handlePaneShortcut(
+  event: KeyboardEvent,
+  getActiveKey: (id: string) => string,
+  splitPane: (paneId: string, position: 'right' | 'bottom') => void
+): boolean {
+  const workspace = useWorkspaceStore.getState()
+  const paneId = workspace.activePaneId
+
+  const splitPosition = matchesShortcut(event, getActiveKey('splitRight'))
+    ? 'right'
+    : matchesShortcut(event, getActiveKey('splitDown'))
+      ? 'bottom'
+      : null
+  if (splitPosition) {
+    if (paneId) splitPane(paneId, splitPosition)
+    return true
+  }
+
+  const focus = PANE_FOCUS_SHORTCUTS.find(({ id }) => matchesShortcut(event, getActiveKey(id)))
+  if (focus) {
+    const targetPaneId = !paneId
+      ? null
+      : focus.direction === 'next' || focus.direction === 'prev'
+        ? findAdjacentPane(workspace.root, paneId, focus.direction === 'next' ? 1 : -1)
+        : findPaneInDirection(workspace.root, paneId, focus.direction)
+    if (targetPaneId) {
+      workspace.setActivePane(targetPaneId)
+      focusPaneSurface(targetPaneId)
+    }
+    return true
+  }
+
+  if (matchesShortcut(event, getActiveKey('togglePaneZoom'))) {
+    if (paneId) workspace.togglePaneFullscreen(paneId)
+    return true
+  }
+  return false
 }

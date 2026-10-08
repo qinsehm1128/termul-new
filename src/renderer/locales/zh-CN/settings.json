@@ -152,7 +152,16 @@
     "description": "自定义键盘快捷键以匹配你的工作流。",
     "resetAll": "重置所有快捷键",
     "resetTitle": "重置键盘快捷键",
-    "resetMessage": "确定要将所有键盘快捷键重置为默认值吗？"
+    "resetMessage": "确定要将所有键盘快捷键重置为默认值吗？",
+    "scheme": "快捷键方案",
+    "defaultScheme": "Se（默认）",
+    "userScheme": "{{name}}（自定义）",
+    "schemeHint": "切换方案会保留你自己录制过的快捷键。⌘1–9 切换项目固定不可改。",
+    "schemeFileHint": "添加自己的方案：在 ~/.se-manager/keybindings/ 放一个 JSON 文件",
+    "reloadSchemes": "重新加载",
+    "openSchemeDir": "打开目录",
+    "schemesReloaded": "已重新加载快捷键方案",
+    "schemeSaveFailed": "保存快捷键方案失败"
   },
   "updates": {
     "description": "管理应用更新和版本信息。",
