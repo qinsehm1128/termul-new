@@ -253,7 +253,6 @@ mod tests {
             .collect()
     }
 
-
     /// The published log paths in `.github/ISSUE_TEMPLATE/bug_report.yml` are
     /// derived from `brand::canonical().log_file_name`. That derivation is only
     /// true of the shipped binary while this module reads the seam instead of

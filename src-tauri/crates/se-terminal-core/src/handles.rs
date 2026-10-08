@@ -11,10 +11,10 @@
 
 use super::ipc::CoreError;
 use super::terminal::TerminalCoreClient;
-use se_pty::{PtyManager, SpawnOptions};
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use se_foundation::ids::ConversationId;
+use se_pty::{PtyManager, SpawnOptions};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Weak};
 

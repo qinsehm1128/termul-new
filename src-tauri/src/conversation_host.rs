@@ -153,7 +153,8 @@ impl TerminalResourceInspector for TerminalInspector {
         terminal_ids: &'a [String],
     ) -> ProviderFuture<'a, Result<Vec<String>, String>> {
         Box::pin(async move {
-            self.0.runtime()
+            self.0
+                .runtime()
                 .observe_conversation(conversation_id, terminal_ids)
                 .await
                 .map(|observation| observation.live_terminal_ids)
@@ -168,7 +169,8 @@ impl TerminalResourceInspector for TerminalInspector {
         operation_id: &'a str,
     ) -> ProviderFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.0.runtime()
+            self.0
+                .runtime()
                 .terminate_for_conversation(conversation_id, terminal_id, operation_id)
                 .await
                 .map(|_| ())
@@ -178,7 +180,8 @@ impl TerminalResourceInspector for TerminalInspector {
 
     fn terminate<'a>(&'a self, terminal_id: &'a str) -> ProviderFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.0.runtime()
+            self.0
+                .runtime()
                 .terminate(terminal_id)
                 .await
                 .map_err(|error| error.to_string())
@@ -192,7 +195,8 @@ impl TerminalResourceInspector for TerminalInspector {
     ) -> ProviderFuture<'a, Result<String, String>> {
         Box::pin(async move {
             let options = intent.into_trusted_options(conversation)?;
-            self.0.runtime()
+            self.0
+                .runtime()
                 .spawn_trusted(options)
                 .await
                 .map_err(|error| error.to_string())

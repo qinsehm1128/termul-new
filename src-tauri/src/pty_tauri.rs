@@ -27,7 +27,9 @@ struct AppEmitter(AppHandle);
 
 impl DesktopEventSink for AppEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) -> Result<(), String> {
-        self.0.emit(event, payload).map_err(|error| error.to_string())
+        self.0
+            .emit(event, payload)
+            .map_err(|error| error.to_string())
     }
 }
 

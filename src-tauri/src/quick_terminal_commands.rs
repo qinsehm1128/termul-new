@@ -176,11 +176,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn terminal_core_serves_quick_terminals_with_their_error_codes() {
+        use crate::core::{CoreEndpoint, CoreRole, TerminalCoreClient};
         use crate::quick_terminal::{
             CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
             QuickTerminalRecord, METHOD_CREATE, METHOD_DELETE, METHOD_LIST, METHOD_OPEN,
         };
-        use crate::core::{CoreEndpoint, CoreRole, TerminalCoreClient};
         // Durable directory creation refuses symlinked components (macOS `/var`).
         let profile_dir = tempfile::tempdir().unwrap();
         let workspace_dir = tempfile::tempdir().unwrap();
@@ -189,13 +189,10 @@ mod tests {
         let endpoint = CoreEndpoint::for_profile(&profile, CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
         let roots = (profile.clone(), workspace.clone());
+        let program = crate::terminal_program();
         let server = tokio::spawn(async move {
-            crate::core::terminal::run_terminal_core_with(
-                server_endpoint,
-                Some(roots),
-                crate::terminal_program(),
-            )
-            .await
+            crate::core::terminal::run_terminal_core_with(server_endpoint, Some(roots), program)
+                .await
         });
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let client = loop {

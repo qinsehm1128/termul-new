@@ -2703,8 +2703,11 @@ mod tests {
         assert!(!runtime.observes_live_terminals());
 
         let server_endpoint = endpoint.clone();
+        let program = crate::terminal_program();
         let mut server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, crate::terminal_program()).await });
+            tokio::spawn(
+                async move { run_terminal_core_on_endpoint(server_endpoint, program).await },
+            );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while !runtime.observes_live_terminals() {
             assert!(
@@ -2729,7 +2732,11 @@ mod tests {
         }
 
         let server_endpoint = endpoint.clone();
-        server = tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, crate::terminal_program()).await });
+        let program = crate::terminal_program();
+        server =
+            tokio::spawn(
+                async move { run_terminal_core_on_endpoint(server_endpoint, program).await },
+            );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while !runtime.observes_live_terminals() {
             assert!(

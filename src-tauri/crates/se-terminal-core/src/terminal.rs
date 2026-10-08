@@ -15,17 +15,17 @@ use super::ipc::{
     CURRENT_PROTOCOL_VERSION,
 };
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
+use async_trait::async_trait;
+use parking_lot::Mutex;
+use se_foundation::ids::ConversationId;
 use se_pty::claims::RotatedClaim;
 use se_pty::manager::{
     SpawnedTerminal, TerminalAttachResult, TerminalResumeGrant, TerminalResumeRequest,
 };
-use se_pty::{PtyManager, SpawnOptions, TerminalProgram};
 use se_pty::trackers::{
     CwdTracker, ExitCodeTracker, GitTracker, TerminalDisplayMode, TerminalEvent, TerminalEventHub,
 };
-use async_trait::async_trait;
-use parking_lot::Mutex;
-use se_foundation::ids::ConversationId;
+use se_pty::{PtyManager, SpawnOptions, TerminalProgram};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -383,13 +383,7 @@ fn construct_pty_manager(program: TerminalProgram) -> Arc<PtyManager> {
     let cwd = Arc::new(CwdTracker::new(events.clone()));
     let git = Arc::new(GitTracker::new(events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
-    Arc::new(PtyManager::new(
-        events,
-        cwd,
-        git,
-        exit,
-        program,
-    ))
+    Arc::new(PtyManager::new(events, cwd, git, exit, program))
 }
 
 struct TerminalCoreState {
@@ -1788,8 +1782,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, test_program()).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -1916,8 +1911,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, test_program()).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -1946,8 +1942,9 @@ mod tests {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
 
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, test_program()).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         wait_for_reconnect(&client, &endpoint).await;
         client.list().await.expect("list after reconnect");
@@ -1990,8 +1987,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, test_program()).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -2097,8 +2095,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, test_program()).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -2131,8 +2130,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint, test_program()).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
