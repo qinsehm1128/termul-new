@@ -27,6 +27,7 @@ mod conversation_host_tests;
 pub mod conversation_roots;
 pub mod legacy_appdata;
 mod logging;
+mod keybinding_schemes;
 mod macos_permissions;
 /// Runtime-neutral contracts for the independent HTTP-first MCP Core.
 pub mod mcp_core;
@@ -3444,6 +3445,7 @@ pub fn run() {
             commands::mcp_clients_detect,
             commands::mcp_client_sync,
             commands::mcp_client_unsync,
+            keybinding_schemes::keybinding_schemes_load,
             commands::mcp_descriptions_get,
             commands::mcp_descriptions_put,
             commands::mcp_describe_servers,

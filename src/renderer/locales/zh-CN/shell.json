@@ -212,6 +212,19 @@
       },
       "fileExplorerRename": { "label": "重命名文件", "description": "重命名选中的文件" },
       "fileExplorerDelete": { "label": "删除文件", "description": "删除选中的文件" },
+      "splitRight": { "label": "向右分栏", "description": "在右侧新开一个分栏终端" },
+      "splitDown": { "label": "向下分栏", "description": "在下方新开一个分栏终端" },
+      "focusPaneLeft": { "label": "切到左侧分栏", "description": "把焦点移到左边的分栏" },
+      "focusPaneRight": { "label": "切到右侧分栏", "description": "把焦点移到右边的分栏" },
+      "focusPaneUp": { "label": "切到上方分栏", "description": "把焦点移到上面的分栏" },
+      "focusPaneDown": { "label": "切到下方分栏", "description": "把焦点移到下面的分栏" },
+      "focusPaneNext": { "label": "下一个分栏", "description": "把焦点移到下一个分栏" },
+      "focusPanePrev": { "label": "上一个分栏", "description": "把焦点移到上一个分栏" },
+      "togglePaneZoom": {
+        "label": "最大化分栏",
+        "description": "最大化当前分栏，再按一次恢复分栏布局"
+      },
+      "clearTerminal": { "label": "清屏", "description": "清空当前终端的屏幕和回滚内容" },
       "worktreeCreate": { "label": "创建工作树", "description": "打开新建工作树对话框" },
       "worktreeSwitchNext": {
         "label": "切换到下一个工作树",

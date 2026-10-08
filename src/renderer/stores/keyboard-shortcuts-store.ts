@@ -1,15 +1,30 @@
 import { create } from 'zustand'
+import {
+  BUILTIN_KEYBINDING_SCHEMES,
+  buildSchemeShortcuts,
+  DEFAULT_SCHEME_ID,
+  type KeybindingScheme,
+  resolveSchemeBindings,
+  type SchemeIssue
+} from '@/lib/keybinding-schemes'
 import { isMac } from '@/lib/platform'
-import type { KeyboardShortcut, KeyboardShortcutsConfig } from '@/types/settings'
+import type { KeyboardShortcut, KeyboardShortcutsConfig, ShortcutScope } from '@/types/settings'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 
 interface KeyboardShortcutsState {
   shortcuts: KeyboardShortcutsConfig
   isLoaded: boolean
+  schemeId: string
+  schemes: KeybindingScheme[]
+  schemeIssues: SchemeIssue[]
   setShortcuts: (shortcuts: KeyboardShortcutsConfig) => void
   updateShortcut: (id: string, customKey: string) => void
   resetShortcut: (id: string) => void
   resetAllShortcuts: () => void
+  /** Replace the user schemes, keeping the bundled ones first. */
+  setUserSchemes: (schemes: KeybindingScheme[], issues: SchemeIssue[]) => void
+  /** Switch scheme; recorded custom keys are kept. Unknown ids fall back to Se. */
+  applyScheme: (schemeId: string) => void
 }
 
 // Deep clone defaults to avoid mutation
@@ -21,9 +36,33 @@ function cloneDefaults(): KeyboardShortcutsConfig {
   return result
 }
 
+function customKeysOf(shortcuts: KeyboardShortcutsConfig): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(shortcuts).map(([id, entry]) => [id, entry.customKey]))
+}
+
 export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>((set) => ({
   shortcuts: cloneDefaults(),
   isLoaded: false,
+  schemeId: DEFAULT_SCHEME_ID,
+  schemes: [...BUILTIN_KEYBINDING_SCHEMES],
+  schemeIssues: [],
+
+  setUserSchemes: (userSchemes, issues) =>
+    set({ schemes: [...BUILTIN_KEYBINDING_SCHEMES, ...userSchemes], schemeIssues: issues }),
+
+  applyScheme: (requestedId) =>
+    set((state) => {
+      const schemeId = state.schemes.some((scheme) => scheme.id === requestedId)
+        ? requestedId
+        : DEFAULT_SCHEME_ID
+      return {
+        schemeId,
+        shortcuts: buildSchemeShortcuts(
+          resolveSchemeBindings(schemeId, state.schemes),
+          customKeysOf(state.shortcuts)
+        )
+      }
+    }),
 
   setShortcuts: (shortcuts) => set({ shortcuts, isLoaded: true }),
 
@@ -59,23 +98,110 @@ export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>((set) =>
       }
     }),
 
-  resetAllShortcuts: () => set({ shortcuts: cloneDefaults() })
+  resetAllShortcuts: () =>
+    set((state) => ({
+      shortcuts: buildSchemeShortcuts(resolveSchemeBindings(state.schemeId, state.schemes), {})
+    }))
 }))
 
-// Helper: Check if a key combination conflicts with any other shortcut
+// Helper: Check if a key combination conflicts with any other shortcut that
+// can fire in the same place (see `scopesOverlap`).
 export function findConflictingShortcut(
   shortcuts: KeyboardShortcutsConfig,
   key: string,
   excludeId: string
 ): KeyboardShortcut | undefined {
+  if (!key) return undefined
+  const scope = shortcuts[excludeId]?.scope
+  const target = conflictKey(key)
   for (const shortcut of Object.values(shortcuts)) {
-    if (shortcut.id === excludeId) continue
+    if (shortcut.id === excludeId || !scopesOverlap(scope, shortcut.scope)) continue
     const activeKey = shortcut.customKey ?? shortcut.defaultKey
-    if (shortcutsEqual(activeKey, key)) {
+    if (activeKey && conflictKey(activeKey) === target) {
       return shortcut
     }
   }
   return undefined
+}
+
+/** Keys Se handles outside the configurable table. */
+export type ReservedShortcutId =
+  | 'projectSwitch'
+  | 'systemEdit'
+  | 'macQuit'
+  | 'macHide'
+  | 'macMinimize'
+
+const RESERVED_SHORTCUTS: readonly { id: ReservedShortcutId; keys: string[]; macOnly?: boolean }[] =
+  [
+    // ⌘1–9 / Ctrl+1–9 switch projects (WorkspaceLayout) and stay fixed.
+    {
+      id: 'projectSwitch',
+      keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => `ctrl+${digit}`)
+    },
+    // The native Edit menu owns these; macOS never delivers ⌘V to the webview.
+    {
+      id: 'systemEdit',
+      keys: ['ctrl+c', 'ctrl+v', 'ctrl+x', 'ctrl+a', 'ctrl+z', 'ctrl+shift+z']
+    },
+    { id: 'macQuit', keys: ['cmd+q'], macOnly: true },
+    { id: 'macHide', keys: ['cmd+h', 'cmd+alt+h'], macOnly: true },
+    { id: 'macMinimize', keys: ['cmd+m'], macOnly: true }
+  ]
+
+export function findReservedShortcut(key: string): ReservedShortcutId | undefined {
+  if (!key) return undefined
+  const target = conflictKey(key)
+  return RESERVED_SHORTCUTS.find(
+    (reserved) =>
+      (!reserved.macOnly || isMac) && reserved.keys.some((item) => conflictKey(item) === target)
+  )?.id
+}
+
+export type ShortcutConflict =
+  | { kind: 'duplicate'; otherId: string }
+  | { kind: 'reserved'; reservedId: ReservedShortcutId }
+
+/** Every conflict of every bound shortcut, keyed by shortcut id. */
+export function detectShortcutConflicts(
+  shortcuts: KeyboardShortcutsConfig
+): Record<string, ShortcutConflict[]> {
+  const result: Record<string, ShortcutConflict[]> = {}
+  const entries = Object.values(shortcuts)
+  for (const shortcut of entries) {
+    const key = shortcut.customKey ?? shortcut.defaultKey
+    const conflicts: ShortcutConflict[] = []
+    const reservedId = findReservedShortcut(key)
+    if (reservedId) conflicts.push({ kind: 'reserved', reservedId })
+    const target = conflictKey(key)
+    for (const other of entries) {
+      if (other.id === shortcut.id || !scopesOverlap(shortcut.scope, other.scope)) continue
+      const otherKey = other.customKey ?? other.defaultKey
+      if (otherKey && conflictKey(otherKey) === target) {
+        conflicts.push({ kind: 'duplicate', otherId: other.id })
+      }
+    }
+    if (conflicts.length > 0) result[shortcut.id] = conflicts
+  }
+  return result
+}
+
+// Two shortcuts can collide when they listen in the same place: a global one
+// fires everywhere, a scoped one only while its surface has focus.
+function scopesOverlap(left: ShortcutScope | undefined, right: ShortcutScope | undefined): boolean {
+  const a = left ?? 'global'
+  const b = right ?? 'global'
+  return a === b || a === 'global' || b === 'global'
+}
+
+// The physical press a key stands for. On macOS a lone ctrl modifier fires
+// on ⌘ (see matchesShortcut), so 'ctrl+k' and 'cmd+k' are the same press.
+function conflictKey(key: string): string {
+  const canonical = canonicalizeShortcutKey(key)
+  if (!isMac) return canonical
+  const parts = canonical.split('+')
+  if (!parts.includes('ctrl') || parts.includes('cmd')) return canonical
+  return canonicalizeShortcutKey(parts.map((part) => (part === 'ctrl' ? 'cmd' : part)).join('+'))
 }
 
 const MODIFIER_ORDER = ['ctrl', 'cmd', 'shift', 'alt'] as const

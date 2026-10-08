@@ -91,6 +91,12 @@ import { runCloseFlush } from '@/lib/close-flush'
 import { getColorClasses } from '@/lib/colors'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
+import {
+  findAdjacentPane,
+  findPaneInDirection,
+  focusPaneSurface,
+  type PaneFocusDirection
+} from '@/lib/pane-navigation'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { isConversationAreaPath, setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
@@ -271,6 +277,19 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
     </div>
   )
 }
+
+// Pane focus shortcuts and where each one moves focus.
+const PANE_FOCUS_SHORTCUTS: readonly {
+  id: string
+  direction: PaneFocusDirection | 'next' | 'prev'
+}[] = [
+  { id: 'focusPaneLeft', direction: 'left' },
+  { id: 'focusPaneRight', direction: 'right' },
+  { id: 'focusPaneUp', direction: 'up' },
+  { id: 'focusPaneDown', direction: 'down' },
+  { id: 'focusPaneNext', direction: 'next' },
+  { id: 'focusPanePrev', direction: 'prev' }
+]
 
 export default function WorkspaceLayout(): React.JSX.Element {
   const { t } = useTranslation('workspace')
@@ -1941,6 +1960,46 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
+      // Pane actions (iTerm2 / Ghostty style): split, move focus, maximize.
+      if (isWorkspaceRoute) {
+        const workspace = useWorkspaceStore.getState()
+        const paneId = workspace.activePaneId
+        const splitPosition = matchesShortcut(e, getActiveKey('splitRight'))
+          ? 'right'
+          : matchesShortcut(e, getActiveKey('splitDown'))
+            ? 'bottom'
+            : null
+        if (splitPosition) {
+          e.preventDefault()
+          e.stopPropagation()
+          if (paneId) handleSplitTerminal(paneId, splitPosition)
+          return
+        }
+        const focusTarget = PANE_FOCUS_SHORTCUTS.find(({ id }) =>
+          matchesShortcut(e, getActiveKey(id))
+        )
+        if (focusTarget) {
+          e.preventDefault()
+          e.stopPropagation()
+          const targetPaneId = !paneId
+            ? null
+            : focusTarget.direction === 'next' || focusTarget.direction === 'prev'
+              ? findAdjacentPane(workspace.root, paneId, focusTarget.direction === 'next' ? 1 : -1)
+              : findPaneInDirection(workspace.root, paneId, focusTarget.direction)
+          if (targetPaneId) {
+            workspace.setActivePane(targetPaneId)
+            focusPaneSurface(targetPaneId)
+          }
+          return
+        }
+        if (matchesShortcut(e, getActiveKey('togglePaneZoom'))) {
+          e.preventDefault()
+          e.stopPropagation()
+          if (paneId) workspace.togglePaneFullscreen(paneId)
+          return
+        }
+      }
+
       // Zoom in/out/reset — whole-UI zoom (VS Code style)
       if (matchesShortcut(e, getActiveKey('zoomIn'))) {
         e.preventDefault()
@@ -1999,6 +2058,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     cycleTab,
     activeTab,
     handleCreateTerminalInPane,
+    handleSplitTerminal,
     handleNewBrowserTab,
     updatePanelVisibility,
     isExplorerVisible,

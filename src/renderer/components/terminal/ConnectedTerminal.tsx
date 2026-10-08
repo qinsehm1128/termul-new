@@ -120,7 +120,10 @@ function isAppOwnedTerminalShortcut(
   // 1. App shortcuts take priority over readline passthrough.
   // This ensures commandPalette, commandHistory, etc. work from terminal
   // focus even though their Ctrl+key also matches a readline binding.
+  // Only global shortcuts: a file-explorer key such as Delete must still
+  // reach the shell, and terminal-scoped ones are handled by the terminal.
   for (const shortcut of Object.values(shortcuts)) {
+    if ((shortcut.scope ?? 'global') !== 'global') continue
     const activeKey = shortcut.customKey ?? shortcut.defaultKey
     if (matchesShortcut(event, activeKey)) {
       return true
@@ -1200,6 +1203,17 @@ function ConnectedTerminalComponent({
       if (event.type !== 'keydown') return true
 
       const shortcuts = shortcutsRef.current
+
+      const clearShortcut = shortcuts.clearTerminal
+      if (
+        clearShortcut &&
+        matchesShortcut(event, clearShortcut.customKey ?? clearShortcut.defaultKey)
+      ) {
+        // preventDefault keeps a global shortcut on the same key from also firing.
+        event.preventDefault()
+        terminal.clear()
+        return false
+      }
 
       // Check if this key matches any app shortcut
       // On macOS: Ctrl+key shortcuts should pass through to the shell (not intercepted by app)
