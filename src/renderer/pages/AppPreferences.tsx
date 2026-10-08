@@ -75,6 +75,7 @@ import {
   useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout,
+  useResumeAgentSessionsOnRestore,
   useSidebarFontSize,
   useTerminalBufferSize,
   useTerminalFontFamily,
@@ -217,6 +218,12 @@ const APP_PREF_SEARCH_DEFS = [
     labelKey: 'behavior.openLinks',
     descriptionKey: 'behavior.openLinksHint',
     keywords: ['url', 'links', 'browser']
+  },
+  {
+    categoryId: 'behavior',
+    labelKey: 'behavior.resumeAgentSessions',
+    descriptionKey: 'behavior.resumeAgentSessionsHint',
+    keywords: ['resume', 'restore', 'claude', 'codex', 'pi', 'qin-code', 'agent']
   },
   {
     categoryId: 'behavior',
@@ -425,6 +432,7 @@ export default function AppPreferences(): React.JSX.Element {
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
   const confirmTerminalClose = useConfirmTerminalClose()
+  const resumeAgentSessionsOnRestore = useResumeAgentSessionsOnRestore()
   const confirmTerminalTerminate = useConfirmTerminalTerminate()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
   const acpTurnTimeoutSecs = useAcpTurnTimeout()
@@ -588,6 +596,10 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleConfirmTerminalTerminateToggle = async (enabled: boolean) => {
     await updateSetting('confirmTerminalTerminate', enabled)
+  }
+
+  const handleResumeAgentSessionsToggle = async (enabled: boolean) => {
+    await updateSetting('resumeAgentSessionsOnRestore', enabled)
   }
 
   const handleOrphanDetectionToggle = async (enabled: boolean) => {
@@ -1202,6 +1214,37 @@ export default function AppPreferences(): React.JSX.Element {
                           className={cn(
                             'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
                             confirmTerminalClose ? 'translate-x-6' : 'translate-x-1'
+                          )}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-md bg-secondary/25 px-3 py-2.5 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.035)]">
+                      <div className="flex-1">
+                        <div className="text-sm text-foreground">
+                          {tSettings('behavior.resumeAgentSessions')}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {tSettings('behavior.resumeAgentSessionsHint')}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={resumeAgentSessionsOnRestore}
+                        aria-label={tSettings('behavior.resumeAgentSessions')}
+                        onClick={() =>
+                          handleResumeAgentSessionsToggle(!resumeAgentSessionsOnRestore)
+                        }
+                        className={cn(
+                          'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                          resumeAgentSessionsOnRestore ? 'bg-primary' : 'bg-input'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                            resumeAgentSessionsOnRestore ? 'translate-x-6' : 'translate-x-1'
                           )}
                         />
                       </button>

@@ -1,6 +1,7 @@
 // Import GitStatus from shared types to ensure consistency
 // between IPC contract and renderer domain models
 import { acceptedBrandValues } from '@shared/brand'
+import type { TerminalAgentSession } from '@shared/types/cli-session.types'
 import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
 import type { TerminalResourceHydrationStatus } from '@shared/types/session-workspace.types'
 import type { AgentTerminalState } from '@/lib/agents/agent-terminal-state'
@@ -157,6 +158,12 @@ export interface Terminal {
   agentProgram?: string // Resolved/declared program for restore re-spawn (no prompt)
   agentArgs?: string[] // baseArgs only (seed prompt intentionally excluded for restore)
   kind?: 'shell' | 'agent' // Session type marker; defaults to 'shell' when unset
+  /**
+   * The claude / codex / pi / qin-code session last detected running under
+   * this terminal's shell, whoever started it. Persisted so a restore after
+   * the process died can reopen it.
+   */
+  agentSession?: TerminalAgentSession
   /**
    * Latest OSC 0/2 title the child process set, or null once it cleared it.
    * Evidence for `agentState`, not a display label — the tab keeps using

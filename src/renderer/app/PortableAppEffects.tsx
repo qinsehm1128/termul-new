@@ -6,6 +6,7 @@ import { useAcpHistory } from '@/hooks/use-acp-history'
 import { useAcpListeners } from '@/hooks/use-acp-listeners'
 import { useAcpMcp } from '@/hooks/use-acp-mcp'
 import { useAcpSessionResume } from '@/hooks/use-acp-session-resume'
+import { useAgentSessionTracker } from '@/hooks/use-agent-session-tracker'
 import { useAgentTerminalState } from '@/hooks/use-agent-terminal-state'
 import { useAppSettingsLoader } from '@/hooks/use-app-settings'
 import { useAppliedColorThemeSync } from '@/hooks/use-color-theme'
@@ -80,6 +81,7 @@ export function PortableAppEffects(): React.JSX.Element | null {
   useAppliedColorThemeSync()
   useAppliedUiZoomSync()
   useAppliedSidebarFontSizeSync()
+  useAgentSessionTracker()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()

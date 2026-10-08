@@ -98,6 +98,8 @@
     "confirmTerminalTerminateHint": "结束终端会连同它启动的所有进程一起结束。关掉此项则点 × 直接关闭，不再确认。",
     "confirmTerminalClose": "隐藏终端前询问",
     "confirmTerminalCloseHint": "仅在关闭标签后进程仍继续运行时生效，例如 agent 打开的终端。",
+    "resumeAgentSessions": "恢复时续接 agent 会话",
+    "resumeAgentSessionsHint": "重启后终端进程已不在时，自动用 resume 重新打开其中运行过的 claude、codex、pi 或 qin-code 会话，而不是只留一个空 shell。",
     "enableOrphanDetection": "启用孤立终端检测",
     "orphanDetectionHint": "自动清理长时间未活动的终端",
     "cleanupTimeout": "清理前等待时间",

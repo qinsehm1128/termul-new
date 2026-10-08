@@ -3406,6 +3406,7 @@ pub fn run() {
             scheduled_tasks::commands::scheduled_task_list_audit,
             cli_session::commands::list_cli_sessions_cmd,
             cli_session::commands::resolve_cli_sessions_cmd,
+            cli_session::commands::detect_live_agent_sessions_cmd,
             memory_index::commands::memory_index_build_cmd,
             memory_index::commands::memory_index_status_cmd,
             memory_index::commands::memory_index_search_cmd,

@@ -1,3 +1,4 @@
+import type { TerminalAgentSession } from '@shared/types/cli-session.types'
 import type {
   IpcResult,
   TerminalCoreRestartedEvent,
@@ -187,6 +188,8 @@ export interface TerminalState {
   setTerminalClaim: (ptyId: string, claim: string | undefined) => void
   findTerminalByPtyId: (ptyId: string) => Terminal | undefined
   setTerminalAgentMetadata: (id: string, meta: TerminalAgentMetadata) => void
+  /** Record (or clear) the agent session last detected under this terminal. */
+  setTerminalAgentSession: (id: string, session: TerminalAgentSession | undefined) => void
   updateTerminalCwd: (id: string, cwd: string) => void
   updateTerminalGitBranch: (id: string, gitBranch: string | null) => void
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
@@ -831,6 +834,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             }
           : t
       )
+    }))
+  },
+
+  setTerminalAgentSession: (id: string, session: TerminalAgentSession | undefined): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => {
+        if (t.id !== id) return t
+        if (session) return { ...t, agentSession: session }
+        const { agentSession: _cleared, ...rest } = t
+        return rest
+      })
     }))
   },
 

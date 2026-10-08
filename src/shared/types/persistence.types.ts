@@ -1,3 +1,4 @@
+import type { TerminalAgentSession } from './cli-session.types'
 import type { TerminalModes } from './ipc.types'
 
 // Persisted terminal data (subset of Terminal for storage)
@@ -25,6 +26,11 @@ export interface PersistedTerminal {
   agentName?: string
   agentProgram?: string
   agentArgs?: string[]
+  /**
+   * The agent session last seen running in this terminal. Restore uses it only
+   * when the process is gone, to reopen that session rather than a bare shell.
+   */
+  agentSession?: TerminalAgentSession
 }
 
 // Default scrollback limit to prevent excessive storage

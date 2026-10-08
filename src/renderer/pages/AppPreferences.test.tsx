@@ -316,6 +316,20 @@ describe('AppPreferences settings controls', () => {
     expect(mockWriteDebounced).toHaveBeenCalled()
   })
 
+  it('resumes agent sessions on restore by default and lets the user turn it off', async () => {
+    renderPage()
+
+    const toggle = await screen.findByRole('switch', { name: 'Resume agent sessions on restore' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.resumeAgentSessionsOnRestore).toBe(false)
+    })
+    expect(mockWriteDebounced).toHaveBeenCalled()
+  })
+
   it('explains a preserved Core as reconnect and still restarts the GUI', () => {
     updaterFixture.updateAvailable = true
     updaterFixture.version = '1.2.3'
