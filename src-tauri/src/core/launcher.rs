@@ -507,6 +507,14 @@ pub(crate) async fn probe_endpoint(
     }
 }
 
+/// How long a replaced Core gets to exit after `shutdown`. Both Cores clean
+/// up first under a five-second budget (Terminal Core reaps its PTYs within
+/// `TERMINAL_CLEANUP_DEADLINE`, ACP Core flushes its catalog within the same),
+/// and a forced update replaces them while they still run terminals and
+/// agents. Giving up sooner reports a dying Core as "still live" and the GUI
+/// then refuses both the spawn and the in-process fallback.
+pub(crate) const CORE_REPLACE_EXIT_DEADLINE: Duration = Duration::from_secs(8);
+
 async fn replace_incompatible_core(
     endpoint: &CoreEndpoint,
     role: CoreRole,
@@ -515,7 +523,7 @@ async fn replace_incompatible_core(
     // Always wait for the endpoint to go absent. A rejected pre-hello peer is
     // not in the request loop, so a shutdown frame must not be treated as
     // processed just because connect succeeded.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + CORE_REPLACE_EXIT_DEADLINE;
     loop {
         let presence = probe_endpoint_presence(endpoint, role).await;
         if presence.allows_unlink_and_spawn() {
@@ -944,6 +952,16 @@ mod tests {
         assert_eq!(
             classify_core_identity(&current, CoreRole::AcpCore),
             CoreIdentityState::Stale
+        );
+    }
+
+    #[test]
+    fn replacement_waits_out_the_cores_own_cleanup_budget() {
+        // A forced update shuts a busy Terminal Core down; it may spend the
+        // whole PTY cleanup deadline before its endpoint goes away.
+        assert!(
+            CORE_REPLACE_EXIT_DEADLINE
+                >= se_pty::manager::TERMINAL_CLEANUP_DEADLINE + Duration::from_secs(2)
         );
     }
 
