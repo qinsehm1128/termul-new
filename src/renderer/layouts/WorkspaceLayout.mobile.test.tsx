@@ -129,14 +129,25 @@ vi.mock('@/stores/remote-status-store', () => ({
 // `useFullscreenPaneId`, `useSidebarVisible`, `useFileExplorerVisible`, …) is
 // defined. Their default/empty state is fine for the mobile branch.
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
+vi.mock('@/stores/keyboard-shortcuts-store', async () => ({
+  formatKeyForDisplay: (
+    await vi.importActual<typeof import('@/stores/keyboard-shortcuts-store')>(
+      '@/stores/keyboard-shortcuts-store'
+    )
+  ).formatKeyForDisplay,
   useKeyboardShortcutsStore: vi.fn(
     (
       selector?: (state: {
-        shortcuts: Record<string, { customKey: string; defaultKey: string }>
+        shortcuts: Record<string, { customKey?: string; defaultKey: string }>
       }) => unknown
     ) => {
-      const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
+      const state = {
+        shortcuts: {
+          commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' },
+          newTerminal: { defaultKey: 'ctrl+t' },
+          clearTerminal: { defaultKey: '' }
+        }
+      }
       return selector ? selector(state) : state
     }
   ),
@@ -172,8 +183,27 @@ vi.mock('@/hooks/use-command-history', () => ({
 // in `cmdk` (whose scrollIntoView call is not implemented in jsdom). The real
 // overlay rendering is covered in CommandPalette.test.tsx.
 vi.mock('@/components/CommandPalette', () => ({
-  CommandPalette: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <input placeholder="Search commands, projects, settings..." readOnly /> : null
+  CommandPalette: ({
+    isOpen,
+    getShortcutLabel,
+    getProjectShortcutLabel
+  }: {
+    isOpen: boolean
+    getShortcutLabel?: (id: string) => string | undefined
+    getProjectShortcutLabel?: (index: number) => string | undefined
+  }) =>
+    isOpen ? (
+      <>
+        <input placeholder="Search commands, projects, settings..." readOnly />
+        <span data-testid="palette-shortcut-labels">
+          {[
+            getShortcutLabel?.('newTerminal'),
+            getShortcutLabel?.('clearTerminal') ?? 'none',
+            getProjectShortcutLabel?.(0)
+          ].join('|')}
+        </span>
+      </>
+    ) : null
 }))
 
 // GitPanel dependencies (rendered inside the mobile git Sheet).
@@ -556,6 +586,20 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(
       await screen.findByPlaceholderText('Search commands, projects, settings...')
     ).toBeInTheDocument()
+  })
+
+  it('hands the palette display labels: formatted keys, none when unbound, ⌘1–9 for projects', async () => {
+    render(
+      <MemoryRouter>
+        <WorkspaceLayout />
+      </MemoryRouter>
+    )
+    await openMobileOverflow()
+    fireEvent.click(await screen.findByLabelText('Command palette'))
+    // jsdom is not macOS, so the primary modifier reads Ctrl.
+    expect(await screen.findByTestId('palette-shortcut-labels')).toHaveTextContent(
+      'Ctrl+T|none|Ctrl+1'
+    )
   })
 
   it('opens the Git Changes Sheet with the mobile GitPanel file list when the trigger is tapped', async () => {

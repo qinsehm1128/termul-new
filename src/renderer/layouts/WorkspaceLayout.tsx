@@ -125,7 +125,11 @@ import { useCliSessionPanelVisible } from '@/stores/cli-session-panel-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
-import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import {
+  formatKeyForDisplay,
+  matchesShortcut,
+  useKeyboardShortcutsStore
+} from '@/stores/keyboard-shortcuts-store'
 import { useLastSessionStore } from '@/stores/last-session-store'
 import {
   useActiveProject,
@@ -1280,17 +1284,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const getShortcutLabel = useCallback(
     (id: string): string | undefined => {
       const shortcut = shortcuts[id]
-      return shortcut ? (shortcut.customKey ?? shortcut.defaultKey) : undefined
+      const key = shortcut ? (shortcut.customKey ?? shortcut.defaultKey) : ''
+      return key ? formatKeyForDisplay(key) : undefined
     },
     [shortcuts]
   )
 
+  // ⌘1–9 / Ctrl+1–9 switch projects; fixed, not part of the shortcut table.
   const getProjectShortcutLabel = useCallback(
-    (index: number): string | undefined => {
-      const shortcut = shortcuts[`project-${index + 1}`]
-      return shortcut ? (shortcut.customKey ?? shortcut.defaultKey) : undefined
-    },
-    [shortcuts]
+    (index: number): string | undefined => formatKeyForDisplay(`ctrl+${index + 1}`),
+    []
   )
 
   const uiZoomLevel = useUiZoomLevel()
