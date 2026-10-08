@@ -564,6 +564,7 @@ describe('AppPreferences update component diff and forced install', () => {
 
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
     expect(screen.queryByRole('button', { name: 'Force Update' })).not.toBeInTheDocument()
-    expect(screen.queryByTestId('update-component-diff')).not.toBeInTheDocument()
+    expect(screen.queryByText('Component changes')).not.toBeInTheDocument()
+    expect(fetchComponentRuntimeIdentities).not.toHaveBeenCalled()
   })
 })

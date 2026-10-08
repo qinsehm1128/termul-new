@@ -8,7 +8,7 @@ import {
   shortBuildId
 } from './update-component-diff'
 
-const HASH = 'a'.repeat(52) + '0123456789ab'
+const HASH = `${'a'.repeat(52)}0123456789ab`
 
 const policy: UpdateComponentPolicy = {
   schemaVersion: 1,
