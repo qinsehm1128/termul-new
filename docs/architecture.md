@@ -359,7 +359,7 @@ Standalone `se-server` owns its `PtyManager` and terminates those PTYs after gra
 ## Recommended Reading Order for Changes
 
 ### Terminal work
-1. `src-tauri/src/core/terminal.rs` (independent Terminal Core ownership, local IPC, attach/replay)
+1. `src-tauri/crates/se-terminal-core/src/terminal.rs` (independent Terminal Core ownership, local IPC, attach/replay)
 2. `src/renderer/components/terminal/ConnectedTerminal.tsx`
 3. `src/renderer/stores/terminal-store.ts`
 4. `src/renderer/lib/tauri-terminal-api.ts`
@@ -370,7 +370,7 @@ Standalone `se-server` owns its `PtyManager` and terminates those PTYs after gra
 
 Desktop can run two independent long-lived roles from the packaged executable:
 
-- `--terminal-core`: the sole owner of desktop PTYs, claims, trackers, output sequence/replay state, bounded scrollback, and terminal cleanup.
+- `--terminal-core`: the sole owner of desktop PTYs, claims, trackers, output sequence/replay state, bounded scrollback, and terminal cleanup. It is built from the `se-terminal-core` crate and ships as its own lean `se-terminal-core` executable beside the app binary (no WebView); the launcher runs that when present and falls back to the app executable's `--terminal-core` flag.
 - `--acp-core`: the sole owner of the ACP manager, the Conversation durable writer (bootstrap-owned ordered persistence), the WS relay's durable admission, both rendezvous, scheduled tasks, and the memory index. The GUI proxies every command family over Core IPC (acp/history/conversation/scheduled-task/memory) and mirrors `acp:*` events verbatim; shared-live serves phone/browser history, conversations, tasks, and memory through the same Core-backed host.
 - normal Tauri GUI: a client/launcher. It may adopt an existing Core endpoint and must not kill Core-owned PTYs during ordinary exit/relaunch. A supervisor watches both endpoints (3-miss detection, owned-child SIGTERM before respawn, in-place client reconnect with terminal stream restore); Windows named-pipe transport is compile-level only until validated on real Windows.
 

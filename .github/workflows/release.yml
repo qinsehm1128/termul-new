@@ -409,6 +409,33 @@ jobs:
           }
           NODE
 
+      # The launcher falls back to `<app> --terminal-core` when this executable
+      # is absent, so a bundling regression would not fail anything else.
+      - name: Verify the standalone Terminal Core is bundled
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=("src-tauri/target/$RUST_TARGET/release/bundle/macos"/*.app)
+          if [[ "${#apps[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS app bundle." >&2
+            exit 1
+          fi
+          core="${apps[0]}/Contents/MacOS/se-terminal-core"
+          if [[ ! -f "$core" || ! -x "$core" ]]; then
+            echo "se-terminal-core is missing from ${apps[0]}" >&2
+            exit 1
+          fi
+          linked="$(otool -L "$core")"
+          printf '%s\n' "$linked"
+          if grep -q 'WebKit' <<< "$linked"; then
+            echo "se-terminal-core links WebKit; it must link only the se-terminal-core crate" >&2
+            exit 1
+          fi
+
       - name: Verify macOS bundle library portability and signing
         if: startsWith(matrix.platform, 'macos-') && env.APPLE_CERTIFICATE != ''
         shell: bash
