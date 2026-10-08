@@ -5,6 +5,10 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import {
+  resetQuickTerminalStore,
+  useQuickTerminalStore
+} from '@/features/quick-terminal/quick-terminal-store'
 import { persistState, restoreProjectWorkspace } from '@/hooks/use-editor-persistence'
 import WorkspaceDashboard from '@/pages/WorkspaceDashboard'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
@@ -1687,6 +1691,119 @@ describe('WorkspaceLayout - conversation area navigation', () => {
     await waitFor(() => {
       expect(vi.mocked(persistState)).toHaveBeenCalledWith('a')
     })
+  })
+})
+
+describe('WorkspaceLayout - quick terminal file tree', () => {
+  const quickTerminalCwd = '/Users/qs/Documents/Se/terminals/2026/10/08/qt-1'
+
+  beforeEach(() => {
+    const project = createProject('a', '/workspace/a', 'blue')
+    mockUseProjects.mockReturnValue([project])
+    mockUseActiveProject.mockReturnValue(project)
+    mockUseActiveProjectId.mockReturnValue('a')
+    useQuickTerminalStore.setState({
+      loaded: true,
+      records: [
+        {
+          schemaVersion: 1,
+          id: 'qt-1',
+          target: { kind: 'workspace' },
+          cwd: quickTerminalCwd,
+          createdAtUtc: '2026-10-08T00:00:00Z',
+          updatedAtUtc: '2026-10-08T00:00:00Z',
+          origin: 'created'
+        }
+      ]
+    })
+    mockApi.filesystem.setWatchRoots.mockClear()
+  })
+
+  afterEach(() => {
+    resetQuickTerminalStore()
+    useFileExplorerStore.getState().setRootPath(null)
+  })
+
+  function renderAt(path: string): MutableRefObject<((to: string) => void) | null> {
+    const navigateRef: MutableRefObject<((to: string) => void) | null> = { current: null }
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <WorkspaceLayoutWithNavigate navigateRef={navigateRef} />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    return navigateRef
+  }
+
+  function lastWatchRoots(): unknown {
+    return mockApi.filesystem.setWatchRoots.mock.calls.at(-1)?.[0]
+  }
+
+  // Reported: an open quick terminal's page showed its folder in the header
+  // while the explorer beside it listed the active project's files.
+  it("roots the file tree and the watched set at the open quick terminal's folder", async () => {
+    const navigateRef = renderAt('/')
+    await waitFor(() => {
+      expect(useFileExplorerStore.getState().rootPath).toBe('/workspace/a')
+    })
+
+    act(() => {
+      navigateRef.current?.('/quick-terminals/qt-1')
+    })
+
+    await waitFor(() => {
+      expect(useFileExplorerStore.getState().rootPath).toBe(quickTerminalCwd)
+      expect(lastWatchRoots()).toEqual([quickTerminalCwd])
+    })
+    expect(screen.getByTestId('file-explorer-panel-fade')).toHaveClass('opacity-100')
+
+    act(() => {
+      navigateRef.current?.('/')
+    })
+
+    await waitFor(() => {
+      expect(useFileExplorerStore.getState().rootPath).toBe('/workspace/a')
+      expect(lastWatchRoots()).toEqual(['/workspace/a'])
+    })
+  })
+
+  it('keeps the project tree on the quick terminal list, where no folder is open', async () => {
+    renderAt('/quick-terminals')
+
+    await waitFor(() => {
+      expect(useFileExplorerStore.getState().rootPath).toBe('/workspace/a')
+      expect(lastWatchRoots()).toEqual(['/workspace/a'])
+    })
+  })
+
+  it("brings the project's expanded directories back after visiting a quick terminal", async () => {
+    mockApi.filesystem.readDirectory.mockResolvedValue({ success: true, data: [] })
+    const navigateRef = renderAt('/')
+    await waitFor(() => {
+      expect(useFileExplorerStore.getState().rootPath).toBe('/workspace/a')
+    })
+    useFileExplorerStore.getState().setExpandedDirs(new Set(['/workspace/a/src']))
+
+    act(() => {
+      navigateRef.current?.('/quick-terminals/qt-1')
+    })
+    await waitFor(() => {
+      expect(useFileExplorerStore.getState().rootPath).toBe(quickTerminalCwd)
+    })
+    // Persistence keeps saving the project's own set while the tree is away.
+    expect([...(useFileExplorerStore.getState().setAsideExpandedDirs ?? [])]).toEqual([
+      '/workspace/a/src'
+    ])
+
+    act(() => {
+      navigateRef.current?.('/')
+    })
+
+    await waitFor(() => {
+      expect(useFileExplorerStore.getState().expandedDirs.has('/workspace/a/src')).toBe(true)
+    })
+    expect(useFileExplorerStore.getState().setAsideExpandedDirs).toBeNull()
   })
 })
 

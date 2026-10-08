@@ -888,7 +888,9 @@ export function persistState(projectId: string): void {
     openFiles.push(persisted)
   })
 
-  const expandedDirs = Array.from(explorerState.expandedDirs)
+  // While the tree shows a folder outside the project, the project's own
+  // expanded directories are the set-aside ones.
+  const expandedDirs = Array.from(explorerState.setAsideExpandedDirs ?? explorerState.expandedDirs)
 
   const data: PersistedEditorState = {
     openFiles,
