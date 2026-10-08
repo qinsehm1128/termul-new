@@ -58,6 +58,8 @@ export const useConfirmTerminalClose = () =>
   useAppSettingsStore((state) => state.settings.confirmTerminalClose)
 export const useConfirmTerminalTerminate = () =>
   useAppSettingsStore((state) => state.settings.confirmTerminalTerminate)
+export const useResumeAgentSessionsOnRestore = () =>
+  useAppSettingsStore((state) => state.settings.resumeAgentSessionsOnRestore)
 export const useTerminalUrlOpenMode = () =>
   useAppSettingsStore((state) => state.settings.terminalUrlOpenMode)
 export const useSidebarVisibilitySetting = () =>

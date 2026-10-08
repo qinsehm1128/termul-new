@@ -98,6 +98,8 @@
     "confirmTerminalTerminateHint": "Ending a terminal also ends everything it started. Turn this off to close without a prompt.",
     "confirmTerminalClose": "Ask before hiding a terminal",
     "confirmTerminalCloseHint": "Only applies when closing the tab leaves the process running, such as a terminal an agent opened.",
+    "resumeAgentSessions": "Resume agent sessions on restore",
+    "resumeAgentSessionsHint": "When a terminal's process is gone after a restart, reopen the claude, codex, pi or qin-code session it was running instead of an empty shell.",
     "enableOrphanDetection": "Enable orphan detection",
     "orphanDetectionHint": "Automatically clean up terminals that have been inactive",
     "cleanupTimeout": "Timeout Before Cleanup",

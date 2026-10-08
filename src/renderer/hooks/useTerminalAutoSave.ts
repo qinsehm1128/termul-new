@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { isSameAgentSession } from '@/lib/agents/live-agent-sessions'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
@@ -85,7 +86,8 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
             agentProgram: terminal.agentProgram,
             agentArgs: terminal.agentArgs
           }
-        : {})
+        : {}),
+      ...(terminal.agentSession ? { agentSession: terminal.agentSession } : {})
     },
     scrollbackExtractionAvailable: extractedScrollback !== undefined,
     extractedScrollbackLineCount: extractedScrollback?.length ?? 0
@@ -207,7 +209,8 @@ export function hasStructuralTerminalChange(next: Terminal[], prev: Terminal[]):
       t.agentId !== previous.agentId ||
       t.agentName !== previous.agentName ||
       t.agentProgram !== previous.agentProgram ||
-      JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(previous.agentArgs ?? [])
+      JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(previous.agentArgs ?? []) ||
+      !isSameAgentSession(t.agentSession, previous.agentSession)
     )
   })
 }

@@ -1,3 +1,4 @@
+import type { TerminalAgentSession } from '@shared/types/cli-session.types'
 import type { TerminalStatus } from '@shared/types/ipc.types'
 import { useEffect, useRef, useState } from 'react'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
@@ -6,6 +7,7 @@ import { formatNumber } from '@/i18n/format'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
+import { resumeCommandLine, reviveTerminalAgentSession } from '@/lib/agents/live-agent-sessions'
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { shellApi } from '@/lib/shell-api'
@@ -930,7 +932,15 @@ async function restoreFromLayout(
       agentName?: string
       agentProgram?: string
       agentArgs?: string[]
+      agentSession?: TerminalAgentSession
     }> = []
+
+    // A remembered agent session is reopened at most once per restore, even if
+    // two terminals remembered it; its resume command is typed into the fresh
+    // shell once the terminals are in the store.
+    const resumeAgentSessions = useAppSettingsStore.getState().settings.resumeAgentSessionsOnRestore
+    const resumedSessionKeys = new Set<string>()
+    const pendingResumeWrites: PendingResumeWrite[] = []
 
     // Map old IDs to new IDs for active terminal selection and pane remapping
     const idMap = new Map<string, string>()
@@ -995,6 +1005,7 @@ async function restoreFromLayout(
               kind: 'agent' as const
             }
           : null
+        const rememberedSession = reviveTerminalAgentSession(persistedTerminal.agentSession)
 
         const liveMatch = matchLiveProjectPty(
           persistedTerminal,
@@ -1038,13 +1049,37 @@ async function restoreFromLayout(
                   agentProgram: persistedTerminal.agentProgram,
                   agentArgs: persistedTerminal.agentArgs
                 }
-              : {})
+              : {}),
+            // Still running: nothing to resume, but keep knowing what it is.
+            ...(rememberedSession ? { agentSession: rememberedSession } : {})
           })
           debugLog('restoreFromLayout', `Adopted live PTY [${terminalCallId}]`, {
             ptyId: liveMatch.id
           })
           continue
         }
+
+        // The process is gone. If it was running an agent session, reopen that
+        // session where it ran instead of only replaying its old screen.
+        const sessionKey = rememberedSession
+          ? `${rememberedSession.agentId}:${rememberedSession.sessionId}`
+          : ''
+        const resumeSession =
+          resumeAgentSessions && rememberedSession && !resumedSessionKeys.has(sessionKey)
+            ? rememberedSession
+            : null
+        if (resumeSession) resumedSessionKeys.add(sessionKey)
+        const spawnCwd = resumeSession?.cwd ?? persistedTerminal.cwd
+        // An agent tab has no shell to type into: run the resume command as
+        // its program. A shell tab gets the command typed once it is up.
+        const programSpawnOptions =
+          resumeSession && agentSpawnOptions
+            ? {
+                program: resumeSession.resumeArgv[0],
+                args: resumeSession.resumeArgv.slice(1),
+                kind: 'agent' as const
+              }
+            : agentSpawnOptions
 
         // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
         // FIX #1b: Kill orphan PTY if timeout fires after spawn resolves
@@ -1053,17 +1088,17 @@ async function restoreFromLayout(
         const spawnResult = await Promise.race([
           (async () => {
             const result = await terminalApi.spawn(
-              agentSpawnOptions
+              programSpawnOptions
                 ? {
                     projectId,
-                    cwd: persistedTerminal.cwd,
-                    ...agentSpawnOptions,
+                    cwd: spawnCwd,
+                    ...programSpawnOptions,
                     ...(spawnEnv ? { env: spawnEnv } : {})
                   }
                 : {
                     projectId,
                     shell: normalizedShell,
-                    cwd: persistedTerminal.cwd,
+                    cwd: spawnCwd,
                     ...(spawnEnv ? { env: spawnEnv } : {})
                   }
             )
@@ -1124,13 +1159,20 @@ async function restoreFromLayout(
         // FIX #6: Increment SPAWN_CALL_COUNT for each successful spawn in the loop
         SPAWN_CALL_COUNT++
 
+        if (resumeSession && !agentSpawnOptions) {
+          pendingResumeWrites.push({
+            ptyId: spawnData.id,
+            command: resumeCommandLine(resumeSession)
+          })
+        }
+
         idMap.set(persistedTerminal.id, newId)
         newTerminals.push({
           id: newId,
           name: persistedTerminal.name,
           projectId,
           shell: normalizedShell,
-          cwd: persistedTerminal.cwd,
+          cwd: spawnCwd,
           output: [],
           healthStatus: 'running',
           viewState: 'visible',
@@ -1152,7 +1194,8 @@ async function restoreFromLayout(
                 agentProgram: persistedTerminal.agentProgram,
                 agentArgs: persistedTerminal.agentArgs
               }
-            : {})
+            : {}),
+          ...(resumeSession ? { agentSession: resumeSession } : {})
         })
       } finally {
         if (spawnTimeout) clearTimeout(spawnTimeout)
@@ -1190,6 +1233,7 @@ async function restoreFromLayout(
     // by the stale startup snapshot.
     const existingTerminals = useTerminalStore.getState().terminals
     useTerminalStore.getState().setTerminals([...existingTerminals, ...newTerminals])
+    typeResumeCommands(pendingResumeWrites)
 
     if (idMap.size > 0) {
       useWorkspaceStore.getState().remapTerminalTabs(Object.fromEntries(idMap))
@@ -1230,6 +1274,27 @@ async function restoreFromLayout(
       totalSpawnCalls: SPAWN_CALL_COUNT
     })
   }
+}
+
+interface PendingResumeWrite {
+  ptyId: string
+  command: string
+}
+
+/** How long a fresh shell gets to start before its resume command is typed. */
+export const RESUME_COMMAND_DELAY_MS = 600
+
+function typeResumeCommands(writes: PendingResumeWrite[]): void {
+  if (writes.length === 0) return
+  setTimeout(() => {
+    for (const { ptyId, command } of writes) {
+      void terminalApi.write(ptyId, `${command}\r`).then((result) => {
+        if (!result.success) {
+          console.warn('[restore] could not type the agent resume command:', result.error)
+        }
+      })
+    }
+  }, RESUME_COMMAND_DELAY_MS)
 }
 
 /**

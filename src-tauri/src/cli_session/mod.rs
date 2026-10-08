@@ -6,6 +6,7 @@
 //! Transcript bodies are never consumed. Resume argv is assembled in the renderer.
 
 pub mod commands;
+mod live;
 mod parse;
 /// Vendor store roots and the per-project folder encoders. `pub(crate)` so the
 /// memory index reuses the exact same encoders instead of growing a second copy
@@ -16,6 +17,7 @@ mod scope;
 mod types;
 mod walk;
 
+pub use live::{detect_live_agent_sessions, LiveAgentSession};
 pub use scan::{list_cli_sessions, resolve_cli_sessions};
 pub use types::{
     CliSessionListArgs, CliSessionListResult, CliSessionResolveArgs, CliSessionResolveResult,

@@ -115,6 +115,22 @@ describe('useTerminalAutoSave', () => {
       expect(result.updatedAt).toBeDefined()
     })
 
+    it('keeps the agent session last seen in a terminal', () => {
+      const agentSession = {
+        agentId: 'pi' as const,
+        sessionId: '01a11a0b',
+        cwd: '/repo',
+        resumeArgv: ['pi', '--session', '01a11a0b']
+      }
+      const terminals: Terminal[] = [
+        { id: '1', name: 'Terminal 1', projectId: 'proj-1', shell: 'bash', agentSession }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(result.terminals[0].agentSession).toEqual(agentSession)
+    })
+
     it('excludes conversation-scoped terminals so SessionWorkspace stays their only owner', () => {
       const terminals: Terminal[] = [
         { id: '1', name: 'Project terminal', projectId: 'proj-1', shell: 'bash' },
@@ -507,7 +523,17 @@ describe('useTerminalAutoSave', () => {
       ['name', { name: 'Renamed' }],
       ['cwd', { cwd: '/elsewhere' }],
       ['shell', { shell: 'zsh' as const }],
-      ['projectId', { projectId: 'proj-2' }]
+      ['projectId', { projectId: 'proj-2' }],
+      [
+        'agentSession',
+        {
+          agentSession: {
+            agentId: 'claude-code' as const,
+            sessionId: 's1',
+            resumeArgv: ['claude', '--resume', 's1']
+          }
+        }
+      ]
     ])('detects a changed persisted field: %s', (_label, patch) => {
       const after = base.map((t) => (t.id === '1' ? { ...t, ...patch } : t))
       expect(hasStructuralTerminalChange(after, base)).toBe(true)

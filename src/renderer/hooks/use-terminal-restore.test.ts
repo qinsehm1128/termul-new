@@ -4,6 +4,7 @@ import type { PaneNode } from '@/types/workspace.types'
 import {
   __TEST_RESET_LOCKS__,
   normalizeShellForStartup,
+  RESUME_COMMAND_DELAY_MS,
   useTerminalRestore
 } from './use-terminal-restore'
 
@@ -21,8 +22,12 @@ const {
   mockTerminalSpawn,
   mockTerminalKill,
   mockTerminalList,
-  mockTerminalResume
+  mockTerminalResume,
+  mockTerminalWrite,
+  mockAppSettings
 } = vi.hoisted(() => ({
+  mockTerminalWrite: vi.fn(),
+  mockAppSettings: { defaultShell: 'bash', resumeAgentSessionsOnRestore: true },
   mockLoadPersistedTerminals: vi.fn(),
   mockSaveTerminalLayout: vi.fn(),
   mockSetTerminalRestoreInProgress: vi.fn(),
@@ -44,7 +49,8 @@ vi.mock('@/lib/api', () => ({
     terminate: mockTerminalKill,
     kill: mockTerminalKill,
     list: mockTerminalList,
-    resume: mockTerminalResume
+    resume: mockTerminalResume,
+    write: mockTerminalWrite
   },
   sessionApi: {
     restore: vi.fn(async () => ({
@@ -169,7 +175,7 @@ vi.mock('../stores/workspace-store', async () => {
 
 vi.mock('../stores/app-settings-store', () => ({
   useAppSettingsStore: {
-    getState: vi.fn(() => ({ settings: { defaultShell: 'bash' } }))
+    getState: vi.fn(() => ({ settings: mockAppSettings }))
   }
 }))
 
@@ -209,6 +215,8 @@ beforeEach(() => {
     data: { id: 'pty-1', claim: 'lease-claim-restore' }
   })
   mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
+  mockTerminalWrite.mockResolvedValue({ success: true, data: undefined })
+  mockAppSettings.resumeAgentSessionsOnRestore = true
   mockTerminalList.mockResolvedValue({ success: true, data: [] })
   mockTerminalResume.mockResolvedValue({
     success: false,
@@ -963,5 +971,105 @@ describe('useTerminalRestore', () => {
       )
     })
     consoleErrorSpy.mockRestore()
+  })
+})
+
+describe('restore reopens remembered agent sessions', () => {
+  const claudeSession = {
+    agentId: 'claude-code' as const,
+    sessionId: 'abc-123',
+    cwd: '/projects/a/sub',
+    resumeArgv: ['claude', '--resume', 'abc-123']
+  }
+  const shellTerminal = (id: string, agentSession?: object) => ({
+    id,
+    name: id,
+    shell: 'bash',
+    cwd: '/projects/a',
+    scrollback: [],
+    ...(agentSession ? { agentSession } : {})
+  })
+  const restoreWith = (terminals: object[]) => {
+    mockSessionWorkspaceState.activeConversationId = null
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: null,
+      terminals,
+      updatedAt: '2026-10-08T00:00:00.000Z'
+    })
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, RESUME_COMMAND_DELAY_MS + 200))
+
+  it('types the resume command into a shell started where the session ran', async () => {
+    restoreWith([shellTerminal('t1', claudeSession)])
+
+    await waitFor(() =>
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({ shell: 'bash', cwd: '/projects/a/sub' })
+      )
+    )
+    await waitFor(() =>
+      expect(mockTerminalWrite).toHaveBeenCalledWith('pty-1', 'claude --resume abc-123\r')
+    )
+  })
+
+  it('rebuilds the command from the session rather than trusting the stored argv', async () => {
+    restoreWith([shellTerminal('t1', { ...claudeSession, resumeArgv: ['rm', '-rf', '/'] })])
+
+    await waitFor(() =>
+      expect(mockTerminalWrite).toHaveBeenCalledWith('pty-1', 'claude --resume abc-123\r')
+    )
+  })
+
+  it('leaves a bare shell when resuming is turned off', async () => {
+    mockAppSettings.resumeAgentSessionsOnRestore = false
+    restoreWith([shellTerminal('t1', claudeSession)])
+
+    await waitFor(() =>
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: '/projects/a' })
+      )
+    )
+    await settle()
+    expect(mockTerminalWrite).not.toHaveBeenCalled()
+  })
+
+  it('reopens a session once even when two terminals remembered it', async () => {
+    restoreWith([shellTerminal('t1', claudeSession), shellTerminal('t2', claudeSession)])
+
+    await waitFor(() => expect(mockTerminalSpawn).toHaveBeenCalledTimes(2))
+    await settle()
+    expect(mockTerminalWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('restarts an agent tab as the resume command itself', async () => {
+    restoreWith([
+      {
+        ...shellTerminal('t1', {
+          agentId: 'codex',
+          sessionId: '01a0849d-0000-7000-8000-000000000002',
+          resumeArgv: ['codex', 'resume', '01a0849d-0000-7000-8000-000000000002']
+        }),
+        kind: 'agent',
+        agentId: 'codex',
+        agentProgram: 'codex',
+        agentArgs: []
+      }
+    ])
+
+    await waitFor(() =>
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          program: 'codex',
+          args: ['resume', '01a0849d-0000-7000-8000-000000000002'],
+          kind: 'agent'
+        })
+      )
+    )
+    await settle()
+    expect(mockTerminalWrite).not.toHaveBeenCalled()
   })
 })

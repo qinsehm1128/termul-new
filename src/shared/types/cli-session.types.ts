@@ -245,3 +245,34 @@ export interface CliSessionApi {
   listSessions: (args?: CliSessionListArgs) => Promise<CliSessionListResult>
   resolveSessions: (args: CliSessionResolveArgs) => Promise<CliSessionResolveResult>
 }
+
+/** Agents whose running session a terminal can be reopened into after a restart. */
+export const LIVE_AGENT_IDS = ['claude-code', 'codex', 'pi', 'qin-code'] as const
+
+export type LiveAgentId = (typeof LIVE_AGENT_IDS)[number]
+
+/**
+ * An agent session found running under a terminal's shell (desktop host only).
+ * Metadata only, like the transcript scan: the renderer builds the resume argv.
+ */
+export interface LiveAgentSession {
+  /** Shell pid of the terminal the agent was found under. */
+  rootPid: number
+  agentId: LiveAgentId
+  /** Session id as the agent's resume flag takes it. */
+  sessionId: string
+  /** qin-code self-development sessions resume through `qin-code self-dev`. */
+  selfDev?: boolean
+  /** Set only when codex ran with a non-default `CODEX_HOME`. */
+  codexHome?: string
+  cwd?: string | null
+}
+
+/** What a terminal remembers about the agent session running in it. */
+export interface TerminalAgentSession {
+  agentId: LiveAgentId
+  sessionId: string
+  cwd?: string
+  /** argv that reopens the session, e.g. `['claude', '--resume', '<id>']`. */
+  resumeArgv: string[]
+}

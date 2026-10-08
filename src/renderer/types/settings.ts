@@ -118,6 +118,12 @@ export interface AppSettings {
    * running, so turning it off must not also silence the prompt for a kill.
    */
   confirmTerminalTerminate: boolean
+  /**
+   * When a restored terminal's process is gone (machine restart, Terminal Core
+   * restart), relaunch the claude / codex / pi / qin-code session it was
+   * running with that agent's resume command instead of a bare shell.
+   */
+  resumeAgentSessionsOnRestore: boolean
   terminalUrlOpenMode: TerminalUrlOpenMode // Controls how Ctrl/Cmd+Click terminal URLs are opened
   sidebarVisible: boolean
   fileExplorerVisible: boolean
@@ -397,6 +403,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   orphanDetectionTimeout: 600000, // 10 minutes
   confirmTerminalClose: true,
   confirmTerminalTerminate: true,
+  resumeAgentSessionsOnRestore: true,
   terminalUrlOpenMode: 'system',
   sidebarVisible: true,
   fileExplorerVisible: true,
