@@ -6791,6 +6791,147 @@ pub async fn git_init(cwd: String) -> Result<(), String> {
     .map_err(|e| format!("git init task failed: {e}"))?
 }
 
+/// Clones may pull a large history; push's few-minute budget is too short.
+const GIT_CLONE_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+
+/// Remote forms a project can be cloned from. Anything else — `file://`, a
+/// local path, a `transport::` helper — is refused rather than handed to git.
+fn is_allowed_clone_url(url: &str) -> bool {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_whitespace) {
+        return false;
+    }
+    ["https://", "http://", "ssh://", "git://"]
+        .iter()
+        .any(|scheme| url.starts_with(scheme))
+        || (url.starts_with("git@") && url.contains(':'))
+}
+
+/// A single plain directory name inside `parent_dir`.
+fn is_safe_clone_dir_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+}
+
+/// Where `git clone` would put the repository, or why it cannot. An existing
+/// empty directory is fine (git accepts it); anything with content is not
+/// overwritten.
+fn clone_target(parent_dir: &str, dir_name: &str) -> Result<std::path::PathBuf, String> {
+    if !is_safe_clone_dir_name(dir_name) {
+        return Err(format!("Invalid folder name: {dir_name}"));
+    }
+    let parent = std::path::Path::new(parent_dir);
+    if !parent.is_dir() {
+        return Err(format!("Folder does not exist: {parent_dir}"));
+    }
+    let target = parent.join(dir_name);
+    if target.exists() {
+        let empty = std::fs::read_dir(&target)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if !empty {
+            return Err(format!(
+                "{} already exists and is not empty",
+                target.display()
+            ));
+        }
+    }
+    Ok(target)
+}
+
+/// Clone `url` into `<parent_dir>/<dir_name>` and return that path.
+#[tauri::command]
+pub async fn git_clone(
+    url: String,
+    parent_dir: String,
+    dir_name: String,
+) -> Result<String, String> {
+    if !is_allowed_clone_url(&url) {
+        return Err(format!("Unsupported repository address: {url}"));
+    }
+    let target = clone_target(&parent_dir, &dir_name)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Same network-command handling as push: no terminal credential prompt
+        // to hang on, and a timeout sized for a transfer.
+        let output = crate::trackers::git_tracker::GitTracker::run_git_push(
+            &parent_dir,
+            &["clone", "--", url.trim(), &dir_name],
+            GIT_CLONE_TIMEOUT_MS,
+        )
+        .ok_or_else(|| "Failed to run git clone".to_string())?;
+        if output.status.success() {
+            Ok(target.to_string_lossy().into_owned())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git clone task failed: {e}"))?
+}
+
+#[cfg(test)]
+mod git_clone_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_remote_urls_only() {
+        for ok in [
+            "https://github.com/qinsehm1128/prefect_test.git",
+            "http://example.com/a/b",
+            "ssh://git@github.com/a/b.git",
+            "git@github.com:a/b.git",
+            "git://example.com/a.git",
+        ] {
+            assert!(is_allowed_clone_url(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "file:///etc",
+            "/Users/me/repo",
+            "ext::sh -c touch% /tmp/pwned",
+            "--upload-pack=touch /tmp/x",
+            "https://github.com/a b",
+            "git@github.com",
+        ] {
+            assert!(!is_allowed_clone_url(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn folder_name_is_one_plain_segment() {
+        assert!(is_safe_clone_dir_name("prefect_test"));
+        assert!(is_safe_clone_dir_name("my.repo-2"));
+        for bad in ["", ".", "..", "a/b", "../x", "-x", "a b"] {
+            assert!(!is_safe_clone_dir_name(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn target_refuses_a_non_empty_folder_and_accepts_an_empty_one() {
+        let parent = tempfile::tempdir().unwrap();
+        let parent_str = parent.path().to_string_lossy().into_owned();
+
+        assert_eq!(
+            clone_target(&parent_str, "fresh").unwrap(),
+            parent.path().join("fresh")
+        );
+
+        std::fs::create_dir(parent.path().join("empty")).unwrap();
+        assert!(clone_target(&parent_str, "empty").is_ok());
+
+        std::fs::create_dir(parent.path().join("used")).unwrap();
+        std::fs::write(parent.path().join("used").join("x"), "x").unwrap();
+        assert!(clone_target(&parent_str, "used").is_err());
+
+        assert!(clone_target("/definitely/not/here", "x").is_err());
+    }
+}
+
 /// Check out an existing local or remote-tracking branch.
 #[tauri::command]
 pub async fn git_checkout_branch(

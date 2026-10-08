@@ -67,6 +67,11 @@ export const gitApi = {
   init: (cwd: string) =>
     isTauriContext() ? invoke<void>('git_init', { cwd }) : webServerGit.init(cwd),
 
+  // Desktop only: the new-project dialog offers cloning only there. Resolves
+  // to the folder the repository was cloned into.
+  clone: (url: string, parentDir: string, dirName: string) =>
+    invoke<string>('git_clone', { url, parentDir, dirName }),
+
   checkoutBranch: (cwd: string, branch: string, isRemote = false) =>
     isTauriContext()
       ? invoke<void>('git_checkout_branch', { cwd, branch, isRemote })

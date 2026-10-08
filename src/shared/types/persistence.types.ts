@@ -97,7 +97,9 @@ export const PersistenceKeys = {
   cliResumeDefaults: 'agents/cli-resume-defaults',
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
-  mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`
+  mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`,
+  // Folders projects were cloned into, most recent first (new-project dialog).
+  cloneParentDirs: 'projects/clone-parent-dirs'
 } as const
 
 // GH-289: persisted launcher selection — the chosen agent plus its call mode.

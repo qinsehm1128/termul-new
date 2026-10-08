@@ -7,7 +7,9 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
+import { loadCloneParentHistory, rememberCloneParent } from '@/lib/clone-parent-history'
 import { availableColors, getColorClasses } from '@/lib/colors'
+import { cloneTargetPath, parseGitRepoUrl } from '@/lib/git-clone-url'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
@@ -68,6 +70,14 @@ export function NewProjectModal({
   const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate>(BUILT_IN_TEMPLATES[0])
   const [isFolderEmpty, setIsFolderEmpty] = useState(false)
   const [initGit, setInitGit] = useState(false)
+  // Cloning is desktop-only: the host runs `git clone` on this machine.
+  const canClone = isTauriContext()
+  const [repoUrl, setRepoUrl] = useState('')
+  const [nameEdited, setNameEdited] = useState(false)
+  const [cloneParentHistory, setCloneParentHistory] = useState<string[]>([])
+  const isCloning = canClone && repoUrl.trim().length > 0
+  const parsedRepo = isCloning ? parseGitRepoUrl(repoUrl) : null
+  const repoUrlInvalid = isCloning && parsedRepo === null
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
@@ -128,8 +138,31 @@ export function NewProjectModal({
       setSelectedTemplate(BUILT_IN_TEMPLATES[0])
       setIsFolderEmpty(false)
       setInitGit(false)
+      setRepoUrl('')
+      setNameEdited(false)
     }
   }, [isOpen, defaultColor, shells?.default?.name, fallbackShell])
+
+  useEffect(() => {
+    if (!isOpen || !canClone) return
+    let cancelled = false
+    void loadCloneParentHistory()
+      .then((history) => {
+        if (!cancelled) setCloneParentHistory(history)
+      })
+      .catch(() => {
+        // History is a convenience; the folder can still be typed or browsed.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen, canClone])
+
+  // The project is named after the repository unless the user named it.
+  const parsedRepoName = parsedRepo?.repoName
+  useEffect(() => {
+    if (parsedRepoName && !nameEdited) setName(parsedRepoName)
+  }, [parsedRepoName, nameEdited])
 
   // Handle Escape key to close modal
   useEffect(() => {
@@ -158,9 +191,47 @@ export function NewProjectModal({
     [shells, fallbackShell]
   )
 
+  const handleClone = useCallback(() => {
+    const trimmedName = name.trim()
+    const parentDir = path.trim()
+    if (!parsedRepo || !trimmedName || !parentDir) return
+    const shellToUse = selectedShell || fallbackShell
+
+    const runClone = async () => {
+      const clonedPath = await gitApi.clone(parsedRepo.cloneUrl, parentDir, parsedRepo.repoName)
+      void rememberCloneParent(parentDir).catch(() => {
+        // A failed history write must not undo a successful clone.
+      })
+      onCreateProject(trimmedName, selectedColor, clonedPath, shellToUse)
+    }
+
+    toast.promise(runClone(), {
+      loading: t('cloning', { name: parsedRepo.repoName }),
+      success: t('cloned', { name: parsedRepo.repoName }),
+      error: (err: unknown) =>
+        t('cloneFailed', { message: err instanceof Error ? err.message : String(err) })
+    })
+    onClose()
+  }, [
+    parsedRepo,
+    name,
+    path,
+    selectedShell,
+    fallbackShell,
+    selectedColor,
+    t,
+    onCreateProject,
+    onClose
+  ])
+
   const handleCreate = useCallback(() => {
     const trimmedName = name.trim()
     const trimmedPath = path.trim()
+
+    if (isCloning) {
+      handleClone()
+      return
+    }
 
     if (trimmedName && trimmedPath) {
       // Use selected shell or fallback
@@ -236,10 +307,14 @@ export function NewProjectModal({
     fallbackShell,
     selectedTemplate,
     initGit,
+    isCloning,
+    handleClone,
     t,
     onCreateProject,
     onClose
   ])
+
+  const canCreate = Boolean(name.trim() && path.trim()) && !repoUrlInvalid
 
   const handleBrowse = useCallback(async () => {
     const result = await dialogApi.selectDirectory()
@@ -250,7 +325,7 @@ export function NewProjectModal({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === 'Enter' && name.trim() && path.trim()) {
+      if (e.key === 'Enter' && canCreate) {
         e.preventDefault()
         handleCreate()
       } else if (e.key === 'Escape') {
@@ -258,7 +333,7 @@ export function NewProjectModal({
         onClose()
       }
     },
-    [name, path, handleCreate, onClose]
+    [canCreate, handleCreate, onClose]
   )
 
   return (
@@ -294,13 +369,42 @@ export function NewProjectModal({
             </div>
 
             <div className="flex-1 space-y-3 overflow-y-auto p-4">
+              {canClone && (
+                <div className="space-y-2">
+                  <label
+                    htmlFor="new-project-repo-url"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
+                    {t('cloneFromGit')}
+                  </label>
+                  <input
+                    id="new-project-repo-url"
+                    type="text"
+                    value={repoUrl}
+                    onChange={(e) => setRepoUrl(e.target.value)}
+                    placeholder={t('cloneUrlPlaceholder')}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    aria-invalid={repoUrlInvalid || undefined}
+                    className={cn(
+                      'h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground/70 focus-visible:border-ring/70 focus-visible:ring-1 focus-visible:ring-ring/35',
+                      repoUrlInvalid && 'border-destructive/70'
+                    )}
+                  />
+                  {repoUrlInvalid && (
+                    <p className="text-3xs text-destructive">{t('cloneUrlInvalid')}</p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2">
                 <label className="text-xs font-medium text-muted-foreground">
                   {t('projectTemplate')}
                 </label>
                 <div className="relative">
                   <select
-                    value={selectedTemplate.id}
+                    disabled={isCloning}
+                    value={isCloning ? 'empty' : selectedTemplate.id}
                     onChange={(e) => {
                       const tpl = BUILT_IN_TEMPLATES.find((t) => t.id === e.target.value)
                       if (tpl) handleSelectTemplate(tpl)
@@ -318,11 +422,13 @@ export function NewProjectModal({
                   </div>
                 </div>
                 <p className="text-3xs text-muted-foreground mt-1 leading-snug">
-                  {t(getTemplateTranslationKeys(selectedTemplate.id).description)}
+                  {isCloning
+                    ? t('cloneTemplateNote')
+                    : t(getTemplateTranslationKeys(selectedTemplate.id).description)}
                 </p>
               </div>
 
-              {selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
+              {!isCloning && selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
                 <div className="mt-2 rounded-md border border-border/80 bg-secondary/40 p-2.5">
                   <span className="text-3xs font-semibold text-muted-foreground block mb-1.5">
                     {t('includedEnvironmentVariables')}
@@ -347,7 +453,10 @@ export function NewProjectModal({
                 <input
                   type="text"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value)
+                    setNameEdited(true)
+                  }}
                   placeholder={t('namePlaceholder')}
                   className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring/70 focus-visible:ring-1 focus-visible:ring-ring/35"
                 />
@@ -355,7 +464,7 @@ export function NewProjectModal({
 
               <div className="space-y-2">
                 <label className="text-xs font-medium text-muted-foreground">
-                  {t('rootDirectory')}
+                  {isCloning ? t('cloneParentDirectory') : t('rootDirectory')}
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -373,7 +482,39 @@ export function NewProjectModal({
                   </button>
                 </div>
 
-                {isFolderEmpty && (
+                {isCloning && parsedRepo && path.trim() && (
+                  <p className="break-all px-1 font-mono text-3xs text-muted-foreground">
+                    {t('cloneTargetHint', { path: cloneTargetPath(path, parsedRepo.repoName) })}
+                  </p>
+                )}
+
+                {isCloning && cloneParentHistory.length > 0 && (
+                  <div className="space-y-1 px-1">
+                    <span className="text-3xs text-muted-foreground">
+                      {t('recentCloneParents')}
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {cloneParentHistory.map((dir) => (
+                        <button
+                          key={dir}
+                          type="button"
+                          title={dir}
+                          onClick={() => setPath(dir)}
+                          className={cn(
+                            'max-w-full truncate rounded-md border border-border/80 px-2 py-0.5 font-mono text-3xs transition-colors hover:bg-secondary focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                            path.trim() === dir
+                              ? 'bg-secondary text-foreground'
+                              : 'bg-background text-secondary-foreground'
+                          )}
+                        >
+                          {dir}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {!isCloning && isFolderEmpty && (
                   <div className="flex items-center gap-2 mt-2 px-1">
                     <input
                       type="checkbox"
@@ -474,7 +615,7 @@ export function NewProjectModal({
                 </button>
                 <button
                   onClick={handleCreate}
-                  disabled={!name.trim() || !path.trim()}
+                  disabled={!canCreate}
                   className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {t('create')}
