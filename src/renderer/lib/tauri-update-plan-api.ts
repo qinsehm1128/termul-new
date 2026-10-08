@@ -60,6 +60,22 @@ function hasValidActionMetadata(plan: PendingUpdatePlan): boolean {
   )
 }
 
+/**
+ * Forced install: a mismatched Core is replaced at the next launch even while
+ * it still runs terminals or agents, which ends that work. Only the
+ * `defer-if-active` Cores change; build IDs and the component key set stay
+ * exactly as published so the plan still parses.
+ */
+export function forceComponentPolicy(policy: UpdateComponentPolicy): UpdateComponentPolicy {
+  const components = { ...policy.components }
+  for (const component of ['acpCore', 'terminalCore'] as const) {
+    if (components[component].action === 'defer-if-active') {
+      components[component] = { ...components[component], action: 'restart' }
+    }
+  }
+  return { ...policy, components }
+}
+
 export function createPendingUpdatePlan(
   targetVersion: string,
   componentPolicy: UpdateComponentPolicy

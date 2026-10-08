@@ -86,11 +86,15 @@ const { updaterFixture, updaterActions, isAurUpdateMode, hasActiveTerminalSessio
       isManualUpdateMode: false,
       updateChannel: 'stable' as const,
       componentPolicy: null as UpdateComponentPolicy | null,
-      pendingUpdatePlan: null as PendingUpdatePlan | null
+      pendingUpdatePlan: null as PendingUpdatePlan | null,
+      isDownloading: false,
+      downloadProgress: 0
     },
     updaterActions: {
       checkForUpdates: vi.fn(),
+      downloadUpdate: vi.fn(),
       installAndRestart: vi.fn(),
+      forceInstallAndRestart: vi.fn(),
       setAutoUpdateEnabled: vi.fn(),
       setUpdateChannel: vi.fn()
     },
@@ -101,6 +105,15 @@ const { updaterFixture, updaterActions, isAurUpdateMode, hasActiveTerminalSessio
 
 vi.mock('@/lib/tauri-updater-api', () => ({
   isAurUpdateMode: () => isAurUpdateMode()
+}))
+
+const { fetchComponentRuntimeIdentities } = vi.hoisted(() => ({
+  fetchComponentRuntimeIdentities: vi.fn()
+}))
+
+vi.mock('@/lib/update-component-diff', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/update-component-diff')>()),
+  fetchComponentRuntimeIdentities: () => fetchComponentRuntimeIdentities()
 }))
 
 vi.mock('@/lib/tauri-safe-update', () => ({
@@ -193,6 +206,8 @@ describe('AppPreferences settings controls', () => {
     updaterFixture.isManualUpdateMode = false
     updaterFixture.componentPolicy = null
     updaterFixture.pendingUpdatePlan = null
+    updaterFixture.isDownloading = false
+    updaterFixture.downloadProgress = 0
     useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
   })
 
@@ -473,5 +488,83 @@ describe('AppPreferences settings controls', () => {
       )
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Open Download Page' })).toBeInTheDocument()
+  })
+})
+
+describe('AppPreferences update component diff and forced install', () => {
+  const tauriWindow = window as unknown as Record<string, unknown>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tauriWindow.__TAURI_INTERNALS__ = {}
+    isAurUpdateMode.mockReturnValue(false)
+    hasActiveTerminalSessions.mockReturnValue(true)
+    vi.mocked(confirm).mockResolvedValue(false)
+    updaterFixture.updateAvailable = true
+    updaterFixture.downloaded = true
+    updaterFixture.version = '1.2.3'
+    updaterFixture.isManualUpdateMode = false
+    updaterFixture.pendingUpdatePlan = null
+    updaterFixture.isDownloading = false
+    updaterFixture.downloadProgress = 0
+    updaterFixture.componentPolicy = policyWith({
+      renderer: 'restart',
+      guiNative: 'restart',
+      acpCore: 'defer-if-active',
+      terminalCore: 'defer-if-active'
+    })
+    fetchComponentRuntimeIdentities.mockResolvedValue({
+      guiNative: 'build-guiNative',
+      acpCore: { buildId: 'build-acpCore', activeResources: 2 },
+      terminalCore: { buildId: 'old-terminal', activeResources: 3 }
+    })
+    useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+  })
+
+  afterEach(() => {
+    delete tauriWindow.__TAURI_INTERNALS__
+    vi.mocked(confirm).mockReset()
+  })
+
+  it('lists each component with its running and new build ID', async () => {
+    renderPage()
+
+    const table = await screen.findByTestId('update-component-diff')
+    const status = (component: string) =>
+      table.querySelector(`tr[data-component="${component}"]`)?.getAttribute('data-status')
+    expect(status('renderer')).toBe('bundled')
+    expect(status('guiNative')).toBe('same')
+    expect(status('acpCore')).toBe('same')
+    expect(status('terminalCore')).toBe('replace')
+    expect(table).toHaveTextContent('old-terminal')
+    expect(table).toHaveTextContent('3 terminal(s) running')
+  })
+
+  it('names the terminals a forced install ends and installs only after confirmation', async () => {
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Force Update' }))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    const message = vi.mocked(confirm).mock.calls[0]?.[0] as string
+    expect(message).toContain('This ends 3 running terminal(s) and 0 agent session(s).')
+    expect(updaterActions.forceInstallAndRestart).not.toHaveBeenCalled()
+
+    vi.mocked(confirm).mockResolvedValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Force Update' }))
+    await waitFor(() => expect(updaterActions.forceInstallAndRestart).toHaveBeenCalledTimes(1))
+    expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+  })
+
+  it('offers a download with progress before the update is downloaded', () => {
+    updaterFixture.downloaded = false
+    updaterFixture.isDownloading = true
+    updaterFixture.downloadProgress = 42
+
+    renderPage()
+
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
+    expect(screen.queryByRole('button', { name: 'Force Update' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Component changes')).not.toBeInTheDocument()
+    expect(fetchComponentRuntimeIdentities).not.toHaveBeenCalled()
   })
 })

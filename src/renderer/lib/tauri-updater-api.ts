@@ -14,10 +14,12 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
 import { runtimeT } from '@/i18n/runtime'
+import { logFrontendError } from './log-api'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 import {
   createPendingUpdatePlan,
+  forceComponentPolicy,
   loadPendingUpdatePlan,
   savePendingUpdatePlan
 } from './tauri-update-plan-api'
@@ -718,7 +720,9 @@ export async function downloadUpdate(
   }
 }
 
-export async function installAndRestart(): Promise<IpcResult<void>> {
+export async function installAndRestart(
+  options: { force?: boolean } = {}
+): Promise<IpcResult<void>> {
   if (isAurUpdateMode()) {
     return {
       success: false,
@@ -755,8 +759,16 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
 
   let pendingPlanForFailure: PendingUpdatePlan | null = null
   try {
-    const componentPolicy =
+    const declaredPolicy =
       pendingComponentPolicy ?? legacyUpdateComponentPolicy(pendingTauriUpdate.version)
+    const componentPolicy = options.force ? forceComponentPolicy(declaredPolicy) : declaredPolicy
+    if (options.force) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'updater.installAndRestart',
+        message: `code=FORCED_CORE_REPLACEMENT version=${pendingTauriUpdate.version}`
+      })
+    }
     const plan = createPendingUpdatePlan(pendingTauriUpdate.version, componentPolicy)
     pendingPlanForFailure = plan
     const planResult = await savePendingUpdatePlan(plan)
