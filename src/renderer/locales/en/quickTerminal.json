@@ -1,5 +1,6 @@
 {
   "title": "Quick terminals",
+  "running": "Running",
   "count": "{{shown}} / {{total}}",
   "newMenu": "New quick terminal",
   "newWorkspace": "In a new folder",

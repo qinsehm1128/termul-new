@@ -143,6 +143,8 @@
     "unassigned": "未归属项目",
     "noProject": "无项目",
     "archived": "已归档",
+    "quickTerminals": "快捷终端",
+    "sshTerminals": "SSH",
     "status": {
       "live": "运行中",
       "hidden": "已隐藏",

@@ -254,7 +254,9 @@ describe('ActivityRail', () => {
     useTerminalStore.setState({
       terminals: [
         { id: 't-live', name: 'zsh', ptyId: 'pty-1', shell: 'zsh' },
-        { id: 't-dead', name: 'old', shell: 'zsh' }
+        { id: 't-dead', name: 'old', shell: 'zsh' },
+        // Exited shells keep their pty id until cleanup; they are not running.
+        { id: 't-exited', name: 'done', ptyId: 'pty-2', shell: 'zsh', healthStatus: 'exited' }
       ]
     })
 

@@ -15,7 +15,7 @@ pub mod windows;
 
 pub use claims::RotatedClaim;
 pub use da_filter::DaFilter;
-pub use manager::{PtyManager, SpawnOptions, TerminalProgram};
+pub use manager::{OutputSink, PtyManager, SpawnOptions, TerminalProgram};
 
 /// A standalone `PtyManager` for tests in this crate and its dependents.
 #[cfg(any(test, feature = "test-support"))]
@@ -23,7 +23,7 @@ pub fn test_pty_manager() -> std::sync::Arc<PtyManager> {
     use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
     let events = TerminalEventHub::standalone();
     let cwd = std::sync::Arc::new(CwdTracker::new(events.clone()));
-    let git = std::sync::Arc::new(GitTracker::new(None, events.clone()));
+    let git = std::sync::Arc::new(GitTracker::new(events.clone()));
     let exit = std::sync::Arc::new(ExitCodeTracker::new(events.clone()));
     std::sync::Arc::new(PtyManager::new(
         events,

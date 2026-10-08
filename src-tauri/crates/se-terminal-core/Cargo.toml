@@ -1,0 +1,24 @@
+[package]
+name = "se-terminal-core"
+version = "0.1.0"
+description = "Terminal Core: the long-lived PTY service process and its client"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+se-foundation = { path = "../se-foundation" }
+se-ipc = { path = "../se-ipc" }
+se-pty = { path = "../se-pty" }
+se-quick-terminal = { path = "../se-quick-terminal" }
+async-trait = "0.1"
+log = "0.4"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+se-pty = { path = "../se-pty", features = ["test-support"] }
+tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }

@@ -1,5 +1,6 @@
 {
   "title": "快捷终端",
+  "running": "运行中",
   "count": "{{shown}} / {{total}}",
   "newMenu": "新建快捷终端",
   "newWorkspace": "在独立文件夹中",

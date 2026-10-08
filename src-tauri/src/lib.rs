@@ -6,7 +6,7 @@ mod agent_registry;
 /// Runtime-neutral AI channel, credential, analysis, and Fx contracts.
 /// No provider I/O and no keyring access live in this skeleton.
 pub mod ai_channels;
-pub mod brand;
+pub use se_foundation::brand;
 mod browser_tab_manager;
 mod cli_session;
 mod commands;
@@ -42,7 +42,8 @@ pub mod migration_detect;
 /// User-initiated merge orchestrator for the pre-rename roots (T-MIG-RUN).
 pub mod migration_run;
 mod migrations;
-pub mod quick_terminal;
+mod pty_tauri;
+pub use se_terminal_core::quick_terminal;
 mod quick_terminal_commands;
 mod quick_terminal_migration;
 use se_foundation::path_validation;
@@ -2048,7 +2049,7 @@ fn desktop_terminal_service(
                     note_component_reconciled(&app_handle, "terminalCore");
                 }
                 let mut events = client.subscribe_events();
-                let mirror = TerminalEventHub::tauri(app_handle);
+                let mirror = pty_tauri::desktop_terminal_events(app_handle);
                 tauri::async_runtime::spawn(async move {
                     loop {
                         match events.recv().await {
@@ -2674,13 +2675,13 @@ pub fn run() {
             // Transport-neutral terminal event fan-out: desktop events remain
             // byte-compatible while the web terminal socket subscribes to the
             // same lifecycle/metadata stream.
-            let terminal_events = TerminalEventHub::tauri(handle.clone());
+            let terminal_events = pty_tauri::desktop_terminal_events(handle.clone());
 
             let cwd_tracker = Arc::new(CwdTracker::new(terminal_events.clone()));
             app.manage(cwd_tracker.clone());
 
-            let git_tracker = Arc::new(GitTracker::new(
-                Some(handle.clone()),
+            let git_tracker = Arc::new(GitTracker::with_cwd_tracker(
+                cwd_tracker.clone(),
                 terminal_events.clone(),
             ));
             app.manage(git_tracker.clone());

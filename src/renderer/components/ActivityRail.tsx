@@ -50,6 +50,7 @@ import { isMac } from '@/lib/platform'
 import { type RailRowBox, railDragExceeded, railPointerDrop, railRestIndex } from '@/lib/rail-drop'
 import { isConversationAreaPath } from '@/lib/router-navigate'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { isTerminalRunning } from '@/lib/terminal-board'
 import { cn } from '@/lib/utils'
 import { useNavigationStore } from '@/stores/navigation-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
@@ -228,7 +229,7 @@ export function ActivityRail({
   const isConversationsActive = isConversationAreaPath(location.pathname)
   const isTerminalsActive = location.pathname === '/terminals'
   const liveTerminalCount = useTerminalStore(
-    (state) => state.terminals.filter((terminal) => Boolean(terminal.ptyId)).length
+    (state) => state.terminals.filter(isTerminalRunning).length
   )
   const [drop, setDrop] = useState<RailDropState | null>(null)
   const [reorderStatus, setReorderStatus] = useState('')

@@ -22,7 +22,7 @@ use super::acp::{
     METHOD_SET_MODEL, METHOD_SET_PERMISSION_POLICY, METHOD_SPAWN_AGENT,
     METHOD_STABLE_AGENT_NAMESPACE, METHOD_WAIT_TURN_IDLE,
 };
-use super::handles::AcpServiceHandle;
+use super::acp_handles::AcpServiceHandle;
 use super::ipc::CoreError;
 use crate::acp::config::{AgentConfig, AgentId, PermissionPolicy, SessionId};
 use crate::acp::manager::{

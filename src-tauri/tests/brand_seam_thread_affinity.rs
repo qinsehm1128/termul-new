@@ -83,12 +83,12 @@ use syn::{Expr, ExprCall, ExprMethodCall, Ident};
 
 /// The one file exempt from the scan, and why.
 ///
-/// `src/brand.rs` deliberately spawns a thread and calls `canonical()` inside it
+/// `crates/se-foundation/src/brand.rs` deliberately spawns a thread and calls `canonical()` inside it
 /// — that is `override_does_not_leak_into_other_threads`, the test that proves
 /// the thread-local semantics this whole gate is derived from. Excluding it is
 /// not a loophole: it is the single place where reading the seam off-thread is
 /// the point.
-const EXEMPT: &str = "src/brand.rs";
+const EXEMPT: &str = "crates/se-foundation/src/brand.rs";
 
 /// Call names whose argument runs somewhere other than the caller's thread.
 ///
@@ -135,8 +135,18 @@ fn source_files() -> Vec<String> {
             }
         }
     }
+    // The app crate and the workspace crates the Cores are built from.
     let mut found = Vec::new();
     walk(&manifest_dir().join("src"), &mut found);
+    let mut crates: Vec<PathBuf> = std::fs::read_dir(manifest_dir().join("crates"))
+        .expect("read crates dir")
+        .map(|entry| entry.expect("dir entry").path().join("src"))
+        .filter(|src| src.is_dir())
+        .collect();
+    crates.sort();
+    for src in crates {
+        walk(&src, &mut found);
+    }
     found.retain(|relative| relative != EXEMPT);
     found
 }

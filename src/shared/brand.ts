@@ -17,7 +17,7 @@
  * production still emits the pre-rename one — which is how a Wave-1 red can be
  * a *real* red rather than a self-certifying assertion.
  *
- * Residual-scan whitelist: this file and `src-tauri/src/brand.rs` are the only
+ * Residual-scan whitelist: this file and `src-tauri/crates/se-foundation/src/brand.rs` are the only
  * two non-fixture files permitted to contain a legacy brand string.
  */
 

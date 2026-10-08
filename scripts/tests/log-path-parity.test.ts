@@ -16,7 +16,7 @@
  * from `log_file_name`, the `{}.log` template in `log_file_path`, and the
  * bundle identifier. No path in this file is written down as a literal.
  *
- * T-M04 moved the name itself into `src-tauri/src/brand.rs` — `logging.rs` now
+ * T-M04 moved the name itself into `src-tauri/crates/se-foundation/src/brand.rs` — `logging.rs` now
  * reads `brand::canonical().log_file_name` rather than holding a literal, so a
  * Wave-5 flip is a one-line edit there. This file follows that indirection
  * instead of short-circuiting it: the expected name is read from `brand.rs`,
@@ -36,7 +36,7 @@ const repoRoot = process.cwd()
 const read = (relativePath: string): string => readFileSync(join(repoRoot, relativePath), 'utf8')
 
 const BUG_REPORT_YML = '.github/ISSUE_TEMPLATE/bug_report.yml'
-const BRAND_RS = 'src-tauri/src/brand.rs'
+const BRAND_RS = 'src-tauri/crates/se-foundation/src/brand.rs'
 const LOGGING_RS = 'src-tauri/src/logging.rs'
 const LIB_RS = 'src-tauri/src/lib.rs'
 const TAURI_CONF = 'src-tauri/tauri.conf.json'

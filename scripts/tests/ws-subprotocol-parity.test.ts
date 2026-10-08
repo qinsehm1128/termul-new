@@ -31,7 +31,7 @@ const read = (relativePath: string): string => readFileSync(join(repoRoot, relat
 
 const PROTOCOL_TYPES_TS = 'src/shared/types/web-terminal-protocol.types.ts'
 const TERMINAL_WS_RS = 'src-tauri/src/web/terminal_ws.rs'
-const BRAND_RS = 'src-tauri/src/brand.rs'
+const BRAND_RS = 'src-tauri/crates/se-foundation/src/brand.rs'
 
 function extract(relativePath: string, pattern: RegExp, what: string): string {
   const match = read(relativePath).match(pattern)

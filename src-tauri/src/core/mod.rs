@@ -5,22 +5,21 @@
 //! standalone, and tests can share the same service contracts.
 
 pub mod acp;
-pub mod handles;
-pub mod ipc;
+pub mod acp_handles;
 pub mod launcher;
-pub mod terminal;
-pub mod transport;
+pub mod process;
 pub mod web_host;
+pub use se_terminal_core::{handles, ipc, terminal, transport};
 
 pub use acp::{
     run_acp_core, run_acp_core_with_roots, AcpCoreClient, AcpCoreEvent,
     ACP_CONNECTION_CHANGED_EVENT,
 };
+pub use acp_handles::{AcpRuntimeHandle, AcpServiceHandle, CoreServices, InProcessAcpRuntime};
 pub use handles::{
-    AcpRuntimeHandle, AcpServiceHandle, CoreServices, DetachedTerminalRuntime, InProcessAcpRuntime,
-    InProcessTerminalRuntime, SwitchableTerminalRuntime, TerminalConversationObservation,
-    TerminalConversationTermination, TerminalRuntimeHandle, TerminalServiceHandle,
-    TerminalTerminationOutcome,
+    DetachedTerminalRuntime, InProcessTerminalRuntime, SwitchableTerminalRuntime,
+    TerminalConversationObservation, TerminalConversationTermination, TerminalRuntimeHandle,
+    TerminalServiceHandle, TerminalTerminationOutcome,
 };
 pub use ipc::{
     component_build_id, component_capabilities, negotiate_protocol, prepare_runtime_dir,
@@ -29,9 +28,10 @@ pub use ipc::{
     CoreHelloAck, CoreRequest, CoreResponse, CoreRole, CURRENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 pub use launcher::{
-    classify_core_identity, core_replacement_is_safe, ensure_core, profile_root_from_env,
-    run_core_process, CoreIdentityState, CoreLaunchConfig, CoreProcess,
+    classify_core_identity, core_replacement_is_safe, ensure_core, CoreIdentityState,
+    CoreLaunchConfig, CoreProcess,
 };
+pub use process::{profile_root_from_env, run_core_process};
 pub use terminal::{
     run_terminal_core, OutputFrame, OutputKind, TerminalAttachSession, TerminalCoreClient,
     TerminalStatus,

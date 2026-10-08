@@ -156,7 +156,7 @@ fn app_state(project_root: PathBuf) -> AppState {
     let relay = Arc::new(WsRelaySink::new());
     let events = TerminalEventHub::standalone();
     let cwd = Arc::new(CwdTracker::new(events.clone()));
-    let git_tracker = Arc::new(GitTracker::new(None, events.clone()));
+    let git_tracker = Arc::new(GitTracker::new(events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
     let pty = Arc::new(PtyManager::new(
         events.clone(),

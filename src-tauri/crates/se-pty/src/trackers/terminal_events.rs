@@ -2,7 +2,6 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast;
 
 use super::git_tracker::GitStatus;
@@ -103,18 +102,24 @@ pub struct TerminalStateSnapshot {
     pub osc_title: Option<String>,
 }
 
+/// Where the desktop renderer's terminal events go. The GUI implements it
+/// with Tauri's emitter; this crate only names the events and their payloads.
+pub trait DesktopEventSink: Send + Sync {
+    fn emit(&self, event: &str, payload: serde_json::Value) -> Result<(), String>;
+}
+
 #[derive(Clone)]
 pub struct TerminalEventHub {
     tx: Arc<broadcast::Sender<TerminalEvent>>,
-    tauri: Option<AppHandle>,
+    desktop: Option<Arc<dyn DesktopEventSink>>,
     snapshots: Arc<RwLock<HashMap<String, TerminalStateSnapshot>>>,
 }
 
 impl TerminalEventHub {
-    pub fn tauri(app_handle: AppHandle) -> Self {
+    pub fn desktop(sink: Arc<dyn DesktopEventSink>) -> Self {
         Self {
             tx: Arc::new(broadcast::channel(EVENT_CAPACITY).0),
-            tauri: Some(app_handle),
+            desktop: Some(sink),
             snapshots: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -122,7 +127,7 @@ impl TerminalEventHub {
     pub fn standalone() -> Self {
         Self {
             tx: Arc::new(broadcast::channel(EVENT_CAPACITY).0),
-            tauri: None,
+            desktop: None,
             snapshots: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -178,44 +183,44 @@ impl TerminalEventHub {
             }
         }
         let _ = self.tx.send(event.clone());
-        let Some(app) = &self.tauri else {
+        let Some(sink) = &self.desktop else {
             return;
         };
-        let result = match event {
+        let (name, payload) = match event {
             TerminalEvent::Exit {
                 terminal_id,
                 exit_code,
                 signal,
-            } => app.emit(
+            } => (
                 "terminal-exit",
                 serde_json::json!({ "id": terminal_id, "exitCode": exit_code, "signal": signal }),
             ),
-            TerminalEvent::CwdChanged { terminal_id, cwd } => app.emit(
+            TerminalEvent::CwdChanged { terminal_id, cwd } => (
                 "terminal-cwd-changed",
                 serde_json::json!({ "terminalId": terminal_id, "cwd": cwd }),
             ),
             TerminalEvent::GitBranchChanged {
                 terminal_id,
                 branch,
-            } => app.emit(
+            } => (
                 "terminal-git-branch-changed",
                 serde_json::json!({ "terminalId": terminal_id, "branch": branch }),
             ),
             TerminalEvent::GitStatusChanged {
                 terminal_id,
                 status,
-            } => app.emit(
+            } => (
                 "terminal-git-status-changed",
                 serde_json::json!({ "terminalId": terminal_id, "status": status }),
             ),
             TerminalEvent::ExitCodeChanged {
                 terminal_id,
                 exit_code,
-            } => app.emit(
+            } => (
                 "terminal-exit-code-changed",
                 serde_json::json!({ "terminalId": terminal_id, "exitCode": exit_code }),
             ),
-            TerminalEvent::OscTitleChanged { terminal_id, title } => app.emit(
+            TerminalEvent::OscTitleChanged { terminal_id, title } => (
                 "terminal-osc-title-changed",
                 serde_json::json!({ "terminalId": terminal_id, "oscTitle": title }),
             ),
@@ -227,7 +232,7 @@ impl TerminalEventHub {
                 cols,
                 rows,
                 shell,
-            } => app.emit(
+            } => (
                 "terminal-spawned",
                 serde_json::json!({
                     "terminalId": terminal_id,
@@ -244,7 +249,7 @@ impl TerminalEventHub {
                 mode,
                 cols,
                 rows,
-            } => app.emit(
+            } => (
                 "terminal-display-mode-changed",
                 serde_json::json!({
                     "terminalId": terminal_id,
@@ -254,7 +259,7 @@ impl TerminalEventHub {
                 }),
             ),
         };
-        if let Err(error) = result {
+        if let Err(error) = sink.emit(name, payload) {
             log::error!("failed to emit terminal event to desktop renderer: {error}");
         }
     }
@@ -263,5 +268,69 @@ impl TerminalEventHub {
 impl Default for TerminalEventHub {
     fn default() -> Self {
         Self::standalone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex;
+
+    #[derive(Default)]
+    struct RecordingSink(Mutex<Vec<(String, serde_json::Value)>>);
+
+    impl DesktopEventSink for RecordingSink {
+        fn emit(&self, event: &str, payload: serde_json::Value) -> Result<(), String> {
+            self.0.lock().push((event.to_string(), payload));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn desktop_sink_receives_the_renderer_event_names_and_payloads() {
+        let sink = Arc::new(RecordingSink::default());
+        let hub = TerminalEventHub::desktop(sink.clone());
+        hub.emit(TerminalEvent::Exit {
+            terminal_id: "t1".into(),
+            exit_code: Some(2),
+            signal: None,
+        });
+        hub.emit(TerminalEvent::CwdChanged {
+            terminal_id: "t1".into(),
+            cwd: "/tmp".into(),
+        });
+        hub.emit(TerminalEvent::OscTitleChanged {
+            terminal_id: "t1".into(),
+            title: Some("claude".into()),
+        });
+        assert_eq!(
+            *sink.0.lock(),
+            vec![
+                (
+                    "terminal-exit".to_string(),
+                    serde_json::json!({ "id": "t1", "exitCode": 2, "signal": null })
+                ),
+                (
+                    "terminal-cwd-changed".to_string(),
+                    serde_json::json!({ "terminalId": "t1", "cwd": "/tmp" })
+                ),
+                (
+                    "terminal-osc-title-changed".to_string(),
+                    serde_json::json!({ "terminalId": "t1", "oscTitle": "claude" })
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn standalone_hub_still_broadcasts_and_snapshots() {
+        let hub = TerminalEventHub::standalone();
+        let mut rx = hub.subscribe();
+        hub.emit(TerminalEvent::CwdChanged {
+            terminal_id: "t1".into(),
+            cwd: "/tmp".into(),
+        });
+        assert_eq!(rx.try_recv().unwrap().terminal_id(), "t1");
+        assert_eq!(hub.snapshot("t1").cwd.as_deref(), Some("/tmp"));
     }
 }

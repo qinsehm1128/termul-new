@@ -396,7 +396,7 @@ fn response(id: u64, result: Result<Value, CoreError>) -> CoreResponse {
 }
 
 pub async fn run_acp_core(profile_root: PathBuf) -> Result<(), CoreError> {
-    let workspace_base = super::launcher::workspace_base_from_env();
+    let workspace_base = super::process::workspace_base_from_env();
     run_acp_core_with_roots(profile_root, workspace_base).await
 }
 
@@ -2703,8 +2703,11 @@ mod tests {
         assert!(!runtime.observes_live_terminals());
 
         let server_endpoint = endpoint.clone();
+        let program = crate::terminal_program();
         let mut server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+            tokio::spawn(
+                async move { run_terminal_core_on_endpoint(server_endpoint, program).await },
+            );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while !runtime.observes_live_terminals() {
             assert!(
@@ -2729,7 +2732,11 @@ mod tests {
         }
 
         let server_endpoint = endpoint.clone();
-        server = tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let program = crate::terminal_program();
+        server =
+            tokio::spawn(
+                async move { run_terminal_core_on_endpoint(server_endpoint, program).await },
+            );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while !runtime.observes_live_terminals() {
             assert!(

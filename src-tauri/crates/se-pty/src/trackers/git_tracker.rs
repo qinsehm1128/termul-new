@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
 
 use super::cwd_tracker::CwdTracker;
 use super::{TerminalEvent, TerminalEventHub};
@@ -334,7 +333,6 @@ impl GitState {
 /// every terminal that shares it. Unchanged repos use a longer cooldown.
 pub struct GitTracker {
     terminal_states: Arc<RwLock<HashMap<String, GitState>>>,
-    app_handle: Option<AppHandle>,
     cwd_tracker: Option<Arc<CwdTracker>>,
     events: TerminalEventHub,
     poll_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
@@ -344,11 +342,10 @@ pub struct GitTracker {
 }
 
 impl GitTracker {
-    /// Create a new GitTracker with the given app handle
-    pub fn new(app_handle: Option<AppHandle>, events: TerminalEventHub) -> Self {
+    /// Create a GitTracker that only follows the cwds it is told about.
+    pub fn new(events: TerminalEventHub) -> Self {
         Self {
             terminal_states: Arc::new(RwLock::new(HashMap::new())),
-            app_handle,
             cwd_tracker: None,
             events,
             poll_handle: Arc::new(RwLock::new(None)),
@@ -358,10 +355,9 @@ impl GitTracker {
         }
     }
 
-    /// Create a GitTracker with a direct CwdTracker reference (standalone mode).
-    /// This avoids the Tauri AppHandle dependency for CWD synchronization.
+    /// Create a GitTracker that also syncs terminal cwds from `cwd_tracker`.
     pub fn with_cwd_tracker(cwd_tracker: Arc<CwdTracker>, events: TerminalEventHub) -> Self {
-        let mut tracker = Self::new(None, events);
+        let mut tracker = Self::new(events);
         tracker.cwd_tracker = Some(cwd_tracker);
         tracker
     }
@@ -482,12 +478,8 @@ impl GitTracker {
     }
 
     fn refresh_tracked_terminals(&self) {
-        // Transport-neutral: use the direct CwdTracker reference if available,
-        // otherwise fall back to the Tauri AppHandle state lookup.
         if let Some(cwd_tracker) = &self.cwd_tracker {
-            Self::sync_terminal_cwds_from_tracker_direct(cwd_tracker, &self.terminal_states);
-        } else if let Some(app_handle) = &self.app_handle {
-            Self::sync_terminal_cwds_from_tracker(app_handle, &self.terminal_states);
+            Self::sync_terminal_cwds_from_tracker(cwd_tracker, &self.terminal_states);
         }
 
         Self::prune_unused_cwd_poll_states(&self.terminal_states, &self.cwd_poll_states);
@@ -517,38 +509,6 @@ impl GitTracker {
     }
 
     fn sync_terminal_cwds_from_tracker(
-        app_handle: &AppHandle,
-        states: &Arc<RwLock<HashMap<String, GitState>>>,
-    ) {
-        let Some(cwd_tracker) = app_handle.try_state::<Arc<CwdTracker>>() else {
-            return;
-        };
-
-        let terminal_ids: Vec<String> = states.read().keys().cloned().collect();
-        let updates: Vec<(String, String)> = terminal_ids
-            .into_iter()
-            .filter_map(|terminal_id| {
-                cwd_tracker
-                    .get_cwd(&terminal_id)
-                    .map(|cwd| (terminal_id, cwd))
-            })
-            .collect();
-
-        if updates.is_empty() {
-            return;
-        }
-
-        let mut states_guard = states.write();
-        for (terminal_id, new_cwd) in updates {
-            if let Some(state) = states_guard.get_mut(&terminal_id) {
-                state.update_terminal_cwd(new_cwd);
-            }
-        }
-    }
-
-    /// Transport-neutral CWD sync: uses a direct Arc<CwdTracker> reference
-    /// instead of the Tauri AppHandle state lookup. Used in standalone mode.
-    fn sync_terminal_cwds_from_tracker_direct(
         cwd_tracker: &Arc<CwdTracker>,
         states: &Arc<RwLock<HashMap<String, GitState>>>,
     ) {
@@ -1633,7 +1593,6 @@ impl GitTracker {
         let states = self.terminal_states.clone();
         let is_visible = self.is_visible.clone();
         let cwd_poll_states = self.cwd_poll_states.clone();
-        let app_handle = self.app_handle.clone();
         let cwd_tracker = self.cwd_tracker.clone();
         let events = self.events.clone();
         let poll_handle = self.poll_handle.clone();
@@ -1687,9 +1646,7 @@ impl GitTracker {
                 };
 
                 if let Some(cwd_tracker) = &cwd_tracker {
-                    Self::sync_terminal_cwds_from_tracker_direct(cwd_tracker, &states);
-                } else if let Some(app_handle) = &app_handle {
-                    Self::sync_terminal_cwds_from_tracker(app_handle, &states);
+                    Self::sync_terminal_cwds_from_tracker(cwd_tracker, &states);
                 }
                 Self::prune_unused_cwd_poll_states(&states, &cwd_poll_states);
 
@@ -2440,7 +2397,7 @@ mod tests {
     #[test]
     fn test_group_terminals_by_cwd_dedupes_shared_repo() {
         let events = TerminalEventHub::standalone();
-        let tracker = GitTracker::new(None, events);
+        let tracker = GitTracker::new(events);
         tracker.terminal_states.write().insert(
             "term-1".to_string(),
             GitState {

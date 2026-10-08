@@ -15,17 +15,17 @@ use super::ipc::{
     CURRENT_PROTOCOL_VERSION,
 };
 use super::transport::{connect_core, listen_core, CoreReadHalf, CoreServerStream, CoreWriteHalf};
-use crate::conversation::ConversationId;
-use crate::pty::claims::RotatedClaim;
-use crate::pty::manager::{
-    SpawnedTerminal, TerminalAttachResult, TerminalResumeGrant, TerminalResumeRequest,
-};
-use crate::pty::{PtyManager, SpawnOptions};
-use crate::trackers::{
-    CwdTracker, ExitCodeTracker, GitTracker, TerminalDisplayMode, TerminalEvent, TerminalEventHub,
-};
 use async_trait::async_trait;
 use parking_lot::Mutex;
+use se_foundation::ids::ConversationId;
+use se_pty::claims::RotatedClaim;
+use se_pty::manager::{
+    SpawnedTerminal, TerminalAttachResult, TerminalResumeGrant, TerminalResumeRequest,
+};
+use se_pty::trackers::{
+    CwdTracker, ExitCodeTracker, GitTracker, TerminalDisplayMode, TerminalEvent, TerminalEventHub,
+};
+use se_pty::{PtyManager, SpawnOptions, TerminalProgram};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -338,7 +338,7 @@ fn ok_response(id: u64, result: Value) -> CoreResponse {
 
 pub(crate) fn status_from_instance(
     pty: &PtyManager,
-    instance: &crate::pty::manager::TerminalInstance,
+    instance: &se_pty::manager::TerminalInstance,
 ) -> TerminalStatus {
     let latest_seq = instance
         .output_log
@@ -371,25 +371,19 @@ pub(crate) fn status_from_instance(
     }
 }
 
-pub(crate) fn list_terminal_statuses(pty: &PtyManager) -> Vec<TerminalStatus> {
+pub fn list_terminal_statuses(pty: &PtyManager) -> Vec<TerminalStatus> {
     pty.get_all()
         .iter()
         .map(|instance| status_from_instance(pty, instance))
         .collect()
 }
 
-fn construct_pty_manager() -> Arc<PtyManager> {
+fn construct_pty_manager(program: TerminalProgram) -> Arc<PtyManager> {
     let events = TerminalEventHub::standalone();
     let cwd = Arc::new(CwdTracker::new(events.clone()));
-    let git = Arc::new(GitTracker::new(None, events.clone()));
+    let git = Arc::new(GitTracker::new(events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
-    Arc::new(PtyManager::new(
-        events,
-        cwd,
-        git,
-        exit,
-        crate::terminal_program(),
-    ))
+    Arc::new(PtyManager::new(events, cwd, git, exit, program))
 }
 
 struct TerminalCoreState {
@@ -400,35 +394,43 @@ struct TerminalCoreState {
     shutdown: watch::Sender<bool>,
 }
 
-pub async fn run_terminal_core(profile_root: PathBuf) -> Result<(), CoreError> {
+/// `program` is what spawned shells see as `TERM_PROGRAM` / its version.
+pub async fn run_terminal_core(
+    profile_root: PathBuf,
+    program: TerminalProgram,
+) -> Result<(), CoreError> {
     #[cfg(any(unix, windows))]
     {
         let endpoint = CoreEndpoint::for_profile(&profile_root, CoreRole::TerminalCore);
-        let workspace_base = super::launcher::workspace_base_from_env();
-        run_terminal_core_with(endpoint, Some((profile_root, workspace_base))).await
+        let workspace_base = super::process::workspace_base_from_env();
+        run_terminal_core_with(endpoint, Some((profile_root, workspace_base)), program).await
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = profile_root;
+        let _ = (profile_root, program);
         Err(CoreError::UnsupportedPlatform)
     }
 }
 
-pub async fn run_terminal_core_on_endpoint(endpoint: CoreEndpoint) -> Result<(), CoreError> {
-    run_terminal_core_with(endpoint, None).await
+pub async fn run_terminal_core_on_endpoint(
+    endpoint: CoreEndpoint,
+    program: TerminalProgram,
+) -> Result<(), CoreError> {
+    run_terminal_core_with(endpoint, None, program).await
 }
 
 /// `quick_roots` is `(profile_root, workspace_base)` for the quick terminal
 /// store; without it Terminal Core serves PTYs only.
-async fn run_terminal_core_with(
+pub async fn run_terminal_core_with(
     endpoint: CoreEndpoint,
     quick_roots: Option<(PathBuf, PathBuf)>,
+    program: TerminalProgram,
 ) -> Result<(), CoreError> {
     prepare_runtime_dir(&endpoint)?;
     let _ = remove_stale_socket(&endpoint);
     let mut listener = listen_core(&endpoint, CoreRole::TerminalCore).await?;
 
-    let pty = construct_pty_manager();
+    let pty = construct_pty_manager(program);
     let quick = quick_roots.and_then(|(profile_root, workspace_base)| {
         match crate::quick_terminal::open_service(&profile_root, &workspace_base, Arc::clone(&pty))
         {
@@ -887,14 +889,14 @@ const STREAM_OUTPUT_CAPACITY: usize = 256;
 /// Lagged is a hole in seq space. Continuing would silently skip bytes;
 /// fail the stream (emit `terminal.gap`) and let reconnect/rewatch heal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LiveOutputDecision {
+pub enum LiveOutputDecision {
     Forward { seq: u64, data: Vec<u8> },
     FailGap { last_seq: u64 },
     Stop,
 }
 
-pub(crate) fn decide_live_output(
-    received: Result<crate::pty::manager::TerminalOutputChunk, broadcast::error::RecvError>,
+pub fn decide_live_output(
+    received: Result<se_pty::manager::TerminalOutputChunk, broadcast::error::RecvError>,
     current_seq: u64,
 ) -> LiveOutputDecision {
     match received {
@@ -991,7 +993,7 @@ async fn start_replay_forwarder(
     writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
     subscriptions: &mut HashMap<String, tokio::task::JoinHandle<()>>,
     terminal_id: &str,
-    replay: crate::pty::manager::TerminalReplay,
+    replay: se_pty::manager::TerminalReplay,
     latest_seq: u64,
     generation: Option<u64>,
 ) {
@@ -1334,7 +1336,7 @@ impl TerminalCoreClient {
         cols: Option<u16>,
         rows: Option<u16>,
         force: bool,
-    ) -> Result<crate::pty::manager::DisplayModeState, CoreError> {
+    ) -> Result<se_pty::manager::DisplayModeState, CoreError> {
         let value = self
             .rpc(
                 METHOD_SET_DISPLAY_MODE,
@@ -1682,7 +1684,14 @@ impl TerminalRuntimeHandle for TerminalCoreClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pty::manager::SCROLLBACK_CAP;
+    use se_pty::manager::SCROLLBACK_CAP;
+
+    fn test_program() -> TerminalProgram {
+        TerminalProgram {
+            name: "se-test".to_string(),
+            version: "0.0.0-test".to_string(),
+        }
+    }
 
     #[test]
     fn terminal_core_module_does_not_import_acp() {
@@ -1769,90 +1778,13 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn terminal_core_serves_quick_terminals_with_their_error_codes() {
-        use crate::quick_terminal::{
-            CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
-            QuickTerminalRecord, METHOD_CREATE, METHOD_DELETE, METHOD_LIST, METHOD_OPEN,
-        };
-        use crate::quick_terminal_commands::request;
-        // Durable directory creation refuses symlinked components (macOS `/var`).
-        let profile_dir = tempfile::tempdir().unwrap();
-        let workspace_dir = tempfile::tempdir().unwrap();
-        let profile = profile_dir.path().canonicalize().unwrap();
-        let workspace = workspace_dir.path().canonicalize().unwrap();
-        let endpoint = CoreEndpoint::for_profile(&profile, CoreRole::TerminalCore);
-        let server_endpoint = endpoint.clone();
-        let roots = (profile.clone(), workspace.clone());
-        let server =
-            tokio::spawn(async move { run_terminal_core_with(server_endpoint, Some(roots)).await });
-        let handle =
-            crate::core::TerminalServiceHandle::from_core_client(wait_for_client(&endpoint).await);
-        assert!(
-            handle.quick_terminals().is_none(),
-            "Core mode owns no local store"
-        );
-
-        let created: crate::commands::IpcResult<QuickTerminalRecord> = request(
-            &handle,
-            METHOD_CREATE,
-            &CreateQuickTerminal {
-                target: se_quick_terminal::QuickTerminalTarget::Workspace,
-                title: Some("core".to_string()),
-            },
-        )
-        .await;
-        let record = created.data.expect("created through Terminal Core");
-        assert!(record
-            .cwd
-            .starts_with(workspace.join("terminals").to_str().unwrap()));
-
-        let opened: crate::commands::IpcResult<QuickTerminalOpened> = request(
-            &handle,
-            METHOD_OPEN,
-            &OpenQuickTerminal {
-                id: record.id,
-                cols: 80,
-                rows: 24,
-            },
-        )
-        .await;
-        let opened = opened.data.expect("opened through Terminal Core");
-        assert!(opened.spawned && opened.claim.is_some());
-
-        let missing: crate::commands::IpcResult<QuickTerminalOpened> = request(
-            &handle,
-            METHOD_OPEN,
-            &OpenQuickTerminal {
-                id: crate::quick_terminal::QuickTerminalId::new_v4(),
-                cols: 80,
-                rows: 24,
-            },
-        )
-        .await;
-        assert!(!missing.success);
-        assert_eq!(missing.code.as_deref(), Some("QUICK_TERMINAL_NOT_FOUND"));
-
-        let deleted: crate::commands::IpcResult<()> = request(
-            &handle,
-            METHOD_DELETE,
-            &QuickTerminalIdParams { id: record.id },
-        )
-        .await;
-        assert!(deleted.success);
-        let listed: crate::commands::IpcResult<Vec<QuickTerminalRecord>> =
-            request(&handle, METHOD_LIST, &serde_json::Value::Null).await;
-        assert_eq!(listed.data.map(|records| records.len()), Some(0));
-        server.abort();
-    }
-
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn core_socket_survives_disconnect_and_replays_marker() {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -1979,8 +1911,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -2009,8 +1942,9 @@ mod tests {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
 
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         wait_for_reconnect(&client, &endpoint).await;
         client.list().await.expect("list after reconnect");
@@ -2053,8 +1987,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -2160,8 +2095,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();
@@ -2194,8 +2130,9 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
         let server_endpoint = endpoint.clone();
-        let server =
-            tokio::spawn(async move { run_terminal_core_on_endpoint(server_endpoint).await });
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
 
         let client = wait_for_client(&endpoint).await;
         let cwd = profile.path().to_string_lossy().into_owned();

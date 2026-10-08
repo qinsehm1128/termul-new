@@ -10,9 +10,7 @@ use super::ipc::{
 };
 use super::transport::connect_core;
 use std::collections::HashMap;
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -53,6 +51,26 @@ impl CoreLaunchConfig {
             ready_timeout: Duration::from_secs(5),
         })
     }
+}
+
+/// File name of the standalone Terminal Core executable bundled beside the app.
+const TERMINAL_CORE_EXECUTABLE: &str = if cfg!(windows) {
+    "se-terminal-core.exe"
+} else {
+    "se-terminal-core"
+};
+
+/// What to run for `role`: the bundled `se-terminal-core` beside the app
+/// executable when it is there, else the app executable itself, which still
+/// serves `--terminal-core` / `--acp-core`.
+fn core_executable(app_executable: &Path, role: CoreRole) -> PathBuf {
+    if role == CoreRole::TerminalCore {
+        let standalone = app_executable.with_file_name(TERMINAL_CORE_EXECUTABLE);
+        if standalone.is_file() {
+            return standalone;
+        }
+    }
+    app_executable.to_path_buf()
 }
 
 /// Where spawned Cores write their logs: the GUI's log directory plus the
@@ -726,7 +744,14 @@ pub async fn ensure_core(
         }
     };
 
-    let mut command = Command::new(&config.executable);
+    let executable = core_executable(&config.executable, role);
+    log::info!(
+        target: "se_manager::core",
+        "operation=core_spawn role={} executable={}",
+        role.endpoint_name(),
+        executable.display()
+    );
+    let mut command = Command::new(&executable);
     command
         .arg(role_arg)
         .env("TERMUL_CORE_PROFILE_ROOT", &config.profile_root)
@@ -795,104 +820,6 @@ pub async fn ensure_core(
     }
 }
 
-/// Resolve the user-visible workspace base (Conversation and quick terminal folders) the same way the desktop does:
-/// explicit env override, else `<home>/Documents/<brand>`, else `<home>/<brand>`.
-/// The GUI launcher passes its own computed root via env so both processes
-/// always agree; the fallback keeps the Core runnable standalone in tests.
-pub fn workspace_base_from_env() -> PathBuf {
-    if let Some(root) = std::env::var_os("TERMUL_CORE_WORKSPACE_ROOT") {
-        let root = PathBuf::from(root);
-        if root.as_os_str().is_empty() {
-            // fall through to the derived default
-        } else {
-            return root;
-        }
-    }
-    #[cfg(unix)]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-    #[cfg(not(any(unix, windows)))]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let brand = crate::brand::canonical().display_name.to_string();
-    match home {
-        Some(home) => home.join("Documents").join(&brand),
-        None => std::env::temp_dir().join(brand),
-    }
-}
-
-pub fn profile_root_from_env() -> PathBuf {
-    std::env::var_os("TERMUL_CORE_PROFILE_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("termul-core"))
-}
-
-#[cfg(any(unix, windows))]
-pub fn run_core_process(role: CoreRole) -> i32 {
-    let logging_to_file = crate::logging::install_core_logger().is_some();
-    if logging_to_file {
-        log::info!(
-            target: "se_manager::core",
-            "operation=core_process_start role={} pid={} version={}",
-            role.endpoint_name(),
-            std::process::id(),
-            env!("CARGO_PKG_VERSION")
-        );
-    }
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("core runtime initialization failed: {error}");
-            return 1;
-        }
-    };
-    let result = match role {
-        CoreRole::TerminalCore => {
-            runtime.block_on(super::terminal::run_terminal_core(profile_root_from_env()))
-        }
-        CoreRole::AcpCore => runtime.block_on(super::acp::run_acp_core(profile_root_from_env())),
-        CoreRole::Gui => Err(CoreError::InvalidRequest(
-            "GUI is not a launchable core role".to_string(),
-        )),
-    };
-    match result {
-        Ok(()) => {
-            log::info!(
-                target: "se_manager::core",
-                "operation=core_process_exit role={} stable_code=OK",
-                role.endpoint_name()
-            );
-            0
-        }
-        Err(error) => {
-            log::error!(
-                target: "se_manager::core",
-                "operation=core_process_exit role={} stable_code={} error={error}",
-                role.endpoint_name(),
-                error.code()
-            );
-            if !logging_to_file {
-                eprintln!("{} process failed: {error}", role.endpoint_name());
-            }
-            1
-        }
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-pub fn run_core_process(role: CoreRole) -> i32 {
-    eprintln!(
-        "{} process is not supported on this platform yet",
-        role.endpoint_name()
-    );
-    2
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,6 +829,20 @@ mod tests {
         let config = CoreLaunchConfig::for_current_executable("/tmp/termul-profile").unwrap();
         assert!(config.executable.is_absolute());
         assert_eq!(config.profile_root, Path::new("/tmp/termul-profile"));
+    }
+
+    #[test]
+    fn terminal_core_runs_the_standalone_executable_when_it_is_bundled() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("se-manager");
+        std::fs::write(&app, b"").unwrap();
+
+        assert_eq!(core_executable(&app, CoreRole::TerminalCore), app);
+
+        let standalone = dir.path().join(TERMINAL_CORE_EXECUTABLE);
+        std::fs::write(&standalone, b"").unwrap();
+        assert_eq!(core_executable(&app, CoreRole::TerminalCore), standalone);
+        assert_eq!(core_executable(&app, CoreRole::AcpCore), app);
     }
 
     #[test]
@@ -1257,8 +1198,9 @@ mod tests {
         let start = source
             .find("pub async fn ensure_core(")
             .expect("ensure_core");
+        // ensure_core is the last item before the test module.
         let end = source[start..]
-            .find("pub fn profile_root_from_env")
+            .find("\n#[cfg(test)]\nmod tests")
             .map(|offset| start + offset)
             .expect("ensure_core boundary");
         let body = &source[start..end];

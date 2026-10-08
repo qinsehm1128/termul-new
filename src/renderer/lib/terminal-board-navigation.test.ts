@@ -136,6 +136,33 @@ describe('terminal-board-navigation', () => {
     expect(peekPendingTerminalFocus()).toBeNull()
   })
 
+  it('opens an SSH terminal by selecting its profile, not a project', () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: 'term-ssh',
+          name: 'SSH: box',
+          projectId: 'ssh-profile-7',
+          shell: 'zsh',
+          ptyId: 'pty-ssh',
+          healthStatus: 'running',
+          viewState: 'visible'
+        }
+      ],
+      activeTerminalId: '',
+      ptyIdIndex: new Map([['pty-ssh', 'term-ssh']]),
+      cleanupRecoveries: {}
+    })
+    const navigate = vi.fn()
+
+    openBoardTerminal({ projectId: 'ssh-profile-7', terminalId: 'term-ssh', navigate })
+
+    expect(useSSHStore.getState().activeProfileId).toBe('profile-7')
+    expect(useProjectStore.getState().activeProjectId).toBe('')
+    expect(navigate).toHaveBeenCalledWith('/')
+    expect(peekPendingTerminalFocus()).toBeNull()
+  })
+
   it('opens a project without focusing a terminal', () => {
     const navigate = vi.fn()
     openBoardTerminal({ projectId: 'p-cost', terminalId: 'term-1', navigate })

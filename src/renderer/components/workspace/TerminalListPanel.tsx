@@ -42,6 +42,8 @@ export function TerminalListPanel(): React.JSX.Element {
 
   const conversationSummaries = useConversationStore((state) => state.summariesById)
   const conversationGroupName = t('switcher.conversations')
+  const quickGroupName = t('board.quickTerminals')
+  const sshGroupName = t('board.sshTerminals')
   const conversationNames = useMemo(
     () =>
       buildConversationTerminalNames(
@@ -52,8 +54,20 @@ export function TerminalListPanel(): React.JSX.Element {
     [terminals, conversationSummaries, t]
   )
   const board = useMemo(
-    () => buildTerminalBoard(terminals, projects, groups, conversationNames, conversationGroupName),
-    [terminals, projects, groups, conversationNames, conversationGroupName]
+    () =>
+      buildTerminalBoard(terminals, projects, groups, conversationNames, conversationGroupName, {
+        quick: quickGroupName,
+        ssh: sshGroupName
+      }),
+    [
+      terminals,
+      projects,
+      groups,
+      conversationNames,
+      conversationGroupName,
+      quickGroupName,
+      sshGroupName
+    ]
   )
 
   const open = (terminalId: string, projectId: string | undefined): void => {

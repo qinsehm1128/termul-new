@@ -4785,10 +4785,12 @@ dependencies = [
 name = "se-foundation"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "libc",
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
  "windows-sys 0.59.0",
@@ -4847,6 +4849,7 @@ dependencies = [
  "se-mcp-bridge",
  "se-pty",
  "se-quick-terminal",
+ "se-terminal-core",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4915,7 +4918,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "subtle",
- "tauri",
  "tempfile",
  "tokio",
  "winapi",
@@ -4932,6 +4934,23 @@ dependencies = [
  "parking_lot",
  "se-foundation",
  "se-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "se-terminal-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "log",
+ "parking_lot",
+ "se-foundation",
+ "se-ipc",
+ "se-pty",
+ "se-quick-terminal",
  "serde",
  "serde_json",
  "tempfile",

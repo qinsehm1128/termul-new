@@ -44,6 +44,8 @@ export default function TerminalBoard(): React.JSX.Element {
 
   const conversationSummaries = useConversationStore((state) => state.summariesById)
   const conversationGroupName = t('switcher.conversations')
+  const quickGroupName = t('board.quickTerminals')
+  const sshGroupName = t('board.sshTerminals')
   const conversationNames = useMemo(
     () =>
       buildConversationTerminalNames(
@@ -54,8 +56,20 @@ export default function TerminalBoard(): React.JSX.Element {
     [terminals, conversationSummaries, t]
   )
   const board = useMemo(
-    () => buildTerminalBoard(terminals, projects, groups, conversationNames, conversationGroupName),
-    [groups, projects, terminals, conversationNames, conversationGroupName]
+    () =>
+      buildTerminalBoard(terminals, projects, groups, conversationNames, conversationGroupName, {
+        quick: quickGroupName,
+        ssh: sshGroupName
+      }),
+    [
+      groups,
+      projects,
+      terminals,
+      conversationNames,
+      conversationGroupName,
+      quickGroupName,
+      sshGroupName
+    ]
   )
   const visible = useMemo(() => filterTerminalBoard(board, query), [board, query])
   const total = countBoardTerminals(board)
@@ -159,7 +173,7 @@ export default function TerminalBoard(): React.JSX.Element {
                                 </button>
                               ) : (
                                 <span className="min-w-0 truncate text-xs font-medium text-foreground">
-                                  {t('board.noProject')}
+                                  {project.projectName || t('board.noProject')}
                                 </span>
                               )}
                               {project.archived ? (

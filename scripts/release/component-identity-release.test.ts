@@ -442,7 +442,7 @@ describe('component identity release propagation', () => {
       expect(workflow).not.toContain(':terminal-core')
       expect(workflow).toContain('scripts/release/component-build-id.mjs')
       expect(workflow).toContain('scripts/release/component-identity-release.mjs')
-      expect(workflow).toContain('touch src-tauri/src/core/ipc.rs')
+      expect(workflow).toContain('touch src-tauri/crates/se-terminal-core/src/ipc.rs')
       const desktop = workflow.slice(
         workflow.indexOf('name: Build platform artifacts locally'),
         workflow.indexOf('name: Persist Tauri artifact paths')

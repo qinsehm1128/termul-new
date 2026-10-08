@@ -67,7 +67,7 @@ SCAN_GLOBS=(
 # --------------------------------------------------------------------------
 ALLOWED_PATHS=(
   'src/shared/brand.ts'
-  'src-tauri/src/brand.rs'
+  'src-tauri/crates/se-foundation/src/brand.rs'
   'src/__fixtures__/legacy-brand/'
   'src-tauri/tests/fixtures/legacy-brand/'
   # This file. A scanner has to spell what it looks for; it cannot be its own

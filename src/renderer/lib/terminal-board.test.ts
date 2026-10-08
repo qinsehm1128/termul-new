@@ -60,36 +60,29 @@ describe('buildTerminalBoard', () => {
     expect(countBoardTerminals(board)).toBe(3)
   })
 
-  it('leaves quick terminals off the board instead of filing them as unassigned', () => {
-    // A quick terminal has no project, so it used to land in the unassigned
-    // block. It is managed on its own page and has no place on the board.
+  it('lists quick and SSH terminals in their own groups, not as unassigned or by project', () => {
+    // A quick terminal has no project and an SSH terminal carries a synthetic
+    // `ssh-<profile>` id. Left off the board, the activity rail counted them
+    // while the board did not, so the user could not see what was open.
     const board = buildTerminalBoard(
       [
         terminal('t-cost', { projectId: 'p-cost' }),
-        terminal('t-quick', { quickTerminalId: 'q1', ptyId: 'pty-q' })
-      ],
-      projects,
-      groups
-    )
-
-    expect(board.map((group) => group.groupId)).toEqual(['g-ns'])
-    expect(countBoardTerminals(board)).toBe(1)
-  })
-
-  it('leaves SSH terminals off the board instead of listing their synthetic project', () => {
-    // An SSH terminal carries `ssh-<profile>` as its project id. No such project
-    // exists, so the board showed a block named after the raw id.
-    const board = buildTerminalBoard(
-      [
-        terminal('t-cost', { projectId: 'p-cost' }),
+        terminal('t-quick', { quickTerminalId: 'q1', ptyId: 'pty-q' }),
         terminal('t-ssh', { projectId: sshTerminalProjectId('profile-1'), ptyId: 'pty-s' })
       ],
       projects,
-      groups
+      groups,
+      new Map(),
+      'Conversations',
+      { quick: 'Quick', ssh: 'Remote' }
     )
 
-    expect(board.map((group) => group.groupId)).toEqual(['g-ns'])
-    expect(countBoardTerminals(board)).toBe(1)
+    expect(board.map((group) => group.groupId)).toEqual(['g-ns', '__quick__', '__ssh__'])
+    expect(board[1]).toMatchObject({ groupName: 'Quick', projects: [{ projectName: 'Quick' }] })
+    expect(board[1].projects[0].terminals.map((item) => item.id)).toEqual(['t-quick'])
+    expect(board[2]).toMatchObject({ groupName: 'Remote', projects: [{ projectName: 'Remote' }] })
+    expect(board[2].projects[0].terminals.map((item) => item.id)).toEqual(['t-ssh'])
+    expect(countBoardTerminals(board)).toBe(3)
   })
 
   it('lists a Conversation terminal under its Conversation, not its project', () => {

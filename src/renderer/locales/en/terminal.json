@@ -143,6 +143,8 @@
     "unassigned": "No project",
     "noProject": "No project",
     "archived": "Archived",
+    "quickTerminals": "Quick terminals",
+    "sshTerminals": "SSH",
     "status": {
       "live": "Live",
       "hidden": "Hidden",

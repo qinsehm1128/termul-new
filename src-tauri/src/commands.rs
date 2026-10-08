@@ -690,7 +690,10 @@ async fn terminal_spawn_resource_impl(
         }
     };
 
-    let spawned = match pty_manager.spawn(options, on_data).await {
+    let spawned = match pty_manager
+        .spawn(options, on_data.map(crate::pty_tauri::channel_output))
+        .await
+    {
         Ok(spawned) => spawned,
         Err(error) => return IpcResult::error(error, "SPAWN_FAILED"),
     };

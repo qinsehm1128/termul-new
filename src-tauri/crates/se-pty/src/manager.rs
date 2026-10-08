@@ -77,7 +77,12 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 use std::time::{Duration, Instant};
-use tauri::ipc::{Channel, Response};
+
+/// Receives a terminal's flushed output batches in order. The desktop GUI
+/// adapts its Tauri IPC channel to this; detached terminals pass none.
+pub trait OutputSink: Send + Sync {
+    fn send(&self, data: Vec<u8>) -> Result<(), String>;
+}
 
 /// ADR-004.2: Result of resolving a program path, possibly with leading argv
 /// entries that must be prepended before the user-supplied args (e.g. when a
@@ -1987,7 +1992,7 @@ impl PtyManager {
     pub async fn spawn(
         &self,
         options: SpawnOptions,
-        on_data: Option<Channel<Response>>,
+        on_data: Option<Arc<dyn OutputSink>>,
     ) -> Result<SpawnedTerminal, String> {
         if se_foundation::host_admission::HostAdmission::global()
             .check()
@@ -2061,7 +2066,7 @@ impl PtyManager {
         &self,
         id: String,
         options: SpawnOptions,
-        on_data: Option<Channel<Response>>,
+        on_data: Option<Arc<dyn OutputSink>>,
         workspace_ref_tracked: bool,
     ) -> Result<TerminalInfo, String> {
         // ADR-004.2: Resolve the program to run. When `program` is set we run
@@ -2715,13 +2720,13 @@ impl PtyManager {
         output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
         output_log_bytes: Arc<AtomicUsize>,
         next_output_seq: Arc<AtomicU64>,
-        on_data: Option<Channel<Response>>,
+        on_data: Option<Arc<dyn OutputSink>>,
         terminal_id: String,
     ) {
         let id = terminal_id;
         log::info!("[PTY {}] Flusher thread starting", id);
 
-        let channel_ref: Option<&Channel<Response>> = on_data.as_ref();
+        let channel_ref: Option<&Arc<dyn OutputSink>> = on_data.as_ref();
 
         fn publish(
             data: Vec<u8>,
@@ -2766,7 +2771,7 @@ impl PtyManager {
 
                 // Forward to Tauri frontend channel (may be None for detached terminals)
                 if let Some(ch) = channel_ref {
-                    if let Err(e) = ch.send(Response::new(data)) {
+                    if let Err(e) = ch.send(data) {
                         log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
                     }
                 }
@@ -2785,7 +2790,7 @@ impl PtyManager {
                             &next_output_seq,
                         );
                         if let Some(ch) = channel_ref {
-                            if let Err(e) = ch.send(Response::new(final_data)) {
+                            if let Err(e) = ch.send(final_data) {
                                 log::error!(
                                     "[PTY {}] Failed to send final data via channel: {}",
                                     id,

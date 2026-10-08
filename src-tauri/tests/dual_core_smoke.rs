@@ -81,6 +81,22 @@ async fn packaged_binary_runs_both_cores_and_second_process_adopts() {
     assert!(!acp_spawned.reused);
     let _reaper = PidReaper(vec![terminal_spawned.pid, acp_spawned.pid]);
 
+    // cargo builds `se-terminal-core` beside `se-manager`, as the bundle ships
+    // them: the launcher must run the lean executable, the ACP Core the app's.
+    let command_of = |pid: u32| {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    assert!(
+        command_of(terminal_spawned.pid).ends_with("/se-terminal-core"),
+        "terminal core ran {}",
+        command_of(terminal_spawned.pid)
+    );
+    assert!(command_of(acp_spawned.pid).ends_with("/se-manager"));
+
     // The ACP Core must own the conversation root on this shared profile.
     for _ in 0..100 {
         if profile.path().join("conversations").is_dir() {

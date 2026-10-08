@@ -1,8 +1,9 @@
 import type { Project, ProjectColor, ProjectGroup, Terminal } from '@/types/project'
 import {
   isConversationScopedTerminal,
-  isManagedOnOwnPage,
-  isOpenTerminalView
+  isOpenTerminalView,
+  isQuickTerminal,
+  isSshTerminal
 } from '@/types/project'
 
 export interface TerminalBoardProjectBlock {
@@ -38,16 +39,27 @@ export function terminalBoardStatus(terminal: Terminal): TerminalBoardStatusKey 
   return 'disconnected'
 }
 
+/** The terminal's process is still there: not exited and not cut off. */
+export function isTerminalRunning(terminal: Terminal): boolean {
+  const status = terminalBoardStatus(terminal)
+  return status !== 'exited' && status !== 'disconnected'
+}
+
 function projectGroupId(projectId: string, groups: readonly ProjectGroup[]): string | undefined {
   return groups.find((group) => group.projectIds.includes(projectId))?.id
 }
+
+/** Board group ids for terminals that live on their own pages. */
+export const QUICK_TERMINAL_GROUP_ID = '__quick__'
+export const SSH_TERMINAL_GROUP_ID = '__ssh__'
 
 export function buildTerminalBoard(
   terminals: readonly Terminal[],
   projects: readonly Project[],
   groups: readonly ProjectGroup[],
   conversationNames: ReadonlyMap<string, string> = new Map(),
-  conversationGroupName = 'Conversations'
+  conversationGroupName = 'Conversations',
+  ownPageGroupNames: { quick: string; ssh: string } = { quick: 'Quick terminals', ssh: 'SSH' }
 ): TerminalBoardGroupBlock[] {
   const projectById = new Map(projects.map((project) => [project.id, project]))
   const usedProjectIds = new Set<string>()
@@ -55,11 +67,22 @@ export function buildTerminalBoard(
   const byProject = new Map<string, Terminal[]>()
   const byConversation = new Map<string, Terminal[]>()
   const conversationOrder: string[] = []
+  const quick: Terminal[] = []
+  const ssh: Terminal[] = []
 
   for (const terminal of terminals) {
-    // Quick and SSH terminals are managed on their own pages. Without a real
-    // project they would otherwise be filed as unassigned or under a synthetic id.
-    if (isManagedOnOwnPage(terminal)) continue
+    // Quick and SSH terminals are managed on their own pages. They get their
+    // own groups: filed by project they would land in the unassigned block or
+    // under a synthetic `ssh-<profile>` id, and left off the board the user
+    // could not see how many terminals are open.
+    if (isQuickTerminal(terminal)) {
+      quick.push(terminal)
+      continue
+    }
+    if (isSshTerminal(terminal)) {
+      ssh.push(terminal)
+      continue
+    }
     // A Conversation's terminal is listed under its Conversation, never under
     // the project it is attributed to. Filing it by project made the board
     // report shells the project does not own — and, with the Conversation's
@@ -134,6 +157,20 @@ export function buildTerminalBoard(
         archived: false,
         terminals: byConversation.get(conversationId) ?? []
       }))
+    })
+  }
+
+  for (const [groupId, name, list] of [
+    [QUICK_TERMINAL_GROUP_ID, ownPageGroupNames.quick, quick],
+    [SSH_TERMINAL_GROUP_ID, ownPageGroupNames.ssh, ssh]
+  ] as const) {
+    if (list.length === 0) continue
+    blocks.push({
+      groupId,
+      groupName: name,
+      projects: [
+        { projectId: '', projectName: name, color: 'gray', archived: false, terminals: list }
+      ]
     })
   }
 
