@@ -4,7 +4,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ListEmptyState, ListPanelHeader, ListRow, ListRowMeta } from '@/components/lists'
+import {
+  ListEmptyState,
+  ListPanelHeader,
+  ListRow,
+  ListRowMeta,
+  ListRowStatus
+} from '@/components/lists'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,7 +40,9 @@ import {
 import { Input } from '@/components/ui/input'
 import { formatRelativeTime } from '@/lib/git-time'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { isTerminalRunning } from '@/lib/terminal-board'
 import { useProjectStore } from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import type { Project } from '@/types/project'
 import { QuickTerminalView } from './QuickTerminalView'
 import { quickTerminalApi } from './quick-terminal-api'
@@ -92,6 +100,14 @@ export default function QuickTerminalsPage(): React.JSX.Element {
   const remove = useQuickTerminalStore((state) => state.remove)
   const closeShell = useQuickTerminalStore((state) => state.close)
   const projects = useProjectStore((state) => state.projects)
+  // Joined so the selector returns a stable value; a fresh array would rerender every store update.
+  const runningKey = useTerminalStore((state) =>
+    state.terminals
+      .filter((terminal) => terminal.quickTerminalId && isTerminalRunning(terminal))
+      .map((terminal) => terminal.quickTerminalId)
+      .join('\n')
+  )
+  const running = useMemo(() => new Set(runningKey.split('\n')), [runningKey])
   const [query, setQuery] = useState('')
   const [renaming, setRenaming] = useState<QuickTerminalRecord | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -213,7 +229,14 @@ export default function QuickTerminalsPage(): React.JSX.Element {
           {visible.map((record) => (
             <ListRow
               key={record.id}
-              title={quickTerminalName(record)}
+              title={
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="min-w-0 truncate">{quickTerminalName(record)}</span>
+                  {running.has(record.id) ? (
+                    <ListRowStatus status="working" label={t('running')} />
+                  ) : null}
+                </span>
+              }
               titleAttr={record.cwd}
               active={record.id === quickTerminalId}
               onClick={() => navigate(`/quick-terminals/${record.id}`)}

@@ -2,7 +2,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useSSHStore } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
-import { isOpenTerminalView } from '@/types/project'
+import { isOpenTerminalView, sshTerminalProfileId } from '@/types/project'
 import { logFrontendError } from './log-api'
 
 export interface PendingTerminalFocus {
@@ -79,6 +79,15 @@ export function openBoardTerminal(options: {
   if (record?.quickTerminalId) {
     clearPendingTerminalFocus()
     options.navigate(`/quick-terminals/${record.quickTerminalId}`)
+    return
+  }
+  // An SSH terminal is shown by selecting its profile, not a project.
+  const sshProfileId = record ? sshTerminalProfileId(record) : null
+  if (sshProfileId) {
+    clearPendingTerminalFocus()
+    useWorkspaceStore.getState().hideAgentLauncher()
+    useSSHStore.getState().selectProfile(sshProfileId)
+    options.navigate('/')
     return
   }
   const owner = record?.conversationId

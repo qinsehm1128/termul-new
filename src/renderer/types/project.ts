@@ -217,6 +217,14 @@ export function isSshTerminal(terminal: Pick<Terminal, 'projectId'>): boolean {
   return terminal.projectId?.startsWith(SSH_TERMINAL_PROJECT_PREFIX) ?? false
 }
 
+/** The SSH profile an SSH terminal belongs to; null for any other terminal. */
+export function sshTerminalProfileId(terminal: Pick<Terminal, 'projectId'>): string | null {
+  const projectId = terminal.projectId
+  return projectId?.startsWith(SSH_TERMINAL_PROJECT_PREFIX)
+    ? projectId.slice(SSH_TERMINAL_PROJECT_PREFIX.length)
+    : null
+}
+
 /**
  * Quick and SSH terminals are reached from their own pages, so terminal lists
  * that group by project skip them instead of inventing a project for them.

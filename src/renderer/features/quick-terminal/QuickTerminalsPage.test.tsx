@@ -175,6 +175,35 @@ describe('QuickTerminalsPage', () => {
     expect(api.close).toHaveBeenCalledWith(id)
   })
 
+  it('marks the quick terminals whose shell is running', async () => {
+    const stopped = { ...record, id: '44444444-4444-4444-8444-444444444444', title: 'stopped' }
+    const exited = { ...record, id: '55555555-5555-4555-8555-555555555555', title: 'exited' }
+    api.list.mockResolvedValue({
+      success: true,
+      data: [{ ...record, title: 'live' }, stopped, exited]
+    })
+    useTerminalStore.setState({
+      terminals: [
+        { id: 'pty-live', name: 'live', shell: 'zsh', ptyId: 'pty-live', quickTerminalId: id },
+        {
+          id: 'pty-exited',
+          name: 'exited',
+          shell: 'zsh',
+          ptyId: 'pty-exited',
+          quickTerminalId: exited.id,
+          healthStatus: 'exited'
+        }
+      ]
+    })
+
+    renderAt('/quick-terminals')
+
+    const live = await screen.findByText('live')
+    expect(live.parentElement?.textContent).toContain('Running')
+    expect(screen.getByText('stopped').parentElement?.textContent).not.toContain('Running')
+    expect(screen.getByText('exited').parentElement?.textContent).not.toContain('Running')
+  })
+
   it('lists again when the host reports new quick terminals', async () => {
     renderAt('/quick-terminals')
     await screen.findByText('Untitled terminal')
