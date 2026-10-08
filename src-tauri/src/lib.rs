@@ -1633,6 +1633,66 @@ const LAST_RESORT_PTY_CLEANUP_DEADLINE: std::time::Duration = std::time::Duratio
 /// with the PTY reap that follows.
 const LAST_RESORT_ACP_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_millis(800);
 
+/// Live identity of one Core endpoint, as its Hello acknowledgement reports it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreRuntimeIdentity {
+    build_id: Option<String>,
+    active_resources: u32,
+}
+
+/// Build identities of the components this install is running right now. The
+/// settings page compares them with the downloaded release before an update.
+/// A Core that is not listening (in-process fallback or not started) is `None`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComponentRuntimeIdentities {
+    gui_native: String,
+    acp_core: Option<CoreRuntimeIdentity>,
+    terminal_core: Option<CoreRuntimeIdentity>,
+}
+
+async fn probe_core_runtime_identity(
+    profile_root: &Path,
+    role: crate::core::CoreRole,
+) -> Option<CoreRuntimeIdentity> {
+    let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
+    match crate::core::launcher::probe_endpoint(&endpoint, role).await {
+        Ok(ack) => Some(CoreRuntimeIdentity {
+            build_id: ack.component_build_id,
+            active_resources: ack.active_resources,
+        }),
+        Err(error) => {
+            log::info!(
+                target: "se_manager::core",
+                "operation=component_runtime_identity role={} stable_code=CORE_NOT_LISTENING error_code={}",
+                role.endpoint_name(),
+                error.code()
+            );
+            None
+        }
+    }
+}
+
+#[tauri::command]
+async fn component_runtime_identities(
+    app: tauri::AppHandle,
+) -> Result<ComponentRuntimeIdentities, String> {
+    let profile_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
+    Ok(ComponentRuntimeIdentities {
+        gui_native: crate::core::component_build_id(crate::core::CoreRole::Gui),
+        acp_core: probe_core_runtime_identity(&profile_root, crate::core::CoreRole::AcpCore).await,
+        terminal_core: probe_core_runtime_identity(
+            &profile_root,
+            crate::core::CoreRole::TerminalCore,
+        )
+        .await,
+    })
+}
+
 fn pending_update_plan(app_handle: &tauri::AppHandle) -> Option<serde_json::Value> {
     let store = app_handle.store("update-plan.json").ok()?;
     store.get("pending_update_plan")
@@ -3208,6 +3268,8 @@ pub fn run() {
             // macOS privacy (TCC) settings panel
             macos_permissions_report_command,
             macos_open_privacy_pane_command,
+            // Updater: running component build identities
+            component_runtime_identities,
             // Restart-required Conversation migration maintenance
             commands::conversation_migration_control,
             // Terminal commands
@@ -3810,6 +3872,27 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn component_runtime_identities_serialize_in_the_renderer_shape() {
+        let value = serde_json::to_value(ComponentRuntimeIdentities {
+            gui_native: "gui-build".to_string(),
+            acp_core: None,
+            terminal_core: Some(CoreRuntimeIdentity {
+                build_id: Some("terminal-build".to_string()),
+                active_resources: 3,
+            }),
+        })
+        .expect("serialize");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "guiNative": "gui-build",
+                "acpCore": null,
+                "terminalCore": { "buildId": "terminal-build", "activeResources": 3 }
+            })
+        );
+    }
 
     #[test]
     fn desktop_remote_bootstrap_uses_memory_authority_until_start() {
