@@ -5,7 +5,7 @@ import { motion } from 'framer-motion'
 import { FolderGit2, SquareTerminal, X } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { matchPath, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityRail } from '@/components/ActivityRail'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -44,6 +44,7 @@ import { AgentLauncher } from '@/features/agent-session/agents/AgentLauncher'
 import { ConversationSidebar } from '@/features/agent-session/conversation/ConversationSidebar'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import { useQuickTerminalStore } from '@/features/quick-terminal/quick-terminal-store'
 import {
   useUpdateAppSetting,
   useUpdatePanelVisibility,
@@ -856,14 +857,33 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // `/conversations` is the list, not an open Conversation; only `/c/<id>` has a
   // workspace to follow.
   const fileTreeFollowsConversation = location.pathname.startsWith('/c/')
+  // Likewise only an open quick terminal, not the list, has a folder to follow.
+  const openQuickTerminalId = matchPath('/quick-terminals/:quickTerminalId', location.pathname)
+    ?.params.quickTerminalId
+  const openQuickTerminalCwd = useQuickTerminalStore((state) =>
+    openQuickTerminalId
+      ? state.records.find((record) => record.id === openQuickTerminalId)?.cwd
+      : undefined
+  )
+  // The folder the file tree follows instead of the active project: the open
+  // Conversation's workspace, or the open quick terminal's folder. Empty while
+  // that is still loading; null everywhere else, where the tree shows the
+  // project.
+  const fileTreeFollowedRoot = fileTreeFollowsConversation
+    ? (activeConversation?.workspaceCwd ?? '')
+    : openQuickTerminalId
+      ? (openQuickTerminalCwd ?? '')
+      : null
 
-  // The file tree follows the open Conversation's workspace directory while in
-  // the Conversation area, and the active project elsewhere. Project switches
-  // keep their dedicated effect above; this one only owns scope transitions.
+  // The file tree follows that folder while one is open, and the active project
+  // elsewhere. Project switches keep their dedicated effect above; this one only
+  // owns scope transitions.
   useEffect(() => {
-    const inConversationScope = fileTreeFollowsConversation
-    if (!inConversationScope && activeGroupId) {
-      useFileExplorerStore.getState().setRoots(
+    const explorer = useFileExplorerStore.getState()
+    // The project's tree as it was before the detour, if there was one.
+    const setAsideExpandedDirs = explorer.setAsideExpandedDirs
+    if (fileTreeFollowedRoot === null && activeGroupId) {
+      explorer.setRoots(
         activeGroupProjects.map((project) => ({
           projectId: project.id,
           name: project.name,
@@ -872,22 +892,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
         activeProject?.path
       )
       displayedRootPathRef.current = null
+      if (setAsideExpandedDirs) void explorer.restoreExpandedDirs([...setAsideExpandedDirs])
       return
     }
-    const desiredRoot = inConversationScope
-      ? (activeConversation?.workspaceCwd ?? '')
-      : (activeProject?.path ?? '')
+    const desiredRoot = fileTreeFollowedRoot ?? activeProject?.path ?? ''
     if (!desiredRoot || desiredRoot === displayedRootPathRef.current) return
-    useFileExplorerStore.getState().setRootPath(desiredRoot)
+    if (fileTreeFollowedRoot !== null) {
+      explorer.showOutsideRoot(desiredRoot)
+    } else {
+      explorer.setRootPath(desiredRoot)
+      if (setAsideExpandedDirs) void explorer.restoreExpandedDirs([...setAsideExpandedDirs])
+    }
     displayedRootPathRef.current = desiredRoot
     return
-  }, [
-    fileTreeFollowsConversation,
-    activeConversation?.workspaceCwd,
-    activeGroupId,
-    activeGroupProjects,
-    activeProject?.path
-  ])
+  }, [fileTreeFollowedRoot, activeGroupId, activeGroupProjects, activeProject?.path])
 
   // Single owner of the watched root set.
   //
@@ -899,11 +917,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // shared key, an unwatch from either side silently released a root the other
   // still believed it held, and the group branch never registered a root at all.
   useEffect(() => {
-    const candidates = fileTreeFollowsConversation
-      ? [activeConversation?.workspaceCwd]
-      : activeGroupId
-        ? activeGroupProjects.map((project) => project.path)
-        : [activeProject?.path]
+    const candidates =
+      fileTreeFollowedRoot !== null
+        ? [fileTreeFollowedRoot]
+        : activeGroupId
+          ? activeGroupProjects.map((project) => project.path)
+          : [activeProject?.path]
     const roots = candidates.filter((root): root is string => Boolean(root))
 
     let cancelled = false
@@ -927,13 +946,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [
-    fileTreeFollowsConversation,
-    activeConversation?.workspaceCwd,
-    activeGroupId,
-    activeGroupProjects,
-    activeProject?.path
-  ])
+  }, [fileTreeFollowedRoot, activeGroupId, activeGroupProjects, activeProject?.path])
 
   // Editor state persistence
   useEditorPersistence(
@@ -1367,12 +1380,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // The phone shell keeps its own navigation and still owns the dashboard at its root.
   const isConversationListRoute = location.pathname === '/conversations'
   const isOpenConversationRoute = location.pathname.startsWith('/c/')
-  // File explorer visibility follows the Conversation workspace in the
-  // Conversation area and the active project elsewhere — the same scope the
+  // File explorer visibility follows the open Conversation's or quick terminal's
+  // folder there and the active project elsewhere — the same scope the
   // displayed root and the watched root set use.
-  const explorerRootVisible = fileTreeFollowsConversation
-    ? Boolean(activeConversation?.workspaceCwd)
-    : Boolean(activeProject?.path)
+  const explorerRootVisible =
+    fileTreeFollowedRoot !== null ? Boolean(fileTreeFollowedRoot) : Boolean(activeProject?.path)
   const isConversationRoute =
     isConversationListRoute ||
     location.pathname.startsWith('/c/') ||

@@ -61,6 +61,7 @@ const mockEditorState = {
 
 const mockExplorerState = {
   expandedDirs: new Set<string>(),
+  setAsideExpandedDirs: null as Set<string> | null,
   isVisible: true,
   setExpandedDirs: vi.fn(),
   restoreExpandedDirs: vi.fn().mockResolvedValue(undefined)
@@ -490,6 +491,22 @@ describe('useEditorPersistence', () => {
       { type: 'terminal', terminalId: 'old-1' },
       { type: 'editor', filePath: '/projects/a/src/index.ts' }
     ])
+  })
+
+  it("saves the project's set-aside expanded directories while the tree shows an outside folder", () => {
+    mockExplorerState.expandedDirs = new Set(['/quick/terminal/sub'])
+    mockExplorerState.setAsideExpandedDirs = new Set(['/projects/a/src'])
+    try {
+      persistState('project-a')
+    } finally {
+      mockExplorerState.expandedDirs = new Set<string>()
+      mockExplorerState.setAsideExpandedDirs = null
+    }
+
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+      'editor-state/project-a',
+      expect.objectContaining({ expandedDirs: ['/projects/a/src'] })
+    )
   })
 
   it('does not persist the project pane tree while a Conversation is active', () => {

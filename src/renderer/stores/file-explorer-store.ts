@@ -116,6 +116,12 @@ export interface FileExplorerState {
   /** Active worktree root override */
   worktreeRoot: string | null
   expandedDirs: Set<string>
+  /**
+   * The project tree's expanded directories while the tree shows a folder
+   * outside the project (`showOutsideRoot`). Persistence keeps saving these for
+   * the project; null while the tree shows the project itself.
+   */
+  setAsideExpandedDirs: Set<string> | null
   directoryContents: Map<string, DirectoryEntry[]>
   selectedPaths: Set<string>
   lastClickedPath: string | null
@@ -150,6 +156,12 @@ export interface FileExplorerState {
   refreshingTree: boolean
 
   setRootPath: (path: string | null) => void
+  /**
+   * Root the tree at a folder outside the project — an open Conversation's
+   * workspace or quick terminal's folder — setting the project's expanded
+   * directories aside until the project root comes back.
+   */
+  showOutsideRoot: (path: string) => void
   setRoots: (roots: FileExplorerRoot[], focusedRootPath?: string | null) => void
   setFocusedRoot: (path: string) => void
   setWorktreeRoot: (path: string | null) => void
@@ -332,6 +344,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   scopeRoot: null,
   worktreeRoot: null,
   expandedDirs: new Set<string>(),
+  setAsideExpandedDirs: null,
   directoryContents: new Map<string, DirectoryEntry[]>(),
   selectedPaths: new Set<string>(),
   lastClickedPath: null,
@@ -366,6 +379,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       rootPath: normalized,
       scopeRoot: normalized,
       expandedDirs: new Set<string>(),
+      setAsideExpandedDirs: null,
       directoryContents: new Map<string, DirectoryEntry[]>(),
       selectedPaths: new Set<string>(),
       lastClickedPath: null,
@@ -389,6 +403,14 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     })
   },
 
+  showOutsideRoot: (path: string): void => {
+    // Moving between two outside folders keeps the project's set, not the
+    // first outside folder's.
+    const { expandedDirs, setAsideExpandedDirs } = get()
+    get().setRootPath(path)
+    set({ setAsideExpandedDirs: setAsideExpandedDirs ?? expandedDirs })
+  },
+
   setRoots: (roots: FileExplorerRoot[], focusedRootPath?: string | null): void => {
     cancelActiveSearchStreams()
 
@@ -410,6 +432,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       scopeRoot: rootPath,
       worktreeRoot: null,
       expandedDirs: new Set<string>(),
+      setAsideExpandedDirs: null,
       directoryContents: new Map<string, DirectoryEntry[]>(),
       selectedPaths: new Set<string>(),
       lastClickedPath: null,
