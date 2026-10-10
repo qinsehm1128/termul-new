@@ -46,6 +46,26 @@ export interface BackupInfo {
 // Maximum number of backups to keep
 const MAX_BACKUPS = 3
 
+/**
+ * Top-level userData entries a pre-update backup leaves out.
+ *
+ * `backups` and `versions` would otherwise be copied into every new backup.
+ * The rest can be rebuilt or fetched again and dwarf the data a rollback
+ * actually needs: the session memory index alone measured 3.4 GB of a 4 GB
+ * profile, and copying it file by file held the update at "0%" for minutes
+ * before the download even began. `core-runtime` only holds live sockets.
+ *
+ * A restore keeps the current copy of each of these (see `restoreBackup`).
+ */
+export const BACKUP_EXCLUDED_ENTRIES: ReadonlySet<string> = new Set([
+  'backups',
+  'versions',
+  'memory-index',
+  'acp-npm-packages',
+  'acp-registry-binaries',
+  'core-runtime'
+])
+
 // Store file for metadata persistence
 const METADATA_STORE_FILE = 'backup-metadata.json'
 
@@ -298,11 +318,7 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     const entries = await readDir(userDataPath)
 
     for (const entry of entries) {
-      // Skip the backups directory itself, and the rollback versions store
-      // (both grow unbounded relative to a single backup and would otherwise
-      // be copied recursively into every new backup, making backups slow and
-      // fragile enough to silently block updates).
-      if (entry.name === 'backups' || entry.name === 'versions') {
+      if (BACKUP_EXCLUDED_ENTRIES.has(entry.name)) {
         continue
       }
 
@@ -474,6 +490,33 @@ export async function listBackups(): Promise<IpcResult<BackupInfo[]>> {
  * Copies all files from backup directory to userData atomically
  * Overwrites existing files
  */
+async function pathExists(path: string): Promise<boolean> {
+  return stat(path)
+    .then(() => true)
+    .catch(() => false)
+}
+
+/**
+ * Move each backup-excluded entry from the replaced userData tree into the
+ * restored one. A backup taken before an entry was excluded may still carry its
+ * own copy; that copy is left in place. Returns false if any move failed.
+ */
+async function carryOverExcludedEntries(fromDir: string, toDir: string): Promise<boolean> {
+  let complete = true
+  for (const name of BACKUP_EXCLUDED_ENTRIES) {
+    const source = `${fromDir}/${name}`
+    const target = `${toDir}/${name}`
+    if (!(await pathExists(source)) || (await pathExists(target))) continue
+    try {
+      await rename(source, target)
+    } catch (error) {
+      complete = false
+      console.warn(`Failed to carry ${name} over into restored userData:`, error)
+    }
+  }
+  return complete
+}
+
 export async function restoreBackup(backupId: string): Promise<IpcResult<void>> {
   let tempRestorePath: string | null = null
   let oldUserDataPath: string | null = null
@@ -524,6 +567,14 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
     // Atomic rename: userData -> old, temp -> userData
     await rename(userDataPath, oldUserDataPath)
     await rename(tempRestorePath, userDataPath)
+
+    // The backup never held these, so the restored tree lacks them. Move the
+    // current ones across; until every move has landed the old tree is the only
+    // copy, so it is kept rather than deleted.
+    if (!(await carryOverExcludedEntries(oldUserDataPath, userDataPath))) {
+      console.warn(`Kept old userData with entries not carried over: ${oldUserDataPath}`)
+      return { success: true, data: undefined }
+    }
 
     // Clean up old userData directory
     try {
