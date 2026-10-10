@@ -5,6 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
 import { resetNavigationStore, useNavigationStore } from '@/stores/navigation-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
+import { useSSHStore } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { ActivityRail } from './ActivityRail'
 
@@ -54,6 +55,7 @@ describe('ActivityRail', () => {
     )
     resetNavigationStore()
     useSSHPanelStore.setState({ isVisible: true })
+    useSSHStore.setState({ activeProfileId: null })
     useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
   })
 
@@ -248,6 +250,34 @@ describe('ActivityRail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open the terminal board' }))
 
     expect(mockNavigate).toHaveBeenCalledWith('/terminals')
+  })
+
+  // A selected SSH profile covers the main area on every route; a rail pick
+  // that leaves it selected only changes the route behind the SSH view.
+  it.each([
+    ['Open the terminal board', '/terminals'],
+    ['Open projects', '/'],
+    ['Open preferences', '/preferences']
+  ])('leaves the SSH view when "%s" is picked', (name, path) => {
+    useSSHStore.setState({ activeProfileId: 'profile-1' })
+    renderRail()
+
+    fireEvent.click(screen.getByRole('button', { name }))
+
+    expect(useSSHStore.getState().activeProfileId).toBeNull()
+    expect(mockNavigate).toHaveBeenCalledWith(path)
+  })
+
+  it('keeps the SSH view when only the SSH panel is toggled', async () => {
+    useSSHStore.setState({ activeProfileId: 'profile-1' })
+    renderRail()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide SSH panel' }))
+
+    await waitFor(() => {
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sshPanelVisible', false)
+    })
+    expect(useSSHStore.getState().activeProfileId).toBe('profile-1')
   })
 
   it('shows a live terminal count on the board action', () => {
