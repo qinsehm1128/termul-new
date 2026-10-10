@@ -11,6 +11,21 @@ import { sshTerminalProjectId } from '@/types/project'
 const sshT = (key: string, fallback: string, values?: TranslationValues) =>
   runtimeT('ssh', key, fallback, values)
 
+/**
+ * Drop the terminal record a connect registered for this SSH PTY.
+ *
+ * Nothing can show that record again once its PTY is gone: the workspace offers
+ * a fresh connect instead. Left in the store it stays on the terminal board as a
+ * dead entry (one more per reconnect), and the exit that follows a user's own
+ * disconnect flags it "needs attention".
+ */
+function forgetSshTerminal(ptyId: string | null): void {
+  if (!ptyId) return
+  const store = useTerminalStore.getState()
+  const record = store.findTerminalByPtyId(ptyId)
+  if (record) store.closeTerminal(record.id, record.projectId ?? '')
+}
+
 export function useSSHConnection(profile: SSHProfile | null) {
   const connections = useSSHConnections()
   const connection = profile ? connections.find((c) => c.profileId === profile.id) : undefined
@@ -145,6 +160,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
     // retrying), kill it first so we don't orphan a running ssh process.
     if (localTerminalPtyId) {
       void terminalApi.terminate(localTerminalPtyId)
+      forgetSshTerminal(localTerminalPtyId)
       setLocalTerminalPtyId(null)
     }
 
@@ -323,6 +339,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
       clearTimeout(writeTimerRef.current)
       writeTimerRef.current = null
     }
+    forgetSshTerminal(localTerminalPtyId)
     setLocalTerminalPtyId(null)
     if (!isConnected) {
       setSftpReady(false)
@@ -333,7 +350,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
         sshT('connection.sessionEnded', 'SSH session ended')
       )
     }
-  }, [profile, isConnected, updateConnectionStatusByProfile])
+  }, [profile, isConnected, localTerminalPtyId, updateConnectionStatusByProfile])
 
   const handleDisconnect = useCallback(async () => {
     if (!profile) return
@@ -356,6 +373,9 @@ export function useSSHConnection(profile: SSHProfile | null) {
       }
     }
     if (localTerminalPtyId) void terminalApi.terminate(localTerminalPtyId)
+    // Before the exit event arrives: the exit handler flags a terminal it can
+    // still find, and this disconnect is not something to draw attention to.
+    forgetSshTerminal(localTerminalPtyId)
     markDisconnected(profile.id)
     setLocalTerminalPtyId(null)
     setSftpReady(false)

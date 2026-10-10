@@ -54,6 +54,7 @@ import { isTerminalRunning } from '@/lib/terminal-board'
 import { cn } from '@/lib/utils'
 import { useNavigationStore } from '@/stores/navigation-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
+import { useSSHStore } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
 const REORDER_HINT_ID = 'activity-rail-reorder-hint'
@@ -346,6 +347,10 @@ export function ActivityRail({
         return
       }
       event.stopPropagation()
+      // A selected SSH profile takes over the main area on every route, so a
+      // rail pick that leaves it selected changes the route behind the SSH
+      // view and nothing visible happens. The connection itself stays up.
+      useSSHStore.getState().selectProfile(null)
       action()
     }
 

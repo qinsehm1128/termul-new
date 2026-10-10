@@ -275,6 +275,64 @@ describe('useSSHConnection', () => {
     expect(result.current.sftpReady).toBe(true)
   })
 
+  // The terminal record a connect registers has nowhere to be shown once its
+  // PTY is gone. Kept, it lingered on the terminal board, and the exit that
+  // follows a user's own disconnect flagged it "needs attention".
+  const sshTerminalRecords = () =>
+    useTerminalStore.getState().terminals.filter((t) => t.projectId === 'ssh-profile-1')
+
+  it('drops the SSH terminal record on disconnect, before the PTY exit arrives', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    expect(sshTerminalRecords()).toHaveLength(1)
+
+    await act(async () => {
+      await result.current.handleDisconnect()
+    })
+
+    expect(mocks.kill).toHaveBeenCalledWith('pty-1')
+    expect(sshTerminalRecords()).toHaveLength(0)
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-1')).toBeUndefined()
+  })
+
+  it('drops the SSH terminal record when the interactive shell exits', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    act(() => {
+      result.current.handleSSHProcessExit()
+    })
+
+    expect(sshTerminalRecords()).toHaveLength(0)
+  })
+
+  it('keeps one SSH terminal record across a retried connect', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'auth failed',
+      code: 'SSH_CONNECT_ERROR'
+    })
+    mocks.spawn
+      .mockResolvedValueOnce({ success: true, data: { id: 'pty-1', shell: 'ssh', cwd: '/' } })
+      .mockResolvedValueOnce({ success: true, data: { id: 'pty-2', shell: 'ssh', cwd: '/' } })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    expect(sshTerminalRecords().map((t) => t.ptyId)).toEqual(['pty-2'])
+  })
+
   it('resets profile-local terminal state when switching between SSH profiles', async () => {
     const secondProfile: SSHProfile = {
       ...baseProfile,
