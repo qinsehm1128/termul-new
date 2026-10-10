@@ -66,9 +66,13 @@ const searchIndex: SettingsSearchEntry[] = [
   { categoryId: 'updates', label: 'Auto-update', description: 'check for updates' }
 ]
 
-function renderLayout() {
+function renderLayout(initialSectionId?: string) {
   return render(
-    <SettingsLayout categories={categories} searchIndex={searchIndex}>
+    <SettingsLayout
+      categories={categories}
+      searchIndex={searchIndex}
+      initialSectionId={initialSectionId}
+    >
       <SettingsSection id="appearance">
         <h2>Appearance</h2>
       </SettingsSection>
@@ -109,6 +113,15 @@ describe('SettingsLayout', () => {
     fireEvent.click(shellButton)
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled()
     expect(shellButton).toHaveAttribute('aria-current', 'true')
+  })
+
+  it('opens at the section a deep link names', () => {
+    const { container } = renderLayout('updates')
+    const scroll = window.HTMLElement.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+    expect(scroll.mock.contexts).toContain(
+      container.querySelector('[data-settings-section="updates"]')
+    )
+    expect(screen.getByRole('button', { name: 'Updates' })).toHaveAttribute('aria-current', 'true')
   })
 
   it('renders the section content tagged with the category id', () => {

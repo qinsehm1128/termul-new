@@ -26,6 +26,8 @@ interface SettingsLayoutProps {
   children: React.ReactNode
   /** Optional extra content rendered at the bottom of the sidebar. */
   sidebarFooter?: React.ReactNode
+  /** Category to scroll to when the page opens, e.g. from a deep link. */
+  initialSectionId?: string
 }
 
 /**
@@ -82,7 +84,8 @@ export function SettingsLayout({
   categories,
   searchIndex,
   children,
-  sidebarFooter
+  sidebarFooter,
+  initialSectionId
 }: SettingsLayoutProps): React.JSX.Element {
   const { t } = useTranslation('settings')
   const contentRef = useRef<HTMLDivElement | null>(null)
@@ -114,6 +117,10 @@ export function SettingsLayout({
     setActiveId(id)
     target.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [])
+
+  useEffect(() => {
+    if (initialSectionId) scrollToSection(initialSectionId)
+  }, [initialSectionId, scrollToSection])
 
   // Scroll-spy: highlight the section nearest the top of the viewport.
   useEffect(() => {

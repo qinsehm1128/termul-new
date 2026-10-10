@@ -88,6 +88,7 @@ const { updaterFixture, updaterActions, isAurUpdateMode, hasActiveTerminalSessio
       componentPolicy: null as UpdateComponentPolicy | null,
       pendingUpdatePlan: null as PendingUpdatePlan | null,
       isDownloading: false,
+      isPreparingDownload: false,
       downloadProgress: 0
     },
     updaterActions: {
@@ -509,6 +510,7 @@ describe('AppPreferences update component diff and forced install', () => {
     updaterFixture.isManualUpdateMode = false
     updaterFixture.pendingUpdatePlan = null
     updaterFixture.isDownloading = false
+    updaterFixture.isPreparingDownload = false
     updaterFixture.downloadProgress = 0
     updaterFixture.componentPolicy = policyWith({
       renderer: 'restart',
@@ -566,8 +568,74 @@ describe('AppPreferences update component diff and forced install', () => {
     renderPage()
 
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
-    expect(screen.queryByRole('button', { name: 'Force Update' })).not.toBeInTheDocument()
-    expect(screen.queryByText('Component changes')).not.toBeInTheDocument()
-    expect(fetchComponentRuntimeIdentities).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /42% complete/ })).toBeDisabled()
+  })
+
+  // The choice between a safe and a forced install is the point of the
+  // section. It is on screen as soon as an update is found; installing still
+  // waits for the download and for the user's click.
+  it('shows the component diff and both install choices once an update is found', async () => {
+    updaterFixture.downloaded = false
+
+    renderPage()
+
+    expect(await screen.findByTestId('update-component-diff')).toBeInTheDocument()
+    const safe = screen.getByRole('button', { name: 'Safe Install & Restart' })
+    const force = screen.getByRole('button', { name: 'Force Update' })
+    expect(safe).toBeDisabled()
+    expect(force).toBeDisabled()
+    expect(
+      screen.getByText(
+        'Download first, then pick how to install. Nothing restarts until you choose.'
+      )
+    ).toBeInTheDocument()
+
+    fireEvent.click(safe)
+    fireEvent.click(force)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+    expect(updaterActions.forceInstallAndRestart).not.toHaveBeenCalled()
+  })
+
+  it('opens at the updates section when a link asks for it', () => {
+    const scrollIntoView = vi.fn()
+    const original = window.HTMLElement.prototype.scrollIntoView
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView
+    try {
+      const { container } = render(
+        <MemoryRouter initialEntries={['/preferences?section=updates']}>
+          <AppPreferences />
+        </MemoryRouter>
+      )
+
+      expect(scrollIntoView.mock.contexts).toContain(
+        container.querySelector('[data-settings-section="updates"]')
+      )
+    } finally {
+      window.HTMLElement.prototype.scrollIntoView = original
+    }
+  })
+
+  it('enables both install choices once the update is downloaded', () => {
+    renderPage()
+
+    expect(screen.getByRole('button', { name: 'Safe Install & Restart' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Force Update' })).toBeEnabled()
+    expect(
+      screen.queryByText(
+        'Download first, then pick how to install. Nothing restarts until you choose.'
+      )
+    ).not.toBeInTheDocument()
+  })
+
+  it('says the data is being backed up instead of showing 0% before the download starts', () => {
+    updaterFixture.downloaded = false
+    updaterFixture.isDownloading = true
+    updaterFixture.isPreparingDownload = true
+
+    renderPage()
+
+    expect(screen.getByRole('button', { name: /Backing up your data/ })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /0% complete/ })).not.toBeInTheDocument()
   })
 })

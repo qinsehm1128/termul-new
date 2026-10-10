@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { KeybindingSchemePicker } from '@/components/KeybindingSchemePicker'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
@@ -380,6 +380,7 @@ const TERMINAL_RENDERER_TRANSLATION_KEYS = {
 
 export default function AppPreferences(): React.JSX.Element {
   const navigate = useNavigate()
+  const initialSectionId = new URLSearchParams(useLocation().search).get('section') ?? undefined
   const { t: tSettings } = useTranslation('settings')
   const { t: tShell } = useTranslation('shell')
   const { t: tCommon } = useTranslation('common')
@@ -483,6 +484,7 @@ export default function AppPreferences(): React.JSX.Element {
     componentPolicy,
     pendingUpdatePlan,
     isDownloading,
+    isPreparingDownload,
     downloadProgress
   } = useUpdaterState()
   const {
@@ -495,6 +497,10 @@ export default function AppPreferences(): React.JSX.Element {
   } = useUpdaterActions()
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
   const pendingUpdate = presentPendingUpdate(pendingUpdatePlan, translateUpdateCopy)
+  // The two ways to install are shown from the moment an update is found, not
+  // only once it is downloaded: the choice is the point of the section. Both
+  // stay disabled until the download finishes; nothing restarts on its own.
+  const showInstallChoices = (updateAvailable || downloaded) && !isManualUpdateMode && !isAurUpdater
 
   const handleSafeInstallAndRestart = async (): Promise<void> => {
     if (!downloaded || isInstallingUpdate) return
@@ -801,7 +807,11 @@ export default function AppPreferences(): React.JSX.Element {
         </div>
 
         {/* Content */}
-        <SettingsLayout categories={categories} searchIndex={searchIndex}>
+        <SettingsLayout
+          categories={categories}
+          searchIndex={searchIndex}
+          initialSectionId={initialSectionId}
+        >
           {/* Terminal Appearance Section */}
           <SettingsSection id="appearance">
             <div className="flex items-start gap-6 border-b border-border/70 pb-6">
@@ -1905,11 +1915,13 @@ export default function AppPreferences(): React.JSX.Element {
                         className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-sm text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-primary/50"
                       >
                         <HardDriveDownload size={16} />
-                        {isDownloading
-                          ? tShell('updates.complete', {
-                              progress: String(Math.round(downloadProgress))
-                            })
-                          : tShell('updates.downloadUpdate')}
+                        {isPreparingDownload
+                          ? tShell('updates.preparingDownload')
+                          : isDownloading
+                            ? tShell('updates.complete', {
+                                progress: String(Math.round(downloadProgress))
+                              })
+                            : tShell('updates.downloadUpdate')}
                       </button>
                       {isDownloading && (
                         <div
@@ -1928,12 +1940,15 @@ export default function AppPreferences(): React.JSX.Element {
                     </div>
                   )}
 
-                {downloaded && !isManualUpdateMode && componentPolicy && isTauriContext() && (
-                  <UpdateComponentDiff
-                    key={componentPolicy.targetVersion}
-                    policy={componentPolicy}
-                  />
-                )}
+                {(updateAvailable || downloaded) &&
+                  !isManualUpdateMode &&
+                  componentPolicy &&
+                  isTauriContext() && (
+                    <UpdateComponentDiff
+                      key={componentPolicy.targetVersion}
+                      policy={componentPolicy}
+                    />
+                  )}
 
                 {updateAvailable && version && (
                   <div>
@@ -2024,11 +2039,11 @@ export default function AppPreferences(): React.JSX.Element {
                         {tSettings('updates.openDownloadPage')}
                       </button>
                     )}
-                    {downloaded && !isManualUpdateMode && (
+                    {showInstallChoices && (
                       <button
                         type="button"
                         onClick={() => void handleSafeInstallAndRestart()}
-                        disabled={isInstallingUpdate}
+                        disabled={isInstallingUpdate || !downloaded}
                         className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-sm text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-primary/50"
                       >
                         <RotateCcw
@@ -2038,11 +2053,11 @@ export default function AppPreferences(): React.JSX.Element {
                         {tShell('updates.safeInstallRestart')}
                       </button>
                     )}
-                    {downloaded && !isManualUpdateMode && componentPolicy && (
+                    {showInstallChoices && componentPolicy && (
                       <button
                         type="button"
                         onClick={() => void handleForceInstallAndRestart()}
-                        disabled={isInstallingUpdate}
+                        disabled={isInstallingUpdate || !downloaded}
                         className="inline-flex h-8 items-center gap-2 rounded-md bg-red-500 px-3 text-sm text-white transition-colors duration-150 hover:bg-red-500/90 disabled:cursor-not-allowed disabled:bg-red-500/50"
                       >
                         <AlertCircle size={16} />
@@ -2050,12 +2065,17 @@ export default function AppPreferences(): React.JSX.Element {
                       </button>
                     )}
                   </div>
-                  {downloaded && !isManualUpdateMode && (
+                  {showInstallChoices && !downloaded && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {tShell('updates.installAfterDownload')}
+                    </p>
+                  )}
+                  {showInstallChoices && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       {tShell('updates.safeRestartHint')}
                     </p>
                   )}
-                  {downloaded && !isManualUpdateMode && componentPolicy && (
+                  {showInstallChoices && componentPolicy && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       {tShell('updates.forceInstallHint')}
                     </p>

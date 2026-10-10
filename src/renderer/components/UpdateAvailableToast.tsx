@@ -2,14 +2,11 @@ import { Clock, Download, Terminal } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { i18n } from '@/i18n'
+import { navigateToPath } from '@/lib/router-navigate'
 import { confirm } from '@/lib/tauri-dialog'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
-import {
-  buildUpdateInstallConfirmation,
-  getUpdateImpactLines,
-  translateUpdateCopy
-} from '@/lib/updater-status'
+import { buildUpdateInstallConfirmation, translateUpdateCopy } from '@/lib/updater-status'
 import {
   updaterStore,
   useDownloadProgress,
@@ -45,13 +42,6 @@ function setReminderForTomorrow(): void {
   localStorage.setItem(UPDATE_REMINDER_KEY, now.toISOString())
 }
 
-function formatComponentImpact(): string {
-  return [
-    i18n.t('updates.impact', { ns: 'shell' }),
-    ...getUpdateImpactLines(updaterStore.getState().componentPolicy, translateUpdateCopy)
-  ].join('\n')
-}
-
 function confirmUpdateInstall(version: string, hasActiveTerminals: boolean): Promise<boolean> {
   return confirm(
     buildUpdateInstallConfirmation({
@@ -77,7 +67,9 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
   const channel = updaterStore.getState().updateChannel
   const channelPrefix =
     channel === 'stable' ? '' : i18n.t(`updates.channels.${channel}`, { ns: 'shell' })
-  const impactDescription = formatComponentImpact()
+  // The per-component impact is in Settings → Updates next to the install
+  // choices; repeated here it filled half the window.
+  const installsInApp = !isAur && channel === 'stable'
   const title = i18n.t('updates.available', {
     ns: 'shell',
     channel: channelPrefix,
@@ -100,7 +92,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
                 channel
               })
             : i18n.t('updates.downloadAvailable', { ns: 'shell' }),
-      impactDescription
+      ...(installsInApp ? [i18n.t('updates.installAfterDownload', { ns: 'shell' })] : [])
     ].join('\n'),
     action: {
       label: (
@@ -160,12 +152,16 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
  * Show a toast notification when update is downloaded
  */
 export function showUpdateDownloadedToast(version: string): void {
-  const impactDescription = formatComponentImpact()
+  // One line, not the impact list: the choice between a safe and a forced
+  // install, with the per-component diff, lives in Settings → Updates. The
+  // safe install stays here as a shortcut and still confirms the impact first.
   toast.success(i18n.t('updates.ready', { ns: 'shell' }), {
     duration: 30000,
-    description: [i18n.t('updates.downloaded', { ns: 'shell', version }), impactDescription].join(
-      '\n'
-    ),
+    description: i18n.t('updates.readyChoose', { ns: 'shell', version }),
+    cancel: {
+      label: i18n.t('updates.viewInstallOptions', { ns: 'shell' }),
+      onClick: () => navigateToPath('/preferences?section=updates')
+    },
     action: {
       label: (
         <div className="flex items-center gap-2">
@@ -203,15 +199,17 @@ export function showUpdateDownloadedToast(version: string): void {
 /**
  * Show a toast notification with download progress
  */
-function showDownloadProgressToast(version: string, progress: number): void {
+function showDownloadProgressToast(version: string, progress: number, preparing: boolean): void {
   const progressId = `download-progress-${version}`
 
   toast.loading(i18n.t('updates.downloading', { ns: 'shell', version }), {
     id: progressId,
-    description: i18n.t('updates.complete', {
-      ns: 'shell',
-      progress: progress.toFixed(0)
-    }),
+    description: preparing
+      ? i18n.t('updates.backingUp', { ns: 'shell' })
+      : i18n.t('updates.complete', {
+          ns: 'shell',
+          progress: progress.toFixed(0)
+        }),
     duration: Infinity
   })
 }
@@ -229,7 +227,8 @@ function dismissDownloadProgressToast(version: string): void {
  * Listens to updater state changes and shows appropriate toasts
  */
 export function useUpdateToast(): void {
-  const { updateAvailable, downloaded, isDownloading, skippedVersion } = useUpdaterState()
+  const { updateAvailable, downloaded, isDownloading, isPreparingDownload, skippedVersion } =
+    useUpdaterState()
   const version = useUpdateVersion()
   const _updateDownloaded = useUpdateDownloaded()
   const downloading = useIsDownloading()
@@ -266,14 +265,14 @@ export function useUpdateToast(): void {
   // Show download progress
   useEffect(() => {
     if (isDownloading && version) {
-      showDownloadProgressToast(version, downloadProgress)
+      showDownloadProgressToast(version, downloadProgress, isPreparingDownload)
 
       // Clean up progress toast when download completes or effect re-runs
       return () => {
         dismissDownloadProgressToast(version)
       }
     }
-  }, [isDownloading, downloadProgress, version])
+  }, [isDownloading, isPreparingDownload, downloadProgress, version])
 
   // Reset flags when update state changes
   useEffect(() => {

@@ -67,6 +67,11 @@ export interface UpdaterStoreState {
   skippedVersion: string | null
   isChecking: boolean
   isDownloading: boolean
+  /**
+   * The download was asked for and the pre-update backup is still running; no
+   * byte has been fetched yet. Lets the UI say "backing up" rather than "0%".
+   */
+  isPreparingDownload: boolean
   error: string | null
   lastChecked: Date | null
   autoUpdateEnabled: boolean
@@ -147,6 +152,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   skippedVersion: null,
   isChecking: false,
   isDownloading: false,
+  isPreparingDownload: false,
   error: null,
   lastChecked: null,
   autoUpdateEnabled: true,
@@ -240,7 +246,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     const { isDownloading, updateAvailable } = get()
     if (isDownloading || !updateAvailable) return
 
-    set({ isDownloading: true, error: null, downloadProgress: 0 })
+    set({ isDownloading: true, isPreparingDownload: true, error: null, downloadProgress: 0 })
 
     try {
       const result = await tauriDownloadUpdate((progress) => {
@@ -268,7 +274,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
           : runtimeT('shell', 'updates.errors.downloadFailed', 'Failed to download update')
       set({ error: errorMessage })
     } finally {
-      set({ isDownloading: false })
+      set({ isDownloading: false, isPreparingDownload: false })
     }
   },
 
@@ -615,6 +621,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       releaseNotes: info.releaseNotes ?? null,
       componentPolicy: info.componentPolicy ?? null,
       isDownloading: false,
+      isPreparingDownload: false,
       error: null
     })
   },
@@ -623,7 +630,9 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Internal action: Called when download progress updates (IPC event)
    */
   _setDownloadProgress: (progress: DownloadProgress): void => {
-    set({ downloadProgress: progress.percent })
+    // The facade reports progress only once the backup is done and the
+    // download itself has started.
+    set({ downloadProgress: progress.percent, isPreparingDownload: false })
   },
 
   /**
@@ -634,6 +643,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       error: code ? `${error} (${code})` : error,
       isChecking: false,
       isDownloading: false,
+      isPreparingDownload: false,
       hasActiveTerminals: hasActiveTerminalSessions()
     })
   },
@@ -763,6 +773,7 @@ export function useUpdaterState() {
       skippedVersion: state.skippedVersion,
       isChecking: state.isChecking,
       isDownloading: state.isDownloading,
+      isPreparingDownload: state.isPreparingDownload,
       error: state.error,
       lastChecked: state.lastChecked,
       autoUpdateEnabled: state.autoUpdateEnabled,
