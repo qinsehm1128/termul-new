@@ -79,6 +79,11 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   confirm: (message: string, options?: unknown) => confirmMock(message, options)
 }))
 
+const navigateToPath = vi.fn()
+vi.mock('@/lib/router-navigate', () => ({
+  navigateToPath: (path: string) => navigateToPath(path)
+}))
+
 const hasActiveTerminalSessions = vi.fn(() => false)
 vi.mock('@/lib/tauri-safe-update', () => ({
   hasActiveTerminalSessions: () => hasActiveTerminalSessions()
@@ -245,7 +250,29 @@ describe('UpdateAvailableToast error surfacing', () => {
     expect(message).not.toContain('Replacement waits while a terminal is active.')
   })
 
-  it('filters preserve out of the impact lines and does not promise a zero-interruption swap', () => {
+  // The downloaded toast used to dump the whole impact list and offer only a
+  // safe install. The choice (and the per-component diff) lives in Settings.
+  it('keeps the downloaded toast short and links to the install choices', () => {
+    storePolicy = policyWith({ terminalCore: 'defer-if-active' })
+    showUpdateDownloadedToast('1.2.3')
+    const calls = vi.mocked(toast.success).mock.calls
+    const opts = calls[calls.length - 1][1] as {
+      description: string
+      cancel: { label: string; onClick: () => void }
+    }
+
+    expect(opts.description).toBe(
+      'Version 1.2.3 is downloaded. Choose how to install it in Settings → Updates.'
+    )
+    expect(opts.cancel.label).toBe('Choose how to install')
+    opts.cancel.onClick()
+    expect(navigateToPath).toHaveBeenCalledWith('/preferences?section=updates')
+    expect(installAndRestart).not.toHaveBeenCalled()
+  })
+
+  // The impact list (covered in updater-status.test.ts) lives in Settings
+  // next to the install choices; the toast only says what happens next.
+  it('keeps the available toast short and says installing waits for the user', () => {
     storePolicy = policyWith({
       renderer: 'restart',
       guiNative: 'preserve',
@@ -256,13 +283,18 @@ describe('UpdateAvailableToast error surfacing', () => {
     const calls = vi.mocked(toast.success).mock.calls
     const description = (calls[calls.length - 1][1] as { description: string }).description
 
-    expect(description).toContain('The app window always restarts.')
-    expect(description).toContain('Kept and reconnected because the build matches: ACP Core.')
-    expect(description).toContain('Renderer restarts with the app window.')
-    expect(description).toContain('Terminal Core is checked by build identity')
-    expect(description).not.toContain('Desktop runtime restarts')
-    expect(description).not.toContain('build-acpCore')
-    expect(description).toContain('not a zero-interruption swap')
+    expect(description).toBe(
+      'A new version is available for download.\nDownload first, then pick how to install. Nothing restarts until you choose.'
+    )
+  })
+
+  it('does not promise in-app install choices for a manual channel download', () => {
+    storeChannel = 'nightly'
+    showUpdateToast('1.2.3-nightly.1')
+    const calls = vi.mocked(toast.success).mock.calls
+    const description = (calls[calls.length - 1][1] as { description: string }).description
+
+    expect(description).not.toContain('pick how to install')
   })
 })
 
