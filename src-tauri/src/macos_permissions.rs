@@ -151,6 +151,10 @@ impl PermissionProbe {
 pub enum SigningKind {
     DeveloperId,
     AppleDevelopment,
+    /// Signed with a certificate Apple did not issue. Not trusted by
+    /// Gatekeeper, but the designated requirement names the certificate rather
+    /// than the binary's hash, so it is the same for every build.
+    SelfSigned,
     Adhoc,
     Unsigned,
     Unknown,
@@ -343,13 +347,15 @@ pub fn parse_codesign_output(output: &str) -> SigningIdentity {
         SigningKind::DeveloperId
     } else if authority.starts_with("Apple Development") || authority.starts_with("Mac Developer") {
         SigningKind::AppleDevelopment
+    } else if !authority.is_empty() {
+        SigningKind::SelfSigned
     } else {
         SigningKind::Unknown
     };
 
     let grants_survive_rebuild = matches!(
         kind,
-        SigningKind::DeveloperId | SigningKind::AppleDevelopment
+        SigningKind::DeveloperId | SigningKind::AppleDevelopment | SigningKind::SelfSigned
     );
 
     SigningIdentity {
@@ -958,6 +964,27 @@ mod tests {
         assert_eq!(identity.kind, SigningKind::DeveloperId);
         assert_eq!(identity.team_id.as_deref(), Some("ABCDE12345"));
         assert!(identity.grants_survive_rebuild);
+    }
+
+    #[test]
+    fn reads_a_self_signed_certificate_as_stable() {
+        let output = "Identifier=com.se-manager.app\n\
+             CodeDirectory v=20400 size=230507 flags=0x0(none) hashes=7197+3 location=embedded\n\
+             Signature size=2191\n\
+             Authority=Se Manager Self-Signed Code Signing\n\
+             TeamIdentifier=not set\n";
+        let identity = parse_codesign_output(output);
+        assert_eq!(identity.kind, SigningKind::SelfSigned);
+        assert_eq!(identity.team_id, None);
+        assert!(identity.grants_survive_rebuild);
+    }
+
+    #[test]
+    fn reads_a_signature_without_authority_as_unknown() {
+        let identity =
+            parse_codesign_output("Identifier=com.se-manager.app\nTeamIdentifier=not set\n");
+        assert_eq!(identity.kind, SigningKind::Unknown);
+        assert!(!identity.grants_survive_rebuild);
     }
 
     #[test]

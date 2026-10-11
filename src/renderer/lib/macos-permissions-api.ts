@@ -32,7 +32,13 @@ export interface PermissionProbe {
   active: boolean
 }
 
-export type SigningKind = 'developerId' | 'appleDevelopment' | 'adhoc' | 'unsigned' | 'unknown'
+export type SigningKind =
+  | 'developerId'
+  | 'appleDevelopment'
+  | 'selfSigned'
+  | 'adhoc'
+  | 'unsigned'
+  | 'unknown'
 
 export interface SigningIdentity {
   kind: SigningKind
