@@ -1021,6 +1021,85 @@ describe('useTerminalRestore', () => {
       ['Terminal 1', 'pty-shared']
     ])
     expect(mockTerminalSpawn).not.toHaveBeenCalled()
+    // The cleaned list is written back, not left for the next restore to redo.
+    expect(mockSaveTerminalLayout).toHaveBeenCalledWith('project-a')
+  })
+
+  // Autosave skips restore writes. Without an explicit save, a crash before
+  // the next change restores the dead ptyId again and orphans the new shell.
+  it('records a respawned terminal as soon as the restore commits', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-shell',
+      terminals: [
+        {
+          id: 'persisted-shell',
+          name: 'Terminal 1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          ptyId: 'pty-gone'
+        }
+      ],
+      updatedAt: '2026-10-11T00:00:00.000Z'
+    })
+    mockTerminalList.mockResolvedValue({ success: true, data: [] })
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalStoreState.setTerminals).toHaveBeenCalled()
+    })
+    expect(mockTerminalSpawn).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(mockSaveTerminalLayout).toHaveBeenCalledWith('project-a')
+    })
+  })
+
+  it('does not rewrite the layout when every terminal was adopted unchanged', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-shell',
+      terminals: [
+        {
+          id: 'persisted-shell',
+          name: 'Terminal 1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          ptyId: 'pty-live'
+        }
+      ],
+      updatedAt: '2026-10-11T00:00:00.000Z'
+    })
+    mockTerminalList.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'pty-live',
+          shell: 'bash',
+          cwd: '/projects/a',
+          pid: 12,
+          cols: 80,
+          rows: 24,
+          workspaceRefTracked: false,
+          latestSeq: 40,
+          active: true,
+          lifecycle: 'active',
+          projectId: 'project-a'
+        }
+      ]
+    })
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalStoreState.setTerminals).toHaveBeenCalled()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(mockSaveTerminalLayout).not.toHaveBeenCalled()
   })
 
   it('falls back to spawn when the persisted ptyId is absent from list', async () => {

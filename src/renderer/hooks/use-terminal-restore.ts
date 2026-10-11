@@ -1281,6 +1281,15 @@ async function restoreFromLayout(
       terminalStore.selectTerminal(activeId)
     }
 
+    // Autosave skips the restore's own store writes, so a PTY spawned here
+    // stays unrecorded until something else changes. If Se then exits without
+    // its quit flush (crash, forced kill), the next restore finds the old dead
+    // ptyId, spawns yet another shell and leaves this one running with no tab.
+    // Record the result now — also when duplicate records were dropped.
+    if (newTerminals.some((terminal) => !terminal.adopted) || layout !== persistedLayout) {
+      void saveTerminalLayout(projectId)
+    }
+
     // CRITICAL: Get fresh state after mutations for accurate logging
     const freshTerminalStore = useTerminalStore.getState()
 
