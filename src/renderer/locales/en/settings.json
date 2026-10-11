@@ -22,6 +22,7 @@
     "updates": "Updates",
     "privacy": "Privacy & Permissions",
     "dataMigration": "Data migration",
+    "runtime": "Runtime",
     "diagnostics": "Diagnostics & Logs",
     "reset": "Reset Settings"
   },
@@ -341,6 +342,32 @@
       "repoWorkspaceDir": "Repository workspace directories",
       "sshKnownHosts": "SSH host-key store"
     }
+  },
+  "runtime": {
+    "description": "Terminals and agents run in separate background Cores, so restarting or updating the app does not end them. See whether each process is running and what it holds, and restart it by hand.",
+    "loading": "Reading runtime status…",
+    "gui": "App (GUI)",
+    "terminalCore": "Terminal Core",
+    "acpCore": "ACP Core",
+    "state": {
+      "running": "Running",
+      "stopped": "Not running",
+      "inProcess": "Runs inside the app"
+    },
+    "startedAt": "started {{when}}",
+    "noTerminals": "No terminals running",
+    "noAgents": "No agents running",
+    "noTab": "No tab shows it",
+    "restart": "Restart",
+    "restarting": "Restarting…",
+    "refresh": "Refresh",
+    "autoRefresh": "Refreshes every 3 seconds",
+    "restartGuiTitle": "Restart the app",
+    "restartGuiMessage": "Only the app process restarts. Terminals and agents keep running in their Cores and are picked up again when the app starts.",
+    "restartTerminalCoreTitle": "Restart the Terminal Core",
+    "restartTerminalCoreMessage": "Ends all {{count}} terminals and any agent running in them. This cannot be undone.",
+    "restartAcpCoreTitle": "Restart the ACP Core",
+    "restartAcpCoreMessage": "Ends all {{count}} ACP agent sessions and interrupts any reply in progress. This cannot be undone."
   },
   "diagnostics": {
     "description": "Export or copy application logs to troubleshoot issues.",

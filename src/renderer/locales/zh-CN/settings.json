@@ -22,6 +22,7 @@
     "updates": "更新",
     "privacy": "隐私与授权",
     "dataMigration": "数据迁移",
+    "runtime": "运行状态",
     "diagnostics": "诊断与日志",
     "reset": "重置设置"
   },
@@ -341,6 +342,32 @@
       "repoWorkspaceDir": "仓库工作区目录",
       "sshKnownHosts": "SSH 主机密钥库"
     }
+  },
+  "runtime": {
+    "description": "终端和 agent 运行在独立的后台核心里，界面重启或更新不会结束它们。这里显示每个进程是否在运行、里面有什么，并可以手动重启。",
+    "loading": "正在读取运行状态…",
+    "gui": "界面（GUI）",
+    "terminalCore": "终端核心",
+    "acpCore": "ACP 核心",
+    "state": {
+      "running": "运行中",
+      "stopped": "未运行",
+      "inProcess": "在界面进程内运行"
+    },
+    "startedAt": "启动于 {{when}}",
+    "noTerminals": "没有正在运行的终端",
+    "noAgents": "没有正在运行的 agent",
+    "noTab": "界面未显示",
+    "restart": "重启",
+    "restarting": "正在重启…",
+    "refresh": "刷新",
+    "autoRefresh": "每 3 秒自动刷新",
+    "restartGuiTitle": "重启界面",
+    "restartGuiMessage": "只重启界面进程。终端和 agent 在核心里继续运行，界面启动后会自动接回。",
+    "restartTerminalCoreTitle": "重启终端核心",
+    "restartTerminalCoreMessage": "会结束全部 {{count}} 个终端，以及在其中运行的 agent。此操作无法撤销。",
+    "restartAcpCoreTitle": "重启 ACP 核心",
+    "restartAcpCoreMessage": "会结束全部 {{count}} 个 ACP agent 会话，正在进行的回复会中断。此操作无法撤销。"
   },
   "diagnostics": {
     "description": "导出或复制应用日志以排查问题。",

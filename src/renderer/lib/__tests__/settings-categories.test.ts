@@ -25,6 +25,14 @@ describe('isSettingsCategoryAvailable', () => {
     expect(isSettingsCategoryAvailable('data-migration', LINUX_DESKTOP)).toBe(true)
   })
 
+  it('hides the runtime category outside the desktop shell', () => {
+    // It lists and restarts the local Core processes; a browser client has none.
+    expect(isSettingsCategoryAvailable('runtime', MAC_BROWSER)).toBe(false)
+    expect(isSettingsCategoryAvailable('runtime', LINUX_BROWSER)).toBe(false)
+    expect(isSettingsCategoryAvailable('runtime', MAC_DESKTOP)).toBe(true)
+    expect(isSettingsCategoryAvailable('runtime', LINUX_DESKTOP)).toBe(true)
+  })
+
   it('leaves every other category available on every host', () => {
     for (const id of ['appearance', 'shell', 'updates', 'diagnostics', 'reset']) {
       for (const host of [MAC_DESKTOP, LINUX_DESKTOP, MAC_BROWSER, LINUX_BROWSER]) {
