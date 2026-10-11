@@ -72,7 +72,7 @@ import { useSessionWorkspaceSync } from '@/hooks/use-session-workspace-sync'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
-import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
+import { isProjectTerminalRestoreInProgress, saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
 import { runtimeT } from '@/i18n/runtime'
 import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
@@ -1538,6 +1538,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
     (projectId: string, options?: { explicit?: boolean }) => {
       if (locationPathRef.current !== '/') return
       if (applyPendingTerminalFocus(projectId)) return
+      // The project's terminals are still being restored. Opening one now
+      // would race that restore, and autosave would write the new terminal
+      // over the record of the PTY the restore is about to adopt. The restore
+      // opens a terminal itself when there is nothing to bring back.
+      if (isProjectTerminalRestoreInProgress(projectId) && !options?.explicit) return
       // The user just hid the last project terminal. Do not undo that close
       // by spawning or reopening from the restore path. An explicit click on
       // the row's terminal button is the user asking again, so it overrides.
