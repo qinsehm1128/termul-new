@@ -10,6 +10,7 @@ import {
   coreRuntimeApi
 } from '@/lib/core-runtime-api'
 import { logFrontendError } from '@/lib/log-api'
+import { shortBuildId } from '@/lib/update-component-diff'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -29,10 +30,6 @@ type RestartTarget = 'gui' | 'acpCore' | 'terminalCore'
 
 function formatTime(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toLocaleString()
-}
-
-function shortBuild(buildId: string | null): string | null {
-  return buildId === null ? null : buildId.slice(0, 12)
 }
 
 export function CoreRuntimeSettings(): React.JSX.Element {
@@ -154,7 +151,7 @@ export function CoreRuntimeSettings(): React.JSX.Element {
         formatTime(startedAtMs) === null
           ? null
           : t('runtime.startedAt', { when: formatTime(startedAtMs) }),
-        shortBuild(buildId) === null ? null : `build ${shortBuild(buildId)}`
+        buildId === null ? null : `build ${shortBuildId(buildId)}`
       ]
         .filter(Boolean)
         .join(' · ')}
@@ -258,10 +255,18 @@ export function CoreRuntimeSettings(): React.JSX.Element {
                               {agent}
                             </span>
                           )}
-                          {name === null && (
-                            <span className="rounded-full bg-amber-500/10 px-1.5 text-3xs text-amber-500">
-                              {t('runtime.noTab')}
+                          {/* A conversation's terminal shows in that conversation's
+                              workspace, not as a project tab. */}
+                          {pty.conversationId ? (
+                            <span className="rounded-full bg-secondary/60 px-1.5 text-3xs text-muted-foreground">
+                              {t('runtime.conversationTerminal')}
                             </span>
+                          ) : (
+                            name === null && (
+                              <span className="rounded-full bg-amber-500/10 px-1.5 text-3xs text-amber-500">
+                                {t('runtime.noTab')}
+                              </span>
+                            )
                           )}
                           {!pty.active && (
                             <span className="rounded-full bg-secondary/60 px-1.5 text-3xs text-muted-foreground">

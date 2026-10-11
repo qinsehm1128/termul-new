@@ -109,6 +109,43 @@ describe('CoreRuntimeSettings', () => {
     expect(hidden).toHaveTextContent('No tab shows it')
   })
 
+  it('marks a conversation terminal as such instead of as missing a tab', async () => {
+    await renderPanel(
+      runtime({
+        terminals: [
+          {
+            id: 'terminal-9',
+            shell: '/bin/zsh',
+            cwd: '/work/py_bi',
+            pid: 4117,
+            conversationId: 'df45f537',
+            active: true,
+            lifecycle: 'running'
+          }
+        ]
+      })
+    )
+
+    const row = document.querySelector('[data-runtime-terminal="terminal-9"]')
+    expect(row).toHaveTextContent('Conversation terminal')
+    expect(row).not.toHaveTextContent('No tab shows it')
+  })
+
+  it('shows the hash of a release build id, not its prefix', async () => {
+    await renderPanel(
+      runtime({
+        terminalCore: core({
+          buildId:
+            'termul-terminalCore-v1-sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+        })
+      })
+    )
+
+    expect(document.querySelector('[data-runtime-card="terminalCore"]')).toHaveTextContent(
+      'build 456789abcdef'
+    )
+  })
+
   it('shows each process with its pid and whether it runs', async () => {
     await renderPanel(runtime({ acpCore: core({ running: false, pid: null }) }))
 

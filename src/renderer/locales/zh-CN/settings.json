@@ -357,6 +357,7 @@
     "startedAt": "启动于 {{when}}",
     "noTerminals": "没有正在运行的终端",
     "noAgents": "没有正在运行的 agent",
+    "conversationTerminal": "会话终端",
     "noTab": "界面未显示",
     "restart": "重启",
     "restarting": "正在重启…",

@@ -357,6 +357,7 @@
     "startedAt": "started {{when}}",
     "noTerminals": "No terminals running",
     "noAgents": "No agents running",
+    "conversationTerminal": "Conversation terminal",
     "noTab": "No tab shows it",
     "restart": "Restart",
     "restarting": "Restarting…",
