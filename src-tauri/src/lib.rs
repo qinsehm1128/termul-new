@@ -1695,6 +1695,199 @@ async fn component_runtime_identities(
     })
 }
 
+/// One Core as the settings runtime panel shows it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreProcessStatus {
+    /// `separate`: its own process the GUI talks to; `inProcess`: runs inside
+    /// the GUI (Windows, or the fallback when the Core could not start).
+    mode: &'static str,
+    running: bool,
+    pid: Option<u32>,
+    started_at_ms: Option<u64>,
+    build_id: Option<String>,
+    active_resources: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiProcessStatus {
+    pid: u32,
+    started_at_ms: Option<u64>,
+    build_id: String,
+    version: String,
+}
+
+/// What is running right now and what each Core holds, so the user can see
+/// whether terminals and agents survived a restart instead of guessing.
+/// `terminals` / `agents` are `None` when the owning service cannot be asked.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreRuntimeStatus {
+    gui: GuiProcessStatus,
+    acp_core: CoreProcessStatus,
+    terminal_core: CoreProcessStatus,
+    terminals: Option<Vec<crate::core::terminal::TerminalStatus>>,
+    agents: Option<Vec<crate::acp::AgentId>>,
+}
+
+async fn core_process_status(
+    profile_root: &Path,
+    role: crate::core::CoreRole,
+    separate: bool,
+) -> CoreProcessStatus {
+    if !separate {
+        let pid = std::process::id();
+        return CoreProcessStatus {
+            mode: "inProcess",
+            running: true,
+            pid: Some(pid),
+            started_at_ms: process_started_at_ms(pid),
+            build_id: None,
+            active_resources: 0,
+        };
+    }
+    let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
+    match crate::core::launcher::probe_endpoint_with_pid(&endpoint, role).await {
+        Ok((ack, pid)) => CoreProcessStatus {
+            mode: "separate",
+            running: true,
+            pid,
+            started_at_ms: pid.and_then(process_started_at_ms),
+            build_id: ack.component_build_id,
+            active_resources: ack.active_resources,
+        },
+        Err(_) => CoreProcessStatus {
+            mode: "separate",
+            running: false,
+            pid: None,
+            started_at_ms: None,
+            build_id: None,
+            active_resources: 0,
+        },
+    }
+}
+
+/// When `pid` started, in milliseconds since the Unix epoch.
+#[cfg(target_os = "macos")]
+fn process_started_at_ms(pid: u32) -> Option<u64> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            i32::try_from(pid).ok()?,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if written != size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    Some(info.pbi_start_tvsec * 1000 + info.pbi_start_tvusec / 1000)
+}
+
+/// When `pid` started, in milliseconds since the Unix epoch: field 22 of
+/// `/proc/<pid>/stat` counts clock ticks since boot, `btime` is the boot time.
+#[cfg(target_os = "linux")]
+fn process_started_at_ms(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command name may contain spaces; the fields after it do not.
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    let start_ticks: u64 = after_comm.split_whitespace().nth(19)?.parse().ok()?;
+    let boot_secs: u64 = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("btime "))?
+        .trim()
+        .parse()
+        .ok()?;
+    let ticks_per_sec = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok()?;
+    if ticks_per_sec == 0 {
+        return None;
+    }
+    Some(boot_secs * 1000 + start_ticks * 1000 / ticks_per_sec)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn process_started_at_ms(_pid: u32) -> Option<u64> {
+    None
+}
+
+#[tauri::command]
+async fn core_runtime_status(app: tauri::AppHandle) -> Result<CoreRuntimeStatus, String> {
+    let profile_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
+    let acp = app.try_state::<crate::core::AcpServiceHandle>();
+    let acp_client = acp.as_ref().and_then(|handle| handle.core_client());
+    let terminal_client = app
+        .try_state::<crate::core::TerminalServiceHandle>()
+        .and_then(|handle| handle.core_client());
+    let gui_pid = std::process::id();
+
+    let terminals = match &terminal_client {
+        Some(client) => client.list().await.ok(),
+        None => None,
+    };
+    let agents = match &acp_client {
+        Some(client) => client.list_agents().await.ok(),
+        None => acp
+            .as_ref()
+            .and_then(|handle| handle.require_in_process().ok())
+            .map(|manager| manager.list_agents()),
+    };
+    Ok(CoreRuntimeStatus {
+        gui: GuiProcessStatus {
+            pid: gui_pid,
+            started_at_ms: process_started_at_ms(gui_pid),
+            build_id: crate::core::component_build_id(crate::core::CoreRole::Gui),
+            version: app.package_info().version.to_string(),
+        },
+        acp_core: core_process_status(
+            &profile_root,
+            crate::core::CoreRole::AcpCore,
+            acp_client.is_some(),
+        )
+        .await,
+        terminal_core: core_process_status(
+            &profile_root,
+            crate::core::CoreRole::TerminalCore,
+            terminal_client.is_some(),
+        )
+        .await,
+        terminals,
+        agents,
+    })
+}
+
+/// Restart one Core on the user's request. Everything it runs ends: every
+/// terminal for the Terminal Core, every agent for the ACP Core.
+#[tauri::command]
+async fn restart_core(app: tauri::AppHandle, role: String) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let role = match role.as_str() {
+            "acpCore" => crate::core::CoreRole::AcpCore,
+            "terminalCore" => crate::core::CoreRole::TerminalCore,
+            other => return Err(format!("unknown core: {other}")),
+        };
+        let profile_root = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
+        restart_core_on_request(&app, &profile_root, role).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (app, role);
+        Err("Cores run inside the app on this platform".to_string())
+    }
+}
+
 fn pending_update_plan(app_handle: &tauri::AppHandle) -> Option<serde_json::Value> {
     let store = app_handle.store("update-plan.json").ok()?;
     store.get("pending_update_plan")
@@ -2304,6 +2497,13 @@ async fn supervise_one_core(
     if !supervised {
         return;
     }
+    // A user-requested restart stops the Core on purpose and starts the next
+    // one itself; probing now would race it with a second spawn.
+    if manual_restart_flag(role).is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        *consecutive_misses = 0;
+        return;
+    }
 
     if reconcile_pending_core(app_handle, profile_root, role, ready, consecutive_misses).await {
         return;
@@ -2338,21 +2538,93 @@ async fn supervise_one_core(
     *ready = false;
     if restart_and_reconnect(app_handle, profile_root, role).await {
         finalize_pending_core_update_plan(app_handle, profile_root);
-        match role {
-            crate::core::CoreRole::AcpCore => {
-                let _ = app_handle.emit(
-                    ACP_CONNECTION_CHANGED_EVENT,
-                    AcpConnectionChangedPayload { connected: true },
-                );
-            }
-            crate::core::CoreRole::TerminalCore => {
-                emit_terminal_core_restarted(app_handle).await;
-            }
-            crate::core::CoreRole::Gui => {}
-        }
+        announce_core_restarted(app_handle, role).await;
         *ready = true;
         *consecutive_misses = 0;
     }
+}
+
+#[cfg(unix)]
+static ACP_CORE_MANUAL_RESTART: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(unix)]
+static TERMINAL_CORE_MANUAL_RESTART: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+fn manual_restart_flag(
+    role: crate::core::CoreRole,
+) -> Option<&'static std::sync::atomic::AtomicBool> {
+    match role {
+        crate::core::CoreRole::AcpCore => Some(&ACP_CORE_MANUAL_RESTART),
+        crate::core::CoreRole::TerminalCore => Some(&TERMINAL_CORE_MANUAL_RESTART),
+        crate::core::CoreRole::Gui => None,
+    }
+}
+
+#[cfg(unix)]
+async fn announce_core_restarted(app_handle: &tauri::AppHandle, role: crate::core::CoreRole) {
+    match role {
+        crate::core::CoreRole::AcpCore => {
+            let _ = app_handle.emit(
+                ACP_CONNECTION_CHANGED_EVENT,
+                AcpConnectionChangedPayload { connected: true },
+            );
+        }
+        crate::core::CoreRole::TerminalCore => {
+            emit_terminal_core_restarted(app_handle).await;
+        }
+        crate::core::CoreRole::Gui => {}
+    }
+}
+
+#[cfg(unix)]
+async fn restart_core_on_request(
+    app_handle: &tauri::AppHandle,
+    profile_root: &Path,
+    role: crate::core::CoreRole,
+) -> Result<(), String> {
+    let Some(flag) = manual_restart_flag(role) else {
+        return Err("only the ACP Core and the Terminal Core can be restarted".to_string());
+    };
+    let runs_separately = match role {
+        crate::core::CoreRole::AcpCore => app_handle
+            .try_state::<crate::core::AcpServiceHandle>()
+            .is_some_and(|handle| handle.core_client().is_some()),
+        crate::core::CoreRole::TerminalCore => app_handle
+            .try_state::<crate::core::TerminalServiceHandle>()
+            .is_some_and(|handle| handle.core_client().is_some()),
+        crate::core::CoreRole::Gui => false,
+    };
+    if !runs_separately {
+        return Err("this Core runs inside the app; restart the app instead".to_string());
+    }
+    if flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("a restart of this Core is already in progress".to_string());
+    }
+    log::info!(
+        target: "se_manager::core",
+        "operation=core_restart role={} stable_code=RESTARTING reason=user_request",
+        role.endpoint_name()
+    );
+    if role == crate::core::CoreRole::AcpCore {
+        let _ = app_handle.emit(
+            ACP_CONNECTION_CHANGED_EVENT,
+            AcpConnectionChangedPayload { connected: false },
+        );
+    }
+    let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
+    let result = if !crate::core::launcher::stop_core(&endpoint, role).await {
+        Err("the Core did not stop in time".to_string())
+    } else if restart_and_reconnect(app_handle, profile_root, role).await {
+        announce_core_restarted(app_handle, role).await;
+        Ok(())
+    } else {
+        // The supervisor picks it up again once the flag is cleared.
+        Err("the Core stopped but did not start again".to_string())
+    };
+    flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    result
 }
 
 /// After Terminal Core restart+reconnect, tell the renderer which PTYs still
@@ -3272,6 +3544,8 @@ pub fn run() {
             macos_open_privacy_pane_command,
             // Updater: running component build identities
             component_runtime_identities,
+            core_runtime_status,
+            restart_core,
             // Restart-required Conversation migration maintenance
             commands::conversation_migration_control,
             // Terminal commands
@@ -3896,6 +4170,51 @@ mod tests {
                 "terminalCore": { "buildId": "terminal-build", "activeResources": 3 }
             })
         );
+    }
+
+    #[test]
+    fn core_process_status_serializes_in_the_renderer_shape() {
+        let value = serde_json::to_value(CoreProcessStatus {
+            mode: "separate",
+            running: true,
+            pid: Some(42),
+            started_at_ms: Some(1_000),
+            build_id: Some("acp-build".to_string()),
+            active_resources: 2,
+        })
+        .expect("serialize");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "mode": "separate",
+                "running": true,
+                "pid": 42,
+                "startedAtMs": 1000,
+                "buildId": "acp-build",
+                "activeResources": 2
+            })
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn process_started_at_ms_reports_when_this_process_started() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_millis() as u64;
+        let started = process_started_at_ms(std::process::id()).expect("start time");
+        assert!(started <= now, "started {started} is after now {now}");
+        assert!(
+            now - started < 3_600_000,
+            "started {started} is over an hour before now {now}"
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn process_started_at_ms_is_none_for_a_missing_process() {
+        assert_eq!(process_started_at_ms(i32::MAX as u32), None);
     }
 
     #[test]
