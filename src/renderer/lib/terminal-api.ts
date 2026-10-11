@@ -14,6 +14,7 @@ import type {
   TerminalResumeRequest,
   TerminalScopedDataCallback
 } from '@shared/types/ipc.types'
+import { trackLocalTerminalSpawn } from './local-terminal-spawns'
 import { isTauriContext } from './tauri-runtime'
 import {
   addRendererRef as addTauriRendererRef,
@@ -23,9 +24,19 @@ import {
 } from './tauri-terminal-api'
 import { createWebTerminalApi, webTerminalInternals } from './web-terminal-api'
 
-export const terminalApi: TerminalApi = isTauriContext()
+const runtimeTerminalApi: TerminalApi = isTauriContext()
   ? createTauriTerminalApi()
   : createWebTerminalApi()
+const runtimeSpawn = runtimeTerminalApi.spawn.bind(runtimeTerminalApi)
+
+/**
+ * Every spawn from this renderer is marked local, so the host terminal catalog
+ * does not adopt it a second time as a terminal opened on another device.
+ */
+export const terminalApi: TerminalApi = Object.assign(runtimeTerminalApi, {
+  spawn: (options?: Parameters<TerminalApi['spawn']>[0]) =>
+    trackLocalTerminalSpawn(() => runtimeSpawn(options))
+})
 
 /** Transport-neutral cold-resume entry point; never spawns or terminates a PTY. */
 export function resumeTerminal(

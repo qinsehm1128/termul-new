@@ -173,6 +173,28 @@ function matchLiveProjectPty(
   )
 }
 
+/**
+ * Layouts saved before local spawns were marked can hold two records on one
+ * PTY: the host terminal catalog adopted a restore spawn as if another device
+ * had opened it. Restoring both adopts the PTY once and spawns a fresh shell
+ * for the copy — one more on every restart, the older ones left running with
+ * no tab. Keep one record per PTY: the active one if it is among them, else
+ * the first. The dropped record's tab goes with the orphan-tab sync.
+ */
+export function dropDuplicatePtyRecords(layout: PersistedTerminalLayout): PersistedTerminalLayout {
+  const keeperByPty = new Map<string, string>()
+  for (const terminal of layout.terminals) {
+    if (!terminal.ptyId) continue
+    if (!keeperByPty.has(terminal.ptyId) || terminal.id === layout.activeTerminalId) {
+      keeperByPty.set(terminal.ptyId, terminal.id)
+    }
+  }
+  const terminals = layout.terminals.filter(
+    (terminal) => !terminal.ptyId || keeperByPty.get(terminal.ptyId) === terminal.id
+  )
+  return terminals.length === layout.terminals.length ? layout : { ...layout, terminals }
+}
+
 async function cleanupSpawnedPtys(
   terminals: Array<{ ptyId?: string; adopted?: boolean }>,
   restoreId: string,
@@ -857,10 +879,17 @@ interface RestoreExecutionResult {
 
 async function restoreFromLayout(
   projectId: string,
-  layout: PersistedTerminalLayout,
+  persistedLayout: PersistedTerminalLayout,
   isCancelled: () => boolean
 ): Promise<RestoreExecutionResult> {
   const restoreId = `restore-${randomUUID().slice(0, 5)}`
+  const layout = dropDuplicatePtyRecords(persistedLayout)
+  if (layout !== persistedLayout) {
+    debugLog('restoreFromLayout', `DROPPED duplicate PTY records [${restoreId}]`, {
+      projectId,
+      dropped: persistedLayout.terminals.length - layout.terminals.length
+    })
+  }
   // No conversation scope here by construction: `terminals/{projectId}` holds
   // scope-less project terminals only (see `isProjectScopedTerminal`), and the
   // record carries no conversation of its own. Adopting whichever conversation
@@ -1250,6 +1279,15 @@ async function restoreFromLayout(
     // Select the active terminal
     if (activeId) {
       terminalStore.selectTerminal(activeId)
+    }
+
+    // Autosave skips the restore's own store writes, so a PTY spawned here
+    // stays unrecorded until something else changes. If Se then exits without
+    // its quit flush (crash, forced kill), the next restore finds the old dead
+    // ptyId, spawns yet another shell and leaves this one running with no tab.
+    // Record the result now — also when duplicate records were dropped.
+    if (newTerminals.some((terminal) => !terminal.adopted) || layout !== persistedLayout) {
+      void saveTerminalLayout(projectId)
     }
 
     // CRITICAL: Get fresh state after mutations for accurate logging
