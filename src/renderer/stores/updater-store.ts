@@ -68,8 +68,8 @@ export interface UpdaterStoreState {
   isChecking: boolean
   isDownloading: boolean
   /**
-   * The download was asked for and the pre-update backup is still running; no
-   * byte has been fetched yet. Lets the UI say "backing up" rather than "0%".
+   * The download was asked for and is still being prepared; no byte has been
+   * fetched yet. Lets the UI say "preparing" rather than "0%".
    */
   isPreparingDownload: boolean
   error: string | null
@@ -630,8 +630,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Internal action: Called when download progress updates (IPC event)
    */
   _setDownloadProgress: (progress: DownloadProgress): void => {
-    // The facade reports progress only once the backup is done and the
-    // download itself has started.
+    // The facade reports progress only once the download itself has started.
     set({ downloadProgress: progress.percent, isPreparingDownload: false })
   },
 

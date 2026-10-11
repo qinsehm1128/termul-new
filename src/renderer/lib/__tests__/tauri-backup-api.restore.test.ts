@@ -71,7 +71,7 @@ vi.mock('@tauri-apps/plugin-store', () => {
   return { Store: { load: async () => store } }
 })
 
-import { BACKUP_EXCLUDED_ENTRIES, createBackup, restoreBackup } from './tauri-backup-api'
+import { BACKUP_EXCLUDED_ENTRIES, createBackup, restoreBackup } from '../tauri-backup-api'
 
 /** A profile with data a rollback needs next to caches it does not. */
 function seedProfile(): void {

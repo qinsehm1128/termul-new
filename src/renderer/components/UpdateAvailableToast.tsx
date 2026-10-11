@@ -205,7 +205,7 @@ function showDownloadProgressToast(version: string, progress: number, preparing:
   toast.loading(i18n.t('updates.downloading', { ns: 'shell', version }), {
     id: progressId,
     description: preparing
-      ? i18n.t('updates.backingUp', { ns: 'shell' })
+      ? i18n.t('updates.preparingDownload', { ns: 'shell' })
       : i18n.t('updates.complete', {
           ns: 'shell',
           progress: progress.toFixed(0)

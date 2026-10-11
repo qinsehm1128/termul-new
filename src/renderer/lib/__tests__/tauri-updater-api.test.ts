@@ -212,13 +212,12 @@ describe('tauri-updater-api', () => {
       })
 
       expect(result).toEqual({ success: true, data: undefined })
-      expect(createBackup).toHaveBeenCalledTimes(1)
+      // No copy of userData: nothing could restore it, and it held the
+      // download for minutes on a large profile.
+      expect(createBackup).not.toHaveBeenCalled()
       expect(keepPreviousVersion).toHaveBeenCalledWith('0.2.3')
       // Download must not install/restart the app on its own.
       expect(update.install).not.toHaveBeenCalled()
-      expect(vi.mocked(createBackup).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(update.download).mock.invocationCallOrder[0]
-      )
       expect(vi.mocked(keepPreviousVersion).mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(update.download).mock.invocationCallOrder[0]
       )
@@ -247,28 +246,6 @@ describe('tauri-updater-api', () => {
         success: false,
         error: 'download failed',
         code: 'DOWNLOAD_FAILED'
-      })
-    })
-
-    it('returns DISK_SPACE_INSUFFICIENT when backup preparation fails', async () => {
-      const update = createMockUpdate('2.0.3')
-      vi.mocked(check).mockResolvedValue(update as never)
-      await checkForUpdates()
-
-      vi.mocked(createBackup).mockResolvedValue({
-        success: false,
-        error: 'disk full',
-        code: 'DISK_SPACE_ERROR'
-      } as never)
-
-      const result = await downloadUpdate()
-
-      expect(update.download).not.toHaveBeenCalled()
-      expect(keepPreviousVersion).not.toHaveBeenCalled()
-      expect(result).toEqual({
-        success: false,
-        error: 'disk full',
-        code: 'DISK_SPACE_INSUFFICIENT'
       })
     })
   })
