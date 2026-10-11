@@ -15,7 +15,7 @@ import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
 import { runtimeT } from '@/i18n/runtime'
 import { logFrontendError } from './log-api'
-import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
+import { setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 import {
   createPendingUpdatePlan,
@@ -184,19 +184,10 @@ async function prepareUpdateRecovery(): Promise<IpcResult<void>> {
     }
   }
 
-  const backupResult = await createBackup()
-  if (!backupResult.success) {
-    return {
-      success: false,
-      error:
-        backupResult.error ??
-        runtimeT('shell', 'updates.errors.backupFailed', 'Failed to create backup before update'),
-      code:
-        backupResult.code === BackupErrorCodes.DISK_SPACE_ERROR
-          ? UpdaterErrorCodes.DISK_SPACE_INSUFFICIENT
-          : UpdaterErrorCodes.INSTALL_FAILED
-    }
-  }
+  // No copy of userData is taken here. Nothing in the app could ever restore
+  // one, yet it copied the whole profile (4 GB measured, three kept) before
+  // every download, and a full disk failed the update outright. Migrations
+  // that rewrite data keep their own records.
 
   const preserveResult = await keepPreviousVersion(currentVersion)
   if (!preserveResult.success) {

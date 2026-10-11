@@ -628,14 +628,14 @@ describe('AppPreferences update component diff and forced install', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('says the data is being backed up instead of showing 0% before the download starts', () => {
+  it('says the download is being prepared instead of showing 0% before it starts', () => {
     updaterFixture.downloaded = false
     updaterFixture.isDownloading = true
     updaterFixture.isPreparingDownload = true
 
     renderPage()
 
-    expect(screen.getByRole('button', { name: /Backing up your data/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Preparing the download/ })).toBeDisabled()
     expect(screen.queryByRole('button', { name: /0% complete/ })).not.toBeInTheDocument()
   })
 })

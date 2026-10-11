@@ -244,9 +244,9 @@ describe('updater-store', () => {
       expect(state.isDownloading).toBe(false)
     })
 
-    // The facade backs up user data before fetching a byte and reports
-    // progress only once the download itself runs.
-    it('reports the pre-download backup apart from download progress', async () => {
+    // The facade prepares before fetching a byte and reports progress only once
+    // the download itself runs.
+    it('reports the preparation apart from download progress', async () => {
       useUpdaterStore.setState({ updateAvailable: true, downloaded: false })
       let reportProgress: ((progress: DownloadProgress) => void) | undefined
       let finish: (() => void) | undefined
@@ -270,18 +270,20 @@ describe('updater-store', () => {
       expect(useUpdaterStore.getState().downloaded).toBe(true)
     })
 
-    it('clears the backup phase when the download fails before it starts', async () => {
+    it('clears the preparation phase when the download fails before it starts', async () => {
       useUpdaterStore.setState({ updateAvailable: true, downloaded: false })
       vi.mocked(tauriUpdaterApi.downloadUpdate).mockResolvedValue({
         success: false,
-        error: 'Failed to create backup before update',
-        code: 'BACKUP_FAILED'
+        error: 'Failed to preserve current version before update',
+        code: 'INSTALL_FAILED'
       })
 
       await useUpdaterStore.getState().downloadUpdate()
 
       expect(useUpdaterStore.getState().isPreparingDownload).toBe(false)
-      expect(useUpdaterStore.getState().error).toBe('Failed to create backup before update')
+      expect(useUpdaterStore.getState().error).toBe(
+        'Failed to preserve current version before update'
+      )
     })
 
     it('should surface tauri install failure', async () => {
