@@ -262,6 +262,7 @@
     "signingKind": {
       "developerId": "Developer ID",
       "appleDevelopment": "Apple Development",
+      "selfSigned": "Self-signed certificate",
       "adhoc": "Ad-hoc",
       "unsigned": "Unsigned",
       "unknown": "Unknown"

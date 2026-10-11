@@ -262,6 +262,7 @@
     "signingKind": {
       "developerId": "Developer ID",
       "appleDevelopment": "Apple Development",
+      "selfSigned": "自签名证书",
       "adhoc": "Ad-hoc 临时签名",
       "unsigned": "未签名",
       "unknown": "未知"
