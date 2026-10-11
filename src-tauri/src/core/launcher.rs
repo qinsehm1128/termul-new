@@ -659,9 +659,26 @@ async fn try_shutdown_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
         method: "shutdown".to_string(),
         params: serde_json::Value::Null,
     };
-    super::ipc::write_json_frame(&mut stream, &request)
+    if super::ipc::write_json_frame(&mut stream, &request)
         .await
-        .is_ok()
+        .is_err()
+    {
+        return false;
+    }
+    // Stay connected until the Core answers. Both Cores write the reply before
+    // they stop, and give up without stopping when that write fails — which it
+    // does if this socket is already closed. The Terminal Core has killed its
+    // PTYs by then, so hanging up early leaves a live Core with no terminals.
+    let _ = tokio::time::timeout(CORE_REPLACE_EXIT_DEADLINE, async {
+        while let Ok(reply) = super::ipc::read_json_frame::<_, serde_json::Value>(&mut stream).await
+        {
+            if reply.get("id").and_then(serde_json::Value::as_u64) == Some(request.id) {
+                break;
+            }
+        }
+    })
+    .await;
+    true
 }
 
 pub async fn ensure_core(
@@ -1447,6 +1464,66 @@ mod tests {
 
         assert_eq!(ack.role, CoreRole::TerminalCore);
         assert_eq!(pid, Some(std::process::id()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_core_ends_a_live_terminal_core() {
+        use super::super::terminal::run_terminal_core_on_endpoint;
+
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let program = crate::terminal_program();
+        let server =
+            tokio::spawn(
+                async move { run_terminal_core_on_endpoint(server_endpoint, program).await },
+            );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let (_, pid) = loop {
+            if let Ok(found) = probe_endpoint_with_pid(&endpoint, CoreRole::TerminalCore).await {
+                break found;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Terminal Core did not start listening"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert_eq!(pid, Some(std::process::id()));
+
+        assert!(stop_core(&endpoint, CoreRole::TerminalCore).await);
+
+        assert!(probe_endpoint(&endpoint, CoreRole::TerminalCore)
+            .await
+            .is_err());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_core_ends_a_live_acp_core() {
+        let profile = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::AcpCore);
+        let state_root = profile.path().to_path_buf();
+        let workspace_root = workspace.path().to_path_buf();
+        let server = tokio::spawn(async move {
+            super::super::acp::run_acp_core_with_roots(state_root, workspace_root).await
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while probe_endpoint(&endpoint, CoreRole::AcpCore).await.is_err() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "ACP Core did not start listening"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert!(stop_core(&endpoint, CoreRole::AcpCore).await);
+
+        assert!(probe_endpoint(&endpoint, CoreRole::AcpCore).await.is_err());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
     }
 
     #[tokio::test]
