@@ -1,6 +1,6 @@
 import type { TerminalAgentSession } from '@shared/types/cli-session.types'
 import type { TerminalStatus } from '@shared/types/ipc.types'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { i18n } from '@/i18n'
 import { formatNumber } from '@/i18n/format'
@@ -16,7 +16,7 @@ import {
   recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
 import { randomUUID } from '@/lib/uuid'
-import { isVisibleReady } from '@/lib/visibility-signal'
+import { isVisibleReady, waitForVisibility } from '@/lib/visibility-signal'
 import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
 import type { Terminal as TerminalRecord } from '@/types/project'
 import type {
@@ -32,8 +32,6 @@ import {
   saveTerminalLayout,
   setTerminalRestoreInProgress
 } from './useTerminalAutoSave'
-
-const DEFERRED_RETRY_MS = 50
 
 const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
@@ -345,10 +343,6 @@ export function useTerminalRestore(projectIdOverride?: string | null): void {
   const previousProjectIdRef = useRef<string>('')
   // FIX #4: Use Set instead of boolean to track multiple restoring projects
   const isRestoringRef = useRef<Set<string>>(new Set())
-  // Retry counter for visibility-deferred restore
-  const [visibilityRetry, setVisibilityRetry] = useState(0)
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityRetry intentionally retriggers restore attempts
   useEffect(() => {
     const callId = randomUUID().slice(0, 7)
     RESTORE_CALL_STACK.push(callId)
@@ -433,12 +427,20 @@ export function useTerminalRestore(projectIdOverride?: string | null): void {
         // `showWindow()` resolves asynchronously. Spawning during the hidden
         // phase causes the Rust backend to defer PTY cleanup, accumulating
         // zombie PTYs and RAM growth (manager.rs:993).
-        // When `isAppHidden` flips to `false`, the effect re-runs via the
-        // `visibilityRetry` dependency, and this check passes.
+        //
+        // Wait here, inside this restore, holding its lock and in-progress
+        // flag. Returning and retrying from the effect instead released both:
+        // the retry was then skipped as "same project", the restore never ran,
+        // the workspace opened a fresh terminal for the empty project, and
+        // autosave wrote it over the record of the PTY still running in Core
+        // — after an update restart, every running terminal and agent was
+        // left unreachable.
         if (!isVisibleReady()) {
-          debugLog('useTerminalRestore', `DEFERRED [${callId}]: window not visible yet`)
-          setTimeout(() => setVisibilityRetry((v) => v + 1), DEFERRED_RETRY_MS)
-          return
+          await waitForVisibility()
+          if (isCancelled()) {
+            debugLog('useTerminalRestore', `CANCELLED [${callId}] while waiting for visibility`)
+            return
+          }
         }
 
         // Save layout for crash recovery purposes, but preserve live PTYs
@@ -712,7 +714,7 @@ export function useTerminalRestore(projectIdOverride?: string | null): void {
       // and prevents a race condition where terminals are wiped before being saved to disk.
       // PTYs are managed by the backend and their lifecycle is independent of the renderer store.
     }
-  }, [activeProjectId, visibilityRetry])
+  }, [activeProjectId])
 }
 
 /**

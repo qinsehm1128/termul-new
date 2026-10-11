@@ -37,6 +37,13 @@ const {
   mockTerminalResume: vi.fn()
 }))
 
+// The window is visible unless a test holds the gate closed.
+const visibilityGate = vi.hoisted(() => ({ wait: null as Promise<void> | null }))
+vi.mock('@/lib/visibility-signal', () => ({
+  isVisibleReady: () => visibilityGate.wait === null,
+  waitForVisibility: () => visibilityGate.wait ?? Promise.resolve()
+}))
+
 vi.mock('./useTerminalAutoSave', () => ({
   loadPersistedTerminals: mockLoadPersistedTerminals,
   saveTerminalLayout: mockSaveTerminalLayout,
@@ -183,6 +190,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.useRealTimers()
   __TEST_RESET_LOCKS__()
+  visibilityGate.wait = null
   mockRecordTerminalContinuityEvent.mockReset()
   mockBeginProjectContinuityCorrelation.mockReset()
   mockBeginProjectContinuityCorrelation.mockImplementation(
@@ -841,6 +849,85 @@ describe('useTerminalRestore', () => {
     expect(adoptedRecord).not.toHaveProperty('healthStatus')
     expect(adoptedRecord).not.toHaveProperty('pendingScrollback')
     expect(adoptedRecord).not.toHaveProperty('transcript')
+  })
+
+  // An update restart relaunches the window hidden while Core keeps every
+  // PTY running. The restore used to bail out, release its in-progress flag
+  // and never come back, so the workspace opened a new terminal and autosave
+  // wrote it over the record of the PTY still running.
+  it('adopts the live PTY once a window that started hidden becomes visible', async () => {
+    let show: () => void = () => undefined
+    visibilityGate.wait = new Promise<void>((resolve) => {
+      show = resolve
+    })
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-shell',
+      terminals: [
+        {
+          id: 'persisted-shell',
+          name: 'Terminal 1',
+          shell: 'bash',
+          cwd: '/projects/a',
+          ptyId: 'pty-agent'
+        }
+      ],
+      updatedAt: '2026-10-11T00:00:00.000Z'
+    })
+    mockTerminalList.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'pty-agent',
+          shell: 'bash',
+          cwd: '/projects/a',
+          pid: 12,
+          cols: 80,
+          rows: 24,
+          workspaceRefTracked: false,
+          latestSeq: 40,
+          active: true,
+          lifecycle: 'active',
+          projectId: 'project-a'
+        }
+      ]
+    })
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith(
+        'project-a',
+        true,
+        expect.any(String)
+      )
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // Still hidden: the restore holds its claim on the project and touches nothing.
+    expect(mockSetTerminalRestoreInProgress).not.toHaveBeenCalledWith(
+      'project-a',
+      false,
+      expect.any(String)
+    )
+    expect(mockTerminalStoreState.setTerminals).not.toHaveBeenCalled()
+
+    show()
+
+    await waitFor(() => {
+      expect(mockTerminalStoreState.setTerminals).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ ptyId: 'pty-agent', adopted: true })])
+      )
+    })
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith(
+        'project-a',
+        false,
+        expect.any(String)
+      )
+    })
   })
 
   it('falls back to spawn when the persisted ptyId is absent from list', async () => {

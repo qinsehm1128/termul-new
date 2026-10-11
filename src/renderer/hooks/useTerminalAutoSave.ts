@@ -143,6 +143,11 @@ export function isTerminalRestoreInProgress(): boolean {
   return terminalRestoreProjectsInProgress.size > 0
 }
 
+/** Whether this project's terminals are still being restored (or adopted). */
+export function isProjectTerminalRestoreInProgress(projectId: string): boolean {
+  return terminalRestoreProjectsInProgress.has(projectId)
+}
+
 /**
  * Sync extracted scrollback to the terminal store
  * Updates each terminal's pendingScrollback field in memory

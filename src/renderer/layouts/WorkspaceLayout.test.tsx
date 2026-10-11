@@ -9,9 +9,14 @@ import {
   resetQuickTerminalStore,
   useQuickTerminalStore
 } from '@/features/quick-terminal/quick-terminal-store'
-import { persistState, restoreProjectWorkspace } from '@/hooks/use-editor-persistence'
+import {
+  persistState,
+  restoreProjectWorkspace,
+  subscribeProjectWorkspaceRestored
+} from '@/hooks/use-editor-persistence'
 import WorkspaceDashboard from '@/pages/WorkspaceDashboard'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
@@ -325,11 +330,13 @@ vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
   WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
 }))
 
-const { mockSaveTerminalLayout } = vi.hoisted(() => ({
-  mockSaveTerminalLayout: vi.fn(() => Promise.resolve())
+const { mockSaveTerminalLayout, mockIsProjectTerminalRestoreInProgress } = vi.hoisted(() => ({
+  mockSaveTerminalLayout: vi.fn(() => Promise.resolve()),
+  mockIsProjectTerminalRestoreInProgress: vi.fn((_projectId: string) => false)
 }))
 vi.mock('@/hooks/useTerminalAutoSave', () => ({
   saveTerminalLayout: mockSaveTerminalLayout,
+  isProjectTerminalRestoreInProgress: mockIsProjectTerminalRestoreInProgress,
   useTerminalAutoSave: vi.fn(),
   loadPersistedTerminals: vi.fn(),
   setTerminalRestoreInProgress: vi.fn(),
@@ -456,6 +463,7 @@ vi.mock('@/lib/api', () => ({
   removeRendererRef: mockApi.removeRendererRef,
   hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
   sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
+  worktreeApi: { list: vi.fn(() => Promise.resolve({ success: true, data: [] })) },
   tauriUpdaterApi: {},
   tauriVersionSkipService: {},
   remoteServerApi: {
@@ -1584,6 +1592,57 @@ describe('WorkspaceLayout - Empty States', () => {
         expect(roots).toEqual(['/workspace/a'])
       }
     }, 15_000)
+  })
+})
+
+// After an update restart the pane layout comes back before the project's
+// terminals are re-adopted from Core. Opening a terminal for the "empty"
+// project in that window raced the restore, and autosave then wrote the new
+// terminal over the record of the PTY still running an agent.
+describe('WorkspaceLayout - project terminal after a workspace restore', () => {
+  let onWorkspaceRestored: (projectId: string) => void = () => undefined
+
+  beforeEach(() => {
+    const project = createProject('a', '/workspace/a', 'blue')
+    mockUseProjects.mockReturnValue([project])
+    mockUseActiveProject.mockReturnValue(project)
+    mockUseActiveProjectId.mockReturnValue('a')
+    vi.mocked(useProjectStore.getState).mockReturnValue({
+      projects: [project],
+      activeProjectId: 'a',
+      groups: [],
+      activeGroupId: null,
+      isLoaded: true,
+      isWorktreeOperationLocked: false,
+      removeWorktree: vi.fn(),
+      updateProject: vi.fn()
+    } as unknown as ReturnType<typeof useProjectStore.getState>)
+    mockApi.terminal.spawn.mockClear()
+    mockIsProjectTerminalRestoreInProgress.mockReset()
+    mockIsProjectTerminalRestoreInProgress.mockReturnValue(false)
+    vi.mocked(subscribeProjectWorkspaceRestored).mockImplementation((listener) => {
+      onWorkspaceRestored = listener
+      return () => undefined
+    })
+  })
+
+  it('opens a terminal for a project with none once nothing is being restored', async () => {
+    renderWithRouter(['/'])
+
+    act(() => onWorkspaceRestored('a'))
+
+    await waitFor(() => expect(mockApi.terminal.spawn).toHaveBeenCalled())
+  })
+
+  it('leaves the project alone while its terminals are still being restored', async () => {
+    mockIsProjectTerminalRestoreInProgress.mockImplementation((projectId) => projectId === 'a')
+    renderWithRouter(['/'])
+
+    act(() => onWorkspaceRestored('a'))
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(mockIsProjectTerminalRestoreInProgress).toHaveBeenCalledWith('a')
+    expect(mockApi.terminal.spawn).not.toHaveBeenCalled()
   })
 })
 
