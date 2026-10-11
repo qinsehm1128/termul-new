@@ -8,7 +8,7 @@ use super::ipc::{
     component_build_id, prepare_runtime_dir, read_json_frame, write_json_frame, CoreEndpoint,
     CoreError, CoreHello, CoreHelloAck, CoreRequest, CoreRole, CURRENT_PROTOCOL_VERSION,
 };
-use super::transport::connect_core;
+use super::transport::{connect_core, CoreStream};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -482,12 +482,13 @@ pub(crate) async fn probe_endpoint_presence(
     endpoint: &CoreEndpoint,
     expected_role: CoreRole,
 ) -> EndpointPresence {
-    let mut stream = match connect_core(endpoint).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            return EndpointPresence::from_connect_and_handshake(Err(error), None);
-        }
-    };
+    match connect_core(endpoint).await {
+        Ok(mut stream) => handshake_presence(&mut stream, expected_role).await,
+        Err(error) => EndpointPresence::from_connect_and_handshake(Err(error), None),
+    }
+}
+
+async fn handshake_presence(stream: &mut CoreStream, expected_role: CoreRole) -> EndpointPresence {
     let hello = CoreHello {
         // Hello.role names the target server, not the caller. The GUI identifies
         // itself with `client_name` and asks for `expected_role`.
@@ -495,10 +496,10 @@ pub(crate) async fn probe_endpoint_presence(
         protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
         client_name: "termul-gui-launcher".to_string(),
     };
-    if let Err(error) = write_json_frame(&mut stream, &hello).await {
+    if let Err(error) = write_json_frame(stream, &hello).await {
         return EndpointPresence::from_connect_and_handshake(Ok(()), Some(Err(error)));
     }
-    match read_json_frame::<_, CoreHelloAck>(&mut stream).await {
+    match read_json_frame::<_, CoreHelloAck>(stream).await {
         Ok(ack)
             if ack.role == expected_role && ack.protocol_version == CURRENT_PROTOCOL_VERSION =>
         {
@@ -522,6 +523,70 @@ pub(crate) async fn probe_endpoint(
         EndpointPresence::LiveCompatible(ack) => Ok(ack),
         EndpointPresence::Absent => Err(CoreError::Io("core endpoint is not listening".into())),
         EndpointPresence::LiveIncompatible(error) => Err(error),
+    }
+}
+
+/// Like [`probe_endpoint`], and also reports the pid of the process behind
+/// the endpoint. It is read from the socket's peer credentials, so a Core this
+/// GUI adopted rather than spawned still has one. `None` where the platform
+/// cannot tell.
+pub(crate) async fn probe_endpoint_with_pid(
+    endpoint: &CoreEndpoint,
+    expected_role: CoreRole,
+) -> Result<(CoreHelloAck, Option<u32>), CoreError> {
+    let mut stream = connect_core(endpoint)
+        .await
+        .map_err(|_| CoreError::Io("core endpoint is not listening".into()))?;
+    let pid = peer_pid(&stream);
+    match handshake_presence(&mut stream, expected_role).await {
+        EndpointPresence::LiveCompatible(ack) => Ok((ack, pid)),
+        EndpointPresence::Absent => Err(CoreError::Io("core endpoint is not listening".into())),
+        EndpointPresence::LiveIncompatible(error) => Err(error),
+    }
+}
+
+fn peer_pid(stream: &CoreStream) -> Option<u32> {
+    match stream {
+        #[cfg(unix)]
+        CoreStream::Unix(stream) => stream
+            .peer_cred()
+            .ok()?
+            .pid()
+            .and_then(|pid| u32::try_from(pid).ok()),
+        #[cfg(windows)]
+        CoreStream::Pipe(_) => None,
+    }
+}
+
+/// Shut a running Core down on the user's request and wait until its endpoint
+/// is gone. Holds the role lock throughout so a concurrent `ensure_core`
+/// cannot adopt the dying Core; the caller starts the replacement afterwards.
+pub(crate) async fn stop_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
+    let lock = role_lock(role).await;
+    let _guard = lock.lock().await;
+    let shutdown_sent = try_shutdown_core(endpoint, role).await;
+    let deadline = tokio::time::Instant::now() + CORE_REPLACE_EXIT_DEADLINE;
+    loop {
+        if probe_endpoint_presence(endpoint, role)
+            .await
+            .allows_unlink_and_spawn()
+        {
+            log::info!(
+                target: "se_manager::core",
+                "operation=core_stop role={} stable_code=STOPPED shutdown_sent={shutdown_sent}",
+                role.endpoint_name()
+            );
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            log::error!(
+                target: "se_manager::core",
+                "operation=core_stop role={} stable_code=STILL_LIVE shutdown_sent={shutdown_sent}",
+                role.endpoint_name()
+            );
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -594,9 +659,26 @@ async fn try_shutdown_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
         method: "shutdown".to_string(),
         params: serde_json::Value::Null,
     };
-    super::ipc::write_json_frame(&mut stream, &request)
+    if super::ipc::write_json_frame(&mut stream, &request)
         .await
-        .is_ok()
+        .is_err()
+    {
+        return false;
+    }
+    // Stay connected until the Core answers. Both Cores write the reply before
+    // they stop, and give up without stopping when that write fails — which it
+    // does if this socket is already closed. The Terminal Core has killed its
+    // PTYs by then, so hanging up early leaves a live Core with no terminals.
+    let _ = tokio::time::timeout(CORE_REPLACE_EXIT_DEADLINE, async {
+        while let Ok(reply) = super::ipc::read_json_frame::<_, serde_json::Value>(&mut stream).await
+        {
+            if reply.get("id").and_then(serde_json::Value::as_u64) == Some(request.id) {
+                break;
+            }
+        }
+    })
+    .await;
+    true
 }
 
 pub async fn ensure_core(
@@ -1354,5 +1436,102 @@ mod tests {
 
         let still_alive = unsafe { libc::kill(pid as i32, 0) == 0 };
         assert!(!still_alive, "owned child pid {pid} should be gone");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_with_pid_reports_the_process_behind_the_endpoint() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        prepare_runtime_dir(&endpoint).unwrap();
+        let mut listener = super::super::transport::listen_core(&endpoint, CoreRole::TerminalCore)
+            .await
+            .unwrap();
+        let server = tokio::spawn(async move {
+            let mut stream = listener.accept().await.unwrap();
+            let _: CoreHello = read_json_frame(&mut stream).await.unwrap();
+            let ack = CoreHelloAck {
+                role: CoreRole::TerminalCore,
+                ..compatible_ack()
+            };
+            write_json_frame(&mut stream, &ack).await.unwrap();
+        });
+
+        let (ack, pid) = probe_endpoint_with_pid(&endpoint, CoreRole::TerminalCore)
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(ack.role, CoreRole::TerminalCore);
+        assert_eq!(pid, Some(std::process::id()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_core_ends_a_live_terminal_core() {
+        use super::super::terminal::run_terminal_core_on_endpoint;
+
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let program = crate::terminal_program();
+        let server =
+            tokio::spawn(
+                async move { run_terminal_core_on_endpoint(server_endpoint, program).await },
+            );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let (_, pid) = loop {
+            if let Ok(found) = probe_endpoint_with_pid(&endpoint, CoreRole::TerminalCore).await {
+                break found;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Terminal Core did not start listening"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert_eq!(pid, Some(std::process::id()));
+
+        assert!(stop_core(&endpoint, CoreRole::TerminalCore).await);
+
+        assert!(probe_endpoint(&endpoint, CoreRole::TerminalCore)
+            .await
+            .is_err());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_core_ends_a_live_acp_core() {
+        let profile = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::AcpCore);
+        let state_root = profile.path().to_path_buf();
+        let workspace_root = workspace.path().to_path_buf();
+        let server = tokio::spawn(async move {
+            super::super::acp::run_acp_core_with_roots(state_root, workspace_root).await
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while probe_endpoint(&endpoint, CoreRole::AcpCore).await.is_err() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "ACP Core did not start listening"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert!(stop_core(&endpoint, CoreRole::AcpCore).await);
+
+        assert!(probe_endpoint(&endpoint, CoreRole::AcpCore).await.is_err());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
+
+    #[tokio::test]
+    async fn probe_with_pid_fails_when_nothing_listens() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::AcpCore);
+        assert!(probe_endpoint_with_pid(&endpoint, CoreRole::AcpCore)
+            .await
+            .is_err());
     }
 }

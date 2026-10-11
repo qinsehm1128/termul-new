@@ -1,6 +1,7 @@
 import { LEGACY } from '@shared/brand'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import {
+  Activity,
   AlertCircle,
   Bot,
   CheckCircle2,
@@ -27,6 +28,7 @@ import { KeybindingSchemePicker } from '@/components/KeybindingSchemePicker'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
 import { CliResumeDefaultsSettings } from '@/components/settings/CliResumeDefaultsSettings'
+import { CoreRuntimeSettings } from '@/components/settings/CoreRuntimeSettings'
 import { DataMigrationSettings } from '@/components/settings/DataMigrationSettings'
 import { MacosPermissionsSettings } from '@/components/settings/MacosPermissionsSettings'
 import { RemoteAccessSettings } from '@/components/settings/RemoteAccessSettings'
@@ -153,6 +155,8 @@ const APP_PREF_CATEGORY_DEFS = [
     labelKey: 'categories.dataMigration',
     icon: <HardDriveDownload size={16} />
   },
+  // Desktop-only; same filtering.
+  { id: 'runtime', labelKey: 'categories.runtime', icon: <Activity size={16} /> },
   { id: 'diagnostics', labelKey: 'categories.diagnostics', icon: <FileText size={16} /> },
   { id: 'reset', labelKey: 'categories.reset', icon: <RotateCcw size={16} /> }
 ] as const
@@ -350,6 +354,12 @@ const APP_PREF_SEARCH_DEFS = [
       // carry a legacy brand literal.
       LEGACY.displayName.toLowerCase()
     ]
+  },
+  {
+    categoryId: 'runtime',
+    labelKey: 'categories.runtime',
+    descriptionKey: 'runtime.description',
+    keywords: ['core', 'process', 'pid', 'restart', 'terminal core', 'acp core', 'background']
   },
   {
     categoryId: 'diagnostics',
@@ -2183,6 +2193,27 @@ export default function AppPreferences(): React.JSX.Element {
           )}
 
           <SettingsDivider label="Diagnostics & reset" />
+
+          {/* The background Cores and what they hold. Desktop-only: a browser
+              client has no local processes to inspect. */}
+          {isSettingsCategoryAvailable('runtime', HOST) && (
+            <SettingsSection id="runtime">
+              <div className="flex items-start gap-6 border-b border-border/70 pb-6">
+                <div className="w-1/3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <Activity size={16} className="text-primary" />
+                    <h2 className="text-lg font-medium text-foreground">
+                      {tSettings('categories.runtime')}
+                    </h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {tSettings('runtime.description')}
+                  </p>
+                </div>
+                <CoreRuntimeSettings />
+              </div>
+            </SettingsSection>
+          )}
 
           <SettingsSection id="diagnostics">
             <div className="flex items-start gap-6 border-b border-border/70 pb-6">

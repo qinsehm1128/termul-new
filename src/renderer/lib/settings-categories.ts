@@ -14,7 +14,9 @@ const PLATFORM_ONLY_CATEGORIES: Record<string, 'mac' | 'desktop'> = {
   privacy: 'mac',
   // Reads and copies roots on the machine the app is installed on. A browser
   // client has no pre-rename desktop install of its own to merge.
-  'data-migration': 'desktop'
+  'data-migration': 'desktop',
+  // Lists and restarts the local Core processes; a browser client has none.
+  runtime: 'desktop'
 }
 
 export interface SettingsHost {
