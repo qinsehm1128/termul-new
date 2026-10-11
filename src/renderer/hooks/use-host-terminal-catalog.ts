@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
+import { isLocalTerminalSpawnEvent } from '@/lib/local-terminal-spawns'
 import { logFrontendError } from '@/lib/log-api'
 import { terminalApi } from '@/lib/terminal-api'
-import { consumeLocalSpawnEvent, isLocalTerminalSpawnInFlight } from '@/lib/terminal-spawn'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -14,7 +14,7 @@ export function useHostTerminalCatalog(): void {
   useEffect(() => {
     if (!terminalApi.onSpawned) return undefined
     return terminalApi.onSpawned((event) => {
-      if (isLocalTerminalSpawnInFlight() || consumeLocalSpawnEvent(event.terminalId)) return
+      if (isLocalTerminalSpawnEvent(event.terminalId)) return
       const adoptedId = useTerminalStore.getState().adoptRemoteProjectTerminal(event)
       if (!adoptedId) return
       if (useProjectStore.getState().activeProjectId === event.projectId) {

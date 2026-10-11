@@ -1,4 +1,4 @@
-import type { TerminalSpawnedEvent } from '@shared/types/ipc.types'
+import type { SpawnedTerminal, TerminalSpawnedEvent } from '@shared/types/ipc.types'
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -29,6 +29,7 @@ vi.mock('@/stores/workspace-store', () => ({
   }
 }))
 
+import { trackLocalTerminalSpawn } from '@/lib/local-terminal-spawns'
 import { useHostTerminalCatalog } from './use-host-terminal-catalog'
 
 describe('useHostTerminalCatalog', () => {
@@ -80,6 +81,39 @@ describe('useHostTerminalCatalog', () => {
       shell: 'zsh'
     })
 
+    expect(ensureTerminalTab).not.toHaveBeenCalled()
+  })
+
+  // A restore spawn's own record lands only when the restore commits; adopting
+  // the host event first left two records on one PTY.
+  it('ignores the spawn event of a terminal this renderer is creating', async () => {
+    let listener: ((event: TerminalSpawnedEvent) => void) | undefined
+    onSpawned.mockImplementation((callback: (event: TerminalSpawnedEvent) => void) => {
+      listener = callback
+      return () => undefined
+    })
+    adoptRemoteProjectTerminal.mockReturnValue('pty-restore')
+    renderHook(() => useHostTerminalCatalog())
+
+    let reply: () => void = () => undefined
+    const spawn = trackLocalTerminalSpawn(
+      () =>
+        new Promise((resolve) => {
+          reply = () => resolve({ success: true, data: { id: 'pty-restore' } as SpawnedTerminal })
+        })
+    )
+    listener?.({
+      terminalId: 'pty-restore',
+      projectId: 'project-1',
+      cwd: '/tmp/demo',
+      cols: 80,
+      rows: 24,
+      shell: 'zsh'
+    })
+    reply()
+    await spawn
+
+    expect(adoptRemoteProjectTerminal).not.toHaveBeenCalled()
     expect(ensureTerminalTab).not.toHaveBeenCalled()
   })
 })
