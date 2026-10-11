@@ -207,6 +207,12 @@ jobs:
     # resolved earlier and is visible to every step's `if`.
     env:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      # Self-signed code signing for macOS when no Apple Developer ID is
+      # configured. Ad-hoc signatures identify the app by its binary hash, so
+      # every release looked like a new app to macOS and lost its privacy
+      # grants (folders, automation, local network). A fixed certificate gives
+      # every release the same identity. APPLE_CERTIFICATE takes precedence.
+      MACOS_CODESIGN_CERTIFICATE: ${{ secrets.MACOS_CODESIGN_CERTIFICATE }}
     strategy:
       fail-fast: false
       matrix:
@@ -279,6 +285,51 @@ jobs:
             printf '  - %s\n' "${missing[@]}" >&2
             exit 1
           fi
+
+      # Imported into a keychain of our own rather than through Tauri's
+      # APPLE_CERTIFICATE path: that path only accepts Apple-issued certificate
+      # names (with a team ID). Tauri then signs with APPLE_SIGNING_IDENTITY.
+      - name: Import self-signed macOS code signing certificate
+        if: >-
+          startsWith(matrix.platform, 'macos-') && env.APPLE_CERTIFICATE == '' &&
+          env.MACOS_CODESIGN_CERTIFICATE != ''
+        shell: bash
+        env:
+          MACOS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CODESIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MACOS_CODESIGN_CERTIFICATE_PASSWORD:-}" ]]; then
+            echo "MACOS_CODESIGN_CERTIFICATE_PASSWORD is required with MACOS_CODESIGN_CERTIFICATE." >&2
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/se-codesign.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          certificate="$RUNNER_TEMP/se-codesign.p12"
+          printf '%s' "$MACOS_CODESIGN_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" \
+            -P "$MACOS_CODESIGN_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$certificate"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          existing_keychains=()
+          while IFS= read -r line; do
+            line="${line//\"/}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            [[ -n "$line" ]] && existing_keychains+=("$line")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing_keychains[@]}"
+          # Self-signed, so not trusted: list without -v and take its SHA-1.
+          identity="$(security find-identity -p codesigning "$keychain" \
+            | awk '/^[[:space:]]*1\)/ { print $2; exit }')"
+          if [[ ! "$identity" =~ ^[0-9A-F]{40}$ ]]; then
+            echo "No code signing identity found in MACOS_CODESIGN_CERTIFICATE." >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "Signing macOS bundles with self-signed identity $identity"
 
       - name: Install Linux dependencies
         if: matrix.runner == 'ubuntu-22.04'
@@ -389,7 +440,9 @@ jobs:
           args: >-
             ${{ matrix.args }}${{ (matrix.platform == 'windows-x64' &&
             needs.changelog.outputs.is_prerelease == 'true') && ' --bundles nsis' || '' }}
-            --config src-tauri/tauri.conf.prod.json -- --locked
+            --config src-tauri/tauri.conf.prod.json${{ (startsWith(matrix.platform, 'macos-') &&
+            env.APPLE_CERTIFICATE == '' && env.MACOS_CODESIGN_CERTIFICATE != '') &&
+            ' --config src-tauri/tauri.conf.selfsigned.json' || '' }} -- --locked
 
       - name: Persist Tauri artifact paths
         shell: bash
@@ -516,6 +569,35 @@ jobs:
           codesign --verify --strict --verbose=2 "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
           xcrun stapler validate "$dmg"
+
+      # A self-signed bundle is not notarized, so spctl/stapler do not apply.
+      # What matters is that it is signed by the fixed certificate: its
+      # designated requirement must name the certificate, not a cdhash.
+      - name: Verify self-signed macOS bundle
+        if: >-
+          startsWith(matrix.platform, 'macos-') && env.APPLE_CERTIFICATE == '' &&
+          env.MACOS_CODESIGN_CERTIFICATE != ''
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=("src-tauri/target/$RUST_TARGET/release/bundle/macos"/*.app)
+          if [[ "${#apps[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS app bundle." >&2
+            exit 1
+          fi
+          app="${apps[0]}"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          requirement="$(codesign -d -r- "$app" 2>&1)"
+          printf '%s\n' "$requirement"
+          expected_root="certificate root = H\"$(tr 'A-F' 'a-f' <<< "$APPLE_SIGNING_IDENTITY")\""
+          if ! grep -q 'identifier "com.se-manager.app"' <<< "$requirement" ||
+            ! grep -qF "$expected_root" <<< "$requirement"; then
+            echo "The app is not signed by the self-signed certificate." >&2
+            exit 1
+          fi
 
       - name: Collect platform release assets and updater manifest
         shell: bash
