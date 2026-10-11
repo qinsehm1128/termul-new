@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PaneNode } from '@/types/workspace.types'
 import {
   __TEST_RESET_LOCKS__,
+  dropDuplicatePtyRecords,
   normalizeShellForStartup,
   RESUME_COMMAND_DELAY_MS,
   useTerminalRestore
@@ -272,6 +273,43 @@ describe('normalizeShellForStartup', () => {
     })
 
     expect(normalizeShellForStartup('cmd')).toBe('cmd')
+  })
+})
+
+describe('dropDuplicatePtyRecords', () => {
+  const record = (id: string, ptyId?: string) => ({ id, name: id, shell: 'bash', ptyId })
+
+  it('keeps the active record of two on one PTY', () => {
+    const layout = {
+      activeTerminalId: 'b',
+      terminals: [record('a', 'pty-1'), record('b', 'pty-1'), record('c', 'pty-2')],
+      updatedAt: ''
+    }
+    expect(dropDuplicatePtyRecords(layout).terminals.map((terminal) => terminal.id)).toEqual([
+      'b',
+      'c'
+    ])
+  })
+
+  it('keeps the first when the active record is elsewhere', () => {
+    const layout = {
+      activeTerminalId: 'c',
+      terminals: [record('a', 'pty-1'), record('b', 'pty-1'), record('c', 'pty-2')],
+      updatedAt: ''
+    }
+    expect(dropDuplicatePtyRecords(layout).terminals.map((terminal) => terminal.id)).toEqual([
+      'a',
+      'c'
+    ])
+  })
+
+  it('leaves records without a PTY and a clean layout untouched', () => {
+    const layout = {
+      activeTerminalId: null,
+      terminals: [record('a'), record('b'), record('c', 'pty-1')],
+      updatedAt: ''
+    }
+    expect(dropDuplicatePtyRecords(layout)).toBe(layout)
   })
 })
 
@@ -928,6 +966,61 @@ describe('useTerminalRestore', () => {
         expect.any(String)
       )
     })
+  })
+
+  // A layout saved while restore spawns were adopted a second time by the host
+  // terminal catalog holds two records on one PTY. Restoring both would adopt
+  // it once and spawn an extra shell for the copy on every restart.
+  it('restores one terminal for two saved records on the same live PTY', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'tab-1',
+      terminals: [
+        {
+          id: 'pty-shared',
+          name: 'project-a',
+          shell: 'bash',
+          cwd: '/projects/a',
+          ptyId: 'pty-shared'
+        },
+        { id: 'tab-1', name: 'Terminal 1', shell: 'bash', cwd: '/projects/a', ptyId: 'pty-shared' }
+      ],
+      updatedAt: '2026-10-11T00:00:00.000Z'
+    })
+    mockTerminalList.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'pty-shared',
+          shell: 'bash',
+          cwd: '/projects/a',
+          pid: 12,
+          cols: 80,
+          rows: 24,
+          workspaceRefTracked: false,
+          latestSeq: 40,
+          active: true,
+          lifecycle: 'active',
+          projectId: 'project-a'
+        }
+      ]
+    })
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalStoreState.setTerminals).toHaveBeenCalled()
+    })
+    const restored = mockTerminalStoreState.setTerminals.mock.calls.at(-1)?.[0] as Array<{
+      name: string
+      ptyId?: string
+    }>
+    expect(restored.map((terminal) => [terminal.name, terminal.ptyId])).toEqual([
+      ['Terminal 1', 'pty-shared']
+    ])
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
   })
 
   it('falls back to spawn when the persisted ptyId is absent from list', async () => {
