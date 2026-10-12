@@ -20,15 +20,21 @@
 //! * **Coalesce and bound.** Events are merged per path over a short quiet
 //!   window and delivered in bounded batches, so a build or an `npm install`
 //!   cannot flood the renderer.
-//! * **Never join on the UI thread.** Replacing the watcher hands the old one to
-//!   the blocking pool to drop.
+//! * **One stream for the app's lifetime.** A root change edits the path set
+//!   of the existing watcher in a single batch. On macOS every `watch()` call
+//!   stops and restarts the whole FSEvents stream, and every new stream is a
+//!   new `fseventsd` client; rebuilding the watcher per change once left an old
+//!   build with ~1000 live stream threads, pinned at fseventsd's 512-client
+//!   limit per process.
+//! * **Never join on the UI thread.** Editing the path set joins the stream's
+//!   thread, so root changes run on the blocking pool.
 
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 
@@ -356,6 +362,13 @@ impl Coalescer {
 struct Inner {
     watcher: Option<RecommendedWatcher>,
     roots: Vec<PathBuf>,
+    /// The roots the event callback judges paths against. Shared with the
+    /// callback so a root change edits it in place instead of needing a new
+    /// watcher to capture a new list.
+    filter_roots: Arc<RwLock<Vec<PathBuf>>>,
+    /// How many watchers this service has created. Root changes must not move
+    /// it; only going from no roots to some does.
+    watchers_created: u64,
     sink: Option<Channel<Batch>>,
 }
 
@@ -371,6 +384,8 @@ impl FsWatcherService {
             inner: Mutex::new(Inner {
                 watcher: None,
                 roots: Vec::new(),
+                filter_roots: Arc::new(RwLock::new(Vec::new())),
+                watchers_created: 0,
                 sink: None,
             }),
             tx,
@@ -464,10 +479,11 @@ impl FsWatcherService {
     /// Point the watcher at exactly `roots` (recursively), replacing whatever it
     /// watched before.
     ///
-    /// Builds the replacement before releasing the old one so no event window is
-    /// lost, and hands the old watcher to the blocking pool to drop — dropping a
-    /// `notify` watcher joins its backend thread, which must never happen on the
-    /// thread servicing the UI.
+    /// Only the difference is applied, through one `paths_mut` batch: removed
+    /// roots go, new ones are added, and the stream restarts once. A root that
+    /// failed last time is not in `roots`, so an identical request retries it.
+    ///
+    /// Blocks while the stream's thread is joined; call it off the UI thread.
     pub fn set_roots(&self, roots: Vec<PathBuf>) -> Result<(), String> {
         let desired = dedupe_roots(&roots);
 
@@ -480,46 +496,84 @@ impl FsWatcherService {
         if desired.is_empty() {
             let previous = inner.watcher.take();
             inner.roots.clear();
+            write_roots(&inner.filter_roots, Vec::new());
             drop(inner);
             release_watcher(previous);
             return Ok(());
         }
 
-        let tx = self.tx.clone();
-        // The filter needs the roots so it can judge each path *inside* its own
-        // root. A fresh watcher is built for every root change, so the set the
-        // closure captures is always the one it is watching.
-        //
-        // Watching still uses the path as given; only the filter is resolved.
-        let filter_roots = resolve_filter_roots(&desired);
-        let mut watcher = RecommendedWatcher::new(
-            move |result: notify::Result<notify::Event>| {
-                let Ok(event) = result else { return };
-                for change in expand_event(event, &filter_roots) {
-                    let _ = tx.send(change);
-                }
-            },
-            Config::default(),
-        )
-        .map_err(|err| format!("failed to create fs watcher: {err}"))?;
+        let Inner {
+            watcher,
+            roots: watched_roots,
+            filter_roots,
+            watchers_created,
+            ..
+        } = &mut *inner;
 
-        // A root that cannot be watched must not take the others down with it.
-        // One stale path in a group of twenty projects used to fail the whole
-        // call, leaving nothing watched — and the failure path dropped this
-        // half-registered watcher inline, joining its backend thread while
-        // still holding the state lock.
+        let mut active = match watcher.take() {
+            Some(existing) => existing,
+            None => {
+                *watchers_created += 1;
+                log::info!("[fs-watcher] creating watcher #{watchers_created}");
+                let tx = self.tx.clone();
+                let callback_roots = Arc::clone(filter_roots);
+                RecommendedWatcher::new(
+                    move |result: notify::Result<notify::Event>| {
+                        let Ok(event) = result else { return };
+                        let roots = callback_roots
+                            .read()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        for change in expand_event(event, &roots) {
+                            let _ = tx.send(change);
+                        }
+                    },
+                    Config::default(),
+                )
+                .map_err(|err| format!("failed to create fs watcher: {err}"))?
+            }
+        };
+
+        // Stops the stream; `commit` starts one stream for the whole new set.
+        let mut paths = active.paths_mut();
+        for root in watched_roots.iter() {
+            if !desired.contains(root) {
+                // Already gone from the set means nothing to undo.
+                let _ = paths.remove(root);
+            }
+        }
+
+        // A root that cannot be watched must not take the others down with it:
+        // one stale path in a group of twenty projects used to leave nothing
+        // watched at all.
         let mut failures: Vec<String> = Vec::new();
         let mut watched: Vec<PathBuf> = Vec::new();
         for root in &desired {
-            match watcher.watch(root, RecursiveMode::Recursive) {
+            if watched_roots.contains(root) {
+                watched.push(root.clone());
+                continue;
+            }
+            match paths.add(root, RecursiveMode::Recursive) {
                 Ok(()) => watched.push(root.clone()),
                 Err(err) => failures.push(format!("{}: {err}", root.display())),
             }
         }
 
-        if watched.is_empty() {
+        // Updated while the stream is stopped, so no event is judged against
+        // the wrong set.
+        write_roots(filter_roots, resolve_filter_roots(&watched));
+        if let Err(err) = paths.commit() {
+            failures.push(format!("restart: {err}"));
+        }
+
+        // What is actually watched, not what was asked for. Caching the request
+        // would let the `inner.roots == desired` short-circuit above turn a root
+        // that was merely missing at this moment into one that is never watched
+        // again.
+        *watched_roots = watched;
+
+        if watched_roots.is_empty() {
             drop(inner);
-            release_watcher(Some(watcher));
+            release_watcher(Some(active));
             return Err(format!(
                 "failed to watch any root ({})",
                 failures.join("; ")
@@ -528,23 +582,20 @@ impl FsWatcherService {
         if !failures.is_empty() {
             log::warn!(
                 "[fs-watcher] watching {}/{} roots; skipped {}",
-                watched.len(),
+                watched_roots.len(),
                 desired.len(),
                 failures.join("; ")
             );
         }
-
-        let previous = inner.watcher.replace(watcher);
-        // What is actually watched, not what was asked for. Caching the request
-        // would let the `inner.roots == desired` short-circuit above turn a root
-        // that was merely missing at this moment into one that is never watched
-        // again: the next identical request would be answered from cache and
-        // never retry it.
-        inner.roots = watched;
-        drop(inner);
-        release_watcher(previous);
+        *watcher = Some(active);
         Ok(())
     }
+}
+
+fn write_roots(target: &RwLock<Vec<PathBuf>>, roots: Vec<PathBuf>) {
+    *target
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = roots;
 }
 
 /// Drop a watcher somewhere that can afford to block.
@@ -572,7 +623,10 @@ pub async fn fs_watcher_set_roots(
         .filter(|root| !root.trim().is_empty())
         .map(PathBuf::from)
         .collect();
-    service.set_roots(paths)
+    let service = Arc::clone(&service);
+    tauri::async_runtime::spawn_blocking(move || service.set_roots(paths))
+        .await
+        .map_err(|err| format!("fs watcher task failed: {err}"))?
 }
 
 #[cfg(test)]
@@ -1038,6 +1092,119 @@ mod tests {
         // Nothing watchable at all is still an error — that one the caller needs.
         let all_bad = service.set_roots(vec![PathBuf::from("/se-manager-missing-root-2-xyz")]);
         assert!(all_bad.is_err());
+    }
+
+    /// A sink that records every delivered path.
+    fn recording_sink() -> (Channel<Batch>, Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                let batch: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+                let mut seen = record.lock().unwrap();
+                for change in batch {
+                    seen.push(change["path"].as_str().unwrap().to_string());
+                }
+            }
+            Ok(())
+        });
+        (channel, seen)
+    }
+
+    fn wait_for_path(seen: &Mutex<Vec<String>>, name: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if seen.lock().unwrap().iter().any(|path| path.ends_with(name)) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    fn filter_roots_of(service: &FsWatcherService) -> Vec<PathBuf> {
+        service.lock_inner().filter_roots.read().unwrap().clone()
+    }
+
+    #[test]
+    fn root_changes_reuse_the_watcher_and_retarget_its_filter() {
+        let base = tempfile::tempdir().expect("temp dir");
+        let first = base.path().join("first");
+        let second = base.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let service = FsWatcherService::new();
+
+        service.set_roots(vec![first.clone()]).unwrap();
+        assert_eq!(
+            filter_roots_of(&service),
+            resolve_filter_roots(&[first.clone()])
+        );
+
+        service.set_roots(vec![second.clone()]).unwrap();
+        service
+            .set_roots(vec![first.clone(), second.clone()])
+            .unwrap();
+        assert_eq!(service.lock_inner().watchers_created, 1);
+        assert_eq!(
+            filter_roots_of(&service),
+            resolve_filter_roots(&[first.clone(), second.clone()])
+        );
+
+        // No roots releases the watcher and empties the filter; the next set
+        // needs a new watcher.
+        service.set_roots(Vec::new()).unwrap();
+        assert!(service.lock_inner().watcher.is_none());
+        assert!(filter_roots_of(&service).is_empty());
+        service.set_roots(vec![first]).unwrap();
+        assert_eq!(service.lock_inner().watchers_created, 2);
+    }
+
+    /// Needs a responsive `fseventsd` on macOS: when the daemon is saturated by
+    /// another process it stops delivering to new clients, and this fails with
+    /// no event at all.
+    #[test]
+    fn a_root_change_moves_event_delivery_to_the_new_roots() {
+        let base = tempfile::tempdir().expect("temp dir");
+        let first = base.path().join("first");
+        // Under a directory named like an excluded segment: if the filter kept
+        // judging against the old roots, this root's events would fall back to
+        // whole-path matching and be dropped.
+        let second = base.path().join("build").join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        let service = FsWatcherService::new();
+        let (sink, seen) = recording_sink();
+        service.set_sink(sink);
+
+        service.set_roots(vec![first.clone()]).unwrap();
+        std::fs::write(first.join("one.txt"), "1").unwrap();
+        assert!(
+            wait_for_path(&seen, "one.txt"),
+            "first root delivers events"
+        );
+
+        service.set_roots(vec![second.clone()]).unwrap();
+
+        std::fs::write(first.join("stale.txt"), "1").unwrap();
+        std::fs::write(second.join("two.txt"), "1").unwrap();
+        assert!(wait_for_path(&seen, "two.txt"), "new root delivers events");
+        assert!(
+            !seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path.ends_with("stale.txt")),
+            "a removed root stops delivering"
+        );
+
+        service.set_roots(vec![first.clone(), second]).unwrap();
+        std::fs::write(first.join("three.txt"), "1").unwrap();
+        assert!(
+            wait_for_path(&seen, "three.txt"),
+            "an added root delivers events"
+        );
     }
 
     #[test]
