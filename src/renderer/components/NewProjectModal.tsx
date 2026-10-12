@@ -5,6 +5,7 @@ import { ChevronDown, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { runCloneWithProgress } from '@/components/CloneProgressToast'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { loadCloneParentHistory, rememberCloneParent } from '@/lib/clone-parent-history'
@@ -197,19 +198,17 @@ export function NewProjectModal({
     if (!parsedRepo || !trimmedName || !parentDir) return
     const shellToUse = selectedShell || fallbackShell
 
-    const runClone = async () => {
-      const clonedPath = await gitApi.clone(parsedRepo.cloneUrl, parentDir, parsedRepo.repoName)
+    void runCloneWithProgress({
+      repoName: parsedRepo.repoName,
+      clone: (cloneId, onProgress) =>
+        gitApi.clone(cloneId, parsedRepo.cloneUrl, parentDir, parsedRepo.repoName, onProgress),
+      cancel: (cloneId) => gitApi.cancelClone(cloneId)
+    }).then((clonedPath) => {
+      if (clonedPath === null) return
       void rememberCloneParent(parentDir).catch(() => {
         // A failed history write must not undo a successful clone.
       })
       onCreateProject(trimmedName, selectedColor, clonedPath, shellToUse)
-    }
-
-    toast.promise(runClone(), {
-      loading: t('cloning', { name: parsedRepo.repoName }),
-      success: t('cloned', { name: parsedRepo.repoName }),
-      error: (err: unknown) =>
-        t('cloneFailed', { message: err instanceof Error ? err.message : String(err) })
     })
     onClose()
   }, [
@@ -219,7 +218,6 @@ export function NewProjectModal({
     selectedShell,
     fallbackShell,
     selectedColor,
-    t,
     onCreateProject,
     onClose
   ])

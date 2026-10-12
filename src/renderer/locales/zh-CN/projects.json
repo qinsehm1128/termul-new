@@ -78,6 +78,21 @@
   "cloning": "正在克隆 {{name}}…",
   "cloned": "已克隆 {{name}}",
   "cloneFailed": "克隆失败：{{message}}",
+  "cloneProgress": {
+    "phase": {
+      "connecting": "正在连接",
+      "preparing": "服务器正在准备",
+      "receiving": "接收对象",
+      "resolving": "解析差异",
+      "checkout": "检出文件"
+    },
+    "elapsed": "已用 {{time}}",
+    "cancel": "取消",
+    "cancelling": "正在取消克隆 {{name}}…",
+    "cancelled": "已取消克隆 {{name}}",
+    "stalled": "已经 {{seconds}} 秒没有新进度，连接可能卡住了，可以取消后重试。",
+    "log": "git 输出"
+  },
   "noDirectorySelected": "未选择目录",
   "optionalDefaultDirectory": "可选：留空以使用默认项目目录",
   "browse": "浏览",
