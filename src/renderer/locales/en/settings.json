@@ -69,7 +69,11 @@
     "emptyMermaidDiagram": "Empty Mermaid diagram",
     "loading": "Loading...",
     "frontmatterKeyEmpty": "Key cannot be empty",
-    "frontmatterKeyExists": "Key already exists"
+    "frontmatterKeyExists": "Key already exists",
+    "switchToPreview": "Switch to preview",
+    "previewFailed": "Cannot preview this file: unsupported format or damaged file",
+    "actualSize": "Actual size",
+    "fitToWindow": "Fit to window"
   },
   "customAgents": {
     "nameRequired": "Agent name is required",

@@ -1,10 +1,12 @@
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTocSettings } from '@/hooks/use-toc-settings'
+import { getPreviewKind, isDiskPreview, previewSourceUrl, svgDataUrl } from '@/lib/file-preview'
 import type { EditorFileState } from '@/stores/editor-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { CodeEditor } from './CodeEditor'
 import { EditorToolbar } from './EditorToolbar'
+import { FilePreview } from './FilePreview'
 import { MarkdownEditor } from './MarkdownEditor'
 
 interface EditorPanelProps {
@@ -45,10 +47,12 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
     [filePath, updateScrollTop]
   )
 
+  const previewKind = getPreviewKind(filePath)
+
   const handleToggleViewMode = useCallback(() => {
     if (!fileState) return
-    const newMode = fileState.viewMode === 'markdown' ? 'code' : 'markdown'
-    setViewMode(filePath, newMode)
+    const renderedMode = fileState.language === 'markdown' ? 'markdown' : 'preview'
+    setViewMode(filePath, fileState.viewMode === 'code' ? renderedMode : 'code')
   }, [filePath, fileState, setViewMode])
 
   if (!fileState) {
@@ -59,19 +63,29 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
     )
   }
 
+  if (isDiskPreview(previewKind) && previewKind) {
+    return (
+      <FilePreview kind={previewKind} src={previewSourceUrl(filePath, fileState.lastModified)} />
+    )
+  }
+
   const isMarkdownFile = fileState.language === 'markdown'
+  const isSvgFile = previewKind === 'svg'
 
   return (
     <div className="w-full h-full flex flex-col">
-      {isMarkdownFile && (
+      {(isMarkdownFile || isSvgFile) && (
         <EditorToolbar
           viewMode={fileState.viewMode}
           onToggleViewMode={handleToggleViewMode}
           filePath={filePath}
+          isMarkdown={isMarkdownFile}
         />
       )}
       <div className="flex-1 relative overflow-hidden">
-        {isMarkdownFile && fileState.viewMode === 'markdown' ? (
+        {isSvgFile && fileState.viewMode === 'preview' ? (
+          <FilePreview kind="svg" src={svgDataUrl(fileState.content)} />
+        ) : isMarkdownFile && fileState.viewMode === 'markdown' ? (
           <MarkdownEditor
             filePath={filePath}
             content={fileState.content}

@@ -11,6 +11,7 @@ import {
 } from '@/lib/editor-auto-save'
 import { flushEditorContent } from '@/lib/editor-content-flush'
 import { markEditorSelfSave } from '@/lib/editor-self-save'
+import { getPreviewKind, isDiskPreview } from '@/lib/file-preview'
 import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 
 const EDITOR_TAB_LIMIT = 15
@@ -49,9 +50,31 @@ function detectLanguage(filePath: string): string {
   return map[ext] || ''
 }
 
-function getDefaultViewMode(filePath: string): 'code' | 'markdown' {
+export type EditorViewMode = 'code' | 'markdown' | 'preview'
+
+function getDefaultViewMode(filePath: string): EditorViewMode {
   const ext = getExtname(filePath).slice(1).toLowerCase()
-  return ext === 'md' ? 'markdown' : 'code'
+  if (ext === 'md') return 'markdown'
+  return getPreviewKind(filePath) ? 'preview' : 'code'
+}
+
+/**
+ * Reads what a tab needs from disk. Images and media have no text buffer: the
+ * preview loads them itself, so only their modification time is read.
+ */
+async function readEditorSource(
+  path: string
+): Promise<
+  { success: true; content: string; modifiedAt: number } | { success: false; error: string }
+> {
+  if (isDiskPreview(getPreviewKind(path))) {
+    const info = await filesystemApi.getFileInfo(path)
+    if (!info.success) return { success: false, error: info.error }
+    return { success: true, content: '', modifiedAt: info.data.modifiedAt }
+  }
+  const result = await filesystemApi.readFile(path)
+  if (!result.success) return { success: false, error: result.error }
+  return { success: true, content: result.data.content, modifiedAt: result.data.modifiedAt }
 }
 
 export interface EditorFileState {
@@ -61,7 +84,7 @@ export interface EditorFileState {
   isDirty: boolean
   language: string
   lastModified: number
-  viewMode: 'code' | 'markdown'
+  viewMode: EditorViewMode
   cursorPosition: { line: number; col: number }
   scrollTop: number
   operationStatus: 'idle' | 'saving' | 'reloading' | 'saved'
@@ -77,7 +100,7 @@ export interface EditorState {
   updateContent: (path: string, content: string) => void
   saveFile: (path: string) => Promise<boolean>
   saveAllDirty: () => Promise<void>
-  setViewMode: (path: string, mode: 'code' | 'markdown') => void
+  setViewMode: (path: string, mode: EditorViewMode) => void
   updateCursorPosition: (path: string, line: number, col: number) => void
   updateScrollTop: (path: string, scrollTop: number) => void
   reloadFile: (path: string) => Promise<void>
@@ -104,7 +127,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Read file content. readFile() now performs size + binary checks in a
     // single IPC round-trip pair (stat + readTextFile), avoiding the previous
     // getFileInfo() pre-check that doubled the IPC cost (issue #378).
-    const result = await filesystemApi.readFile(path)
+    const result = await readEditorSource(path)
     if (!result.success) {
       throw new Error(result.error)
     }
@@ -140,11 +163,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const fileState: EditorFileState = {
       filePath: path,
-      content: result.data.content,
-      originalContent: result.data.content,
+      content: result.content,
+      originalContent: result.content,
       isDirty: false,
       language: detectLanguage(path),
-      lastModified: result.data.modifiedAt,
+      lastModified: result.modifiedAt,
       viewMode: getDefaultViewMode(path),
       cursorPosition: { line: 1, col: 1 },
       scrollTop: 0,
@@ -297,7 +320,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
-  setViewMode: (path: string, mode: 'code' | 'markdown'): void => {
+  setViewMode: (path: string, mode: EditorViewMode): void => {
     const { openFiles } = get()
     const file = openFiles.get(path)
     if (!file) return
@@ -341,7 +364,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ openFiles: newFiles })
 
     try {
-      const result = await filesystemApi.readFile(path)
+      const result = await readEditorSource(path)
       if (!result.success) {
         const resetFiles = new Map(get().openFiles)
         const current = resetFiles.get(path)
@@ -361,10 +384,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (bufferUnchanged) {
         updatedFiles.set(path, {
           ...current,
-          content: result.data.content,
-          originalContent: result.data.content,
+          content: result.content,
+          originalContent: result.content,
           isDirty: false,
-          lastModified: result.data.modifiedAt,
+          lastModified: result.modifiedAt,
           operationStatus: 'idle'
         })
       } else {

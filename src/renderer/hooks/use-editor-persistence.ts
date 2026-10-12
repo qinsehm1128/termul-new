@@ -3,8 +3,8 @@ import { useConversationStore } from '@/features/agent-session/stores/conversati
 import { persistenceApi } from '@/lib/api'
 import { randomUUID } from '@/lib/uuid'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import type { EditorFileState } from '@/stores/editor-store'
-import { useEditorStore } from '@/stores/editor-store'
+import type { EditorFileState, EditorViewMode } from '@/stores/editor-store'
+import { getDefaultViewMode, useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -31,7 +31,7 @@ interface PersistedEditorFile {
   filePath: string
   cursorPosition: { line: number; col: number }
   scrollTop: number
-  viewMode: 'code' | 'markdown'
+  viewMode: EditorViewMode
   isDirty: boolean
   draftContent?: string
   lastModified: number
@@ -671,7 +671,7 @@ export function useEditorPersistence(
               file.cursorPosition.col
             )
             editorStore.updateScrollTop(file.filePath, file.scrollTop)
-            if (file.viewMode !== 'code') {
+            if (file.viewMode !== getDefaultViewMode(file.filePath)) {
               editorStore.setViewMode(file.filePath, file.viewMode)
             }
             if (file.isDirty && file.draftContent) {

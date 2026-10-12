@@ -26,6 +26,7 @@ import {
   type PendingRevealLineWindow
 } from '@/lib/editor-events'
 import { readPasteboardFilePaths } from '@/lib/file-pasteboard'
+import { getPreviewKind } from '@/lib/file-preview'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -417,8 +418,9 @@ export function FileExplorer({
       try {
         await useEditorStore.getState().openFile(path)
         useWorkspaceStore.getState().addEditorTab(path)
-      } catch {
-        // File couldn't be opened (binary, too large, etc.)
+      } catch (error) {
+        // Binary, too large, unreadable: say why instead of ignoring the click.
+        toast.error(error instanceof Error ? error.message : String(error))
       }
     },
     [selectPath]
@@ -989,8 +991,9 @@ export function FileExplorer({
       try {
         await useEditorStore.getState().openFile(filePath)
         useWorkspaceStore.getState().addEditorTab(filePath)
-        const isMarkdown = /\.md$/i.test(filePath)
-        if (isMarkdown) {
+        // Rendered views have no lines to reveal; jump to the source instead.
+        const hasRenderedView = /\.md$/i.test(filePath) || getPreviewKind(filePath) === 'svg'
+        if (hasRenderedView) {
           useEditorStore.getState().setViewMode(filePath, 'code')
         }
         useEditorStore.getState().updateCursorPosition(filePath, lineNumber, 1)

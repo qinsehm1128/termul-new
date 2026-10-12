@@ -101,12 +101,17 @@ const mockProjectState = {
   ]
 }
 
-vi.mock('@/stores/editor-store', () => ({
-  useEditorStore: {
-    getState: vi.fn(() => mockEditorState),
-    subscribe: vi.fn(() => vi.fn())
+vi.mock('@/stores/editor-store', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/stores/editor-store')>('@/stores/editor-store')
+  return {
+    getDefaultViewMode: actual.getDefaultViewMode,
+    useEditorStore: {
+      getState: vi.fn(() => mockEditorState),
+      subscribe: vi.fn(() => vi.fn())
+    }
   }
-}))
+})
 
 vi.mock('@/stores/file-explorer-store', () => ({
   useFileExplorerStore: {
@@ -513,6 +518,39 @@ describe('useEditorPersistence', () => {
     mockConversationState.activeConversationId = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
     persistState('project-a')
     expect(mockPersistenceWriteDebounced).not.toHaveBeenCalled()
+  })
+
+  it('restores a view only when it differs from how the file opens', async () => {
+    const persistedFile = (filePath: string, viewMode: 'code' | 'markdown' | 'preview') => ({
+      filePath,
+      cursorPosition: { line: 1, col: 1 },
+      scrollTop: 0,
+      viewMode,
+      isDirty: false,
+      lastModified: 10
+    })
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [
+          persistedFile('/projects/a/icon.svg', 'code'),
+          persistedFile('/projects/a/logo.svg', 'preview'),
+          persistedFile('/projects/a/README.md', 'markdown'),
+          persistedFile('/projects/a/main.ts', 'code')
+        ],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null,
+        paneLayout: { type: 'leaf', id: 'pane-empty', tabs: [], activeTabId: null }
+      }
+    })
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockEditorState.openFile).toHaveBeenCalledWith('/projects/a/main.ts')
+    })
+    expect(mockEditorState.setViewMode.mock.calls).toEqual([['/projects/a/icon.svg', 'code']])
   })
 
   it('notifies listeners after a project pane restore finishes', async () => {
