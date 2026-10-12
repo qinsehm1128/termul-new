@@ -20,6 +20,7 @@ mod editor_workspaces;
 mod file_pasteboard;
 mod fs_copy;
 mod fs_watcher;
+mod git_clone;
 use se_foundation::host_admission;
 pub mod conversation_host;
 #[cfg(test)]
@@ -2943,6 +2944,7 @@ pub fn run() {
             }
 
             app.manage(ViewMenuState::default());
+            app.manage(Arc::new(git_clone::GitCloneRegistry::default()));
 
             // Transport-neutral terminal event fan-out: desktop events remain
             // byte-compatible while the web terminal socket subscribes to the
@@ -3663,7 +3665,8 @@ pub fn run() {
             commands::git_push,
             commands::git_get_commit_context,
             commands::git_init,
-            commands::git_clone,
+            git_clone::git_clone,
+            git_clone::git_clone_cancel,
             commands::git_checkout_branch,
             commands::git_create_branch,
             commands::git_stash_save,

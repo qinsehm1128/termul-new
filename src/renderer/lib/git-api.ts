@@ -4,7 +4,7 @@ import type {
   GitStashInfo,
   GitStatusDetail
 } from '@shared/types/ipc.types'
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import { isTauriContext } from './tauri-runtime'
 import { webServerGit } from './web-server-api'
 
@@ -13,6 +13,21 @@ import { webServerGit } from './web-server-api'
 // The `init` template (below) is the canonical pattern — replicate it for the
 // other 19 methods. `webServerGit.*` throws on `!res.success` so callers see
 // the same error shape the desktop `invoke` rejection produces.
+
+/** One line of `git clone --progress` output; progress fields are null when absent. */
+export interface GitCloneProgress {
+  line: string
+  /** e.g. `Receiving objects`. */
+  phase: string | null
+  percent: number | null
+  /** e.g. `22.25 MiB`. */
+  transferred: string | null
+  /** e.g. `1.28 MiB/s`. */
+  speed: string | null
+}
+
+/** What a cancelled clone rejects with, as opposed to a failure. */
+export const GIT_CLONE_CANCELLED = 'GIT_CLONE_CANCELLED'
 
 export const gitApi = {
   getStatus: (cwd: string) =>
@@ -68,9 +83,21 @@ export const gitApi = {
     isTauriContext() ? invoke<void>('git_init', { cwd }) : webServerGit.init(cwd),
 
   // Desktop only: the new-project dialog offers cloning only there. Resolves
-  // to the folder the repository was cloned into.
-  clone: (url: string, parentDir: string, dirName: string) =>
-    invoke<string>('git_clone', { url, parentDir, dirName }),
+  // to the folder the repository was cloned into; `cancelClone` with the same
+  // id stops it, rejecting with GIT_CLONE_CANCELLED.
+  clone: (
+    cloneId: string,
+    url: string,
+    parentDir: string,
+    dirName: string,
+    onProgress: (progress: GitCloneProgress) => void
+  ) => {
+    const channel = new Channel<GitCloneProgress>()
+    channel.onmessage = onProgress
+    return invoke<string>('git_clone', { cloneId, url, parentDir, dirName, onProgress: channel })
+  },
+
+  cancelClone: (cloneId: string) => invoke<boolean>('git_clone_cancel', { cloneId }),
 
   checkoutBranch: (cwd: string, branch: string, isRemote = false) =>
     isTauriContext()

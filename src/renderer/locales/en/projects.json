@@ -78,6 +78,21 @@
   "cloning": "Cloning {{name}}…",
   "cloned": "Cloned {{name}}",
   "cloneFailed": "Clone failed: {{message}}",
+  "cloneProgress": {
+    "phase": {
+      "connecting": "Connecting",
+      "preparing": "Server is preparing",
+      "receiving": "Receiving objects",
+      "resolving": "Resolving deltas",
+      "checkout": "Checking out files"
+    },
+    "elapsed": "{{time}} elapsed",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling the clone of {{name}}…",
+    "cancelled": "Cancelled the clone of {{name}}",
+    "stalled": "No new progress for {{seconds}} seconds. The connection may be stuck; you can cancel and try again.",
+    "log": "git output"
+  },
   "noDirectorySelected": "No directory selected",
   "optionalDefaultDirectory": "Optional: leave empty to use default project directory",
   "browse": "Browse",

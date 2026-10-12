@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockIsTauri, mockClone, mockRead, mockWrite } = vi.hoisted(() => ({
+const { mockIsTauri, mockClone, mockCancelClone, mockRead, mockWrite } = vi.hoisted(() => ({
   mockIsTauri: vi.fn(() => true),
   mockClone: vi.fn(),
+  mockCancelClone: vi.fn(),
   mockRead: vi.fn(),
   mockWrite: vi.fn()
 }))
@@ -15,7 +16,7 @@ vi.mock('@/lib/api', () => ({
     readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] }),
     createDirectory: vi.fn()
   },
-  gitApi: { clone: mockClone, init: vi.fn() },
+  gitApi: { clone: mockClone, cancelClone: mockCancelClone, init: vi.fn() },
   shellApi: {
     getAvailableShells: vi.fn().mockResolvedValue({
       success: true,
@@ -24,7 +25,15 @@ vi.mock('@/lib/api', () => ({
   },
   persistenceApi: { read: mockRead, write: mockWrite }
 }))
-vi.mock('sonner', () => ({ toast: { promise: vi.fn() } }))
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), {
+    promise: vi.fn(),
+    custom: vi.fn(),
+    dismiss: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn()
+  })
+}))
 vi.mock('@/stores/app-settings-store', () => ({ useDefaultProjectColor: () => 'blue' }))
 
 import { NewProjectModal } from './NewProjectModal'
@@ -72,15 +81,32 @@ describe('NewProjectModal clone from Git', () => {
       )
     )
     expect(mockClone).toHaveBeenCalledWith(
+      expect.any(String),
       'https://github.com/qinsehm1128/prefect_test.git',
       '/Users/qs/project/ns/python',
-      'prefect_test'
+      'prefect_test',
+      expect.any(Function)
     )
     await waitFor(() =>
       expect(mockWrite).toHaveBeenCalledWith('projects/clone-parent-dirs', [
         '/Users/qs/project/ns/python'
       ])
     )
+  })
+
+  it('does not create a project for a cancelled clone', async () => {
+    mockClone.mockRejectedValue('GIT_CLONE_CANCELLED')
+    const onCreateProject = await renderModal()
+    fireEvent.change(repoInput(), {
+      target: { value: 'https://github.com/qinsehm1128/prefect_test.git' }
+    })
+    fireEvent.click(await screen.findByRole('button', { name: '/Users/qs/project/ns/python' }))
+    fireEvent.click(createButton())
+
+    await waitFor(() => expect(mockClone).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onCreateProject).not.toHaveBeenCalled()
+    expect(mockWrite).not.toHaveBeenCalled()
   })
 
   it('keeps a name the user typed', async () => {
