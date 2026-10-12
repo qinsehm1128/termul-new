@@ -6,6 +6,12 @@ import { PENDING_REVEAL_LINE_GLOBAL, type PendingRevealLineWindow } from '@/lib/
 import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { FileExplorer } from './FileExplorer'
 
+const { mockToastError } = vi.hoisted(() => ({ mockToastError: vi.fn() }))
+
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { error: mockToastError, success: vi.fn(), warning: vi.fn() })
+}))
+
 const mockToggleDirectory = vi.fn()
 const mockSelectPath = vi.fn()
 const mockTogglePathSelection = vi.fn()
@@ -157,10 +163,12 @@ vi.mock('./FileTreeNode', async (importOriginal) => {
   function StubNode({
     entry,
     depth,
+    onClick,
     renderContextMenu
   }: {
     entry: DirectoryEntry
     depth: number
+    onClick?: (e: React.MouseEvent, entry: DirectoryEntry) => void
     renderContextMenu?: (entry: DirectoryEntry) => React.ReactNode
   }): React.JSX.Element {
     const placement = useContext(actual.InlineInputContext)
@@ -168,7 +176,9 @@ vi.mock('./FileTreeNode', async (importOriginal) => {
     const children = expanded ? (mockExplorerState.directoryContents.get(entry.path) ?? []) : []
     return (
       <div data-testid="tree-node">
-        {entry.name}
+        <button type="button" onClick={(e) => onClick?.(e, entry)}>
+          {entry.name}
+        </button>
         {renderContextMenu?.(entry)}
         {expanded && placement?.createIn === entry.path && placement.render(depth + 1)}
         {children.map((child) => (
@@ -176,6 +186,7 @@ vi.mock('./FileTreeNode', async (importOriginal) => {
             key={child.path}
             entry={child as DirectoryEntry}
             depth={depth + 1}
+            onClick={onClick}
             renderContextMenu={renderContextMenu}
           />
         ))}
@@ -245,6 +256,22 @@ beforeEach(() => {
 })
 
 describe('FileExplorer', () => {
+  it('says why a clicked file could not be opened', async () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([
+      ['/project', [{ path: '/project/archive.zip', name: 'archive.zip', type: 'file' }]]
+    ])
+    mockOpenFile.mockRejectedValueOnce(new Error('Binary file cannot be displayed'))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getAllByText('archive.zip')[0])
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith('Binary file cannot be displayed')
+    })
+    expect(mockAddEditorTab).not.toHaveBeenCalled()
+  })
+
   it('shows loading while root entries are unavailable', () => {
     mockExplorerState.rootPath = '/project'
 
@@ -433,6 +460,45 @@ describe('FileExplorer', () => {
         searchTerm: 'term'
       })
     })
+  })
+
+  it('opens an svg search match in source, where the line exists', async () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'fill'
+    mockExplorerState.searchLastCompletedQuery = 'fill'
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/icon.svg',
+        matches: [{ lineNumber: 3, lineText: '<path fill="red"/>' }]
+      }
+    ]
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByText(/red/))
+
+    await waitFor(() => {
+      expect(mockSetViewMode).toHaveBeenCalledWith('/project/icon.svg', 'code')
+      expect(mockUpdateCursorPosition).toHaveBeenCalledWith('/project/icon.svg', 3, 1)
+    })
+  })
+
+  it('leaves the view of a plain source match alone', async () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+    mockExplorerState.searchLastCompletedQuery = 'term'
+    mockExplorerState.searchResults = [
+      { filePath: '/project/a.ts', matches: [{ lineNumber: 2, lineText: 'const term = 1' }] }
+    ]
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByText(/= 1/))
+
+    await waitFor(() => {
+      expect(mockUpdateCursorPosition).toHaveBeenCalledWith('/project/a.ts', 2, 1)
+    })
+    expect(mockSetViewMode).not.toHaveBeenCalled()
   })
 
   it('renders empty and degraded search states clearly', () => {

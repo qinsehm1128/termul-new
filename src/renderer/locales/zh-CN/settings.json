@@ -69,7 +69,11 @@
     "emptyMermaidDiagram": "Mermaid 图表为空",
     "loading": "加载中...",
     "frontmatterKeyEmpty": "键不能为空",
-    "frontmatterKeyExists": "键已存在"
+    "frontmatterKeyExists": "键已存在",
+    "switchToPreview": "切换到预览",
+    "previewFailed": "无法预览此文件：格式不受支持或文件已损坏",
+    "actualSize": "实际大小",
+    "fitToWindow": "适应窗口"
   },
   "customAgents": {
     "nameRequired": "代理名称不能为空",
