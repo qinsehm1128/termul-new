@@ -67,6 +67,8 @@ where
             std::process::id(),
         );
     }
+    #[cfg(unix)]
+    witness_termination_signals(role);
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -107,6 +109,81 @@ where
     }
 }
 
+/// Record who ends this Core, then let the signal end it as it always did.
+///
+/// Cores were being killed by signals with nothing in their log: no exit line,
+/// no panic, every terminal and agent gone with them. The sender is the one
+/// fact that names the cause, and only the receiving process can see it. The
+/// handler changes nothing else — after logging, the default action runs.
+#[cfg(unix)]
+fn witness_termination_signals(role: CoreRole) {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    use signal_hook::iterator::{exfiltrator::WithOrigin, SignalsInfo};
+
+    let mut signals = match SignalsInfo::<WithOrigin>::new([SIGTERM, SIGHUP, SIGINT]) {
+        Ok(signals) => signals,
+        Err(error) => {
+            log::warn!(
+                target: "se_manager::core",
+                "operation=core_signal_witness role={} stable_code=UNAVAILABLE error={error}",
+                role.endpoint_name()
+            );
+            return;
+        }
+    };
+    let role = role.endpoint_name();
+    let _ = std::thread::Builder::new()
+        .name("core-signal-witness".into())
+        .spawn(move || {
+            let Some(origin) = signals.forever().next() else {
+                return;
+            };
+            let sender = origin.process.map(|process| process.pid);
+            log::warn!(
+                target: "se_manager::core",
+                "operation=core_signal role={role} signal={} sender_pid={} sender={} stable_code=TERMINATED_BY_SIGNAL",
+                signal_name(origin.signal),
+                sender.map_or_else(|| "unknown".to_string(), |pid| pid.to_string()),
+                sender
+                    .and_then(process_path)
+                    .unwrap_or_else(|| "unknown".to_string())
+            );
+            log::logger().flush();
+            let _ = signal_hook::low_level::emulate_default_handler(origin.signal);
+        });
+}
+
+#[cfg(unix)]
+fn signal_name(signal: i32) -> String {
+    match signal {
+        libc::SIGTERM => "SIGTERM".to_string(),
+        libc::SIGHUP => "SIGHUP".to_string(),
+        libc::SIGINT => "SIGINT".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Executable of `pid`, if it is still around to ask.
+#[cfg(target_os = "macos")]
+fn process_path(pid: libc::pid_t) -> Option<String> {
+    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: the buffer is writable for the length passed.
+    let length =
+        unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    if length <= 0 {
+        return None;
+    }
+    buffer.truncate(length as usize);
+    String::from_utf8(buffer).ok()
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_path(pid: libc::pid_t) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .map(|path| path.display().to_string())
+}
+
 #[cfg(not(any(unix, windows)))]
 pub fn run_core_process<F, Fut>(role: CoreRole, _version: &str, _serve: F) -> i32
 where
@@ -118,4 +195,70 @@ where
         role.endpoint_name()
     );
     2
+}
+
+#[cfg(all(test, unix))]
+mod signal_witness_tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const CHILD_ENV: &str = "SE_SIGNAL_WITNESS_CHILD";
+    const TEST_PATH: &str =
+        "process::signal_witness_tests::a_terminating_signal_is_logged_with_its_sender";
+
+    /// Runs twice: as the test, and — re-executed with `CHILD_ENV` — as the
+    /// Core-like process the test signals.
+    #[test]
+    fn a_terminating_signal_is_logged_with_its_sender() {
+        if let Some(ready) = std::env::var_os(CHILD_ENV) {
+            // The real Core entry, serving a stand-in that just waits.
+            run_core_process(CoreRole::TerminalCore, "test", |_| async move {
+                std::fs::write(ready, "ready").unwrap();
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(())
+            });
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("core.log");
+        let ready = dir.path().join("ready");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST_PATH, "--test-threads=1"])
+            .env(CHILD_ENV, &ready)
+            .env(se_foundation::logging::CORE_LOG_FILE_ENV, &log)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !ready.exists() {
+            assert!(Instant::now() < deadline, "child never became ready");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // SAFETY: plain kill(2) on our own child.
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        let status = child.wait().unwrap();
+
+        // Still ends by the signal: the witness only records.
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            text.contains(&format!(
+                "operation=core_signal role=terminal-core signal=SIGTERM sender_pid={} ",
+                std::process::id()
+            )),
+            "{text}"
+        );
+        let test_binary = std::env::current_exe().unwrap();
+        let name = test_binary.file_name().unwrap().to_string_lossy();
+        assert!(
+            text.lines()
+                .any(|line| line.contains("sender=") && line.contains(name.as_ref())),
+            "{text}"
+        );
+    }
 }
