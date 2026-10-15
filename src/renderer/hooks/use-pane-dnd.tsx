@@ -152,20 +152,39 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
     setReorderPreviewState(null)
   }, [])
 
+  const endDrag = useCallback(() => {
+    setIsDragging(false)
+    setDragPayload(null)
+    clearPreviewTarget()
+    clearReorderPreview()
+  }, [clearPreviewTarget, clearReorderPreview])
+
   // Track drag state via document-level events
   useEffect(() => {
-    const handleDragEnd = (): void => {
-      setIsDragging(false)
-      setDragPayload(null)
-      clearPreviewTarget()
-      clearReorderPreview()
-    }
-
-    document.addEventListener('dragend', handleDragEnd)
+    document.addEventListener('dragend', endDrag)
     return () => {
-      document.removeEventListener('dragend', handleDragEnd)
+      document.removeEventListener('dragend', endDrag)
     }
-  }, [clearPreviewTarget, clearReorderPreview])
+  }, [endDrag])
+
+  // `dragend` is dispatched on the drag source. When the drop removed that
+  // element (a tab moved to another pane), the event never reaches `document`,
+  // and every pane kept its drop overlay: terminals went on printing beneath
+  // it while scrolling, selection and paste stopped working. The page gets no
+  // pointer events during a drag, so a pointer event with no button held means
+  // the drag is long over.
+  useEffect(() => {
+    if (!isDragging) return
+    const endStaleDrag = (event: PointerEvent): void => {
+      if (event.type === 'pointerdown' || event.buttons === 0) endDrag()
+    }
+    document.addEventListener('pointermove', endStaleDrag)
+    document.addEventListener('pointerdown', endStaleDrag)
+    return () => {
+      document.removeEventListener('pointermove', endStaleDrag)
+      document.removeEventListener('pointerdown', endStaleDrag)
+    }
+  }, [isDragging, endDrag])
 
   const startTabDrag = useCallback(
     (tabId: string, paneId: string, event: React.DragEvent) => {
@@ -294,7 +313,9 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
           targetPaneId,
           position === 'after' ? targetIndex + 1 : targetIndex
         )
-        clearReorderPreview()
+        // The source tab unmounts with this move, so its `dragend` never
+        // reaches `document`; end the drag here.
+        endDrag()
         return
       }
 
@@ -326,7 +347,7 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
       )
       clearReorderPreview()
     },
-    [dragPayload, clearReorderPreview]
+    [dragPayload, clearReorderPreview, endDrag]
   )
 
   return (
