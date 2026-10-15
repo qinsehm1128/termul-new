@@ -2333,6 +2333,11 @@ impl PtyManager {
             for arg in &program_args {
                 cmd.arg(arg);
             }
+            // `CommandBuilder` starts from this process's whole environment, so
+            // setting the merged map on top could only add or override: what
+            // the map filtered out (the host identity, inherited NO_COLOR) still
+            // reached the shell. The map is the whole environment.
+            cmd.env_clear();
             for (key, value) in &env {
                 cmd.env(key, value);
             }
@@ -4466,6 +4471,60 @@ mod tests {
             "a client attaching later should see the retained title"
         );
 
+        let _ = manager.terminate(&terminal_id).await;
+    }
+
+    /// A program started in our terminal must not inherit the identity macOS
+    /// gave this app, or a bundle-less GUI helper registers as us and opening
+    /// the app only activates the helper.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_shells_do_not_inherit_the_host_app_identity() {
+        // Stands in for the bundle id macOS sets on the app it launched.
+        std::env::set_var("__CFBundleIdentifier", "com.se-manager.test-host");
+        let manager = crate::test_pty_manager();
+        let mut events = manager.terminal_events().subscribe();
+        let temp = tempfile::tempdir().unwrap();
+
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    cols: Some(80),
+                    rows: Some(24),
+                    shell: Some("/bin/sh".into()),
+                    env: Some(HashMap::from([("PS1".into(), "$ ".into())])),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn a real PTY");
+        let terminal_id = spawned.info.id.clone();
+
+        manager
+            .write(
+                &terminal_id,
+                "printf '\\033]0;id=%s\\007' \"${__CFBundleIdentifier-unset}\"\n",
+            )
+            .await
+            .expect("write to the PTY");
+
+        let title = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match events.recv().await.expect("event stream open") {
+                    TerminalEvent::OscTitleChanged {
+                        terminal_id: id,
+                        title,
+                    } if id == terminal_id => return title,
+                    _ => continue,
+                }
+            }
+        })
+        .await
+        .expect("an OSC title event within the deadline");
+
+        assert_eq!(title.as_deref(), Some("id=unset"));
         let _ = manager.terminate(&terminal_id).await;
     }
 
