@@ -402,6 +402,13 @@ pub fn resolve_spawn_program(program: &str) -> Result<ResolvedProgram, String> {
 
 use tokio::sync::Mutex as AsyncMutex;
 
+/// Every terminal writes through a queue; see `input_queue`.
+fn queued_input(id: &str, writer: Box<dyn Write + Send>) -> Result<Box<dyn Write + Send>, String> {
+    crate::input_queue::QueuedInput::spawn(id, writer)
+        .map(|input| Box::new(input) as Box<dyn Write + Send>)
+        .map_err(|e| format!("Failed to start PTY input writer: {}", e))
+}
+
 #[cfg(target_os = "windows")]
 fn has_windows_env_var(env_map: &HashMap<String, String>, key: &str) -> bool {
     env_map
@@ -2197,7 +2204,7 @@ impl PtyManager {
                 project_id: options.project_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(Box::new(child)))),
                 master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
-                writer: Arc::new(AsyncMutex::new(Some(writer))),
+                writer: Arc::new(AsyncMutex::new(Some(queued_input(&id, writer)?))),
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
                 done_flag: Arc::new(AtomicBool::new(false)),
@@ -2406,7 +2413,7 @@ impl PtyManager {
                 project_id: options.project_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(child))),
                 master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
-                writer: Arc::new(AsyncMutex::new(Some(writer))),
+                writer: Arc::new(AsyncMutex::new(Some(queued_input(&id, writer)?))),
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
                 done_flag: Arc::new(AtomicBool::new(false)),
@@ -4526,6 +4533,86 @@ mod tests {
 
         assert_eq!(title.as_deref(), Some("id=unset"));
         let _ = manager.terminate(&terminal_id).await;
+    }
+
+    /// A program that stops reading stdin fills the kernel's input queue and
+    /// a further write to the master blocks. That stall must stay with the
+    /// terminal: the caller's write returns, and the terminal can still be
+    /// closed (cleanup takes the same writer the stalled write was holding).
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_program_that_stops_reading_input_neither_stalls_writes_nor_cleanup() {
+        let manager = crate::test_pty_manager();
+        let mut events = manager.terminal_events().subscribe();
+        let temp = tempfile::tempdir().unwrap();
+
+        // Raw mode, as a TUI uses: the queue fills instead of being trimmed
+        // line by line. The title marks the moment raw mode is in effect.
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    cols: Some(80),
+                    rows: Some(24),
+                    program: Some("/bin/sh".into()),
+                    args: Some(vec![
+                        "-c".into(),
+                        "stty raw -echo; printf '\\033]0;not-reading\\007'; exec sleep 60".into(),
+                    ]),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn a real PTY");
+        let terminal_id = spawned.info.id.clone();
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match events.recv().await.expect("event stream open") {
+                    TerminalEvent::OscTitleChanged {
+                        terminal_id: id,
+                        title,
+                    } if id == terminal_id && title.as_deref() == Some("not-reading") => return,
+                    _ => continue,
+                }
+            }
+        })
+        .await
+        .expect("the program enters raw mode within the deadline");
+
+        // Off the runtime: a write that blocks inside `poll` never yields, so
+        // a tokio timeout around it could not fire.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        {
+            let manager = Arc::clone(&manager);
+            let terminal_id = terminal_id.clone();
+            let runtime = tokio::runtime::Handle::current();
+            std::thread::spawn(move || {
+                let input = "x".repeat(64 * 1024);
+                let _ = done_tx.send(runtime.block_on(manager.write(&terminal_id, &input)));
+            });
+        }
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writing to a program that is not reading returns")
+            .expect("the input is accepted");
+
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        {
+            let manager = Arc::clone(&manager);
+            let terminal_id = terminal_id.clone();
+            let runtime = tokio::runtime::Handle::current();
+            std::thread::spawn(move || {
+                let _ = closed_tx.send(runtime.block_on(manager.terminate(&terminal_id)).is_ok());
+            });
+        }
+        assert!(
+            closed_rx
+                .recv_timeout(Duration::from_secs(15))
+                .expect("closing a terminal whose program is not reading completes"),
+            "the terminal is cleaned up"
+        );
     }
 
     #[tokio::test]

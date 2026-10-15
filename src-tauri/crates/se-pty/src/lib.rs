@@ -7,6 +7,7 @@
 pub mod claims;
 pub mod da_filter;
 pub mod env_refresh;
+pub mod input_queue;
 pub mod manager;
 pub mod trackers;
 
