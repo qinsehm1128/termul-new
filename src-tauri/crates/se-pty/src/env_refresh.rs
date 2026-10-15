@@ -392,9 +392,22 @@ pub fn is_inherited_color_suppressor(key: &str, value: &str) -> bool {
     false
 }
 
-/// Process environment minus inherited color-suppression flags.
+/// Variables naming the app that launched this process.
+///
+/// macOS sets `__CFBundleIdentifier` for an app it launches, and children
+/// inherit it. A GUI program started from one of our terminals without a bundle
+/// of its own (an agent's menu bar helper, say) reads it and registers with
+/// LaunchServices as this app. macOS then believes the app is already running:
+/// clicking it in the Dock or `open` only activates that helper, and no window
+/// appears.
+const HOST_IDENTITY_KEYS: &[&str] = &["__CFBundleIdentifier"];
+
+/// Process environment minus inherited color-suppression flags and the host
+/// app's identity.
 pub fn inherited_process_env() -> impl Iterator<Item = (String, String)> {
-    std::env::vars().filter(|(key, value)| !is_inherited_color_suppressor(key, value))
+    std::env::vars().filter(|(key, value)| {
+        !is_inherited_color_suppressor(key, value) && !HOST_IDENTITY_KEYS.contains(&key.as_str())
+    })
 }
 
 /// Advertise 24-bit color to chalk, ls, git, and Node `hasColors()`.
