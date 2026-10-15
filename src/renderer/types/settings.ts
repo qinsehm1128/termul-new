@@ -111,6 +111,7 @@ export interface AppSettings {
   maxTerminalsPerProject: number // Maximum terminals allowed per project
   orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
   orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
+  logRetentionDays: number // Days of logs kept on disk, today included (desktop)
   confirmTerminalClose: boolean // Show a confirmation dialog before closing a terminal
   /**
    * Ask before ending a terminal's process. Separate from `confirmTerminalClose`
@@ -238,6 +239,9 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
   { value: 1800000, label: '30 minutes' },
   { value: 3600000, label: '1 hour' }
 ]
+
+// Days of logs kept on disk, today included
+export const LOG_RETENTION_OPTIONS = [1, 3, 7, 14, 30, 90]
 
 // Editor auto-save delay options (GH-539)
 export const EDITOR_AUTO_SAVE_DELAY_OPTIONS = [
@@ -401,6 +405,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   maxTerminalsPerProject: 10,
   orphanDetectionEnabled: true,
   orphanDetectionTimeout: 600000, // 10 minutes
+  logRetentionDays: 7,
   confirmTerminalClose: true,
   confirmTerminalTerminate: true,
   resumeAgentSessionsOnRestore: true,

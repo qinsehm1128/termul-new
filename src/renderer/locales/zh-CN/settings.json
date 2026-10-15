@@ -384,7 +384,11 @@
     "copyContents": "复制日志内容",
     "copyContentsHint": "将日志复制到剪贴板",
     "exportDefault": "导出到默认目录",
-    "exportDefaultHint": "直接保存到下载目录"
+    "exportDefaultHint": "直接保存到下载目录",
+    "retention": "日志保留天数",
+    "retentionDays_one": "{{count}} 天",
+    "retentionDays_other": "{{count}} 天",
+    "retentionHint": "包括今天在内，超过这个天数的日志会被自动删除。日志每天生成一个新文件，单个文件超过 5 MB 时也会另起新文件。"
   },
   "reset": {
     "description": "将所有设置恢复为默认值。",

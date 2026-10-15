@@ -21,6 +21,7 @@ import AppPreferences from './AppPreferences'
  */
 
 const mockWriteDebounced = vi.fn().mockResolvedValue(undefined)
+const mockSetLogRetentionDays = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('@/lib/api', () => ({
   acpApi: { setTurnTimeout: vi.fn().mockResolvedValue({ success: true }) },
@@ -28,7 +29,8 @@ vi.mock('@/lib/api', () => ({
     revealLogDir: vi.fn(),
     exportLogFile: vi.fn(),
     copyLogContents: vi.fn(),
-    exportLogToDefault: vi.fn()
+    exportLogToDefault: vi.fn(),
+    setLogRetentionDays: (...args: unknown[]) => mockSetLogRetentionDays(...args)
   },
   shellApi: {
     getAvailableShells: vi.fn().mockResolvedValue({
@@ -250,6 +252,32 @@ describe('AppPreferences settings controls', () => {
       expect(settings.sidebarFontSize).toBe(15)
       expect(settings.uiContrast).toBe(35)
     })
+  })
+
+  it('keeps logs for the chosen days and tells the host at once', async () => {
+    const tauriWindow = window as unknown as { __TAURI_INTERNALS__?: unknown }
+    tauriWindow.__TAURI_INTERNALS__ = {}
+    try {
+      renderPage()
+
+      const select = await screen.findByLabelText('Keep logs for')
+      expect(select).toHaveValue('7')
+
+      fireEvent.change(select, { target: { value: '30' } })
+      await waitFor(() => {
+        expect(useAppSettingsStore.getState().settings.logRetentionDays).toBe(30)
+        expect(mockSetLogRetentionDays).toHaveBeenCalledWith(30)
+      })
+    } finally {
+      delete tauriWindow.__TAURI_INTERNALS__
+    }
+  })
+
+  it('offers no log retention in the web client, where the server owns its logs', async () => {
+    renderPage()
+
+    await screen.findByLabelText('Auto save delay')
+    expect(screen.queryByLabelText('Keep logs for')).not.toBeInTheDocument()
   })
 
   it('changing the delay select writes editorAutoSaveDelayMs and is disabled while off', async () => {

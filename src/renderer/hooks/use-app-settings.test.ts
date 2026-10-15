@@ -28,7 +28,8 @@ const {
   mockSetSessionNewTimeout,
   mockSetSessionReopenTimeout,
   mockSetFirstPromptWarmupTimeout,
-  mockSetPreferLocalNpmInstall
+  mockSetPreferLocalNpmInstall,
+  mockSetLogRetentionDays
 } = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn(),
   mockPersistenceWrite: vi.fn(),
@@ -39,7 +40,8 @@ const {
   mockSetSessionNewTimeout: vi.fn(),
   mockSetSessionReopenTimeout: vi.fn(),
   mockSetFirstPromptWarmupTimeout: vi.fn(),
-  mockSetPreferLocalNpmInstall: vi.fn()
+  mockSetPreferLocalNpmInstall: vi.fn(),
+  mockSetLogRetentionDays: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -55,6 +57,9 @@ vi.mock('@/lib/api', () => ({
     read: mockPersistenceRead,
     write: mockPersistenceWrite,
     writeDebounced: mockPersistenceWriteDebounced
+  },
+  logApi: {
+    setLogRetentionDays: mockSetLogRetentionDays
   },
   terminalApi: {
     updateOrphanDetection: mockUpdateOrphanDetection
@@ -84,6 +89,32 @@ describe('use-app-settings', () => {
     mockSetSessionReopenTimeout.mockResolvedValue(undefined)
     mockSetFirstPromptWarmupTimeout.mockResolvedValue(undefined)
     mockSetPreferLocalNpmInstall.mockResolvedValue(undefined)
+    mockSetLogRetentionDays.mockResolvedValue(undefined)
+  })
+
+  /** The host deletes no log until it hears this, so it must go out on load. */
+  it('tells the host the log retention on load', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: { ...DEFAULT_APP_SETTINGS, logRetentionDays: 30 }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockSetLogRetentionDays).toHaveBeenCalledWith(30)
+    })
+  })
+
+  it('keeps logs for seven days when the setting predates retention', async () => {
+    const { logRetentionDays: _absent, ...older } = DEFAULT_APP_SETTINGS
+    mockPersistenceRead.mockResolvedValueOnce({ success: true, data: older })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockSetLogRetentionDays).toHaveBeenCalledWith(7)
+    })
   })
 
   it('hydrates sidebar and file explorer visibility from persisted app settings', async () => {

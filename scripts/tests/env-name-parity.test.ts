@@ -190,7 +190,14 @@ function frozenInventory(): string[] {
  * Keep the historical fixture immutable; new names belong in this explicit delta
  * so the parity check continues to require an exact, reviewable inventory.
  */
-const POST_FREEZE_ENV_SUFFIXES = ['CANARY', 'CANARY_BUILD', 'CANARY_BUILD__', 'SKILLS_TEST_ROOT']
+const POST_FREEZE_ENV_SUFFIXES = [
+  'CANARY',
+  'CANARY_BUILD',
+  'CANARY_BUILD__',
+  'SKILLS_TEST_ROOT',
+  // Test-only: re-executes the signal-witness test as the signalled Core.
+  'SIGNAL_WITNESS_CHILD'
+]
 
 /** The frozen inventory plus reviewed post-freeze additions at `prefix`. */
 function inventoryAt(prefix: string): string[] {

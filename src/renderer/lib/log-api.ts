@@ -117,6 +117,15 @@ export function installGlobalErrorForwarding(): void {
   })
 }
 
+/**
+ * Keep `days` of logs on disk (today included) and delete older archives now.
+ * Desktop only: the standalone server manages its own log files.
+ */
+export async function setLogRetentionDays(days: number): Promise<void> {
+  if (!isTauriContext()) return
+  await invoke('set_log_retention_days', { days })
+}
+
 export async function revealLogDir(): Promise<void> {
   try {
     await invoke('reveal_log_dir_command')
