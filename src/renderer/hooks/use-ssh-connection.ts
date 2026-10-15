@@ -6,7 +6,7 @@ import { createAskpassScript, sshApi, terminalApi } from '@/lib/api'
 import { isWindows } from '@/lib/platform'
 import { useSSHActions, useSSHConnections } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { sshTerminalProjectId } from '@/types/project'
+import { isSshTerminal, sshTerminalProjectId } from '@/types/project'
 
 const sshT = (key: string, fallback: string, values?: TranslationValues) =>
   runtimeT('ssh', key, fallback, values)
@@ -121,6 +121,18 @@ export function useSSHConnection(profile: SSHProfile | null) {
   // Stable ref for loadDirectory so effects always call latest version
   const loadDirRef = useRef(loadDirectory)
   loadDirRef.current = loadDirectory
+
+  // An SSH shell can end while its workspace is off screen (another page or
+  // profile), where no terminal view reports the exit. Its record would stay
+  // on the terminal board as a dead entry flagged for attention.
+  useEffect(
+    () =>
+      terminalApi.onExit((ptyId) => {
+        const record = useTerminalStore.getState().findTerminalByPtyId(ptyId)
+        if (record && isSshTerminal(record)) forgetSshTerminal(ptyId)
+      }),
+    []
+  )
 
   useEffect(
     () => () => {

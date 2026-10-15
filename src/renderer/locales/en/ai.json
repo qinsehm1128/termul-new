@@ -37,7 +37,8 @@
     "purposesDescription": "Choose the channel and model each feature uses.",
     "purposeChannel": "Channel",
     "purposeModel": "Model",
-    "purposeNone": "None"
+    "purposeNone": "None",
+    "tabsLabel": "AI channel sections"
   },
   "apis": {
     "openai-completions": "OpenAI Chat Completions",

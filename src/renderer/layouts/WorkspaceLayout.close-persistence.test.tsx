@@ -365,7 +365,8 @@ vi.mock('@/lib/api', () => ({
   terminalApi: {
     spawn: vi.fn(),
     kill: vi.fn(),
-    onData: vi.fn(() => vi.fn())
+    onData: vi.fn(() => vi.fn()),
+    onExit: vi.fn(() => vi.fn())
   },
   persistenceApi: {
     flushPendingWrites: mockFlushPendingWrites

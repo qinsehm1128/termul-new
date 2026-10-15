@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   disconnect: vi.fn(),
   sftpListDir: vi.fn(),
-  createAskpassScript: vi.fn()
+  createAskpassScript: vi.fn(),
+  exitHandlers: [] as Array<(ptyId: string, exitCode: number) => void>
 }))
 
 vi.mock('@/stores/session-workspace-sync-store', () => ({
@@ -26,7 +27,13 @@ vi.mock('@/lib/api', () => ({
     spawn: mocks.spawn,
     write: mocks.write,
     terminate: mocks.kill,
-    kill: mocks.kill
+    kill: mocks.kill,
+    onExit: (handler: (ptyId: string, exitCode: number) => void) => {
+      mocks.exitHandlers.push(handler)
+      return () => {
+        mocks.exitHandlers = mocks.exitHandlers.filter((candidate) => candidate !== handler)
+      }
+    }
   },
   sshApi: {
     connect: mocks.connect,
@@ -308,6 +315,44 @@ describe('useSSHConnection', () => {
       result.current.handleSSHProcessExit()
     })
 
+    expect(sshTerminalRecords()).toHaveLength(0)
+  })
+
+  it('drops the SSH terminal record when its shell exits while the workspace is off screen', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    // A shell that is not SSH is not this hook's to forget. (Record ids come
+    // from the clock, which fake timers hold still.)
+    vi.advanceTimersByTime(1)
+    const other = useTerminalStore.getState().addTerminal('zsh', 'project-1', 'zsh', '/')
+    useTerminalStore.getState().setTerminalPtyId(other.id, 'pty-other')
+
+    // No terminal view is mounted to call handleSSHProcessExit.
+    act(() => {
+      for (const handler of mocks.exitHandlers) handler('pty-other', 0)
+      for (const handler of mocks.exitHandlers) handler('pty-1', 0)
+    })
+
+    expect(sshTerminalRecords()).toHaveLength(0)
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-other')?.id).toBe(other.id)
+  })
+
+  it('ends the SSH shell and drops its record when disconnected from the SSH panel', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    const connection = useSSHStore.getState().connections[0]
+    expect(sshTerminalRecords()).toHaveLength(1)
+    mocks.disconnect.mockResolvedValue({ success: true })
+
+    await act(async () => {
+      await useSSHStore.getState().disconnect(connection.id)
+    })
+
+    expect(mocks.kill).toHaveBeenCalledWith('pty-1')
     expect(sshTerminalRecords()).toHaveLength(0)
   })
 

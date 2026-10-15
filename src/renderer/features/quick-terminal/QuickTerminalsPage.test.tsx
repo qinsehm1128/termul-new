@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -34,6 +34,14 @@ vi.mock('@/components/terminal/ConnectedTerminal', async () => {
   }
 })
 
+vi.mock('@/components/editor/EditorPanel', () => ({
+  EditorPanel: ({ filePath }: { filePath: string }) => (
+    <div data-testid="editor-panel" data-path={filePath} />
+  )
+}))
+
+import { showOpenedFile } from '@/lib/file-open-target'
+import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import QuickTerminalsPage from './QuickTerminalsPage'
@@ -240,6 +248,42 @@ describe('QuickTerminalsPage', () => {
       expect(screen.getByTestId('location').textContent).toBe(`/quick-terminals/${created.id}`)
     )
     expect(api.create).toHaveBeenCalledWith({ target: { kind: 'workspace' } })
+  })
+
+  it('the new-terminal shortcut creates a quick terminal in its own folder', async () => {
+    const created = { ...record, id: '33333333-3333-4333-8333-333333333333' }
+    api.create.mockResolvedValue({ success: true, data: created })
+    api.open.mockResolvedValue({ success: false, error: 'not in this test', code: 'X' })
+    renderAt('/quick-terminals')
+    await screen.findByText('Untitled terminal')
+
+    fireEvent.keyDown(window, { key: 't', ctrlKey: true })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(`/quick-terminals/${created.id}`)
+    )
+    expect(api.create).toHaveBeenCalledWith({ target: { kind: 'workspace' } })
+  })
+
+  it('previews a file opened from the tree beside the shell and lets it go on close', async () => {
+    api.open.mockResolvedValue({ success: false, error: 'not in this test', code: 'X' })
+    const file = `${record.cwd}/notes.md`
+    useEditorStore.setState({
+      openFiles: new Map([[file, { filePath: file, isDirty: false } as never]])
+    })
+    renderAt(`/quick-terminals/${id}`)
+    await screen.findByText('Untitled terminal')
+
+    act(() => showOpenedFile(file))
+
+    const preview = await screen.findByRole('region', { name: 'Preview of notes.md' })
+    // The editor is lazy: the region is up before it is.
+    expect((await within(preview).findByTestId('editor-panel')).getAttribute('data-path')).toBe(
+      file
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }))
+    expect(screen.queryByRole('region', { name: 'Preview of notes.md' })).toBeNull()
+    expect(useEditorStore.getState().openFiles.has(file)).toBe(false)
   })
 
   it('opens a project quick terminal in its active worktree', async () => {

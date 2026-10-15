@@ -44,6 +44,7 @@ vi.mock('@/lib/api', () => ({
   sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
   terminalApi: {
     onData: vi.fn(() => vi.fn()),
+    onExit: vi.fn(() => vi.fn()),
     write: vi.fn(async () => ({ success: true, data: undefined }))
   },
   windowApi: {

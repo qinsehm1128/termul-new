@@ -20,6 +20,12 @@
         "name": "Project scope",
         "description": "Expose the current project boundary to MCP clients."
       }
+    },
+    "tabs": {
+      "label": "MCP sections",
+      "gateway": "Connect agents",
+      "servers": "MCP servers",
+      "descriptions": "Server descriptions"
     }
   },
   "common": {
