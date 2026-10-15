@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -277,7 +277,8 @@ describe('QuickTerminalsPage', () => {
     act(() => showOpenedFile(file))
 
     const preview = await screen.findByRole('region', { name: 'Preview of notes.md' })
-    expect(preview.querySelector('[data-testid="editor-panel"]')?.getAttribute('data-path')).toBe(
+    // The editor is lazy: the region is up before it is.
+    expect((await within(preview).findByTestId('editor-panel')).getAttribute('data-path')).toBe(
       file
     )
     fireEvent.click(screen.getByRole('button', { name: 'Close preview' }))
