@@ -626,6 +626,51 @@ fn set_native_ui_language(app: tauri::AppHandle, language: String) -> Result<(),
     Ok(())
 }
 
+/// How often archives past the retention are swept while the app runs.
+const LOG_RETENTION_SWEEP_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(6 * 60 * 60);
+
+/// Sweep the log directory on an interval with the retention last reported by
+/// the renderer. The first sweep happens when the renderer reports it.
+fn spawn_log_retention_sweep(log_dir: std::path::PathBuf) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(LOG_RETENTION_SWEEP_INTERVAL);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let dir = log_dir.clone();
+            if let Ok(removed) = tauri::async_runtime::spawn_blocking(move || {
+                logging::prune_logs_with_current_retention(&dir)
+            })
+            .await
+            {
+                if !removed.is_empty() {
+                    log::info!("[logs] operation=retention_sweep removed={}", removed.len());
+                }
+            }
+        }
+    });
+}
+
+/// Adopt the user's log retention (days) and delete older archives now.
+#[tauri::command]
+async fn set_log_retention_days(app: tauri::AppHandle, days: u32) -> Result<(), String> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|error| format!("could not resolve log directory: {error}"))?;
+    let removed = tauri::async_runtime::spawn_blocking(move || {
+        logging::set_log_retention_days(&log_dir, days)
+    })
+    .await
+    .map_err(|error| format!("log retention sweep failed: {error}"))?;
+    log::info!(
+        "[logs] operation=retention days={days} removed={}",
+        removed.len()
+    );
+    Ok(())
+}
+
 #[tauri::command]
 fn reveal_log_dir_command(app: tauri::AppHandle) -> Result<(), String> {
     reveal_log_dir(&app)
@@ -2840,10 +2885,16 @@ pub fn run() {
             // Cores log next to the GUI log. The file prefix reads the brand
             // seam, so it is resolved here on the setup thread (FORBID-07).
             match handle.path().app_log_dir() {
-                Ok(log_dir) => crate::core::launcher::configure_core_logging(
-                    log_dir,
-                    logging::core_log_file_prefix(),
-                ),
+                Ok(log_dir) => {
+                    if let Err(error) = logging::attach_gui_log_dir(&log_dir) {
+                        eprintln!("could not open the GUI log in {}: {error}", log_dir.display());
+                    }
+                    spawn_log_retention_sweep(log_dir.clone());
+                    crate::core::launcher::configure_core_logging(
+                        log_dir,
+                        logging::core_log_file_prefix(),
+                    )
+                }
                 Err(error) => log::warn!(
                     target: "se_manager::core",
                     "operation=core_log_dir stable_code=CORE_LOG_UNAVAILABLE error={error}"
@@ -3538,6 +3589,7 @@ pub fn run() {
             restore_app_menu,
             set_native_ui_language,
             reveal_log_dir_command,
+            set_log_retention_days,
             export_log_file_command,
             copy_log_contents_command,
             export_log_to_default_command,

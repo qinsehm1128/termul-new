@@ -89,6 +89,31 @@ fn core_log_file(role: CoreRole) -> Option<PathBuf> {
         .map(|(dir, prefix)| dir.join(format!("{prefix}-{}.log", role.endpoint_name())))
 }
 
+/// Start a Core in its own session, so it is no longer in the GUI's process
+/// group.
+///
+/// Cores are meant to outlive the GUI that spawned them and be adopted by the
+/// next one. Sharing the GUI's process group meant anything signalling that
+/// group took the Terminal and ACP Cores down with the GUI — every terminal
+/// and agent with them — while the GUI's own restart path looked fine.
+#[cfg(unix)]
+fn detach_from_gui_session(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the closure runs in the forked child before exec and only calls
+    // `setsid`, which is async-signal-safe and touches no parent memory.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_from_gui_session(_command: &mut Command) {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeclaredCoreAction {
     Preserve,
@@ -840,6 +865,7 @@ pub async fn ensure_core(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    detach_from_gui_session(&mut command);
     if let Some(log_file) = core_log_file(role) {
         match crate::logging::open_core_log_file(&log_file) {
             Ok(file) => {
@@ -1524,6 +1550,58 @@ mod tests {
 
         assert!(probe_endpoint(&endpoint, CoreRole::AcpCore).await.is_err());
         let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
+
+    /// A Core shares nothing with the GUI's process group or session, so a
+    /// signal aimed at the GUI's group cannot reach it. The fake Core reports
+    /// its own ids and exits; the launch then times out, which is fine here.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_spawned_core_leads_its_own_session() {
+        let profile = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let report = bin.path().join("ids.txt");
+        let fake_core = bin.path().join("fake-core");
+        std::fs::write(
+            &fake_core,
+            format!(
+                "#!/usr/bin/env python3\nimport os\nopen({:?}, 'w').write('%d %d %d' % (os.getpid(), os.getsid(0), os.getpgrp()))\n",
+                report.display().to_string()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_core, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = CoreLaunchConfig {
+            profile_root: profile.path().to_path_buf(),
+            executable: fake_core,
+            ready_timeout: Duration::from_secs(3),
+        };
+
+        let _ = ensure_core(CoreRole::AcpCore, &config).await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !report.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if let Some(mut owned) = take_owned_core(CoreRole::AcpCore) {
+            let _ = owned.child.kill();
+            let _ = wait_for_owned_exit(
+                &mut owned.child,
+                &CoreEndpoint::for_profile(profile.path(), CoreRole::AcpCore),
+                Duration::from_secs(3),
+            )
+            .await;
+        }
+
+        let ids: Vec<i64> = std::fs::read_to_string(&report)
+            .expect("fake core ran")
+            .split_whitespace()
+            .map(|id| id.parse().unwrap())
+            .collect();
+        let (pid, sid, pgid) = (ids[0], ids[1], ids[2]);
+        assert_eq!(sid, pid, "the Core leads a session of its own");
+        assert_eq!(pgid, pid, "and a process group of its own");
+        assert_ne!(pgid, i64::from(unsafe { libc::getpgrp() }));
     }
 
     #[tokio::test]

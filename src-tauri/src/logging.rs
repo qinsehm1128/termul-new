@@ -5,8 +5,14 @@
 //! banner, and exposes a per-run session id used to correlate user-attached
 //! log slices with a single run.
 
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+
+use se_foundation::log_files::{prune_log_dir, DailyLogFile};
 use tauri::{Manager, Runtime};
-use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind};
+use tauri_plugin_log::{fern, Builder as LogBuilder, Target, TargetKind};
 
 use crate::brand;
 pub use se_foundation::logging::{
@@ -47,9 +53,12 @@ pub fn build_channel() -> &'static str {
 /// The default plugin format already prefixes every line with timestamp,
 /// level, and target, satisfying the structured-line requirement.
 pub fn build_log_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    let mut targets = vec![Target::new(TargetKind::LogDir {
-        file_name: Some(log_file_name().to_string()),
-    })];
+    // Not the plugin's own file target: it only rotates by size, so a quiet
+    // install kept lines for as long as the file stayed small. This one rolls
+    // daily and leaves deleting to the retention sweep.
+    let mut targets = vec![Target::new(TargetKind::Dispatch(
+        fern::Dispatch::new().chain(fern::Output::writer(Box::new(GuiLogWriter), "\n")),
+    ))];
 
     if cfg!(debug_assertions) {
         targets.push(Target::new(TargetKind::Stdout));
@@ -57,14 +66,7 @@ pub fn build_log_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 
     let directives = resolve_directives();
 
-    let mut builder = LogBuilder::new()
-        .targets(targets)
-        .level(directives.global)
-        // KeepOne caps disk usage: on rotation the previous file is discarded
-        // rather than retained forever, so a chatty or crash-looping release
-        // build cannot grow the log directory without bound.
-        .max_file_size(MAX_LOG_FILE_SIZE)
-        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne);
+    let mut builder = LogBuilder::new().targets(targets).level(directives.global);
 
     // Quiet known-noisy crates first; RUST_LOG overrides still win after.
     for (module, level) in default_quiet_modules() {
@@ -77,6 +79,90 @@ pub fn build_log_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     }
 
     builder.build()
+}
+
+/// Where GUI log lines go: held in memory until the log directory is known
+/// (it needs the app handle, which does not exist yet when the plugin is
+/// built), then the daily file.
+enum GuiLogSink {
+    Pending(Vec<u8>),
+    Open(DailyLogFile),
+}
+
+/// Most bytes held before the log directory is attached. Startup logs a few
+/// KB; the cap only matters if attaching never happens.
+const PENDING_LOG_LIMIT: usize = 1024 * 1024;
+
+static GUI_LOG: Mutex<GuiLogSink> = Mutex::new(GuiLogSink::Pending(Vec::new()));
+
+struct GuiLogWriter;
+
+impl Write for GuiLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut sink = GUI_LOG
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &mut *sink {
+            GuiLogSink::Pending(held) => {
+                if held.len() + buf.len() <= PENDING_LOG_LIMIT {
+                    held.extend_from_slice(buf);
+                }
+            }
+            GuiLogSink::Open(file) => file.write_all(buf)?,
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut sink = GUI_LOG
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &mut *sink {
+            GuiLogSink::Pending(_) => Ok(()),
+            GuiLogSink::Open(file) => file.flush(),
+        }
+    }
+}
+
+/// Start writing the GUI log in `dir`, beginning with whatever was logged
+/// before the directory was known.
+///
+/// Reads the brand seam, so call it on the setup thread (FORBID-07).
+pub fn attach_gui_log_dir(dir: &Path) -> std::io::Result<()> {
+    let mut file = DailyLogFile::open(dir.join(log_file_base_name()), MAX_LOG_FILE_SIZE as u64)?;
+    let mut sink = GUI_LOG
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let GuiLogSink::Pending(held) = &*sink {
+        file.write_all(held)?;
+    }
+    *sink = GuiLogSink::Open(file);
+    Ok(())
+}
+
+/// The user's log retention in days; 0 until the renderer reports it.
+///
+/// Nothing is deleted before then. Sweeping at startup with a default would
+/// delete days a user who chose a longer retention asked to keep.
+static LOG_RETENTION_DAYS: AtomicU32 = AtomicU32::new(0);
+
+/// Longest retention the setting accepts.
+pub const MAX_LOG_RETENTION_DAYS: u32 = 365;
+
+/// Adopt `days` (clamped to 1..=[`MAX_LOG_RETENTION_DAYS`]) and sweep `dir` with
+/// it now. Returns the deleted archives.
+pub fn set_log_retention_days(dir: &Path, days: u32) -> Vec<PathBuf> {
+    let days = days.clamp(1, MAX_LOG_RETENTION_DAYS);
+    LOG_RETENTION_DAYS.store(days, Ordering::SeqCst);
+    prune_log_dir(dir, days, chrono::Utc::now().date_naive())
+}
+
+/// Sweep `dir` with the retention last reported, if any.
+pub fn prune_logs_with_current_retention(dir: &Path) -> Vec<PathBuf> {
+    match LOG_RETENTION_DAYS.load(Ordering::SeqCst) {
+        0 => Vec::new(),
+        days => prune_log_dir(dir, days, chrono::Utc::now().date_naive()),
+    }
 }
 
 /// Bridge `tracing` events from shared web/WS admission paths into the `log`
@@ -294,6 +380,60 @@ mod tests {
             log_file_base_name(),
             format!("{}.log", brand::LEGACY.log_file_name)
         );
+    }
+
+    /// Lines logged before the directory is known are not lost: they open the
+    /// file, followed by everything after.
+    #[test]
+    fn the_gui_log_keeps_what_was_logged_before_its_directory_was_known() {
+        let dir = tempfile::tempdir().unwrap();
+        GuiLogWriter.write_all(b"early line\n").unwrap();
+
+        attach_gui_log_dir(dir.path()).unwrap();
+        GuiLogWriter.write_all(b"later line\n").unwrap();
+        GuiLogWriter.flush().unwrap();
+
+        let written = std::fs::read_to_string(dir.path().join(log_file_base_name())).unwrap();
+        assert_eq!(written, "early line\nlater line\n");
+    }
+
+    /// Only this test touches the retention static, so its steps are ordered.
+    #[test]
+    fn retention_sweeps_only_once_the_user_setting_is_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let today = chrono::Utc::now().date_naive();
+        let archive = |days_ago: i64| {
+            let day = today - chrono::Duration::days(days_ago);
+            let path = dir
+                .path()
+                .join(format!("se-manager.{}.log", day.format("%Y-%m-%d")));
+            std::fs::write(&path, "x").unwrap();
+            path
+        };
+        let ten_days = archive(10);
+        let three_days = archive(3);
+
+        assert!(
+            prune_logs_with_current_retention(dir.path()).is_empty(),
+            "no sweep before the renderer reports the setting"
+        );
+        assert!(ten_days.exists());
+
+        assert_eq!(
+            set_log_retention_days(dir.path(), 7),
+            vec![ten_days.clone()]
+        );
+        assert!(three_days.exists());
+
+        // Later sweeps reuse the reported value.
+        let eight_days = archive(8);
+        assert_eq!(
+            prune_logs_with_current_retention(dir.path()),
+            vec![eight_days]
+        );
+
+        // Zero is not "keep nothing forever"; it clamps to today only.
+        assert_eq!(set_log_retention_days(dir.path(), 0), vec![three_days]);
     }
 
     #[test]

@@ -384,7 +384,11 @@
     "copyContents": "Copy Log Contents",
     "copyContentsHint": "Copy logs to clipboard",
     "exportDefault": "Export to Default Directory",
-    "exportDefaultHint": "Save directly to Downloads"
+    "exportDefaultHint": "Save directly to Downloads",
+    "retention": "Keep logs for",
+    "retentionDays_one": "{{count}} day",
+    "retentionDays_other": "{{count}} days",
+    "retentionHint": "Logs older than this, today included, are deleted automatically. A new log file starts each day, and whenever one passes 5 MB."
   },
   "reset": {
     "description": "Restore all settings to their default values.",

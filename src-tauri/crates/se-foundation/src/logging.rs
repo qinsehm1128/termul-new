@@ -8,9 +8,10 @@ use std::sync::OnceLock;
 use log::LevelFilter;
 use uuid::Uuid;
 
-/// Maximum size of a single log file before it is rotated (5 MB). Old logs are
-/// renamed to a timestamped file (`KeepAll`) so the lifecycle narrative that
-/// led to a crash survives rotation while individual files stay attachable.
+/// Maximum size of a single log file before it rolls over (5 MB), on top of the
+/// daily roll in [`crate::log_files::DailyLogFile`]. Archives are kept until
+/// the retention sweep removes them, so the narrative that led to a crash
+/// survives rotation while individual files stay attachable.
 pub const MAX_LOG_FILE_SIZE: u128 = 5 * 1024 * 1024;
 
 static SESSION_ID: OnceLock<String> = OnceLock::new();
@@ -185,7 +186,7 @@ pub fn open_core_log_file(path: &std::path::Path) -> std::io::Result<std::fs::Fi
 /// by hand) or the file cannot be opened.
 pub fn install_core_logger() -> Option<std::path::PathBuf> {
     let path = std::path::PathBuf::from(std::env::var_os(CORE_LOG_FILE_ENV)?);
-    let file = open_core_log_file(&path).ok()?;
+    let file = crate::log_files::DailyLogFile::open(&path, MAX_LOG_FILE_SIZE as u64).ok()?;
     let logger: &'static CoreFileLogger =
         Box::leak(Box::new(CoreFileLogger::new(file, resolve_directives())));
     log::set_logger(logger).ok()?;
@@ -197,14 +198,14 @@ pub fn install_core_logger() -> Option<std::path::PathBuf> {
 /// `log` backend for Core processes. Lines match the GUI file format
 /// (`[date][time][target][LEVEL] message`, UTC) so both files read alike.
 struct CoreFileLogger {
-    file: std::sync::Mutex<std::fs::File>,
+    file: std::sync::Mutex<crate::log_files::DailyLogFile>,
     global: LevelFilter,
     /// Quiet defaults first, then `RUST_LOG` overrides; the last match wins.
     per_module: Vec<(String, LevelFilter)>,
 }
 
 impl CoreFileLogger {
-    fn new(file: std::fs::File, directives: LogDirectives) -> Self {
+    fn new(file: crate::log_files::DailyLogFile, directives: LogDirectives) -> Self {
         let mut per_module = default_quiet_modules();
         per_module.extend(directives.per_module);
         Self {
@@ -393,7 +394,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.log");
         let logger = CoreFileLogger::new(
-            open_core_log_file(&path).unwrap(),
+            crate::log_files::DailyLogFile::open(&path, MAX_LOG_FILE_SIZE as u64).unwrap(),
             LogDirectives {
                 global: LevelFilter::Info,
                 per_module: vec![("noisy".to_string(), LevelFilter::Warn)],

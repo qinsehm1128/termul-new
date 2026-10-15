@@ -4,6 +4,7 @@ pub mod brand;
 pub mod durable_fs;
 pub mod host_admission;
 pub mod ids;
+pub mod log_files;
 pub mod logging;
 pub mod path_validation;
 pub mod shell_paths;

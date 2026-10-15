@@ -54,6 +54,8 @@ export const useOrphanDetectionEnabled = () =>
   useAppSettingsStore((state) => state.settings.orphanDetectionEnabled)
 export const useOrphanDetectionTimeout = () =>
   useAppSettingsStore((state) => state.settings.orphanDetectionTimeout)
+export const useLogRetentionDays = () =>
+  useAppSettingsStore((state) => state.settings.logRetentionDays)
 export const useConfirmTerminalClose = () =>
   useAppSettingsStore((state) => state.settings.confirmTerminalClose)
 export const useConfirmTerminalTerminate = () =>

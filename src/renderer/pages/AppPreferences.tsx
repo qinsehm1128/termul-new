@@ -82,6 +82,7 @@ import {
   useDefaultShell,
   useEditorAutoSave,
   useEditorAutoSaveDelayMs,
+  useLogRetentionDays,
   useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout,
@@ -114,6 +115,7 @@ import {
   DEFAULT_APP_SETTINGS,
   EDITOR_AUTO_SAVE_DELAY_OPTIONS,
   FONT_FAMILY_OPTIONS,
+  LOG_RETENTION_OPTIONS,
   MAX_TERMINALS_OPTIONS,
   normalizeTerminalUrlOpenMode,
   ORPHAN_TIMEOUT_OPTIONS,
@@ -453,6 +455,7 @@ export default function AppPreferences(): React.JSX.Element {
   const maxTerminals = useMaxTerminalsPerProject()
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
+  const logRetentionDays = useLogRetentionDays()
   const confirmTerminalClose = useConfirmTerminalClose()
   const resumeAgentSessionsOnRestore = useResumeAgentSessionsOnRestore()
   const confirmTerminalTerminate = useConfirmTerminalTerminate()
@@ -688,6 +691,15 @@ export default function AppPreferences(): React.JSX.Element {
       await terminalApi.updateOrphanDetection(enabled, orphanDetectionTimeout)
     } catch (error) {
       console.error('Failed to update orphan detection:', error)
+    }
+  }
+
+  const handleLogRetentionChange = async (days: number) => {
+    await updateSetting('logRetentionDays', days)
+    try {
+      await logApi.setLogRetentionDays(days)
+    } catch (error) {
+      console.error('Failed to update log retention:', error)
     }
   }
 
@@ -2286,6 +2298,32 @@ export default function AppPreferences(): React.JSX.Element {
                     </div>
                   </button>
                 </div>
+
+                {isTauriContext() && (
+                  <div>
+                    <label
+                      htmlFor="log-retention-days"
+                      className="block text-sm font-medium text-secondary-foreground mb-2"
+                    >
+                      {tSettings('diagnostics.retention')}
+                    </label>
+                    <select
+                      id="log-retention-days"
+                      value={logRetentionDays}
+                      onChange={(e) => void handleLogRetentionChange(parseInt(e.target.value, 10))}
+                      className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
+                    >
+                      {LOG_RETENTION_OPTIONS.map((days) => (
+                        <option key={days} value={days}>
+                          {tSettings('diagnostics.retentionDays', { count: days })}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {tSettings('diagnostics.retentionHint')}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </SettingsSection>

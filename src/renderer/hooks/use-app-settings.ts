@@ -1,7 +1,7 @@
 import { brandCanonical, LEGACY } from '@shared/brand'
 import { useCallback, useEffect } from 'react'
 import { runtimeT } from '@/i18n/runtime'
-import { acpApi, persistenceApi, terminalApi } from '@/lib/api'
+import { acpApi, logApi, persistenceApi, terminalApi } from '@/lib/api'
 import { getSystemAppearance, normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useCliSessionPanelStore } from '@/stores/cli-session-panel-store'
@@ -270,6 +270,14 @@ export function useAppSettingsLoader(): void {
         )
       } catch (error) {
         console.error('Failed to apply orphan detection settings:', error)
+      }
+
+      // The host deletes nothing until it hears the user's retention, so this
+      // also starts log cleanup for the session.
+      try {
+        await logApi.setLogRetentionDays(settings.logRetentionDays)
+      } catch (error) {
+        console.error('Failed to apply log retention:', error)
       }
 
       // Push the ACP timeout overrides to the Rust core (desktop-only via the
