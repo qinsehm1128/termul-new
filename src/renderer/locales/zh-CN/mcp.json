@@ -20,6 +20,12 @@
         "name": "项目范围",
         "description": "向 MCP 客户端暴露当前项目边界。"
       }
+    },
+    "tabs": {
+      "label": "MCP 分区",
+      "gateway": "连接 Agent",
+      "servers": "MCP 服务器",
+      "descriptions": "服务器说明"
     }
   },
   "common": {

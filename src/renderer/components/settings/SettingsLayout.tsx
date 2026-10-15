@@ -294,7 +294,7 @@ export function SettingsLayout({
         ref={contentRef}
         className="min-w-0 flex-1 overflow-y-auto bg-background px-8 pb-32 pt-7"
       >
-        <div className="mx-auto max-w-4xl space-y-8">{children}</div>
+        <div className="mx-auto max-w-6xl space-y-8">{children}</div>
       </div>
     </div>
   )

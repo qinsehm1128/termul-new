@@ -222,6 +222,10 @@
       "writeDescription": "此操作只会写入 Termul 管理的规范文件和投影记录，不会修改未管理文件。",
       "confirm": "确认",
       "cancel": "取消"
+    },
+    "tabs": {
+      "label": "技能分区",
+      "detail": "技能详情"
     }
   },
   "scheduledTasks": {
@@ -259,7 +263,8 @@
       "cancelled": "已取消",
       "skipped": "已跳过",
       "interrupted": "已中断"
-    }
+    },
+    "tabsLabel": "定时任务分区"
   },
   "brandMigration": {
     "title": "发现旧版数据",

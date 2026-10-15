@@ -1,5 +1,14 @@
 import type { ScheduledTaskRecordV1 } from '@shared/types/scheduled-task.types'
-import { CalendarClock, CirclePlay, Pause, Play, RefreshCw } from 'lucide-react'
+import {
+  CalendarClock,
+  CirclePlay,
+  FileText,
+  History,
+  Pause,
+  Play,
+  RefreshCw,
+  ScrollText
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -14,6 +23,7 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from '@/components/ui/page-tabs'
 import { cn } from '@/lib/utils'
 import { useScheduledTaskStore, useSelectedScheduledTask } from '@/stores/scheduled-task-store'
 
@@ -124,7 +134,7 @@ export default function ScheduledTasks(): React.JSX.Element {
             {t('scheduledTasks.selectTask')}
           </div>
         ) : (
-          <div className="mx-auto max-w-4xl space-y-6">
+          <div className="mx-auto max-w-6xl space-y-6">
             <header className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h1 className="text-xl font-semibold">{task.name}</h1>
@@ -173,64 +183,85 @@ export default function ScheduledTasks(): React.JSX.Element {
               </div>
             </header>
 
-            <section className="rounded-lg border border-border p-4">
-              <h2 className="mb-2 text-sm font-semibold">{t('scheduledTasks.prompt')}</h2>
-              <pre className="whitespace-pre-wrap font-sans text-sm text-muted-foreground">
-                {task.prompt}
-              </pre>
-              <div className="mt-4 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-                <div>{t('scheduledTasks.agent', { agent: task.agentConfigId })}</div>
-                <div>{t('scheduledTasks.revision', { revision: task.revision })}</div>
-                <div>
-                  {task.projectId
-                    ? t('scheduledTasks.project', { project: task.projectId })
-                    : t('scheduledTasks.noProject')}
-                </div>
-                <div className="truncate">
-                  {t('scheduledTasks.workspace', { workspace: task.workspaceCwd })}
-                </div>
-                <div className="truncate sm:col-span-2">
-                  {t('scheduledTasks.hash', { hash: task.draftHash })}
-                </div>
-              </div>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-sm font-semibold">{t('scheduledTasks.history')}</h2>
-              <div className="space-y-2">
-                {runs.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">{t('scheduledTasks.noRuns')}</p>
-                ) : null}
-                {runs.map((run) => (
-                  <button
-                    key={run.runId}
-                    type="button"
-                    disabled={!run.conversationId}
-                    onClick={() => run.conversationId && navigate(`/c/${run.conversationId}`)}
-                    className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left hover:bg-secondary disabled:hover:bg-transparent"
-                  >
-                    <span className="text-sm">{t(`scheduledTasks.runStatus.${run.status}`)}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(run.queuedAt).toLocaleString()}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-sm font-semibold">{t('scheduledTasks.audit')}</h2>
-              <div className="space-y-1 text-xs text-muted-foreground">
-                {audit.map((entry) => (
-                  <div key={entry.eventId} className="flex justify-between rounded px-2 py-1">
-                    <span>
-                      {entry.action} · {entry.actor}
-                    </span>
-                    <span>{new Date(entry.createdAt).toLocaleString()}</span>
+            <PageTabs defaultValue="prompt">
+              <PageTabsList aria-label={t('scheduledTasks.tabsLabel')}>
+                <PageTabsTrigger value="prompt" icon={<FileText aria-hidden="true" />}>
+                  {t('scheduledTasks.prompt')}
+                </PageTabsTrigger>
+                <PageTabsTrigger value="history" icon={<History aria-hidden="true" />}>
+                  {t('scheduledTasks.history')}
+                </PageTabsTrigger>
+                <PageTabsTrigger value="audit" icon={<ScrollText aria-hidden="true" />}>
+                  {t('scheduledTasks.audit')}
+                </PageTabsTrigger>
+              </PageTabsList>
+              <PageTabsContent value="prompt">
+                <section className="rounded-lg border border-border p-4">
+                  <h2 className="mb-2 text-sm font-semibold">{t('scheduledTasks.prompt')}</h2>
+                  <pre className="whitespace-pre-wrap font-sans text-sm text-muted-foreground">
+                    {task.prompt}
+                  </pre>
+                  <div className="mt-4 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                    <div>{t('scheduledTasks.agent', { agent: task.agentConfigId })}</div>
+                    <div>{t('scheduledTasks.revision', { revision: task.revision })}</div>
+                    <div>
+                      {task.projectId
+                        ? t('scheduledTasks.project', { project: task.projectId })
+                        : t('scheduledTasks.noProject')}
+                    </div>
+                    <div className="truncate">
+                      {t('scheduledTasks.workspace', { workspace: task.workspaceCwd })}
+                    </div>
+                    <div className="truncate sm:col-span-2">
+                      {t('scheduledTasks.hash', { hash: task.draftHash })}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </section>
+                </section>
+              </PageTabsContent>
+
+              <PageTabsContent value="history">
+                <section>
+                  <h2 className="mb-2 text-sm font-semibold">{t('scheduledTasks.history')}</h2>
+                  <div className="space-y-2">
+                    {runs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">{t('scheduledTasks.noRuns')}</p>
+                    ) : null}
+                    {runs.map((run) => (
+                      <button
+                        key={run.runId}
+                        type="button"
+                        disabled={!run.conversationId}
+                        onClick={() => run.conversationId && navigate(`/c/${run.conversationId}`)}
+                        className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left hover:bg-secondary disabled:hover:bg-transparent"
+                      >
+                        <span className="text-sm">
+                          {t(`scheduledTasks.runStatus.${run.status}`)}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(run.queuedAt).toLocaleString()}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </PageTabsContent>
+
+              <PageTabsContent value="audit">
+                <section>
+                  <h2 className="mb-2 text-sm font-semibold">{t('scheduledTasks.audit')}</h2>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    {audit.map((entry) => (
+                      <div key={entry.eventId} className="flex justify-between rounded px-2 py-1">
+                        <span>
+                          {entry.action} · {entry.actor}
+                        </span>
+                        <span>{new Date(entry.createdAt).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </PageTabsContent>
+            </PageTabs>
           </div>
         )}
       </main>

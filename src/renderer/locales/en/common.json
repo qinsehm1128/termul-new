@@ -222,6 +222,10 @@
       "writeDescription": "This writes only Termul-owned canonical files and recorded projections. Unmanaged files are left unchanged.",
       "confirm": "Confirm",
       "cancel": "Cancel"
+    },
+    "tabs": {
+      "label": "Skill sections",
+      "detail": "Skill details"
     }
   },
   "scheduledTasks": {
@@ -259,7 +263,8 @@
       "cancelled": "Cancelled",
       "skipped": "Skipped",
       "interrupted": "Interrupted"
-    }
+    },
+    "tabsLabel": "Scheduled task sections"
   },
   "brandMigration": {
     "title": "Legacy data found",

@@ -37,7 +37,8 @@
     "purposesDescription": "为各项功能选择使用的渠道和模型。",
     "purposeChannel": "渠道",
     "purposeModel": "模型",
-    "purposeNone": "未选择"
+    "purposeNone": "未选择",
+    "tabsLabel": "AI 渠道分区"
   },
   "apis": {
     "openai-completions": "OpenAI Chat Completions",

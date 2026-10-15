@@ -1,9 +1,21 @@
-import { BrainCircuit, Download, Loader2, Plus, Save, Trash2, X, Zap } from 'lucide-react'
+import {
+  BrainCircuit,
+  Download,
+  Loader2,
+  Network,
+  Plus,
+  Save,
+  Target,
+  Trash2,
+  X,
+  Zap
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from '@/components/ui/page-tabs'
 import { Switch } from '@/components/ui/switch'
 import {
   AI_APIS,
@@ -367,114 +379,136 @@ export default function AiChannelsPage(): React.JSX.Element {
         </div>
         <p className="mt-1 text-sm text-muted-foreground">{t('page.subtitle')}</p>
       </header>
-      <main className="mx-auto w-full max-w-4xl space-y-4 p-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-foreground">{t('page.channels')}</span>
-          <div className="ml-auto flex flex-wrap gap-2">
-            {AI_CHANNEL_PRESETS.map((preset) => (
-              <Button
-                key={preset.id}
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => addChannel(preset.id)}
-              >
-                <Plus />
-                {t(`presets.${preset.id}`)}
-              </Button>
-            ))}
-            <Button type="button" size="sm" disabled={!dirty || saving} onClick={() => void save()}>
+      <main className="mx-auto w-full max-w-6xl space-y-4 p-6">
+        <PageTabs defaultValue="channels">
+          <div className="flex flex-wrap items-center gap-3">
+            <PageTabsList aria-label={t('page.tabsLabel')}>
+              <PageTabsTrigger value="channels" icon={<Network aria-hidden="true" />}>
+                {t('page.channels')}
+              </PageTabsTrigger>
+              <PageTabsTrigger value="purposes" icon={<Target aria-hidden="true" />}>
+                {t('page.purposes')}
+              </PageTabsTrigger>
+            </PageTabsList>
+            {/* Both tabs edit one document, so saving is not a tab's action. */}
+            <Button
+              type="button"
+              size="sm"
+              className="ml-auto"
+              disabled={!dirty || saving}
+              onClick={() => void save()}
+            >
               {saving ? <Loader2 className="animate-spin" /> : <Save />}
               {t('page.save')}
             </Button>
           </div>
-        </div>
-
-        {document.channels.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            {t('page.noChannels')}
-          </div>
-        ) : null}
-        {document.channels.map((channel) => (
-          <ChannelCard
-            key={channel.id}
-            channel={channel}
-            hasKey={keys[channel.id] === true}
-            onKeyChange={(stored) => setKeys((current) => ({ ...current, [channel.id]: stored }))}
-            onChange={(next) =>
-              change({
-                ...document,
-                channels: document.channels.map((item) => (item.id === next.id ? next : item))
-              })
-            }
-            onRemove={() =>
-              change({
-                ...document,
-                channels: document.channels.filter((item) => item.id !== channel.id),
-                purposes:
-                  summary?.channelId === channel.id
-                    ? { ...document.purposes, mcpSummary: undefined }
-                    : document.purposes
-              })
-            }
-          />
-        ))}
-
-        <section className="space-y-3 rounded-lg border border-border bg-secondary/20 p-4">
-          <div>
-            <p className="text-sm font-medium text-foreground">{t('page.purposes')}</p>
-            <p className="text-xs text-muted-foreground">{t('page.purposesDescription')}</p>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-[12rem_1fr_1fr] sm:items-center">
-            <span className="text-sm text-foreground">{t('purposes.mcpSummary')}</span>
-            <select
-              aria-label={t('page.purposeChannel')}
-              className={SELECT_CLASS}
-              value={summary?.channelId ?? ''}
-              onChange={(event) => {
-                const channel = document.channels.find((item) => item.id === event.target.value)
-                change({
-                  ...document,
-                  purposes: {
-                    ...document.purposes,
-                    mcpSummary: channel
-                      ? { channelId: channel.id, model: channel.models[0] ?? '' }
-                      : undefined
-                  }
-                })
-              }}
-            >
-              <option value="">{t('page.purposeNone')}</option>
-              {document.channels.map((channel) => (
-                <option key={channel.id} value={channel.id}>
-                  {channel.name || t('page.untitled')}
-                </option>
+          <PageTabsContent value="channels" className="space-y-4">
+            <div className="flex flex-wrap justify-end gap-2">
+              {AI_CHANNEL_PRESETS.map((preset) => (
+                <Button
+                  key={preset.id}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => addChannel(preset.id)}
+                >
+                  <Plus />
+                  {t(`presets.${preset.id}`)}
+                </Button>
               ))}
-            </select>
-            <select
-              aria-label={t('page.purposeModel')}
-              className={SELECT_CLASS}
-              value={summary?.model ?? ''}
-              disabled={!summaryChannel}
-              onChange={(event) =>
-                summary &&
-                change({
-                  ...document,
-                  purposes: {
-                    ...document.purposes,
-                    mcpSummary: { ...summary, model: event.target.value }
+            </div>
+
+            {document.channels.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+                {t('page.noChannels')}
+              </div>
+            ) : null}
+            {document.channels.map((channel) => (
+              <ChannelCard
+                key={channel.id}
+                channel={channel}
+                hasKey={keys[channel.id] === true}
+                onKeyChange={(stored) =>
+                  setKeys((current) => ({ ...current, [channel.id]: stored }))
+                }
+                onChange={(next) =>
+                  change({
+                    ...document,
+                    channels: document.channels.map((item) => (item.id === next.id ? next : item))
+                  })
+                }
+                onRemove={() =>
+                  change({
+                    ...document,
+                    channels: document.channels.filter((item) => item.id !== channel.id),
+                    purposes:
+                      summary?.channelId === channel.id
+                        ? { ...document.purposes, mcpSummary: undefined }
+                        : document.purposes
+                  })
+                }
+              />
+            ))}
+          </PageTabsContent>
+
+          <PageTabsContent value="purposes">
+            <section className="space-y-3 rounded-lg border border-border bg-secondary/20 p-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">{t('page.purposes')}</p>
+                <p className="text-xs text-muted-foreground">{t('page.purposesDescription')}</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-[12rem_1fr_1fr] sm:items-center">
+                <span className="text-sm text-foreground">{t('purposes.mcpSummary')}</span>
+                <select
+                  aria-label={t('page.purposeChannel')}
+                  className={SELECT_CLASS}
+                  value={summary?.channelId ?? ''}
+                  onChange={(event) => {
+                    const channel = document.channels.find((item) => item.id === event.target.value)
+                    change({
+                      ...document,
+                      purposes: {
+                        ...document.purposes,
+                        mcpSummary: channel
+                          ? { channelId: channel.id, model: channel.models[0] ?? '' }
+                          : undefined
+                      }
+                    })
+                  }}
+                >
+                  <option value="">{t('page.purposeNone')}</option>
+                  {document.channels.map((channel) => (
+                    <option key={channel.id} value={channel.id}>
+                      {channel.name || t('page.untitled')}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label={t('page.purposeModel')}
+                  className={SELECT_CLASS}
+                  value={summary?.model ?? ''}
+                  disabled={!summaryChannel}
+                  onChange={(event) =>
+                    summary &&
+                    change({
+                      ...document,
+                      purposes: {
+                        ...document.purposes,
+                        mcpSummary: { ...summary, model: event.target.value }
+                      }
+                    })
                   }
-                })
-              }
-            >
-              {(summaryChannel?.models ?? []).map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </div>
-        </section>
+                >
+                  {(summaryChannel?.models ?? []).map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+          </PageTabsContent>
+        </PageTabs>
         <p className="text-xs text-muted-foreground">{t('page.security')}</p>
       </main>
     </div>
