@@ -212,6 +212,45 @@ describe('use-pane-dnd routing', () => {
     expect(result.current.previewTarget).toBeNull()
   })
 
+  describe('a drag whose dragend never arrives', () => {
+    function stuckDrag() {
+      const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <PaneDndProvider>{children}</PaneDndProvider>
+      )
+      const { result } = renderHook(() => usePaneDnd(), { wrapper })
+      act(() => {
+        result.current.startTabDrag('tab-1', 'pane-a', createDragEvent())
+      })
+      return result
+    }
+
+    function pointer(type: 'pointermove' | 'pointerdown', buttons: number): void {
+      act(() => {
+        document.dispatchEvent(new MouseEvent(type, { buttons, bubbles: true }))
+      })
+    }
+
+    it('ends on the first pointer move with no button held', () => {
+      const result = stuckDrag()
+
+      // A held button is still the gesture that started the drag.
+      pointer('pointermove', 1)
+      expect(result.current.isDragging).toBe(true)
+
+      pointer('pointermove', 0)
+      expect(result.current.isDragging).toBe(false)
+      expect(result.current.dragPayload).toBeNull()
+    })
+
+    it('ends on a click', () => {
+      const result = stuckDrag()
+
+      pointer('pointerdown', 1)
+
+      expect(result.current.isDragging).toBe(false)
+    })
+  })
+
   describe('handleTabReorder', () => {
     /** Render the hook with a drag already in flight from `sourcePaneId`. */
     function dragging(tabId: string, sourcePaneId: string) {
@@ -248,6 +287,10 @@ describe('use-pane-dnd routing', () => {
       })
       expect(moveTabToPane).toHaveBeenCalledWith('tab-9', 'pane-b', 'pane-a', 1)
 
+      // The drop ended that drag; aim the next one after the target.
+      act(() => {
+        result.current.startTabDrag('tab-9', 'pane-b', createDragEvent())
+      })
       act(() => {
         result.current.handleTabReorder('pane-a', 'tab-2', 'after')
       })
@@ -255,6 +298,25 @@ describe('use-pane-dnd routing', () => {
 
       // A cross-pane drop is a move, never a reorder of a list the tab is not in.
       expect(reorderTabsInPane).not.toHaveBeenCalled()
+    })
+
+    /**
+     * Moving the tab unmounts the element the drag started on, so its
+     * `dragend` never reaches `document`. Left to that event, every pane kept
+     * its drop overlay and all terminals stopped taking scroll, selection and
+     * paste while still printing underneath.
+     */
+    it('ends the drag itself when a cross-pane drop moves the tab', () => {
+      mockFindPaneById.mockReturnValue(twoTabs)
+      const result = dragging('tab-9', 'pane-b')
+      expect(result.current.isDragging).toBe(true)
+
+      act(() => {
+        result.current.handleTabReorder('pane-a', 'tab-2', 'before')
+      })
+
+      expect(result.current.isDragging).toBe(false)
+      expect(result.current.dragPayload).toBeNull()
     })
 
     it('still reorders within one pane without moving anything', () => {
