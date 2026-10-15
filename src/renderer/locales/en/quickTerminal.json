@@ -38,5 +38,8 @@
   "renameFailed": "Rename failed",
   "deleteFailed": "Delete failed",
   "closeFailed": "Could not close the terminal",
-  "untitled": "Untitled terminal"
+  "untitled": "Untitled terminal",
+  "preview": "Preview of {{name}}",
+  "closePreview": "Close preview",
+  "resizePreview": "Drag to resize the preview"
 }

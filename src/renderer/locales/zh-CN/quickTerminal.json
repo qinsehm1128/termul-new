@@ -38,5 +38,8 @@
   "renameFailed": "重命名失败",
   "deleteFailed": "删除失败",
   "closeFailed": "关闭终端失败",
-  "untitled": "未命名终端"
+  "untitled": "未命名终端",
+  "preview": "{{name}} 的预览",
+  "closePreview": "关闭预览",
+  "resizePreview": "拖动调整预览宽度"
 }

@@ -1,6 +1,6 @@
 import type { QuickTerminalRecord, QuickTerminalTarget } from '@shared/types/quick-terminal.types'
 import { FolderPlus, MoreHorizontal, Plus, Terminal as TerminalIcon } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -38,12 +38,15 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { claimFileOpens, releaseShownFile } from '@/lib/file-open-target'
 import { formatRelativeTime } from '@/lib/git-time'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { isTerminalRunning } from '@/lib/terminal-board'
+import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { Project } from '@/types/project'
+import { QuickTerminalFilePreview } from './QuickTerminalFilePreview'
 import { QuickTerminalView } from './QuickTerminalView'
 import { quickTerminalApi } from './quick-terminal-api'
 import { failureMessage, quickTerminalName, useQuickTerminalStore } from './quick-terminal-store'
@@ -112,6 +115,11 @@ export default function QuickTerminalsPage(): React.JSX.Element {
   const [renaming, setRenaming] = useState<QuickTerminalRecord | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleting, setDeleting] = useState<QuickTerminalRecord | null>(null)
+  const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const newShortcut = useKeyboardShortcutsStore((state) => {
+    const shortcut = state.shortcuts.newTerminal
+    return shortcut?.customKey ?? shortcut?.defaultKey ?? ''
+  })
 
   useEffect(() => {
     void load()
@@ -130,12 +138,42 @@ export default function QuickTerminalsPage(): React.JSX.Element {
     )
   }, [records, query])
   const selected = records.find((record) => record.id === quickTerminalId)
+  const selectedId = selected?.id
+
+  // The workspace panes are hidden here, so files opened from the tree are
+  // shown beside the shell instead.
+  useEffect(() => claimFileOpens(setPreviewPath), [])
+  // A file belongs to the folder it was opened from.
+  useEffect(() => {
+    void selectedId
+    setPreviewPath(null)
+  }, [selectedId])
+  useEffect(() => {
+    if (!previewPath) return
+    return () => releaseShownFile(previewPath)
+  }, [previewPath])
 
   const createIn = async (target: QuickTerminalTarget): Promise<void> => {
     const result = await createQuickTerminal(target)
     if (result.success && result.data) navigate(`/quick-terminals/${result.data.id}`)
     else toast.error(failureMessage(result, t('createFailed')))
   }
+
+  // The new-terminal shortcut opens a quick terminal in a new folder here, as
+  // the first entry of the new menu does.
+  const createInRef = useRef(createIn)
+  createInRef.current = createIn
+  useEffect(() => {
+    if (!newShortcut) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || !matchesShortcut(event, newShortcut)) return
+      event.preventDefault()
+      event.stopPropagation()
+      void createInRef.current({ kind: 'workspace' })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [newShortcut])
 
   const submitRename = async (): Promise<void> => {
     if (!renaming) return
@@ -285,14 +323,19 @@ export default function QuickTerminalsPage(): React.JSX.Element {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1">
-        {selected ? (
-          <QuickTerminalView key={selected.id} record={selected} />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {t('selectHint')}
-          </div>
-        )}
+      <main className="flex min-w-0 flex-1">
+        <div className="min-w-0 flex-1">
+          {selected ? (
+            <QuickTerminalView key={selected.id} record={selected} />
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              {t('selectHint')}
+            </div>
+          )}
+        </div>
+        {selected && previewPath ? (
+          <QuickTerminalFilePreview path={previewPath} onClose={() => setPreviewPath(null)} />
+        ) : null}
       </main>
 
       <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
