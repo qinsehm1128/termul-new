@@ -19,7 +19,22 @@ interface PendingDebounceEntry<T = unknown> {
   activeWrite: Promise<IpcResult<void>> | null
 }
 
-let storeInstance: Store | null = null
+/**
+ * Command history lives in one small file per project instead of the shared
+ * store. `save()` rewrites a whole file, and agent prompts make history the
+ * bulk of the data: with it in the shared file, every prompt sent rewrote
+ * ~5 MB, and every unrelated write rewrote the history too.
+ */
+const COMMAND_HISTORY_KEY_PATTERN = /^projects\/([^/]+)\/command-history$/
+
+function storeFileFor(key: string): string {
+  const match = COMMAND_HISTORY_KEY_PATTERN.exec(key)
+  return match ? `command-history/${match[1]}.json` : STORE_FILE
+}
+
+const storeInstances = new Map<string, Promise<Store>>()
+/** Keys whose copy in the shared store is known to be gone. */
+const legacyCopyCleared = new Set<string>()
 const pendingDebounce = new Map<string, PendingDebounceEntry>()
 
 function createSuccessResult(): IpcResult<void> {
@@ -32,19 +47,39 @@ function resolvePendingResolvers(resolvers: PendingWriteResolver[], result: IpcR
   })
 }
 
-async function getStore(): Promise<Store> {
-  if (!storeInstance) {
-    storeInstance = await Store.load(STORE_FILE, { autoSave: false, defaults: {} })
+function getStore(file: string = STORE_FILE): Promise<Store> {
+  let store = storeInstances.get(file)
+  if (!store) {
+    store = Store.load(file, { autoSave: false, defaults: {} })
+    // A failed load must not stick: the next call retries.
+    store.catch(() => storeInstances.delete(file))
+    storeInstances.set(file, store)
   }
-  return storeInstance
+  return store
+}
+
+/**
+ * Drop the copy a key left in the shared store before it moved to its own
+ * file. Runs once per key per session; the shared file is only rewritten when
+ * there was something to remove.
+ */
+async function dropLegacyCopy(key: string): Promise<void> {
+  if (storeFileFor(key) === STORE_FILE || legacyCopyCleared.has(key)) return
+  const shared = await getStore()
+  if ((await shared.get(key)) != null) {
+    await shared.delete(key)
+    await shared.save()
+  }
+  legacyCopyCleared.add(key)
 }
 
 async function persistVersionedData<T>(key: string, data: T): Promise<IpcResult<void>> {
   try {
-    const store = await getStore()
+    const store = await getStore(storeFileFor(key))
     const versioned: PersistedStore<T> = { _version: CURRENT_VERSION, data }
     await store.set(key, versioned)
     await store.save()
+    await dropLegacyCopy(key)
     return createSuccessResult()
   } catch (err) {
     return { success: false, error: String(err), code: 'WRITE_ERROR' }
@@ -110,8 +145,12 @@ async function flushPendingEntry(
 export const tauriPersistenceApi = {
   async read<T>(key: string): Promise<IpcResult<T>> {
     try {
-      const store = await getStore()
-      const raw = await store.get<PersistedStore<T> | T>(key)
+      const file = storeFileFor(key)
+      let raw = await (await getStore(file)).get<PersistedStore<T> | T>(key)
+      // Not moved yet: still in the shared store until its first write here.
+      if ((raw === null || raw === undefined) && file !== STORE_FILE) {
+        raw = await (await getStore()).get<PersistedStore<T> | T>(key)
+      }
 
       if (raw === null || raw === undefined) {
         return { success: false, error: `Key not found: ${key}`, code: 'KEY_NOT_FOUND' }
@@ -159,9 +198,10 @@ export const tauriPersistenceApi = {
 
   async remove(key: string): Promise<IpcResult<void>> {
     try {
-      const store = await getStore()
+      const store = await getStore(storeFileFor(key))
       await store.delete(key)
       await store.save()
+      await dropLegacyCopy(key)
       return createSuccessResult()
     } catch (err) {
       return { success: false, error: String(err), code: 'DELETE_ERROR' }
@@ -203,7 +243,8 @@ export function createTauriPersistenceApi() {
  * @internal Testing only - reset the singleton store instance
  */
 export function _resetStoreInstanceForTesting() {
-  storeInstance = null
+  storeInstances.clear()
+  legacyCopyCleared.clear()
 
   for (const entry of pendingDebounce.values()) {
     if (entry.timer) {

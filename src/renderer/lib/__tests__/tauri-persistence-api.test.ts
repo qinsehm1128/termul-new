@@ -322,6 +322,89 @@ describe('tauriPersistenceApi', () => {
     })
   })
 
+  describe('command history files', () => {
+    const historyKey = 'projects/p1/command-history'
+    let files: Map<string, { data: Map<string, unknown>; store: MockStore }>
+
+    function fileStore(path: string) {
+      let file = files.get(path)
+      if (!file) {
+        const data = new Map<string, unknown>()
+        const store: MockStore = {
+          get: vi.fn(async (key: string) => data.get(key) ?? null),
+          set: vi.fn(async (key: string, value: unknown) => {
+            data.set(key, value)
+          }),
+          delete: vi.fn(async (key: string) => {
+            data.delete(key)
+          }),
+          save: vi.fn(async () => {})
+        }
+        file = { data, store }
+        files.set(path, file)
+      }
+      return file
+    }
+
+    beforeEach(() => {
+      files = new Map()
+      mockStoreLoad.mockImplementation(async (path: string) => fileStore(path).store)
+    })
+
+    it('writes a project history to its own file, never the shared store', async () => {
+      await tauriPersistenceApi.write(historyKey, [{ command: 'ls' }])
+
+      expect(fileStore('command-history/p1.json').data.get(historyKey)).toEqual({
+        _version: 1,
+        data: [{ command: 'ls' }]
+      })
+      expect(fileStore('termul-data.json').store.save).not.toHaveBeenCalled()
+    })
+
+    it('keeps other keys in the shared store', async () => {
+      await tauriPersistenceApi.write('projects/p1/layout', { a: 1 })
+
+      expect(fileStore('termul-data.json').data.has('projects/p1/layout')).toBe(true)
+      expect(files.has('command-history/p1.json')).toBe(false)
+    })
+
+    it('reads history still in the shared store, then moves it out on the next write', async () => {
+      const shared = fileStore('termul-data.json')
+      shared.data.set(historyKey, { _version: 1, data: [{ command: 'old' }] })
+
+      const read = await tauriPersistenceApi.read(historyKey)
+      expect(read).toEqual({ success: true, data: [{ command: 'old' }] })
+
+      await tauriPersistenceApi.write(historyKey, [{ command: 'new' }])
+      expect(shared.data.has(historyKey)).toBe(false)
+      expect(shared.store.save).toHaveBeenCalledTimes(1)
+
+      // Moved once; later writes leave the shared file alone, without even
+      // looking it up again.
+      const lookups = shared.store.get.mock.calls.length
+      await tauriPersistenceApi.write(historyKey, [{ command: 'newer' }])
+      expect(shared.store.save).toHaveBeenCalledTimes(1)
+      expect(shared.store.get).toHaveBeenCalledTimes(lookups)
+    })
+
+    it('prefers the history file over a stale shared copy', async () => {
+      fileStore('termul-data.json').data.set(historyKey, { _version: 1, data: ['stale'] })
+      fileStore('command-history/p1.json').data.set(historyKey, { _version: 1, data: ['fresh'] })
+
+      expect(await tauriPersistenceApi.read(historyKey)).toEqual({ success: true, data: ['fresh'] })
+    })
+
+    it('clears history from both places', async () => {
+      fileStore('termul-data.json').data.set(historyKey, { _version: 1, data: ['stale'] })
+      fileStore('command-history/p1.json').data.set(historyKey, { _version: 1, data: ['fresh'] })
+
+      await tauriPersistenceApi.remove(historyKey)
+
+      expect(fileStore('termul-data.json').data.has(historyKey)).toBe(false)
+      expect(fileStore('command-history/p1.json').data.has(historyKey)).toBe(false)
+    })
+  })
+
   describe('createTauriPersistenceApi factory', () => {
     it('should return the singleton instance', () => {
       const api = createTauriPersistenceApi()

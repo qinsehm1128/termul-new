@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useCommandHistoryStore } from './command-history-store'
+import { MAX_HISTORY_CHARS, useCommandHistoryStore } from './command-history-store'
 
 describe('command-history-store', () => {
   beforeEach(() => {
@@ -69,6 +69,53 @@ describe('command-history-store', () => {
 
       const entries = useCommandHistoryStore.getState().entries
       expect(entries[0].id).not.toBe(entries[1].id)
+    })
+  })
+
+  describe('size budget', () => {
+    function add(command: string, projectId = 'proj-1'): void {
+      useCommandHistoryStore.getState().addCommand({
+        command,
+        terminalName: 'Terminal 1',
+        terminalId: 'term-1',
+        projectId,
+        timestamp: Date.now()
+      })
+    }
+
+    function commands(projectId: string): string[] {
+      return useCommandHistoryStore
+        .getState()
+        .entries.filter((entry) => entry.projectId === projectId)
+        .map((entry) => entry.command)
+    }
+
+    it('drops the oldest commands once a project exceeds its text budget', () => {
+      const quarter = 'x'.repeat(MAX_HISTORY_CHARS / 4)
+      add(`a${quarter}`)
+      add(`b${quarter}`)
+      add(`c${quarter}`)
+      add(`d${quarter}`)
+      expect(commands('proj-1').map((command) => command[0])).toEqual(['d', 'c', 'b'])
+
+      add('e')
+      expect(commands('proj-1').map((command) => command[0])).toEqual(['e', 'd', 'c', 'b'])
+    })
+
+    it('keeps the newest command even when it alone is over budget', () => {
+      add('small')
+      add('y'.repeat(MAX_HISTORY_CHARS + 1))
+
+      expect(commands('proj-1')).toHaveLength(1)
+      expect(commands('proj-1')[0]).toHaveLength(MAX_HISTORY_CHARS + 1)
+    })
+
+    it('budgets each project separately', () => {
+      add('z'.repeat(MAX_HISTORY_CHARS - 10), 'proj-2')
+      add('z'.repeat(MAX_HISTORY_CHARS - 10), 'proj-1')
+
+      expect(commands('proj-2')).toHaveLength(1)
+      expect(commands('proj-1')).toHaveLength(1)
     })
   })
 
