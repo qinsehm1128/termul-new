@@ -8,7 +8,8 @@ import type {
 } from '@shared/types/ssh.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import { sshApi } from '@/lib/api'
+import { sshApi, terminalApi } from '@/lib/api'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 export interface SSHState {
   // State
@@ -64,7 +65,7 @@ export interface SSHState {
   clearCompletedTransfers: () => void
 }
 
-export const useSSHStore = create<SSHState>((set, _get) => ({
+export const useSSHStore = create<SSHState>((set, get) => ({
   profiles: [],
   connections: [],
   transfers: [],
@@ -161,8 +162,17 @@ export const useSSHStore = create<SSHState>((set, _get) => ({
     // would fail with an unknown id. Treat those as local-only and just clear
     // local state.
     const isLocalOnly = connectionId.startsWith('ssh-conn-')
+    const connection = get().connections.find((c) => c.id === connectionId)
     const result = isLocalOnly ? { success: true as const } : await sshApi.disconnect(connectionId)
     if (result.success) {
+      // The interactive ssh shell this connect started goes too. Left running,
+      // it outlived the connection and stayed on the terminal board.
+      const terminals = useTerminalStore.getState()
+      const record = terminals.terminals.find((t) => t.id === connection?.terminalId)
+      if (record) {
+        if (record.ptyId) void terminalApi.terminate(record.ptyId)
+        terminals.closeTerminal(record.id, record.projectId ?? '')
+      }
       set((state) => ({
         connections: state.connections.filter((c) => c.id !== connectionId)
       }))
