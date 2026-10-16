@@ -68,6 +68,29 @@ describe('EditorPanel previews', () => {
     expect(document.querySelector('img')).toBeInTheDocument()
   })
 
+  it('renders html from the saved file in a sandbox and switches to its source', () => {
+    seed('/p/report.html', { content: '<h1>Report</h1>', language: 'html' })
+    render(<EditorPanel filePath="/p/report.html" isVisible />)
+
+    const frame = screen.getByTitle('Rendered report.html')
+    expect(frame).toHaveAttribute('src', 'asset://localhost/p/report.html?v=5')
+    // Scripts run, but without the app's origin: no IPC, no storage, no file reads.
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts')
+    expect(screen.queryByText(/Unsaved edits appear after saving/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTitle('Switch to source mode'))
+    expect(screen.getByTestId('code-editor')).toHaveTextContent('<h1>Report</h1>')
+    fireEvent.click(screen.getByTitle('Switch to preview'))
+    expect(screen.getByTitle('Rendered report.html')).toBeInTheDocument()
+  })
+
+  it('says when the rendered html lags behind unsaved edits', () => {
+    seed('/p/report.html', { content: '<h1>Draft</h1>', language: 'html', isDirty: true })
+    render(<EditorPanel filePath="/p/report.html" isVisible />)
+
+    expect(screen.getByText(/Unsaved edits appear after saving/)).toBeInTheDocument()
+  })
+
   it('keeps the markdown toggle and outline', () => {
     seed('/p/README.md', { language: 'markdown', viewMode: 'markdown' })
     render(<EditorPanel filePath="/p/README.md" isVisible />)

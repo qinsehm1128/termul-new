@@ -73,7 +73,9 @@
     "switchToPreview": "Switch to preview",
     "previewFailed": "Cannot preview this file: unsupported format or damaged file",
     "actualSize": "Actual size",
-    "fitToWindow": "Fit to window"
+    "fitToWindow": "Fit to window",
+    "htmlPreviewTitle": "Rendered {{name}}",
+    "htmlPreviewUnsaved": "Showing the saved file. Unsaved edits appear after saving."
   },
   "customAgents": {
     "nameRequired": "Agent name is required",
