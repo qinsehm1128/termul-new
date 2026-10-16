@@ -27,7 +27,7 @@ import {
 } from '@/lib/editor-events'
 import { showOpenedFile } from '@/lib/file-open-target'
 import { readPasteboardFilePaths } from '@/lib/file-pasteboard'
-import { getPreviewKind } from '@/lib/file-preview'
+import { getPreviewKind, isTextPreview } from '@/lib/file-preview'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -993,7 +993,7 @@ export function FileExplorer({
         await useEditorStore.getState().openFile(filePath)
         showOpenedFile(filePath)
         // Rendered views have no lines to reveal; jump to the source instead.
-        const hasRenderedView = /\.md$/i.test(filePath) || getPreviewKind(filePath) === 'svg'
+        const hasRenderedView = /\.md$/i.test(filePath) || isTextPreview(getPreviewKind(filePath))
         if (hasRenderedView) {
           useEditorStore.getState().setViewMode(filePath, 'code')
         }

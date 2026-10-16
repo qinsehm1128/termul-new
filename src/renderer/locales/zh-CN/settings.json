@@ -73,7 +73,9 @@
     "switchToPreview": "切换到预览",
     "previewFailed": "无法预览此文件：格式不受支持或文件已损坏",
     "actualSize": "实际大小",
-    "fitToWindow": "适应窗口"
+    "fitToWindow": "适应窗口",
+    "htmlPreviewTitle": "{{name}} 的渲染结果",
+    "htmlPreviewUnsaved": "这里显示的是已保存的文件，未保存的修改要保存后才会出现。"
   },
   "customAgents": {
     "nameRequired": "代理名称不能为空",

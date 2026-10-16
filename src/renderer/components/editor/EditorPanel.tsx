@@ -7,6 +7,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { CodeEditor } from './CodeEditor'
 import { EditorToolbar } from './EditorToolbar'
 import { FilePreview } from './FilePreview'
+import { HtmlPreview } from './HtmlPreview'
 import { MarkdownEditor } from './MarkdownEditor'
 
 interface EditorPanelProps {
@@ -71,10 +72,11 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
 
   const isMarkdownFile = fileState.language === 'markdown'
   const isSvgFile = previewKind === 'svg'
+  const isHtmlFile = previewKind === 'html'
 
   return (
     <div className="w-full h-full flex flex-col">
-      {(isMarkdownFile || isSvgFile) && (
+      {(isMarkdownFile || isSvgFile || isHtmlFile) && (
         <EditorToolbar
           viewMode={fileState.viewMode}
           onToggleViewMode={handleToggleViewMode}
@@ -85,6 +87,12 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
       <div className="flex-1 relative overflow-hidden">
         {isSvgFile && fileState.viewMode === 'preview' ? (
           <FilePreview kind="svg" src={svgDataUrl(fileState.content)} />
+        ) : isHtmlFile && fileState.viewMode === 'preview' ? (
+          <HtmlPreview
+            src={previewSourceUrl(filePath, fileState.lastModified)}
+            name={filePath.split(/[\\/]/).pop() || filePath}
+            unsaved={fileState.isDirty}
+          />
         ) : isMarkdownFile && fileState.viewMode === 'markdown' ? (
           <MarkdownEditor
             filePath={filePath}
