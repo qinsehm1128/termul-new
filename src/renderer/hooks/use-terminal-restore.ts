@@ -15,6 +15,7 @@ import {
   beginProjectContinuityCorrelation,
   recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
+import { adoptMissingProjectPtys, isAdoptableLiveTerminal } from '@/lib/terminal-recovery'
 import { randomUUID } from '@/lib/uuid'
 import { isVisibleReady, waitForVisibility } from '@/lib/visibility-signal'
 import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
@@ -124,15 +125,6 @@ function releaseGlobalSpawnLock(ownerId: string): void {
 function resetSpawnCallCount(sessionId: string): void {
   SPAWN_CALL_COUNT = 0
   debugLog('SPAWN_LOCK', `RESET SPAWN COUNT [${sessionId}]`)
-}
-
-function isAdoptableLiveTerminal(live: TerminalStatus, projectId: string): boolean {
-  if (!live.active || live.workspaceRefTracked || live.conversationId) {
-    return false
-  }
-  // Strict project identity: an unscoped PTY (SSH, ad-hoc spawn) belongs to
-  // no project restore, and a PTY of another project must never be adopted.
-  return live.projectId === projectId
 }
 
 async function loadLiveProjectPtys(projectId: string): Promise<TerminalStatus[]> {
@@ -484,7 +476,7 @@ export function useTerminalRestore(projectIdOverride?: string | null): void {
         const existingTerminals = terminalStore.terminals.filter(
           (t) => t.projectId === projectIdToRestore
         )
-        const liveProjectTerminals = existingTerminals.filter((terminal) => !!terminal.ptyId)
+        let liveProjectTerminals = existingTerminals.filter((terminal) => !!terminal.ptyId)
 
         if (liveProjectTerminals.length > 0) {
           emitTerminalContinuityEvent({
@@ -503,6 +495,24 @@ export function useTerminalRestore(projectIdOverride?: string | null): void {
           if (isCancelled()) {
             debugLog('useTerminalRestore', `CANCELLED [${callId}] after live layout load`)
             return
+          }
+          // The store may hold only some of this project's PTYs (one record
+          // arrived before restore, e.g. after a renderer reload). Taking this
+          // path on that alone used to drop every other running terminal's tab.
+          const adoptedIds = adoptMissingProjectPtys(
+            projectIdToRestore,
+            await loadLiveProjectPtys(projectIdToRestore),
+            layout
+          )
+          if (isCancelled()) {
+            return
+          }
+          if (adoptedIds.length > 0) {
+            liveProjectTerminals = useTerminalStore
+              .getState()
+              .terminals.filter(
+                (terminal) => terminal.projectId === projectIdToRestore && !!terminal.ptyId
+              )
           }
 
           const workspaceStore = useWorkspaceStore.getState()

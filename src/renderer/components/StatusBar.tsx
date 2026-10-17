@@ -5,6 +5,7 @@ import {
   Download,
   FileQuestion,
   Folder,
+  LifeBuoy,
   Pencil,
   Plus,
   RefreshCw,
@@ -16,6 +17,7 @@ import { GitBranchPicker } from '@/components/GitBranchPicker'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
+import { useTerminalRecovery } from '@/hooks/use-terminal-recovery'
 import { getColorClasses } from '@/lib/colors'
 import { presentPendingUpdate, translateUpdateCopy } from '@/lib/updater-status'
 import { cn } from '@/lib/utils'
@@ -38,6 +40,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   const projectColor = project ? getColorClasses(project.color) : null
   const activeTerminal = useActiveTerminal()
   const homeDir = useHomeDirectory()
+  const { recover, recovering } = useTerminalRecovery()
 
   // Context bar visibility settings
   const showGitBranch = useShowGitBranch()
@@ -125,6 +128,22 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       {/* Right side */}
       <div className="flex items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={t('recovery.button')}
+              disabled={recovering}
+              onClick={recover}
+              className="flex h-5 items-center rounded-sm px-1.5 text-muted-foreground transition-[color,background-color] duration-150 ease-[var(--ease-out)] hover:bg-foreground/[0.045] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60"
+            >
+              <LifeBuoy size={14} className={recovering ? 'animate-spin' : undefined} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            {t('recovery.tooltip')}
+          </TooltipContent>
+        </Tooltip>
         <RemoteAccessPopover />
 
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (

@@ -6,9 +6,11 @@ import {
   History,
   Keyboard,
   Layers,
+  LifeBuoy,
   Monitor,
   Palette,
   Pin,
+  RotateCw,
   Save,
   Settings,
   SlidersHorizontal,
@@ -28,6 +30,7 @@ import {
 } from '@/components/ui/command'
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
+import { recoverTerminals, reloadAndRecover } from '@/hooks/use-terminal-recovery'
 import { getColorClasses } from '@/lib/colors'
 import { navigateToPath } from '@/lib/router-navigate'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -319,7 +322,25 @@ export function CommandPalette({
             keywords: ['ssh', 'remote', 'connect', profile.name, profile.host, profile.username],
             execute: () => onSSHConnect(profile.id)
           }))
-        : [])
+        : []),
+      {
+        id: 'recover-terminals',
+        category: 'tools' as const,
+        icon: <LifeBuoy aria-hidden="true" size={16} />,
+        label: t('recovery.commandRecover'),
+        description: t('recovery.commandRecoverDescription'),
+        keywords: ['recover', 'restore', 'reconnect', 'tabs', 'terminal', '恢复', '重连'],
+        execute: () => void recoverTerminals()
+      },
+      {
+        id: 'reload-and-recover',
+        category: 'tools' as const,
+        icon: <RotateCw aria-hidden="true" size={16} />,
+        label: t('recovery.commandReload'),
+        description: t('recovery.commandReloadDescription'),
+        keywords: ['reload', 'refresh', 'restore', 'terminal', '重载', '刷新'],
+        execute: reloadAndRecover
+      }
     ],
     [
       projects,
