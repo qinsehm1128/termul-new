@@ -858,42 +858,27 @@ pub async fn ensure_core(
         role.endpoint_name(),
         executable.display()
     );
-    let mut command = Command::new(&executable);
-    command
-        .arg(role_arg)
-        .env("TERMUL_CORE_PROFILE_ROOT", &config.profile_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    detach_from_gui_session(&mut command);
-    if let Some(log_file) = core_log_file(role) {
-        match crate::logging::open_core_log_file(&log_file) {
-            Ok(file) => {
-                command
-                    .env(crate::logging::CORE_LOG_FILE_ENV, &log_file)
-                    .stderr(Stdio::from(file));
-            }
-            Err(error) => log::warn!(
-                target: "se_manager::core",
-                "operation=core_log_open role={} stable_code=CORE_LOG_UNAVAILABLE error={error}",
-                role.endpoint_name()
-            ),
-        }
-    }
-    let child = command.spawn().map_err(|error| {
-        log::error!(
-            target: "se_manager::core",
-            "operation=core_spawn role={} stable_code=SPAWN_FAILED",
-            role.endpoint_name()
-        );
-        CoreError::Io(format!("spawn {}: {error}", role.endpoint_name()))
-    })?;
-    let pid = child.id();
-    insert_owned_core(role, child);
+    let log_file = core_log_file(role);
+    #[cfg(target_os = "macos")]
+    let hosted = launch_in_host_app(role, role_arg, &executable, config, log_file.as_deref());
+    #[cfg(not(target_os = "macos"))]
+    let hosted = false;
+    let spawned_pid = if hosted {
+        None
+    } else {
+        Some(spawn_core_child(
+            role,
+            role_arg,
+            &executable,
+            config,
+            log_file,
+        )?)
+    };
 
     let deadline = tokio::time::Instant::now() + config.ready_timeout;
     loop {
-        if let Ok(ack) = probe_endpoint(&endpoint, role).await {
+        if let Ok((ack, peer_pid)) = probe_endpoint_with_pid(&endpoint, role).await {
+            let pid = spawned_pid.or(peer_pid).unwrap_or(0);
             log::info!(
                 target: "se_manager::core",
                 "operation=core_ready role={} stable_code=READY pid={pid}",
@@ -926,6 +911,83 @@ pub async fn ensure_core(
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+/// Launch the Core in its own app (see `app_host`), so quitting the GUI and
+/// stopping it in the background leaves the Core running.
+#[cfg(target_os = "macos")]
+fn launch_in_host_app(
+    role: CoreRole,
+    role_arg: &str,
+    executable: &Path,
+    config: &CoreLaunchConfig,
+    log_file: Option<&Path>,
+) -> bool {
+    let process = match role {
+        CoreRole::TerminalCore => super::app_host::TERMINAL_CORE,
+        CoreRole::AcpCore => super::app_host::ACP_CORE,
+        CoreRole::Gui => return false,
+    };
+    let mut env: Vec<(&str, &Path)> = vec![("TERMUL_CORE_PROFILE_ROOT", &config.profile_root)];
+    // Open the log once here: it creates the directory and rotates an
+    // oversized file, as the child spawn does. `open --stderr` appends.
+    let log_file = log_file.filter(|path| crate::logging::open_core_log_file(path).is_ok());
+    if let Some(log_file) = log_file {
+        env.push((crate::logging::CORE_LOG_FILE_ENV, log_file));
+    }
+    super::app_host::launch(
+        process,
+        executable,
+        &[std::ffi::OsStr::new(role_arg)],
+        &env,
+        log_file,
+        &config.profile_root,
+    )
+}
+
+/// Spawn the Core as a child of the GUI in a session of its own. This is the
+/// only way off macOS, and the fallback there when the GUI does not run from
+/// an app bundle or LaunchServices refused the host app.
+fn spawn_core_child(
+    role: CoreRole,
+    role_arg: &str,
+    executable: &Path,
+    config: &CoreLaunchConfig,
+    log_file: Option<PathBuf>,
+) -> Result<u32, CoreError> {
+    let mut command = Command::new(executable);
+    command
+        .arg(role_arg)
+        .env("TERMUL_CORE_PROFILE_ROOT", &config.profile_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    detach_from_gui_session(&mut command);
+    if let Some(log_file) = log_file {
+        match crate::logging::open_core_log_file(&log_file) {
+            Ok(file) => {
+                command
+                    .env(crate::logging::CORE_LOG_FILE_ENV, &log_file)
+                    .stderr(Stdio::from(file));
+            }
+            Err(error) => log::warn!(
+                target: "se_manager::core",
+                "operation=core_log_open role={} stable_code=CORE_LOG_UNAVAILABLE error={error}",
+                role.endpoint_name()
+            ),
+        }
+    }
+    let child = command.spawn().map_err(|error| {
+        log::error!(
+            target: "se_manager::core",
+            "operation=core_spawn role={} stable_code=SPAWN_FAILED",
+            role.endpoint_name()
+        );
+        CoreError::Io(format!("spawn {}: {error}", role.endpoint_name()))
+    })?;
+    let pid = child.id();
+    insert_owned_core(role, child);
+    Ok(pid)
 }
 
 #[cfg(test)]

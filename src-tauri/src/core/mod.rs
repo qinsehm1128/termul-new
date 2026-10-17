@@ -6,6 +6,8 @@
 
 pub mod acp;
 pub mod acp_handles;
+#[cfg(target_os = "macos")]
+pub(crate) mod app_host;
 pub mod launcher;
 pub mod process;
 pub mod web_host;

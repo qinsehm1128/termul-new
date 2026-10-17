@@ -730,8 +730,10 @@ impl McpService {
                 let _ = std::fs::create_dir_all(parent);
             }
         }
-        se_mcp_bridge::bridge::spawn_gateway(&self.executable, &self.settings_path, settings)
-            .map_err(|error| format!("could not start the MCP gateway: {error}"))?;
+        if !self.launch_in_host_app(settings) {
+            se_mcp_bridge::bridge::spawn_gateway(&self.executable, &self.settings_path, settings)
+                .map_err(|error| format!("could not start the MCP gateway: {error}"))?;
+        }
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         loop {
             match remote_status(settings).await {
@@ -751,6 +753,37 @@ impl McpService {
                 }
             }
         }
+    }
+
+    /// The gateway outlives the GUI. On macOS it runs in its own app (see
+    /// `core::app_host`); as a child it would be stopped with the GUI from the
+    /// Dock. Returns `false` where that is not available.
+    #[cfg(target_os = "macos")]
+    fn launch_in_host_app(&self, settings: &GatewaySettings) -> bool {
+        let mut env: Vec<(&str, &Path)> = Vec::new();
+        if let Some(profile_root) = &settings.profile_root {
+            env.push(("TERMUL_CORE_PROFILE_ROOT", profile_root));
+        }
+        if let Some(log_file) = &settings.log_file {
+            env.push(("TERMUL_CORE_LOG_FILE", log_file));
+        }
+        crate::core::app_host::launch(
+            crate::core::app_host::MCP_GATEWAY,
+            &self.executable,
+            &[
+                std::ffi::OsStr::new("--mcp-core"),
+                std::ffi::OsStr::new("--config"),
+                self.settings_path.as_os_str(),
+            ],
+            &env,
+            None,
+            &self.profile_root,
+        )
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn launch_in_host_app(&self, _settings: &GatewaySettings) -> bool {
+        false
     }
 
     async fn stop_remote(&self, settings: &GatewaySettings) -> Result<(), String> {
