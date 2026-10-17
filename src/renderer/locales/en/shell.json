@@ -545,5 +545,17 @@
     "detailsId": "Session id",
     "detailsLog": "Log file",
     "resumeRow": "Resume"
+  },
+  "recovery": {
+    "button": "Restore UI and terminals",
+    "tooltip": "Reconnect the UI to the terminals still running. Nothing is restarted.",
+    "nothing": "Everything is already connected.",
+    "done": "Restored. Tabs back: {{tabs}} · Terminals taken back: {{adopted}} · Marked disconnected: {{disconnected}}",
+    "failed": "Could not restore in place.",
+    "reload": "Reload UI and restore",
+    "commandRecover": "Restore UI and terminal connections",
+    "commandRecoverDescription": "Rebuild tabs from the terminals still running, without reloading",
+    "commandReload": "Reload UI and restore",
+    "commandReloadDescription": "Reload the interface, then take the running terminals back"
   }
 }

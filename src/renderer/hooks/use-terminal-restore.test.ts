@@ -140,7 +140,22 @@ const mockTerminalStoreState = {
   setTerminals: vi.fn(),
   addTerminal: vi.fn(),
   setTerminalPtyId: vi.fn(),
-  setTerminalClaim: vi.fn()
+  setTerminalClaim: vi.fn(),
+  findTerminalByPtyId: (ptyId: string) =>
+    mockTerminalStoreState.terminals.find((terminal) => terminal.ptyId === ptyId),
+  adoptRemoteProjectTerminal: vi.fn(
+    (event: { terminalId: string; projectId?: string | null; shell: string }) => {
+      mockTerminalStoreState.terminals.push({
+        id: event.terminalId,
+        projectId: event.projectId ?? '',
+        name: 'adopted',
+        shell: event.shell,
+        ptyId: event.terminalId
+      })
+      return event.terminalId
+    }
+  ),
+  renameTerminal: vi.fn()
 }
 
 vi.mock('../stores/terminal-store', () => ({
@@ -360,6 +375,58 @@ describe('useTerminalRestore', () => {
         liveTerminalCount: 1
       }
     })
+  })
+
+  it('takes back the live PTYs the store lost when it holds only one of them', async () => {
+    // A renderer reload: one record came back before restore ran.
+    mockTerminalStoreState.terminals = [
+      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+    ]
+    const live = (id: string, cwd: string) => ({
+      id,
+      shell: 'bash',
+      cwd,
+      pid: 1,
+      cols: 80,
+      rows: 24,
+      projectId: 'project-a',
+      workspaceRefTracked: false,
+      latestSeq: 0,
+      active: true,
+      lifecycle: 'running'
+    })
+    mockTerminalList.mockResolvedValue({
+      success: true,
+      data: [live('pty-a', '/projects/a'), live('pty-b', '/projects/a/api')]
+    })
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'a-live',
+      terminals: [
+        { id: 'a-live', name: 'A', shell: 'bash', cwd: '/projects/a', ptyId: 'pty-a' },
+        { id: 'b-old', name: 'api server', shell: 'bash', cwd: '/projects/a/api', ptyId: 'pty-b' }
+      ],
+      updatedAt: '2026-10-17T00:00:00.000Z'
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() =>
+      expect(mockWorkspaceStore.ensureTerminalTab).toHaveBeenCalledWith(
+        'pty-b',
+        undefined,
+        expect.any(Boolean)
+      )
+    )
+    expect(mockWorkspaceStore.ensureTerminalTab).toHaveBeenCalledWith(
+      'a-live',
+      undefined,
+      expect.any(Boolean)
+    )
+    expect(mockTerminalStoreState.renameTerminal).toHaveBeenCalledWith('pty-b', 'api server')
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
   })
 
   it('preserves a valid active agent-chat tab during live terminal reconciliation', async () => {

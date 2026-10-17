@@ -503,5 +503,17 @@
     "detailsId": "会话编号",
     "detailsLog": "日志文件",
     "resumeRow": "恢复"
+  },
+  "recovery": {
+    "button": "恢复界面与终端",
+    "tooltip": "把界面重新接回仍在运行的终端，不会重启任何进程。",
+    "nothing": "界面与终端都已连接，无需恢复。",
+    "done": "已恢复。找回标签：{{tabs}} · 接回终端：{{adopted}} · 标记为已断开：{{disconnected}}",
+    "failed": "原地恢复失败。",
+    "reload": "重载界面并恢复",
+    "commandRecover": "恢复界面与终端连接",
+    "commandRecoverDescription": "按仍在运行的终端重建标签，不刷新页面",
+    "commandReload": "重载界面并恢复",
+    "commandReloadDescription": "重新加载界面，再接回仍在运行的终端"
   }
 }

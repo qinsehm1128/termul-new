@@ -1,6 +1,6 @@
 import type { PendingUpdatePlan } from '@shared/types/updater.types'
 import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
@@ -10,6 +10,9 @@ import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import { StatusBar } from './StatusBar'
 
 // Mock the terminal store
+const recovery = vi.hoisted(() => ({ recover: vi.fn(), recovering: false }))
+vi.mock('@/hooks/use-terminal-recovery', () => ({ useTerminalRecovery: () => recovery }))
+
 vi.mock('@/stores/terminal-store', () => ({
   useActiveTerminal: vi.fn(() => ({
     id: 'test-terminal',
@@ -161,6 +164,22 @@ describe('StatusBar', () => {
       expect(bar?.className).not.toMatch(
         /bg-(blue|purple|green|yellow|red|cyan|pink|orange|gray)-600/
       )
+    })
+  })
+
+  describe('recovery', () => {
+    it('restores the UI and terminals from the status bar', () => {
+      recovery.recovering = false
+      renderWithProviders(<StatusBar project={mockProject} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Restore UI and terminals' }))
+      expect(recovery.recover).toHaveBeenCalledTimes(1)
+    })
+
+    it('cannot start a second recovery while one runs', () => {
+      recovery.recovering = true
+      renderWithProviders(<StatusBar project={mockProject} />)
+      expect(screen.getByRole('button', { name: 'Restore UI and terminals' })).toBeDisabled()
+      recovery.recovering = false
     })
   })
 
