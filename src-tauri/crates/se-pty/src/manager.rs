@@ -1269,6 +1269,8 @@ pub struct TerminalInstance {
     /// keeping whole chunks, so reconnect cursors can detect replay gaps.
     pub output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
     pub output_log_bytes: Arc<AtomicUsize>,
+    /// Modes in force at the oldest retained chunk; see [`crate::modes`].
+    pub output_log_modes: Arc<parking_lot::Mutex<crate::modes::ModeTracker>>,
     pub next_output_seq: Arc<AtomicU64>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
@@ -1451,11 +1453,19 @@ impl TerminalInstance {
         let gap = earliest
             .map(|first| last_seq.saturating_add(1) < first)
             .unwrap_or(last_seq > 0);
-        let chunks = guard
+        let mut chunks: Vec<TerminalOutputChunk> = guard
             .iter()
             .filter(|chunk| chunk.seq > last_seq)
             .cloned()
             .collect();
+        // A replay from before the oldest retained chunk starts from a blank
+        // terminal: turn back on the modes the evicted bytes had set.
+        if last_seq == 0 || gap {
+            let preamble = self.output_log_modes.lock().preamble();
+            if let Some(first) = chunks.first_mut().filter(|_| !preamble.is_empty()) {
+                first.data.splice(0..0, preamble);
+            }
+        }
         TerminalReplay {
             chunks,
             gap,
@@ -2227,6 +2237,9 @@ impl PtyManager {
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
+                output_log_modes: Arc::new(parking_lot::Mutex::new(
+                    crate::modes::ModeTracker::default(),
+                )),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
@@ -2251,6 +2264,7 @@ impl PtyManager {
             let flusher_broadcast = instance.broadcast_tx.clone();
             let flusher_output_log = instance.output_log.clone();
             let flusher_output_log_bytes = instance.output_log_bytes.clone();
+            let flusher_output_log_modes = instance.output_log_modes.clone();
             let flusher_next_seq = instance.next_output_seq.clone();
 
             let flusher_task = std::thread::spawn(move || {
@@ -2261,6 +2275,7 @@ impl PtyManager {
                     flusher_broadcast,
                     flusher_output_log,
                     flusher_output_log_bytes,
+                    flusher_output_log_modes,
                     flusher_next_seq,
                     flusher_channel,
                     flusher_id,
@@ -2436,6 +2451,9 @@ impl PtyManager {
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
+                output_log_modes: Arc::new(parking_lot::Mutex::new(
+                    crate::modes::ModeTracker::default(),
+                )),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
@@ -2456,6 +2474,7 @@ impl PtyManager {
             let flusher_broadcast = instance.broadcast_tx.clone();
             let flusher_output_log = instance.output_log.clone();
             let flusher_output_log_bytes = instance.output_log_bytes.clone();
+            let flusher_output_log_modes = instance.output_log_modes.clone();
             let flusher_next_seq = instance.next_output_seq.clone();
 
             let flusher_task = std::thread::spawn(move || {
@@ -2466,6 +2485,7 @@ impl PtyManager {
                     flusher_broadcast,
                     flusher_output_log,
                     flusher_output_log_bytes,
+                    flusher_output_log_modes,
                     flusher_next_seq,
                     flusher_channel,
                     flusher_id,
@@ -2731,6 +2751,7 @@ impl PtyManager {
         broadcast_tx: Arc<tokio::sync::broadcast::Sender<TerminalOutputChunk>>,
         output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
         output_log_bytes: Arc<AtomicUsize>,
+        output_log_modes: Arc<parking_lot::Mutex<crate::modes::ModeTracker>>,
         next_output_seq: Arc<AtomicU64>,
         on_data: Option<Arc<dyn OutputSink>>,
         terminal_id: String,
@@ -2745,6 +2766,7 @@ impl PtyManager {
             tx: &tokio::sync::broadcast::Sender<TerminalOutputChunk>,
             log: &Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
             bytes: &Arc<AtomicUsize>,
+            modes: &Arc<parking_lot::Mutex<crate::modes::ModeTracker>>,
             next_seq: &Arc<AtomicU64>,
         ) {
             let chunk = TerminalOutputChunk {
@@ -2758,6 +2780,7 @@ impl PtyManager {
                 let Some(evicted) = guard.pop_front() else {
                     break;
                 };
+                modes.lock().feed(&evicted.data);
                 total = total.saturating_sub(evicted.data.len());
             }
             bytes.store(total, Ordering::Relaxed);
@@ -2778,6 +2801,7 @@ impl PtyManager {
                     &broadcast_tx,
                     &output_log,
                     &output_log_bytes,
+                    &output_log_modes,
                     &next_output_seq,
                 );
 
@@ -2799,6 +2823,7 @@ impl PtyManager {
                             &broadcast_tx,
                             &output_log,
                             &output_log_bytes,
+                            &output_log_modes,
                             &next_output_seq,
                         );
                         if let Some(ch) = channel_ref {
@@ -4393,6 +4418,9 @@ mod tests {
             broadcast_tx: Arc::new(broadcast_tx),
             output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
             output_log_bytes: Arc::new(AtomicUsize::new(0)),
+            output_log_modes: Arc::new(parking_lot::Mutex::new(
+                crate::modes::ModeTracker::default(),
+            )),
             next_output_seq: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "windows")]
             conpty_handles: None,
@@ -4533,6 +4561,72 @@ mod tests {
 
         assert_eq!(title.as_deref(), Some("id=unset"));
         let _ = manager.terminate(&terminal_id).await;
+    }
+
+    /// A TUI turns mouse reporting on once at startup. Once that output has
+    /// been evicted from the log, a replay from the start must still turn it
+    /// back on, or the program no longer gets clicks or the wheel.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_replay_restores_modes_whose_output_was_evicted() {
+        let manager = crate::test_pty_manager();
+        let temp = tempfile::tempdir().unwrap();
+        let script = format!(
+            "printf '\\033[?1000h\\033[?1006h\\033[?2004h'; head -c {} /dev/zero | tr '\\0' x; printf DONE; exec sleep 60",
+            SCROLLBACK_CAP * 2
+        );
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    cols: Some(80),
+                    rows: Some(24),
+                    program: Some("/bin/sh".into()),
+                    args: Some(vec!["-c".into(), script]),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn a real PTY");
+        let instance = manager.get(&spawned.info.id).expect("instance");
+
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let done = instance
+                    .output_log
+                    .read()
+                    .back()
+                    .is_some_and(|chunk| chunk.data.ends_with(b"DONE"));
+                if done {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the program finishes its output");
+
+        let from_start = instance.subscribe_from(0);
+        let first = String::from_utf8_lossy(&from_start.chunks[0].data).into_owned();
+        assert!(
+            !from_start.chunks.iter().any(|chunk| chunk.seq == 1),
+            "the startup output must have been evicted for this test to mean anything"
+        );
+        assert!(
+            first.starts_with("\x1b[?1000h\x1b[?1006h\x1b[?2004h"),
+            "replay must open with the evicted modes: {:?}",
+            &first[..first.len().min(40)]
+        );
+
+        let latest = from_start.latest_seq;
+        let incremental = instance.subscribe_from(latest - 1);
+        assert!(
+            !incremental.chunks[0].data.starts_with(b"\x1b[?1000h"),
+            "a caller that already has the earlier output gets no preamble"
+        );
+
+        let _ = manager.terminate(&spawned.info.id).await;
     }
 
     /// A program that stops reading stdin fills the kernel's input queue and
@@ -6037,6 +6131,9 @@ mod tests {
             broadcast_tx: Arc::new(broadcast_tx),
             output_log: Arc::new(RwLock::new(chunks)),
             output_log_bytes: Arc::new(AtomicUsize::new(6)),
+            output_log_modes: Arc::new(parking_lot::Mutex::new(
+                crate::modes::ModeTracker::default(),
+            )),
             next_output_seq: Arc::new(AtomicU64::new(3)),
             #[cfg(target_os = "windows")]
             conpty_handles: None,
