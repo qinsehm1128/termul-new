@@ -98,12 +98,14 @@ vi.mock('./hooks/use-visibility-state', () => ({
 // CAP-3: resilience hooks + ErrorBoundary/WhatsNewModal wiring assertions.
 const {
   mockUseCrashRecovery,
+  mockUseAdoptLiveTerminalsOnBoot,
   mockUseTerminalExitNotification,
   mockUseRemoteProjects,
   mockUseWhatsNew,
   mockInitNotificationPermissions
 } = vi.hoisted(() => ({
   mockUseCrashRecovery: vi.fn(() => undefined),
+  mockUseAdoptLiveTerminalsOnBoot: vi.fn(() => undefined),
   mockUseTerminalExitNotification: vi.fn(() => undefined),
   mockUseRemoteProjects: vi.fn(() => undefined),
   mockUseWhatsNew: vi.fn(() => ({
@@ -118,6 +120,11 @@ const {
 
 vi.mock('./hooks/use-crash-recovery', () => ({
   useCrashRecovery: mockUseCrashRecovery
+}))
+
+vi.mock('./hooks/use-terminal-recovery', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./hooks/use-terminal-recovery')>()),
+  useAdoptLiveTerminalsOnBoot: mockUseAdoptLiveTerminalsOnBoot
 }))
 
 vi.mock('./hooks/use-terminal-exit-notification', () => ({
@@ -454,6 +461,12 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     render(<App />)
 
     expect(mockUseCrashRecovery).toHaveBeenCalled()
+  })
+
+  it('mounts useAdoptLiveTerminalsOnBoot in PortableAppEffects', () => {
+    render(<App />)
+
+    expect(mockUseAdoptLiveTerminalsOnBoot).toHaveBeenCalled()
   })
 
   it('mounts useTerminalExitNotification in PortableAppEffects', () => {

@@ -9,6 +9,7 @@ pub mod da_filter;
 pub mod env_refresh;
 pub mod input_queue;
 pub mod manager;
+pub mod modes;
 pub mod trackers;
 
 #[cfg(target_os = "windows")]

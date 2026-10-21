@@ -988,6 +988,27 @@ async fn begin_output_stream(
     Ok(reply)
 }
 
+/// Largest replay frame. Well under the IPC frame limit.
+const REPLAY_FRAME_BYTES: usize = 64 * 1024;
+
+/// Merge retained chunks into few large frames, each carrying the seq of its
+/// last chunk. A TUI's history is hundreds of tiny chunks. Sent one frame
+/// each, a full replay overran the client's output slot before the caller
+/// began draining it, which dropped the rest of that terminal's output.
+fn coalesce_replay(chunks: &[se_pty::manager::TerminalOutputChunk]) -> Vec<(u64, Vec<u8>)> {
+    let mut frames: Vec<(u64, Vec<u8>)> = Vec::new();
+    for chunk in chunks {
+        match frames.last_mut() {
+            Some((seq, data)) if data.len() + chunk.data.len() <= REPLAY_FRAME_BYTES => {
+                *seq = chunk.seq;
+                data.extend_from_slice(&chunk.data);
+            }
+            _ => frames.push((chunk.seq, chunk.data.clone())),
+        }
+    }
+    frames
+}
+
 async fn start_replay_forwarder(
     pty: &Arc<PtyManager>,
     writer: &Arc<tokio::sync::Mutex<CoreWriteHalf>>,
@@ -1011,9 +1032,8 @@ async fn start_replay_forwarder(
     let pty = Arc::clone(pty);
     let attached_id = terminal_id.to_string();
     let handle = tokio::spawn(async move {
-        for chunk in &replay.chunks {
-            let Ok(frame) =
-                encode_output_frame(OutputKind::Replay, &attached_id, chunk.seq, &chunk.data)
+        for (seq, data) in coalesce_replay(&replay.chunks) {
+            let Ok(frame) = encode_output_frame(OutputKind::Replay, &attached_id, seq, &data)
             else {
                 return;
             };
@@ -1716,6 +1736,26 @@ mod tests {
     }
 
     #[test]
+    fn replay_merges_chunks_into_large_frames_that_keep_the_last_seq() {
+        let chunk = |seq: u64, len: usize| se_pty::manager::TerminalOutputChunk {
+            seq,
+            data: vec![b'x'; len],
+        };
+        let chunks = vec![
+            chunk(1, 10),
+            chunk(2, 20),
+            chunk(3, REPLAY_FRAME_BYTES),
+            chunk(4, 5),
+        ];
+        let frames = coalesce_replay(&chunks);
+        let shape: Vec<(u64, usize)> = frames
+            .iter()
+            .map(|(seq, data)| (*seq, data.len()))
+            .collect();
+        assert_eq!(shape, [(2, 30), (3, REPLAY_FRAME_BYTES), (4, 5)]);
+    }
+
+    #[test]
     fn scrollback_cap_is_256_kib() {
         assert_eq!(SCROLLBACK_CAP, 256 * 1024);
     }
@@ -2119,6 +2159,80 @@ mod tests {
             Some(99),
             "StreamSlot must start at the attach cursor, not 0"
         );
+
+        client.shutdown().await.expect("shutdown");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    /// A renderer that reloads re-watches every terminal from seq 0. A TUI's
+    /// retained history is hundreds of small chunks, more than one output slot
+    /// holds before the caller starts draining it. Dropping that overflow lost
+    /// the middle of the screen, and closing the slot left the terminal frozen.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watching_a_long_history_keeps_every_chunk_and_the_live_stream() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
+
+        let client = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+        let chunks = STREAM_OUTPUT_CAPACITY * 2;
+        // One line per flush interval, so the history is many small chunks.
+        // The markers are split by `""` so the echoed command never matches.
+        client
+            .write(
+                &terminal_id,
+                &format!(
+                    "i=0; while [ $i -lt {chunks} ]; do echo row$i; i=$((i+1)); sleep 0.01; done; echo HISTORY_\"\"DONE\n"
+                ),
+            )
+            .await
+            .expect("write");
+        let mut first = client.watch(&terminal_id, 0).await.expect("first watch");
+        collect_until_marker(
+            &mut first.output,
+            "HISTORY_DONE\r\n",
+            std::time::Duration::from_secs(30),
+        )
+        .await;
+        drop(first);
+
+        let mut session = client.watch(&terminal_id, 0).await.expect("re-watch");
+        // The caller is not draining yet, as when the GUI is still setting up.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let replayed = collect_until_marker(
+            &mut session.output,
+            "HISTORY_DONE\r\n",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        let last_row = format!("row{}\r\n", chunks - 1);
+        assert!(
+            replayed.contains(&last_row),
+            "replay lost the tail: {replayed:?}"
+        );
+        let rows = replayed.matches("\r\nrow").count();
+        assert!(
+            rows + 1 >= chunks,
+            "replay dropped rows: {rows} of {chunks}"
+        );
+
+        client
+            .write(&terminal_id, "echo LIVE_\"\"AFTER_REPLAY\n")
+            .await
+            .expect("write live");
+        collect_until_marker(
+            &mut session.output,
+            "LIVE_AFTER_REPLAY\r\n",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
 
         client.shutdown().await.expect("shutdown");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
