@@ -238,3 +238,92 @@ export function countBoardTerminals(board: readonly TerminalBoardGroupBlock[]): 
     0
   )
 }
+
+/** How recently a terminal must have printed to count as working. */
+export const BOARD_WORKING_WINDOW_MS = 3000
+
+/**
+ * What a board row tells the user, most urgent first. `live` / `hidden` in
+ * {@link terminalBoardStatus} describe the view, not the process, so every
+ * running terminal read "Live" and the column carried no information. The
+ * board instead asks whether the terminal needs you, is busy, or is waiting.
+ */
+export type TerminalRowState = 'attention' | 'disconnected' | 'working' | 'idle' | 'exited'
+
+const ROW_STATE_ORDER: readonly TerminalRowState[] = [
+  'attention',
+  'disconnected',
+  'working',
+  'idle',
+  'exited'
+]
+
+/**
+ * `lastOutputAt` comes from the app-wide output clock rather than the record's
+ * `hasActivity`, which only a mounted terminal maintains. A blocked agent is
+ * waiting on the user just as much as a finished background command is.
+ */
+export function terminalRowState(
+  terminal: Terminal,
+  lastOutputAt: number | undefined,
+  now: number
+): TerminalRowState {
+  const status = terminalBoardStatus(terminal)
+  if (status === 'attention' || terminal.agentState === 'blocked') return 'attention'
+  if (status === 'exited' || status === 'disconnected') return status
+  if (lastOutputAt !== undefined && now - lastOutputAt < BOARD_WORKING_WINDOW_MS) return 'working'
+  return 'idle'
+}
+
+/** The status filter a row state falls under. */
+export type BoardStatusBucket = 'attention' | 'working' | 'idle' | 'ended'
+
+export const BOARD_STATUS_BUCKETS: readonly BoardStatusBucket[] = [
+  'attention',
+  'working',
+  'idle',
+  'ended'
+]
+
+export function boardStatusBucket(state: TerminalRowState): BoardStatusBucket {
+  if (state === 'attention' || state === 'disconnected') return 'attention'
+  if (state === 'exited') return 'ended'
+  return state
+}
+
+export interface BoardRowFacts {
+  state: TerminalRowState
+  /** Latest of the output clock and the record's own activity stamp. */
+  lastActiveAt: number | undefined
+}
+
+/** Most urgent first, then most recently active; ties keep their input order. */
+export function compareBoardRows(a: BoardRowFacts, b: BoardRowFacts): number {
+  const byState = ROW_STATE_ORDER.indexOf(a.state) - ROW_STATE_ORDER.indexOf(b.state)
+  if (byState !== 0) return byState
+  return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0)
+}
+
+export function latestActivity(
+  terminal: Terminal,
+  lastOutputAt: number | undefined
+): number | undefined {
+  const stamps = [lastOutputAt, terminal.lastActivityTimestamp].filter(
+    (stamp): stamp is number => stamp !== undefined
+  )
+  return stamps.length > 0 ? Math.max(...stamps) : undefined
+}
+
+/**
+ * The one line that says what a terminal is doing: the title its program set
+ * (agents put their current task there), else where it is.
+ */
+export function terminalActivityText(terminal: Terminal): string | undefined {
+  const title = terminal.oscTitle?.trim()
+  if (title) return title
+  return terminal.cwd ? abbreviateHome(terminal.cwd) : undefined
+}
+
+function abbreviateHome(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
+}

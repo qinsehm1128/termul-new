@@ -1,5 +1,9 @@
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  _resetTerminalOutputClockForTests,
+  lastTerminalOutputAt
+} from '@/lib/terminal-output-clock'
 import { useTerminalDetachedOutput } from './use-terminal-detached-output'
 
 const {
@@ -141,6 +145,18 @@ describe('useTerminalDetachedOutput', () => {
     // When a renderer IS attached, data flows through xterm naturally
     // and will resume when the app becomes visible again.
     expect(mockAppendTranscript).not.toHaveBeenCalled()
+  })
+
+  it('records when each PTY last printed, attached or not, until it exits', () => {
+    _resetTerminalOutputClockForTests()
+    const { emit, exit } = mountHook()
+
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 1, isAppHidden: false })
+    emit('pty-a', toBytes('visible output'))
+    expect(lastTerminalOutputAt('pty-a')).toEqual(expect.any(Number))
+
+    exit('pty-a', 0)
+    expect(lastTerminalOutputAt('pty-a')).toBeUndefined()
   })
 
   it('ignores empty terminal-data payloads', () => {

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { peekCachedTerminal, setCacheEvictionHandler } from '@/components/terminal/terminal-cache'
 import { terminalApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { forgetTerminalOutput, noteTerminalOutput } from '@/lib/terminal-output-clock'
 import {
   MAX_TRANSCRIPT_CHARS,
   rendererOwnsDetachedContinuity,
@@ -159,6 +160,9 @@ export function useTerminalDetachedOutput(): void {
       if (!data || data.length === 0) {
         return
       }
+      // Every chunk passes this sidecar, attached or not, so this is the one
+      // place that can tell the board which terminals are busy.
+      noteTerminalOutput(ptyId)
 
       // Decode EVERY event, including ones dropped further down. A retained
       // streaming decoder is a stateful cursor over the byte stream, so moving
@@ -196,6 +200,7 @@ export function useTerminalDetachedOutput(): void {
     const unsubscribeExit = terminalApi.onExit((ptyId: string) => {
       decoders.delete(ptyId)
       pendingDetachedBuffer.delete(ptyId)
+      forgetTerminalOutput(ptyId)
     })
 
     return () => {
