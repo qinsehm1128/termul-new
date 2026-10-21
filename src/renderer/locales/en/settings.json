@@ -147,6 +147,8 @@
     "firstPromptWarmupHint": "Warmup prompt budget after session/new to absorb agent cold-start stalls; choose Disabled to skip the warmup entirely. The SE_ACP_FIRST_PROMPT_WARMUP_SECS env var still overrides this (operator/diagnostic). Desktop only — the standalone server uses the env var.",
     "preferLocalNpmInstall": "Install npm agents locally",
     "preferLocalNpmInstallHint": "On first launch, download npx agents (Claude, Codex, Gemini, Copilot, Qwen, Cline, Auggie) into Se’s local cache and run that copy afterwards. Turn this off to always use npx. Desktop only — the standalone server uses SE_ACP_PREFER_LOCAL_NPM.",
+    "prewarm": "Prewarm agent at launch",
+    "prewarmHint": "Start the selected agent and a ready session for the current project when Se opens, so Agent Chat opens instantly. Each ready session is a separate agent process (about 140 MB for Claude). Off: the agent starts when you open the Agent launcher.",
     "cliResumeTitle": "CLI resume extra args",
     "cliResumeDescription": "Prefixed before the resume flag when launching a scanned session. Edit here or override once in the resume dialog.",
     "cliResumePlaceholder": "none",

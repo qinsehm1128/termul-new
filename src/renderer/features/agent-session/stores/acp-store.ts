@@ -100,6 +100,10 @@ import {
 } from '@/lib/acp-api'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import {
+  forgetBackendEphemeralSession,
+  rememberBackendEphemeralSession
+} from './backend-ephemeral-sessions'
+import {
   deriveTitle,
   getCachedSessionPayload,
   type HistoryPageProgress,
@@ -3689,6 +3693,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         ...(opts?.executionTarget ? { executionTarget: opts.executionTarget } : {})
       })
       const sessionId = outcome.sessionId
+      // Before anything else can fail: a reload from here on must still find it.
+      if (opts?.backendEphemeral) rememberBackendEphemeralSession(agentId, sessionId)
       invalidateSessionReopen(sessionId)
       set((s) => {
         // Merge with any record an event may have created during the await window,
@@ -3875,6 +3881,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (session && session.status !== 'closed') {
       await acpApi.closeSession(session.agentId, sessionId)
     }
+    forgetBackendEphemeralSession(sessionId)
     void deleteSessionTempFiles(sessionId)
     set((s) => ({
       sessions: s.sessions[sessionId]
@@ -4786,6 +4793,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
                   )
                 )
               ])
+              forgetBackendEphemeralSession(lateSessionId)
             } catch (error) {
               void logFrontendError({
                 level: 'warn',
@@ -4865,6 +4873,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
                 )
               )
             ])
+            forgetBackendEphemeralSession(temporarySessionId)
           }
         } catch (error) {
           void logFrontendError({
@@ -4884,10 +4893,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   retargetWarmPool: (configId, cwd, projectId) => {
     const trimmedCwd = cwd.trim()
     if (!configId || trimmedCwd.length === 0) return
-    // Agent-switch drain (single-target): close + drop pooled sessions for THIS
-    // cwd but a DIFFERENT agent. Sessions for other cwds stay warm so switching
-    // projects back is instant (per-cwd warm, like processes). Idempotent: a
-    // retarget to the same target drains nothing and `prepareChat` dedupes the seed.
+    // Single-target drain: close + drop every pooled session for another agent
+    // or another cwd. Each one holds an agent-side process (claude-agent-acp
+    // runs one `claude` per session), so keeping one per visited project cost
+    // ~140 MB per project. Idempotent: a retarget to the same target drains
+    // nothing and `prepareChat` dedupes the seed.
     const state = get()
     const targetCwd = normalizeCwd(trimmedCwd)
     for (const k of new Set([
@@ -4895,7 +4905,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       ...Object.keys(state.preparingChatKeys)
     ])) {
       const [kConfig, kCwd] = k.split('\0')
-      if (kConfig !== configId && normalizeCwd(kCwd) === targetCwd) {
+      if (kConfig !== configId || normalizeCwd(kCwd) !== targetCwd) {
         get().cancelPreparedChat(k)
       }
     }

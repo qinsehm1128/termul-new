@@ -93,3 +93,4 @@ export const useAcpFirstPromptWarmup = () =>
   useAppSettingsStore((state) => state.settings.acpFirstPromptWarmupSecs)
 export const useAcpPreferLocalNpmInstall = () =>
   useAppSettingsStore((state) => state.settings.acpPreferLocalNpmInstall)
+export const useAcpPrewarm = () => useAppSettingsStore((state) => state.settings.acpPrewarm)
