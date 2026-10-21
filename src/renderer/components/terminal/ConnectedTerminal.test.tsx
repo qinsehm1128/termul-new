@@ -3182,9 +3182,9 @@ describe('ConnectedTerminal', () => {
     })
 
     it('rebuilds the render model after an atlas merge even on the alternate screen', async () => {
-      // A merge started by a sibling terminal moves glyphs to other atlas pages;
-      // a kept model then draws them from the wrong page — garbled glyphs that
-      // persist until a resize. Only a model rebuild clears it.
+      // A merge started by a sibling terminal moves glyphs to other atlas pages.
+      // Before addon-webgl 0.20.0-beta.288 a kept model then drew them from the
+      // wrong page — garbled glyphs that persisted until a resize.
       vi.mocked(useTerminalRenderer).mockReturnValue('webgl')
 
       render(<ConnectedTerminal />)
