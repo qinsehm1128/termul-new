@@ -650,6 +650,24 @@ describe('tauri-terminal-api', () => {
       handle?.dispose()
     })
 
+    it('drops bytes held for an unbound terminal once it is terminated', async () => {
+      const { api } = await loadApi()
+      mockInvoke.mockResolvedValue({ success: true, data: SPAWNED })
+
+      await api.spawn()
+      const spawnChannel = mockInvoke.mock.calls[0][1].onData as unknown as ChannelLike
+      spawnChannel.onmessage?.(new Uint8Array([97]).buffer)
+      await api.terminate(SPAWNED.id)
+
+      const painted: string[] = []
+      const handle = api.registerPrimaryTerminalData?.((bytes) =>
+        painted.push(new TextDecoder().decode(bytes))
+      )
+      handle?.bind(SPAWNED.id)
+      expect(painted).toEqual([])
+      handle?.dispose()
+    })
+
     it('never presents an id-only attach: empty claim fails without an invoke', async () => {
       const { api } = await loadApi()
 
