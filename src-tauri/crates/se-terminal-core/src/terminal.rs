@@ -915,26 +915,402 @@ fn requested_stream_last_seq(params: &Value) -> u64 {
     params.get("lastSeq").and_then(Value::as_u64).unwrap_or(0)
 }
 
+/// Delivered ahead of a replay whose cursor was evicted (RIS), so the replay
+/// paints a blank terminal instead of the screen the gap left behind.
+const RESYNC_RESET: &[u8] = b"\x1bc";
+/// Resync attempts in a row that deliver nothing before the slot fails closed.
+const MAX_STALLED_RESYNCS: u32 = 3;
+static NEXT_RESYNC_ID: AtomicU64 = AtomicU64::new(1);
+
+/// A slot whose consumer fell behind. Removing it left the terminal frozen
+/// for good, so it is rebuilt from the Core's output log instead: frames of
+/// the overrun subscription are dropped while a task re-watches from
+/// `last_seq`, and delivery resumes with the new subscription's replay.
+struct StreamResync {
+    id: u64,
+    /// Kind and seq of the last frame dropped from the overrun subscription;
+    /// `None` once it can send nothing more.
+    dropped: Option<(OutputKind, u64)>,
+    /// `(gap, latest_seq)` from the re-watch reply.
+    reply: Option<(bool, u64)>,
+    /// New-subscription frames that arrived before the reply said whether a
+    /// reset goes in front of them.
+    parked: Vec<OutputFrame>,
+    /// Attempts in a row that delivered nothing.
+    stalled: u32,
+}
+
+impl StreamResync {
+    /// Seqs only grow within a subscription and its replay comes before its
+    /// live output. So after a dropped live frame, the next replay frame is
+    /// the new subscription's. An old Core sends one replay frame per chunk;
+    /// after one of those, a replay frame is new when it restarts at or below
+    /// the dropped seq instead of continuing past it.
+    fn starts_new_subscription(&self, frame: &OutputFrame) -> bool {
+        match self.dropped {
+            None => true,
+            Some((OutputKind::Replay, seq)) => frame.kind == OutputKind::Replay && frame.seq <= seq,
+            Some(_) => frame.kind == OutputKind::Replay,
+        }
+    }
+}
+
+/// Hand-off from the read loop to the task that re-watches a slot.
+struct ResyncStart {
+    terminal_id: String,
+    id: u64,
+    cause: &'static str,
+    seq: u64,
+    sender: mpsc::Sender<OutputFrame>,
+}
+
+enum FrameRoute {
+    Done,
+    Resync(ResyncStart),
+    /// The slot was removed: its consumer is gone or resync gave up.
+    Closed {
+        terminal_id: String,
+        seq: u64,
+        stable_code: &'static str,
+    },
+}
+
 fn deliver_client_output_frame(
     streams: &mut HashMap<String, StreamSlot>,
     frame: OutputFrame,
-) -> Result<(), OutputFrame> {
+) -> FrameRoute {
     let Some(slot) = streams.get_mut(&frame.terminal_id) else {
-        return Ok(());
+        return FrameRoute::Done;
     };
-    let seq = frame.seq;
-    match slot.sender.try_send(frame) {
-        Ok(()) => {
-            if seq > slot.last_seq {
-                slot.last_seq = seq;
-            }
-            Ok(())
+    let route = route_client_output_frame(slot, frame);
+    remove_closed_slot(streams, &route);
+    route
+}
+
+fn route_client_output_frame(slot: &mut StreamSlot, frame: OutputFrame) -> FrameRoute {
+    let Some(resync) = slot.resync.as_mut() else {
+        return match push_client_output_frame(slot, frame) {
+            Ok(()) => FrameRoute::Done,
+            Err(error) => overrun_route(slot, error, None, 0),
+        };
+    };
+    if !resync.starts_new_subscription(&frame) {
+        // Live output past the reply's latest seq is the new subscription's,
+        // so its replay was missed: watch again.
+        if resync
+            .reply
+            .is_some_and(|(_, latest)| frame.kind == OutputKind::Live && frame.seq > latest)
+        {
+            let stalled = resync.stalled + 1;
+            return start_resync(
+                slot,
+                frame.terminal_id,
+                Some((frame.kind, frame.seq)),
+                stalled,
+                "STREAM_RESYNC_MISSED",
+                frame.seq,
+            );
         }
-        Err(
-            mpsc::error::TrySendError::Full(rejected) | mpsc::error::TrySendError::Closed(rejected),
-        ) => {
-            streams.remove(&rejected.terminal_id);
-            Err(rejected)
+        resync.dropped = Some((frame.kind, frame.seq));
+        return FrameRoute::Done;
+    }
+    if resync.reply.is_none() {
+        resync.parked.push(frame);
+        return FrameRoute::Done;
+    }
+    finish_resync(slot, vec![frame])
+}
+
+fn push_client_output_frame(
+    slot: &mut StreamSlot,
+    frame: OutputFrame,
+) -> Result<(), mpsc::error::TrySendError<OutputFrame>> {
+    let seq = frame.seq;
+    slot.sender.try_send(frame)?;
+    // What this consumer has, even below a requested cursor that was ahead
+    // of the log (a live hand-off): a resync replays from here.
+    slot.last_seq = seq;
+    Ok(())
+}
+
+fn overrun_route(
+    slot: &mut StreamSlot,
+    error: mpsc::error::TrySendError<OutputFrame>,
+    dropped: Option<(OutputKind, u64)>,
+    stalled: u32,
+) -> FrameRoute {
+    match error {
+        mpsc::error::TrySendError::Full(frame) => {
+            let dropped = dropped.unwrap_or((frame.kind, frame.seq));
+            start_resync(
+                slot,
+                frame.terminal_id,
+                Some(dropped),
+                stalled,
+                "STREAM_SLOT_FULL",
+                frame.seq,
+            )
+        }
+        mpsc::error::TrySendError::Closed(frame) => FrameRoute::Closed {
+            terminal_id: frame.terminal_id,
+            seq: frame.seq,
+            stable_code: "STREAM_SLOT_CLOSED",
+        },
+    }
+}
+
+fn start_resync(
+    slot: &mut StreamSlot,
+    terminal_id: String,
+    dropped: Option<(OutputKind, u64)>,
+    stalled: u32,
+    cause: &'static str,
+    seq: u64,
+) -> FrameRoute {
+    if stalled >= MAX_STALLED_RESYNCS {
+        return FrameRoute::Closed {
+            terminal_id,
+            seq,
+            stable_code: "STREAM_RESYNC_FAILED",
+        };
+    }
+    let id = NEXT_RESYNC_ID.fetch_add(1, Ordering::Relaxed);
+    slot.resync = Some(StreamResync {
+        id,
+        dropped,
+        reply: None,
+        parked: Vec::new(),
+        stalled,
+    });
+    FrameRoute::Resync(ResyncStart {
+        terminal_id,
+        id,
+        cause,
+        seq,
+        sender: slot.sender.clone(),
+    })
+}
+
+/// Deliver the new subscription's first frames, behind a reset when its
+/// cursor was evicted, and leave resync.
+fn finish_resync(slot: &mut StreamSlot, frames: Vec<OutputFrame>) -> FrameRoute {
+    let Some(resync) = slot.resync.take() else {
+        return FrameRoute::Done;
+    };
+    let Some(first) = frames.first() else {
+        return FrameRoute::Done;
+    };
+    let terminal_id = first.terminal_id.clone();
+    let dropped = frames.last().map(|frame| (frame.kind, frame.seq));
+    let gap = resync.reply.is_some_and(|(gap, _)| gap);
+    let reset = gap.then(|| OutputFrame {
+        kind: OutputKind::Replay,
+        terminal_id: terminal_id.clone(),
+        seq: slot.last_seq,
+        data: RESYNC_RESET.to_vec(),
+    });
+    let mut delivered = false;
+    for frame in reset.into_iter().chain(frames) {
+        if let Err(error) = push_client_output_frame(slot, frame) {
+            let stalled = if delivered { 0 } else { resync.stalled + 1 };
+            return overrun_route(slot, error, dropped, stalled);
+        }
+        delivered = true;
+    }
+    log::info!(
+        target: "se_manager::core",
+        "operation=terminal_output_resync stable_code=STREAM_RESYNC_DONE terminal_id={} last_seq={} gap={}",
+        terminal_id,
+        slot.last_seq,
+        gap
+    );
+    FrameRoute::Done
+}
+
+/// Record the re-watch reply; frames that beat it here are delivered now.
+fn apply_resync_reply(
+    slot: &mut StreamSlot,
+    last_seq: u64,
+    gap: bool,
+    latest_seq: u64,
+) -> FrameRoute {
+    let Some(resync) = slot.resync.as_mut() else {
+        return FrameRoute::Done;
+    };
+    if latest_seq <= last_seq {
+        // Nothing to replay, and nothing newer the overrun subscription
+        // could still send: whatever comes next is the new subscription's.
+        resync.dropped = None;
+    }
+    resync.reply = Some((gap, latest_seq));
+    if resync.parked.is_empty() {
+        return FrameRoute::Done;
+    }
+    let parked = std::mem::take(&mut resync.parked);
+    finish_resync(slot, parked)
+}
+
+/// The Core ended a subscription whose broadcast lagged; it sends nothing
+/// more, so its slot is rebuilt like an overrun one.
+fn resync_after_gap(
+    streams: &mut HashMap<String, StreamSlot>,
+    terminal_id: &str,
+    seq: u64,
+) -> FrameRoute {
+    let Some(slot) = streams.get_mut(terminal_id) else {
+        return FrameRoute::Done;
+    };
+    let stalled = match slot.resync.as_mut() {
+        None => 0,
+        // The overrun subscription ended; the running task re-watches.
+        Some(resync) if resync.reply.is_none() && resync.parked.is_empty() => {
+            resync.dropped = None;
+            return FrameRoute::Done;
+        }
+        // The re-watched subscription itself ended.
+        Some(resync) => resync.stalled + 1,
+    };
+    let route = start_resync(
+        slot,
+        terminal_id.to_string(),
+        None,
+        stalled,
+        "STREAM_GAP",
+        seq,
+    );
+    remove_closed_slot(streams, &route);
+    route
+}
+
+fn remove_closed_slot(streams: &mut HashMap<String, StreamSlot>, route: &FrameRoute) {
+    if let FrameRoute::Closed { terminal_id, .. } = route {
+        streams.remove(terminal_id);
+    }
+}
+
+fn resyncing_slot<'a>(
+    streams: &'a mut HashMap<String, StreamSlot>,
+    terminal_id: &str,
+    id: u64,
+) -> Option<&'a mut StreamSlot> {
+    streams
+        .get_mut(terminal_id)
+        .filter(|slot| slot.resync.as_ref().is_some_and(|resync| resync.id == id))
+}
+
+fn follow_frame_route(inner: &Arc<ClientInner>, route: FrameRoute) {
+    match route {
+        FrameRoute::Done => {}
+        FrameRoute::Resync(start) => {
+            log::warn!(
+                target: "se_manager::core",
+                "operation=terminal_output_backpressure stable_code={} terminal_id={} seq={}",
+                start.cause,
+                start.terminal_id,
+                start.seq
+            );
+            tokio::spawn(run_stream_resync(Arc::downgrade(inner), start));
+        }
+        FrameRoute::Closed {
+            terminal_id,
+            seq,
+            stable_code,
+        } => {
+            log::warn!(
+                target: "se_manager::core",
+                "operation=terminal_output_backpressure stable_code={} terminal_id={} seq={}",
+                stable_code,
+                terminal_id,
+                seq
+            );
+        }
+    }
+}
+
+/// Never runs on the read loop: the watch reply arrives there.
+async fn run_stream_resync(inner: std::sync::Weak<ClientInner>, mut start: ResyncStart) {
+    loop {
+        let next = match resync_stream_once(&inner, start).await {
+            FrameRoute::Resync(next) => next,
+            FrameRoute::Done => return,
+            route => {
+                if let Some(inner) = inner.upgrade() {
+                    follow_frame_route(&inner, route);
+                }
+                return;
+            }
+        };
+        start = next;
+    }
+}
+
+async fn resync_stream_once(
+    inner: &std::sync::Weak<ClientInner>,
+    start: ResyncStart,
+) -> FrameRoute {
+    let ResyncStart {
+        terminal_id,
+        id,
+        cause,
+        sender,
+        ..
+    } = start;
+    // Wait until the consumer drained the slot so the replay fits; an old
+    // Core sends it one frame per chunk.
+    let drained = sender.reserve_many(STREAM_OUTPUT_CAPACITY).await.is_ok();
+    drop(sender);
+    let Some(inner) = inner.upgrade() else {
+        return FrameRoute::Done;
+    };
+    let last_seq = {
+        let mut streams = inner.streams.lock();
+        let Some(slot) = resyncing_slot(&mut streams, &terminal_id, id) else {
+            return FrameRoute::Done;
+        };
+        let last_seq = slot.last_seq;
+        if !drained {
+            streams.remove(&terminal_id);
+            return FrameRoute::Done;
+        }
+        last_seq
+    };
+    log::info!(
+        target: "se_manager::core",
+        "operation=terminal_output_resync stable_code=STREAM_RESYNC_START cause={} terminal_id={} last_seq={}",
+        cause,
+        terminal_id,
+        last_seq
+    );
+    let reply = client_rpc(
+        &inner,
+        METHOD_WATCH,
+        json!({ "terminalId": terminal_id, "lastSeq": last_seq }),
+    )
+    .await
+    .and_then(|value| {
+        serde_json::from_value::<AttachReply>(value).map_err(|error| invalid(error.to_string()))
+    });
+    let mut streams = inner.streams.lock();
+    let Some(slot) = resyncing_slot(&mut streams, &terminal_id, id) else {
+        return FrameRoute::Done;
+    };
+    match reply {
+        Ok(reply) => {
+            let route = apply_resync_reply(slot, last_seq, reply.gap, reply.latest_seq);
+            remove_closed_slot(&mut streams, &route);
+            route
+        }
+        Err(error) => {
+            streams.remove(&terminal_id);
+            drop(streams);
+            log::warn!(
+                target: "se_manager::core",
+                "operation=terminal_output_resync stable_code=STREAM_RESYNC_FAILED terminal_id={} last_seq={} error={}",
+                terminal_id,
+                last_seq,
+                error.code()
+            );
+            FrameRoute::Done
         }
     }
 }
@@ -1121,6 +1497,7 @@ pub struct TerminalAttachSession {
 struct StreamSlot {
     sender: mpsc::Sender<OutputFrame>,
     last_seq: u64,
+    resync: Option<StreamResync>,
 }
 
 struct ClientInner {
@@ -1204,6 +1581,9 @@ impl TerminalCoreClient {
             let mut streams = self.inner.streams.lock();
             streams.retain(|id, slot| {
                 if active.contains(id) {
+                    // A resync in flight watched on the old connection; the
+                    // re-watch below replaces it.
+                    slot.resync = None;
                     to_rewatch.push((id.clone(), slot.last_seq));
                     true
                 } else {
@@ -1461,6 +1841,7 @@ impl TerminalCoreClient {
             StreamSlot {
                 sender: tx,
                 last_seq,
+                resync: None,
             },
         );
         let value = match self.rpc(method, params).await {
@@ -1574,18 +1955,11 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
         };
         if is_output_frame(&payload) {
             if let Ok(frame) = decode_output_frame(&payload) {
-                let rejected = {
+                let route = {
                     let mut streams = inner.streams.lock();
-                    deliver_client_output_frame(&mut streams, frame).err()
+                    deliver_client_output_frame(&mut streams, frame)
                 };
-                if let Some(rejected) = rejected {
-                    log::warn!(
-                        target: "se_manager::core",
-                        "operation=terminal_output_backpressure stable_code=STREAM_SLOT_FULL terminal_id={} seq={}",
-                        rejected.terminal_id,
-                        rejected.seq
-                    );
-                }
+                follow_frame_route(&inner, route);
             }
             continue;
         }
@@ -1598,23 +1972,12 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
         if let Ok(event) = serde_json::from_slice::<CoreEvent>(&payload) {
             if event.topic == GAP_TOPIC {
                 if let Ok(gap) = serde_json::from_value::<GapPayload>(event.payload) {
-                    let last_seq = inner
-                        .streams
-                        .lock()
-                        .get(&gap.terminal_id)
-                        .map(|slot| slot.last_seq)
-                        .unwrap_or(gap.last_seq);
-                    let frame = OutputFrame {
-                        kind: OutputKind::Gap,
-                        terminal_id: gap.terminal_id.clone(),
-                        seq: last_seq,
-                        data: Vec::new(),
-                    };
-                    let _ = deliver_client_output_frame(&mut inner.streams.lock(), frame);
-                    // A lagged stream has lost data. Do not silently re-watch it
-                    // behind the consumer's back; the WebSocket must receive a
-                    // gap and perform an explicit replay/resume.
-                    inner.streams.lock().remove(&gap.terminal_id);
+                    // A lagged stream has lost data and ended. Ending the
+                    // consumer's stream too froze the terminal; rebuild it
+                    // from the Core's log instead, which loses nothing.
+                    let route =
+                        resync_after_gap(&mut inner.streams.lock(), &gap.terminal_id, gap.last_seq);
+                    follow_frame_route(&inner, route);
                 }
                 continue;
             }
@@ -2096,37 +2459,219 @@ mod tests {
         assert_eq!(requested_stream_last_seq(&json!({ "terminalId": "t" })), 0);
     }
 
-    #[tokio::test]
-    async fn full_output_slot_fails_closed_without_advancing_last_seq() {
-        let (tx, _rx) = mpsc::channel(1);
-        let mut streams = HashMap::new();
-        streams.insert(
+    fn test_frame(kind: OutputKind, seq: u64, data: &[u8]) -> OutputFrame {
+        OutputFrame {
+            kind,
+            terminal_id: "t1".to_string(),
+            seq,
+            data: data.to_vec(),
+        }
+    }
+
+    fn one_slot(sender: mpsc::Sender<OutputFrame>, last_seq: u64) -> HashMap<String, StreamSlot> {
+        HashMap::from([(
             "t1".to_string(),
             StreamSlot {
-                sender: tx,
-                last_seq: 7,
+                sender,
+                last_seq,
+                resync: None,
             },
+        )])
+    }
+
+    fn slot_resync(streams: &HashMap<String, StreamSlot>) -> Option<&StreamResync> {
+        streams.get("t1")?.resync.as_ref()
+    }
+
+    /// A full slot used to be removed, which froze the terminal for good.
+    #[tokio::test]
+    async fn full_output_slot_resyncs_instead_of_failing_closed() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut streams = one_slot(tx, 7);
+        let first = test_frame(OutputKind::Live, 8, b"a");
+        assert!(matches!(
+            deliver_client_output_frame(&mut streams, first),
+            FrameRoute::Done
+        ));
+        let second = test_frame(OutputKind::Live, 9, b"b");
+        assert!(
+            matches!(
+                deliver_client_output_frame(&mut streams, second),
+                FrameRoute::Resync(ResyncStart { seq: 9, .. })
+            ),
+            "a full slot must start a resync"
         );
-        let first = OutputFrame {
-            kind: OutputKind::Live,
-            terminal_id: "t1".to_string(),
-            seq: 8,
-            data: vec![1],
-        };
-        let second = OutputFrame {
-            kind: OutputKind::Live,
-            terminal_id: "t1".to_string(),
-            seq: 9,
-            data: vec![2],
-        };
-        assert!(deliver_client_output_frame(&mut streams, first).is_ok());
-        assert_eq!(streams.get("t1").map(|slot| slot.last_seq), Some(8));
-        let rejected = deliver_client_output_frame(&mut streams, second).unwrap_err();
-        assert_eq!(rejected.seq, 9);
+        assert_eq!(
+            streams.get("t1").map(|slot| slot.last_seq),
+            Some(8),
+            "the dropped frame must not advance last_seq"
+        );
+        // The overrun subscription keeps sending; its frames are dropped.
+        let old = test_frame(OutputKind::Live, 10, b"c");
+        deliver_client_output_frame(&mut streams, old);
+        // The re-watch replays everything after 8, before its reply arrives.
+        let replay = test_frame(OutputKind::Replay, 10, b"bc");
+        deliver_client_output_frame(&mut streams, replay);
+        assert_eq!(
+            slot_resync(&streams).map(|resync| resync.parked.len()),
+            Some(1)
+        );
+
+        assert_eq!(rx.recv().await.map(|frame| frame.data), Some(b"a".to_vec()));
+        let slot = streams.get_mut("t1").expect("slot kept");
+        assert!(matches!(
+            apply_resync_reply(slot, 8, false, 10),
+            FrameRoute::Done
+        ));
+        assert!(slot.resync.is_none(), "the reply must end the resync");
+        assert_eq!(slot.last_seq, 10);
+        assert_eq!(
+            rx.recv().await.map(|frame| frame.data),
+            Some(b"bc".to_vec())
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "the overrun subscription leaked a frame"
+        );
+
+        let live = test_frame(OutputKind::Live, 11, b"d");
+        deliver_client_output_frame(&mut streams, live);
+        assert_eq!(rx.recv().await.map(|frame| frame.data), Some(b"d".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn evicted_resync_cursor_resets_the_screen_before_the_replay() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut streams = one_slot(tx, 7);
+        let slot = streams.get_mut("t1").expect("slot");
+        start_resync(
+            slot,
+            "t1".to_string(),
+            Some((OutputKind::Live, 9)),
+            0,
+            "test",
+            9,
+        );
+        assert!(matches!(
+            apply_resync_reply(slot, 7, true, 40),
+            FrameRoute::Done
+        ));
+        let replay = test_frame(OutputKind::Replay, 40, b"retained");
+        deliver_client_output_frame(&mut streams, replay);
+        let reset = rx.recv().await.expect("reset");
+        assert_eq!(reset.data, RESYNC_RESET);
+        assert_eq!(
+            reset.seq, 7,
+            "the reset must not move the consumer's cursor"
+        );
+        assert_eq!(
+            rx.recv().await.map(|frame| frame.data),
+            Some(b"retained".to_vec())
+        );
+        assert!(slot_resync(&streams).is_none());
+    }
+
+    /// An old Core sends its replay one frame per chunk, so the overrun
+    /// subscription can still be replaying when the new one starts.
+    #[test]
+    fn old_core_replay_overrun_resumes_at_the_restarted_replay() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut streams = one_slot(tx, 7);
+        let slot = streams.get_mut("t1").expect("slot");
+        start_resync(
+            slot,
+            "t1".to_string(),
+            Some((OutputKind::Replay, 20)),
+            0,
+            "test",
+            20,
+        );
+        deliver_client_output_frame(&mut streams, test_frame(OutputKind::Replay, 21, b"old"));
+        assert_eq!(
+            slot_resync(&streams).map(|resync| (resync.parked.len(), resync.dropped)),
+            Some((0, Some((OutputKind::Replay, 21)))),
+            "a replay frame continuing past the dropped one is the old subscription's"
+        );
+        deliver_client_output_frame(&mut streams, test_frame(OutputKind::Replay, 8, b"new"));
+        assert_eq!(
+            slot_resync(&streams).map(|resync| resync.parked.len()),
+            Some(1),
+            "a replay restarting below the dropped seq is the new subscription's"
+        );
+    }
+
+    #[test]
+    fn resync_that_misses_the_replay_watches_again_then_fails_closed() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut streams = one_slot(tx, 7);
+        let slot = streams.get_mut("t1").expect("slot");
+        start_resync(
+            slot,
+            "t1".to_string(),
+            Some((OutputKind::Live, 9)),
+            0,
+            "test",
+            9,
+        );
+        for stalled in 1..MAX_STALLED_RESYNCS {
+            let slot = streams.get_mut("t1").expect("slot");
+            apply_resync_reply(slot, 7, false, 20);
+            // Live output past the reply's latest seq: the replay was missed.
+            let live = test_frame(OutputKind::Live, 20 + u64::from(stalled), b"x");
+            assert!(matches!(
+                deliver_client_output_frame(&mut streams, live),
+                FrameRoute::Resync(_)
+            ));
+            assert_eq!(
+                slot_resync(&streams).map(|resync| resync.stalled),
+                Some(stalled)
+            );
+        }
+        let slot = streams.get_mut("t1").expect("slot");
+        apply_resync_reply(slot, 7, false, 20);
+        let live = test_frame(OutputKind::Live, 30, b"x");
+        assert!(matches!(
+            deliver_client_output_frame(&mut streams, live),
+            FrameRoute::Closed {
+                stable_code: "STREAM_RESYNC_FAILED",
+                ..
+            }
+        ));
         assert!(
             !streams.contains_key("t1"),
-            "a full slot must fail closed so the multiplexed reader can continue"
+            "a stalled resync must fail closed"
         );
+    }
+
+    /// The Core ends a lagged subscription with `terminal.gap`. That used to
+    /// end the consumer's stream; now nothing more can come from it, so the
+    /// next frame, live or not, is the re-watch's.
+    #[test]
+    fn lagged_stream_resyncs_and_takes_the_next_frame_as_new() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut streams = one_slot(tx, 7);
+        assert!(matches!(
+            resync_after_gap(&mut streams, "t1", 7),
+            FrameRoute::Resync(ResyncStart {
+                cause: "STREAM_GAP",
+                ..
+            })
+        ));
+        deliver_client_output_frame(&mut streams, test_frame(OutputKind::Live, 12, b"new"));
+        assert_eq!(
+            slot_resync(&streams).map(|resync| resync.parked.len()),
+            Some(1)
+        );
+    }
+
+    /// A live hand-off asks for a cursor past the log. Keeping it would make
+    /// a resync replay nothing and lose what the overrun dropped.
+    #[test]
+    fn delivered_frame_sets_last_seq_below_a_handoff_cursor() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut streams = one_slot(tx, (1 << 53) - 1);
+        deliver_client_output_frame(&mut streams, test_frame(OutputKind::Live, 5, b"x"));
+        assert_eq!(streams.get("t1").map(|slot| slot.last_seq), Some(5));
     }
 
     #[cfg(unix)]
@@ -2143,6 +2688,13 @@ mod tests {
         let cwd = profile.path().to_string_lossy().into_owned();
         let spawned = client.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
         let terminal_id = spawned.info.id.clone();
+        // Let the shell finish its prompt first: a frame delivered after the
+        // attach moves last_seq to that frame's seq.
+        let viewer = TerminalCoreClient::connect(&endpoint)
+            .await
+            .expect("viewer");
+        let mut prompt = viewer.watch(&terminal_id, 0).await.expect("viewer watch");
+        collect_until_marker(&mut prompt.output, "$ ", std::time::Duration::from_secs(10)).await;
         let _session = client
             .attach(&terminal_id, &spawned.claim, 99)
             .await
@@ -2233,6 +2785,206 @@ mod tests {
             std::time::Duration::from_secs(10),
         )
         .await;
+
+        client.shutdown().await.expect("shutdown");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    /// `n` numbered rows, one output chunk each, then `tail`, then `done` is
+    /// touched. The row commands never echo a `row<digits>` line themselves.
+    #[cfg(unix)]
+    fn rows_command(n: usize, tail: &str, done: &std::path::Path) -> String {
+        format!(
+            "i=0; while [ $i -lt {n} ]; do echo row$i; i=$((i+1)); sleep 0.01; done; {tail}; touch '{}'",
+            done.display()
+        )
+    }
+
+    #[cfg(unix)]
+    fn assert_slot_resyncing(client: &TerminalCoreClient, terminal_id: &str) {
+        assert!(
+            client
+                .inner
+                .streams
+                .lock()
+                .get(terminal_id)
+                .is_some_and(|slot| slot.resync.is_some()),
+            "the output must overflow the undrained slot"
+        );
+    }
+
+    #[cfg(unix)]
+    fn row_numbers(output: &str) -> Vec<usize> {
+        output
+            .split("\r\n")
+            .filter_map(|line| line.strip_prefix("row")?.parse().ok())
+            .collect()
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_file(path: &std::path::Path) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !path.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "shell never finished: {}",
+                path.display()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// A consumer that falls behind overflows its output slot. Dropping the
+    /// slot froze the terminal for good: input still worked, output never
+    /// came back. The slot must be rebuilt from the Core's output log.
+    #[cfg(unix)]
+    async fn assert_overflowed_slot_resumes_every_row(cursor: u64) {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
+
+        let client = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+        let mut session = client.watch(&terminal_id, cursor).await.expect("watch");
+        let rows = STREAM_OUTPUT_CAPACITY + 64;
+        let done = profile.path().join("rows-done");
+        // Nothing drains the slot while the shell prints, so it overflows
+        // partway through the rows; the marker comes after the overflow.
+        client
+            .write(
+                &terminal_id,
+                &format!("{}\n", rows_command(rows, "echo AFTER_\"\"OVERFLOW", &done)),
+            )
+            .await
+            .expect("write");
+        wait_for_file(&done).await;
+        assert_slot_resyncing(&client, &terminal_id);
+
+        let output = collect_until_marker(
+            &mut session.output,
+            "AFTER_OVERFLOW\r\n",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(
+            row_numbers(&output),
+            (0..rows).collect::<Vec<_>>(),
+            "rows were lost, repeated or reordered: {output:?}"
+        );
+        assert!(
+            !output.contains("\x1bc"),
+            "a resync whose cursor is still retained must not reset the screen"
+        );
+
+        client
+            .write(&terminal_id, "echo LIVE_\"\"AFTER_RESYNC\n")
+            .await
+            .expect("write live");
+        collect_until_marker(
+            &mut session.output,
+            "LIVE_AFTER_RESYNC\r\n",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+
+        client.shutdown().await.expect("shutdown");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn overflowed_slot_resumes_every_row_after_a_full_watch() {
+        assert_overflowed_slot_resumes_every_row(0).await;
+    }
+
+    /// The renderer hands a freshly spawned terminal over with this cursor
+    /// (`Number.MAX_SAFE_INTEGER`), so the Core replays nothing.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn overflowed_slot_resumes_every_row_after_a_live_handoff() {
+        assert_overflowed_slot_resumes_every_row((1u64 << 53) - 1).await;
+    }
+
+    /// When the overrun slot's cursor is evicted before the re-watch, the
+    /// screen is reset and rebuilt from everything the Core still holds.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn overflowed_slot_whose_cursor_was_evicted_resets_then_replays_the_log() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
+
+        let client = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+        let mut session = client.watch(&terminal_id, 0).await.expect("watch");
+        let done = profile.path().join("rows-done");
+        // Overflow the slot, then print more than the log retains. `exec`
+        // keeps the shell from printing anything after the marker.
+        let tail = format!(
+            "yes x | head -c {}; echo GAP_\"\"END",
+            SCROLLBACK_CAP + SCROLLBACK_CAP / 2
+        );
+        client
+            .write(
+                &terminal_id,
+                &format!(
+                    "{}; exec sleep 600\n",
+                    rows_command(STREAM_OUTPUT_CAPACITY + 64, &tail, &done)
+                ),
+            )
+            .await
+            .expect("write");
+        wait_for_file(&done).await;
+        assert_slot_resyncing(&client, &terminal_id);
+
+        let marker = "GAP_END\r\n";
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while !String::from_utf8_lossy(&frames.concat()).contains(marker) {
+            let frame = tokio::time::timeout_at(deadline, session.output.recv())
+                .await
+                .expect("timed out before the marker")
+                .expect("output stream closed before the marker");
+            frames.push(frame.data);
+        }
+        let resets: Vec<usize> = frames
+            .iter()
+            .enumerate()
+            .filter(|(_, data)| data.as_slice() == RESYNC_RESET)
+            .map(|(index, _)| index)
+            .collect();
+        let [reset] = resets[..] else {
+            panic!("expected exactly one reset, got {resets:?}");
+        };
+        let before = String::from_utf8_lossy(&frames[..reset].concat()).into_owned();
+        assert!(
+            before.contains("row0\r\n") && !before.contains(marker),
+            "the reset must come after the delivered prefix and before the replay"
+        );
+        let after = frames[reset + 1..].concat();
+
+        // Everything the Core still retains, as a fresh full watch sees it.
+        let viewer = TerminalCoreClient::connect(&endpoint)
+            .await
+            .expect("viewer");
+        let mut full = viewer.watch(&terminal_id, 0).await.expect("full watch");
+        let retained =
+            collect_until_marker(&mut full.output, marker, std::time::Duration::from_secs(10))
+                .await;
+        assert!(
+            after.ends_with(retained.as_bytes()),
+            "the resync must replay the whole retained log after the reset"
+        );
 
         client.shutdown().await.expect("shutdown");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
