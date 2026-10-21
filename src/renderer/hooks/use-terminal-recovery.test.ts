@@ -2,18 +2,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   recover: vi.fn(),
+  adoptOnBoot: vi.fn(() => Promise.resolve(0)),
   loadQuick: vi.fn(() => Promise.resolve()),
   success: vi.fn(),
   error: vi.fn()
 }))
-vi.mock('@/lib/terminal-recovery', () => ({ recoverTerminalWorkspace: mocks.recover }))
+vi.mock('@/lib/terminal-recovery', () => ({
+  recoverTerminalWorkspace: mocks.recover,
+  adoptLiveTerminalsOnBoot: mocks.adoptOnBoot
+}))
 vi.mock('@/features/quick-terminal/quick-terminal-store', () => ({
   useQuickTerminalStore: { getState: () => ({ load: mocks.loadQuick }) }
 }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
 vi.mock('sonner', () => ({ toast: { success: mocks.success, error: mocks.error } }))
 
-import { recoverTerminals, reloadAndRecover } from './use-terminal-recovery'
+import { renderHook } from '@testing-library/react'
+import { useProjectStore } from '@/stores/project-store'
+import {
+  recoverTerminals,
+  reloadAndRecover,
+  useAdoptLiveTerminalsOnBoot
+} from './use-terminal-recovery'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -44,5 +54,20 @@ describe('recoverTerminals', () => {
     expect(mocks.error).toHaveBeenCalledWith('Could not restore in place.', {
       action: { label: 'Reload UI and restore', onClick: reloadAndRecover }
     })
+  })
+})
+
+describe('useAdoptLiveTerminalsOnBoot', () => {
+  it('waits for the projects, then takes the terminals back once per renderer', () => {
+    useProjectStore.setState({ isLoaded: false } as never)
+    const first = renderHook(() => useAdoptLiveTerminalsOnBoot())
+    expect(mocks.adoptOnBoot).not.toHaveBeenCalled()
+
+    useProjectStore.setState({ isLoaded: true } as never)
+    first.rerender()
+    first.unmount()
+    renderHook(() => useAdoptLiveTerminalsOnBoot())
+
+    expect(mocks.adoptOnBoot).toHaveBeenCalledTimes(1)
   })
 })

@@ -31,6 +31,7 @@ import { useSessionWorkspaceBootstrap } from '@/hooks/use-session-workspace-sync
 import { useAppliedSidebarFontSizeSync } from '@/hooks/use-sidebar-font-size'
 import { useTerminalDetachedOutput } from '@/hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from '@/hooks/use-terminal-exit-notification'
+import { useAdoptLiveTerminalsOnBoot } from '@/hooks/use-terminal-recovery'
 import { useTerminalResourceLifecycle } from '@/hooks/use-terminal-resource-lifecycle'
 import { useTerminalRestore } from '@/hooks/use-terminal-restore'
 import { useAppliedUiZoomSync } from '@/hooks/use-ui-zoom'
@@ -68,6 +69,7 @@ export function PortableAppEffects(): React.JSX.Element | null {
   useConversationLifecycle()
   useTerminalResourceLifecycle()
   useTerminalRestore(activeGroupId ? null : undefined)
+  useAdoptLiveTerminalsOnBoot()
   useCrashRecovery()
   useTerminalDetachedOutput()
   useCwd()

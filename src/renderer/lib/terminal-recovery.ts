@@ -1,6 +1,9 @@
 import type { TerminalStatus } from '@shared/types/ipc.types'
 import type { PersistedTerminalLayout } from '@shared/types/persistence.types'
-import { loadPersistedTerminals } from '@/hooks/useTerminalAutoSave'
+import {
+  isProjectTerminalRestoreInProgress,
+  loadPersistedTerminals
+} from '@/hooks/useTerminalAutoSave'
 import { terminalApi } from '@/lib/api'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -60,13 +63,60 @@ export interface TerminalRecoveryResult {
 }
 
 /**
+ * Take back the live PTYs of every known project the store has lost, project
+ * by project. `skip` leaves out a project whose own restore is about to run or
+ * is running, so the two never add the same PTY. Returns how many came back.
+ */
+export async function adoptLiveTerminalsOfAllProjects(
+  live: readonly TerminalStatus[],
+  skip: (projectId: string) => boolean = () => false
+): Promise<number> {
+  const known = new Set(useProjectStore.getState().projects.map((project) => project.id))
+  const projectIds = new Set<string>()
+  for (const terminal of live) {
+    if (!terminal.projectId || !known.has(terminal.projectId)) continue
+    if (!isAdoptableLiveTerminal(terminal, terminal.projectId)) continue
+    if (useTerminalStore.getState().findTerminalByPtyId(terminal.id)) continue
+    projectIds.add(terminal.projectId)
+  }
+
+  let adopted = 0
+  for (const projectId of projectIds) {
+    if (skip(projectId)) continue
+    const layout = await loadPersistedTerminals(projectId)
+    // The restore may have started while the layout loaded.
+    if (skip(projectId)) continue
+    adopted += adoptMissingProjectPtys(projectId, live, layout).length
+  }
+  return adopted
+}
+
+/**
+ * Run once when the renderer starts: a reload empties the store while
+ * Terminal Core keeps every terminal running, and only the active project gets
+ * its terminals back from its own restore. The active project and any project
+ * already restoring are left to that restore.
+ */
+export async function adoptLiveTerminalsOnBoot(): Promise<number> {
+  if (typeof terminalApi.list !== 'function') return 0
+  const listed = await terminalApi.list()
+  if (!listed.success) throw new Error(listed.error)
+  return adoptLiveTerminalsOfAllProjects(
+    listed.data,
+    (projectId) =>
+      projectId === useProjectStore.getState().activeProjectId ||
+      isProjectTerminalRestoreInProgress(projectId)
+  )
+}
+
+/**
  * Rebuild the renderer's terminals from what Terminal Core is running, without
  * reloading the page or touching any process.
  *
- * Projects repaired: the active one, and any whose store holds some but not
- * all of its live PTYs (restore would otherwise keep only those). A project
- * with no records at all is left to its layout restore on the next switch,
- * which keeps names, order and panes.
+ * Every project gets its running terminals back, not only the active one: a
+ * renderer reload empties the store, and a project left out vanished from the
+ * workspace while its terminals kept running. Only the active project's tabs
+ * are put on screen; another project shows its tabs when it is opened.
  */
 export async function recoverTerminalWorkspace(): Promise<TerminalRecoveryResult> {
   if (typeof terminalApi.list !== 'function') throw new Error('Terminal list unavailable')
@@ -84,26 +134,8 @@ export async function recoverTerminalWorkspace(): Promise<TerminalRecoveryResult
     disconnected += 1
   }
 
+  const adopted = await adoptLiveTerminalsOfAllProjects(live)
   const activeProjectId = useProjectStore.getState().activeProjectId
-  const projectIds = new Set<string>()
-  if (activeProjectId) projectIds.add(activeProjectId)
-  for (const terminal of useTerminalStore.getState().terminals) {
-    if (terminal.projectId && terminal.ptyId && liveIds.has(terminal.ptyId)) {
-      projectIds.add(terminal.projectId)
-    }
-  }
-
-  let adopted = 0
-  for (const projectId of projectIds) {
-    const missing = live.filter(
-      (terminal) =>
-        isAdoptableLiveTerminal(terminal, projectId) &&
-        !useTerminalStore.getState().findTerminalByPtyId(terminal.id)
-    )
-    if (missing.length === 0) continue
-    const layout = await loadPersistedTerminals(projectId)
-    adopted += adoptMissingProjectPtys(projectId, missing, layout).length
-  }
 
   let tabsRestored = 0
   if (activeProjectId) {

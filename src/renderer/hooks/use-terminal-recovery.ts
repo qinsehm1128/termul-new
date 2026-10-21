@@ -3,7 +3,8 @@ import { toast } from 'sonner'
 import { useQuickTerminalStore } from '@/features/quick-terminal/quick-terminal-store'
 import { runtimeT } from '@/i18n/runtime'
 import { logFrontendError } from '@/lib/log-api'
-import { recoverTerminalWorkspace } from '@/lib/terminal-recovery'
+import { adoptLiveTerminalsOnBoot, recoverTerminalWorkspace } from '@/lib/terminal-recovery'
+import { useProjectStore } from '@/stores/project-store'
 
 const recoveryT = (key: string, fallback: string, values?: Record<string, number>) =>
   runtimeT('shell', `recovery.${key}`, fallback, values)
@@ -78,4 +79,22 @@ export function useTerminalRecovery(): { recover: () => void; recovering: boolea
     void recoverTerminals()
   }, [])
   return { recover, recovering }
+}
+
+let bootAdoptionStarted = false
+
+/** Take back every project's running terminals once, when the renderer starts. */
+export function useAdoptLiveTerminalsOnBoot(): void {
+  const projectsLoaded = useProjectStore((state) => state.isLoaded)
+  useEffect(() => {
+    if (!projectsLoaded || bootAdoptionStarted) return
+    bootAdoptionStarted = true
+    adoptLiveTerminalsOnBoot().catch((error: unknown) => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'terminal-recovery.boot',
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }, [projectsLoaded])
 }

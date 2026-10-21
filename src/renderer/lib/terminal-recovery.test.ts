@@ -1,16 +1,19 @@
 import type { TerminalStatus } from '@shared/types/ipc.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), layout: vi.fn() }))
+const mocks = vi.hoisted(() => ({ list: vi.fn(), layout: vi.fn(), restoring: vi.fn() }))
 vi.mock('@/lib/api', () => ({ terminalApi: { list: mocks.list } }))
-vi.mock('@/hooks/useTerminalAutoSave', () => ({ loadPersistedTerminals: mocks.layout }))
+vi.mock('@/hooks/useTerminalAutoSave', () => ({
+  loadPersistedTerminals: mocks.layout,
+  isProjectTerminalRestoreInProgress: mocks.restoring
+}))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
 
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, type LeafNode, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Terminal } from '@/types/project'
-import { recoverTerminalWorkspace } from './terminal-recovery'
+import { adoptLiveTerminalsOnBoot, recoverTerminalWorkspace } from './terminal-recovery'
 
 function live(id: string, projectId: string, extra: Partial<TerminalStatus> = {}): TerminalStatus {
   return {
@@ -51,7 +54,11 @@ function tabTerminalIds(): string[] {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.layout.mockResolvedValue(null)
-  useProjectStore.setState({ activeProjectId: 'p1' } as never)
+  mocks.restoring.mockReturnValue(false)
+  useProjectStore.setState({
+    activeProjectId: 'p1',
+    projects: ['p1', 'p2', 'p3'].map((id) => ({ id, name: id }))
+  } as never)
   useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
   useWorkspaceStore.setState(() => {
     const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
@@ -96,7 +103,7 @@ describe('recoverTerminalWorkspace', () => {
     expect(useTerminalStore.getState().terminals).toEqual([])
   })
 
-  it('completes a project the store holds in part, and leaves an untouched one to its restore', async () => {
+  it('takes back the running terminals of every project, showing only the active one', async () => {
     useTerminalStore.getState().setTerminals([record('p2-one', 'p2', 'pty-p2-a')])
     mocks.list.mockResolvedValue({
       success: true,
@@ -105,11 +112,20 @@ describe('recoverTerminalWorkspace', () => {
 
     const result = await recoverTerminalWorkspace()
 
-    expect(result.adopted).toBe(1)
+    expect(result.adopted).toBe(2)
     expect(useTerminalStore.getState().findTerminalByPtyId('pty-p2-b')?.projectId).toBe('p2')
-    expect(useTerminalStore.getState().findTerminalByPtyId('pty-p3')).toBeUndefined()
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-p3')?.projectId).toBe('p3')
     // Not the active project: its panes are not on screen.
     expect(tabTerminalIds()).toEqual([])
+  })
+
+  it('takes nothing for a project this renderer does not know', async () => {
+    mocks.list.mockResolvedValue({ success: true, data: [live('pty-gone-project', 'p9')] })
+
+    const result = await recoverTerminalWorkspace()
+
+    expect(result.adopted).toBe(0)
+    expect(useTerminalStore.getState().terminals).toEqual([])
   })
 
   it('marks a record whose process is gone as disconnected', async () => {
@@ -126,5 +142,41 @@ describe('recoverTerminalWorkspace', () => {
   it('fails when Terminal Core cannot be asked', async () => {
     mocks.list.mockResolvedValue({ success: false, error: 'core down', code: 'X' })
     await expect(recoverTerminalWorkspace()).rejects.toThrow('core down')
+  })
+})
+
+describe('adoptLiveTerminalsOnBoot', () => {
+  it('takes back other projects and leaves the active and restoring ones to their restore', async () => {
+    mocks.restoring.mockImplementation((projectId: string) => projectId === 'p2')
+    mocks.list.mockResolvedValue({
+      success: true,
+      data: [live('pty-p1', 'p1'), live('pty-p2', 'p2'), live('pty-p3', 'p3')]
+    })
+    mocks.layout.mockResolvedValue({
+      terminals: [{ id: 'old', name: 'worker', shell: 'zsh', cwd: '/', ptyId: 'pty-p3' }],
+      activeTerminalId: 'old',
+      updatedAt: ''
+    })
+
+    expect(await adoptLiveTerminalsOnBoot()).toBe(1)
+
+    const store = useTerminalStore.getState()
+    expect(store.findTerminalByPtyId('pty-p1')).toBeUndefined()
+    expect(store.findTerminalByPtyId('pty-p2')).toBeUndefined()
+    expect(store.findTerminalByPtyId('pty-p3')?.name).toBe('worker')
+    expect(tabTerminalIds()).toEqual([])
+  })
+
+  it('backs off when the project starts its own restore while its layout loads', async () => {
+    let restoring = false
+    mocks.restoring.mockImplementation(() => restoring)
+    mocks.layout.mockImplementation(async () => {
+      restoring = true
+      return null
+    })
+    mocks.list.mockResolvedValue({ success: true, data: [live('pty-p3', 'p3')] })
+
+    expect(await adoptLiveTerminalsOnBoot()).toBe(0)
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-p3')).toBeUndefined()
   })
 })
