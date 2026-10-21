@@ -34,7 +34,7 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   smoothScrollDuration: 0,
   // Wide/ambiguous CJK and box-drawing leftovers after a scroll.
   rescaleOverlappingGlyphs: true,
-  scrollback: 10000,
+  scrollback: 3000,
   tabStopWidth: 4,
   convertEol: false,
   ignoreBracketedPasteMode: false,

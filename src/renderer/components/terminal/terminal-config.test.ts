@@ -54,7 +54,7 @@ describe('DEFAULT_TERMINAL_OPTIONS', () => {
     expect(DEFAULT_TERMINAL_OPTIONS.letterSpacing).toBe(0)
     expect(DEFAULT_TERMINAL_OPTIONS.smoothScrollDuration).toBe(0)
     expect(DEFAULT_TERMINAL_OPTIONS.rescaleOverlappingGlyphs).toBe(true)
-    expect(DEFAULT_TERMINAL_OPTIONS.scrollback).toBe(10000)
+    expect(DEFAULT_TERMINAL_OPTIONS.scrollback).toBe(3000)
     expect(DEFAULT_TERMINAL_OPTIONS.cursorBlink).toBe(true)
     expect(DEFAULT_TERMINAL_OPTIONS.drawBoldTextInBrightColors).toBe(true)
     expect(DEFAULT_TERMINAL_OPTIONS.scrollbar).toEqual({ showScrollbar: false })

@@ -201,6 +201,7 @@ export type AppSettingsUpdate = Partial<Omit<AppSettings, AppPanelVisibilitySett
 // Terminal buffer size options
 export const BUFFER_SIZE_OPTIONS = [
   { value: 1000, label: '1,000 lines' },
+  { value: 3000, label: '3,000 lines' },
   { value: 5000, label: '5,000 lines' },
   { value: 10000, label: '10,000 lines' },
   { value: 25000, label: '25,000 lines' },
@@ -396,7 +397,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
   terminalSymbolFontFamily: '',
   terminalFontSize: 14,
-  terminalBufferSize: 10000,
+  terminalBufferSize: 3000,
   terminalRenderer: 'webgl',
   terminalScreenReaderMode: false,
   defaultShell: '',
