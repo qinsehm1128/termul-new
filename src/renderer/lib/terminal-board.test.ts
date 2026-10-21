@@ -6,10 +6,16 @@ import {
   type Terminal
 } from '@/types/project'
 import {
+  BOARD_WORKING_WINDOW_MS,
+  boardStatusBucket,
   buildTerminalBoard,
+  compareBoardRows,
   countBoardTerminals,
   filterTerminalBoard,
-  terminalBoardStatus
+  latestActivity,
+  terminalActivityText,
+  terminalBoardStatus,
+  terminalRowState
 } from './terminal-board'
 
 function project(id: string, name: string, extras: Partial<Project> = {}): Project {
@@ -192,5 +198,75 @@ describe('terminalBoardStatus', () => {
     expect(terminalBoardStatus(terminal('f', { ptyId: 'pty', healthStatus: 'crashed' }))).toBe(
       'disconnected'
     )
+  })
+})
+
+describe('terminalRowState', () => {
+  const now = 1_000_000
+  const running = terminal('t', { ptyId: 'pty', healthStatus: 'running', viewState: 'visible' })
+
+  it('calls a terminal busy only while it is still printing', () => {
+    expect(terminalRowState(running, now - 500, now)).toBe('working')
+    expect(terminalRowState(running, now - BOARD_WORKING_WINDOW_MS, now)).toBe('idle')
+    expect(terminalRowState(running, undefined, now)).toBe('idle')
+  })
+
+  it('puts a blocked agent and a flagged terminal ahead of output', () => {
+    expect(terminalRowState({ ...running, agentState: 'blocked' }, now, now)).toBe('attention')
+    expect(terminalRowState({ ...running, needsAttention: true }, now, now)).toBe('attention')
+  })
+
+  it('reports an ended or cut-off process whatever it last printed', () => {
+    expect(terminalRowState({ ...running, healthStatus: 'exited' }, now, now)).toBe('exited')
+    expect(terminalRowState({ ...running, healthStatus: 'crashed' }, now, now)).toBe('disconnected')
+  })
+})
+
+describe('boardStatusBucket', () => {
+  it('files a cut-off terminal under "needs you" and an ended one under "ended"', () => {
+    expect(boardStatusBucket('disconnected')).toBe('attention')
+    expect(boardStatusBucket('attention')).toBe('attention')
+    expect(boardStatusBucket('exited')).toBe('ended')
+    expect(boardStatusBucket('working')).toBe('working')
+  })
+})
+
+describe('compareBoardRows', () => {
+  it('sorts the most urgent first, then the most recently active', () => {
+    const rows = [
+      { id: 'idle-old', state: 'idle' as const, lastActiveAt: 1 },
+      { id: 'ended', state: 'exited' as const, lastActiveAt: 9 },
+      { id: 'idle-new', state: 'idle' as const, lastActiveAt: 5 },
+      { id: 'busy', state: 'working' as const, lastActiveAt: 2 },
+      { id: 'needs', state: 'attention' as const, lastActiveAt: undefined }
+    ]
+    expect([...rows].sort(compareBoardRows).map((row) => row.id)).toEqual([
+      'needs',
+      'busy',
+      'idle-new',
+      'idle-old',
+      'ended'
+    ])
+  })
+})
+
+describe('latestActivity', () => {
+  it('takes the later of the output clock and the record stamp', () => {
+    expect(latestActivity(terminal('t', { lastActivityTimestamp: 5 }), 9)).toBe(9)
+    expect(latestActivity(terminal('t', { lastActivityTimestamp: 9 }), 5)).toBe(9)
+    expect(latestActivity(terminal('t'), undefined)).toBeUndefined()
+  })
+})
+
+describe('terminalActivityText', () => {
+  it('prefers the title the program set, else the folder with home shortened', () => {
+    expect(terminalActivityText(terminal('t', { oscTitle: '✳ Fix login', cwd: '/x' }))).toBe(
+      '✳ Fix login'
+    )
+    expect(terminalActivityText(terminal('t', { cwd: '/Users/qs/project/app' }))).toBe(
+      '~/project/app'
+    )
+    expect(terminalActivityText(terminal('t', { cwd: '/home/dev' }))).toBe('~')
+    expect(terminalActivityText(terminal('t', { cwd: '/srv/app' }))).toBe('/srv/app')
   })
 })
