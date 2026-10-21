@@ -130,7 +130,7 @@
   },
   "board": {
     "title": "终端看板",
-    "description": "所有终端按分组和项目列在一起。点一行即可跳到对应项目。",
+    "description": "所有终端按项目列出：哪个需要你处理、哪个在忙、哪个空闲，一眼看清。选中一行可预览，回车或双击打开。",
     "listTitle": "全部终端",
     "search": "搜索终端",
     "searchPlaceholder": "分组、项目或终端",
@@ -151,6 +151,41 @@
       "disconnected": "已断开",
       "attention": "需要关注",
       "exited": "已结束"
+    },
+    "agent": "Agent",
+    "justNow": "刚刚",
+    "keyboardHint": "↑↓ 选择 · 回车打开 · / 搜索",
+    "cancel": "取消",
+    "restartTitle": "重启 {{name}}？",
+    "restartDescription": "会结束正在运行的进程，并在同一目录重新启动 shell。",
+    "filter": {
+      "label": "按状态筛选",
+      "all": "全部",
+      "attention": "需要处理",
+      "working": "运行中",
+      "idle": "空闲",
+      "ended": "已结束"
+    },
+    "groupBy": {
+      "label": "分组方式",
+      "project": "按项目",
+      "status": "按状态"
+    },
+    "state": {
+      "attention": "需要处理",
+      "disconnected": "已断开",
+      "working": "运行中",
+      "idle": "空闲",
+      "exited": "已结束"
+    },
+    "actions": {
+      "open": "打开",
+      "restart": "重启",
+      "terminate": "结束进程"
+    },
+    "preview": {
+      "label": "{{name}} 的预览",
+      "empty": "这个终端暂时没有可预览的输出。"
     }
   },
   "lifecycle": {

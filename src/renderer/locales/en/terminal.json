@@ -130,7 +130,7 @@
   },
   "board": {
     "title": "Terminal board",
-    "description": "Every live terminal, grouped by folder and project. Click a row to open that project.",
+    "description": "Every terminal, by project: which ones need you, which are busy, which are waiting. Select a row to preview it; press Enter or double-click to open.",
     "listTitle": "All terminals",
     "search": "Search terminals",
     "searchPlaceholder": "Group, project, or terminal",
@@ -151,6 +151,41 @@
       "disconnected": "Disconnected",
       "attention": "Needs attention",
       "exited": "Ended"
+    },
+    "agent": "Agent",
+    "justNow": "just now",
+    "keyboardHint": "↑↓ select · Enter open · / search",
+    "cancel": "Cancel",
+    "restartTitle": "Restart {{name}}?",
+    "restartDescription": "This ends the running process and starts a new shell in the same folder.",
+    "filter": {
+      "label": "Filter by status",
+      "all": "All",
+      "attention": "Needs you",
+      "working": "Busy",
+      "idle": "Idle",
+      "ended": "Ended"
+    },
+    "groupBy": {
+      "label": "Group by",
+      "project": "Project",
+      "status": "Status"
+    },
+    "state": {
+      "attention": "Needs you",
+      "disconnected": "Disconnected",
+      "working": "Busy",
+      "idle": "Idle",
+      "exited": "Ended"
+    },
+    "actions": {
+      "open": "Open",
+      "restart": "Restart",
+      "terminate": "End process"
+    },
+    "preview": {
+      "label": "Preview of {{name}}",
+      "empty": "Nothing to preview for this terminal yet."
     }
   },
   "lifecycle": {
