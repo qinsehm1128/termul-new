@@ -551,6 +551,18 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(screen.getByLabelText('Git changes')).not.toBeDisabled()
   })
 
+  it('keeps the switcher bar off the quick terminal page on the phone', async () => {
+    // `/` is the conversation list here, so a project chip could not land.
+    render(
+      <MemoryRouter initialEntries={['/quick-terminals/qt-1']}>
+        <WorkspaceLayout />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
+    expect(screen.queryByRole('group', { name: 'Terminal scope' })).not.toBeInTheDocument()
+  })
+
   it('keeps immutable recovery context and exact actions usable at phone width', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
     useSessionWorkspaceSyncStore.getState().setRecoveryItems(conversationId, [mobileRecoveryItem])

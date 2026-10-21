@@ -70,14 +70,20 @@ describe('scopeTerminals', () => {
     expect(scopeTerminals('all', context).map((t) => t.id)).toEqual(['t1', 't2', 't3', 't4'])
   })
 
-  it('should leave quick terminals out of every scope', () => {
-    // A quick terminal has no project, so it used to surface at `all` scope as
-    // an "unassigned project" chip. It lives on its own page instead.
+  it('should offer quick terminals at all scope only', () => {
+    // A quick terminal belongs to no project or group, so the narrower scopes
+    // have nothing to file it under. At `all` it is reachable like a project.
     const withQuick: TerminalSwitcherContext = {
       ...context,
       terminals: [...context.terminals, { ...terminal('tq'), quickTerminalId: 'q1' }]
     }
-    expect(scopeTerminals('all', withQuick).map((t) => t.id)).toEqual(['t1', 't2', 't3', 't4'])
+    expect(scopeTerminals('all', withQuick).map((t) => t.id)).toEqual([
+      't1',
+      't2',
+      't3',
+      't4',
+      'tq'
+    ])
     expect(scopeTerminals('group', withQuick).map((t) => t.id)).toEqual(['t1', 't2'])
     expect(scopeTerminals('project', withQuick).map((t) => t.id)).toEqual(['t1'])
   })
@@ -292,6 +298,56 @@ describe('groupTerminalsByProject', () => {
     )
 
     expect(entries[1]).toMatchObject({ projectId: undefined, name: 'No project' })
+  })
+
+  it('gives each quick terminal its own chip after the project and Conversation chips', () => {
+    // A quick terminal has no project. Bucketed by project it landed in the
+    // unassigned chip, which opened the project workspace it is not in.
+    const quick = (id: string, name: string, quickTerminalId: string): Terminal => ({
+      ...terminal(id),
+      name,
+      quickTerminalId
+    })
+    const entries = groupTerminalsByProject(
+      [
+        quick('qa', 'scratch', 'qt-a'),
+        terminal('t1', 'p1'),
+        { id: 'c', name: 'c', projectId: 'p1', shell: 'bash', conversationId: 'conv-1' },
+        quick('qb', 'notes', 'qt-b')
+      ],
+      projects,
+      [],
+      'No project',
+      new Map([['conv-1', 'Chat']])
+    )
+
+    expect(
+      entries.map((entry) => [
+        entry.kind,
+        entry.name,
+        entry.quickTerminalId,
+        entry.targetTerminalId
+      ])
+    ).toEqual([
+      ['project', 'Alpha', undefined, 't1'],
+      ['conversation', 'Chat', undefined, 'c'],
+      ['quick', 'scratch', 'qt-a', 'qa'],
+      ['quick', 'notes', 'qt-b', 'qb']
+    ])
+    expect(entries[2].projectId).toBeUndefined()
+  })
+
+  it('should report a quick chip by the same worst-first status', () => {
+    const exited: Terminal = {
+      ...terminal('qa'),
+      quickTerminalId: 'qt-a',
+      ptyId: 'pty-qa',
+      healthStatus: 'crashed'
+    }
+
+    expect(groupTerminalsByProject([exited], projects, [], '-', new Map())[0].status).toBe(
+      'disconnected'
+    )
   })
 
   it('should fall back to the project id when the project record is missing', () => {

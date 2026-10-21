@@ -128,12 +128,27 @@ describe('terminal-board-navigation', () => {
       ptyIdIndex: new Map([['pty-quick', 'pty-quick']]),
       cleanupRecoveries: {}
     })
+    useProjectStore.setState({
+      projects: [
+        { id: 'p-cost', name: 'cost', color: 'blue', path: '/srv/logistics' },
+        { id: 'p-other', name: 'other', color: 'green', path: '/srv/other' }
+      ],
+      activeProjectId: 'p-cost'
+    })
     const navigate = vi.fn()
 
     openBoardTerminal({ projectId: null, terminalId: 'pty-quick', navigate })
 
     expect(navigate).toHaveBeenCalledWith('/quick-terminals/qt-1')
     expect(peekPendingTerminalFocus()).toBeNull()
+    // The project workspace is left as it was, ready for the way back.
+    expect(useProjectStore.getState().activeProjectId).toBe('p-cost')
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'terminal-board.open',
+        message: 'open quick terminal quickTerminalId=qt-1'
+      })
+    )
   })
 
   it('opens an SSH terminal by selecting its profile, not a project', () => {
