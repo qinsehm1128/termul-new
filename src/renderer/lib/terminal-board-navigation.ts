@@ -78,6 +78,11 @@ export function openBoardTerminal(options: {
     .terminals.find((terminal) => terminal.id === options.terminalId)
   if (record?.quickTerminalId) {
     clearPendingTerminalFocus()
+    void logFrontendError({
+      level: 'warn',
+      source: 'terminal-board.open',
+      message: `open quick terminal quickTerminalId=${record.quickTerminalId}`
+    })
     options.navigate(`/quick-terminals/${record.quickTerminalId}`)
     return
   }

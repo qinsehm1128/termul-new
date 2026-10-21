@@ -1396,6 +1396,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isWorkspaceRoute =
     location.pathname.startsWith('/c/') ||
     (!isMobileWebShell && (location.pathname === '/' || location.pathname === '/terminal'))
+  // The quick terminal page gets the switcher bar too, so a project is one click
+  // away. The list and an open quick terminal are one page, so both get it and
+  // picking a quick terminal does not shift the page. Not on the phone shell,
+  // where `/` is the conversation list and a project chip could not land.
+  const isQuickTerminalRoute =
+    !isMobileWebShell &&
+    (location.pathname === '/quick-terminals' || location.pathname.startsWith('/quick-terminals/'))
 
   useEffect(() => {
     if (isOpenConversationRoute) {
@@ -2429,11 +2436,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
               </motion.div>
             </>
           ) : (
-            <div className="relative flex-1 overflow-hidden bg-background">
-              <div className="h-full w-full">
-                <Outlet />
+            <>
+              {isQuickTerminalRoute ? <TerminalSwitcherBar /> : null}
+              <div className="relative flex-1 overflow-hidden bg-background">
+                <div className="h-full w-full">
+                  <Outlet />
+                </div>
               </div>
-            </div>
+            </>
           )}
           {!isMobileWebShell && <StatusBar project={activeProject} />}
         </>

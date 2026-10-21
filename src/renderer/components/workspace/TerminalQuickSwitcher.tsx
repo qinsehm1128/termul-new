@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { isQuickTerminal, type Terminal } from '@/types/project'
 
 const STATUS_DOT: Record<TerminalBoardStatusKey, string> = {
   live: 'bg-emerald-500',
@@ -79,13 +80,20 @@ export function TerminalQuickSwitcher({
   const effectiveScope = scopes.includes(scope) ? scope : 'all'
   const entries = orderByRecency(scopeTerminals(effectiveScope, context), recentTerminalIds)
 
-  const projectName = (projectId: string | undefined): string =>
-    projects.find((project) => project.id === projectId)?.name ?? t('board.noProject')
+  // A quick terminal has no project; saying "no project" would read as a
+  // project terminal that lost its project.
+  const ownerLabel = (terminal: Terminal): string =>
+    isQuickTerminal(terminal)
+      ? t('switcher.quickTerminal')
+      : (projects.find((project) => project.id === terminal.projectId)?.name ??
+        t('board.noProject'))
 
-  const jump = (terminalId: string, projectId: string | undefined): void => {
+  const jump = (terminal: Terminal): void => {
     onClose()
-    openBoardTerminal({ projectId: projectId ?? null, terminalId, navigate })
-    useTerminalStore.getState().selectTerminal(terminalId)
+    openBoardTerminal({ projectId: terminal.projectId ?? null, terminalId: terminal.id, navigate })
+    // Same reason as the switcher bar: a quick terminal is shown by its page,
+    // and selecting it would repoint the project workspace's active terminal.
+    if (!isQuickTerminal(terminal)) useTerminalStore.getState().selectTerminal(terminal.id)
   }
 
   return (
@@ -120,8 +128,8 @@ export function TerminalQuickSwitcher({
               key={terminal.id}
               // cmdk matches on `value`; the project name is included so
               // "which project was that in" is a usable query too.
-              value={`${terminal.name} ${projectName(terminal.projectId)}`}
-              onSelect={() => jump(terminal.id, terminal.projectId)}
+              value={`${terminal.name} ${ownerLabel(terminal)}`}
+              onSelect={() => jump(terminal)}
             >
               <span
                 className={cn(
@@ -132,7 +140,7 @@ export function TerminalQuickSwitcher({
               />
               <span className="truncate">{terminal.name}</span>
               <span className="ml-auto truncate pl-2 text-2xs text-muted-foreground">
-                {projectName(terminal.projectId)}
+                {ownerLabel(terminal)}
                 {terminal.id === activeTerminalId ? ` · ${t('switcher.current')}` : ''}
               </span>
             </CommandItem>
