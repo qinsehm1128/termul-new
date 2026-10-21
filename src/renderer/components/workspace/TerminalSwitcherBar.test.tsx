@@ -6,7 +6,14 @@ import type { Terminal } from '@/types/project'
 import { TerminalSwitcherBar } from './TerminalSwitcherBar'
 
 const navigate = vi.fn()
-vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }))
+const route = vi.hoisted(() => ({ pathname: '/' }))
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>()
+  return {
+    useNavigate: () => navigate,
+    useMatch: (pattern: string) => actual.matchPath(pattern, route.pathname)
+  }
+})
 
 const openBoardTerminal = vi.fn()
 vi.mock('@/lib/terminal-board-navigation', () => ({
@@ -19,6 +26,10 @@ vi.mock('react-i18next', () => ({
 
 function terminal(id: string, projectId?: string): Terminal {
   return { id, name: id, projectId, shell: 'bash', ptyId: `pty-${id}` }
+}
+
+function quickTerminal(id: string, name: string, quickTerminalId: string): Terminal {
+  return { ...terminal(id), name, quickTerminalId }
 }
 
 /** Chip label plus its terminal-count badge, e.g. `P1 2`. */
@@ -48,6 +59,7 @@ describe('TerminalSwitcherBar', () => {
   beforeEach(() => {
     navigate.mockClear()
     openBoardTerminal.mockClear()
+    route.pathname = '/'
     seed(null)
   })
 
@@ -171,6 +183,125 @@ describe('TerminalSwitcherBar', () => {
 
     expect(screen.getByRole('tab', { name: /P1/ })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: /P2/ })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('should give each quick terminal its own chip after the projects', () => {
+    useTerminalStore.setState({
+      terminals: [
+        quickTerminal('tq', 'scratch', 'qt-1'),
+        terminal('t1', 'p1'),
+        terminal('t2', 'p2')
+      ]
+    })
+    render(<TerminalSwitcherBar />)
+
+    // First in the store, last on the row: quick terminals never sit between
+    // projects. Named after the quick terminal, not filed as "no project".
+    expect(projectChips()).toEqual(['P11', 'P21', 'scratch1'])
+  })
+
+  it('should mark a quick chip with the quick terminal icon', () => {
+    useTerminalStore.setState({
+      terminals: [terminal('t1', 'p1'), quickTerminal('tq', 'scratch', 'qt-1')]
+    })
+    render(<TerminalSwitcherBar />)
+
+    expect(
+      screen.getByRole('tab', { name: /scratch/ }).querySelector('svg.lucide-terminal')
+    ).not.toBeNull()
+    expect(screen.getByRole('tab', { name: /scratch/ })).toHaveAttribute(
+      'title',
+      'switcher.quickTerminalTitle'
+    )
+    expect(screen.getByRole('tab', { name: /P1/ }).querySelector('svg')).toBeNull()
+  })
+
+  it('should keep quick terminals out of the group scope', () => {
+    seed('g1')
+    useTerminalStore.setState({
+      terminals: [
+        terminal('t1', 'p1'),
+        terminal('t2', 'p2'),
+        quickTerminal('tq', 'scratch', 'qt-1')
+      ]
+    })
+    render(<TerminalSwitcherBar />)
+
+    fireEvent.click(screen.getByText('switcher.scope.group'))
+
+    expect(projectChips()).toEqual(['P11', 'P21'])
+  })
+
+  it('should open a quick chip without making it the workspace terminal', () => {
+    useTerminalStore.setState({
+      terminals: [terminal('t1', 'p1'), quickTerminal('tq', 'scratch', 'qt-1')],
+      activeTerminalId: 't1',
+      recentTerminalIds: ['t1']
+    })
+    render(<TerminalSwitcherBar />)
+
+    fireEvent.click(screen.getByRole('tab', { name: /scratch/ }))
+
+    expect(openBoardTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: null, terminalId: 'tq' })
+    )
+    // The project's tab bar, branch picker and saved layout follow the active
+    // terminal; a quick terminal is not one of the project's.
+    expect(useTerminalStore.getState().activeTerminalId).toBe('t1')
+    expect(useTerminalStore.getState().recentTerminalIds).toEqual(['t1'])
+    expect(useProjectStore.getState().activeProjectId).toBe('p1')
+  })
+
+  it("should mark the open quick terminal's chip, not the active project's", () => {
+    route.pathname = '/quick-terminals/qt-1'
+    useTerminalStore.setState({
+      terminals: [
+        terminal('t1', 'p1'),
+        quickTerminal('tq', 'scratch', 'qt-1'),
+        quickTerminal('tr', 'notes', 'qt-2')
+      ],
+      activeTerminalId: 't1'
+    })
+    render(<TerminalSwitcherBar />)
+
+    expect(screen.getByRole('tab', { name: /scratch/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: /notes/ })).toHaveAttribute('aria-selected', 'false')
+    // t1 is still the workspace's active terminal, but it is not on screen.
+    expect(screen.getByRole('tab', { name: /P1/ })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('should not mark a quick chip off its page', () => {
+    // The terminal list panel can make a quick terminal the active one; on a
+    // project page that still is not what is on screen.
+    useTerminalStore.setState({
+      terminals: [terminal('t1', 'p1'), quickTerminal('tq', 'scratch', 'qt-1')],
+      activeTerminalId: 'tq'
+    })
+    render(<TerminalSwitcherBar />)
+
+    expect(screen.getByRole('tab', { name: /scratch/ })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('should mark no chip on the quick terminal list', () => {
+    route.pathname = '/quick-terminals'
+    useTerminalStore.setState({
+      terminals: [terminal('t1', 'p1'), quickTerminal('tq', 'scratch', 'qt-1')],
+      activeTerminalId: 't1'
+    })
+    render(<TerminalSwitcherBar />)
+
+    expect(screen.getByRole('tab', { name: /P1/ })).toHaveAttribute('aria-selected', 'false')
+    expect(screen.getByRole('tab', { name: /scratch/ })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('should stay on the quick terminal page with no terminals yet', () => {
+    // The first quick terminal is sized before it joins the store; a bar
+    // appearing only then would shrink the shell right after it started.
+    route.pathname = '/quick-terminals/qt-1'
+    useTerminalStore.setState({ terminals: [], activeTerminalId: '' })
+    render(<TerminalSwitcherBar />)
+
+    expect(screen.getByText('switcher.scope.all')).toBeTruthy()
   })
 
   it('should stay on screen with a single terminal', () => {

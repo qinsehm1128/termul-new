@@ -2,8 +2,8 @@ import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
 import { terminalBoardStatus } from '@/lib/terminal-board'
 import {
   isConversationScopedTerminal,
-  isManagedOnOwnPage,
   isProjectScopedTerminal,
+  isSshTerminal,
   type Project,
   type ProjectGroup,
   type Terminal
@@ -37,8 +37,10 @@ export function scopeTerminals(
 ): Terminal[] {
   const { terminals, activeProjectId, activeGroup } = context
 
-  // Quick and SSH terminals are managed on their own pages, so no scope offers them.
-  if (scope === 'all') return terminals.filter((terminal) => !isManagedOnOwnPage(terminal))
+  // SSH terminals are reached through their profile, so no scope offers them.
+  // Quick terminals belong to no project or group, so only `all` offers them —
+  // as chips of their own, never as an unassigned project.
+  if (scope === 'all') return terminals.filter((terminal) => !isSshTerminal(terminal))
 
   if (scope === 'group' && activeGroup) {
     // Widened so an unassigned terminal's `undefined` can be probed directly.
@@ -108,12 +110,15 @@ export interface SwitcherProjectEntry {
    * the project they are attributed to. They are a different kind of thing —
    * owned by a Conversation, not by the project — and folding them into the
    * project's count made the project claim terminals it does not own.
+   * Quick terminals likewise get one chip each: they belong to no project.
    */
-  kind: 'project' | 'conversation'
+  kind: 'project' | 'conversation' | 'quick'
   /** `undefined` for terminals belonging to no project; they still get a chip. */
   projectId: string | undefined
   /** Set on a `conversation` chip: where clicking it navigates. */
   conversationId?: string
+  /** Set on a `quick` chip: the quick terminal whose page it opens. */
+  quickTerminalId?: string
   name: string
   terminals: Terminal[]
   /** Where a click lands — the most recently visited terminal of this chip. */
@@ -148,7 +153,7 @@ function aggregateStatus(terminals: readonly Terminal[]): TerminalBoardStatusKey
  */
 /** Bucket key: a project id, `undefined` for no project, or one Conversation. */
 type BucketKey = string | undefined
-type Bucket = { conversationId?: string; terminals: Terminal[] }
+type Bucket = { conversationId?: string; quickTerminalId?: string; terminals: Terminal[] }
 
 /**
  * One chip per Conversation, not one chip for all of them.
@@ -167,6 +172,9 @@ export function groupTerminalsByProject(
 ): SwitcherProjectEntry[] {
   const nameById = new Map(projects.map((project) => [project.id, project.name]))
   const order: string[] = []
+  // Quick terminals trail every project and Conversation chip rather than
+  // taking first-appearance order, so they never wedge themselves between projects.
+  const quickOrder: string[] = []
   const buckets = new Map<string, Bucket>()
 
   for (const terminal of terminals) {
@@ -178,21 +186,40 @@ export function groupTerminalsByProject(
     const projectId: BucketKey = conversationId
       ? undefined
       : terminal.projectId?.trim() || undefined
-    const key = conversationId ? `c:${conversationId}` : `p:${projectId ?? ''}`
+    const quickTerminalId = terminal.quickTerminalId
+    const key = quickTerminalId
+      ? `q:${quickTerminalId}`
+      : conversationId
+        ? `c:${conversationId}`
+        : `p:${projectId ?? ''}`
     const bucket = buckets.get(key)
     if (bucket) {
       bucket.terminals.push(terminal)
       continue
     }
-    buckets.set(key, { conversationId, terminals: [terminal] })
-    order.push(key)
+    buckets.set(key, { conversationId, quickTerminalId, terminals: [terminal] })
+    if (quickTerminalId) quickOrder.push(key)
+    else order.push(key)
   }
 
-  return order.map((key) => {
+  return [...order, ...quickOrder].map((key) => {
     const bucket = buckets.get(key) ?? { terminals: [] }
     // Non-empty by construction — a bucket only exists because a terminal
     // created it — so orderByRecency always yields a first entry.
     const target = orderByRecency(bucket.terminals, recentIds)[0]
+    // Checked first, as `openBoardTerminal` does: a quick terminal opens on
+    // its own page whatever else its record carries.
+    if (bucket.quickTerminalId) {
+      return {
+        kind: 'quick' as const,
+        projectId: undefined,
+        quickTerminalId: bucket.quickTerminalId,
+        name: target.name,
+        terminals: bucket.terminals,
+        targetTerminalId: target.id,
+        status: aggregateStatus(bucket.terminals)
+      }
+    }
     if (bucket.conversationId) {
       const conversationId = bucket.conversationId
       return {

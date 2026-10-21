@@ -225,7 +225,9 @@
     "projectTitle": "{{project}} —— {{terminals}} 个终端，打开最近用过的那个",
     "conversations": "会话",
     "conversationTitle": "{{project}} —— {{terminals}} 个会话终端，打开最近使用的那个",
-    "untitledConversation": "未命名对话"
+    "untitledConversation": "未命名对话",
+    "quickTerminal": "快捷终端",
+    "quickTerminalTitle": "{{project}} —— 快捷终端，打开它的页面"
   },
   "lastSession": {
     "label": "上次会话",

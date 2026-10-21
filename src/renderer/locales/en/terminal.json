@@ -225,7 +225,9 @@
     "projectTitle": "{{project}} — {{terminals}} terminal(s), opens the most recent",
     "conversations": "Conversations",
     "conversationTitle": "{{project}} — {{terminals}} terminal(s) owned by conversations, opens the most recent",
-    "untitledConversation": "Untitled conversation"
+    "untitledConversation": "Untitled conversation",
+    "quickTerminal": "Quick terminal",
+    "quickTerminalTitle": "{{project}} — quick terminal, opens its page"
   },
   "lastSession": {
     "label": "Last session",

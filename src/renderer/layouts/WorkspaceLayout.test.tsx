@@ -1866,6 +1866,47 @@ describe('WorkspaceLayout - quick terminal file tree', () => {
   })
 })
 
+describe('WorkspaceLayout - quick terminal switcher bar', () => {
+  beforeEach(() => {
+    mockUseTerminals.mockReturnValue([
+      { id: 't1', name: 'build', projectId: 'a', shell: 'bash', ptyId: 'pty-t1' },
+      { id: 'tq', name: 'scratch', quickTerminalId: 'qt-1', shell: 'zsh', ptyId: 'pty-tq' }
+    ])
+    mockUseActiveTerminalId.mockReturnValue('t1')
+  })
+
+  function renderAt(path: string): void {
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  // Reported: an open quick terminal had no bar, so going back to a project
+  // meant a detour through the activity rail.
+  it('shows the bar on an open quick terminal, with its chip marked', () => {
+    renderAt('/quick-terminals/qt-1')
+
+    expect(screen.getByRole('tab', { name: /scratch/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: /^a/ })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('shows the bar on the quick terminal list, which is the same page', () => {
+    renderAt('/quick-terminals')
+
+    expect(screen.getByRole('tab', { name: /scratch/ })).toBeInTheDocument()
+  })
+
+  it('keeps the bar off other non-workspace pages', () => {
+    renderAt('/terminals')
+
+    expect(screen.queryByRole('tab', { name: /scratch/ })).not.toBeInTheDocument()
+  })
+})
+
 describe('WorkspaceLayout panel fade structure', () => {
   it('wraps the project sidebar and file explorer in opacity-only fades', () => {
     const project = createProject('a', '/workspace/a', 'blue')

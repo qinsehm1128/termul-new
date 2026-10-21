@@ -1,7 +1,7 @@
-import { PanelRight } from 'lucide-react'
+import { PanelRight, Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useMatch, useNavigate } from 'react-router-dom'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { buildConversationTerminalNames } from '@/lib/conversation-terminal-names'
 import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
@@ -61,6 +61,9 @@ export function TerminalSwitcherBar({
   const activeGroupId = useProjectStore((state) => state.activeGroupId)
   const groups = useProjectStore((state) => state.groups)
   const projects = useProjectStore((state) => state.projects)
+  // On the quick terminal page the open quick terminal is what is on screen,
+  // whatever the workspace's active terminal still is.
+  const quickTerminalPage = useMatch('/quick-terminals/:quickTerminalId?')
 
   // Membership, not navigation mode. `activeGroupId` tracks the sidebar's
   // group *scope*, which `selectProject` deliberately exits — so clicking any
@@ -108,7 +111,9 @@ export function TerminalSwitcherBar({
   // selected. Hiding it instead made the control look absent rather than
   // inapplicable — the same reason the whole bar is no longer hidden below two
   // terminals: one terminal still needs a visible way to reach the list.
-  if (terminals.length === 0) return null
+  // The quick terminal page keeps it even then: opening the first terminal
+  // there would otherwise push the bar in and shrink the shell it just sized.
+  if (terminals.length === 0 && !quickTerminalPage) return null
 
   const activeTerminal = terminals.find((terminal) => terminal.id === activeTerminalId)
   const activeProjectOfTerminal = activeTerminal?.projectId
@@ -124,7 +129,12 @@ export function TerminalSwitcherBar({
       terminalId: entry.targetTerminalId,
       navigate
     })
-    useTerminalStore.getState().selectTerminal(entry.targetTerminalId)
+    // A quick terminal is shown by its page, not as the workspace's active
+    // terminal. Selecting it would leave the project's tab bar, branch picker
+    // and saved layout pointing at a terminal the project does not own.
+    if (entry.kind !== 'quick') {
+      useTerminalStore.getState().selectTerminal(entry.targetTerminalId)
+    }
   }
 
   return (
@@ -185,16 +195,20 @@ export function TerminalSwitcherBar({
           aria-label={t('switcher.listLabel')}
         >
           {visible.map((entry) => {
-            const isActive =
-              entry.kind === 'conversation'
+            const isActive = quickTerminalPage
+              ? entry.kind === 'quick' &&
+                entry.quickTerminalId === quickTerminalPage.params.quickTerminalId
+              : entry.kind === 'conversation'
                 ? activeTerminalIsConversationScoped
-                : entry.projectId === activeProjectOfTerminal
+                : entry.kind === 'project' && entry.projectId === activeProjectOfTerminal
             return (
               <button
                 key={
-                  entry.kind === 'conversation'
-                    ? '__conversations__'
-                    : (entry.projectId ?? '__unassigned__')
+                  entry.kind === 'quick'
+                    ? `quick:${entry.quickTerminalId}`
+                    : entry.kind === 'conversation'
+                      ? '__conversations__'
+                      : (entry.projectId ?? '__unassigned__')
                 }
                 type="button"
                 role="tab"
@@ -203,9 +217,11 @@ export function TerminalSwitcherBar({
                 // `terminals`, not `count`: i18next reads `count` as a plural
                 // selector and would look for keys we do not define.
                 title={t(
-                  entry.kind === 'conversation'
-                    ? 'switcher.conversationTitle'
-                    : 'switcher.projectTitle',
+                  entry.kind === 'quick'
+                    ? 'switcher.quickTerminalTitle'
+                    : entry.kind === 'conversation'
+                      ? 'switcher.conversationTitle'
+                      : 'switcher.projectTitle',
                   {
                     project: entry.name,
                     terminals: entry.terminals.length
@@ -222,6 +238,9 @@ export function TerminalSwitcherBar({
                   className={cn('size-1.5 shrink-0 rounded-full', STATUS_DOT[entry.status])}
                   aria-hidden="true"
                 />
+                {entry.kind === 'quick' ? (
+                  <TerminalIcon className="size-3 shrink-0" aria-hidden="true" />
+                ) : null}
                 <span className="max-w-32 truncate">{entry.name}</span>
                 <span className="shrink-0 tabular-nums text-muted-foreground/70" aria-hidden="true">
                   {entry.terminals.length}

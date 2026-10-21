@@ -100,6 +100,49 @@ describe('TerminalQuickSwitcher', () => {
     expect(optionLabels()).toHaveLength(2)
   })
 
+  it('should list quick terminals at all scope, labelled as quick terminals', () => {
+    const quick: Terminal = { ...terminal('tq', 'scratch'), quickTerminalId: 'qt-1' }
+    useTerminalStore.setState({ terminals: [...useTerminalStore.getState().terminals, quick] })
+    renderSwitcher()
+
+    // Not "no project": that reads as a project terminal that lost its project.
+    const row = screen.getByRole('option', { name: /scratch/ })
+    expect(row.textContent).toContain('switcher.quickTerminal')
+    expect(row.textContent).not.toContain('board.noProject')
+
+    fireEvent.click(screen.getByText('switcher.scope.project'))
+    expect(screen.queryByRole('option', { name: /scratch/ })).toBeNull()
+  })
+
+  it('should open a quick terminal without making it the workspace terminal', () => {
+    const quick: Terminal = { ...terminal('tq', 'scratch'), quickTerminalId: 'qt-1' }
+    useTerminalStore.setState({
+      terminals: [...useTerminalStore.getState().terminals, quick],
+      recentTerminalIds: ['t1']
+    })
+    renderSwitcher()
+
+    fireEvent.click(screen.getByRole('option', { name: /scratch/ }))
+
+    expect(openBoardTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: null, terminalId: 'tq' })
+    )
+    expect(useTerminalStore.getState().activeTerminalId).toBe('t1')
+    expect(useTerminalStore.getState().recentTerminalIds).toEqual(['t1'])
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('should match a quick terminal on its label', () => {
+    const quick: Terminal = { ...terminal('tq', 'scratch'), quickTerminalId: 'qt-1' }
+    useTerminalStore.setState({ terminals: [...useTerminalStore.getState().terminals, quick] })
+    renderSwitcher()
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'switcher.quickTerminal' } })
+
+    expect(optionLabels()).toHaveLength(1)
+    expect(optionLabels()[0]).toContain('scratch')
+  })
+
   it('should match on the project name as well as the terminal name', () => {
     renderSwitcher()
 
