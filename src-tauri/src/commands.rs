@@ -202,6 +202,10 @@ async fn install_core_output_forwarder(
     let forwarder_id = terminal_id.clone();
     let handle = tokio::spawn(async move {
         while let Some(frame) = output.recv().await {
+            // Nothing to paint; an empty write reaches xterm as a no-op IPC.
+            if frame.data.is_empty() {
+                continue;
+            }
             if on_data.send(Response::new(frame.data)).is_err() {
                 break;
             }
