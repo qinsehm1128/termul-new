@@ -135,10 +135,12 @@ export interface WebglScrollRepair {
 
 export interface WebglRebuildContext {
   /**
-   * An atlas merge moved glyphs to other pages. xterm only flags that to the
-   * renderer that draws next, so every other terminal sharing the atlas keeps
-   * cells that sample the old pages — garbled glyphs until a resize. A rebuild
-   * skipped elsewhere for cost must still run when this is set.
+   * An atlas merge moved glyphs to other pages. Before addon-webgl
+   * 0.20.0-beta.288 (xterm.js #6042) xterm flagged that only to the renderer
+   * that drew next, so every other terminal sharing the atlas kept cells that
+   * sampled the old pages — garbled glyphs until a resize. Each renderer now
+   * rebuilds on a page-layout change by itself; a rebuild skipped elsewhere
+   * for cost still runs when this is set, as a safeguard that merges keep rare.
    */
   atlasPagesMoved: boolean
 }
@@ -147,8 +149,10 @@ export interface WebglRebuildContext {
  * Rebuild this terminal's WebGL model after scroll, writes, or atlas merges.
  *
  * Do not call `clearTextureAtlas`. xterm's WebGL addon shares one atlas
- * across matching terminals; clearing it leaves sibling render models with
- * stale UVs and leftover glyphs. A hidden tab keeps its renderer (the WebGL
+ * across matching terminals, so clearing it re-rasterizes every glyph for all
+ * of them, and it silently does nothing while the first page is empty. Before
+ * addon-webgl 0.20.0-beta.291 (xterm.js #6055) it also left sibling render
+ * models with stale UVs. A hidden tab keeps its renderer (the WebGL
  * budget evicts by LRU, not on hide), so it is not rebuilt for free on show:
  * an atlas merge must reach it through `rebuildSurface` like any other.
  */

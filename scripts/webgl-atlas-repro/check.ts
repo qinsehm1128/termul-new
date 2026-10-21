@@ -5,8 +5,13 @@
  *
  *   bun scripts/webgl-atlas-repro/check.ts
  *
- * Exits non-zero when the fixed policy corrupts, or when either positive
- * control stays clean — a clean control means the check proves nothing.
+ * Exits non-zero when any policy corrupts, when a stress run never merges atlas
+ * pages, or when the detector control sees no difference — a run that never
+ * merges, or a blind detector, means the check proves nothing.
+ *
+ * The legacy policy and the sibling clearTextureAtlas used to be positive
+ * controls that corrupted. addon-webgl 0.20.0-beta.288 (xterm.js #6042) and
+ * 0.20.0-beta.291 (#6055) fixed both upstream; they now guard those fixes.
  */
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdtempSync } from 'node:fs'
@@ -46,15 +51,18 @@ const server = Bun.serve({
 
 // Async on purpose: a blocking spawn would stall the event loop that serves the
 // page the runner is waiting for.
-async function render(name: string, query: string): Promise<string> {
+async function render(name: string, query: string): Promise<{ png: string; merged: number }> {
   const png = path.join(work, `${name}.png`)
   const url = `http://127.0.0.1:${server.port}/index.html?${query}`
   const runner = Bun.spawn([path.join(work, 'runner'), url, png, path.join(work, `${name}.txt`)], {
-    stdout: 'ignore',
+    stdout: 'pipe',
     stderr: 'inherit'
   })
+  const out = await new Response(runner.stdout).text()
   if ((await runner.exited) !== 0) throw new Error(`runner failed for ${name}`)
-  return png
+  const match = / merged=(\d+) /.exec(out)
+  if (!match) throw new Error(`unexpected runner output for ${name}: ${out}`)
+  return { png, merged: Number(match[1]) }
 }
 
 function differingPixels(a: string, b: string): number {
@@ -70,18 +78,12 @@ const hidden = 'scenario=hidden&screen=alt&terms=2&capture=2&frames=900&hide=vis
 const sibling = 'scenario=tui&terms=2&capture=2'
 
 const checks = [
-  { name: 'fixed policy stays clean', scenario: hidden, extra: '', expectCorrupt: false },
+  { name: 'fixed policy stays clean', scenario: hidden, extra: '' },
+  { name: 'legacy policy stays clean (#6042)', scenario: hidden, extra: '&policy=legacy' },
   {
-    name: 'legacy policy corrupts (scenario still reaches the bug)',
-    scenario: hidden,
-    extra: '&policy=legacy',
-    expectCorrupt: true
-  },
-  {
-    name: 'sibling clearTextureAtlas corrupts (detector works)',
+    name: 'sibling clearTextureAtlas stays clean (#6055)',
     scenario: sibling,
-    extra: '&repair=sibling-atlas',
-    expectCorrupt: true
+    extra: '&repair=sibling-atlas'
   }
 ]
 
@@ -90,15 +92,25 @@ let failed = false
 for (const [index, check] of checks.entries()) {
   let reference = references.get(check.scenario)
   if (!reference) {
-    reference = await render(`reference-${index}`, `mode=reference&${check.scenario}`)
+    reference = (await render(`reference-${index}`, `mode=reference&${check.scenario}`)).png
     references.set(check.scenario, reference)
   }
   const stress = await render(`stress-${index}`, `mode=stress&${check.scenario}${check.extra}`)
-  const differing = differingPixels(reference, stress)
-  const ok = check.expectCorrupt ? differing > 0 : differing === 0
+  const differing = differingPixels(reference, stress.png)
+  const ok = differing === 0 && stress.merged > 0
   if (!ok) failed = true
-  console.log(`${ok ? 'PASS' : 'FAIL'} ${check.name}: ${differing} differing pixels`)
+  console.log(
+    `${ok ? 'PASS' : 'FAIL'} ${check.name}: ${differing} differing pixels, ${stress.merged} page merges`
+  )
 }
+
+// Detector control: two different screens must differ, or 0 above proves nothing.
+const [hiddenReference, siblingReference] = [hidden, sibling].map((s) => references.get(s) ?? '')
+const detected = differingPixels(hiddenReference, siblingReference)
+if (detected === 0) failed = true
+console.log(
+  `${detected > 0 ? 'PASS' : 'FAIL'} detector sees different screens: ${detected} differing pixels`
+)
 
 server.stop()
 if (failed) {

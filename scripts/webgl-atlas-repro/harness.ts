@@ -52,7 +52,8 @@ const screen = params.get('screen') ?? 'normal'
 // atlas, then is shown again and restored the way ConnectedTerminal restores.
 const hide = params.get('hide') ?? 'visibility'
 // policy=legacy is the rebuild policy before the fix: the alternate screen kept
-// its model even after an atlas merge. Kept as the scenario's positive control.
+// its model even after an atlas merge. It corrupted until addon-webgl
+// 0.20.0-beta.288 (xterm.js #6042); check.ts now expects it clean.
 const policy = params.get('policy') ?? 'current'
 
 // `app` mirrors DEFAULT_TERMINAL_OPTIONS in terminal-config.ts; `vioh` is the
@@ -346,8 +347,8 @@ async function main(): Promise<void> {
   const target = capture === '2' && side ? side : main
   await settle(5)
   if (repair === 'sibling-atlas') {
-    // Positive control (xterm.js #6014): clearing the shared atlas from the
-    // other terminal must corrupt the captured one on this addon version.
+    // Clearing the shared atlas from the other terminal corrupted the captured
+    // one (xterm.js #6014) until addon-webgl 0.20.0-beta.291 (#6055).
     const other = target === main ? side : main
     other?.addon.clearTextureAtlas()
     other?.term.refresh(0, ROWS - 1)

@@ -75,11 +75,11 @@
         "@tiptap/starter-kit": "3.27.1",
         "@tiptap/suggestion": "3.27.1",
         "@types/dompurify": "^3.0.5",
-        "@xterm/addon-fit": "^0.12.0-beta.216",
-        "@xterm/addon-search": "^0.17.0-beta.216",
-        "@xterm/addon-unicode11": "0.10.0-beta.287",
-        "@xterm/addon-webgl": "^0.20.0-beta.215",
-        "@xterm/xterm": "^6.1.0-beta.216",
+        "@xterm/addon-fit": "0.12.0-beta.311",
+        "@xterm/addon-search": "0.17.0-beta.310",
+        "@xterm/addon-unicode11": "0.10.0-beta.310",
+        "@xterm/addon-webgl": "0.20.0-beta.309",
+        "@xterm/xterm": "6.1.0-beta.315",
         "ai": "^7.0.4",
         "chokidar": "^5.0.0",
         "class-variance-authority": "^0.7.1",
@@ -139,6 +139,9 @@
         "vitest": "^4.1.6",
       },
     },
+  },
+  "patchedDependencies": {
+    "@xterm/addon-webgl@0.20.0-beta.309": "patches/@xterm%2Faddon-webgl@0.20.0-beta.309.patch",
   },
   "overrides": {
     "@tiptap/core": "3.27.1",
@@ -904,15 +907,15 @@
 
     "@workflow/serde": ["@workflow/serde@4.1.0", "", {}, "sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ=="],
 
-    "@xterm/addon-fit": ["@xterm/addon-fit@0.12.0-beta.287", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.287" } }, "sha512-2MDj+J4x67bjOS/SuBPxSYEWH38NbX6ENV18RbKVOhfRYCX3yERnuHBOrgH9hYdY8rCtsLQmuVgF6cmvCJiV2w=="],
+    "@xterm/addon-fit": ["@xterm/addon-fit@0.12.0-beta.311", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.315" } }, "sha512-M40mAWDoAVKz+0zs5ipmBJ+tNilw8CzUbbGIX05NANmTiw0MS47FYeJ4d2El4zdvFphDJjtVLrxTKXuz2wUM6Q=="],
 
-    "@xterm/addon-search": ["@xterm/addon-search@0.17.0-beta.287", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.287" } }, "sha512-nFyUwT/i7i4i1BgqYhQsHIuUGhE18g0KiuoxU6e78n63zGN6RVw5jExvZ8PPa3zVuu/vf8pJ9G9gQs2OmekX4g=="],
+    "@xterm/addon-search": ["@xterm/addon-search@0.17.0-beta.310", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.315" } }, "sha512-HUrAJuoe4LQMfWnx9Xse/xkpTG4CLqor7jirGK5hzTFcPS4xN7WVUp7q3JyfH/SCPc3o081ZDScy9ZN3o09PuQ=="],
 
-    "@xterm/addon-unicode11": ["@xterm/addon-unicode11@0.10.0-beta.287", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.287" } }, "sha512-79JP5qtNh/+emyqW/1TPcFtPrmMIUgypCcx2g6Eo/vQrZF6YNaQrKkJTovMg2RoxbbRy72Oe1SZcpU2b37hzrw=="],
+    "@xterm/addon-unicode11": ["@xterm/addon-unicode11@0.10.0-beta.310", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.315" } }, "sha512-kQQIWMaQX7ViV1ofrYQnydR4/yNqCgOXYSYXG+x9pvNFU5/3KzZbqeQOXuM1y3cZYzR+Mw2cy3oRp/ssnK9cww=="],
 
-    "@xterm/addon-webgl": ["@xterm/addon-webgl@0.20.0-beta.286", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.287" } }, "sha512-Nvk9Jic7OCXtL1lS1/Ryurkpd2VElO7PCBOf+DEB3ODs9yU+F31sJwQD+LIdZ6GAJ+Atp7LuWHjSNhRv/xSY0w=="],
+    "@xterm/addon-webgl": ["@xterm/addon-webgl@0.20.0-beta.309", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.315" } }, "sha512-xr69GVLQPmYHLrPzGOl+oapEIDhaYbLCZALL+0qcEI71UW/EmmawweI6RloQsVxIKbMrujH9Xb5KOAqP7BTFSQ=="],
 
-    "@xterm/xterm": ["@xterm/xterm@6.1.0-beta.287", "", {}, "sha512-3aOHVlxlRVb3tOHI4b/z2O/OsRnqpW5u0qq8OqpqbwLVTbUhThmQ7mBKaehGdbsmcCCBTP1cBwhG0qcvuOjowA=="],
+    "@xterm/xterm": ["@xterm/xterm@6.1.0-beta.315", "", {}, "sha512-w7MeKxi6vbxE3IOFRiwgugkM6FZonE9gF9KyJ0OiE5HbYZOm38bz+CTGZg3+wqA6porJnHfjzX1KaihInP+iWg=="],
 
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
 

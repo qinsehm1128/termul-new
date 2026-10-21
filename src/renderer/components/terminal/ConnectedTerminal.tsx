@@ -1386,8 +1386,8 @@ function ConnectedTerminalComponent({
           })
           webglAddon.onRemoveTextureAtlasCanvas(() => {
             // Shared atlas pages merged. Refresh this renderer after idle;
-            // never clearTextureAtlas — that leaves sibling terminals with
-            // stale UVs on the shared cache.
+            // never clearTextureAtlas — it re-rasterizes the whole shared
+            // atlas for every terminal using it.
             scrollRepair.noteAtlasMerged()
           })
         }
@@ -1475,10 +1475,12 @@ function ConnectedTerminalComponent({
       // every cell would be re-uploaded each time. `refresh` still runs, so the
       // screen is still repainted — only the model is kept.
       //
-      // Except after an atlas merge. A merge a sibling terminal triggered moves
-      // glyphs to other pages, and a kept model then draws them from the wrong
-      // page: garbled glyphs that only a resize cleared. Merges are rare next
-      // to writes, so rebuilding for them does not bring the cost back.
+      // Except after an atlas merge. Before addon-webgl 0.20.0-beta.288 a merge
+      // a sibling terminal triggered left a kept model drawing glyphs from the
+      // wrong page: garbled glyphs that only a resize cleared. xterm now
+      // rebuilds on a page-layout change itself; this rebuild stays as a
+      // safeguard. Merges are rare next to writes, so it does not bring the
+      // cost back.
       rebuildSurface: (terminal, { atlasPagesMoved }) => {
         if (!atlasPagesMoved && terminalRef.current?.buffer.active.type === 'alternate') return
         clearWebglRenderModel(terminal, !!webglAddonRef.current)
