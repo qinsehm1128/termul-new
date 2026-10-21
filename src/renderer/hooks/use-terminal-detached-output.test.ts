@@ -174,6 +174,32 @@ describe('useTerminalDetachedOutput', () => {
     expect(mockAppendTranscript).not.toHaveBeenCalled()
   })
 
+  it('keeps every chunk that arrives before the store record exists', () => {
+    const { emit } = mountHook()
+
+    mockFindTerminalByPtyId.mockReturnValue(undefined)
+    emit('pty-new', toBytes('first prompt '))
+    emit('pty-new', toBytes('second '))
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
+    emit('pty-new', toBytes('after record'))
+
+    expect(capturedTranscript()).toBe('first prompt second after record')
+  })
+
+  it('keeps only the newest output for a PTY that never gets a record', () => {
+    const { emit } = mountHook()
+    const older = 'o'.repeat(200 * 1024)
+    const newer = 'n'.repeat(200 * 1024)
+
+    mockFindTerminalByPtyId.mockReturnValue(undefined)
+    emit('pty-orphan', toBytes(older))
+    emit('pty-orphan', toBytes(newer))
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
+    emit('pty-orphan', toBytes('tail'))
+
+    expect(capturedTranscript()).toBe(`${newer}tail`)
+  })
+
   it('keeps a multi-byte codepoint intact when it is split across two PTY chunks', () => {
     const { emit } = mountHook()
     const bytes = toBytes('中')
@@ -265,6 +291,18 @@ describe('useTerminalDetachedOutput', () => {
       // Order is the whole point: the transcript predates the instance becoming
       // the sink, so writing it second would replay the two halves reversed.
       expect(cachedWrite.mock.calls.map(([chunk]) => chunk)).toEqual(['older span', 'newer span'])
+    })
+
+    it('drains output still queued for the transcript even when the record shows none', () => {
+      cacheATerminal()
+      // Queued output is not on the record until the store commits it, so
+      // `transcript` alone cannot say whether anything is waiting.
+      mockConsumeTranscript.mockReturnValue('queued span')
+      const { emit } = mountHook()
+
+      emit('pty-a', toBytes('newer span'))
+
+      expect(cachedWrite.mock.calls.map(([chunk]) => chunk)).toEqual(['queued span', 'newer span'])
     })
 
     it('keeps using the transcript when the host will replay the interval', () => {

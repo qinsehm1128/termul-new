@@ -405,6 +405,9 @@ export function createTauriTerminalApi(): TerminalApi {
 
   const dropSpawnOutput = (terminalId: string): void => {
     spawnOutputGates.delete(terminalId)
+    // Nothing will bind a terminated PTY again, so its held bytes would stay
+    // for the rest of the session.
+    pendingPrimaryBuffers.delete(terminalId)
   }
 
   const beginLiveHandoff = (

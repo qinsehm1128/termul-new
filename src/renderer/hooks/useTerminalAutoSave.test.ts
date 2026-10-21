@@ -418,6 +418,23 @@ describe('useTerminalAutoSave', () => {
       expect(updatedTerminal?.pendingScrollback).toEqual(['line 1', 'line 2'])
     })
 
+    it('saves detached output that is still queued for the store', async () => {
+      useTerminalStore.setState({
+        terminals: [{ id: 'queued-term', name: 'Queued', projectId: 'proj-1', shell: 'bash' }],
+        activeTerminalId: 'queued-term'
+      })
+      useTerminalStore.getState().setTerminalPtyId('queued-term', 'pty-queued')
+      useTerminalStore.getState().appendTranscript('pty-queued', 'queued output\n')
+
+      await saveTerminalLayout('proj-1')
+
+      const { persistenceApi } = await import('@/lib/persistence-api')
+      const written = vi.mocked(persistenceApi.write).mock.calls.at(-1)?.[1] as
+        | { terminals: PersistedTerminal[] }
+        | undefined
+      expect(written?.terminals[0]?.transcript).toBe('queued output\n')
+    })
+
     it('omits conversation-scoped terminals from the manual save path too', async () => {
       // Built explicitly rather than via addTerminal: its id is Date.now(), so
       // two calls in the same millisecond collide and the fixture silently

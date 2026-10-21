@@ -261,6 +261,8 @@ export function useTerminalAutoSave(): void {
       if (projectIds.size === 0) return
       if (isTerminalRestoreInProgress()) return
 
+      // Detached output still queued for the store is part of the latest state.
+      useTerminalStore.getState().commitTranscripts()
       const current = useTerminalStore.getState()
       for (const projectId of projectIds) {
         const layout = serializeTerminalsForProject(
@@ -394,6 +396,8 @@ export async function saveTerminalLayout(
   projectId: string,
   options?: SaveTerminalLayoutOptions
 ): Promise<void> {
+  // Detached output still queued for the store is part of the latest state.
+  useTerminalStore.getState().commitTranscripts()
   const state = useTerminalStore.getState()
   const projectTerminals = state.terminals.filter((terminal) =>
     isProjectScopedTerminal(terminal, projectId)

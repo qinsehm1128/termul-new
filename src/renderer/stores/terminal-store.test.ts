@@ -24,6 +24,7 @@ import {
   HIDDEN_BUFFER_TRUNCATION_DELAY,
   initTerminalEventListeners,
   MAX_TRANSCRIPT_CHARS,
+  TRANSCRIPT_COMMIT_INTERVAL_MS,
   TRUNCATED_BUFFER_SIZE,
   useTerminalStore
 } from './terminal-store'
@@ -42,6 +43,8 @@ describe('terminal-store', () => {
       activeProjectId: '1'
     })
 
+    // Output a previous test left queued must not land in this one.
+    useTerminalStore.getState().commitTranscripts()
     useTerminalStore.setState({
       terminals: [
         { id: 't1', name: 'Terminal 1', projectId: '1', shell: 'powershell', output: [] },
@@ -791,9 +794,47 @@ describe('terminal-store', () => {
 
       appendTranscript('pty-transcript-1', '\u001b[32mhello\u001b[0m')
       appendTranscript('pty-transcript-1', ' world')
+      useTerminalStore.getState().commitTranscripts()
 
       const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
       expect(terminal?.transcript).toBe('\u001b[32mhello\u001b[0m world')
+    })
+
+    it('queues appended output and commits it in one store update', () => {
+      vi.useFakeTimers()
+      try {
+        const { setTerminalPtyId, appendTranscript } = useTerminalStore.getState()
+        setTerminalPtyId('t1', 'pty-transcript-batch')
+        const listener = vi.fn()
+        const unsubscribe = useTerminalStore.subscribe(listener)
+
+        appendTranscript('pty-transcript-batch', 'one ')
+        appendTranscript('pty-transcript-batch', 'two')
+        expect(listener).not.toHaveBeenCalled()
+
+        vi.advanceTimersByTime(TRANSCRIPT_COMMIT_INTERVAL_MS)
+        unsubscribe()
+
+        expect(listener).toHaveBeenCalledTimes(1)
+        expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.transcript).toBe(
+          'one two'
+        )
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('commits queued output before a renderer attaches', () => {
+      const { setTerminalPtyId, appendTranscript, setRendererAttached } =
+        useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-transcript-attach')
+
+      appendTranscript('pty-transcript-attach', 'detached interval')
+      setRendererAttached('pty-transcript-attach', true)
+
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.transcript).toBe(
+        'detached interval'
+      )
     })
 
     it('should trim transcript on a full CRLF boundary', () => {
@@ -803,6 +844,7 @@ describe('terminal-store', () => {
       const prefix = `header\r\n${'x'.repeat(499995)}`
       appendTranscript('pty-transcript-crlf', prefix)
       appendTranscript('pty-transcript-crlf', 'tail')
+      useTerminalStore.getState().commitTranscripts()
 
       const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
       expect(terminal?.transcript?.startsWith('\n')).toBe(false)
@@ -929,9 +971,10 @@ describe('terminal-store', () => {
       const prefix = 'stale-header\n'
       const retainedBody = 'x'.repeat(MAX_TRANSCRIPT_CHARS)
       appendTranscript('pty-transcript-retention', prefix + retainedBody)
+      useTerminalStore.getState().commitTranscripts()
 
       const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
-      expect(terminal?.transcript?.length).toBe(MAX_TRANSCRIPT_CHARS)
+      expect(terminal?.transcript?.length).toBeLessThan(MAX_TRANSCRIPT_CHARS)
       expect(terminal?.transcript?.startsWith('x')).toBe(true)
       expect(terminal?.transcript?.endsWith('x')).toBe(true)
       expect(terminal?.transcript?.includes('stale-header')).toBe(false)
@@ -942,11 +985,30 @@ describe('terminal-store', () => {
       expect(terminal?.transcriptTrimmed).toBe(true)
     })
 
+    it('does not trim again until the room a trim left is used up', () => {
+      const { setTerminalPtyId, appendTranscript, commitTranscripts } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-transcript-headroom')
+      const readTranscript = (): string | undefined =>
+        useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.transcript
+
+      appendTranscript('pty-transcript-headroom', `stale\n${'x'.repeat(MAX_TRANSCRIPT_CHARS)}`)
+      commitTranscripts()
+      const afterTrim = readTranscript() ?? ''
+
+      // Each trim copies the whole retained tail; doing it per chunk is what
+      // made a busy detached terminal cost megabytes per chunk.
+      appendTranscript('pty-transcript-headroom', 'y')
+      commitTranscripts()
+
+      expect(readTranscript()).toBe(`${afterTrim}y`)
+    })
+
     it('leaves a transcript that fits under the cap unmarked', () => {
       const { setTerminalPtyId, appendTranscript } = useTerminalStore.getState()
       setTerminalPtyId('t1', 'pty-transcript-untrimmed')
 
       appendTranscript('pty-transcript-untrimmed', 'short body\n')
+      useTerminalStore.getState().commitTranscripts()
 
       const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
       expect(terminal?.transcript).toBe('short body\n')
@@ -961,6 +1023,7 @@ describe('terminal-store', () => {
         'pty-transcript-consume',
         `stale-header\n${'x'.repeat(MAX_TRANSCRIPT_CHARS)}`
       )
+      useTerminalStore.getState().commitTranscripts()
       expect(
         useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.transcriptTrimmed
       ).toBe(true)
@@ -1526,6 +1589,20 @@ describe('terminal-store', () => {
       expect(terminals.some((t) => t.claim === 'lease-stale-after-restart')).toBe(true)
     })
 
+    it('restartTerminal does not let output queued before the reset land after it', () => {
+      const { setTerminalPtyId, appendTranscript, restartTerminal, commitTranscripts } =
+        useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-restart-queued')
+
+      appendTranscript('pty-restart-queued', 'before restart')
+      restartTerminal('t1')
+      commitTranscripts()
+
+      expect(
+        useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.transcript
+      ).toBeUndefined()
+    })
+
     it('excludes the claim from the auto-save persisted payload (persistence exclusion)', () => {
       const claimCredential = 'cap3-lease-credential-0123456789abcdef'
       const { setTerminalPtyId, setTerminalClaim, appendTranscript } = useTerminalStore.getState()
@@ -1533,6 +1610,7 @@ describe('terminal-store', () => {
       setTerminalPtyId('t1', 'pty-cap3-persist')
       setTerminalClaim('pty-cap3-persist', claimCredential)
       appendTranscript('pty-cap3-persist', 'persisted output line 1\npersisted output line 2\n')
+      useTerminalStore.getState().commitTranscripts()
 
       const { terminals, activeTerminalId } = useTerminalStore.getState()
       const layout = serializeTerminalsForProject(terminals, '1', activeTerminalId)

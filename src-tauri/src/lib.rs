@@ -2816,6 +2816,23 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     let builder = builder.on_menu_event(handle_menu_event);
 
+    // WebKit ends the page's process when it outgrows its memory limit, while
+    // the terminals carry on in the Cores. Tauri's default handler reloads the
+    // page but only logs at debug level, so a renderer crash left no trace.
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(|webview| {
+        log::warn!(
+            "[webview] web content process terminated label={}; reloading",
+            webview.label()
+        );
+        if let Err(error) = webview.reload() {
+            log::error!(
+                "[webview] reload after termination failed label={}: {error}",
+                webview.label()
+            );
+        }
+    });
+
     // Single-instance must be the first plugin: Tauri initializes plugins in
     // registration order, so duplicate launches must be rejected before any
     // other plugin performs setup or side effects. The plugin is desktop-only.
