@@ -181,6 +181,11 @@ export interface AppSettings {
    * into Se's local prefix and later launches skip npx. When false,
    * always run through npx. Pushed to the Rust core. */
   acpPreferLocalNpmInstall: boolean
+  /** Start the selected agent and a warm session for the active project at
+   * launch, so Agent Chat opens instantly. Off by default: every warm session
+   * is an agent process (~140 MB for Claude) even when Agent Chat is never
+   * used. Opening the Agent launcher still warms it on demand. */
+  acpPrewarm: boolean
 }
 
 /** Whole-UI zoom bounds â€” match the native View menu semantics (0.5xâ€“3.0x, 10% steps). */
@@ -431,7 +436,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   acpSessionNewTimeoutSecs: null,
   acpSessionReopenTimeoutSecs: null,
   acpFirstPromptWarmupSecs: null,
-  acpPreferLocalNpmInstall: true
+  acpPreferLocalNpmInstall: true,
+  acpPrewarm: false
 }
 
 // Persistence key for app settings

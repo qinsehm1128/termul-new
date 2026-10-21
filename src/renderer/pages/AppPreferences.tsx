@@ -72,6 +72,7 @@ import { cn } from '@/lib/utils'
 import {
   useAcpFirstPromptWarmup,
   useAcpPreferLocalNpmInstall,
+  useAcpPrewarm,
   useAcpSessionNewTimeout,
   useAcpSessionReopenTimeout,
   useAcpTurnIdleTimeout,
@@ -286,6 +287,12 @@ const APP_PREF_SEARCH_DEFS = [
   },
   {
     categoryId: 'ai-agents',
+    labelKey: 'aiAgents.prewarm',
+    descriptionKey: 'aiAgents.prewarmHint',
+    keywords: ['prewarm', 'warm', 'startup', 'process', 'memory', 'claude']
+  },
+  {
+    categoryId: 'ai-agents',
     labelKey: 'aiAgents.turnTimeout',
     descriptionKey: 'aiAgents.turnTimeoutHint',
     keywords: ['acp', 'timeout', 'turn', 'hard cap', 'unlimited', 'wedge']
@@ -468,6 +475,7 @@ export default function AppPreferences(): React.JSX.Element {
   const acpSessionReopenTimeoutSecs = useAcpSessionReopenTimeout()
   const acpFirstPromptWarmupSecs = useAcpFirstPromptWarmup()
   const acpPreferLocalNpmInstall = useAcpPreferLocalNpmInstall()
+  const acpPrewarm = useAcpPrewarm()
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 
@@ -772,6 +780,10 @@ export default function AppPreferences(): React.JSX.Element {
     } catch (error) {
       console.error('Failed to apply ACP local npm install preference:', error)
     }
+  }
+
+  const handleAcpPrewarmToggle = async (enabled: boolean) => {
+    await updateSetting('acpPrewarm', enabled)
   }
 
   const handleAcpFirstPromptWarmupChange = async (value: number | null) => {
@@ -1566,6 +1578,37 @@ export default function AppPreferences(): React.JSX.Element {
                         className={cn(
                           'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
                           acpPreferLocalNpmInstall ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    {tSettings('aiAgents.prewarm')}
+                  </label>
+                  <div className="flex items-center justify-between rounded-md bg-secondary/25 px-3 py-2.5 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.035)]">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">{tSettings('aiAgents.prewarm')}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {tSettings('aiAgents.prewarmHint')}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={acpPrewarm}
+                      aria-label={tSettings('aiAgents.prewarm')}
+                      onClick={() => handleAcpPrewarmToggle(!acpPrewarm)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed',
+                        acpPrewarm ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          acpPrewarm ? 'translate-x-6' : 'translate-x-1'
                         )}
                       />
                     </button>

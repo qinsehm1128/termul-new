@@ -147,6 +147,8 @@
     "firstPromptWarmupHint": "session/new 后用于吸收代理冷启动停顿的预热提示预算；选择“禁用”可完全跳过预热。SE_ACP_FIRST_PROMPT_WARMUP_SECS 环境变量仍可覆盖此设置（运维/诊断用途）。仅桌面端有效——独立服务器使用环境变量。",
     "preferLocalNpmInstall": "直接安装到本地，而不是每次用 npx",
     "preferLocalNpmInstallHint": "第一次启动时会把 Claude、Codex、Gemini、Copilot、Qwen、Cline、Auggie 等 npx 代理下载到 Se 本地缓存，之后直接跑这份副本。关闭后始终走 npx。仅桌面端有效——独立服务器使用 SE_ACP_PREFER_LOCAL_NPM。",
+    "prewarm": "启动时预热代理",
+    "prewarmHint": "Se 启动时就为当前项目拉起所选代理和一个备用会话，打开 Agent Chat 时无需等待。每个备用会话都是一个独立的代理进程（Claude 约 140 MB）。关闭时，打开 Agent 启动面板才会拉起代理。",
     "cliResumeTitle": "CLI 恢复附加参数",
     "cliResumeDescription": "启动已扫描会话时，这些参数会加在恢复标志前面。可在这里编辑，也可在恢复对话框里一次性覆盖。",
     "cliResumePlaceholder": "无",

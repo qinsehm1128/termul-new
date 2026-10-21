@@ -2,6 +2,7 @@ import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useEffect, useRef } from 'react'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
+import { disposeBackendEphemeralSessionsFromPreviousLoad } from '@/features/agent-session/stores/backend-ephemeral-sessions'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   pickDefaultSupportedAgent,
@@ -9,6 +10,7 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { persistenceApi } from '@/lib/api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { useAcpPrewarm } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 
 /**
@@ -78,10 +80,14 @@ async function resolveAgentConfigIdToWarm(
 /**
  * Load persisted ACP agent configs once at app mount, then resolve the
  * last-selected ready supported ACP agent (falling back to the default ready
- * entry) and publish it as the warm-pool target. The hook prewarms that agent's
- * process and seeds its warm-session pool for the active project cwd; re-runs on
- * project switch. Agent Chat derives supported configs automatically, so prewarm
- * must not fan out across every supported agent or depend on Preferences toggles.
+ * entry) and publish it as the warm-pool target. With the `acpPrewarm` setting
+ * on, the hook prewarms that agent's process and seeds its warm-session pool for
+ * the active project cwd; re-runs on project switch. Agent Chat derives
+ * supported configs automatically, so prewarm must not fan out across every
+ * supported agent or depend on per-agent Preferences toggles.
+ *
+ * It also disposes the warm sessions a previous load of the renderer left in
+ * the ACP Core, whether or not this load prewarms.
  */
 export function useAcpAgents(): void {
   const loadAgentConfigs = useAcpStore((s) => s.loadAgentConfigs)
@@ -89,6 +95,7 @@ export function useAcpAgents(): void {
   const setSelectedAgentConfigId = useAcpStore((s) => s.setSelectedAgentConfigId)
   const retargetWarmPool = useAcpStore((s) => s.retargetWarmPool)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
+  const prewarm = useAcpPrewarm()
   const configsLoadedRef = useRef<Promise<void> | null>(null)
   const catalogRef = useRef<AgentCatalogCache | null>(null)
 
@@ -99,6 +106,7 @@ export function useAcpAgents(): void {
     // longer re-reads them.
     configsLoadedRef.current ??= loadAgentConfigs()
     const configsLoaded = configsLoadedRef.current
+    void disposeBackendEphemeralSessionsFromPreviousLoad()
 
     const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
     if (cwd.trim().length === 0) {
@@ -127,6 +135,8 @@ export function useAcpAgents(): void {
         // Publishing the selection is cheap and drives UI, so it stays prompt;
         // only the process work below waits out the burst.
         setSelectedAgentConfigId(configId)
+        // Off: the Agent launcher warms the agent when it opens.
+        if (!prewarm) return
         prewarmTimer = setTimeout(() => {
           prewarmTimer = null
           void useAcpStore.getState().prewarmAgent(configId, cwd)
@@ -146,6 +156,7 @@ export function useAcpAgents(): void {
     saveAgentConfig,
     setSelectedAgentConfigId,
     retargetWarmPool,
-    activeProjectId
+    activeProjectId,
+    prewarm
   ])
 }

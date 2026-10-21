@@ -154,6 +154,7 @@ import {
   selectSessionAgentIdentity,
   useAcpStore
 } from './acp-store'
+import { rememberedBackendEphemeralSessionIds } from './backend-ephemeral-sessions'
 
 const CONVERSATION_ID = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
 
@@ -8151,19 +8152,54 @@ describe('warm session pool', () => {
     expect(useAcpStore.getState().preparedSessions[keyA]).toBeUndefined()
   })
 
-  it('retargetWarmPool keeps pooled sessions for other cwds (project switch-back)', async () => {
+  it('retargetWarmPool drains the pooled session of the previous cwd (one warm process)', async () => {
     await seedConnectedAgent('cfg-a', 'agent-a', '/work/proj-1')
     await seedConnectedAgent('cfg-a', 'agent-a', '/work/proj-2')
     vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-1' })
     useAcpStore.getState().prepareChat('cfg-a', '/work/proj-1', undefined, 'p1')
     const key1 = prepareChatKey('cfg-a', '/work/proj-1', undefined)
     await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key1]).toBe('sess-1'))
-    // Retarget to a different cwd: must NOT drain the other cwd's warm slot.
+    // Retarget to a different cwd: each warm session is an agent process, so
+    // the previous project's one is closed rather than kept for a switch-back.
     vi.mocked(invoke).mockResolvedValue({ sessionId: 'sess-2' })
     useAcpStore.getState().retargetWarmPool('cfg-a', '/work/proj-2', 'p2')
     const key2 = prepareChatKey('cfg-a', '/work/proj-2', undefined)
     await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key2]).toBe('sess-2'))
-    expect(useAcpStore.getState().preparedSessions[key1]).toBe('sess-1')
+    expect(useAcpStore.getState().preparedSessions[key1]).toBeUndefined()
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      'acp_close_session',
+      expect.objectContaining({ sessionId: 'sess-1' })
+    )
+  })
+
+  it('remembers a warm session for the next load until it is closed', async () => {
+    localStorage.clear()
+    await seedConnectedAgent('cfg-a', 'agent-a')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-warm' })
+    useAcpStore.getState().prepareChat('cfg-a', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-a', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-warm'))
+    // A reload from here on must still be able to free its agent process.
+    expect(rememberedBackendEphemeralSessionIds()).toEqual(['sess-warm'])
+
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    useAcpStore.getState().cancelPreparedChat(key)
+
+    await vi.waitFor(() => expect(rememberedBackendEphemeralSessionIds()).toEqual([]))
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      'acp_close_session',
+      expect.objectContaining({ sessionId: 'sess-warm' })
+    )
+  })
+
+  it('does not remember a session that is not backend-ephemeral', async () => {
+    localStorage.clear()
+    await seedConnectedAgent('cfg-a', 'agent-a')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-chat' })
+
+    await useAcpStore.getState().createSession('agent-a', '/work', [], 'p1')
+
+    expect(rememberedBackendEphemeralSessionIds()).toEqual([])
   })
 
   it('_onAgentDisconnected drops pooled sessions for the disconnected agent', async () => {

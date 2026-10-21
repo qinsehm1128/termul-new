@@ -15,8 +15,10 @@ const {
   mockRetargetWarmPool,
   mockPersistRead,
   mockResolveSupported,
+  mockDisposePreviousLoad,
   stateRef,
-  projectRef
+  projectRef,
+  settingsRef
 } = vi.hoisted(() => ({
   mockLoadAgentConfigs: vi.fn(),
   mockPrewarmAgent: vi.fn(),
@@ -28,8 +30,10 @@ const {
   // lookup" apart from "memoised the user's choice" — the second is what made a
   // project switch republish a stale agent.
   mockResolveSupported: vi.fn(),
+  mockDisposePreviousLoad: vi.fn(),
   stateRef: { current: { agentConfigs: [] as StoredAgentConfig[] } },
-  projectRef: { current: { activeProjectId: 'proj-1' as string } }
+  projectRef: { current: { activeProjectId: 'proj-1' as string } },
+  settingsRef: { current: { acpPrewarm: true } }
 }))
 
 vi.mock('@tauri-apps/plugin-os', () => ({
@@ -79,6 +83,14 @@ vi.mock('@/stores/project-store', () => {
   return { useProjectStore }
 })
 
+vi.mock('@/stores/app-settings-store', () => ({
+  useAcpPrewarm: () => settingsRef.current.acpPrewarm
+}))
+
+vi.mock('@/features/agent-session/stores/backend-ephemeral-sessions', () => ({
+  disposeBackendEphemeralSessionsFromPreviousLoad: mockDisposePreviousLoad
+}))
+
 vi.mock('@/features/agent-session/stores/acp-store', () => {
   const getState = () => ({
     agentConfigs: stateRef.current.agentConfigs,
@@ -103,6 +115,8 @@ describe('useAcpAgents', () => {
     vi.clearAllMocks()
     stateRef.current.agentConfigs = []
     projectRef.current.activeProjectId = 'proj-1'
+    settingsRef.current.acpPrewarm = true
+    mockDisposePreviousLoad.mockResolvedValue(undefined)
     mockLoadAgentConfigs.mockResolvedValue(undefined)
     mockPersistRead.mockResolvedValue({ success: true, data: undefined })
     mockSaveAgentConfig.mockImplementation(async (entry: StoredAgentConfig) => {
@@ -113,6 +127,28 @@ describe('useAcpAgents', () => {
   it('loads agent configs on mount', async () => {
     renderHook(() => useAcpAgents())
     await waitFor(() => expect(mockLoadAgentConfigs).toHaveBeenCalledTimes(1))
+  })
+
+  it('starts no agent and no warm session while prewarm is off', async () => {
+    settingsRef.current.acpPrewarm = false
+    const cfg = pickDefaultSupportedAgent(buildSupportedAcpAgents([], 'windows-x86_64'))?.config
+    expect(cfg).toBeDefined()
+
+    renderHook(() => useAcpAgents())
+    await waitFor(() => expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith(cfg?.id))
+    // Past the coalescing delay a prewarm would have used.
+    await new Promise((resolve) => setTimeout(resolve, 600))
+
+    expect(mockPrewarmAgent).not.toHaveBeenCalled()
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+  })
+
+  it('disposes the warm sessions a previous load left, even with prewarm off', async () => {
+    settingsRef.current.acpPrewarm = false
+
+    renderHook(() => useAcpAgents())
+
+    await waitFor(() => expect(mockDisposePreviousLoad).toHaveBeenCalled())
   })
 
   it('prewarms only the selected ready agent after configs load', async () => {
