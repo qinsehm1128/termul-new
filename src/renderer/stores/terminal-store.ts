@@ -34,6 +34,24 @@ const GLOBAL_TERMINAL_LIMIT = 30
 export const HIDDEN_BUFFER_TRUNCATION_DELAY = 15 * 60 * 1000 // 15 minutes
 export const TRUNCATED_BUFFER_SIZE = 5000
 export const MAX_TRANSCRIPT_CHARS = 1_500_000
+/**
+ * A transcript over the cap is trimmed this far below it. The trim copies the
+ * whole retained tail, so trimming straight back to the cap repeated that copy
+ * (3 MB once the output holds any non-Latin-1 character) on every chunk.
+ */
+const TRANSCRIPT_TRIM_HEADROOM = 256 * 1024
+/**
+ * Detached output arrives as a chunk every few milliseconds per busy terminal.
+ * Committing each one rebuilt `terminals` and re-rendered every subscriber
+ * hundreds of times a second, which pinned the main thread until WebKit killed
+ * the page. Chunks are queued and committed together at most this often, or
+ * sooner once the queue holds `TRANSCRIPT_COMMIT_MAX_PENDING_CHARS`.
+ */
+export const TRANSCRIPT_COMMIT_INTERVAL_MS = 50
+const TRANSCRIPT_COMMIT_MAX_PENDING_CHARS = 1024 * 1024
+const pendingTranscripts = new Map<string, string[]>()
+let pendingTranscriptChars = 0
+let transcriptCommitTimer: ReturnType<typeof setTimeout> | undefined
 const LINE_BREAK_PATTERN = /\r\n|\r|\n/
 const terminalResumeInFlight = new Map<string, Promise<IpcResult<TerminalReplayCoverage | null>>>()
 const terminalCleanupRetryInFlight = new Map<string, Promise<boolean>>()
@@ -68,12 +86,12 @@ export function rendererOwnsDetachedContinuity(
   return terminal.healthStatus === 'running' && Boolean(terminal.claim)
 }
 
-function trimTranscriptToMaxChars(transcript: string): string {
-  if (transcript.length <= MAX_TRANSCRIPT_CHARS) {
+function trimTranscriptToMaxChars(transcript: string, keepChars = MAX_TRANSCRIPT_CHARS): string {
+  if (transcript.length <= keepChars) {
     return transcript
   }
 
-  const tail = transcript.slice(-MAX_TRANSCRIPT_CHARS)
+  const tail = transcript.slice(-keepChars)
   const firstBreak = LINE_BREAK_PATTERN.exec(tail)
   return firstBreak ? tail.slice(firstBreak.index + firstBreak[0].length) : tail
 }
@@ -199,7 +217,10 @@ export interface TerminalState {
   /** Record the derived agent state; a no-op when it has not changed. */
   setTerminalAgentState: (id: string, agentState: AgentTerminalState) => void
   updateTerminalScrollback: (id: string, scrollback: string[] | undefined) => void
+  /** Queue detached output; it reaches `transcript` at the next commit. */
   appendTranscript: (ptyId: string, data: string) => void
+  /** Commit queued detached output now. Readers in this store call it first. */
+  commitTranscripts: () => void
   peekTranscript: (ptyId: string) => string
   consumeTranscript: (ptyId: string) => string
   appendDetachedOutput: (ptyId: string, data: string) => void
@@ -912,20 +933,53 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   appendTranscript: (ptyId: string, data: string): void => {
     if (!data) return
 
+    const chunks = pendingTranscripts.get(ptyId)
+    if (chunks) {
+      chunks.push(data)
+    } else {
+      pendingTranscripts.set(ptyId, [data])
+    }
+    pendingTranscriptChars += data.length
+
+    if (pendingTranscriptChars >= TRANSCRIPT_COMMIT_MAX_PENDING_CHARS) {
+      get().commitTranscripts()
+    } else {
+      transcriptCommitTimer ??= setTimeout(
+        () => get().commitTranscripts(),
+        TRANSCRIPT_COMMIT_INTERVAL_MS
+      )
+    }
+  },
+
+  commitTranscripts: (): void => {
+    if (transcriptCommitTimer !== undefined) {
+      clearTimeout(transcriptCommitTimer)
+      transcriptCommitTimer = undefined
+    }
+    if (pendingTranscripts.size === 0) return
+
+    const batch = new Map(pendingTranscripts)
+    pendingTranscripts.clear()
+    pendingTranscriptChars = 0
+
     set((state) => {
-      const hasTarget = state.terminals.some((t) => t.ptyId === ptyId)
+      const hasTarget = state.terminals.some((t) => t.ptyId !== undefined && batch.has(t.ptyId))
       if (!hasTarget) {
         return state
       }
 
       return {
         terminals: state.terminals.map((t) => {
-          if (t.ptyId !== ptyId) {
+          const chunks = t.ptyId === undefined ? undefined : batch.get(t.ptyId)
+          if (!chunks) {
             return t
           }
 
-          const combined = (t.transcript || '') + data
-          const trimmed = trimTranscriptToMaxChars(combined)
+          const combined = (t.transcript || '') + chunks.join('')
+          const trimmed =
+            combined.length > MAX_TRANSCRIPT_CHARS
+              ? trimTranscriptToMaxChars(combined, MAX_TRANSCRIPT_CHARS - TRANSCRIPT_TRIM_HEADROOM)
+              : combined
 
           return {
             ...t,
@@ -946,11 +1000,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   peekTranscript: (ptyId: string): string => {
+    get().commitTranscripts()
     const target = get().terminals.find((t) => t.ptyId === ptyId)
     return target?.transcript ?? ''
   },
 
   consumeTranscript: (ptyId: string): string => {
+    get().commitTranscripts()
     let consumed = ''
 
     set((state) => {
@@ -1032,6 +1088,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   setRendererAttached: (ptyId: string, attached: boolean): void => {
+    // Output queued while detached belongs to the detached interval, which the
+    // replay after an attach reads; once attached it no longer reaches here.
+    get().commitTranscripts()
     // F3/R-11: observability only. A miss here means the detached collector
     // (use-terminal-detached-output.ts) keeps writing this pty's bytes into the
     // transcript for its whole lifetime, so the failure cost is unbounded
@@ -1180,6 +1239,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // Compatibility action for legacy callers that only reset renderer state.
     // User-facing restart paths use restartTerminalResource below so the live
     // PTY is explicitly terminated and re-spawned in the same Conversation.
+    // Commit first, or output queued before the reset lands after it.
+    get().commitTranscripts()
     set((state) => ({
       terminals: state.terminals.map((terminal) =>
         terminal.id === id
@@ -1296,6 +1357,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   truncateHiddenTerminalBuffers: (): void => {
+    get().commitTranscripts()
     const now = Date.now()
     set((state) => ({
       terminals: state.terminals.map((t) => {

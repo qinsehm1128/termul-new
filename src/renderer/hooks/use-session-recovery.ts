@@ -27,6 +27,8 @@ export function toTerminalSession(
 
 function buildSessionData(): SessionData {
   const projectState = useProjectStore.getState()
+  // Detached output still queued for the store is part of the latest state.
+  useTerminalStore.getState().commitTranscripts()
   const terminalState = useTerminalStore.getState()
 
   return {

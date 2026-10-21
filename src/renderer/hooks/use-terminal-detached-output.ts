@@ -14,6 +14,7 @@ import {
 } from '@/utils/terminal-registry'
 
 const IS_DEV = import.meta.env.DEV
+const PENDING_DETACHED_MAX_CHARS = 256 * 1024
 
 /**
  * Tracks transcript buffer sizes and logs warnings when they grow large.
@@ -49,7 +50,22 @@ export function useTerminalDetachedOutput(): void {
   useEffect(() => {
     // Buffer for PTY data that arrives before the store has the terminal record
     // (e.g. between spawn and setTerminalPtyId populating the ptyIdIndex).
-    const pendingDetachedBuffer = new Map<string, string[]>()
+    // Some PTYs never get a record here, so each buffer keeps only its newest
+    // PENDING_DETACHED_MAX_CHARS.
+    const pendingDetachedBuffer = new Map<string, { chunks: string[]; length: number }>()
+    const bufferUntilRecordExists = (ptyId: string, dataStr: string): void => {
+      let buffered = pendingDetachedBuffer.get(ptyId)
+      if (!buffered) {
+        buffered = { chunks: [], length: 0 }
+        pendingDetachedBuffer.set(ptyId, buffered)
+      }
+      buffered.chunks.push(dataStr)
+      buffered.length += dataStr.length
+      while (buffered.length > PENDING_DETACHED_MAX_CHARS && buffered.chunks.length > 1) {
+        const oldest = buffered.chunks.shift() ?? ''
+        buffered.length -= oldest.length
+      }
+    }
     // PTY read boundaries are unrelated to UTF-8 character boundaries, so a
     // multi-byte sequence split across two chunks degrades to U+FFFD on both
     // sides unless one decoder carries the partial sequence across events.
@@ -112,10 +128,10 @@ export function useTerminalDetachedOutput(): void {
         try {
           // Whatever the transcript holds predates this instance becoming the
           // sink, so it has to go in first or the two halves land out of order.
-          if (terminal.transcript) {
-            const pending = store.consumeTranscript(ptyId)
-            if (pending) cached.terminal.write(pending)
-          }
+          // Consult the store, not `terminal.transcript`: queued output that
+          // has not been committed yet is not on the record.
+          const pending = store.consumeTranscript(ptyId)
+          if (pending) cached.terminal.write(pending)
           cached.terminal.write(dataStr)
           return
         } catch (error) {
@@ -150,18 +166,6 @@ export function useTerminalDetachedOutput(): void {
       // it and corrupt the NEXT captured chunk.
       const dataStr = getDecoder(ptyId).decode(data, { stream: true })
 
-      const buffered = pendingDetachedBuffer.get(ptyId)
-      if (buffered) {
-        pendingDetachedBuffer.delete(ptyId)
-        const store = useTerminalStore.getState()
-        const terminal = store.findTerminalByPtyId(ptyId)
-        if (terminal && (terminal.rendererAttachmentCount ?? 0) === 0) {
-          routeDetachedOutput(ptyId, terminal, buffered.join('') + dataStr)
-          return
-        }
-        // Terminal exists but has renderer attached — drop buffered data
-      }
-
       const store = useTerminalStore.getState()
       const terminal = store.findTerminalByPtyId(ptyId)
       if (!terminal) {
@@ -171,24 +175,21 @@ export function useTerminalDetachedOutput(): void {
             `[DetachedOutput] Buffering data for unknown PTY pty=${ptyId.slice(0, 12)} len=${dataStr.length}`
           )
         }
-        const existing = pendingDetachedBuffer.get(ptyId)
-        if (existing) {
-          existing.push(dataStr)
-        } else {
-          pendingDetachedBuffer.set(ptyId, [dataStr])
-        }
+        bufferUntilRecordExists(ptyId, dataStr)
         return
       }
 
-      const rendererAttachmentCount = terminal.rendererAttachmentCount ?? 0
+      const buffered = pendingDetachedBuffer.get(ptyId)
+      pendingDetachedBuffer.delete(ptyId)
 
       // Only capture when truly detached — no renderer mounted.
-      // Do NOT capture when the app is hidden but a renderer is attached.
-      if (rendererAttachmentCount > 0) {
+      // Do NOT capture when the app is hidden but a renderer is attached
+      // (buffered data included).
+      if ((terminal.rendererAttachmentCount ?? 0) > 0) {
         return
       }
 
-      routeDetachedOutput(ptyId, terminal, dataStr)
+      routeDetachedOutput(ptyId, terminal, buffered ? buffered.chunks.join('') + dataStr : dataStr)
     })
 
     // Release a closed PTY's decoder immediately rather than at app unmount.
