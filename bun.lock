@@ -76,6 +76,7 @@
         "@tiptap/suggestion": "3.27.1",
         "@types/dompurify": "^3.0.5",
         "@xterm/addon-fit": "0.12.0-beta.311",
+        "@xterm/addon-image": "0.10.0-beta.310",
         "@xterm/addon-search": "0.17.0-beta.310",
         "@xterm/addon-unicode11": "0.10.0-beta.310",
         "@xterm/addon-webgl": "0.20.0-beta.309",
@@ -908,6 +909,8 @@
     "@workflow/serde": ["@workflow/serde@4.1.0", "", {}, "sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ=="],
 
     "@xterm/addon-fit": ["@xterm/addon-fit@0.12.0-beta.311", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.315" } }, "sha512-M40mAWDoAVKz+0zs5ipmBJ+tNilw8CzUbbGIX05NANmTiw0MS47FYeJ4d2El4zdvFphDJjtVLrxTKXuz2wUM6Q=="],
+
+    "@xterm/addon-image": ["@xterm/addon-image@0.10.0-beta.310", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.315" } }, "sha512-8fzgYV7HC9iWlw8ChZgnPmCXeBoYkC3Kyo9C0vyOQWD7Cm/bebKNNWhzNlDt5Qxbv+UBPbgkcO4i3dTYnggkRw=="],
 
     "@xterm/addon-search": ["@xterm/addon-search@0.17.0-beta.310", "", { "peerDependencies": { "@xterm/xterm": "^6.1.0-beta.315" } }, "sha512-HUrAJuoe4LQMfWnx9Xse/xkpTG4CLqor7jirGK5hzTFcPS4xN7WVUp7q3JyfH/SCPc3o081ZDScy9ZN3o09PuQ=="],
 

@@ -52,6 +52,8 @@
     "rendererHint": "使用 GPU 加速渲染终端输出。WebGL 性能最佳。更改应用于新终端。",
     "screenReader": "屏幕阅读器模式",
     "screenReaderHint": "向 NVDA 和 VoiceOver 暴露终端输出。无障碍渲染会降低吞吐量，请仅在需要时启用。",
+    "images": "显示图片",
+    "imagesHint": "显示 agent 等程序输出的 Sixel 和 iTerm2 内联图片。每个终端最多保留 32 MB 图片，更早的会变成占位框。关闭后这些图片不再显示。",
     "preview": "预览",
     "symbolFont": "符号字体（终端图标/字形）",
     "symbolFontHint": "用于渲染提示符图标与 powerline 符号的 Nerd Font；Auto 自动回退到已安装的 Nerd 字体。",

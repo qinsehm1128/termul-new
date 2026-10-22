@@ -48,6 +48,7 @@ export const useTerminalRenderer = () =>
   useAppSettingsStore((state) => state.settings.terminalRenderer)
 export const useTerminalScreenReaderMode = () =>
   useAppSettingsStore((state) => state.settings.terminalScreenReaderMode)
+export const useTerminalImages = () => useAppSettingsStore((state) => state.settings.terminalImages)
 export const useMaxTerminalsPerProject = () =>
   useAppSettingsStore((state) => state.settings.maxTerminalsPerProject)
 export const useOrphanDetectionEnabled = () =>

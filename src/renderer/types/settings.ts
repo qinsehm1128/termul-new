@@ -100,6 +100,8 @@ export interface AppSettings {
   terminalRenderer: 'auto' | 'webgl' | 'dom'
   /** Expose xterm's accessibility tree for NVDA/VoiceOver. Off by default for throughput. */
   terminalScreenReaderMode: boolean
+  /** Show Sixel and iTerm2 inline images in terminals. */
+  terminalImages: boolean
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
   /**
@@ -405,6 +407,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalBufferSize: 3000,
   terminalRenderer: 'webgl',
   terminalScreenReaderMode: false,
+  terminalImages: true,
   defaultShell: '',
   defaultProjectColor: 'blue',
   projectSortMode: 'name',

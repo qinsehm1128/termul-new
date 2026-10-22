@@ -52,6 +52,8 @@
     "rendererHint": "GPU-accelerated rendering for terminal output. WebGL provides best performance. Changes apply to new terminals.",
     "screenReader": "Screen reader mode",
     "screenReaderHint": "Expose terminal output to NVDA and VoiceOver. Enable only when needed because accessibility rendering can reduce throughput.",
+    "images": "Show images",
+    "imagesHint": "Display Sixel and iTerm2 inline images sent by programs such as agent CLIs. Each terminal keeps up to 32 MB of images; older ones become placeholders. When off, those images are not shown.",
     "preview": "Preview",
     "symbolFont": "Symbol font (terminal icons/glyphs)",
     "symbolFontHint": "Nerd Font used to render prompt icons and powerline glyphs; Auto picks installed Nerd Fonts.",
