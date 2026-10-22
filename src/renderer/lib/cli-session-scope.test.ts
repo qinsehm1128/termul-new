@@ -1,5 +1,10 @@
+import type { QuickTerminalRecord, QuickTerminalTarget } from '@shared/types/quick-terminal.types'
 import { describe, expect, it } from 'vitest'
-import { buildCliSessionScopePaths, resolveCliSessionDirectory } from '@/lib/cli-session-scope'
+import {
+  buildCliSessionScopePaths,
+  quickTerminalCliSessionScope,
+  resolveCliSessionDirectory
+} from '@/lib/cli-session-scope'
 
 describe('buildCliSessionScopePaths', () => {
   it('omits paths for all-sessions mode', () => {
@@ -71,5 +76,68 @@ describe('resolveCliSessionDirectory', () => {
 
   it('returns null when nothing is resolvable', () => {
     expect(resolveCliSessionDirectory({})).toBeNull()
+  })
+})
+
+describe('quickTerminalCliSessionScope', () => {
+  function record(target: QuickTerminalTarget, cwd: string): QuickTerminalRecord {
+    return {
+      schemaVersion: 1,
+      id: 'qt-1',
+      target,
+      cwd,
+      createdAtUtc: '2026-10-19T00:00:00Z',
+      updatedAtUtc: '2026-10-19T00:00:00Z',
+      origin: 'created'
+    }
+  }
+  const projects = [
+    { id: 'other', path: '/work/other' },
+    { id: 'repo', path: '/work/repo', worktrees: [{ path: '/work/repo/.worktrees/feat' }] }
+  ] as Parameters<typeof quickTerminalCliSessionScope>[1]
+
+  it('scopes a private folder to that folder, not to the project open before', () => {
+    // The defect this replaced: the panel listed the previously active
+    // project's history on a quick terminal's page.
+    expect(
+      quickTerminalCliSessionScope(
+        record({ kind: 'workspace' }, '/Se/terminals/2026/10/19/abc'),
+        projects
+      )
+    ).toEqual({
+      directoryPath: '/Se/terminals/2026/10/19/abc',
+      projectPath: '/Se/terminals/2026/10/19/abc',
+      worktreePaths: []
+    })
+  })
+
+  it('scopes a project shell to the project it was opened in', () => {
+    expect(
+      quickTerminalCliSessionScope(
+        record({ kind: 'project_root', projectId: 'repo', projectRoot: '/stale' }, '/work/repo'),
+        projects
+      )
+    ).toEqual({
+      directoryPath: '/work/repo',
+      projectPath: '/work/repo',
+      worktreePaths: ['/work/repo/.worktrees/feat']
+    })
+  })
+
+  it('falls back to the recorded path when the project is gone', () => {
+    expect(
+      quickTerminalCliSessionScope(
+        record(
+          {
+            kind: 'worktree',
+            projectId: 'removed',
+            worktreePath: '/gone/wt',
+            worktreeBranch: 'feat'
+          },
+          '/gone/wt'
+        ),
+        projects
+      ).projectPath
+    ).toBe('/gone/wt')
   })
 })
