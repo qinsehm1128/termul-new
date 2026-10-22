@@ -363,6 +363,20 @@ describe('AppPreferences settings controls', () => {
     expect(mockWriteDebounced).toHaveBeenCalled()
   })
 
+  it('shows terminal images by default and persists turning them off', async () => {
+    renderPage()
+
+    const toggle = await screen.findByRole('switch', { name: 'Show images' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.terminalImages).toBe(false)
+    })
+    expect(mockWriteDebounced).toHaveBeenCalled()
+  })
+
   it('resumes agent sessions on restore by default and lets the user turn it off', async () => {
     renderPage()
 

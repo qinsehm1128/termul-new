@@ -8,7 +8,7 @@
 ///
 /// | Type   | Sequence   | Response         |
 /// |--------|-----------|------------------|
-/// | DA1    | `\x1b[c`  | `\x1b[?1;2c`     |
+/// | DA1    | `\x1b[c`  | `\x1b[?62;4;9;22c` |
 /// | DA2    | `\x1b[>c` | `\x1b[>0;276;0c` |
 /// | DA3    | `\x1b[=c` | (silent drop)    |
 ///
@@ -19,8 +19,11 @@
 ///   │                    │                                                      │
 ///   └─ other byte ──→    └─ other byte ──→ flush hold                            └─→ Idle
 /// ```
-// DA1 response: "I am an xterm-256color terminal with VT220 features"
-const DA1_RESPONSE: &[u8] = b"\x1b[?1;2c";
+// DA1 response: VT220 with Sixel graphics (4), national charsets (9) and ANSI
+// color (22). It is byte-for-byte what the renderer's xterm.js image addon
+// answers, so the program sees the same terminal from either reply; this one
+// arrives first, so it is the one that decides whether a program sends images.
+const DA1_RESPONSE: &[u8] = b"\x1b[?62;4;9;22c";
 
 // DA2 response: "I am terminal version 0;276;0"
 const DA2_RESPONSE: &[u8] = b"\x1b[>0;276;0c";
@@ -220,6 +223,13 @@ mod tests {
 
         assert_eq!(responses, DA1_RESPONSE, "DA1 should trigger response");
         assert_eq!(out, b"\x1b[c", "DA1 bytes should pass through");
+    }
+
+    #[test]
+    fn da1_reply_advertises_sixel_like_the_renderer() {
+        // Programs pick Sixel only when the first DA1 reply lists attribute 4.
+        // The literal is the reply of @xterm/addon-image, which answers too.
+        assert_eq!(DA1_RESPONSE, b"\x1b[?62;4;9;22c");
     }
 
     #[test]

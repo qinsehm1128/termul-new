@@ -92,6 +92,7 @@ import {
   useTerminalBufferSize,
   useTerminalFontFamily,
   useTerminalFontSize,
+  useTerminalImages,
   useTerminalRenderer,
   useTerminalScreenReaderMode,
   useTerminalSymbolFontFamily,
@@ -457,6 +458,7 @@ export default function AppPreferences(): React.JSX.Element {
   const bufferSize = useTerminalBufferSize()
   const terminalRenderer = useTerminalRenderer()
   const terminalScreenReaderMode = useTerminalScreenReaderMode()
+  const terminalImages = useTerminalImages()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const maxTerminals = useMaxTerminalsPerProject()
@@ -655,6 +657,10 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleScreenReaderModeToggle = (enabled: boolean) => {
     updateSetting('terminalScreenReaderMode', enabled)
+  }
+
+  const handleTerminalImagesToggle = (enabled: boolean) => {
+    updateSetting('terminalImages', enabled)
   }
 
   const handleDefaultShellChange = (value: string) => {
@@ -1146,6 +1152,36 @@ export default function AppPreferences(): React.JSX.Element {
                       className={cn(
                         'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
                         terminalScreenReaderMode ? 'translate-x-6' : 'translate-x-1'
+                      )}
+                    />
+                  </button>
+                </div>
+
+                {/* Inline images (Sixel, iTerm2) */}
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-medium text-secondary-foreground">
+                      {tSettings('appearance.images')}
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      {tSettings('appearance.imagesHint')}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={terminalImages}
+                    aria-label={tSettings('appearance.images')}
+                    onClick={() => handleTerminalImagesToggle(!terminalImages)}
+                    className={cn(
+                      'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                      terminalImages ? 'bg-primary' : 'bg-input'
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                        terminalImages ? 'translate-x-6' : 'translate-x-1'
                       )}
                     />
                   </button>

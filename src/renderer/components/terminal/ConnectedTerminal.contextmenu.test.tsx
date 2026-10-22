@@ -183,7 +183,8 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: () => 14,
   useTerminalBufferSize: () => 10000,
   useTerminalRenderer: () => 'auto',
-  useTerminalScreenReaderMode: () => false
+  useTerminalScreenReaderMode: () => false,
+  useTerminalImages: () => false
 }))
 vi.mock('@/stores/terminal-store', async () => {
   const { vi: v } = await import('vitest')

@@ -55,6 +55,7 @@ import {
   useTerminalBufferSize,
   useTerminalFontFamily,
   useTerminalFontSize,
+  useTerminalImages,
   useTerminalRenderer,
   useTerminalScreenReaderMode,
   useTerminalSymbolFontFamily
@@ -74,6 +75,7 @@ import {
 } from '../../utils/terminal-registry'
 import { cacheTerminal, takeCachedTerminal } from './terminal-cache'
 import { applyTerminalRenderOptions, getTerminalOptions } from './terminal-config'
+import { setTerminalImagesEnabled } from './terminal-images'
 import { attachPixelSmoothScroll, type PixelSmoothScrollHandle } from './terminal-pixel-scroll'
 import { ensureTerminalUnicode11 } from './terminal-unicode'
 import {
@@ -610,6 +612,7 @@ function ConnectedTerminalComponent({
   const bufferSize = useTerminalBufferSize()
   const rendererPreference = useTerminalRenderer()
   const screenReaderMode = useTerminalScreenReaderMode()
+  const imagesEnabled = useTerminalImages()
   const activeProject = useActiveProject()
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
 
@@ -2296,6 +2299,14 @@ function ConnectedTerminalComponent({
       terminalRef.current.options.screenReaderMode = screenReaderMode
     }
   }, [screenReaderMode])
+
+  // Also runs on mount, after the init effect above has created or restored
+  // the terminal; the sync is idempotent for a cached instance.
+  useEffect(() => {
+    if (terminalRef.current) {
+      setTerminalImagesEnabled(terminalRef.current, imagesEnabled)
+    }
+  }, [imagesEnabled])
 
   useEffect(() => {
     if (!shouldUseWebglRenderer(rendererPreference)) {

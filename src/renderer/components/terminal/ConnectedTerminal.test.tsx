@@ -265,10 +265,24 @@ vi.mock('@/stores/app-settings-store', async (importOriginal) => ({
   useTerminalFontSize: vi.fn(() => 14),
   useTerminalBufferSize: vi.fn(() => 10000),
   useTerminalRenderer: vi.fn(() => 'auto'),
-  useTerminalScreenReaderMode: vi.fn(() => false)
+  useTerminalScreenReaderMode: vi.fn(() => false),
+  useTerminalImages: vi.fn(() => true)
 }))
 
-import { useTerminalRenderer, useTerminalScreenReaderMode } from '@/stores/app-settings-store'
+import {
+  useTerminalImages,
+  useTerminalRenderer,
+  useTerminalScreenReaderMode
+} from '@/stores/app-settings-store'
+
+// The addon itself is covered against a real Terminal in terminal-images.test.ts.
+const { mockSetTerminalImagesEnabled } = vi.hoisted(() => ({
+  mockSetTerminalImagesEnabled: vi.fn()
+}))
+
+vi.mock('./terminal-images', () => ({
+  setTerminalImagesEnabled: mockSetTerminalImagesEnabled
+}))
 
 const mockTerminalStoreState = {
   terminals: [] as Array<{ id: string; ptyId?: string; healthStatus?: string }>,
@@ -379,6 +393,8 @@ describe('ConnectedTerminal', () => {
       .spyOn(appSettingsStore, 'useTerminalRenderer')
       .mockReturnValue('auto')
     vi.mocked(useTerminalScreenReaderMode).mockReturnValue(false)
+    vi.mocked(useTerminalImages).mockReturnValue(true)
+    mockSetTerminalImagesEnabled.mockReset()
     webglAddonCreateCount = 0
     _resetWebglBudgetForTesting()
     capturedContextLossCallback = null
@@ -537,6 +553,19 @@ describe('ConnectedTerminal', () => {
 
     await vi.waitFor(() => {
       expect(mockTerminalInstance.options.screenReaderMode).toBe(true)
+    })
+  })
+
+  it('shows inline images by default and follows the setting at runtime', async () => {
+    const { rerender } = render(<ConnectedTerminal />)
+
+    expect(mockSetTerminalImagesEnabled).toHaveBeenCalledWith(mockTerminalInstance, true)
+
+    vi.mocked(useTerminalImages).mockReturnValue(false)
+    rerender(<ConnectedTerminal className="images-disabled" />)
+
+    await vi.waitFor(() => {
+      expect(mockSetTerminalImagesEnabled).toHaveBeenLastCalledWith(mockTerminalInstance, false)
     })
   })
 
