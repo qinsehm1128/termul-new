@@ -2,6 +2,7 @@ import type { CliSessionAgentId, DiscoveredCliSession } from '@shared/types/cli-
 import { CLI_SESSION_AGENT_IDS, CLI_SESSION_AGENT_LABELS } from '@shared/types/cli-session.types'
 import { ChevronDown, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMatch } from 'react-router-dom'
 import { toast } from 'sonner'
 import { CliSessionResumeDialog } from '@/components/cli-sessions/CliSessionResumeDialog'
 import {
@@ -25,6 +26,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import { useQuickTerminalStore } from '@/features/quick-terminal/quick-terminal-store'
 import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { launchAgentResumeInPane } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
@@ -40,6 +42,7 @@ import {
 import {
   buildCliSessionScopePaths,
   type CliSessionScopeMode,
+  quickTerminalCliSessionScope,
   resolveCliSessionDirectory
 } from '@/lib/cli-session-scope'
 import { cliSessionListTitle } from '@/lib/cli-session-title'
@@ -48,7 +51,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useCliSessionPanelVisible } from '@/stores/cli-session-panel-store'
-import { useActiveProject } from '@/stores/project-store'
+import { useActiveProject, useProjects } from '@/stores/project-store'
 import { useActiveTerminal } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -97,20 +100,35 @@ export function CliSessionPanel({
       ? (state.summariesById[state.activeConversationId]?.workspaceCwd ?? null)
       : null
   )
-  const directoryPath = resolveCliSessionDirectory({
-    conversationWorkspaceCwd,
-    terminalCwd: activeTerminal?.cwd,
-    projectDefaultCwd: activeProject ? getDefaultCwdForProject(activeProject.id) : null
-  })
+  // On a quick terminal's page that quick terminal is the subject; the active
+  // project is whatever was open before and has nothing to do with it.
+  const quickTerminalId = useMatch('/quick-terminals/:quickTerminalId')?.params.quickTerminalId
+  const quickTerminal = useQuickTerminalStore((state) =>
+    quickTerminalId ? state.records.find((record) => record.id === quickTerminalId) : undefined
+  )
+  const projects = useProjects()
+  const quickTerminalScope = useMemo(
+    () => (quickTerminal ? quickTerminalCliSessionScope(quickTerminal, projects) : null),
+    [quickTerminal, projects]
+  )
+  const directoryPath =
+    quickTerminalScope?.directoryPath ??
+    resolveCliSessionDirectory({
+      conversationWorkspaceCwd,
+      terminalCwd: activeTerminal?.cwd,
+      projectDefaultCwd: activeProject ? getDefaultCwdForProject(activeProject.id) : null
+    })
   const scopePaths = useMemo(
     () =>
       buildCliSessionScopePaths({
         mode: scopeMode,
         directoryPath,
-        projectPath: activeProject?.path,
-        worktreePaths: activeProject?.worktrees?.map((worktree) => worktree.path)
+        projectPath: quickTerminalScope ? quickTerminalScope.projectPath : activeProject?.path,
+        worktreePaths: quickTerminalScope
+          ? quickTerminalScope.worktreePaths
+          : activeProject?.worktrees?.map((worktree) => worktree.path)
       }),
-    [scopeMode, directoryPath, activeProject?.path, activeProject?.worktrees]
+    [scopeMode, directoryPath, quickTerminalScope, activeProject?.path, activeProject?.worktrees]
   )
 
   const hydrateSessions = useCallback(
