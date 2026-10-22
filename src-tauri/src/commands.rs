@@ -1423,15 +1423,22 @@ pub async fn terminal_write(
     }
 }
 
-/// Resize a terminal
+/// Resize a terminal. The optional CSS cell size feeds the PTY pixel size.
 #[tauri::command]
 pub async fn terminal_resize(
     terminal_id: String,
     cols: u16,
     rows: u16,
+    cell_width: Option<u16>,
+    cell_height: Option<u16>,
     terminal: State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<IpcResult<()>, String> {
-    match terminal.runtime().resize(&terminal_id, cols, rows).await {
+    let cell = cell_width.zip(cell_height);
+    match terminal
+        .runtime()
+        .resize(&terminal_id, cols, rows, cell)
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(crate::core::CoreError::InvalidRequest(detail)) if !detail.is_empty() => {
             Ok(IpcResult::error(detail, "RESIZE_FAILED"))

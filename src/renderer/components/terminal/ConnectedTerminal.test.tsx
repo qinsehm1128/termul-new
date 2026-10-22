@@ -3450,7 +3450,8 @@ describe('ConnectedTerminal', () => {
       expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
-        expect.any(Number)
+        expect.any(Number),
+        undefined
       )
     })
 
@@ -3627,6 +3628,66 @@ describe('ConnectedTerminal', () => {
       vi.useRealTimers()
     })
 
+    describe('PTY pixel size', () => {
+      const CELL = { width: 8, height: 17 }
+
+      beforeEach(() => {
+        // xterm's measured CSS cell; fractional like a real renderer reports.
+        Object.assign(mockTerminalInstance._core._renderService, {
+          dimensions: { css: { cell: { width: 7.8, height: 17.2 } } }
+        })
+      })
+
+      afterEach(() => {
+        Reflect.deleteProperty(mockTerminalInstance._core._renderService, 'dimensions')
+        vi.useRealTimers()
+      })
+
+      it('sends the measured cell size with a resize', async () => {
+        vi.useFakeTimers()
+        const { rerender } = render(<ConnectedTerminal isVisible={false} />)
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+        vi.mocked(terminalApi).resize.mockClear()
+
+        rerender(<ConnectedTerminal isVisible={true} />)
+        await vi.advanceTimersByTimeAsync(50)
+
+        expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith('terminal-123', 80, 24, CELL)
+      })
+
+      it('sends the cell size with the resize deferred until the PTY is ready', async () => {
+        vi.useFakeTimers()
+        let resolveSpawn: (value: Awaited<ReturnType<typeof terminalApi.spawn>>) => void = () => {}
+        vi.mocked(terminalApi).spawn.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              resolveSpawn = resolve
+            })
+        )
+        render(<ConnectedTerminal isVisible={true} />)
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+        // Visible before the PTY exists: the resize is deferred to spawn.
+        await vi.advanceTimersByTimeAsync(50)
+        vi.mocked(terminalApi).resize.mockClear()
+
+        resolveSpawn({
+          success: true,
+          data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
+        })
+        await vi.advanceTimersByTimeAsync(50)
+
+        const calls = vi.mocked(terminalApi).resize.mock.calls
+        expect(calls.length).toBeGreaterThan(0)
+        for (const call of calls) {
+          expect(call).toEqual(['terminal-123', 80, 24, CELL])
+        }
+      })
+    })
+
     describe('Visibility broadcast to backend', () => {
       it('should broadcast terminal dimensions to backend when becoming visible', async () => {
         vi.useFakeTimers()
@@ -3649,7 +3710,8 @@ describe('ConnectedTerminal', () => {
         expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
           'terminal-123',
           expect.any(Number),
-          expect.any(Number)
+          expect.any(Number),
+          undefined
         )
 
         vi.useRealTimers()
@@ -3679,7 +3741,8 @@ describe('ConnectedTerminal', () => {
         expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
           'terminal-123',
           expect.any(Number),
-          expect.any(Number)
+          expect.any(Number),
+          undefined
         )
 
         vi.useRealTimers()
@@ -4030,7 +4093,8 @@ describe('ConnectedTerminal', () => {
       expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
-        expect.any(Number)
+        expect.any(Number),
+        undefined
       )
 
       vi.useRealTimers()
@@ -4103,7 +4167,8 @@ describe('ConnectedTerminal', () => {
       expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
-        expect.any(Number)
+        expect.any(Number),
+        undefined
       )
       // Buffer repainted to redraw into the re-composited layer
       expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, mockTerminalInstance.rows - 1)

@@ -981,7 +981,7 @@ async fn handle(
             state
                 .terminal_service()
                 .runtime()
-                .resize(terminal_id, cols, rows)
+                .resize(terminal_id, cols, rows, None)
                 .await
                 .map(|_| Value::Null)
                 .map_err(|error| ("RESIZE_FAILED", core_error_detail(error)))

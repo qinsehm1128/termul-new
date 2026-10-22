@@ -159,6 +159,12 @@ export interface TerminalDisplayModeOptions {
   force?: boolean
 }
 
+/** Renderer cell size in whole CSS pixels; the PTY reports the grid times it as its pixel size. */
+export interface TerminalCellSize {
+  width: number
+  height: number
+}
+
 /**
  * CAP-3 attach response — byte-identical camelCase shape on both transports
  * (desktop `terminal_attach` IpcResult data; web `attach` reply data).
@@ -304,7 +310,12 @@ export type TerminalIpcChannels = {
   'terminal:rotate_claim': (terminalId: string, claim: string) => IpcResult<RotatedClaim>
   'terminal:revoke_claim': (terminalId: string, claim: string) => IpcResult<void>
   'terminal:write': (terminalId: string, data: string) => IpcResult<void>
-  'terminal:resize': (terminalId: string, cols: number, rows: number) => IpcResult<void>
+  'terminal:resize': (
+    terminalId: string,
+    cols: number,
+    rows: number,
+    cell?: TerminalCellSize
+  ) => IpcResult<void>
   'terminal:close_view': (terminalId: string) => IpcResult<void>
   'terminal:terminate': (terminalId: string) => IpcResult<void>
   /** @deprecated compatibility alias for terminal:terminate */
@@ -516,7 +527,12 @@ export interface TerminalApi {
   /** CAP-3: revoke the credential; the PTY keeps running. */
   revokeClaim: (terminalId: string, claim: string) => Promise<IpcResult<void>>
   write: (terminalId: string, data: string) => Promise<IpcResult<void>>
-  resize: (terminalId: string, cols: number, rows: number) => Promise<IpcResult<void>>
+  resize: (
+    terminalId: string,
+    cols: number,
+    rows: number,
+    cell?: TerminalCellSize
+  ) => Promise<IpcResult<void>>
   /**
    * Phone takeover resizes the live PTY and parks desktop FitAddon.
    * Desktop mode restores the parked size. Optional on test doubles.

@@ -44,7 +44,15 @@ pub struct TerminalConversationTermination {
 #[async_trait]
 pub trait TerminalRuntimeHandle: Send + Sync {
     async fn write(&self, terminal_id: &str, data: &str) -> Result<(), CoreError>;
-    async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError>;
+    /// `cell` is the renderer's `(width, height)` cell size in CSS pixels, used
+    /// for the TIOCGWINSZ pixel fields; `None` keeps the last known one.
+    async fn resize(
+        &self,
+        terminal_id: &str,
+        cols: u16,
+        rows: u16,
+        cell: Option<(u16, u16)>,
+    ) -> Result<(), CoreError>;
     async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError>;
     async fn observe_conversation(
         &self,
@@ -107,7 +115,13 @@ impl TerminalRuntimeHandle for DetachedTerminalRuntime {
         ))
     }
 
-    async fn resize(&self, _terminal_id: &str, _cols: u16, _rows: u16) -> Result<(), CoreError> {
+    async fn resize(
+        &self,
+        _terminal_id: &str,
+        _cols: u16,
+        _rows: u16,
+        _cell: Option<(u16, u16)>,
+    ) -> Result<(), CoreError> {
         Err(CoreError::InvalidRequest(
             "acp core has no terminal runtime linked".into(),
         ))
@@ -175,9 +189,15 @@ impl TerminalRuntimeHandle for InProcessTerminalRuntime {
             .map_err(CoreError::InvalidRequest)
     }
 
-    async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError> {
+    async fn resize(
+        &self,
+        terminal_id: &str,
+        cols: u16,
+        rows: u16,
+        cell: Option<(u16, u16)>,
+    ) -> Result<(), CoreError> {
         self.manager()?
-            .resize(terminal_id, cols, rows)
+            .resize(terminal_id, cols, rows, cell)
             .await
             .map_err(CoreError::InvalidRequest)
     }
@@ -387,9 +407,15 @@ impl TerminalRuntimeHandle for SwitchableTerminalRuntime {
         runtime.write(terminal_id, data).await
     }
 
-    async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError> {
+    async fn resize(
+        &self,
+        terminal_id: &str,
+        cols: u16,
+        rows: u16,
+        cell: Option<(u16, u16)>,
+    ) -> Result<(), CoreError> {
         let runtime = Arc::clone(&self.current.read());
-        runtime.resize(terminal_id, cols, rows).await
+        runtime.resize(terminal_id, cols, rows, cell).await
     }
 
     async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError> {
@@ -459,6 +485,7 @@ mod switchable_tests {
             _terminal_id: &str,
             _cols: u16,
             _rows: u16,
+            _cell: Option<(u16, u16)>,
         ) -> Result<(), CoreError> {
             Ok(())
         }
