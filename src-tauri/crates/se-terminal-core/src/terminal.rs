@@ -159,6 +159,24 @@ struct ResizeParams {
     terminal_id: String,
     cols: u16,
     rows: u16,
+    // Absent from GUIs that predate pixel sizes; the PTY then keeps its last
+    // known cell size.
+    #[serde(default)]
+    cell_width: Option<u16>,
+    #[serde(default)]
+    cell_height: Option<u16>,
+}
+
+/// Cell fields go on the wire only when known, so a request without one is the
+/// JSON older GUIs sent. Older Cores ignore the extra keys: their
+/// `ResizeParams` never had `deny_unknown_fields`.
+fn resize_params(terminal_id: &str, cols: u16, rows: u16, cell: Option<(u16, u16)>) -> Value {
+    let mut params = json!({ "terminalId": terminal_id, "cols": cols, "rows": rows });
+    if let Some((width, height)) = cell {
+        params["cellWidth"] = json!(width);
+        params["cellHeight"] = json!(height);
+    }
+    params
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -706,7 +724,8 @@ async fn handle_method(
         METHOD_RESIZE => {
             let params: ResizeParams = serde_json::from_value(request.params.clone())
                 .map_err(|error| invalid(error.to_string()))?;
-            pty.resize(&params.terminal_id, params.cols, params.rows)
+            let cell = params.cell_width.zip(params.cell_height);
+            pty.resize(&params.terminal_id, params.cols, params.rows, cell)
                 .await
                 .map_err(invalid)?;
             Ok(Value::Null)
@@ -1765,13 +1784,16 @@ impl TerminalCoreClient {
         .map(|_| ())
     }
 
-    pub async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError> {
-        self.rpc(
-            METHOD_RESIZE,
-            json!({ "terminalId": terminal_id, "cols": cols, "rows": rows }),
-        )
-        .await
-        .map(|_| ())
+    pub async fn resize(
+        &self,
+        terminal_id: &str,
+        cols: u16,
+        rows: u16,
+        cell: Option<(u16, u16)>,
+    ) -> Result<(), CoreError> {
+        self.rpc(METHOD_RESIZE, resize_params(terminal_id, cols, rows, cell))
+            .await
+            .map(|_| ())
     }
 
     pub async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError> {
@@ -2019,8 +2041,14 @@ impl TerminalRuntimeHandle for TerminalCoreClient {
         TerminalCoreClient::write(self, terminal_id, data).await
     }
 
-    async fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), CoreError> {
-        TerminalCoreClient::resize(self, terminal_id, cols, rows).await
+    async fn resize(
+        &self,
+        terminal_id: &str,
+        cols: u16,
+        rows: u16,
+        cell: Option<(u16, u16)>,
+    ) -> Result<(), CoreError> {
+        TerminalCoreClient::resize(self, terminal_id, cols, rows, cell).await
     }
 
     async fn terminate(&self, terminal_id: &str) -> Result<(), CoreError> {
@@ -2084,6 +2112,26 @@ mod tests {
             !source.contains(&forbidden_import),
             "Terminal Core must not import ACP"
         );
+    }
+
+    #[test]
+    fn resize_params_stay_compatible_across_gui_and_core_versions() {
+        // Old GUI -> new Core: no cell fields at all.
+        let old: ResizeParams =
+            serde_json::from_value(json!({ "terminalId": "term-1", "cols": 80, "rows": 24 }))
+                .expect("a request without cell size must still parse");
+        assert_eq!((old.cols, old.rows), (80, 24));
+        assert_eq!(old.cell_width.zip(old.cell_height), None);
+
+        // New GUI without a measured cell sends exactly the old shape.
+        assert_eq!(
+            resize_params("term-1", 80, 24, None),
+            json!({ "terminalId": "term-1", "cols": 80, "rows": 24 })
+        );
+
+        let new: ResizeParams =
+            serde_json::from_value(resize_params("term-1", 80, 24, Some((8, 17)))).unwrap();
+        assert_eq!(new.cell_width.zip(new.cell_height), Some((8, 17)));
     }
 
     #[test]

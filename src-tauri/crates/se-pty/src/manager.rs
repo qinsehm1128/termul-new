@@ -1199,6 +1199,19 @@ fn empty_phone_fit() -> Arc<RwLock<PhoneFitLease>> {
     Arc::new(RwLock::new(PhoneFitLease::default()))
 }
 
+/// Window size for TIOCSWINSZ. The pixel fields are the grid times the cell
+/// size, so any grid (desktop or phone) stays consistent with the cell; 0
+/// means "unknown", which is what programs got before a cell size existed.
+fn pty_size(cols: u16, rows: u16, cell_px: Option<(u16, u16)>) -> PtySize {
+    let (cell_width, cell_height) = cell_px.unwrap_or((0, 0));
+    PtySize {
+        rows,
+        cols,
+        pixel_width: cols.saturating_mul(cell_width),
+        pixel_height: rows.saturating_mul(cell_height),
+    }
+}
+
 /// Current phone/desktop geometry owner for a live PTY.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1259,6 +1272,10 @@ pub struct TerminalInstance {
     pub protected: Arc<AtomicBool>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
+    /// Last renderer cell size `(width, height)` in CSS pixels. Programs size
+    /// inline images from the TIOCGWINSZ pixel fields, so every ioctl derives
+    /// them from this; `None` until a renderer reports it.
+    cell_px: Arc<RwLock<Option<(u16, u16)>>>,
     /// Phone takeover: parked desktop size plus the connections that own geometry.
     phone_fit: Arc<RwLock<PhoneFitLease>>,
     /// Broadcast channel for fan-out of raw PTY output to remote WebSocket clients.
@@ -2233,6 +2250,7 @@ impl PtyManager {
                 protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
+                cell_px: Arc::new(RwLock::new(None)),
                 phone_fit: empty_phone_fit(),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
@@ -2447,6 +2465,7 @@ impl PtyManager {
                 protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
+                cell_px: Arc::new(RwLock::new(None)),
                 phone_fit: empty_phone_fit(),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
@@ -2871,11 +2890,24 @@ impl PtyManager {
     /// without sending a redundant SIGWINCH. While a phone owns the live
     /// ioctl, the requested desktop grid is parked for restore instead of
     /// being discarded.
-    pub async fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
+    ///
+    /// `cell` is the renderer's `(width, height)` cell size in CSS pixels. A
+    /// request without one keeps the last known size; a cell-only change (font
+    /// size) still reaches the ioctl so the reported pixel size follows it.
+    pub async fn resize(
+        &self,
+        id: &str,
+        cols: u16,
+        rows: u16,
+        cell: Option<(u16, u16)>,
+    ) -> Result<(), String> {
         let instance = self
             .get(id)
             .ok_or_else(|| format!("Terminal not found: {id}"))?;
         instance.require_active()?;
+        let cell = cell.filter(|&(width, height)| width > 0 && height > 0);
+        let cell_changed =
+            cell.is_some_and(|cell| instance.cell_px.write().replace(cell) != Some(cell));
         if instance.is_phone_fit() {
             instance.park_desktop_size(cols, rows);
             log::info!(
@@ -2883,7 +2915,10 @@ impl PtyManager {
             );
             return Ok(());
         }
-        if *instance.cols.read() == cols && *instance.rows.read() == rows {
+        // ConPTY has no pixel size, so a cell-only change there would only be
+        // a redundant resize.
+        let pixels_changed = cell_changed && !cfg!(target_os = "windows");
+        if !pixels_changed && *instance.cols.read() == cols && *instance.rows.read() == rows {
             return Ok(());
         }
         self.resize_ioctl(id, cols, rows).await
@@ -2916,12 +2951,7 @@ impl PtyManager {
             .as_ref()
             .ok_or_else(|| "PTY master already consumed".to_string())?;
         master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .resize(pty_size(cols, rows, *instance.cell_px.read()))
             .map_err(|error| format!("Failed to resize terminal: {error}"))?;
         *instance.cols.write() = cols;
         *instance.rows.write() = rows;
@@ -4414,6 +4444,7 @@ mod tests {
             protected: Arc::new(AtomicBool::new(true)),
             cols: Arc::new(RwLock::new(80)),
             rows: Arc::new(RwLock::new(24)),
+            cell_px: Arc::new(RwLock::new(None)),
             phone_fit: empty_phone_fit(),
             broadcast_tx: Arc::new(broadcast_tx),
             output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
@@ -5102,7 +5133,7 @@ mod tests {
         instance.adopt_phone_owner("phone-1", 40, 18);
 
         manager
-            .resize("term-phone-ignore", 80, 24)
+            .resize("term-phone-ignore", 80, 24, None)
             .await
             .expect("parked resize is a no-op");
         assert_eq!(*instance.cols.read(), 100);
@@ -5125,13 +5156,122 @@ mod tests {
         let instance = install_cleanup_fixture(&manager, "term-same-size");
         *instance.cols.write() = 120;
         *instance.rows.write() = 40;
+        *instance.cell_px.write() = Some((8, 17));
 
-        manager
-            .resize("term-same-size", 120, 40)
-            .await
-            .expect("same-size resize must not touch a missing PTY master");
+        for cell in [None, Some((8, 17))] {
+            manager
+                .resize("term-same-size", 120, 40, cell)
+                .await
+                .expect("same-size resize must not touch a missing PTY master");
+        }
         assert_eq!(*instance.cols.read(), 120);
         assert_eq!(*instance.rows.read(), 40);
+    }
+
+    /// A live PTY master so tests can read back what TIOCGWINSZ reports. The
+    /// slave is returned so the pair stays open for the whole test.
+    #[cfg(unix)]
+    async fn install_real_master(
+        instance: &TerminalInstance,
+    ) -> Box<dyn portable_pty::SlavePty + Send> {
+        let pty = portable_pty::native_pty_system()
+            .openpty(pty_size(80, 24, None))
+            .expect("openpty");
+        *instance.master.lock().await = Some(pty.master);
+        pty.slave
+    }
+
+    #[cfg(unix)]
+    async fn reported_size(instance: &TerminalInstance) -> (u16, u16, u16, u16) {
+        let size = instance
+            .master
+            .lock()
+            .await
+            .as_ref()
+            .expect("master")
+            .get_size()
+            .expect("TIOCGWINSZ");
+        (size.cols, size.rows, size.pixel_width, size.pixel_height)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resize_reports_pixel_size_from_cell_size() {
+        let manager = crate::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-pixel");
+        let _slave = install_real_master(&instance).await;
+
+        manager
+            .resize("term-pixel", 100, 30, Some((8, 17)))
+            .await
+            .expect("resize");
+        assert_eq!(reported_size(&instance).await, (100, 30, 800, 510));
+
+        // Without a cell size the known one still drives the pixel fields.
+        manager
+            .resize("term-pixel", 120, 40, None)
+            .await
+            .expect("resize");
+        assert_eq!(reported_size(&instance).await, (120, 40, 960, 680));
+        assert_eq!(*instance.cell_px.read(), Some((8, 17)));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cell_only_change_reaches_the_ioctl() {
+        let manager = crate::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-font");
+        let _slave = install_real_master(&instance).await;
+        manager
+            .resize("term-font", 100, 30, Some((8, 17)))
+            .await
+            .expect("resize");
+
+        // A font size change the fitted grid absorbed exactly: same cols/rows.
+        manager
+            .resize("term-font", 100, 30, Some((9, 19)))
+            .await
+            .expect("resize");
+        assert_eq!(reported_size(&instance).await, (100, 30, 900, 570));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn phone_fit_remembers_cell_size_for_desktop_restore() {
+        let manager = crate::test_pty_manager();
+        let instance = install_cleanup_fixture(&manager, "term-phone-cell");
+        let _slave = install_real_master(&instance).await;
+        manager
+            .set_display_mode(
+                "term-phone-cell",
+                TerminalDisplayMode::Phone,
+                Some(40),
+                Some(18),
+                "phone-1",
+                false,
+            )
+            .await
+            .expect("phone takeover");
+
+        manager
+            .resize("term-phone-cell", 100, 30, Some((8, 17)))
+            .await
+            .expect("parked resize");
+        assert_eq!(*instance.cell_px.read(), Some((8, 17)));
+        assert_eq!(reported_size(&instance).await, (40, 18, 0, 0));
+
+        manager
+            .set_display_mode(
+                "term-phone-cell",
+                TerminalDisplayMode::Desktop,
+                None,
+                None,
+                "phone-1",
+                false,
+            )
+            .await
+            .expect("desktop restore");
+        assert_eq!(reported_size(&instance).await, (100, 30, 800, 510));
     }
 
     #[test]
@@ -6127,6 +6267,7 @@ mod tests {
             protected: Arc::new(AtomicBool::new(true)),
             cols: Arc::new(RwLock::new(80)),
             rows: Arc::new(RwLock::new(24)),
+            cell_px: Arc::new(RwLock::new(None)),
             phone_fit: empty_phone_fit(),
             broadcast_tx: Arc::new(broadcast_tx),
             output_log: Arc::new(RwLock::new(chunks)),
