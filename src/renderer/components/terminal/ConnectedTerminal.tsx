@@ -73,6 +73,7 @@ import {
   unregisterTerminal
 } from '../../utils/terminal-registry'
 import { cacheTerminal, takeCachedTerminal } from './terminal-cache'
+import { readTerminalCellSize } from './terminal-cell-size'
 import { applyTerminalRenderOptions, getTerminalOptions } from './terminal-config'
 import { attachPixelSmoothScroll, type PixelSmoothScrollHandle } from './terminal-pixel-scroll'
 import { ensureTerminalUnicode11 } from './terminal-unicode'
@@ -762,7 +763,13 @@ function ConnectedTerminalComponent({
       }
       if (parkedByPhoneRef.current || isMobileWebShell) return
       try {
-        await terminalApi.resize(ptyId, cols, rows)
+        const terminal = terminalRef.current
+        await terminalApi.resize(
+          ptyId,
+          cols,
+          rows,
+          terminal ? readTerminalCellSize(terminal) : undefined
+        )
       } catch {
         // Ignore resize errors during rapid resize
       }
@@ -1789,7 +1796,14 @@ function ConnectedTerminalComponent({
                   })
                   .catch(() => {})
               } else if (!isMobileWebShell) {
-                terminalApi.resize(result.data.id, terminal.cols, terminal.rows).catch(() => {})
+                terminalApi
+                  .resize(
+                    result.data.id,
+                    terminal.cols,
+                    terminal.rows,
+                    readTerminalCellSize(terminal)
+                  )
+                  .catch(() => {})
               }
             }
             forceResizeFitRef.current()

@@ -809,6 +809,28 @@ describe('tauri-terminal-api', () => {
       })
     })
 
+    it('resize forwards the cell size so the PTY can report its pixel size', async () => {
+      const { api } = await loadApi()
+      mockInvoke.mockResolvedValue({ success: true, data: undefined })
+
+      await api.resize('terminal-1752-1', 120, 32, { width: 8, height: 17 })
+      await api.resize('terminal-1752-1', 120, 32)
+
+      expect(mockInvoke).toHaveBeenNthCalledWith(1, 'terminal_resize', {
+        terminalId: 'terminal-1752-1',
+        cols: 120,
+        rows: 32,
+        cellWidth: 8,
+        cellHeight: 17
+      })
+      // No cell yet: undefined keys serialize away, so the host keeps its last one.
+      expect(mockInvoke).toHaveBeenNthCalledWith(2, 'terminal_resize', {
+        terminalId: 'terminal-1752-1',
+        cols: 120,
+        rows: 32
+      })
+    })
+
     it('rotateClaim invokes terminal_rotate_claim with (terminalId, claim) and returns the fresh credential', async () => {
       const { api } = await loadApi()
       mockInvoke.mockResolvedValue({ success: true, data: { claim: 'rotated-claim-64-hex' } })

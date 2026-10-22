@@ -6,6 +6,7 @@ import type {
   SpawnedTerminal,
   TerminalApi,
   TerminalAttachResult,
+  TerminalCellSize,
   TerminalCoreRestartedEvent,
   TerminalCwdChangedCallback,
   TerminalDataCallback,
@@ -717,10 +718,21 @@ export function createTauriTerminalApi(): TerminalApi {
     },
 
     /**
-     * Resize terminal PTY
+     * Resize terminal PTY. The cell size, when known, becomes the PTY pixel size.
      */
-    async resize(terminalId: string, cols: number, rows: number): Promise<IpcResult<void>> {
-      return invokeIpc<void>(IPC_COMMANDS.RESIZE, { terminalId, cols, rows })
+    async resize(
+      terminalId: string,
+      cols: number,
+      rows: number,
+      cell?: TerminalCellSize
+    ): Promise<IpcResult<void>> {
+      return invokeIpc<void>(IPC_COMMANDS.RESIZE, {
+        terminalId,
+        cols,
+        rows,
+        cellWidth: cell?.width,
+        cellHeight: cell?.height
+      })
     },
 
     async setDisplayMode(
