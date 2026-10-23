@@ -9,9 +9,9 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub const NATIVE_AVAILABLE: bool = cfg!(feature = "native");
-pub const MAX_COLS: u16 = 512;
-pub const MAX_ROWS: u16 = 256;
-pub const MAX_CELLS: usize = 65_536;
+pub const MAX_COLS: u16 = 1024;
+pub const MAX_ROWS: u16 = 1024;
+pub const MAX_CELLS: usize = 262_144;
 pub const MAX_INPUT_BYTES: usize = 65_536;
 pub const MAX_OUTPUT_BYTES: usize = 1_048_576;
 pub const MAX_OUTPUT_LINES: usize = 4096;
@@ -138,7 +138,7 @@ impl Terminal {
         }
     }
 
-    /// Plain text of the active screen and retained scrollback, newest lines last.
+    /// Plain text of the active screen, newest lines last; no retained scrollback.
     /// Tail truncation never splits UTF-8; metadata always describes the viewport.
     pub fn screen_tail(
         &mut self,

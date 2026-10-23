@@ -109,6 +109,12 @@ fn scrollback_tail_is_bounded() {
     for i in 0..1000 {
         vt.write(format!("line-{i}\r\n").as_bytes()).unwrap();
     }
+    let full = text(&mut vt);
+    assert!(!full.contains("line-0\n"));
+    assert!(
+        full.lines().count() <= 3,
+        "zero scrollback must return only the viewport: {full:?}"
+    );
     let s = vt.screen_tail(2, 100).unwrap();
     assert!(s.text.contains("line-999"));
     assert!(s.text.len() <= 100);
@@ -156,11 +162,11 @@ fn resource_limits_are_enforced() {
         Err(Error::InvalidDimensions)
     ));
     assert!(matches!(
-        Terminal::new(513, 24),
+        Terminal::new(1025, 24),
         Err(Error::InvalidDimensions)
     ));
     assert!(matches!(
-        Terminal::new(512, 256),
+        Terminal::new(1024, 257),
         Err(Error::InvalidDimensions)
     ));
     let mut vt = Terminal::new(80, 24).unwrap();

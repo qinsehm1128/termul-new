@@ -23,8 +23,8 @@ void *se_vt_new(uint16_t cols, uint16_t rows) {
 
     const bool disabled = false;
     const uint64_t zero = 0;
-    const size_t scrollback_bytes = 1024 * 1024;
-    const size_t scrollback_lines = 4096;
+    const size_t scrollback_bytes = 0;
+    const size_t scrollback_lines = 0;
     const size_t apc_bytes = 4096;
     const size_t continuation_bytes = 4096;
     const size_t unknown_bytes = 0;

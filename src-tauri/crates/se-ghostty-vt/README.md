@@ -66,7 +66,7 @@ extracts the pinned archive to obtain matching C headers.
   status and **zero-based** cursor coordinates.
 - Terminals are neither `Send` nor `Sync`; all methods require `&mut self` and no
   native handles or callbacks are exposed. No concurrent use of one instance.
-- Maximum dimensions: 512 columns, 256 rows, 65,536 cells. Zero dimensions fail.
+- Maximum dimensions: 1024 columns, 1024 rows, 262,144 cells. Zero dimensions fail.
   Cell pixel dimensions are at most 4096 each (zero means unspecified).
 - A single input chunk is at most 65,536 bytes. Split larger input in the caller;
   parser state, including incomplete escape sequences and UTF-8, survives writes.
@@ -74,8 +74,10 @@ extracts the pinned archive to obtain matching C headers.
   newest text, never splits a UTF-8 character, and zero limits yield empty text
   while still reporting accurate metadata. Cursor coordinates describe the
   viewport, not the truncated text.
-- Retained scrollback, APC accumulation and Kitty image storage are explicitly
-  bounded/disabled by the native shim. No WRITE_PTY, clipboard, bell, title or
+- Scrollback is explicitly disabled (zero bytes/lines), matching the approved
+  observer protocol; `screen_tail` formats only the active screen. APC
+  accumulation is limited to 4096 bytes and Kitty image storage is disabled.
+  No WRITE_PTY, clipboard, bell, title or
   other host-effect callback is installed. Kitty file, temporary-file and shared
   memory media are all disabled; image storage is zero.
 - Plain text formatting uses a bounded caller-owned buffer. An unexpected native
@@ -84,6 +86,17 @@ extracts the pinned archive to obtain matching C headers.
 These bounds reduce ordinary resource exposure; they are **not** a hard total
 RSS/CPU bound and do not replace child-process isolation or rate limiting. The
 crate never opens a PTY or returns terminal query responses to an external host.
+
+## Passive linkage
+
+The shim has no C constructor or implicit initialization entrypoint. The VT
+build root is upstream `src/lib_vt.zig`, not the application `src/main_c.zig`
+(which contains a Windows app DllMain). Terminal state is allocated only by
+explicit calls such as `Terminal::new`; static linkage does not call it. The
+built aarch64 macOS static archive was checked with `xcrun otool -l` and
+`xcrun nm -m`: no initializer/finalizer/ObjC load sections or global constructor
+entrypoints were present. Linux/Windows artifact-level checks remain platform
+verification work; this is not a claim of an OS permission sandbox.
 
 ## License and provenance
 
