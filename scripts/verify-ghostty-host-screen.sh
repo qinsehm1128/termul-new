@@ -15,6 +15,9 @@ if [[ -z "${PYTHON:-}" ]] && command -v python3.12 >/dev/null 2>&1; then
   python_bin=python3.12
 fi
 ZIG="${ZIG:-${SE_GHOSTTY_VT_ZIG:-}}"
+# Goal/CI runners do not necessarily inherit the interactive tool environment.
+# This tool owns only its named cache and mktemp directories under qin scratch.
+scratch_root="${QIN_CODE_SCRATCH_DIR:-${RUNNER_TEMP:-${HOME:?}/.qin-code/scratch}}"
 
 checkpoint() {
   printf 'QIN_CODE_CHECKPOINT {"message":"%s"}\n' "$1"
@@ -26,12 +29,7 @@ checkpoint 'Checksum-pinned build toolchain and failure handling'
 if [[ -z "${ZIG:-}" ]]; then
   toolchain_cache="${GHOSTTY_TOOLCHAIN_CACHE:-}"
   if [[ -z "$toolchain_cache" ]]; then
-    cache_root="${QIN_CODE_SCRATCH_DIR:-${RUNNER_TEMP:-}}"
-    if [[ -z "$cache_root" ]]; then
-      printf '%s\n' 'Set GHOSTTY_TOOLCHAIN_CACHE to an owned cache directory, or set ZIG to the verified Zig 0.16.0 executable.' >&2
-      exit 1
-    fi
-    toolchain_cache="$cache_root/se-ghostty-toolchain"
+    toolchain_cache="$scratch_root/se-ghostty-toolchain"
   fi
   ZIG="$("$python_bin" scripts/release/prepare-ghostty-toolchain.py --cache-dir "$toolchain_cache" --print-executable)"
   export ZIG
@@ -112,12 +110,8 @@ if [[ "$(uname -s)" != Darwin ]] || ! command -v xcodebuild >/dev/null 2>&1; the
   printf '%s\n' 'Full Ghostty cross-surface acceptance requires macOS with Xcode for the iOS build gate.' >&2
   exit 1
 fi
-ios_cache_root="${QIN_CODE_SCRATCH_DIR:-${RUNNER_TEMP:-}}"
-if [[ -z "$ios_cache_root" ]]; then
-  printf '%s\n' 'Set QIN_CODE_SCRATCH_DIR or RUNNER_TEMP to an owned temporary directory for the iOS build.' >&2
-  exit 1
-fi
-ios_derived_data="$(mktemp -d "$ios_cache_root/ghostty-ios-acceptance-XXXXXXXX")"
+mkdir -p "$scratch_root"
+ios_derived_data="$(mktemp -d "$scratch_root/ghostty-ios-acceptance-XXXXXXXX")"
 xcodebuild -project ios/SeRemote/SeRemote.xcodeproj \
   -scheme SeRemote -configuration Debug -sdk iphonesimulator \
   -destination 'generic/platform=iOS Simulator' \
