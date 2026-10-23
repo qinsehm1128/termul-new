@@ -14,6 +14,11 @@ import struct
 import sys
 
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_DEPTH = 8
+MAX_ARCHIVE_MEMBERS = 200_000
+MAX_AUDITED_OBJECTS = 100_000
+MAX_OBJECT_BYTES = 128 * 1024 * 1024
+ALLOWED_IMPORT_DLLS = frozenset({"ntdll.dll", "kernel32.dll"})
 
 
 class AuditError(ValueError):
@@ -174,6 +179,41 @@ def elf(r):
     return "ELF64" if wide else "ELF32"
 
 
+def coff_import(data):
+    # IMAGE_IMPORT_OBJECT_HEADER is a packed 18-byte header. Import objects are
+    # metadata stubs, not relocatable COFF, but must still be validated strictly.
+    if len(data) < 20:
+        raise AuditError("truncated COFF import object header")
+    sig1, sig2, version, machine, _, size, hint, type_word = struct.unpack("<HHHHIIHH", data[:20])
+    if sig1 != 0 or sig2 != 0xFFFF or version != 0:
+        raise AuditError("invalid COFF import object signature/version")
+    if machine not in (0x14C, 0x8664, 0xAA64):
+        raise AuditError("unsupported COFF import object machine")
+    if size != len(data) - 20:
+        raise AuditError("COFF import object size mismatch")
+    import_type = type_word & 0x3
+    name_type = (type_word >> 2) & 0x7
+    reserved = type_word >> 5
+    if import_type not in (0, 1, 2) or name_type not in (1, 2, 3) or reserved:
+        raise AuditError("unsupported COFF import object type/name")
+    payload = data[20:]
+    first = payload.find(b"\0")
+    if first <= 0:
+        raise AuditError("missing/unterminated COFF import symbol")
+    second = payload.find(b"\0", first + 1)
+    if second <= first + 1 or second != len(payload) - 1:
+        raise AuditError("missing/unterminated COFF import DLL name")
+    try:
+        symbol = payload[:first].decode("ascii")
+        dll = payload[first + 1:second].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise AuditError("non-ASCII COFF import symbol/DLL name") from exc
+    if not symbol or not dll or dll.lower() not in ALLOWED_IMPORT_DLLS:
+        raise AuditError(f"unrecognized COFF import DLL {dll!r}")
+    reject_symbol(symbol)
+    return "COFF-import"
+
+
 def coff(r):
     machine, count, _, symoff, nsyms, optional, _ = r.unpack("<HHIIIHH", 0)
     if machine not in (0x14c, 0x8664, 0xaa64) or optional or not count:
@@ -207,8 +247,14 @@ def coff(r):
     for i in range(count):
         raw, virtual, _, size, off, reloc, lines, nreloc, nlines, flags = r.unpack("<8s6I2HI", 20 + i * 40)
         reject_section(name(raw, True), max(virtual, size))
-        if flags & 0x1000000:
-            raise AuditError("unsupported COFF extended relocation count")
+        extended = bool(flags & 0x1000000)
+        if extended:
+            if nreloc != 0xFFFF or not reloc:
+                raise AuditError("invalid COFF extended relocation header")
+            first_va, _, _ = r.unpack("<IIH", reloc)
+            if first_va < 1 or first_va > MAX_ARCHIVE_MEMBERS:
+                raise AuditError("unsupported COFF extended relocation count")
+            nreloc = first_va - 1
         if size and (off or not flags & 0x80):
             if not off:
                 raise AuditError("COFF initialized section has no data offset")
@@ -228,15 +274,92 @@ def coff(r):
 
 
 def audit_object(data):
+    if len(data) > MAX_OBJECT_BYTES:
+        raise AuditError(f"object exceeds {MAX_OBJECT_BYTES}-byte limit")
     r = Reader(data)
     magic = bytes(r.span(0, min(4, len(r.data))))
+    if data.startswith(b"!<arch>\n"):
+        raise AuditError("nested archive requires archive traversal context")
     if magic in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"):
         return macho(r)
     if magic == b"\x7fELF":
         return elf(r)
-    if len(r.data) >= 2 and r.unpack("<H", 0)[0] in (0x14c, 0x8664, 0xaa64):
-        return coff(r)
+    if len(r.data) >= 8:
+        first, signature, version, machine = r.unpack("<HHHH", 0)
+        if first == 0 and signature == 0xFFFF and version == 0 and machine in (0x14c, 0x8664, 0xaa64):
+            # Import objects have a zero signature/version followed by machine.
+            return coff_import(data)
+        if first in (0x14c, 0x8664, 0xaa64):
+            return coff(r)
     raise AuditError(f"unsupported object format (magic {magic.hex()}); bitcode, bigobj/import and fat objects are not audited")
+
+
+def _audit_archive_data(data, state, depth, label):
+    if depth > MAX_ARCHIVE_DEPTH:
+        raise AuditError(f"archive nesting exceeds {MAX_ARCHIVE_DEPTH} levels")
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise AuditError(f"archive exceeds {MAX_ARCHIVE_BYTES}-byte limit")
+    r = Reader(data)
+    if bytes(r.span(0, 8)) != b"!<arch>\n":
+        raise AuditError("unsupported archive: expected regular ar (not thin)")
+    pos, objects, formats, longnames = 8, 0, set(), b""
+    while pos < len(data):
+        state["members"] += 1
+        if state["members"] > MAX_ARCHIVE_MEMBERS:
+            raise AuditError(f"archive member count exceeds {MAX_ARCHIVE_MEMBERS}")
+        header = bytes(r.span(pos, 60))
+        if header[58:] != b"`\n" or not header[48:58].strip().isdigit():
+            raise AuditError("malformed ar member header/size")
+        size = int(header[48:58])
+        payload = bytes(r.span(pos + 60, size))
+        rawname = header[:16].rstrip(b" ")
+        if rawname == b"//":
+            longnames = payload
+        elif rawname not in (b"/", b"/SYM64/"):
+            if rawname.startswith(b"#1/"):
+                if not rawname[3:].isdigit():
+                    raise AuditError("malformed BSD extended name")
+                length = int(rawname[3:])
+                if length > size:
+                    raise AuditError("BSD extended name exceeds member")
+                name = payload[:length].rstrip(b"\0")
+                payload = payload[length:]
+            elif rawname.startswith(b"/"):
+                if not rawname[1:].isdigit():
+                    raise AuditError("invalid GNU ar name reference")
+                offset = int(rawname[1:])
+                if offset >= len(longnames) or (offset and longnames[offset - 1] not in (0, 10)):
+                    raise AuditError("ar name offset out of bounds/not an entry")
+                ends = [end for end in (longnames.find(b"/\n", offset), longnames.find(b"\0", offset)) if end >= 0]
+                if not ends:
+                    raise AuditError("unterminated ar long name")
+                name = longnames[offset:min(ends)]
+            else:
+                name = rawname.removesuffix(b"/")
+            if not name:
+                raise AuditError("empty ar member name")
+            if name not in (b"__.SYMDEF", b"__.SYMDEF SORTED", b"__.SYMDEF_64", b"__.SYMDEF_64 SORTED"):
+                try:
+                    if payload.startswith(b"!<arch>\n"):
+                        child_objects, child_formats = _audit_archive_data(payload, state, depth + 1, name)
+                        objects += child_objects
+                        formats.update(child_formats)
+                    else:
+                        state["objects"] += 1
+                        if state["objects"] > MAX_AUDITED_OBJECTS:
+                            raise AuditError(f"audited object count exceeds {MAX_AUDITED_OBJECTS}")
+                        formats.add(audit_object(payload))
+                        objects += 1
+                except AuditError as exc:
+                    raise AuditError(f"{name.decode('ascii', errors='backslashreplace')}: {exc}") from exc
+        pos += 60 + size
+        if size % 2:
+            if bytes(r.span(pos, 1)) != b"\n":
+                raise AuditError("missing/invalid ar alignment padding")
+            pos += 1
+    if not objects:
+        raise AuditError(f"archive {label!r} contains no auditable objects")
+    return objects, formats
 
 
 def audit_archive(path):
@@ -249,56 +372,7 @@ def audit_archive(path):
         data = stream.read(MAX_ARCHIVE_BYTES + 1)
     if len(data) > MAX_ARCHIVE_BYTES:
         raise AuditError("archive exceeds size limit")
-    r = Reader(data)
-    if bytes(r.span(0, 8)) != b"!<arch>\n":
-        raise AuditError("unsupported archive: expected regular ar (not thin)")
-    pos, objects, formats, longnames = 8, 0, set(), b""
-    while pos < len(data):
-        header = bytes(r.span(pos, 60))
-        if header[58:] != b"`\n" or not header[48:58].strip().isdigit():
-            raise AuditError("malformed ar member header/size")
-        size = int(header[48:58])
-        payload = r.span(pos + 60, size)
-        rawname = header[:16].rstrip(b" ")
-        if rawname == b"//":
-            longnames = bytes(payload)
-        elif rawname not in (b"/", b"/SYM64/"):
-            if rawname.startswith(b"#1/"):
-                if not rawname[3:].isdigit():
-                    raise AuditError("malformed BSD extended name")
-                length = int(rawname[3:])
-                if length > size:
-                    raise AuditError("BSD extended name exceeds member")
-                name = bytes(payload[:length]).rstrip(b"\0")
-                payload = payload[length:]
-            elif rawname.startswith(b"/"):
-                if not rawname[1:].isdigit():
-                    raise AuditError("invalid GNU ar name reference")
-                offset = int(rawname[1:])
-                if offset >= len(longnames) or (offset and longnames[offset - 1] not in (0, 10)):
-                    raise AuditError("ar name offset out of bounds/not an entry")
-                # GNU uses /\n; Microsoft COFF archives use NUL terminators.
-                ends = [end for end in (longnames.find(b"/\n", offset), longnames.find(b"\0", offset)) if end >= 0]
-                if not ends:
-                    raise AuditError("unterminated ar long name")
-                name = longnames[offset:min(ends)]
-            else:
-                name = rawname.removesuffix(b"/")
-            if name not in (b"__.SYMDEF", b"__.SYMDEF SORTED", b"__.SYMDEF_64", b"__.SYMDEF_64 SORTED"):
-                if not name:
-                    raise AuditError("empty ar member name")
-                try:
-                    formats.add(audit_object(payload))
-                except AuditError as exc:
-                    raise AuditError(f"{name.decode('ascii', errors='backslashreplace')}: {exc}") from exc
-                objects += 1
-        pos += 60 + size
-        if size % 2:
-            if bytes(r.span(pos, 1)) != b"\n":
-                raise AuditError("missing/invalid ar alignment padding")
-            pos += 1
-    if not objects:
-        raise AuditError("archive contains no auditable objects")
+    objects, formats = _audit_archive_data(data, {"members": 0, "objects": 0}, 0, path.name)
     return objects, sorted(formats)
 
 

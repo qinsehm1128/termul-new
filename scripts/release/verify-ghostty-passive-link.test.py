@@ -64,10 +64,18 @@ def coff(section=b".text", symbol=b"passive", defined=True):
     # Always use long-name references, exercising the COFF string table.
     strings = struct.pack("<I", 4 + len(section) + 1 + len(symbol) + 1) + section + b"\0" + symbol + b"\0"
     header = struct.pack("<HHIIIHH", 0x8664, 1, 0, 68, 1, 0, 0)
-    section = struct.pack("<8s6I2HI", b"/4", 0, 0, 8, 60, 0, 0, 0, 0, 0x40)
-    symname = struct.pack("<II", 0, 4 + len(strings[4:].split(b"\0", 1)[0]) + 1)
+    section_header = struct.pack("<8s6I2HI", b"/4", 0, 0, 8, 60, 0, 0, 0, 0, 0x40)
+    symname = struct.pack("<II", 0, 4 + len(section) + 1)
     sym = struct.pack("<8sIhHBB", symname, 0, int(defined), 0, 2, 0)
-    return header + section + b"\0" * 8 + sym + strings
+    return header + section_header + b"\0" * 8 + sym + strings
+
+
+def coff_import(symbol=b"RtlCopyMemory", dll=b"ntdll.dll", machine=0x8664,
+                type_word=4, size_override=None, terminator=True):
+    payload = symbol + b"\0" + dll + (b"\0" if terminator else b"")
+    size = len(payload) if size_override is None else size_override
+    header = struct.pack("<HHHHIIHH", 0, 0xFFFF, 0, machine, 0, size, 0, type_word)
+    return header + payload
 
 
 class PassiveLinkTests(unittest.TestCase):
@@ -146,6 +154,32 @@ class PassiveLinkTests(unittest.TestCase):
         data = ar(("/", b"first index"), ("/", b"second index"), ("//", names),
                   ("/0", coff()), (f"/{names.index(b'second')}", coff()))
         self.assertEqual(audit.audit_archive(self.library(data, "ghostty-vt.lib")), (2, ["COFF"]))
+
+    def test_nested_archives_are_fully_audited(self):
+        nested = ar(("inner.o/", macho()))
+        self.assertEqual(audit.audit_archive(self.library(ar(("nested.lib/", nested)))),
+                         (1, ["Mach-O64"]))
+        for obj, pattern in ((coff_import(), "COFF-import"),
+                             (coff_import(dll=b"user32.dll"), "unrecognized COFF import DLL"),
+                             (coff_import(terminator=False), "unterminated"),
+                             (coff_import(size_override=999), "size mismatch"),
+                             (coff_import(type_word=0), "type/name")):
+            with self.subTest(pattern=pattern):
+                path = self.library(ar(("import.obj/", obj)), "imports.lib")
+                if pattern == "COFF-import":
+                    self.assertEqual(audit.audit_archive(path), (1, [pattern]))
+                else:
+                    with self.assertRaisesRegex(audit.AuditError, pattern):
+                        audit.audit_archive(path)
+
+    def test_nested_archive_bounds_fail_closed(self):
+        nested = ar(("inner.o/", macho()))
+        with patch.object(audit, "MAX_ARCHIVE_DEPTH", 0):
+            with self.assertRaisesRegex(audit.AuditError, "nesting"):
+                audit.audit_archive(self.library(ar(("nested.lib/", nested))))
+        with patch.object(audit, "MAX_ARCHIVE_MEMBERS", 1):
+            with self.assertRaisesRegex(audit.AuditError, "member count"):
+                audit.audit_archive(self.library(ar(("nested.lib/", nested))))
 
     def test_empty_initializer_sections_are_allowed(self):
         obj = bytearray(macho(section=b"__mod_init_func"))
