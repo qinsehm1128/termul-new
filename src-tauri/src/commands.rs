@@ -6858,6 +6858,41 @@ pub async fn git_init(cwd: String) -> Result<(), String> {
     .map_err(|e| format!("git init task failed: {e}"))?
 }
 
+#[tauri::command]
+pub async fn git_add_ignore_rules(cwd: String, content: String) -> Result<(), String> {
+    let content_len = content.len();
+    log::info!("operation=git_add_ignore_rules phase=start content_len={content_len}");
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::project_gitignore::append_ignore_rules(std::path::Path::new(&cwd), &content)
+    })
+    .await;
+    match result {
+        Ok(Ok(outcome)) => {
+            log::info!(
+                "operation=git_add_ignore_rules phase=success outcome={} content_len={content_len}",
+                if outcome.appended {
+                    "appended"
+                } else {
+                    "no_op"
+                }
+            );
+            Ok(())
+        }
+        Ok(Err(error)) => {
+            log::error!(
+                "operation=git_add_ignore_rules phase=failure error_category=service content_len={content_len}"
+            );
+            Err(error)
+        }
+        Err(error) => {
+            log::error!(
+                "operation=git_add_ignore_rules phase=failure error_category=task_join content_len={content_len}"
+            );
+            Err(format!("git add ignore rules task failed: {error}"))
+        }
+    }
+}
+
 /// Check out an existing local or remote-tracking branch.
 #[tauri::command]
 pub async fn git_checkout_branch(

@@ -125,6 +125,7 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     .merge(classified_routes(
         Router::<AppState>::new()
             .route("/git/init", post(fs_api::git_init))
+            .route("/git/ignore-rules", post(fs_api::git_ignore_rules))
             .route("/git/status", post(git_api::get_status))
             .route("/git/diff", post(git_api::get_diff))
             .route("/git/stage", post(git_api::stage))
@@ -670,6 +671,12 @@ mod tests {
                 false,
             ),
             ("/git/stage", "POST", r#"{"cwd":"/tmp","path":"x"}"#, false),
+            (
+                "/git/ignore-rules",
+                "POST",
+                r#"{"cwd":"/tmp","content":"x"}"#,
+                false,
+            ),
             (
                 "/worktree/create",
                 "POST",

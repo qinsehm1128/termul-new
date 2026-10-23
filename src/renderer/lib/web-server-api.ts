@@ -239,6 +239,11 @@ export const webServerGit = {
     }
   },
 
+  async addIgnoreRules(cwd: string, content: string): Promise<void> {
+    const res = await postJson<void>('/git/ignore-rules', { cwd, content })
+    if (!res.success) throw new Error(res.error)
+  },
+
   async getStatus(cwd: string): Promise<GitStatusDetail[]> {
     const res = await postJson<GitStatusDetail[]>('/git/status', { cwd })
     if (!res.success) throw new Error(res.error)

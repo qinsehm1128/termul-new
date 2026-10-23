@@ -38,6 +38,42 @@ describe('web-server-api (fetch client)', () => {
     } as unknown as Response
   }
 
+  describe('webServerGit.addIgnoreRules', () => {
+    it.each([
+      '',
+      '.qin-code/\n',
+      'cache/\r\n!cache/keep\r\n'
+    ])('posts exact content %j and resolves only after host success', async (content) => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: null }))
+      await expect(webServerGit.addIgnoreRules('/new project', content)).resolves.toBeUndefined()
+      expect(mockFetch).toHaveBeenCalledWith(
+        `${window.location.origin}/git/ignore-rules`,
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cwd: '/new project', content })
+        })
+      )
+    })
+
+    it('propagates the host guard error', async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'local only', code: 'LOCAL_ONLY' })
+      )
+      await expect(webServerGit.addIgnoreRules('/p', 'x')).rejects.toThrow('local only')
+    })
+
+    it('rejects network failures', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('connection unavailable'))
+      await expect(webServerGit.addIgnoreRules('/p', 'x')).rejects.toThrow('connection unavailable')
+    })
+
+    it('rejects non-successful HTTP responses', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 403))
+      await expect(webServerGit.addIgnoreRules('/p', 'x')).rejects.toThrow('403')
+    })
+  })
+
   describe('webServerFilesystem.createDirectory', () => {
     it('POSTs /fs/mkdir with { path } and returns success', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }))

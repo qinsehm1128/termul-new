@@ -490,6 +490,7 @@ export interface GitApi {
   push: (cwd: string) => Promise<void>
   getCommitContext: (cwd: string) => Promise<GitCommitContext>
   init: (cwd: string) => Promise<void>
+  addIgnoreRules: (cwd: string, content: string) => Promise<void>
   checkoutBranch: (cwd: string, branch: string, isRemote?: boolean) => Promise<void>
   createBranch: (cwd: string, branch: string, startRef?: string) => Promise<void>
   stashSave: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<void>

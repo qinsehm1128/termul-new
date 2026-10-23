@@ -95,6 +95,43 @@ describe('gitApi (web vs desktop branch)', () => {
     expect(mockFetch).not.toHaveBeenCalled()
   }
 
+  describe('addIgnoreRules', () => {
+    const content = '.qin-code/\r\ncache/\r\n!cache/keep\r\n'
+
+    it('web posts the ordered content unchanged to the shared host route', async () => {
+      await expectWebCall(
+        () => gitApi.addIgnoreRules(CWD, content),
+        '/git/ignore-rules',
+        'POST',
+        { cwd: CWD, content },
+        { success: true, data: null }
+      )
+    })
+
+    it('desktop invokes the equivalent host command without fetching', async () => {
+      await expectDesktopCall(() => gitApi.addIgnoreRules(CWD, content), 'git_add_ignore_rules', {
+        cwd: CWD,
+        content
+      })
+    })
+
+    it('web rejects a failed host operation without falling back to desktop', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'unsafe target', code: 'GIT_IGNORE_RULES_ERROR' })
+      )
+      await expect(gitApi.addIgnoreRules(CWD, content)).rejects.toThrow('unsafe target')
+      expect(mockInvoke).not.toHaveBeenCalled()
+    })
+
+    it('desktop propagates command rejection without trying HTTP', async () => {
+      mockIsTauriContext.mockReturnValue(true)
+      mockInvoke.mockRejectedValueOnce(new Error('unsafe target'))
+      await expect(gitApi.addIgnoreRules(CWD, content)).rejects.toThrow('unsafe target')
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+  })
+
   // ---- getStatus ----
   it('getStatus: web → POST /git/status', async () => {
     await expectWebCall(

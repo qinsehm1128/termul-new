@@ -43,6 +43,7 @@ pub mod migration_detect;
 /// User-initiated merge orchestrator for the pre-rename roots (T-MIG-RUN).
 pub mod migration_run;
 mod migrations;
+mod project_gitignore;
 mod pty_tauri;
 pub use se_terminal_core::quick_terminal;
 mod quick_terminal_commands;
@@ -3736,6 +3737,7 @@ pub fn run() {
             commands::git_push,
             commands::git_get_commit_context,
             commands::git_init,
+            commands::git_add_ignore_rules,
             git_clone::git_clone,
             git_clone::git_clone_cancel,
             commands::git_checkout_branch,

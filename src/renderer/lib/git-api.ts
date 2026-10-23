@@ -82,6 +82,11 @@ export const gitApi = {
   init: (cwd: string) =>
     isTauriContext() ? invoke<void>('git_init', { cwd }) : webServerGit.init(cwd),
 
+  addIgnoreRules: (cwd: string, content: string) =>
+    isTauriContext()
+      ? invoke<void>('git_add_ignore_rules', { cwd, content })
+      : webServerGit.addIgnoreRules(cwd, content),
+
   // Desktop only: the new-project dialog offers cloning only there. Resolves
   // to the folder the repository was cloned into; `cancelClone` with the same
   // id stops it, rejecting with GIT_CLONE_CANCELLED.

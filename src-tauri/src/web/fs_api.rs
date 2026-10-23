@@ -110,6 +110,14 @@ pub struct GitInitRequest {
     pub cwd: String,
 }
 
+/// `POST /git/ignore-rules` body: `{ "cwd": "...", "content": "..." }`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIgnoreRulesRequest {
+    pub cwd: String,
+    pub content: String,
+}
+
 /// Mirrors the renderer's `MAX_FILE_SIZE` (3 MiB). `/fs/read` refuses files
 /// larger than this with `code: "FILE_TOO_LARGE"` BEFORE reading or
 /// transferring the content, matching the desktop facade's size guard.
@@ -946,6 +954,90 @@ pub async fn git_init(
     (StatusCode::OK, Json(body))
 }
 
+/// `POST /git/ignore-rules` — append an ordered block to `<cwd>/.gitignore`.
+pub async fn git_ignore_rules(
+    State(_state): State<AppState>,
+    axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    Json(req): Json<GitIgnoreRulesRequest>,
+) -> impl IntoResponse {
+    let content_len = req.content.len();
+    tracing::info!(
+        operation = "git_ignore_rules",
+        phase = "start",
+        content_len,
+        "git ignore rules mutation started"
+    );
+    if let Some(forbidden) = check_local_only::<()>(provenance) {
+        tracing::warn!(
+            operation = "git_ignore_rules",
+            phase = "failure",
+            error_category = "forbidden_ingress",
+            content_len,
+            "git ignore rules mutation rejected"
+        );
+        return (StatusCode::OK, Json(forbidden));
+    }
+    let cwd = match resolve_request_path(Path::new(&req.cwd)) {
+        Ok(path) => path,
+        Err((message, code)) => {
+            tracing::warn!(
+                operation = "git_ignore_rules",
+                phase = "failure",
+                error_category = "invalid_path",
+                error_code = code,
+                content_len,
+                "git ignore rules mutation rejected"
+            );
+            return (StatusCode::OK, Json(IpcBody::<()>::err(message, code)));
+        }
+    };
+    let content = req.content;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::project_gitignore::append_ignore_rules(&cwd, &content)
+    })
+    .await;
+    let body = match result {
+        Ok(Ok(outcome)) => {
+            tracing::info!(
+                operation = "git_ignore_rules",
+                phase = "success",
+                outcome = if outcome.appended {
+                    "appended"
+                } else {
+                    "no_op"
+                },
+                content_len,
+                "git ignore rules mutation succeeded"
+            );
+            IpcBody::<()>::ok(())
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(
+                operation = "git_ignore_rules",
+                phase = "failure",
+                error_category = "service",
+                content_len,
+                "git ignore rules mutation failed"
+            );
+            IpcBody::<()>::err(error, "GIT_IGNORE_RULES_ERROR")
+        }
+        Err(error) => {
+            tracing::error!(
+                operation = "git_ignore_rules",
+                phase = "failure",
+                error_category = "task_join",
+                content_len,
+                "git ignore rules mutation failed"
+            );
+            IpcBody::<()>::err(
+                format!("git ignore rules task failed: {error}"),
+                "GIT_IGNORE_RULES_ERROR",
+            )
+        }
+    };
+    (StatusCode::OK, Json(body))
+}
+
 /// `GET /shells` — detect available shells. Reuses `crate::detect_shells_inner`
 /// (the same logic the `#[tauri::command] detect_shells` calls). Returns
 /// `{ success: true, data: DetectedShells }`.
@@ -1164,6 +1256,7 @@ mod tests {
             .route("/fs/copy", axum::routing::post(copy))
             .route("/fs/copy-into", axum::routing::post(copy_into))
             .route("/git/init", axum::routing::post(git_init))
+            .route("/git/ignore-rules", axum::routing::post(git_ignore_rules))
             .route(
                 "/git/status",
                 axum::routing::post(crate::web::git_api::get_status),
@@ -1398,6 +1491,97 @@ mod tests {
             // Expected only when git is unavailable on the host.
             assert_eq!(body.code.as_deref(), Some("GIT_INIT_ERROR"));
         }
+    }
+
+    #[tokio::test]
+    async fn git_ignore_rules_appends_ordered_block_and_retries_idempotently() {
+        let dir = TempDir::new("ignore-append");
+        let target = dir.path().join(".gitignore");
+        let existing = b"# existing\r\ncache/\r\n!cache/keep\r\n";
+        fs::write(&target, existing).unwrap();
+        let req = serde_json::json!({
+            "cwd": dir.path().to_string_lossy(),
+            "content": "cache/\n!cache/retained\n.qin-code/\n"
+        });
+        for _ in 0..2 {
+            let resp = post_json(test_state(), "/git/ignore-rules", &req).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+            assert!(body.success, "{:?}", body.error);
+        }
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"# existing\r\ncache/\r\n!cache/keep\r\ncache/\r\n!cache/retained\r\n.qin-code/\r\n"
+        );
+        assert!(
+            !dir.path().join(".git").exists(),
+            "templates need no repository"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_ignore_rules_blank_input_creates_no_file() {
+        let dir = TempDir::new("ignore-blank");
+        let req = serde_json::json!({"cwd": dir.path().to_string_lossy(), "content": " \r\n\t"});
+        let resp = post_json(test_state(), "/git/ignore-rules", &req).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "{:?}", body.error);
+        assert!(!dir.path().join(".gitignore").exists());
+    }
+
+    #[tokio::test]
+    async fn git_ignore_rules_rejects_public_ingress_before_writing() {
+        let dir = TempDir::new("ignore-public");
+        let target = dir.path().join(".gitignore");
+        fs::write(&target, b"existing\n").unwrap();
+        let req = serde_json::json!({"cwd": dir.path().to_string_lossy(), "content": "new/"});
+        let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
+        let resp = post_json_from(test_state(), "/git/ignore-rules", &req, remote).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        assert_eq!(fs::read(&target).unwrap(), b"existing\n");
+    }
+
+    #[tokio::test]
+    async fn git_ignore_rules_rejects_traversal_before_writing() {
+        let dir = TempDir::new("ignore-traversal");
+        let cwd = dir.path().join("child").join("..");
+        let req = serde_json::json!({"cwd": cwd.to_string_lossy(), "content": "new/"});
+        let resp = post_json(test_state(), "/git/ignore-rules", &req).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
+        assert!(!dir.path().join(".gitignore").exists());
+    }
+
+    #[tokio::test]
+    async fn git_ignore_rules_surfaces_shared_service_failure_without_changes() {
+        let dir = TempDir::new("ignore-invalid");
+        let target = dir.path().join(".gitignore");
+        fs::write(&target, b"existing\n").unwrap();
+        let req = serde_json::json!({"cwd": dir.path().to_string_lossy(), "content": "new\0rule"});
+        let resp = post_json(test_state(), "/git/ignore-rules", &req).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(body.code.as_deref(), Some("GIT_IGNORE_RULES_ERROR"));
+        assert_eq!(fs::read(&target).unwrap(), b"existing\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn git_ignore_rules_rejects_symlink_without_changing_external_target() {
+        let dir = TempDir::new("ignore-symlink");
+        let outside = TempDir::new("ignore-outside");
+        let target = outside.path().join("keep");
+        fs::write(&target, b"untouched\n").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join(".gitignore")).unwrap();
+        let req = serde_json::json!({"cwd": dir.path().to_string_lossy(), "content": "new/"});
+        let resp = post_json(test_state(), "/git/ignore-rules", &req).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(body.code.as_deref(), Some("GIT_IGNORE_RULES_ERROR"));
+        assert_eq!(fs::read(&target).unwrap(), b"untouched\n");
     }
 
     #[tokio::test]

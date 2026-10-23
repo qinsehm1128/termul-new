@@ -2,6 +2,8 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import type { ProjectTemplate } from '@shared/types/project-template.types'
 import { runtimeT } from '@/i18n/runtime'
 import { filesystemApi } from './api'
+import { gitApi } from './git-api'
+import { logFrontendError } from './log-api'
 
 export const BUILT_IN_TEMPLATES: ProjectTemplate[] = [
   {
@@ -410,7 +412,27 @@ export async function scaffoldProject(
       for (const file of template.files) {
         const filePath = joinPath(normalizedPath, file.path)
         const content = interpolate(file.content, projectName)
-        const fileResult = await filesystemApi.createFile(filePath, content)
+        let fileResult: IpcResult<void>
+        if (file.path === '.gitignore') {
+          try {
+            // The host preserves existing rules and their order, including
+            // negations. Never use the truncating generic file writer here.
+            await gitApi.addIgnoreRules(normalizedPath, content)
+            fileResult = { success: true, data: undefined }
+          } catch (error) {
+            void logFrontendError({
+              source: 'project-scaffold.gitignore',
+              message: 'Failed to merge template .gitignore rules'
+            })
+            fileResult = {
+              success: false,
+              error: error instanceof Error ? error.message : String(error),
+              code: 'GITIGNORE_MERGE_ERROR'
+            }
+          }
+        } else {
+          fileResult = await filesystemApi.createFile(filePath, content)
+        }
         if (!fileResult.success) {
           return {
             success: false,

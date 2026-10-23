@@ -45,6 +45,32 @@ interface DomainCheck {
 const LIB_DIR = join(__dirname, '..')
 const ROOT_DIR = join(__dirname, '..', '..', '..', '..')
 const TESTS_DIR = __dirname
+
+describe('Project Gitignore append parity', () => {
+  it('registers the Tauri command and delegates both host transports to one service', () => {
+    const lib = readFileSync(join(ROOT_DIR, 'src-tauri/src/lib.rs'), 'utf-8')
+    const commands = readFileSync(join(ROOT_DIR, 'src-tauri/src/commands.rs'), 'utf-8')
+    const web = readFileSync(join(ROOT_DIR, 'src-tauri/src/web/fs_api.rs'), 'utf-8')
+    const router = readFileSync(join(ROOT_DIR, 'src-tauri/src/web/router.rs'), 'utf-8')
+    expect(lib).toContain('mod project_gitignore;')
+    expect(lib).toContain('git_add_ignore_rules,')
+    expect(commands).toMatch(/fn git_add_ignore_rules\(/)
+    expect(commands).toContain('project_gitignore::append_ignore_rules')
+    expect(web).toContain('project_gitignore::append_ignore_rules')
+    expect(router).toContain('.route("/git/ignore-rules", post(fs_api::git_ignore_rules))')
+  })
+
+  it('exposes equivalent renderer branches and a shared runtime-neutral contract', () => {
+    const facade = readFileSync(join(LIB_DIR, 'git-api.ts'), 'utf-8')
+    const web = readFileSync(join(LIB_DIR, 'web-server-api.ts'), 'utf-8')
+    const contract = readFileSync(join(ROOT_DIR, 'src/shared/types/ipc.types.ts'), 'utf-8')
+    expect(contract).toContain('addIgnoreRules: (cwd: string, content: string) => Promise<void>')
+    expect(facade).toContain("invoke<void>('git_add_ignore_rules', { cwd, content })")
+    expect(facade).toContain('webServerGit.addIgnoreRules(cwd, content)')
+    expect(web).toContain("postJson<void>('/git/ignore-rules', { cwd, content })")
+  })
+})
+
 let semanticRepositoryFindingsCache: GuardFinding[] | undefined
 
 function semanticRepositoryFindings(): GuardFinding[] {
