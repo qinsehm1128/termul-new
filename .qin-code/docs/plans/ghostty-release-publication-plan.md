@@ -5,63 +5,60 @@ id: ghostty-release-publication
 title: Ghostty VT 正式发布进度与失败修复计划
 date: 2026-10-23
 status: draft
-source: user:2026-10-23T15:13:55+08:00; github-run:39917645711; github-run:39919761413
+source: user:2026-10-23T15:13:55+08:00; github-run:39917645711; github-run:39919761413; commit:ac1e2308; commit:951d3628; agent://release-preflight-review
 updated: 2026-10-23
 lang: zh-CN
 ---
 
 ## 目标
 
-按用户 2026-10-23 15:13:55 +08:00 请求，发布当前已验收的 Ghostty VT 版本及正式 tag。整个过程不在本机安装或启动新安装包。
-
-既有上线流程是 GitHub 正式 Release 和桌面/server 更新清单，不包含未指定 VPS 的手动部署或重启。发布产物为 Windows x64、macOS arm64、Linux standalone `se-server`，不增加 Intel Mac/Linux 桌面目标。
+按用户 2026-10-23 15:13:55 +08:00 请求，发布已验收的 Ghostty VT 版本及正式 tag。全程不在本机安装或启动新安装包，不擅自部署或重启 VPS。交付为 GitHub Release、桌面/server 更新清单，平台为 Windows x64、macOS arm64、Linux standalone `se-server`。
 
 ## 非目标
 
-- 不本地安装、不执行应用更新/重启，不运行安装脚本。
-- 不未经指定部署或重启 VPS。
-- 不强推、覆盖或删除已发布 tag，不绕过签名/native/产物审计门禁。
+- 不执行本地安装、应用更新/重启、安装脚本或未指定 VPS 操作。
+- 不强推、覆盖或删除已有 tag，不绕过签名/native/产物审计门禁。
+- 不增加 Intel Mac/Linux 桌面目标。
 
 ## 任务
 
-### 已完成
+### 首次发布与诊断
 
-- 初次发布前确认远端 latest 为 `v0.15.21`，main 无新增远端提交，`v0.15.22` 尚不存在。
-- 四个版本文件提升为 0.15.22，锁文件精确同步。版本对齐、三个 TypeScript 工程、发布与 parity 测试通过。
-- 提交 `f66fb55fd16d5726b3af47031e71a48ac9b636d6`。
-- 15:25:38 +08:00 原子推送 main 和 annotated tag `v0.15.22`。远端 tag 对象 `bc0bc9c86ee7941db67271d2aaaa1683aa8de513`，peel 正确指向 f66fb55f。
-- Release run `39917645711` 已 completed/failure，仅 Windows passive-link 审计失败。macOS 与 Linux server 构建成功。Release 保持 draft，线上仍为 `v0.15.21`，不能声称上线成功。
-- 父会话新增手动远端 `.github/workflows/ghostty-native-preflight.yml`，提交并推送 `50495873397f416d2148f3bf4ef3bd686642f499`。
-- Windows 诊断预检 `39919761413` completed/failure，真实 native VT 测试通过，passive-link 审计失败。取得真实静态库诊断 artifact，未下载或执行安装包。
+- `f66fb55fd16d5726b3af47031e71a48ac9b636d6` 四个版本文件对齐 0.15.22，发布/类型检查通过。15:25:38 +08:00 原子推送 main 与 annotated `v0.15.22`。tag 对象 `bc0bc9c86ee7941db67271d2aaaa1683aa8de513` peel 正确。
+- Release `39917645711` completed/failure，仅 Windows passive-link 审计失败，macOS/Linux server 成功。`v0.15.22` 保持 draft，线上仍 `v0.15.21`。
+- 失败原因：组合静态库内 `ntdll.lib` 为嵌套 ar，旧审计器拒绝 `magic 213c6172`。Windows native VT 测试本身通过。
+- `50495873397f416d2148f3bf4ef3bd686642f499` 新增手动远端预检。诊断 run `39919761413` 重现失败并下载真实静态库，未下载或执行安装包。
 
-### 当前阻塞与修复
+### 已完成的修复与验证
 
-Windows job `120295045359` 已通过真实 native VT 测试，但在 `Verify passive Ghostty native linkage` 被拒绝：
+- `951d362871b1ddb787aba54301af7c7fedd52e48` 修复两份 passive-link Python 文件：有界递归 ar、严格必要 COFF import 验证、扩展 relocation 边界。未知或畸形成员继续拒绝。
+- 父会话独立复验：Python3.11/3.12 各16测试通过，真实 Windows 3627 个 COFF/COFF-import 对象通过，既有 macOS 12 个 Mach-O64 对象通过。
+- 真实 Windows 输入为 `/Users/qs/.qin-code/scratch/se-release-verify-G6Y36RPQ/windows-native-39919761413/se-ghostty-vt-2898f66b4479c1fd/out/native/lib/ghostty-vt-static.lib`。macOS 输入为 `/Users/qs/.qin-code/scratch/se-ghostty-vt-prebuilt-verified/lib/libghostty-vt.a`。
+- 独立审查 `release-windows-audit-review` 正审查提交 951d3628。未收到批准前不打新 tag。
+- 预检独立审查发现 PowerShell 可能覆盖前一条测试失败、手动预检未绑定不可变 SHA、诊断缺失仅告警。`ac1e2308bf744f85051818a39ced2b9111930f9c` 已修复，复审 approved。
+- preflight/release/nightly 全部五个 passive self-test + audit 步骤显式 bash + `set -euo pipefail`。手动预检输入 `expected_revision` 为完整 SHA，checkout HEAD 与 workflow GITHUB_SHA 均须相同。诊断 artifact 缺失为 error。
+- 新增9项真实执行工作流 shell 的失败传播和 SHA 漂移测试。全部发布/parity 240测试、三个 TypeScript 工程、Biome 通过。parity 既有 System/Keyboard/QuickTerminal 推荐测试缺失警告保持记录。
+- 下一补丁版 0.15.23 的三个源码版本文件与精确根锁文件已准备，版本对齐、locked Cargo metadata、typecheck、240测试通过。尚未创建新 tag。
 
-```text
-FAIL passive-link audit: ...\Windows Kits\10\Lib\10.0.26100.0\um\x64\ntdll.lib:
-unsupported object format (magic 213c6172)
-```
+### 后续顺序与并行约束
 
-这是上游组合静态库中嵌套的 ar archive（`!<ar`），不是 native 测试失败。失败关闭的门禁保持原样，不将未知 member 直接忽略。
+1. 版本提交形成待发布最终 SHA，推送 main，以此完整 SHA 运行 `ghostty-native-preflight.yml --ref main -f expected_revision=<sha>`。
+2. 远端预检可与独立代码审查并行，但两者均通过前禁止打 tag。有审查修复则新 commit、新 SHA 重新预检。
+3. 核实预检 run head_sha 与完成状态，只有同 SHA 审查批准、native 和 passive 审计成功，才为该 SHA 创建新 annotated `v0.15.23`。不移动已有 `v0.15.22`。
+4. 将 Goal acceptance 更新为实际 version/commit/release run，跟踪正式构建、签名、发布与公开清单。成功后结束发布任务并取消有效 CI loop。
 
-- `release-windows-archive-fix` 独占两个被动链接审计 Python 文件，实现有界递归 archive 与严格必要的 COFF import 审计及回归。
-- 真实产物：`/Users/qs/.qin-code/scratch/se-release-verify-G6Y36RPQ/windows-native-39919761413/se-ghostty-vt-2898f66b4479c1fd/out/native/lib/ghostty-vt-static.lib`，已交给该 worker 回归。
-- worker 完成后，父会话复验真实 Windows 产物及测试，并独立审查。只提交本任务改动，不触碰既有 knowledge/reference lock 文件。
-- 推送修复到 main 后触发手动 Windows native preflight。只有远端 native 与被动链接门禁通过，才准备新补丁版本 `v0.15.23`。不移动已有 `v0.15.22`。
-- 首个 `gh run watch` 与 HTTP/1.1 watcher 均曾因 EOF 退出，这只说明本地监听失败，不代表远端 CI 状态。改用低频 loop 和 `GODEBUG=http2client=0 gh` 的单次查询核实。
-- 发布成功后更新 Goal 为实际版本、commit、run，执行只读验收并取消 loop `l396`。
+旧 `gh run watch` 两次 EOF 仅代表本地监听断开。使用 `GODEBUG=http2client=0 gh` 单次查询。旧 loop `l396` 已在旧 run 终止时取消，触发新 CI 后恢复低频追踪。既有 knowledge/reference lock 和生成的 `__pycache__` 不纳入本次提交。
 
 ## 验收
 
-只读线上校验脚本：`/Users/qs/.qin-code/scratch/se-release-verify-G6Y36RPQ/verify_release.py`。当前 Goal acceptance 暂绑定 `v0.15.22`/f66fb55f/run39917645711，正式发布修复版后须明确更新为实际新版本、commit 和 run。
+只读脚本：`/Users/qs/.qin-code/scratch/se-release-verify-G6Y36RPQ/verify_release.py`。Goal 当前旧版本绑定必须在新发布 run 产生后更新，不能误验旧失败 run。
 
 必须同时满足：
 
-1. Release workflow completed/success，构建 commit 与发布 tag 精确一致。
-2. 非 draft、非 prerelease 的正式 Release，`releases/latest` 指向该版本。
-3. 桌面包、server、签名、SHA256SUMS 与两个更新 JSON 全部 uploaded 且非空。
-4. 公共 latest/stable 更新 JSON 版本正确，每个平台带非空签名，下载 URL 指向当前 tag 的真实资产。
-5. 不执行本地安装，也不将下载 metadata/静态诊断库误称为安装。
+1. Release workflow completed/success，构建 commit 与 tag 精确一致。
+2. 非 draft、非 prerelease，GitHub latest 指向新版本。
+3. 桌面包、server、签名、SHA256SUMS、两个更新 JSON uploaded 且非空。
+4. 公开 latest/stable 清单版本正确，各平台有签名，下载 URL 指向当前 tag 的真实资产。
+5. 未在本机安装/启动新包，未擅自部署或重启 VPS。
 
-可观察入口：GitHub Actions run 页面、Release tag 页面，以及 `https://github.com/qinsehm1128/termul-new/releases/latest/download/latest.json`。
+公开入口为 Actions run、Release tag 页面及 `https://github.com/qinsehm1128/termul-new/releases/latest/download/latest.json`。
