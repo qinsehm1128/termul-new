@@ -20,7 +20,11 @@ import type {
   SessionWorkspaceV1,
   SessionWorkspaceWriteOutcome
 } from './session-workspace.types'
-import type { TerminalScreenEngine } from './terminal-screen.types'
+import type {
+  ScreenObservationStatus,
+  TerminalScreenEngine,
+  TerminalScreenReadResult
+} from './terminal-screen.types'
 import type { ConversationHistoryPageV1, GetSessionPayloadPageRequest } from './web-protocol.types'
 import type { WorkspaceManifest, WriteOutcome } from './workspace-manifest.types'
 
@@ -116,6 +120,9 @@ export interface TerminalInfo {
  * cols/rows/claim — pinned by the Rust serde shape tests).
  */
 export interface SpawnedTerminal extends TerminalInfo {
+  /** Actual immutable host mode, not the current project preference. Older hosts omit it. */
+  terminalScreenEngine?: TerminalScreenEngine
+  screenObservation?: ScreenObservationStatus
   pid: number
   cols: number
   rows: number
@@ -175,6 +182,9 @@ export interface TerminalCellSize {
  * claim: attach consumes the credential, it never issues one.
  */
 export interface TerminalAttachResult {
+  /** Actual immutable host mode, not the current project preference. Older hosts omit it. */
+  terminalScreenEngine?: TerminalScreenEngine
+  screenObservation?: ScreenObservationStatus
   id: string
   shell: string
   cwd: string
@@ -208,6 +218,9 @@ export interface TerminalReplayCoverage {
  * Conversation identity is omitted for scope-less project terminals.
  */
 export interface TerminalStatus {
+  /** Actual immutable host mode, not the current project preference. Older hosts omit it. */
+  terminalScreenEngine?: TerminalScreenEngine
+  screenObservation?: ScreenObservationStatus
   id: string
   shell: string
   cwd: string
@@ -497,6 +510,13 @@ export interface TerminalApi {
    * project-layout restore adopts by identity when this is present.
    */
   list?: () => Promise<IpcResult<TerminalStatus[]>>
+  /** Read-only host observation. Desktop verifies claim; web verifies the bound terminal scope. */
+  screenStatus?: (terminalId: string, claim: string) => Promise<IpcResult<ScreenObservationStatus>>
+  screenRead?: (
+    terminalId: string,
+    claim: string,
+    maxLines?: number
+  ) => Promise<IpcResult<TerminalScreenReadResult>>
   /**
    * Resume a passive SessionWorkspace terminal reference without spawning.
    * The host validates the Conversation scope, rotates a one-time claim, and

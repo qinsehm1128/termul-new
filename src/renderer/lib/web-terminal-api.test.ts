@@ -1,8 +1,13 @@
+import type {
+  ScreenObservationStatus,
+  TerminalScreenReadResult
+} from '@shared/types/terminal-screen.types'
 import {
   WEB_TERMINAL_BINARY_KIND,
   WEB_TERMINAL_BINARY_PROTOCOL
 } from '@shared/types/web-terminal-protocol.types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useScreenObservationStore } from '@/stores/screen-observation-store'
 import { resolveTerminalWsUrl, WebTerminalClient } from './web-terminal-api'
 
 vi.mock('@/lib/log-api', () => ({
@@ -1425,6 +1430,181 @@ describe('WebTerminalClient frame handling & request lifecycle', () => {
       internals.reconnectTimer = null
     }
     client.dispose()
+  })
+
+  describe('host screen observation transport', () => {
+    const readyStatus: ScreenObservationStatus = {
+      terminalScreenEngine: 'ghostty-vt',
+      state: 'ready',
+      reason: null,
+      capturedSeq: 42,
+      appliedSeq: 42,
+      observerBuildId: 'observer-test-build'
+    }
+    const unavailableStatus: ScreenObservationStatus = {
+      ...readyStatus,
+      state: 'catching-up',
+      capturedSeq: 44
+    }
+
+    it.each([
+      readyStatus,
+      unavailableStatus
+    ])('round-trips $state screen_status using only the terminal id', async (status) => {
+      const client = new WebTerminalClient(
+        'ws://test/terminal/ws',
+        FakeWebSocket as unknown as typeof WebSocket
+      )
+      const internals = client as unknown as ClientInternals
+      try {
+        await client.connect()
+        const socket = internals.socket
+        vi.spyOn(socket, 'send').mockImplementation((raw: string) => {
+          socket.sent.push(raw)
+          const request = JSON.parse(raw) as { id: string }
+          socket.emitReply({ id: request.id, success: true, data: status })
+        })
+
+        expect(await client.screenStatus('pty-screen')).toEqual({ success: true, data: status })
+        expect(findSentRequest(socket, 'screen_status')?.payload).toEqual({
+          terminalId: 'pty-screen'
+        })
+        expect(internals.trackers.has('pty-screen')).toBe(false)
+        expect(findSentRequest(socket, 'attach')).toBeUndefined()
+      } finally {
+        client.dispose()
+      }
+    })
+
+    it.each([
+      {
+        label: 'ready bounded screen',
+        maxLines: 12,
+        data: { status: readyStatus, text: 'host screen\n', appliedSeq: 42, truncated: true }
+      },
+      {
+        label: 'nonready null screen',
+        maxLines: undefined,
+        data: { status: unavailableStatus, text: null, appliedSeq: null, truncated: false }
+      }
+    ] satisfies {
+      label: string
+      maxLines: number | undefined
+      data: TerminalScreenReadResult
+    }[])('round-trips $label through screen_read without claim, generation, or project scope', async ({
+      maxLines,
+      data
+    }) => {
+      const client = new WebTerminalClient(
+        'ws://test/terminal/ws',
+        FakeWebSocket as unknown as typeof WebSocket
+      )
+      const internals = client as unknown as ClientInternals
+      try {
+        await client.connect()
+        const socket = internals.socket
+        vi.spyOn(socket, 'send').mockImplementation((raw: string) => {
+          socket.sent.push(raw)
+          const request = JSON.parse(raw) as { id: string }
+          socket.emitReply({ id: request.id, success: true, data })
+        })
+
+        expect(await client.screenRead('pty-screen', maxLines)).toEqual({ success: true, data })
+        expect(findSentRequest(socket, 'screen_read')?.payload).toEqual(
+          maxLines === undefined
+            ? { terminalId: 'pty-screen' }
+            : { terminalId: 'pty-screen', maxLines }
+        )
+        expect(internals.trackers.has('pty-screen')).toBe(false)
+        expect(findSentRequest(socket, 'attach')).toBeUndefined()
+      } finally {
+        client.dispose()
+      }
+    })
+
+    it.each([
+      'screenStatus',
+      'screenRead'
+    ] as const)('preserves the host authorization error from %s', async (method) => {
+      const client = new WebTerminalClient(
+        'ws://test/terminal/ws',
+        FakeWebSocket as unknown as typeof WebSocket
+      )
+      const internals = client as unknown as ClientInternals
+      try {
+        await client.connect()
+        const socket = internals.socket
+        vi.spyOn(socket, 'send').mockImplementation((raw: string) => {
+          socket.sent.push(raw)
+          const request = JSON.parse(raw) as { id: string }
+          socket.emitReply({
+            id: request.id,
+            success: false,
+            code: 'UNAUTHORIZED',
+            error: 'Unauthorized'
+          })
+        })
+
+        expect(await client[method]('pty-screen')).toEqual({
+          success: false,
+          code: 'UNAUTHORIZED',
+          error: 'Unauthorized'
+        })
+      } finally {
+        client.dispose()
+      }
+    })
+
+    it('passively caches actual host engine/status from list without polling or attaching', async () => {
+      vi.useFakeTimers()
+      useScreenObservationStore.setState({ byPtyId: {} })
+      const client = new WebTerminalClient(
+        'ws://test/terminal/ws',
+        FakeWebSocket as unknown as typeof WebSocket
+      )
+      const internals = client as unknown as ClientInternals
+      const terminal = {
+        id: 'pty-screen',
+        shell: 'zsh',
+        cwd: '/tmp/se',
+        pid: 9,
+        cols: 80,
+        rows: 24,
+        projectId: 'proj-1',
+        terminalScreenEngine: 'ghostty-vt' as const,
+        screenObservation: readyStatus
+      }
+      try {
+        await client.connect()
+        const socket = internals.socket
+        const send = socket.send.bind(socket)
+        vi.spyOn(socket, 'send').mockImplementation((raw: string) => {
+          const request = JSON.parse(raw) as { id: string; type: string }
+          if (request.type !== 'list') return send(raw)
+          socket.sent.push(raw)
+          socket.emitReply({ id: request.id, success: true, data: { terminals: [terminal] } })
+        })
+
+        expect(await client.list({ projectId: 'proj-1' })).toEqual({
+          success: true,
+          data: { terminals: [terminal] }
+        })
+        expect(useScreenObservationStore.getState().byPtyId['pty-screen']).toMatchObject({
+          terminalScreenEngine: 'ghostty-vt',
+          status: readyStatus
+        })
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(socket.sent.map((raw) => (JSON.parse(raw) as { type: string }).type)).toEqual([
+          'authenticate',
+          'list'
+        ])
+        expect(internals.trackers.has('pty-screen')).toBe(false)
+      } finally {
+        client.dispose()
+        useScreenObservationStore.setState({ byPtyId: {} })
+        vi.useRealTimers()
+      }
+    })
   })
 
   it('lists live host PTYs and watches without a claim', async () => {

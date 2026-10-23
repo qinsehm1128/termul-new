@@ -24,6 +24,10 @@ import type {
   TerminalSpawnOptions,
   TerminalStatus
 } from '@shared/types/ipc.types'
+import type {
+  ScreenObservationStatus,
+  TerminalScreenReadResult
+} from '@shared/types/terminal-screen.types'
 import {
   decodeWebTerminalBinaryFrame,
   readTerminalResourceFailure,
@@ -36,6 +40,7 @@ import {
 } from '@shared/types/web-terminal-protocol.types'
 import { getRemoteAccessCredential } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
+import { useScreenObservationStore } from '@/stores/screen-observation-store'
 
 const REQUEST_TIMEOUT_MS = 15_000
 const RECONNECT_BASE_MS = 500
@@ -354,12 +359,32 @@ export class WebTerminalClient {
     return this.performAttach(terminalId, claim, lastSeq)
   }
 
+  screenStatus(terminalId: string): Promise<IpcResult<ScreenObservationStatus>> {
+    return this.request('screen_status', { terminalId })
+  }
+
+  screenRead(terminalId: string, maxLines?: number): Promise<IpcResult<TerminalScreenReadResult>> {
+    return this.request('screen_read', {
+      terminalId,
+      ...(maxLines === undefined ? {} : { maxLines })
+    })
+  }
+
   /** Enumerate live host PTYs for a conversation or project (companion viewer). */
   list(scope: {
     conversationId?: string
     projectId?: string
   }): Promise<IpcResult<WebTerminalListResult>> {
-    return this.request('list', scope)
+    return this.request<WebTerminalListResult>('list', scope).then((result) => {
+      if (result.success)
+        for (const terminal of result.data.terminals) {
+          useScreenObservationStore.getState().recordHost(terminal.id, {
+            terminalScreenEngine: terminal.terminalScreenEngine,
+            status: terminal.screenObservation
+          })
+        }
+      return result
+    })
   }
 
   /**
@@ -934,6 +959,9 @@ export function createWebTerminalApi(): TerminalApi {
       // project) and is not an unscoped Core identity catalog.
       return { success: true, data: [] }
     },
+    // The server uses the bound WS scope and current generation, never projectId or a client claim.
+    screenStatus: (terminalId) => client.screenStatus(terminalId),
+    screenRead: (terminalId, _claim, maxLines) => client.screenRead(terminalId, maxLines),
     resume: (request) => client.resume(request),
     attach: (terminalId, claim, lastSeq) => client.attachWithCursor(terminalId, claim, lastSeq),
     watch: (terminalId, lastSeq) => client.watch(terminalId, lastSeq),

@@ -26,6 +26,10 @@ import type {
   TerminalSpawnOptions,
   TerminalStatus
 } from '@shared/types/ipc.types'
+import type {
+  ScreenObservationStatus,
+  TerminalScreenReadResult
+} from '@shared/types/terminal-screen.types'
 import { Channel, type InvokeArgs, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { logFrontendError } from './log-api'
@@ -80,6 +84,8 @@ type SharedListenerEntry<T> = {
 const IPC_COMMANDS = {
   SPAWN: 'terminal_spawn',
   LIST: 'terminal_list',
+  SCREEN_STATUS: 'terminal_screen_status',
+  SCREEN_READ: 'terminal_screen_read',
   RESUME: 'terminal_resume',
   ATTACH: 'terminal_attach',
   WATCH: 'terminal_watch',
@@ -632,6 +638,14 @@ export function createTauriTerminalApi(): TerminalApi {
      * second attach from `latestSeq` aborted that forwarder and dropped the
      * in-flight replay.
      */
+    screenStatus: (terminalId, claim) =>
+      invokeIpc<ScreenObservationStatus>(IPC_COMMANDS.SCREEN_STATUS, { terminalId, claim }),
+    screenRead: (terminalId, claim, maxLines) =>
+      invokeIpc<TerminalScreenReadResult>(IPC_COMMANDS.SCREEN_READ, {
+        terminalId,
+        claim,
+        maxLines
+      }),
     async resume(request: TerminalResumeRequest): Promise<IpcResult<TerminalResumeGrant>> {
       const handoff = beginLiveHandoff(request.terminalId, request.lastSeq, 'resume')
       const replayChannel = createTerminalDataChannel(request.terminalId)

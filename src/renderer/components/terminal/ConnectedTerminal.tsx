@@ -17,6 +17,7 @@ import {
 import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { TerminalScreenObservationStatus } from './TerminalScreenObservationStatus'
 import '@xterm/xterm/css/xterm.css'
 import type { PrimaryTerminalDataHandle, TerminalReplayCoverage } from '@shared/types/ipc.types'
 import { useShallow } from 'zustand/shallow'
@@ -2684,6 +2685,7 @@ function ConnectedTerminalComponent({
           >
             <div ref={containerRef} className="w-full h-full" />
           </div>
+          <TerminalScreenObservationStatus terminalId={externalTerminalId ?? targetId} />
           {parkedByPhone && !isMobileWebShell ? (
             <div
               className="pointer-events-none absolute inset-x-3 top-3 z-40 flex justify-center"

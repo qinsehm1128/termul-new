@@ -26,6 +26,63 @@ describe('tauri-terminal-api', () => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
   })
 
+  it('sends the live terminal claim for host screen status without project authority', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    const status = {
+      terminalScreenEngine: 'ghostty-vt',
+      state: 'ready',
+      reason: null,
+      capturedSeq: 4,
+      appliedSeq: 4,
+      observerBuildId: 'test-build'
+    }
+    mockInvoke.mockResolvedValue({ success: true, data: status })
+    const { createTauriTerminalApi } = await import('../tauri-terminal-api')
+    const api = createTauriTerminalApi()
+    expect(await api.screenStatus?.('pty-1', 'claim-1')).toEqual({ success: true, data: status })
+    expect(mockInvoke).toHaveBeenCalledWith('terminal_screen_status', {
+      terminalId: 'pty-1',
+      claim: 'claim-1'
+    })
+  })
+
+  it('sends bounded screen read options with the claim and preserves unavailable evidence', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    const reply = {
+      status: {
+        terminalScreenEngine: 'ghostty-vt',
+        state: 'degraded',
+        reason: 'crash',
+        capturedSeq: 5,
+        appliedSeq: 4,
+        observerBuildId: 'test-build'
+      },
+      text: null,
+      appliedSeq: null,
+      truncated: false
+    }
+    mockInvoke.mockResolvedValue({ success: true, data: reply })
+    const { createTauriTerminalApi } = await import('../tauri-terminal-api')
+    const api = createTauriTerminalApi()
+    expect(await api.screenRead?.('pty-1', 'claim-1', 40)).toEqual({ success: true, data: reply })
+    expect(mockInvoke).toHaveBeenCalledWith('terminal_screen_read', {
+      terminalId: 'pty-1',
+      claim: 'claim-1',
+      maxLines: 40
+    })
+  })
+
+  it('does not turn a rejected screen claim into successful empty evidence', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    const rejected = {
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'invalid terminal claim' }
+    }
+    mockInvoke.mockResolvedValue(rejected)
+    const { createTauriTerminalApi } = await import('../tauri-terminal-api')
+    expect(await createTauriTerminalApi().screenRead?.('pty-1', 'old-claim', 40)).toEqual(rejected)
+  })
+
   it('shares one Tauri listener across multiple onExit subscribers and tears down after last unsubscribe', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
 

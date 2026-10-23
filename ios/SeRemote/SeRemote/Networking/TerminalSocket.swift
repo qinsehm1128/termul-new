@@ -7,6 +7,7 @@ struct SpawnedTerminal: Decodable, Sendable {
     var pid: Int?
     var cols: Int?
     var rows: Int?
+    var terminalScreenEngine: HostTerminalScreenEngine?
     var claim: String?
 }
 
@@ -17,6 +18,7 @@ struct TerminalAttachResult: Decodable, Sendable {
     var pid: Int?
     var cols: Int?
     var rows: Int?
+    var terminalScreenEngine: HostTerminalScreenEngine?
     var latestSeq: Int?
     var gap: Bool?
 }
@@ -40,10 +42,12 @@ struct LiveTerminalSummary: Decodable, Identifiable, Sendable {
     var pid: Int?
     var cols: Int?
     var rows: Int?
+    var terminalScreenEngine: HostTerminalScreenEngine?
     var conversationId: String?
     var projectId: String?
     var title: String?
     var gitBranch: String?
+    var screenObservation: HostScreenObservation?
 }
 
 @MainActor
@@ -143,6 +147,15 @@ final class TerminalSocket {
             as: LiveTerminalList.self
         )
         return reply.terminals
+    }
+
+    /// Read-only host status. Called only by an explicit user refresh, not a poll.
+    func screenStatus(terminalId: String) async throws -> HostScreenObservation {
+        try await request(
+            "screen_status",
+            payload: ["terminalId": terminalId],
+            as: HostScreenObservation.self
+        )
     }
 
     func watch(terminalId: String, lastSeq: Int) async throws -> TerminalAttachResult {

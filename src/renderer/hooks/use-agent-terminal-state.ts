@@ -1,3 +1,7 @@
+import { usableHostScreenText } from '@shared/types/terminal-screen.types'
+import { logFrontendError } from '@/lib/log-api'
+import { readTerminalScreen } from '@/lib/terminal-api'
+import { useScreenObservationStore } from '@/stores/screen-observation-store'
 /**
  * Keeps every agent terminal's `agentState` current.
  *
@@ -90,6 +94,8 @@ export function useAgentTerminalState(): void {
 
   useEffect(() => {
     const memories = new Map<string, ScanMemory>()
+    const inFlight = new Set<string>()
+    let disposed = false
 
     const tick = (): void => {
       const terminals = useTerminalStore.getState().terminals
@@ -103,6 +109,84 @@ export function useAgentTerminalState(): void {
         memories.set(terminal.id, next)
         if (!scan) continue
 
+        const host = terminal.ptyId
+          ? useScreenObservationStore.getState().byPtyId[terminal.ptyId]
+          : undefined
+        if (host?.terminalScreenEngine === 'ghostty-vt' && terminal.ptyId) {
+          // Opted-in PTYs use host evidence only. Never re-label an xterm fallback as host-ready.
+          const ptyId = terminal.ptyId
+          const claim = terminal.claim
+          if (!claim || host.status?.state === 'degraded' || host.status?.state === 'unsupported') {
+            setTerminalAgentState(terminal.id, 'unknown')
+            continue
+          }
+          if (inFlight.has(terminal.id)) continue
+          inFlight.add(terminal.id)
+          void readTerminalScreen(ptyId, claim, 40)
+            .then((result) => {
+              const current = useTerminalStore.getState()
+              if (
+                disposed ||
+                current.terminals.find((t) => t.id === terminal.id)?.ptyId !== ptyId ||
+                current.terminals.find((t) => t.id === terminal.id)?.claim !== claim
+              )
+                return
+              if (!result.success) {
+                current.setTerminalAgentState(terminal.id, 'unknown')
+                void logFrontendError({
+                  level: 'warn',
+                  source: 'host-screen-evidence',
+                  message: 'Host screen read failed'
+                })
+                return
+              }
+              // Reuse the existing tick only while an opted-in observer is catching up.
+              if (
+                result.data.status.state === 'starting' ||
+                result.data.status.state === 'catching-up'
+              )
+                memories.delete(terminal.id)
+              const observations = useScreenObservationStore.getState()
+              observations.recordHost(ptyId, {
+                terminalScreenEngine: result.data.status.terminalScreenEngine,
+                status: result.data.status
+              })
+              const accepted = useScreenObservationStore.getState().byPtyId[ptyId]?.status
+              const text =
+                accepted === result.data.status ? usableHostScreenText(result.data) : null
+              current.setTerminalAgentState(
+                terminal.id,
+                text === null
+                  ? 'unknown'
+                  : deriveAgentTerminalState({
+                      agentId: terminal.agentId as string,
+                      oscTitle:
+                        current.terminals.find((t) => t.id === terminal.id)?.oscTitle ?? null,
+                      screenTail: text
+                    }).state
+              )
+            })
+            .catch(() => {
+              if (
+                !disposed &&
+                useTerminalStore.getState().terminals.find((t) => t.id === terminal.id)?.ptyId ===
+                  ptyId &&
+                useTerminalStore.getState().terminals.find((t) => t.id === terminal.id)?.claim ===
+                  claim
+              ) {
+                useTerminalStore.getState().setTerminalAgentState(terminal.id, 'unknown')
+                void logFrontendError({
+                  level: 'warn',
+                  source: 'host-screen-evidence',
+                  message: 'Host screen transport failed'
+                })
+              }
+            })
+            .finally(() => {
+              inFlight.delete(terminal.id)
+            })
+          continue
+        }
         const evidence: AgentStateEvidence = {
           // `isAgentStateCandidate` already established this is set.
           agentId: terminal.agentId as string,
@@ -121,6 +205,9 @@ export function useAgentTerminalState(): void {
 
     tick()
     const timer = setInterval(tick, SCAN_INTERVAL_MS)
-    return () => clearInterval(timer)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
   }, [setTerminalAgentState])
 }

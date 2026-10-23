@@ -17,6 +17,8 @@ struct LiveTerminal: Identifiable, Hashable, Sendable {
     var gitBranch: String?
     /// True only for PTYs this phone spawned.
     var owned: Bool
+    var terminalScreenEngine: HostTerminalScreenEngine? = nil
+    var screenObservation: HostScreenObservation = .legacyHost
 }
 
 @MainActor
@@ -27,6 +29,7 @@ final class TerminalStore {
     var pendingOutput: [String: Data] = [:]
     var errorMessage: String?
     var isConnecting = false
+    var isRefreshingScreenObservation = false
     var onFeed: (@MainActor (String, Data) -> Void)?
     /// Phone-fit takeover when viewing; desktop restores the parked host size.
     var displayMode: TerminalDisplayMode = .phone
@@ -147,7 +150,9 @@ final class TerminalStore {
                     title: Self.title(for: item),
                     cwd: item.cwd,
                     gitBranch: item.gitBranch,
-                    owned: owned != nil
+                    owned: owned != nil,
+                    terminalScreenEngine: item.terminalScreenEngine,
+                    screenObservation: item.screenObservation ?? .legacyHost
                 )
             }
             if let previousActive, terminals.contains(where: { $0.id == previousActive }) {
@@ -164,6 +169,27 @@ final class TerminalStore {
         }
     }
 
+    /// This is a user action, never part of watching, fitting or polling a PTY.
+    func refreshScreenObservation() async {
+        guard !isRefreshingScreenObservation, let terminalId = activeId, let socket else { return }
+        isRefreshingScreenObservation = true
+        defer { isRefreshingScreenObservation = false }
+        let observation: HostScreenObservation
+        do {
+            observation = try await socket.screenStatus(terminalId: terminalId)
+        } catch {
+            // A legacy host may reject the operation. Never retain a previous
+            // ready label after a failed query or infer it from the preference.
+            observation = .unavailable(
+                reason: .protocol,
+                engine: terminals.first(where: { $0.id == terminalId })?.terminalScreenEngine ?? .existing
+            )
+        }
+        guard self.socket === socket,
+              let index = terminals.firstIndex(where: { $0.id == terminalId }) else { return }
+        terminals[index].screenObservation = observation
+    }
+
     func open(_ terminalId: String) async {
         guard let socket else { return }
         do {
@@ -172,7 +198,10 @@ final class TerminalStore {
                 await releaseDisplayMode(for: watchedId)
                 await socket.detach(terminalId: watchedId)
             }
-            _ = try await socket.watch(terminalId: terminalId, lastSeq: 0)
+            let attached = try await socket.watch(terminalId: terminalId, lastSeq: 0)
+            if let index = terminals.firstIndex(where: { $0.id == terminalId }) {
+                terminals[index].terminalScreenEngine = attached.terminalScreenEngine
+            }
             watchedId = terminalId
             activeId = terminalId
             refitEpoch &+= 1
@@ -209,7 +238,8 @@ final class TerminalStore {
                 title: String(localized: "Terminal"),
                 cwd: spawned.cwd,
                 gitBranch: nil,
-                owned: true
+                owned: true,
+                terminalScreenEngine: spawned.terminalScreenEngine
             )
             if !terminals.contains(where: { $0.id == live.id }) {
                 terminals.append(live)

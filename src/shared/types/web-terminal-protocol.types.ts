@@ -8,6 +8,7 @@ import type {
   TerminalResumeGrant,
   TerminalResumeRequest
 } from './ipc.types'
+import type { ScreenObservationStatus, TerminalScreenEngine } from './terminal-screen.types'
 
 export type { TerminalResumeGrant, TerminalResumeRequest } from './ipc.types'
 
@@ -75,6 +76,8 @@ export type WebTerminalRequestType =
   | 'authenticate'
   | 'spawn'
   | 'list'
+  | 'screen_status'
+  | 'screen_read'
   | 'watch'
   | 'resume'
   | 'write'
@@ -279,6 +282,8 @@ export type WebTerminalSpawnReply = WebTerminalReply<SpawnedTerminal>
 
 /** Live host PTY listed for a companion viewer (`list`). */
 export interface LiveTerminalSummary {
+  terminalScreenEngine?: TerminalScreenEngine
+  screenObservation?: ScreenObservationStatus
   id: string
   shell: string
   cwd: string

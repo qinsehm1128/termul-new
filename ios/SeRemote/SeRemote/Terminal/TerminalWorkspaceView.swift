@@ -12,6 +12,7 @@ struct TerminalWorkspaceView: View {
                 terminalErrorBanner(error)
             }
             if let id = session.terminals.activeId {
+                hostScreenObservation
                 ZStack {
                     TerminalScreen(
                         terminalId: id,
@@ -131,6 +132,59 @@ struct TerminalWorkspaceView: View {
 
     private var activeTerminal: LiveTerminal? {
         session.terminals.terminals.first(where: { $0.id == session.terminals.activeId })
+    }
+
+    /// A host snapshot, not agent activity, the engine preference, or the
+    /// phone renderer's health. Only the refresh button issues screen_status.
+    private var hostScreenObservation: some View {
+        let observation = activeTerminal?.screenObservation ?? .legacyHost
+        return HStack(alignment: .top, spacing: 12) {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Read-only · last host report; not live monitoring")
+                    Text("Applied \(observation.appliedSeq) / captured \(observation.capturedSeq)")
+                        .monospacedDigit()
+                    if let buildId = observation.observerBuildId {
+                        Text("Observer build: \(buildId)")
+                            .textSelection(.enabled)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Host screen observation")
+                        .font(.caption.weight(.semibold))
+                    Text(observationSummary(observation))
+                        .font(.caption)
+                        .foregroundStyle(observation.isReady ? Color.green : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Button {
+                Task { await session.terminals.refreshScreenObservation() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .disabled(session.terminals.isRefreshingScreenObservation)
+            .accessibilityLabel(Text("Refresh host screen observation"))
+            .accessibilityHint(Text("Read-only status request for the current terminal"))
+            .accessibilityIdentifier("refresh-host-screen-observation")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(SeTheme.surface)
+        .accessibilityIdentifier("host-screen-observation")
+    }
+
+    private func observationSummary(_ observation: HostScreenObservation) -> String {
+        let summary = "\(observation.terminalScreenEngine.rawValue) · \(observation.state.rawValue)"
+        if let reason = observation.reason {
+            return "\(summary) · \(reason.rawValue)"
+        }
+        return summary
     }
 
     /// Terminal failures used to surface only in a distant workspace alert;

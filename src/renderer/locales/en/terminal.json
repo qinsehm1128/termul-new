@@ -237,5 +237,33 @@
     "terminalCount": "{{terminals}} terminals",
     "restore": "Restore",
     "restored": "Restored"
+  },
+  "screenObservation": {
+    "label": "Host screen",
+    "description": "Read-only host observer; PTY and terminal rendering are unchanged.",
+    "engine": "Host engine",
+    "state": "Observation",
+    "sequence": "Applied/captured sequence",
+    "refresh": "Refresh host status",
+    "refreshing": "Refreshing…",
+    "unavailable": "Host observation is unavailable. No screen evidence is being used.",
+    "states": {
+      "disabled": "Disabled",
+      "starting": "Starting",
+      "catching-up": "Catching up",
+      "ready": "Ready",
+      "degraded": "Degraded",
+      "unsupported": "Unsupported"
+    },
+    "reasons": {
+      "helper-missing": "Observer helper is not available on this host.",
+      "identity-mismatch": "Observer identity does not match the host build.",
+      "overflow": "Observer queue overflowed.",
+      "timeout": "Observer timed out.",
+      "crash": "Observer process stopped unexpectedly.",
+      "protocol": "Observer protocol is incompatible or invalid.",
+      "size-limit": "Observer size limit exceeded.",
+      "legacy-host": "This host does not provide screen observation status."
+    }
   }
 }

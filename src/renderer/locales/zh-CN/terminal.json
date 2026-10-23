@@ -237,5 +237,33 @@
     "terminalCount": "{{terminals}} 个终端",
     "restore": "恢复",
     "restored": "已恢复"
+  },
+  "screenObservation": {
+    "label": "宿主屏幕",
+    "description": "只读宿主观察器；PTY 与终端渲染保持不变。",
+    "engine": "宿主引擎",
+    "state": "观察状态",
+    "sequence": "已应用/已捕获序号",
+    "refresh": "刷新宿主状态",
+    "refreshing": "刷新中…",
+    "unavailable": "宿主观察不可用，当前不使用屏幕证据。",
+    "states": {
+      "disabled": "未启用",
+      "starting": "启动中",
+      "catching-up": "追赶中",
+      "ready": "就绪",
+      "degraded": "已降级",
+      "unsupported": "不支持"
+    },
+    "reasons": {
+      "helper-missing": "宿主缺少观察器辅助程序。",
+      "identity-mismatch": "观察器身份与宿主构建不匹配。",
+      "overflow": "观察器队列溢出。",
+      "timeout": "观察器响应超时。",
+      "crash": "观察器进程意外退出。",
+      "protocol": "观察器协议不兼容或无效。",
+      "size-limit": "超出观察器大小限制。",
+      "legacy-host": "当前宿主不提供屏幕观察状态。"
+    }
   }
 }

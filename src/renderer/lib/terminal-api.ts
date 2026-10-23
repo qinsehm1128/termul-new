@@ -1,3 +1,9 @@
+import type {
+  ScreenObservationStatus,
+  TerminalScreenReadResult
+} from '@shared/types/terminal-screen.types'
+import { legacyScreenObservation } from '@shared/types/terminal-screen.types'
+import { useScreenObservationStore } from '@/stores/screen-observation-store'
 /**
  * Transport-neutral terminal facade.
  *
@@ -33,9 +39,48 @@ const runtimeSpawn = runtimeTerminalApi.spawn.bind(runtimeTerminalApi)
  * Every spawn from this renderer is marked local, so the host terminal catalog
  * does not adopt it a second time as a terminal opened on another device.
  */
+const runtimeAttach = runtimeTerminalApi.attach.bind(runtimeTerminalApi)
+const runtimeList = runtimeTerminalApi.list?.bind(runtimeTerminalApi)
+const runtimeTerminate = runtimeTerminalApi.terminate.bind(runtimeTerminalApi)
+const runtimeWatch = runtimeTerminalApi.watch?.bind(runtimeTerminalApi)
+
 export const terminalApi: TerminalApi = Object.assign(runtimeTerminalApi, {
-  spawn: (options?: Parameters<TerminalApi['spawn']>[0]) =>
-    trackLocalTerminalSpawn(() => runtimeSpawn(options))
+  spawn: async (options?: Parameters<TerminalApi['spawn']>[0]) => {
+    const result = await trackLocalTerminalSpawn(() => runtimeSpawn(options))
+    if (result.success) useScreenObservationStore.getState().recordHost(result.data.id, result.data)
+    return result
+  },
+  attach: async (...args: Parameters<TerminalApi['attach']>) => {
+    const result = await runtimeAttach(...args)
+    if (result.success)
+      useScreenObservationStore
+        .getState()
+        .recordHost(result.data.id, { ...result.data, claim: args[1] })
+    return result
+  },
+  list: runtimeList
+    ? async () => {
+        const result = await runtimeList()
+        if (result.success)
+          for (const terminal of result.data) {
+            useScreenObservationStore.getState().recordHost(terminal.id, terminal)
+          }
+        return result
+      }
+    : undefined,
+  watch: runtimeWatch
+    ? async (...args: Parameters<NonNullable<TerminalApi['watch']>>) => {
+        const result = await runtimeWatch(...args)
+        if (result.success)
+          useScreenObservationStore.getState().recordHost(result.data.id, result.data)
+        return result
+      }
+    : undefined,
+  terminate: async (terminalId: string) => {
+    const result = await runtimeTerminate(terminalId)
+    if (result.success) useScreenObservationStore.getState().clear(terminalId)
+    return result
+  }
 })
 
 /** Transport-neutral cold-resume entry point; never spawns or terminates a PTY. */
@@ -109,4 +154,34 @@ export function setTerminalProtected(
   return isTauriContext()
     ? setTauriTerminalProtected(terminalId, protectedState)
     : webTerminalInternals.setProtected(terminalId, protectedState)
+}
+
+/** Explicit, claim/scope-protected host status read; no background polling. */
+export function readTerminalScreenStatus(
+  terminalId: string,
+  claim: string
+): Promise<IpcResult<ScreenObservationStatus>> {
+  return (
+    terminalApi.screenStatus?.(terminalId, claim) ??
+    Promise.resolve({ success: true, data: legacyScreenObservation() })
+  )
+}
+
+export function readTerminalScreen(
+  terminalId: string,
+  claim: string,
+  maxLines?: number
+): Promise<IpcResult<TerminalScreenReadResult>> {
+  return (
+    terminalApi.screenRead?.(terminalId, claim, maxLines) ??
+    Promise.resolve({
+      success: true,
+      data: {
+        status: legacyScreenObservation(),
+        text: null,
+        appliedSeq: null,
+        truncated: false
+      }
+    })
+  )
 }
