@@ -88,6 +88,19 @@ async function readInputs(root, inputs) {
         throw new Error(`component identity ${component} cannot be both scoped and crate-built`)
       }
     }
+    const extraRoots = inputs.cargo.crateComponentRoots ?? {}
+    assertPlainObject(extraRoots, 'component identity cargo.crateComponentRoots')
+    for (const [component, roots] of Object.entries(extraRoots)) {
+      if (
+        !(component in crates) ||
+        !Array.isArray(roots) ||
+        !roots.every((name) => typeof name === 'string' && name.length > 0)
+      ) {
+        throw new Error(
+          'component identity cargo.crateComponentRoots must map crate-built components to crate arrays'
+        )
+      }
+    }
   }
 
   const expanded = new Map()
@@ -97,7 +110,12 @@ async function readInputs(root, inputs) {
 
   const crateMaterial = {}
   for (const [component, name] of Object.entries(inputs.cargo?.crateComponents ?? {})) {
-    crateMaterial[component] = await crateComponentMaterial(root, inputs.cargo, name)
+    crateMaterial[component] = await crateComponentMaterial(
+      root,
+      inputs.cargo,
+      name,
+      inputs.cargo.crateComponentRoots?.[component] ?? []
+    )
     for (const dir of crateMaterial[component].crateDirs) await add(dir)
   }
 
@@ -113,8 +131,12 @@ async function readInputs(root, inputs) {
   const fileDigests = new Map()
   for (const path of [...expanded.keys()].sort()) {
     const content = await readFile(resolve(root, path))
-    const text = normalizeText(path, content.toString('utf8'))
-    const digest = createHash('sha256').update(text, 'utf8').digest('hex')
+    const text = content.toString('utf8')
+    // Native source archives and other binary inputs must retain every byte.
+    // Lossy UTF-8 decoding can map distinct archives to the same replacement
+    // characters. Only round-trippable text may use version normalization.
+    const material = Buffer.from(text, 'utf8').equals(content) ? normalizeText(path, text) : content
+    const digest = createHash('sha256').update(material).digest('hex')
     fileDigests.set(path, digest)
   }
 
@@ -319,10 +341,14 @@ async function workspaceCrateDirs(root, cargo) {
  * manifest part, the root manifest's entries for packages in the closure
  * (their features unify with the app's in one build), and the closure.
  */
-async function crateComponentMaterial(root, cargo, crateName) {
+async function crateComponentMaterial(root, cargo, crateName, additionalRoots = []) {
   const manifest = parseCargoManifest(await readFile(resolve(root, cargo.manifest), 'utf8'))
   const packages = parseCargoLock(await readFile(resolve(root, cargo.lock), 'utf8'))
-  const closure = lockClosureEntries(packages, [crateName])
+  // A root binary can have an early self-exec helper branch outside its main
+  // service crate. Hash that branch's full dependency closure too, including
+  // native build dependencies, rather than just listing its Rust directory.
+  const roots = [...new Set([crateName, ...additionalRoots])].sort()
+  const closure = lockClosureEntries(packages, roots)
   const names = new Set([...closure.values()].map((entry) => entry.name))
   const dirs = await workspaceCrateDirs(root, cargo)
   const crateDirs = [...names]
@@ -338,8 +364,9 @@ async function crateComponentMaterial(root, cargo, crateName) {
     crateDirs,
     cargo: {
       crate: crateName,
+      roots,
       manifestSha256: digest([...manifest.shared, ...entries]),
-      lockSha256: digest(lockClosure(packages, [crateName]))
+      lockSha256: digest(lockClosure(packages, roots))
     }
   }
 }

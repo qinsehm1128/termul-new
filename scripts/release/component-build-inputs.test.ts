@@ -19,7 +19,11 @@ const SCOPED_CORES = ['acpCore'] as const
 
 type Inputs = {
   sharedFiles: string[]
-  cargo: { lock: string; crateComponents: Record<string, string> }
+  cargo: {
+    lock: string
+    crateComponents: Record<string, string>
+    crateComponentRoots?: Record<string, string[]>
+  }
   components: Record<string, string[]>
   acknowledgedExternalModules: Record<string, Record<string, string>>
 }
@@ -175,6 +179,18 @@ function uncoveredReferences(core: (typeof SCOPED_CORES)[number]): Map<string, s
 }
 
 describe('component build inputs', () => {
+  test('host identities cover native VT sources outside the Cargo crate closure', () => {
+    // Cargo.lock can follow workspace crates, but not build.rs inputs in
+    // vendor/. A source or toolchain pin change must invalidate live hosts
+    // even when the wrapper crate and its dependency versions are unchanged.
+    for (const host of ['guiNative', 'acpCore', 'terminalCore']) {
+      expect(inputs.components[host], host).toContain('src-tauri/vendor/ghostty-vt')
+    }
+    for (const host of ['guiNative', 'acpCore']) {
+      expect(inputs.components[host], host).toContain('src-tauri/crates/se-ghostty-vt')
+    }
+  })
+
   test.each(CORES)('%s lists every path it names', (core) => {
     const missing = inputs.components[core].filter((path) => !existsSync(join(repoRoot, path)))
     expect(missing).toEqual([])
@@ -231,10 +247,28 @@ describe('component build inputs', () => {
 
   test.each(
     Object.entries(inputs.cargo.crateComponents)
-  )('%s entry links only its own crate, not the app library', (core, crate) => {
+  )('%s entry links only covered crates, not the app library', (core, crate) => {
     // The executable's identity is its crate's Cargo.lock closure. Code that
     // reached into the app library would run without being hashed.
-    const crateIdent = crate.replaceAll('-', '_')
+    const roots = [crate, ...(inputs.cargo.crateComponentRoots?.[core] ?? [])]
+    const lockText = readFileSync(join(repoRoot, inputs.cargo.lock), 'utf8')
+    const packages = new Map<string, string[]>()
+    for (const section of lockText.split('[[package]]').slice(1)) {
+      const name = /^name = "([^"]+)"/m.exec(section)?.[1]
+      const dependencies = /dependencies = \[([\s\S]*?)\]/.exec(section)?.[1] ?? ''
+      if (name)
+        packages.set(
+          name,
+          [...dependencies.matchAll(/"([^" ]+)(?: [^"]*)?"/g)].map((m) => m[1])
+        )
+    }
+    const covered = new Set<string>()
+    const visit = (name: string) => {
+      if (covered.has(name)) return
+      covered.add(name)
+      for (const dependency of packages.get(name) ?? []) visit(dependency)
+    }
+    for (const root of roots) visit(root)
     const entries = inputs.components[core]
       .flatMap(rustFiles)
       .filter((file) => file.startsWith(`${srcRoot}/`))
@@ -242,7 +276,10 @@ describe('component build inputs', () => {
     for (const file of entries) {
       const source = productionSource(file)
       expect(source, file).not.toMatch(/\bcrate::|\bse_manager_lib\b/)
-      expect(source, file).toContain(`${crateIdent}::`)
+      expect(source, file).toContain(`${crate.replaceAll('-', '_')}::`)
+      for (const reference of referencedCrates(source)) {
+        expect(covered.has(reference), `${file} references uncovered ${reference}`).toBe(true)
+      }
     }
   })
 })

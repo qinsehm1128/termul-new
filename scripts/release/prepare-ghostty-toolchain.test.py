@@ -2,6 +2,7 @@
 """Offline tests for the checksum-pinned Ghostty toolchain installer."""
 
 import hashlib
+from contextlib import redirect_stdout
 import importlib.util
 import io
 import os
@@ -149,6 +150,27 @@ class ToolchainTests(unittest.TestCase):
                 toolchain.install(self.root, "aarch64-macos")
             execute.assert_not_called()
         self.assertEqual(sentinel.read_text(), "user data")
+
+    def test_cli_can_return_a_verified_path_without_shell_evaluation(self):
+        binary = self.root / "path with spaces" / "zig"
+        output = io.StringIO()
+        argv = ["prepare", "--cache-dir", str(self.root), "--print-executable"]
+        with patch.object(sys, "argv", argv), patch.object(toolchain, "install", return_value=binary), \
+             redirect_stdout(output):
+            toolchain.main()
+        self.assertEqual(output.getvalue(), f"{binary}\n")
+
+    def test_github_exports_native_wrapper_variable_and_private_caches(self):
+        binary = self.root / "toolchain" / "zig"
+        environment_file = self.root / "github-env"
+        argv = ["prepare", "--cache-dir", str(self.root), "--github-env", str(environment_file)]
+        with patch.object(sys, "argv", argv), patch.object(toolchain, "install", return_value=binary), \
+             redirect_stdout(io.StringIO()):
+            toolchain.main()
+        environment = dict(line.split("=", 1) for line in environment_file.read_text().splitlines())
+        self.assertEqual(environment["SE_GHOSTTY_VT_ZIG"], str(binary))
+        self.assertEqual(environment["ZIG"], str(binary))
+        self.assertTrue(environment["ZIG_GLOBAL_CACHE_DIR"].startswith(str(self.root)))
 
 
 if __name__ == "__main__":

@@ -172,11 +172,14 @@ def main():
     parser.add_argument("--cache-dir", type=Path, required=True)
     parser.add_argument("--platform", choices=RELEASES)
     parser.add_argument("--github-env", type=Path)
+    parser.add_argument("--print-executable", action="store_true",
+                        help="print only the verified executable path, suitable for command substitution")
     args = parser.parse_args()
     key = args.platform or host_platform()
     binary = install(args.cache_dir, key)
     environment = {
         "ZIG": str(binary),
+        "SE_GHOSTTY_VT_ZIG": str(binary),
         "ZIG_GLOBAL_CACHE_DIR": str(binary.parent.parent / f"global-cache-{key}"),
         "ZIG_LOCAL_CACHE_DIR": str(binary.parent.parent / f"local-cache-{key}"),
     }
@@ -185,6 +188,9 @@ def main():
             raise ValueError("newline in toolchain cache path")
         with args.github_env.open("a", encoding="utf-8") as stream:
             stream.writelines(f"{key}={value}\n" for key, value in environment.items())
+    if args.print_executable:
+        print(binary)
+        return
     print(f"Verified Ghostty build toolchain: Zig {VERSION} ({key})")
     for name, value in environment.items():
         print(f"{name}={value}")

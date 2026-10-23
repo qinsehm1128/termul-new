@@ -30,6 +30,23 @@ async function fixtureRoot(version = '0.12.6') {
 }
 
 describe('generateComponentIdentities', () => {
+  test('hashes binary source inputs without lossy UTF-8 replacement collisions', async () => {
+    const root = await fixtureRoot()
+    const binaryInputs = {
+      ...inputs,
+      components: { ...inputs.components, terminalCore: ['src-tauri/source.tar.gz'] }
+    }
+    try {
+      await writeFile(join(root, 'src-tauri/source.tar.gz'), Buffer.from([0x1f, 0x8b, 0x80]))
+      const before = await generateComponentIdentities({ root, inputs: binaryInputs })
+      await writeFile(join(root, 'src-tauri/source.tar.gz'), Buffer.from([0x1f, 0x8b, 0x81]))
+      const after = await generateComponentIdentities({ root, inputs: binaryInputs })
+      expect(after.components.terminalCore.buildId).not.toBe(before.components.terminalCore.buildId)
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
   test('is deterministic and excludes package version from Core IDs', async () => {
     const firstRoot = await fixtureRoot('0.12.6')
     const secondRoot = await fixtureRoot('0.12.7')
@@ -503,6 +520,55 @@ describe('crate-built Core identities', () => {
       }
       await expect(generateComponentIdentities({ root, inputs })).rejects.toThrow(
         'cannot be both scoped and crate-built'
+      )
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  test('additional entry crates include their source and full lock closure in the identity', async () => {
+    const root = await crateRoot()
+    const inputs = {
+      ...crateInputs,
+      cargo: {
+        ...crateInputs.cargo,
+        crateComponentRoots: { terminalCore: ['se-gui-only'] }
+      }
+    }
+    const id = async () =>
+      (await generateComponentIdentities({ root, inputs })).components.terminalCore.buildId
+    try {
+      const result = await generateComponentIdentities({ root, inputs })
+      expect(result.payloads.terminalCore.cargo.roots).toEqual(['se-gui-only', 'se-terminal-core'])
+      expect(
+        result.payloads.terminalCore.files.map((file: { path: string }) => file.path)
+      ).toContain('src-tauri/crates/se-gui-only/src/lib.rs')
+      const before = await id()
+      await writeFile(
+        join(root, 'src-tauri/crates/se-gui-only/src/lib.rs'),
+        'pub fn observer() {}\n'
+      )
+      const sourceChanged = await id()
+      expect(sourceChanged).not.toBe(before)
+      await writeFile(
+        join(root, 'src-tauri/Cargo.lock'),
+        lock().replace('version = "2.0.0"', 'version = "2.0.1"')
+      )
+      expect(await id()).not.toBe(sourceChanged)
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  test('additional roots must belong to a declared crate-built component', async () => {
+    const root = await crateRoot()
+    try {
+      const inputs = {
+        ...crateInputs,
+        cargo: { ...crateInputs.cargo, crateComponentRoots: { renderer: ['se-gui-only'] } }
+      }
+      await expect(generateComponentIdentities({ root, inputs })).rejects.toThrow(
+        'crateComponentRoots'
       )
     } finally {
       await rm(root, { recursive: true })

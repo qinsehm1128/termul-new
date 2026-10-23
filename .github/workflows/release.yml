@@ -382,6 +382,22 @@ jobs:
           python3 scripts/sync-stamped-root-lock.py --manifest src-tauri/Cargo.toml --lockfile src-tauri/Cargo.lock --package se-manager
           cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 --no-deps
 
+      - name: Prepare checksum-pinned Ghostty build toolchain
+        shell: bash
+        run: |
+          python3 scripts/release/prepare-ghostty-toolchain.test.py
+          python3 scripts/release/prepare-ghostty-toolchain.py \
+            --cache-dir "$RUNNER_TEMP/se-ghostty-toolchain" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Verify real Ghostty native VT
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -p se-ghostty-vt --features native
+
+      - name: Verify passive Ghostty native linkage
+        run: |
+          python3 scripts/release/verify-ghostty-passive-link.test.py
+          python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
+
       # Build the Vite WEB bundle (dist-web/) BEFORE the desktop release build so
       # rust-embed embeds it into the desktop binary (the desktop's in-process
       # shared-live server serves this embedded bundle in a release install
@@ -443,6 +459,9 @@ jobs:
             --config src-tauri/tauri.conf.prod.json${{ (startsWith(matrix.platform, 'macos-') &&
             env.APPLE_CERTIFICATE == '' && env.MACOS_CODESIGN_CERTIFICATE != '') &&
             ' --config src-tauri/tauri.conf.selfsigned.json' || '' }} -- --locked
+
+      - name: Verify production Ghostty passive linkage
+        run: python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
 
       - name: Persist Tauri artifact paths
         shell: bash
@@ -699,6 +718,22 @@ jobs:
           python3 scripts/sync-stamped-root-lock.py --manifest src-tauri/Cargo.toml --lockfile src-tauri/Cargo.lock --package se-manager
           cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 --no-deps
 
+      - name: Prepare checksum-pinned Ghostty build toolchain
+        shell: bash
+        run: |
+          python3 scripts/release/prepare-ghostty-toolchain.test.py
+          python3 scripts/release/prepare-ghostty-toolchain.py \
+            --cache-dir "$RUNNER_TEMP/se-ghostty-toolchain" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Verify real Ghostty native VT
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -p se-ghostty-vt --features native
+
+      - name: Verify passive Ghostty native linkage
+        run: |
+          python3 scripts/release/verify-ghostty-passive-link.test.py
+          python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
+
       # ORDER MATTERS: web bundle before se-server release build (rust-embed).
       - name: Build web client (dist-web/)
         run: bun run build:web
@@ -712,9 +747,14 @@ jobs:
         # self-update subsystem can verify downloaded binaries (option_env!).
         env:
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
-        run: >
-          cargo build --locked --release --bin se-server
-          --features standalone-server
+          TERMUL_SERVER_BUILD_ID: termul-server-${{ github.sha }}-ghostty-vt-v1
+        run: |
+          touch src/server_main.rs
+          cargo build --locked --release --bin se-server \
+            --features standalone-server,ghostty-vt
+
+      - name: Verify production Ghostty passive linkage
+        run: python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
 
       - name: Locate se-server binary
         working-directory: src-tauri

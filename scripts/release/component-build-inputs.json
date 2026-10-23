@@ -17,6 +17,9 @@
     "scopedComponents": ["acpCore"],
     "crateComponents": {
       "terminalCore": "se-terminal-core"
+    },
+    "crateComponentRoots": {
+      "terminalCore": ["se-ghostty-observer"]
     }
   },
   "components": {
@@ -29,9 +32,14 @@
       "src-tauri/tauri.conf.json",
       "src-tauri/tauri.conf.prod.json",
       "src-tauri/src/core/launcher.rs",
-      "src-tauri/crates/se-terminal-core"
+      "src-tauri/crates/se-terminal-core",
+      "src-tauri/crates/se-screen-protocol",
+      "src-tauri/crates/se-ghostty-observer",
+      "src-tauri/crates/se-ghostty-vt",
+      "src-tauri/vendor/ghostty-vt"
     ],
     "acpCore": [
+      "src-tauri/tauri.conf.prod.json",
       "src-tauri/src/core/acp.rs",
       "src-tauri/src/core/acp_handles.rs",
       "src-tauri/src/acp",
@@ -56,9 +64,18 @@
       "src-tauri/src/acp_registry_snapshot.rs",
       "src-tauri/src/agent_registry.rs",
       "src-tauri/src/cli_session",
-      "src-tauri/crates/se-terminal-core"
+      "src-tauri/crates/se-terminal-core",
+      "src-tauri/crates/se-screen-protocol",
+      "src-tauri/crates/se-ghostty-observer",
+      "src-tauri/crates/se-ghostty-vt",
+      "src-tauri/vendor/ghostty-vt"
     ],
-    "terminalCore": ["src-tauri/src/terminal_core_main.rs", "src-tauri/build.rs"]
+    "terminalCore": [
+      "src-tauri/tauri.conf.prod.json",
+      "src-tauri/src/terminal_core_main.rs",
+      "src-tauri/build.rs",
+      "src-tauri/vendor/ghostty-vt"
+    ]
   },
   "acknowledgedExternalModules": {
     "acpCore": {
