@@ -180,7 +180,7 @@ def elf(r):
 
 
 def coff_import(data):
-    # IMAGE_IMPORT_OBJECT_HEADER is a packed 18-byte header. Import objects are
+    # IMAGE_IMPORT_OBJECT_HEADER is a packed 20-byte header. Import objects are
     # metadata stubs, not relocatable COFF, but must still be validated strictly.
     if len(data) < 20:
         raise AuditError("truncated COFF import object header")
@@ -244,22 +244,36 @@ def coff(r):
             raise AuditError("invalid COFF string offset")
         return cstring(strings, offset)
 
-    for i in range(count):
-        raw, virtual, _, size, off, reloc, lines, nreloc, nlines, flags = r.unpack("<8s6I2HI", 20 + i * 40)
+    sections = [r.unpack("<8s6I2HI", 20 + i * 40) for i in range(count)]
+    protected = [(0, 20 + count * 40)]
+    for raw, virtual, _, size, off, reloc, lines, nreloc, nlines, flags in sections:
         reject_section(name(raw, True), max(virtual, size))
-        extended = bool(flags & 0x1000000)
-        if extended:
-            if nreloc != 0xFFFF or not reloc:
-                raise AuditError("invalid COFF extended relocation header")
-            first_va, _, _ = r.unpack("<IIH", reloc)
-            if first_va < 1 or first_va > MAX_ARCHIVE_MEMBERS:
-                raise AuditError("unsupported COFF extended relocation count")
-            nreloc = first_va - 1
         if size and (off or not flags & 0x80):
             if not off:
                 raise AuditError("COFF initialized section has no data offset")
             r.span(off, size)
-        r.span(reloc, nreloc * 10)
+            protected.append((off, off + size))
+    if symoff:
+        protected.append((symoff, symoff + nsyms * 18 + len(strings)))
+
+    def overlaps(start, size):
+        return any(start < end and start + size > begin for begin, end in protected)
+
+    for raw, virtual, _, size, off, reloc, lines, nreloc, nlines, flags in sections:
+        extended = bool(flags & 0x1000000)
+        if extended:
+            if nreloc != 0xFFFF or not reloc:
+                raise AuditError("invalid COFF extended relocation header")
+            first_va, marker_symbol, marker_type = r.unpack("<IIH", reloc)
+            if marker_symbol or marker_type:
+                raise AuditError("invalid COFF extended relocation marker")
+            if first_va < 1 or first_va > MAX_ARCHIVE_MEMBERS:
+                raise AuditError("unsupported COFF extended relocation count")
+            nreloc = first_va
+        relocation_size = nreloc * 10
+        if relocation_size and overlaps(reloc, relocation_size):
+            raise AuditError("COFF relocation range overlaps protected data")
+        r.span(reloc, relocation_size)
         r.span(lines, nlines * 6)
     i = 0
     while i < nsyms:

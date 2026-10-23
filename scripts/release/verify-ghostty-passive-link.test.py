@@ -78,6 +78,19 @@ def coff_import(symbol=b"RtlCopyMemory", dll=b"ntdll.dll", machine=0x8664,
     return header + payload
 
 
+def coff_extended(relocations=1, claimed_count=2, marker_symbol=0, marker_type=0,
+                  with_symbols=False):
+    # The count includes the marker itself, not just real relocation entries.
+    table = struct.pack("<IIH", claimed_count, marker_symbol, marker_type)
+    table += struct.pack("<IIH", 0, 0, 0) * relocations
+    symoff = 60 + len(table) if with_symbols else 0
+    header = struct.pack("<HHIIIHH", 0x8664, 1, 0, symoff, int(with_symbols), 0, 0)
+    section = struct.pack("<8s6I2HI", b".text", 0, 0, 0, 0, 60, 0, 0xFFFF, 0, 0x1000020)
+    symbols = (struct.pack("<8sIhHBB", b"passive", 0, 1, 0, 2, 0) + struct.pack("<I", 4)
+               if with_symbols else b"")
+    return header + section + table + symbols
+
+
 class PassiveLinkTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("QIN_CODE_SCRATCH_DIR"))
@@ -181,6 +194,22 @@ class PassiveLinkTests(unittest.TestCase):
             with self.assertRaisesRegex(audit.AuditError, "member count"):
                 audit.audit_archive(self.library(ar(("nested.lib/", nested))))
 
+    def test_coff_extended_relocations_count_includes_marker(self):
+        self.assertEqual(audit.audit_object(coff_extended()), "COFF")
+        self.assertEqual(audit.audit_object(coff_extended(with_symbols=True)), "COFF")
+        for obj in (coff_extended(relocations=0), coff_extended()[:-1],
+                    coff_extended(relocations=0, with_symbols=True)):
+            with self.subTest(size=len(obj)):
+                with self.assertRaises(audit.AuditError):
+                    audit.audit_object(obj)
+
+    def test_coff_extended_relocation_marker_fields_fail_closed(self):
+        for kwargs in ({"marker_symbol": 1}, {"marker_type": 1}, {"claimed_count": 0},
+                       {"claimed_count": audit.MAX_ARCHIVE_MEMBERS + 1}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(audit.AuditError):
+                    audit.audit_object(coff_extended(**kwargs))
+
     def test_empty_initializer_sections_are_allowed(self):
         obj = bytearray(macho(section=b"__mod_init_func"))
         struct.pack_into("<Q", obj, 144, 0)
@@ -202,7 +231,7 @@ class PassiveLinkTests(unittest.TestCase):
                 audit.audit_archive(self.library(data))
 
     def test_every_object_truncation_is_a_controlled_failure(self):
-        for obj in (macho(), elf(), elf(wide=False), coff()):
+        for obj in (macho(), elf(), elf(wide=False), coff(), coff_extended()):
             for end in range(len(obj)):
                 with self.subTest(magic=obj[:4], end=end):
                     with self.assertRaises(audit.AuditError):
