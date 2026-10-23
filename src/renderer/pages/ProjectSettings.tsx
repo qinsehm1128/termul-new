@@ -1,4 +1,6 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
+import type { TerminalScreenEngine } from '@shared/types/terminal-screen.types'
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import {
   ChevronDown,
   Info,
@@ -25,6 +27,7 @@ import {
   SettingsLayout,
   SettingsSection
 } from '@/components/settings/SettingsLayout'
+import { TerminalScreenEngineSetting } from '@/components/TerminalScreenEngineSetting'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
@@ -131,6 +134,9 @@ export default function ProjectSettings() {
   rootPathRef.current = rootPath
   const [envVars, setEnvVars] = useState<EnvVariable[]>(activeProject?.envVars || [])
   const [shell, setShell] = useState(activeProject?.defaultShell || '')
+  const [terminalScreenEngine, setTerminalScreenEngine] = useState<TerminalScreenEngine>(
+    resolveTerminalScreenEngine(activeProject)
+  )
   const [hasChanges, setHasChanges] = useState(false)
   const [symlinkDirs, setSymlinkDirs] = useState<string[]>(activeProject?.symlinkDirs ?? [])
   const [symlinkLoading, setSymlinkLoading] = useState(false)
@@ -202,6 +208,7 @@ export default function ProjectSettings() {
         setRootPath(activeProject.path || '')
         envImportRequestRef.current += 1
         setEnvVars(activeProject.envVars || [])
+        setTerminalScreenEngine(resolveTerminalScreenEngine(activeProject))
         setSymlinkDirs(activeProject.symlinkDirs ?? [])
         setImportError(null)
         setImportWarnings(null)
@@ -269,6 +276,7 @@ export default function ProjectSettings() {
         path: rootPath,
         envVars: normalizedEnvVars,
         defaultShell: shell,
+        terminalScreenEngine,
         symlinkDirs: normalizedSymlinkDirs
       })
       setEnvVars(normalizedEnvVars)
@@ -499,6 +507,14 @@ export default function ProjectSettings() {
                     {t('changingRootAffectsTerminals')}
                   </p>
                 </div>
+
+                <TerminalScreenEngineSetting
+                  value={terminalScreenEngine}
+                  onChange={(value) => {
+                    setTerminalScreenEngine(value)
+                    setHasChanges(true)
+                  }}
+                />
 
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-3">

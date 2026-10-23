@@ -1,5 +1,6 @@
 import type { TerminalAgentSession } from '@shared/types/cli-session.types'
 import type { TerminalStatus } from '@shared/types/ipc.types'
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import { useEffect, useRef } from 'react'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { i18n } from '@/i18n'
@@ -1132,12 +1133,18 @@ async function restoreFromLayout(
               programSpawnOptions
                 ? {
                     projectId,
+                    terminalScreenEngine: resolveTerminalScreenEngine(
+                      useProjectStore.getState().projects.find((p) => p.id === projectId)
+                    ),
                     cwd: spawnCwd,
                     ...programSpawnOptions,
                     ...(spawnEnv ? { env: spawnEnv } : {})
                   }
                 : {
                     projectId,
+                    terminalScreenEngine: resolveTerminalScreenEngine(
+                      useProjectStore.getState().projects.find((p) => p.id === projectId)
+                    ),
                     shell: normalizedShell,
                     cwd: spawnCwd,
                     ...(spawnEnv ? { env: spawnEnv } : {})
@@ -1451,6 +1458,9 @@ async function createDefaultTerminal(
           shell,
           cwd,
           projectId,
+          terminalScreenEngine: resolveTerminalScreenEngine(
+            useProjectStore.getState().projects.find((p) => p.id === projectId)
+          ),
           ...(hasProjectEnv ? { env } : {})
         })
         if (spawnTimeout) {

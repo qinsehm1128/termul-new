@@ -4,6 +4,7 @@ import { acceptedBrandValues } from '@shared/brand'
 import type { TerminalAgentSession } from '@shared/types/cli-session.types'
 import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
 import type { TerminalResourceHydrationStatus } from '@shared/types/session-workspace.types'
+import type { TerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import type { AgentTerminalState } from '@/lib/agents/agent-terminal-state'
 
 // Re-export for convenience
@@ -57,6 +58,8 @@ export interface Project {
   gitBranch?: string
   lastOpened?: Date
   defaultShell?: string
+  /** New PTYs only; absent means existing. Not an authorization scope. */
+  terminalScreenEngine?: TerminalScreenEngine
   envVars?: EnvVariable[]
   worktrees?: Worktree[]
   activeWorktreeId?: string | null

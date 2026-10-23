@@ -1,3 +1,4 @@
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -1759,6 +1760,15 @@ function ConnectedTerminalComponent({
         try {
           const spawnOpts = {
             ...memoizedSpawnOptions,
+            ...(memoizedSpawnOptions?.kind === 'ssh'
+              ? {}
+              : {
+                  terminalScreenEngine: resolveTerminalScreenEngine(
+                    useProjectStore
+                      .getState()
+                      .projects.find((p) => p.id === memoizedSpawnOptions?.projectId)
+                  )
+                }),
             // Ensure empty shell string is treated as undefined so Rust uses default
             shell: memoizedSpawnOptions?.shell || undefined,
             cols: spawnCols,

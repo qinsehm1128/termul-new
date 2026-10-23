@@ -1,3 +1,4 @@
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 /**
  * Shared terminal spawn logic for creating a new terminal in a workspace pane.
  *
@@ -126,6 +127,9 @@ export async function spawnTerminalInPane(
       cwd,
       conversationId,
       projectId,
+      terminalScreenEngine: resolveTerminalScreenEngine(
+        useProjectStore.getState().projects.find((p) => p.id === projectId)
+      ),
       ...(hasEnv ? { env } : {})
     })
 

@@ -135,6 +135,29 @@ describe('useProjectsAutoSave write coalescing', () => {
     unmount()
   })
 
+  it('persists an engine-only change immediately', async () => {
+    const { unmount } = mountArmed()
+    act(() =>
+      useProjectStore.getState().updateProject('p1', { terminalScreenEngine: 'ghostty-vt' })
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(writeDebouncedMock).toHaveBeenCalledTimes(1)
+    expect(writeDebouncedMock).toHaveBeenCalledWith(
+      'projects',
+      expect.objectContaining({
+        projects: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'p1',
+            terminalScreenEngine: 'ghostty-vt'
+          })
+        ])
+      })
+    )
+    unmount()
+  })
+
   it('serialises a structural change immediately rather than deferring it', async () => {
     const { unmount } = mountArmed()
 

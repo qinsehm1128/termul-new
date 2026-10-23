@@ -5,6 +5,8 @@ import {
   type MemoryIndexProgress,
   parseMemoryIndexProgress
 } from '@shared/types/memory-index.types'
+import type { TerminalScreenEngine } from '@shared/types/terminal-screen.types'
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import { LayoutGroup, motion, Reorder } from 'framer-motion'
 import {
   AlertTriangle,
@@ -33,6 +35,7 @@ import {
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
+import { TerminalScreenEngineSetting } from '@/components/TerminalScreenEngineSetting'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import {
   ContextMenu,
@@ -275,6 +278,7 @@ export function ProjectSidebar({
   const [settingsName, setSettingsName] = useState('')
   const [settingsPath, setSettingsPath] = useState('')
   const [settingsShell, setSettingsShell] = useState('')
+  const [settingsScreenEngine, setSettingsScreenEngine] = useState<TerminalScreenEngine>('existing')
   const [settingsColor, setSettingsColor] = useState<ProjectColor>('blue')
   const [settingsPathLoading, setSettingsPathLoading] = useState(false)
 
@@ -541,6 +545,7 @@ export function ProjectSidebar({
         setSettingsName(project.name)
         setSettingsPath(project.path || '')
         setSettingsShell(project.defaultShell || '')
+        setSettingsScreenEngine(resolveTerminalScreenEngine(project))
         setSettingsColor(project.color || 'blue')
       }
     }
@@ -556,6 +561,7 @@ export function ProjectSidebar({
       name,
       path: settingsPath.trim() || undefined,
       defaultShell: settingsShell || undefined,
+      terminalScreenEngine: settingsScreenEngine,
       color: settingsColor
     })
     handleCloseSettings()
@@ -564,6 +570,7 @@ export function ProjectSidebar({
     settingsName,
     settingsPath,
     settingsShell,
+    settingsScreenEngine,
     settingsColor,
     onUpdateProject,
     handleCloseSettings
@@ -1753,6 +1760,10 @@ export function ProjectSidebar({
                   <Skeleton className="w-full h-9 rounded" />
                 )}
               </div>
+              <TerminalScreenEngineSetting
+                value={settingsScreenEngine}
+                onChange={setSettingsScreenEngine}
+              />
             </div>
 
             {/* Footer */}

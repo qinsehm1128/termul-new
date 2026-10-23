@@ -181,6 +181,18 @@ struct HostHomeView: View {
                     Text(row.meta ?? "")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    if section == .projects,
+                       let project = filteredProjects.first(where: { $0.id == row.id }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent("Host terminal screen engine") {
+                                Text(project.terminalScreenEngine.rawValue)
+                                    .font(.footnote.monospaced())
+                            }
+                            Text("Read-only host preference. iOS rendering is unchanged.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     Button {
                         open(row)
                     } label: {

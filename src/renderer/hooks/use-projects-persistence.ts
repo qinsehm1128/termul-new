@@ -1,3 +1,4 @@
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import { useCallback, useEffect, useRef } from 'react'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi, secureStorageApi, syncProjects, worktreeApi } from '@/lib/api'
@@ -239,6 +240,7 @@ async function toPersistedProject(
     isArchived: project.isArchived,
     gitBranch: project.gitBranch,
     defaultShell: project.defaultShell,
+    terminalScreenEngine: resolveTerminalScreenEngine(project),
     envVars: redactedEnvVars,
     worktrees: project.worktrees?.map(toPersistedWorktree),
     activeWorktreeId: project.activeWorktreeId,
@@ -287,6 +289,7 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
     isArchived: persisted.isArchived,
     gitBranch: persisted.gitBranch,
     defaultShell: persisted.defaultShell,
+    terminalScreenEngine: resolveTerminalScreenEngine(persisted),
     envVars: loadedEnvVars,
     worktrees: persisted.worktrees?.map(fromPersistedWorktree),
     activeWorktreeId: persisted.activeWorktreeId,
@@ -415,6 +418,7 @@ export function toProjectSummaries(
     name: p.name,
     color: p.color,
     path: p.path ?? null,
+    terminalScreenEngine: resolveTerminalScreenEngine(p),
     isArchived: p.isArchived ?? false,
     isDefault: hasStoredDefault ? p.isDefault === true : p.id === defaultProjectId
   }))
@@ -441,6 +445,7 @@ function summaryToProject(summary: ProjectSummary): Project {
     path: summary.path ?? undefined,
     isArchived: summary.isArchived,
     isDefault: summary.isDefault,
+    terminalScreenEngine: resolveTerminalScreenEngine(summary),
     liveTerminalCount: summary.liveTerminalCount ?? 0,
     envVars: [],
     worktrees: [],
@@ -603,6 +608,7 @@ export function hasStructuralProjectChange(next: Project[], prev: Project[]): bo
       project.isDefault !== previous.isDefault ||
       project.gitBranch !== previous.gitBranch ||
       project.defaultShell !== previous.defaultShell ||
+      resolveTerminalScreenEngine(project) !== resolveTerminalScreenEngine(previous) ||
       project.isGitRepo !== previous.isGitRepo ||
       project.activeWorktreeId !== previous.activeWorktreeId ||
       JSON.stringify(project.envVars ?? []) !== JSON.stringify(previous.envVars ?? []) ||

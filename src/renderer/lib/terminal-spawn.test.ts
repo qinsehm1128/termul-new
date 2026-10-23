@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockAppDefaultShell,
   mockProjectDefaultShell,
+  mockScreenEngine,
   mockAddTerminal,
   mockSetTerminalPtyId,
   mockSetTerminalClaim,
@@ -23,6 +24,9 @@ const {
 } = vi.hoisted(() => ({
   mockAppDefaultShell: { current: '' as string },
   mockProjectDefaultShell: { current: 'bash' as string },
+  mockScreenEngine: {
+    current: undefined as 'existing' | 'ghostty-vt' | undefined
+  },
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
   mockSetTerminalClaim: vi.fn(),
@@ -78,7 +82,8 @@ vi.mock('@/stores/project-store', () => ({
           name: 'Test',
           path: '/test',
           defaultShell: mockProjectDefaultShell.current,
-          envVars: []
+          envVars: [],
+          terminalScreenEngine: mockScreenEngine.current
         }
       ],
       setActiveWorktree: mockSetActiveWorktree
@@ -121,6 +126,7 @@ import { openTerminalAtCwd, spawnTerminalInPane, spawnTerminalInSplit } from '@/
 describe('spawnTerminalInPane', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockScreenEngine.current = undefined
     mockTerminals.length = 0
     mockActivePaneId.current = 'pane-1'
     mockIsTerminalLimitReached.mockReturnValue(false)
@@ -132,6 +138,23 @@ describe('spawnTerminalInPane', () => {
       success: true,
       data: { id: 'pty-1', shell: 'bash', cwd: '/test/worktree', claim: 'claim-pty-1' }
     })
+  })
+
+  it('defaults to existing and rereads the project preference for each new spawn', async () => {
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test')
+    expect(mockTerminalApiSpawn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ terminalScreenEngine: 'existing' })
+    )
+    mockScreenEngine.current = 'ghostty-vt'
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test')
+    expect(mockTerminalApiSpawn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ terminalScreenEngine: 'ghostty-vt' })
+    )
+    mockScreenEngine.current = 'existing'
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test')
+    expect(mockTerminalApiSpawn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ terminalScreenEngine: 'existing' })
+    )
   })
 
   it('spawns a terminal in the specified pane with full cycle', async () => {

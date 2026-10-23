@@ -1,3 +1,4 @@
+import type { TerminalScreenEngine } from './terminal-screen.types'
 /**
  * Web/remote project list wire contract (runtime-neutral).
  *
@@ -39,6 +40,8 @@ export interface ProjectSummary {
   isDefault: boolean
   /** Active PTYs attributed to this project. Older hosts omit this. */
   liveTerminalCount?: number
+  /** Read-only host preference; omitted by older hosts (existing). */
+  terminalScreenEngine?: TerminalScreenEngine
 }
 
 /**

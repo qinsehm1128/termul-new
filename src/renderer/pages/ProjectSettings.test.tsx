@@ -6,11 +6,16 @@ import type { Project } from '@/types/project'
 import ProjectSettings from './ProjectSettings'
 
 const apiMocks = vi.hoisted(() => ({
+  isDesktop: true,
   selectFile: vi.fn(),
   selectDirectory: vi.fn(),
   readFile: vi.fn(),
   getAvailableShells: vi.fn(),
   parseGitignore: vi.fn()
+}))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => apiMocks.isDesktop
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -84,6 +89,32 @@ describe('ProjectSettings chrome', () => {
       }
     })
     apiMocks.parseGitignore.mockResolvedValue({ success: true, data: [] })
+  })
+
+  it('saves the engine preference only after Save and resets when switching projects', async () => {
+    renderSettings([firstProject, secondProject])
+    const select = screen.getByLabelText('Terminal screen observation')
+    expect(select).toHaveValue('existing')
+    fireEvent.change(select, { target: { value: 'ghostty-vt' } })
+    expect(useProjectStore.getState().projects[0].terminalScreenEngine).toBeUndefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(useProjectStore.getState().projects[0].terminalScreenEngine).toBe('ghostty-vt')
+    act(() => useProjectStore.getState().selectProject('project-2'))
+    await waitFor(() =>
+      expect(screen.getByLabelText('Terminal screen observation')).toHaveValue('existing')
+    )
+  })
+
+  it('shows the host preference read-only on web without expanding write permissions', () => {
+    apiMocks.isDesktop = false
+    try {
+      renderSettings([{ ...firstProject, terminalScreenEngine: 'ghostty-vt' }])
+      expect(screen.getByLabelText('Terminal screen observation')).toBeDisabled()
+      expect(screen.getByLabelText('Terminal screen observation')).toHaveValue('ghostty-vt')
+      expect(screen.getByText(/Host project preference/)).toBeInTheDocument()
+    } finally {
+      apiMocks.isDesktop = true
+    }
   })
 
   it('uses compact sidebar chrome for the page header', () => {

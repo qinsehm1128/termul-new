@@ -1,5 +1,17 @@
 import Foundation
 
+/// Host-side terminal screen preference, not the iOS terminal renderer.
+/// Older hosts omit this field; newer hosts may introduce engines we do not know.
+enum HostTerminalScreenEngine: String, Decodable, Sendable {
+    case existing
+    case ghosttyVT = "ghostty-vt"
+
+    init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: rawValue) ?? .existing
+    }
+}
+
 struct HostProject: Identifiable, Hashable, Decodable, Sendable {
     let id: String
     var name: String
@@ -8,11 +20,12 @@ struct HostProject: Identifiable, Hashable, Decodable, Sendable {
     var isArchived: Bool
     var isDefault: Bool
     var liveTerminalCount: Int
+    let terminalScreenEngine: HostTerminalScreenEngine
 
     var isRunning: Bool { liveTerminalCount > 0 }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, color, path, isArchived, isDefault, liveTerminalCount
+        case id, name, color, path, isArchived, isDefault, liveTerminalCount, terminalScreenEngine
     }
 
     init(from decoder: Decoder) throws {
@@ -24,6 +37,7 @@ struct HostProject: Identifiable, Hashable, Decodable, Sendable {
         isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
         isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
         liveTerminalCount = try container.decodeIfPresent(Int.self, forKey: .liveTerminalCount) ?? 0
+        terminalScreenEngine = try container.decodeIfPresent(HostTerminalScreenEngine.self, forKey: .terminalScreenEngine) ?? .existing
     }
 }
 

@@ -49,6 +49,42 @@ describe('use-projects-persistence', () => {
     })
   })
 
+  it.each([
+    undefined,
+    'existing',
+    'ghostty-vt',
+    'future-engine'
+  ])('normalizes and persists the host engine preference %s', async (engine) => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        projects: [
+          {
+            id: 'project-1',
+            name: 'Engine',
+            color: 'blue',
+            terminalScreenEngine: engine
+          }
+        ],
+        activeProjectId: 'project-1',
+        updatedAt: '2026-10-23T00:00:00Z'
+      }
+    })
+    const { unmount } = renderHook(() => useProjectsLoader())
+    await waitFor(() => expect(useProjectStore.getState().isLoaded).toBe(true))
+    const expected = engine === 'ghostty-vt' ? 'ghostty-vt' : 'existing'
+    expect(useProjectStore.getState().projects[0].terminalScreenEngine).toBe(expected)
+    unmount()
+    const { result } = renderHook(() => usePersistProjectsImmediate())
+    await result.current()
+    expect(mockPersistenceWrite).toHaveBeenCalledWith(
+      PersistenceKeys.projects,
+      expect.objectContaining({
+        projects: [expect.objectContaining({ terminalScreenEngine: expected })]
+      })
+    )
+  })
+
   it('stores secret env vars in secure storage and persists redacted placeholders', async () => {
     useProjectStore.setState({
       projects: [

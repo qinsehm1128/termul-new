@@ -20,6 +20,7 @@ import type {
   SessionWorkspaceV1,
   SessionWorkspaceWriteOutcome
 } from './session-workspace.types'
+import type { TerminalScreenEngine } from './terminal-screen.types'
 import type { ConversationHistoryPageV1, GetSessionPayloadPageRequest } from './web-protocol.types'
 import type { WorkspaceManifest, WriteOutcome } from './workspace-manifest.types'
 
@@ -94,6 +95,8 @@ export interface TerminalSpawnOptions {
   conversationId?: ConversationId
   /** Optional attribution/filter only. Never terminal ownership. */
   projectId?: string
+  /** Optional host-side observer for new PTYs; defaults to existing. */
+  terminalScreenEngine?: TerminalScreenEngine
   // Index signature to satisfy Tauri's InvokeArgs constraint
   [key: string]: unknown
 }

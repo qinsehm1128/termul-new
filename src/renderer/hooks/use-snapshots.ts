@@ -1,3 +1,4 @@
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import { useCallback, useEffect } from 'react'
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
@@ -142,6 +143,9 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
     const spawnResult = await terminalApi.spawn({
       conversationId,
       projectId,
+      terminalScreenEngine: resolveTerminalScreenEngine(
+        useProjectStore.getState().projects.find((p) => p.id === projectId)
+      ),
       shell: persistedTerminal.shell as 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | undefined,
       cwd: persistedTerminal.cwd,
       ...(hasProjectEnv ? { env } : {})

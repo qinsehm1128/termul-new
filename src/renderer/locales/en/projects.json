@@ -338,5 +338,10 @@
   "organizeHistoryProgress": "Organizing history… {{seen}}/{{total}} ({{sessions}} indexed)",
   "organizeHistoryCancel": "Stop organizing",
   "organizeHistoryCancelled": "Stopped after indexing {{sessions}} session(s); the index is partial",
-  "organizeHistoryFirstPass": "First pass: the whole history has to be read, which can take minutes (later runs read only what is new)"
+  "organizeHistoryFirstPass": "First pass: the whole history has to be read, which can take minutes (later runs read only what is new)",
+  "terminalScreenEngine": "Terminal screen observation",
+  "terminalScreenEngineExisting": "Existing (default)",
+  "terminalScreenEngineGhostty": "Ghostty VT (experimental)",
+  "terminalScreenEngineDescription": "Host-side observation only; PTY and xterm rendering stay unchanged. Applies to new or respawned terminals. Adopted sessions keep their current engine.",
+  "terminalScreenEngineReadOnly": "Host project preference (read-only on this client). Configure it on the desktop host."
 }

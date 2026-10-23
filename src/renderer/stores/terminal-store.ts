@@ -10,6 +10,7 @@ import type {
   TerminalResourceDescriptor,
   TerminalResourceHydrationStatus
 } from '@shared/types/session-workspace.types'
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import {
   readTerminalResourceFailure,
   type TerminalCleanupRecoveryInput
@@ -1292,6 +1293,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const spawned = await terminalApi.spawn({
       ...(terminal.conversationId ? { conversationId: terminal.conversationId } : {}),
       projectId: terminal.projectId,
+      terminalScreenEngine: resolveTerminalScreenEngine(
+        useProjectStore.getState().projects.find((p) => p.id === terminal.projectId)
+      ),
       shell: terminal.agentProgram ? undefined : terminal.shell,
       cwd: terminal.cwd,
       kind: terminal.kind ?? 'shell',

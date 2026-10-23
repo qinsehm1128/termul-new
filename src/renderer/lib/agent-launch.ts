@@ -1,3 +1,4 @@
+import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types'
 /**
  * ADR-004.4: Launch orchestration for terminal-native CLI agents.
  *
@@ -154,6 +155,9 @@ export async function launchAgentInPane(
     const spawnResult = await terminalApi.spawn({
       ...(conversationId ? { conversationId } : {}),
       projectId,
+      terminalScreenEngine: resolveTerminalScreenEngine(
+        useProjectStore.getState().projects.find((p) => p.id === projectId)
+      ),
       cwd,
       program,
       args,

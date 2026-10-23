@@ -1,5 +1,6 @@
 import type { TerminalAgentSession } from './cli-session.types'
 import type { TerminalModes } from './ipc.types'
+import type { TerminalScreenEngine } from './terminal-screen.types'
 
 // Persisted terminal data (subset of Terminal for storage)
 export interface PersistedTerminal {
@@ -165,6 +166,7 @@ export interface PersistedProject {
   isArchived?: boolean
   gitBranch?: string
   defaultShell?: string
+  terminalScreenEngine?: TerminalScreenEngine
   envVars?: PersistedEnvVariable[]
   // Worktree fields (added by worktree feature)
   worktrees?: PersistedWorktree[]
