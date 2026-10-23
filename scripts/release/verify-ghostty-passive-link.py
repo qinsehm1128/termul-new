@@ -311,7 +311,7 @@ def main(argv=None):
         libraries = list(args.library)
         if args.cargo_target_dir is not None:
             found = sorted(p for p in args.cargo_target_dir.rglob("*")
-                           if p.name in ("libghostty-vt.a", "ghostty-vt.lib")
+                           if p.name in ("libghostty-vt.a", "ghostty-vt-static.lib")
                            and p.parts[-4:-1] == ("out", "native", "lib") and p.is_file())
             if not found:
                 raise AuditError(f"no Ghostty VT archives under {args.cargo_target_dir}/**/out/native/lib")

@@ -38,7 +38,8 @@ build artifacts. All native controls are ignored when `native` is disabled.
 
 An explicit locally trusted prebuild can avoid invoking Zig:
 `SE_GHOSTTY_VT_PREBUILT_DIR=/absolute/prefix`. It must contain
-`lib/libghostty-vt.a` (`ghostty-vt.lib` on MSVC) and a
+`lib/libghostty-vt.a` (`ghostty-vt-static.lib` on MSVC, not the
+DLL import library `ghostty-vt.lib`) and a
 `se-ghostty-vt.manifest` containing these exact `key=value` lines:
 
 ```text

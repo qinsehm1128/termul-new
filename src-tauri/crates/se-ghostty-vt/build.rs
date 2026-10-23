@@ -42,7 +42,9 @@ mod native {
         let source = source.join("ghostty-vt");
         let target = env::var("TARGET").unwrap();
         let lib_name = if target.contains("windows-msvc") {
-            "ghostty-vt.lib"
+            // The un-suffixed .lib is the DLL import library. Only this
+            // combined static archive keeps self-exec hosts DLL-independent.
+            "ghostty-vt-static.lib"
         } else {
             "libghostty-vt.a"
         };
@@ -122,7 +124,11 @@ mod native {
             "cargo:rustc-link-search=native={}",
             prefix.join("lib").display()
         );
-        println!("cargo:rustc-link-lib=static=ghostty-vt");
+        if target.contains("windows-msvc") {
+            println!("cargo:rustc-link-lib=static=ghostty-vt-static");
+        } else {
+            println!("cargo:rustc-link-lib=static=ghostty-vt");
+        }
         if target.contains("windows") {
             println!("cargo:rustc-link-lib=ntdll");
             println!("cargo:rustc-link-lib=kernel32");

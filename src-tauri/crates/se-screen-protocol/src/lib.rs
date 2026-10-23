@@ -8,6 +8,7 @@ pub const MAX_FRAME_BYTES: usize = 512 * 1024;
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 pub const MAX_LINES: usize = 200;
 pub const MAX_CELLS: usize = 262_144;
+pub const MAX_AXIS: u16 = 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(
@@ -88,12 +89,24 @@ pub fn write_frame<T: Serialize>(writer: &mut impl Write, frame: &T) -> io::Resu
 }
 
 pub fn valid_grid(cols: u16, rows: u16) -> bool {
-    cols > 0 && rows > 0 && (cols as usize) * (rows as usize) <= MAX_CELLS
+    cols > 0
+        && rows > 0
+        && cols <= MAX_AXIS
+        && rows <= MAX_AXIS
+        && (cols as usize) * (rows as usize) <= MAX_CELLS
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn grid_limits_match_native_wrapper_before_process_start() {
+        assert!(valid_grid(1024, 256));
+        assert!(!valid_grid(1025, 1));
+        assert!(!valid_grid(1, 1025));
+        assert!(!valid_grid(1024, 257));
+        assert!(!valid_grid(0, 24));
+    }
     #[test]
     fn oversized_frame_rejected_before_payload_allocation() {
         let bytes = ((MAX_FRAME_BYTES + 1) as u32).to_be_bytes();

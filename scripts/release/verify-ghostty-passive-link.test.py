@@ -224,7 +224,7 @@ class PassiveLinkTests(unittest.TestCase):
 
     def test_cli_discovers_all_and_does_not_mask_bad_archive(self):
         first = self.library(ar(("x.o/", macho())), "debug/build/pkg-one/out/native/lib/libghostty-vt.a")
-        second = self.library(ar(("x.obj/", coff())), "x86_64-pc-windows-msvc/release/build/pkg-two/out/native/lib/ghostty-vt.lib")
+        second = self.library(ar(("x.obj/", coff())), "x86_64-pc-windows-msvc/release/build/pkg-two/out/native/lib/ghostty-vt-static.lib")
         self.library(b"ignored", "elsewhere/libghostty-vt.a")
         code, out, err = self.cli("--cargo-target-dir", self.root, "--library", first)
         self.assertEqual((code, out.count("PASS"), err), (0, 2, ""))
