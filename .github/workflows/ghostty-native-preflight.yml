@@ -1,0 +1,61 @@
+name: Ghostty Native Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghostty-native-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-native:
+    name: Verify Windows native VT and passive linkage
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Prepare checksum-pinned Ghostty build toolchain
+        shell: bash
+        run: |
+          python3 scripts/release/prepare-ghostty-toolchain.test.py
+          python3 scripts/release/prepare-ghostty-toolchain.py \
+            --cache-dir "$RUNNER_TEMP/se-ghostty-toolchain" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Verify real Ghostty native VT
+        id: native
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -p se-ghostty-vt --features native
+
+      - name: Verify passive Ghostty native linkage
+        run: |
+          python3 scripts/release/verify-ghostty-passive-link.test.py
+          python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
+
+      # Preserve the exact compiler output even on audit failure. This lets a
+      # format rejection be reproduced without weakening the production gate.
+      # This artifact is diagnostic only, not an installer or a release asset.
+      - name: Upload native archive for audit reproduction
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: windows-ghostty-native-audit-input
+          path: src-tauri/target/debug/build/se-ghostty-vt-*/out/native/lib/ghostty-vt-static.lib
+          if-no-files-found: warn
+          retention-days: 3
