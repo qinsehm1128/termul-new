@@ -339,6 +339,7 @@
   "organizeHistoryCancel": "Stop organizing",
   "organizeHistoryCancelled": "Stopped after indexing {{sessions}} session(s); the index is partial",
   "organizeHistoryFirstPass": "First pass: the whole history has to be read, which can take minutes (later runs read only what is new)",
+  "gitignoreRules": "Git ignore rules",
   "terminalScreenEngine": "Terminal screen observation",
   "terminalScreenEngineExisting": "Existing (default)",
   "terminalScreenEngineGhostty": "Ghostty VT (experimental)",

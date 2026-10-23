@@ -339,6 +339,7 @@
   "organizeHistoryCancel": "停止整理",
   "organizeHistoryCancelled": "已停止，已入库 {{sessions}} 个会话（索引不完整）",
   "organizeHistoryFirstPass": "首次整理，需通读全部历史，可能要几分钟（之后只读新增的部分）",
+  "gitignoreRules": "Git 忽略规则",
   "terminalScreenEngine": "终端屏幕观察引擎",
   "terminalScreenEngineExisting": "现有引擎（默认）",
   "terminalScreenEngineGhostty": "Ghostty VT（实验性）",

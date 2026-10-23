@@ -1,12 +1,26 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockIsTauri, mockClone, mockCancelClone, mockRead, mockWrite } = vi.hoisted(() => ({
+const {
+  mockIsTauri,
+  mockClone,
+  mockCancelClone,
+  mockRead,
+  mockWrite,
+  mockCreateDirectory,
+  mockCreateFile,
+  mockInit,
+  mockAddIgnoreRules
+} = vi.hoisted(() => ({
   mockIsTauri: vi.fn(() => true),
   mockClone: vi.fn(),
   mockCancelClone: vi.fn(),
   mockRead: vi.fn(),
-  mockWrite: vi.fn()
+  mockWrite: vi.fn(),
+  mockCreateDirectory: vi.fn(),
+  mockCreateFile: vi.fn(),
+  mockInit: vi.fn(),
+  mockAddIgnoreRules: vi.fn()
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauri }))
@@ -14,9 +28,15 @@ vi.mock('@/lib/api', () => ({
   dialogApi: { selectDirectory: vi.fn() },
   filesystemApi: {
     readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] }),
-    createDirectory: vi.fn()
+    createDirectory: mockCreateDirectory,
+    createFile: mockCreateFile
   },
-  gitApi: { clone: mockClone, cancelClone: mockCancelClone, init: vi.fn() },
+  gitApi: {
+    clone: mockClone,
+    cancelClone: mockCancelClone,
+    init: mockInit,
+    addIgnoreRules: mockAddIgnoreRules
+  },
   shellApi: {
     getAvailableShells: vi.fn().mockResolvedValue({
       success: true,
@@ -54,6 +74,10 @@ describe('NewProjectModal clone from Git', () => {
     mockClone.mockReset()
     mockRead.mockReset().mockResolvedValue({ success: true, data: ['/Users/qs/project/ns/python'] })
     mockWrite.mockReset().mockResolvedValue({ success: true })
+    mockCreateDirectory.mockReset().mockResolvedValue({ success: true })
+    mockCreateFile.mockReset().mockResolvedValue({ success: true })
+    mockInit.mockReset().mockResolvedValue({ success: true })
+    mockAddIgnoreRules.mockReset().mockResolvedValue(undefined)
   })
 
   it('names the project after the repository and clones into the chosen folder', async () => {
@@ -77,7 +101,9 @@ describe('NewProjectModal clone from Git', () => {
         'prefect_test',
         'blue',
         '/Users/qs/project/ns/python/prefect_test',
-        'zsh'
+        'zsh',
+        undefined,
+        'existing'
       )
     )
     expect(mockClone).toHaveBeenCalledWith(
@@ -92,8 +118,34 @@ describe('NewProjectModal clone from Git', () => {
         '/Users/qs/project/ns/python'
       ])
     )
+    expect(mockAddIgnoreRules).not.toHaveBeenCalled()
   })
 
+  it('forwards selected Ghostty engine and detected shell without env vars when cloning', async () => {
+    mockClone.mockResolvedValue('/Users/qs/project/ns/python/prefect_test')
+    const onCreateProject = await renderModal()
+
+    fireEvent.change(screen.getByLabelText('Clone from Git (optional)'), {
+      target: { value: 'https://github.com/qinsehm1128/prefect_test.git' }
+    })
+    fireEvent.change(screen.getByLabelText(/Terminal screen observation/i), {
+      target: { value: 'ghostty-vt' }
+    })
+    fireEvent.click(await screen.findByRole('button', { name: '/Users/qs/project/ns/python' }))
+    fireEvent.click(createButton())
+
+    await waitFor(() =>
+      expect(onCreateProject).toHaveBeenCalledWith(
+        'prefect_test',
+        'blue',
+        '/Users/qs/project/ns/python/prefect_test',
+        'zsh',
+        undefined,
+        'ghostty-vt'
+      )
+    )
+    expect(mockAddIgnoreRules).not.toHaveBeenCalled()
+  })
   it('does not create a project for a cancelled clone', async () => {
     mockClone.mockRejectedValue('GIT_CLONE_CANCELLED')
     const onCreateProject = await renderModal()

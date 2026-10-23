@@ -197,6 +197,30 @@ describe('project-store', () => {
       expect(projects.length).toBe(initialCount + 1)
     })
 
+    it('persists the selected terminal screen engine', () => {
+      const { addProject } = useProjectStore.getState()
+
+      const newProject = addProject(
+        'Ghostty Project',
+        'blue',
+        '/tmp/ghostty',
+        'zsh',
+        undefined,
+        'ghostty-vt'
+      )
+
+      expect(newProject.terminalScreenEngine).toBe('ghostty-vt')
+      expect(
+        useProjectStore.getState().projects.find((project) => project.id === newProject.id)
+          ?.terminalScreenEngine
+      ).toBe('ghostty-vt')
+    })
+
+    it('defaults terminal screen engine to existing for legacy callers', () => {
+      const { addProject } = useProjectStore.getState()
+
+      expect(addProject('Default Engine', 'green').terminalScreenEngine).toBe('existing')
+    })
     it('should return the created project', () => {
       const { addProject } = useProjectStore.getState()
       const newProject = addProject('Test Project', 'green')

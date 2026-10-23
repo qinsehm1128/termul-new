@@ -1,3 +1,4 @@
+import type { TerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { randomUUID } from '@/lib/uuid'
@@ -93,7 +94,8 @@ export interface ProjectState {
     color: ProjectColor,
     path?: string,
     defaultShell?: string,
-    envVars?: EnvVariable[]
+    envVars?: EnvVariable[],
+    terminalScreenEngine?: TerminalScreenEngine
   ) => Project
   updateProject: (id: string, updates: Partial<Project>) => void
   deleteProject: (id: string) => void
@@ -197,7 +199,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     color: ProjectColor,
     path?: string,
     defaultShell?: string,
-    envVars?: EnvVariable[]
+    envVars?: EnvVariable[],
+    terminalScreenEngine?: TerminalScreenEngine
   ): Project => {
     const newProject: Project = {
       id: randomUUID(),
@@ -206,6 +209,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       path,
       defaultShell,
       envVars,
+      terminalScreenEngine: terminalScreenEngine ?? 'existing',
       gitBranch: 'main'
     }
     set((state) => ({

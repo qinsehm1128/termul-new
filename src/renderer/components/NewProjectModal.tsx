@@ -1,16 +1,20 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectTemplate } from '@shared/types/project-template.types'
+import type { TerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ChevronDown, X } from 'lucide-react'
-import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { runCloneWithProgress } from '@/components/CloneProgressToast'
+import { TerminalScreenEngineSetting } from '@/components/TerminalScreenEngineSetting'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { loadCloneParentHistory, rememberCloneParent } from '@/lib/clone-parent-history'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cloneTargetPath, parseGitRepoUrl } from '@/lib/git-clone-url'
+import { logFrontendError } from '@/lib/log-api'
+import { getProjectGitignoreDefaults } from '@/lib/project-gitignore-defaults'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
@@ -26,7 +30,8 @@ interface NewProjectModalProps {
     color: ProjectColor,
     path?: string,
     defaultShell?: string,
-    envVars?: EnvVariable[]
+    envVars?: EnvVariable[],
+    terminalScreenEngine?: TerminalScreenEngine
   ) => void
 }
 
@@ -70,7 +75,14 @@ export function NewProjectModal({
   const [shellsLoading, setShellsLoading] = useState(true)
   const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate>(BUILT_IN_TEMPLATES[0])
   const [isFolderEmpty, setIsFolderEmpty] = useState(false)
+  const [isCheckingFolder, setIsCheckingFolder] = useState(false)
+  const [folderCheckedPath, setFolderCheckedPath] = useState('')
   const [initGit, setInitGit] = useState(false)
+  const selectedShellEditedRef = useRef(false)
+  const folderCheckEpochRef = useRef(0)
+  const previousIsOpenRef = useRef(false)
+  const [terminalScreenEngine, setTerminalScreenEngine] = useState<TerminalScreenEngine>('existing')
+  const [gitignoreContent, setGitignoreContent] = useState(getProjectGitignoreDefaults)
   // Cloning is desktop-only: the host runs `git clone` on this machine.
   const canClone = isTauriContext()
   const [repoUrl, setRepoUrl] = useState('')
@@ -90,15 +102,17 @@ export function NewProjectModal({
         const result = await shellApi.getAvailableShells()
         if (result.success && result.data) {
           setShells(result.data)
-          setSelectedShell(result.data.default?.name || fallbackShell)
+          if (!selectedShellEditedRef.current) {
+            setSelectedShell(result.data.default?.name || fallbackShell)
+          }
         } else {
           // Detection failed - use fallback
-          setSelectedShell(fallbackShell)
+          if (!selectedShellEditedRef.current) setSelectedShell(fallbackShell)
         }
       } catch (err) {
         console.error('Failed to detect shells:', err)
         setShells(null)
-        setSelectedShell(fallbackShell)
+        if (!selectedShellEditedRef.current) setSelectedShell(fallbackShell)
       } finally {
         setShellsLoading(false)
       }
@@ -108,40 +122,60 @@ export function NewProjectModal({
 
   // Check if chosen directory is empty
   useEffect(() => {
+    const trimmed = path.trim()
+    const epoch = folderCheckEpochRef.current + 1
+    folderCheckEpochRef.current = epoch
+    setIsFolderEmpty(false)
+    setFolderCheckedPath('')
+    setInitGit(false)
+    setIsCheckingFolder(Boolean(trimmed))
+
+    if (!trimmed) return
+
     const checkEmpty = async () => {
-      const trimmed = path.trim()
-      if (!trimmed) {
-        setIsFolderEmpty(false)
-        return
-      }
       try {
         const result = await filesystemApi.readDirectory(trimmed)
+        if (folderCheckEpochRef.current !== epoch) return
         if (result.success && result.data) {
           setIsFolderEmpty(result.data.length === 0)
+          setFolderCheckedPath(trimmed)
         } else {
           // If directory doesn't exist yet, treat it as empty
           setIsFolderEmpty(true)
+          setFolderCheckedPath(trimmed)
         }
       } catch {
-        setIsFolderEmpty(true)
+        if (folderCheckEpochRef.current === epoch) {
+          setIsFolderEmpty(true)
+          setFolderCheckedPath(trimmed)
+        }
+      } finally {
+        if (folderCheckEpochRef.current === epoch) setIsCheckingFolder(false)
       }
     }
     void checkEmpty()
   }, [path])
 
-  // Reset form when modal opens (use defaults)
+  // Reset form only when the modal transitions from closed to open.
   useEffect(() => {
-    if (isOpen) {
-      setName('')
-      setSelectedColor(defaultColor || 'blue')
-      setPath('')
-      setSelectedShell(shells?.default?.name || fallbackShell)
-      setSelectedTemplate(BUILT_IN_TEMPLATES[0])
-      setIsFolderEmpty(false)
-      setInitGit(false)
-      setRepoUrl('')
-      setNameEdited(false)
-    }
+    const didOpen = isOpen && !previousIsOpenRef.current
+    previousIsOpenRef.current = isOpen
+    if (!didOpen) return
+
+    selectedShellEditedRef.current = false
+    setName('')
+    setSelectedColor(defaultColor || 'blue')
+    setPath('')
+    setSelectedShell(shells?.default?.name || fallbackShell)
+    setSelectedTemplate(BUILT_IN_TEMPLATES[0])
+    setIsFolderEmpty(false)
+    setFolderCheckedPath('')
+    setIsCheckingFolder(false)
+    setInitGit(false)
+    setTerminalScreenEngine('existing')
+    setGitignoreContent(getProjectGitignoreDefaults())
+    setRepoUrl('')
+    setNameEdited(false)
   }, [isOpen, defaultColor, shells?.default?.name, fallbackShell])
 
   useEffect(() => {
@@ -184,8 +218,10 @@ export function NewProjectModal({
     (template: ProjectTemplate) => {
       setSelectedTemplate(template)
       if (template.defaultShell) {
+        selectedShellEditedRef.current = true
         setSelectedShell(template.defaultShell)
       } else {
+        selectedShellEditedRef.current = true
         setSelectedShell(shells?.default?.name || fallbackShell)
       }
     },
@@ -197,7 +233,6 @@ export function NewProjectModal({
     const parentDir = path.trim()
     if (!parsedRepo || !trimmedName || !parentDir) return
     const shellToUse = selectedShell || fallbackShell
-
     void runCloneWithProgress({
       repoName: parsedRepo.repoName,
       clone: (cloneId, onProgress) =>
@@ -208,18 +243,26 @@ export function NewProjectModal({
       void rememberCloneParent(parentDir).catch(() => {
         // A failed history write must not undo a successful clone.
       })
-      onCreateProject(trimmedName, selectedColor, clonedPath, shellToUse)
+      onCreateProject(
+        trimmedName,
+        selectedColor,
+        clonedPath,
+        shellToUse,
+        undefined,
+        terminalScreenEngine
+      )
     })
     onClose()
   }, [
     parsedRepo,
     name,
     path,
+    selectedColor,
     selectedShell,
     fallbackShell,
-    selectedColor,
     onCreateProject,
-    onClose
+    onClose,
+    terminalScreenEngine
   ])
 
   const handleCreate = useCallback(() => {
@@ -231,7 +274,13 @@ export function NewProjectModal({
       return
     }
 
-    if (trimmedName && trimmedPath) {
+    if (
+      trimmedName &&
+      trimmedPath &&
+      !isCheckingFolder &&
+      folderCheckedPath === trimmedPath &&
+      isFolderEmpty
+    ) {
       // Use selected shell or fallback
       const shellToUse = selectedShell || fallbackShell
 
@@ -258,8 +307,11 @@ export function NewProjectModal({
             await gitApi.init(trimmedPath)
             gitInitSucceeded = true
           } catch (err) {
-            console.error('Git init failed during scaffolding:', err)
-            // Continue even if git init fails, so files are still scaffolded
+            void logFrontendError({
+              source: 'new-project.git-init',
+              message: 'Git initialization failed'
+            })
+            throw new Error(err instanceof Error ? err.message : String(err))
           }
         }
 
@@ -271,7 +323,26 @@ export function NewProjectModal({
           }
         }
 
-        onCreateProject(trimmedName, selectedColor, trimmedPath, shellToUse, envVarsToPass)
+        if (initGit && gitInitSucceeded && gitignoreContent.trim()) {
+          try {
+            await gitApi.addIgnoreRules(trimmedPath, gitignoreContent)
+          } catch (err) {
+            void logFrontendError({
+              source: 'new-project.gitignore',
+              message: 'Failed to write custom Git ignore rules'
+            })
+            throw new Error(err instanceof Error ? err.message : String(err))
+          }
+        }
+
+        onCreateProject(
+          trimmedName,
+          selectedColor,
+          trimmedPath,
+          shellToUse,
+          envVarsToPass,
+          terminalScreenEngine
+        )
 
         return { gitInitSucceeded }
       }
@@ -305,6 +376,11 @@ export function NewProjectModal({
     fallbackShell,
     selectedTemplate,
     initGit,
+    gitignoreContent,
+    isCheckingFolder,
+    folderCheckedPath,
+    isFolderEmpty,
+    terminalScreenEngine,
     isCloning,
     handleClone,
     t,
@@ -312,7 +388,13 @@ export function NewProjectModal({
     onClose
   ])
 
-  const canCreate = Boolean(name.trim() && path.trim()) && !repoUrlInvalid
+  const canCreate = isCloning
+    ? Boolean(name.trim() && path.trim()) && !repoUrlInvalid
+    : Boolean(name.trim() && path.trim()) &&
+      !repoUrlInvalid &&
+      !isCheckingFolder &&
+      folderCheckedPath === path.trim() &&
+      isFolderEmpty
 
   const handleBrowse = useCallback(async () => {
     const result = await dialogApi.selectDirectory()
@@ -512,24 +594,53 @@ export function NewProjectModal({
                   </div>
                 )}
 
-                {!isCloning && isFolderEmpty && (
-                  <div className="flex items-center gap-2 mt-2 px-1">
-                    <input
-                      type="checkbox"
-                      id="init-git"
-                      checked={initGit}
-                      onChange={(e) => setInitGit(e.target.checked)}
-                      className="rounded border-border text-primary bg-secondary focus:ring-primary h-3.5 w-3.5"
-                    />
+                {!isCloning &&
+                  isFolderEmpty &&
+                  !isCheckingFolder &&
+                  folderCheckedPath === path.trim() && (
+                    <div className="flex items-center gap-2 mt-2 px-1">
+                      <input
+                        type="checkbox"
+                        id="init-git"
+                        checked={initGit}
+                        onChange={(e) => setInitGit(e.target.checked)}
+                        className="rounded border-border text-primary bg-secondary focus:ring-primary h-3.5 w-3.5"
+                      />
+                      <label
+                        htmlFor="init-git"
+                        className="text-xs text-muted-foreground select-none cursor-pointer"
+                      >
+                        {t('initializeGit')}
+                      </label>
+                    </div>
+                  )}
+              </div>
+
+              <TerminalScreenEngineSetting
+                value={terminalScreenEngine}
+                onChange={setTerminalScreenEngine}
+              />
+              {!isCloning &&
+                initGit &&
+                isFolderEmpty &&
+                !isCheckingFolder &&
+                folderCheckedPath === path.trim() && (
+                  <div className="space-y-1.5">
                     <label
-                      htmlFor="init-git"
-                      className="text-xs text-muted-foreground select-none cursor-pointer"
+                      htmlFor="project-gitignore"
+                      className="text-xs font-medium text-muted-foreground"
                     >
-                      {t('initializeGit')}
+                      {t('gitignoreRules')}
                     </label>
+                    <textarea
+                      id="project-gitignore"
+                      value={gitignoreContent}
+                      onChange={(e) => setGitignoreContent(e.target.value)}
+                      rows={4}
+                      className="w-full resize-y rounded-md border border-input/80 bg-secondary/35 px-2.5 py-2 font-mono text-xs text-foreground outline-none focus-visible:border-ring/70 focus-visible:ring-1 focus-visible:ring-ring/35"
+                    />
                   </div>
                 )}
-              </div>
 
               <div className="space-y-2">
                 <label className="text-xs font-medium text-muted-foreground">{t('color')}</label>
@@ -563,7 +674,10 @@ export function NewProjectModal({
                   <div className="relative">
                     <select
                       value={selectedShell}
-                      onChange={(e) => setSelectedShell(e.target.value)}
+                      onChange={(e) => {
+                        selectedShellEditedRef.current = true
+                        setSelectedShell(e.target.value)
+                      }}
                       className="h-8 w-full cursor-pointer appearance-none rounded-md border border-input/80 bg-secondary/35 px-2.5 pr-8 text-sm text-foreground outline-none focus-visible:border-ring/70 focus-visible:ring-1 focus-visible:ring-ring/35"
                     >
                       {shells?.available && shells.available.length > 0 ? (
