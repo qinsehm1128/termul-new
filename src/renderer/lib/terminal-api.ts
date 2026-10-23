@@ -40,6 +40,7 @@ const runtimeSpawn = runtimeTerminalApi.spawn.bind(runtimeTerminalApi)
  * does not adopt it a second time as a terminal opened on another device.
  */
 const runtimeAttach = runtimeTerminalApi.attach.bind(runtimeTerminalApi)
+const runtimeResume = runtimeTerminalApi.resume.bind(runtimeTerminalApi)
 const runtimeList = runtimeTerminalApi.list?.bind(runtimeTerminalApi)
 const runtimeTerminate = runtimeTerminalApi.terminate.bind(runtimeTerminalApi)
 const runtimeWatch = runtimeTerminalApi.watch?.bind(runtimeTerminalApi)
@@ -56,6 +57,16 @@ export const terminalApi: TerminalApi = Object.assign(runtimeTerminalApi, {
       useScreenObservationStore
         .getState()
         .recordHost(result.data.id, { ...result.data, claim: args[1] })
+    return result
+  },
+  resume: async (request: TerminalResumeRequest) => {
+    const result = await runtimeResume(request)
+    if (result.success) {
+      useScreenObservationStore.getState().recordHost(result.data.terminal.id, {
+        ...result.data.terminal,
+        claim: result.data.claim
+      })
+    }
     return result
   },
   list: runtimeList
