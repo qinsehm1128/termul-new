@@ -202,7 +202,9 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml -p se-ghostty-vt --features native
 
       - name: Verify passive Ghostty native linkage
+        shell: bash
         run: |
+          set -euo pipefail
           python3 scripts/release/verify-ghostty-passive-link.test.py
           python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
 
@@ -385,7 +387,9 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml -p se-ghostty-vt --features native
 
       - name: Verify passive Ghostty native linkage
+        shell: bash
         run: |
+          set -euo pipefail
           python3 scripts/release/verify-ghostty-passive-link.test.py
           python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
 

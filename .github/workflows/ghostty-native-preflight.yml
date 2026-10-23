@@ -2,6 +2,11 @@ name: Ghostty Native Preflight
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_revision:
+        description: Full commit SHA to verify before creating its release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,7 +24,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.expected_revision }}
           persist-credentials: false
+
+      - name: Verify immutable preflight revision
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ inputs.expected_revision }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          if [[ ! "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]] || [[ "$head" != "$EXPECTED_REVISION" ]] || [[ "$GITHUB_SHA" != "$EXPECTED_REVISION" ]]; then
+            echo "preflight revision mismatch: checkout=$head workflow=$GITHUB_SHA expected=$EXPECTED_REVISION" >&2
+            exit 1
+          fi
+          echo "Native preflight bound to $head"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -44,7 +63,9 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml -p se-ghostty-vt --features native
 
       - name: Verify passive Ghostty native linkage
+        shell: bash
         run: |
+          set -euo pipefail
           python3 scripts/release/verify-ghostty-passive-link.test.py
           python3 scripts/release/verify-ghostty-passive-link.py --cargo-target-dir src-tauri/target
 
@@ -57,5 +78,5 @@ jobs:
         with:
           name: windows-ghostty-native-audit-input
           path: src-tauri/target/debug/build/se-ghostty-vt-*/out/native/lib/ghostty-vt-static.lib
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 3
