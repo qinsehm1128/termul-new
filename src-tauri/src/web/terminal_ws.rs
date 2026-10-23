@@ -961,6 +961,80 @@ async fn handle(
             )
             .await
         }
+        "screen_status" | "screen_read" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                terminal_id: String,
+                max_lines: Option<usize>,
+            }
+            let params: Params = serde_json::from_value(request.payload.clone())
+                .map_err(|_| ("VALIDATION_ERROR", "invalid screen request".to_owned()))?;
+            let expected = ctx
+                .scope(&params.terminal_id)
+                .filter(|scope| !scope.cleanup_only)
+                .ok_or_else(|| unauthorized_error(&params.terminal_id))?;
+            let generation = expected
+                .claim_generation
+                .ok_or_else(|| unauthorized_error(&params.terminal_id))?;
+            let max_lines = params.max_lines.unwrap_or(80);
+            let error = || {
+                (
+                    "UNAUTHORIZED",
+                    "screen access denied or unavailable".to_owned(),
+                )
+            };
+            let value = if let Some(core) = state.terminal.core_client() {
+                if request.type_ == "screen_status" {
+                    serde_json::to_value(
+                        core.screen_status_scoped(
+                            &params.terminal_id,
+                            generation,
+                            expected.conversation_id,
+                        )
+                        .await
+                        .map_err(|_| error())?,
+                    )
+                } else {
+                    serde_json::to_value(
+                        core.screen_read_scoped(
+                            &params.terminal_id,
+                            generation,
+                            expected.conversation_id,
+                            max_lines,
+                        )
+                        .await
+                        .map_err(|_| error())?,
+                    )
+                }
+            } else if request.type_ == "screen_status" {
+                serde_json::to_value(
+                    state
+                        .pty
+                        .screen_status_scoped(
+                            &params.terminal_id,
+                            generation,
+                            expected.conversation_id,
+                        )
+                        .await
+                        .map_err(|_| error())?,
+                )
+            } else {
+                serde_json::to_value(
+                    state
+                        .pty
+                        .screen_read_scoped(
+                            &params.terminal_id,
+                            generation,
+                            expected.conversation_id,
+                            max_lines,
+                        )
+                        .await
+                        .map_err(|_| error())?,
+                )
+            };
+            value.map_err(|_| ("INTERNAL_ERROR", "screen response encoding".to_owned()))
+        }
         "write" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             authorized_terminal_scope(state, ctx, terminal_id)?;
@@ -1771,6 +1845,7 @@ async fn spawn_project_terminal(
         project.cwd.clone(),
         intent.cols,
         intent.rows,
+        project.terminal_screen_engine,
     );
     let project_claim_scope = options.conversation_id;
     let spawned = if let Some(client) = state.terminal.core_client() {
@@ -1861,6 +1936,8 @@ fn live_terminal_summary(
         "rows": *instance.rows.read(),
         "conversationId": instance.conversation_id,
         "projectId": instance.project_id,
+        "terminalScreenEngine": instance.terminal_screen_engine,
+        "screenObservation": instance.screen_observation(),
         "title": terminal_display_title(&cwd, &instance.shell),
         "gitBranch": git_branch,
         "displayMode": instance.display_mode(),
@@ -1892,6 +1969,8 @@ fn live_terminal_summary_from_status(
         "rows": status.rows,
         "conversationId": status.conversation_id,
         "projectId": status.project_id,
+        "terminalScreenEngine": status.terminal_screen_engine,
+        "screenObservation": status.screen_observation,
         "title": terminal_display_title(&cwd, &status.shell),
         "gitBranch": git_branch,
         "displayMode": "desktop",
@@ -2222,6 +2301,7 @@ mod tests {
                 is_archived: false,
                 is_default: true,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             Some("project-1".into()),
         );
@@ -2583,6 +2663,59 @@ mod tests {
             .is_err());
         assert!(state.pty.verify_claim(&terminal_id, &successor).is_ok());
 
+        state.pty.terminate(&terminal_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn screen_requests_require_live_connection_scope_and_generation() {
+        let state = terminal_test_state();
+        let temp = tempfile::tempdir().unwrap();
+        let conversation_id = conversation_id();
+        let spawned = state
+            .pty
+            .spawn(
+                SpawnOptions {
+                    conversation_id: Some(conversation_id),
+                    project_id: Some("not-authorization".into()),
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    shell: Some("/bin/sh".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let terminal_id = spawned.info.id.clone();
+        let authority = terminal_authority();
+        let principal = RemotePrincipal::for_tests(1);
+        let generation = state.pty.claim_generation(&terminal_id).unwrap();
+        let mut ctx = ConnectionContext::new(Arc::new(RwLock::new(HashMap::new())), false);
+        let (tx, _rx) = mpsc::channel(8);
+        let request = || Request {
+            id: "screen-read".into(),
+            type_: "screen_read".into(),
+            payload: json!({"terminalId":terminal_id}),
+        };
+        assert!(
+            handle(request(), &state, &authority, &principal, &tx, &mut ctx)
+                .await
+                .is_err()
+        );
+        ctx.authorize(&terminal_id, conversation_id, generation);
+        let reply = handle(request(), &state, &authority, &principal, &tx, &mut ctx)
+            .await
+            .unwrap();
+        assert_eq!(reply["status"]["state"], "disabled");
+        assert!(reply["text"].is_null());
+        state
+            .pty
+            .rotate_claim(&terminal_id, &spawned.claim)
+            .unwrap();
+        assert!(
+            handle(request(), &state, &authority, &principal, &tx, &mut ctx)
+                .await
+                .is_err()
+        );
         state.pty.terminate(&terminal_id).await.unwrap();
     }
 

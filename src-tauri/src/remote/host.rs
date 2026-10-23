@@ -1811,6 +1811,7 @@ mod tests {
         // Seed the registry with both projects; dir_a is the default (the
         // "active" project the host should bind to).
         let project_a = crate::web::ProjectSummary {
+            terminal_screen_engine: Default::default(),
             id: "p-a".to_string(),
             name: "Project A".to_string(),
             color: "blue".to_string(),
@@ -1820,6 +1821,7 @@ mod tests {
             live_terminal_count: 0,
         };
         let project_b = crate::web::ProjectSummary {
+            terminal_screen_engine: Default::default(),
             id: "p-b".to_string(),
             name: "Project B".to_string(),
             color: "green".to_string(),

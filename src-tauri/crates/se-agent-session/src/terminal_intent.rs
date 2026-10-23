@@ -75,6 +75,7 @@ impl TerminalSpawnIntentV1 {
         };
 
         Ok(SpawnOptions {
+            terminal_screen_engine: Default::default(),
             shell: None,
             cwd: Some(cwd),
             env: None,

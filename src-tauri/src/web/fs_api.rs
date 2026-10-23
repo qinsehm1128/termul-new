@@ -2482,6 +2482,7 @@ mod tests {
                     is_archived: false,
                     is_default: true,
                     live_terminal_count: 0,
+                    terminal_screen_engine: Default::default(),
                 },
                 ProjectSummary {
                     id: "registered".to_string(),
@@ -2491,6 +2492,7 @@ mod tests {
                     is_archived: false,
                     is_default: false,
                     live_terminal_count: 0,
+                    terminal_screen_engine: Default::default(),
                 },
             ],
             Some("default".to_string()),

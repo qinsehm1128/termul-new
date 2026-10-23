@@ -303,6 +303,7 @@ mod tests {
             is_archived: archived,
             is_default: default,
             live_terminal_count: 0,
+            terminal_screen_engine: Default::default(),
         }
     }
 
@@ -687,6 +688,7 @@ mod tests {
                     color: "blue".to_string(),
                     is_archived: false,
                     mcp_servers: vec![],
+                    terminal_screen_engine: Default::default(),
                 },
                 crate::acp::VfsRoot {
                     id: "p-2".to_string(),
@@ -695,6 +697,7 @@ mod tests {
                     color: "green".to_string(),
                     is_archived: false,
                     mcp_servers: vec![],
+                    terminal_screen_engine: Default::default(),
                 },
             ],
             Some("p-1".to_string()),

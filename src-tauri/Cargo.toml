@@ -53,6 +53,7 @@ required-features = ["mcp-test-fixture"]
 
 [features]
 default = []
+ghostty-vt = ["se-ghostty-observer/ghostty-vt"]
 # Enables the se-server binary entry (server_main.rs, required-features on
 # the [[bin]] target). rust-embed is always-on (the desktop's in-process
 # shared-live server serves the SAME embedded bundle in a release install
@@ -73,6 +74,7 @@ mcp-test-fixture = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+se-ghostty-observer = { path = "crates/se-ghostty-observer", default-features = false }
 # Local IPC wire protocol shared with the Core processes.
 se-ipc = { path = "crates/se-ipc" }
 # Domain-free helpers (admission gate, path/shell utilities, session ids).

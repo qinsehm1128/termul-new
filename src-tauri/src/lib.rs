@@ -3624,6 +3624,8 @@ pub fn run() {
             commands::terminal_resume,
             commands::terminal_list,
             commands::terminal_attach,
+            commands::terminal_screen_status,
+            commands::terminal_screen_read,
             commands::terminal_watch,
             commands::terminal_rotate_claim,
             commands::terminal_revoke_claim,

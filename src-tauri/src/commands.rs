@@ -465,8 +465,10 @@ pub(crate) fn project_spawn_options_from_intent(
     cwd: String,
     cols: u16,
     rows: u16,
+    terminal_screen_engine: se_pty::screen::TerminalScreenEngine,
 ) -> SpawnOptions {
     SpawnOptions {
+        terminal_screen_engine,
         shell: None,
         cwd: Some(cwd),
         env: None,
@@ -1162,6 +1164,57 @@ pub async fn terminal_attach(
         "terminal-attach",
     )
     .await)
+}
+
+/// Claim-gated observation; project identity never authorizes screen evidence.
+#[tauri::command]
+pub async fn terminal_screen_status(
+    terminal_id: String,
+    claim: String,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
+) -> Result<IpcResult<se_pty::screen::ScreenObservationStatus>, String> {
+    if let Err(error) = require_host_admission() {
+        return Ok(error);
+    }
+    if let Some(client) = terminal.core_client() {
+        return Ok(ipc_from_core(
+            client.screen_status(&terminal_id, &claim).await,
+        ));
+    }
+    let pty = require_in_process_pty(terminal.inner())?;
+    Ok(match pty.screen_status(&terminal_id, &claim).await {
+        Ok(status) => IpcResult::success(status),
+        Err(_) => IpcResult::error("Unauthorized", "UNAUTHORIZED"),
+    })
+}
+
+#[tauri::command]
+pub async fn terminal_screen_read(
+    terminal_id: String,
+    claim: String,
+    max_lines: Option<usize>,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
+) -> Result<IpcResult<se_pty::screen::ScreenReadReply>, String> {
+    if let Err(error) = require_host_admission() {
+        return Ok(error);
+    }
+    if let Some(client) = terminal.core_client() {
+        return Ok(ipc_from_core(
+            client
+                .screen_read(&terminal_id, &claim, max_lines.unwrap_or(80))
+                .await,
+        ));
+    }
+    let pty = require_in_process_pty(terminal.inner())?;
+    Ok(
+        match pty
+            .screen_read(&terminal_id, &claim, max_lines.unwrap_or(80))
+            .await
+        {
+            Ok(reply) => IpcResult::success(reply),
+            Err(_) => IpcResult::error("Screen read unavailable or unauthorized", "UNAUTHORIZED"),
+        },
+    )
 }
 
 /// Watch a live host PTY from the trusted desktop renderer without rotating

@@ -2,6 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    let observer_build_id = option_env!("TERMUL_GUI_BUILD_ID").unwrap_or(env!("CARGO_PKG_VERSION"));
+    if let Some(code) = se_ghostty_observer::dispatch(observer_build_id) {
+        std::process::exit(code);
+    }
+    se_pty::screen::configure_observer(cfg!(feature = "ghostty-vt"), observer_build_id);
+
     if let Some(role) = std::env::args()
         .skip(1)
         .find_map(|argument| match argument.as_str() {

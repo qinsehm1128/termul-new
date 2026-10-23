@@ -7205,6 +7205,7 @@ mod tests {
         let pending = |request_id: &str, project_id: &str| PendingProjectSwitch {
             request_id: request_id.to_string(),
             target: ProjectSwitchContext {
+                terminal_screen_engine: Default::default(),
                 project_id: project_id.to_string(),
                 cwd: format!("/work/{project_id}"),
                 mcp_servers: Vec::new(),
@@ -8647,6 +8648,7 @@ mod tests {
                 is_archived: false,
                 is_default: false,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             None,
         );
@@ -8708,6 +8710,7 @@ mod tests {
                 is_archived: false,
                 is_default: true,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             Some("p-1".to_string()),
         );
@@ -8761,6 +8764,7 @@ mod tests {
                 is_archived: false,
                 is_default: false,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             None,
         );
@@ -8768,6 +8772,7 @@ mod tests {
         // cold-tab switch must NOT touch them.
         let file_registry = FileProjectRegistry::from_roots(
             vec![crate::acp::VfsRoot {
+                terminal_screen_engine: Default::default(),
                 id: "p-1".to_string(),
                 name: "Proj p-1".to_string(),
                 path: PathBuf::from("/a"),
@@ -8784,6 +8789,7 @@ mod tests {
         ));
         let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
         let target = ProjectSwitchContext {
+            terminal_screen_engine: Default::default(),
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],
@@ -8827,6 +8833,7 @@ mod tests {
                 is_archived: false,
                 is_default: true,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             Some("p-1".to_string()),
         );
@@ -9228,6 +9235,7 @@ mod tests {
         let acp = Arc::new(AcpManager::new(vec![]));
         let relay = Arc::new(WsRelaySink::new());
         let target = ProjectSwitchContext {
+            terminal_screen_engine: Default::default(),
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],
@@ -9272,6 +9280,7 @@ mod tests {
         let acp = Arc::new(AcpManager::new(vec![]));
         let relay = Arc::new(WsRelaySink::new());
         let target = ProjectSwitchContext {
+            terminal_screen_engine: Default::default(),
             project_id: "p-1".to_string(),
             // `register_session` canonicalizes cwd; match exactly so the
             // `(project_id, cwd)` lookup finds the stored session.
@@ -9310,6 +9319,7 @@ mod tests {
                     is_archived: false,
                     is_default: true,
                     live_terminal_count: 0,
+                    terminal_screen_engine: Default::default(),
                 },
                 crate::web::project_registry::ProjectSummary {
                     id: "p-2".to_string(),
@@ -9319,6 +9329,7 @@ mod tests {
                     is_archived: false,
                     is_default: false,
                     live_terminal_count: 0,
+                    terminal_screen_engine: Default::default(),
                 },
             ],
             Some("p-1".to_string()),
@@ -9326,6 +9337,7 @@ mod tests {
         let file_registry = FileProjectRegistry::from_roots(
             vec![
                 crate::acp::VfsRoot {
+                    terminal_screen_engine: Default::default(),
                     id: "p-1".to_string(),
                     name: "Proj p-1".to_string(),
                     path: PathBuf::from("/a"),
@@ -9334,6 +9346,7 @@ mod tests {
                     mcp_servers: vec![],
                 },
                 crate::acp::VfsRoot {
+                    terminal_screen_engine: Default::default(),
                     id: "p-2".to_string(),
                     name: "Proj p-2".to_string(),
                     path: PathBuf::from("/b"),
@@ -9392,6 +9405,7 @@ mod tests {
                     is_archived: false,
                     is_default: true,
                     live_terminal_count: 0,
+                    terminal_screen_engine: Default::default(),
                 },
                 crate::web::project_registry::ProjectSummary {
                     id: "p-archived".to_string(),
@@ -9401,6 +9415,7 @@ mod tests {
                     is_archived: true,
                     is_default: false,
                     live_terminal_count: 0,
+                    terminal_screen_engine: Default::default(),
                 },
                 crate::web::project_registry::ProjectSummary {
                     id: "p-pathless".to_string(),
@@ -9410,6 +9425,7 @@ mod tests {
                     is_archived: false,
                     is_default: false,
                     live_terminal_count: 0,
+                    terminal_screen_engine: Default::default(),
                 },
             ],
             Some("p-1".to_string()),
@@ -9461,6 +9477,7 @@ mod tests {
                 is_archived: false,
                 is_default: false,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             None,
         );
@@ -9521,6 +9538,7 @@ mod tests {
                 is_archived: false,
                 is_default: true,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             Some("p-1".to_string()),
         );
@@ -9528,6 +9546,7 @@ mod tests {
         // NOT touch them.
         let file_registry = FileProjectRegistry::from_roots(
             vec![crate::acp::VfsRoot {
+                terminal_screen_engine: Default::default(),
                 id: "p-1".to_string(),
                 name: "Proj p-1".to_string(),
                 path: PathBuf::from("/a"),
@@ -9549,6 +9568,7 @@ mod tests {
         let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
         let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
         let target = ProjectSwitchContext {
+            terminal_screen_engine: Default::default(),
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],
@@ -9603,6 +9623,7 @@ mod tests {
                 is_archived: false,
                 is_default: false,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             None,
         );
@@ -9678,6 +9699,7 @@ mod tests {
                 is_archived: false,
                 is_default: false,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             None,
         );
@@ -9685,6 +9707,7 @@ mod tests {
         // must NOT touch them.
         let file_registry = FileProjectRegistry::from_roots(
             vec![crate::acp::VfsRoot {
+                terminal_screen_engine: Default::default(),
                 id: "p-1".to_string(),
                 name: "Proj p-1".to_string(),
                 path: PathBuf::from("/a"),
@@ -9702,6 +9725,7 @@ mod tests {
         ));
         let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
         let target = ProjectSwitchContext {
+            terminal_screen_engine: Default::default(),
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],
@@ -10188,6 +10212,7 @@ mod tests {
                 is_archived: false,
                 is_default: true,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             Some("p-1".to_string()),
         );
@@ -10197,6 +10222,7 @@ mod tests {
         // The connection is ALREADY on p-1.
         let current_project = Arc::new(parking_lot::Mutex::new(Some("p-1".to_string())));
         let target = ProjectSwitchContext {
+            terminal_screen_engine: Default::default(),
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],

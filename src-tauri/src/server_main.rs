@@ -125,6 +125,13 @@ fn provision_standalone_authority(
 }
 
 fn main() -> ExitCode {
+    let observer_build_id =
+        option_env!("TERMUL_SERVER_BUILD_ID").unwrap_or(env!("CARGO_PKG_VERSION"));
+    if let Some(code) = se_ghostty_observer::dispatch(observer_build_id) {
+        std::process::exit(code);
+    }
+    se_pty::screen::configure_observer(cfg!(feature = "ghostty-vt"), observer_build_id);
+
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
 
     // `--check-update`: operator-explicit one-shot self-update. Handled before

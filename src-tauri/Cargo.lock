@@ -4797,6 +4797,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "se-ghostty-observer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "se-ghostty-vt",
+ "se-screen-protocol",
+]
+
+[[package]]
+name = "se-ghostty-vt"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "flate2",
+ "sha2 0.10.9",
+ "tar",
+]
+
+[[package]]
 name = "se-ipc"
 version = "0.1.0"
 dependencies = [
@@ -4845,6 +4864,7 @@ dependencies = [
  "rust-embed",
  "se-agent-session",
  "se-foundation",
+ "se-ghostty-observer",
  "se-ipc",
  "se-mcp-bridge",
  "se-pty",
@@ -4906,6 +4926,7 @@ dependencies = [
 name = "se-pty"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures",
  "getrandom 0.2.17",
  "lazy_static",
@@ -4915,6 +4936,7 @@ dependencies = [
  "portable-pty",
  "regex",
  "se-foundation",
+ "se-screen-protocol",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4939,6 +4961,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "se-screen-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

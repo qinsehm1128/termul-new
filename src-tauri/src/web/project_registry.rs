@@ -48,6 +48,9 @@ pub struct ProjectSummary {
     pub path: Option<String>,
     /// `true` when the project is archived (rendered greyed, not clickable).
     pub is_archived: bool,
+    /// Host project setting, never a browser-local spawn preference.
+    #[serde(default)]
+    pub terminal_screen_engine: se_pty::screen::TerminalScreenEngine,
     /// `true` when this is the host's default project (set by the host based on
     /// `default_project_id`). Distinct from a client's per-connection active
     /// project — the host cannot know which project a specific client is on.
@@ -116,6 +119,7 @@ pub struct ProjectsChangedPayload {
 pub struct ProjectSwitchContext {
     pub project_id: String,
     pub cwd: String,
+    pub terminal_screen_engine: se_pty::screen::TerminalScreenEngine,
     pub mcp_servers: Vec<McpServer>,
 }
 
@@ -248,6 +252,7 @@ impl ProjectRegistry {
         Some(ProjectSwitchContext {
             project_id: project.id.clone(),
             cwd,
+            terminal_screen_engine: project.terminal_screen_engine,
             mcp_servers,
         })
     }
@@ -509,6 +514,7 @@ impl From<VfsRoot> for ProjectSummary {
             path: (!root.path.as_os_str().is_empty())
                 .then(|| root.path.to_string_lossy().into_owned()),
             is_archived: root.is_archived,
+            terminal_screen_engine: root.terminal_screen_engine,
             is_default: false,
             live_terminal_count: 0,
         }
@@ -557,6 +563,7 @@ mod tests {
             is_archived: archived,
             is_default: false,
             live_terminal_count: 0,
+            terminal_screen_engine: Default::default(),
         }
     }
 
@@ -572,6 +579,44 @@ mod tests {
             color: Some("purple".to_string()),
             preferred_project_id: preferred_project_id.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn terminal_screen_engine_defaults_and_host_switch_preserves_preference() {
+        use se_pty::screen::TerminalScreenEngine;
+        let mut json = serde_json::to_value(sample("p", Some("/project"), false)).unwrap();
+        json.as_object_mut().unwrap().remove("terminalScreenEngine");
+        let old: ProjectSummary = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(old.terminal_screen_engine, TerminalScreenEngine::Existing);
+        json["terminalScreenEngine"] = serde_json::json!("ghostty-vt");
+        let enabled: ProjectSummary = serde_json::from_value(json).unwrap();
+        let reg = ProjectRegistry::new();
+        reg.set(vec![enabled], None);
+        assert_eq!(
+            reg.switch_context("p").unwrap().terminal_screen_engine,
+            TerminalScreenEngine::GhosttyVt
+        );
+        assert_eq!(
+            reg.snapshot().projects[0].terminal_screen_engine,
+            TerminalScreenEngine::GhosttyVt
+        );
+    }
+
+    #[test]
+    fn vfs_terminal_screen_engine_missing_defaults_and_summary_preserves_it() {
+        use se_pty::screen::TerminalScreenEngine;
+        let mut root: VfsRoot = serde_json::from_value(serde_json::json!({
+            "id":"p", "name":"P", "path":"/project", "color":"blue", "isArchived":false
+        }))
+        .unwrap();
+        assert_eq!(root.terminal_screen_engine, TerminalScreenEngine::Existing);
+        root.terminal_screen_engine = TerminalScreenEngine::GhosttyVt;
+        let roundtrip: VfsRoot =
+            serde_json::from_value(serde_json::to_value(&root).unwrap()).unwrap();
+        assert_eq!(
+            ProjectSummary::from(roundtrip).terminal_screen_engine,
+            TerminalScreenEngine::GhosttyVt
+        );
     }
 
     #[test]
@@ -748,6 +793,7 @@ mod tests {
             color: "blue".to_string(),
             is_archived: false,
             mcp_servers: Vec::new(),
+            terminal_screen_engine: Default::default(),
         };
         let summary: ProjectSummary = root.into();
         assert_eq!(summary.id, "p-1");
@@ -773,6 +819,7 @@ mod tests {
             color: "blue".to_string(),
             is_archived: false,
             mcp_servers: Vec::new(),
+            terminal_screen_engine: Default::default(),
         };
         let s: ProjectSummary = empty_root.into();
         assert!(

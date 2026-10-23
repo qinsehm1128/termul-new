@@ -72,6 +72,9 @@ pub struct VfsRoot {
     pub color: String,
     /// `true` when the project is archived (rendered greyed, not switchable).
     pub is_archived: bool,
+    /// Host-owned engine used when spawning project terminals.
+    #[serde(default)]
+    pub terminal_screen_engine: se_pty::screen::TerminalScreenEngine,
     /// Project-scoped MCP attachments passed to ACP `session/new`.
     /// This field is never mapped into the public web project summary or logs.
     #[serde(default)]
@@ -507,6 +510,7 @@ mod tests {
             color: "blue".to_string(),
             is_archived: archived,
             mcp_servers: Vec::new(),
+            terminal_screen_engine: Default::default(),
         }
     }
 
@@ -703,6 +707,7 @@ mod tests {
                     color: "blue".to_string(),
                     is_archived: false,
                     mcp_servers: Vec::new(),
+                    terminal_screen_engine: Default::default(),
                 },
             ],
             None,
@@ -736,6 +741,7 @@ mod tests {
                     color: "blue".to_string(),
                     is_archived: false,
                     mcp_servers: Vec::new(),
+                    terminal_screen_engine: Default::default(),
                 },
             ],
             // Dangling (p-deleted doesn't exist) — must be dropped.
@@ -766,6 +772,7 @@ mod tests {
                 color: "blue".to_string(),
                 is_archived: false,
                 mcp_servers: Vec::new(),
+                terminal_screen_engine: Default::default(),
             }],
             Some("p-empty".to_string()),
         );

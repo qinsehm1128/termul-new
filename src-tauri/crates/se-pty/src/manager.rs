@@ -498,6 +498,8 @@ pub struct TerminalInfo {
     pub pid: u32,
     pub cols: u16,
     pub rows: u16,
+    #[serde(default)]
+    pub terminal_screen_engine: crate::screen::TerminalScreenEngine,
 }
 
 /// Spawn response carrying the terminal info PLUS the issued claim credential.
@@ -541,6 +543,8 @@ pub struct TerminalAttachResult {
     pub rows: u16,
     pub latest_seq: u64,
     pub gap: bool,
+    #[serde(default)]
+    pub terminal_screen_engine: crate::screen::TerminalScreenEngine,
 }
 
 /// Cold-renderer resume request. Unknown fields are rejected so this path can
@@ -609,6 +613,9 @@ pub struct SpawnOptions {
     /// Optional project attribution; never the ownership or authorization key.
     #[serde(default)]
     pub project_id: Option<String>,
+    /// Fixed for the lifetime of this PTY; never inferred from project identity.
+    #[serde(default)]
+    pub terminal_screen_engine: crate::screen::TerminalScreenEngine,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
     // ADR-004.2: terminal-native agent launch.
@@ -631,6 +638,7 @@ impl Default for SpawnOptions {
             env: None,
             conversation_id: None,
             project_id: None,
+            terminal_screen_engine: Default::default(),
             cols: Some(80),
             rows: Some(24),
             program: None,
@@ -1227,6 +1235,8 @@ pub struct TerminalInstance {
     pub conversation_id: ConversationId,
     pub workspace_ref_tracked: bool,
     pub project_id: Option<String>,
+    pub terminal_screen_engine: crate::screen::TerminalScreenEngine,
+    pub screen_observer: Option<Arc<crate::screen::ScreenObserver>>,
     pub child: Arc<AsyncMutex<Option<Box<dyn Child + Send>>>>,
     pub master: Arc<AsyncMutex<Option<Box<dyn MasterPty + Send>>>>,
     pub writer: Arc<AsyncMutex<Option<Box<dyn Write + Send>>>>,
@@ -1294,6 +1304,13 @@ pub struct TerminalInstance {
 }
 
 impl TerminalInstance {
+    pub fn screen_observation(&self) -> crate::screen::ScreenObservationStatus {
+        self.screen_observer
+            .as_ref()
+            .map(|observer| observer.status())
+            .unwrap_or_else(crate::screen::ScreenObservationStatus::disabled)
+    }
+
     #[must_use]
     pub fn lifecycle_state(&self) -> TerminalLifecycleState {
         *self.lifecycle_state.read()
@@ -1794,6 +1811,9 @@ impl PtyManager {
         // the child is dead too, so the descriptor leads nowhere. Quarantine is
         // a staging state on the way out — `force_kill`, which the retry now
         // escalates to, is what resolves it, not a recovered keyboard.
+        if let Some(observer) = &instance.screen_observer {
+            observer.stop();
+        }
         instance.writer.blocking_lock().take();
         Self::cleanup_stages(&instance, driver.as_ref(), &job)
     }
@@ -2229,6 +2249,10 @@ impl PtyManager {
                     .expect("spawn assigned a ConversationId scope"),
                 workspace_ref_tracked,
                 project_id: options.project_id.clone(),
+                terminal_screen_engine: options.terminal_screen_engine,
+                screen_observer: (options.terminal_screen_engine
+                    == crate::screen::TerminalScreenEngine::GhosttyVt)
+                    .then(|| Arc::new(crate::screen::ScreenObserver::start(cols, rows))),
                 child: Arc::new(AsyncMutex::new(Some(Box::new(child)))),
                 master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
                 writer: Arc::new(AsyncMutex::new(Some(queued_input(&id, writer)?))),
@@ -2339,6 +2363,7 @@ impl PtyManager {
                 pid,
                 cols,
                 rows,
+                terminal_screen_engine: options.terminal_screen_engine,
             })
         }
 
@@ -2444,6 +2469,10 @@ impl PtyManager {
                     .expect("spawn assigned a ConversationId scope"),
                 workspace_ref_tracked,
                 project_id: options.project_id.clone(),
+                terminal_screen_engine: options.terminal_screen_engine,
+                screen_observer: (options.terminal_screen_engine
+                    == crate::screen::TerminalScreenEngine::GhosttyVt)
+                    .then(|| Arc::new(crate::screen::ScreenObserver::start(cols, rows))),
                 child: Arc::new(AsyncMutex::new(Some(child))),
                 master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
                 writer: Arc::new(AsyncMutex::new(Some(queued_input(&id, writer)?))),
@@ -2547,6 +2576,7 @@ impl PtyManager {
                 pid,
                 cols,
                 rows,
+                terminal_screen_engine: options.terminal_screen_engine,
             })
         }
     }
@@ -2678,6 +2708,11 @@ impl PtyManager {
                             let _ = writer.flush();
                         }
                     });
+
+                    // Ordered, bounded side tap. No pipe I/O/native calls under this commit.
+                    if let Some(observer) = &instance.screen_observer {
+                        observer.output(&filtered);
+                    }
 
                     // Push filtered (DA-processed) bytes to pending buffer
                     let mut guard = match pending_buf.lock() {
@@ -2941,6 +2976,9 @@ impl PtyManager {
                     .map_err(|error| format!("Failed to resize ConPTY: {error}"))?;
                 *instance.cols.write() = cols;
                 *instance.rows.write() = rows;
+                if let Some(observer) = &instance.screen_observer {
+                    observer.resize(cols, rows, 0, 0);
+                }
                 instance.update_activity();
                 return Ok(());
             }
@@ -2955,6 +2993,10 @@ impl PtyManager {
             .map_err(|error| format!("Failed to resize terminal: {error}"))?;
         *instance.cols.write() = cols;
         *instance.rows.write() = rows;
+        if let Some(observer) = &instance.screen_observer {
+            let (width, height) = instance.cell_px.read().unwrap_or((0, 0));
+            observer.resize(cols, rows, u32::from(width), u32::from(height));
+        }
         instance.update_activity();
         Ok(())
     }
@@ -3444,6 +3486,94 @@ impl PtyManager {
         Arc::clone(&self.exit_code_tracker)
     }
 
+    pub async fn screen_status(
+        &self,
+        terminal_id: &str,
+        claim: &str,
+    ) -> Result<crate::screen::ScreenObservationStatus, String> {
+        self.verify_claim(terminal_id, claim)
+            .map_err(|e| e.to_string())?;
+        let instance = self.get(terminal_id).ok_or("Terminal not found")?;
+        Ok(instance.screen_observation())
+    }
+
+    pub async fn screen_read(
+        &self,
+        terminal_id: &str,
+        claim: &str,
+        max_lines: usize,
+    ) -> Result<crate::screen::ScreenReadReply, String> {
+        self.verify_claim(terminal_id, claim)
+            .map_err(|e| e.to_string())?;
+        let instance = self.get(terminal_id).ok_or("Terminal not found")?;
+        let reply = match &instance.screen_observer {
+            Some(observer) => observer.read(max_lines).await?,
+            None => crate::screen::ScreenReadReply {
+                status: instance.screen_observation(),
+                text: None,
+                applied_seq: None,
+                truncated: false,
+            },
+        };
+        // An ownership transfer during native work invalidates the result too.
+        self.verify_claim(terminal_id, claim)
+            .map_err(|e| e.to_string())?;
+        Ok(reply)
+    }
+
+    pub fn verify_screen_scope(
+        &self,
+        terminal_id: &str,
+        generation: u64,
+        conversation_id: Option<ConversationId>,
+    ) -> Result<Arc<TerminalInstance>, String> {
+        let instance = self
+            .get(terminal_id)
+            .filter(|instance| instance.is_active())
+            .ok_or("Unauthorized")?;
+        if self.claim_generation(terminal_id) != Some(generation)
+            || match conversation_id {
+                Some(conversation_id) => instance.conversation_id != conversation_id,
+                // Legacy/project terminals have no conversation scope in Core status;
+                // their connection grant is still bound to terminal id + generation.
+                None => instance.workspace_ref_tracked,
+            }
+        {
+            return Err("Unauthorized".into());
+        }
+        Ok(instance)
+    }
+    pub async fn screen_status_scoped(
+        &self,
+        terminal_id: &str,
+        generation: u64,
+        conversation_id: Option<ConversationId>,
+    ) -> Result<crate::screen::ScreenObservationStatus, String> {
+        Ok(self
+            .verify_screen_scope(terminal_id, generation, conversation_id)?
+            .screen_observation())
+    }
+    pub async fn screen_read_scoped(
+        &self,
+        terminal_id: &str,
+        generation: u64,
+        conversation_id: Option<ConversationId>,
+        max_lines: usize,
+    ) -> Result<crate::screen::ScreenReadReply, String> {
+        let instance = self.verify_screen_scope(terminal_id, generation, conversation_id)?;
+        let reply = match &instance.screen_observer {
+            Some(observer) => observer.read(max_lines).await?,
+            None => crate::screen::ScreenReadReply {
+                status: instance.screen_observation(),
+                text: None,
+                applied_seq: None,
+                truncated: false,
+            },
+        };
+        self.verify_screen_scope(terminal_id, generation, conversation_id)?;
+        Ok(reply)
+    }
+
     pub fn verify_claim(&self, terminal_id: &str, claim: &str) -> Result<(), ClaimError> {
         let instance = self
             .get(terminal_id)
@@ -3561,6 +3691,7 @@ impl PtyManager {
             .get_cwd(&instance.id)
             .unwrap_or_else(|| instance.cwd.clone());
         TerminalAttachResult {
+            terminal_screen_engine: instance.terminal_screen_engine,
             id: instance.id.clone(),
             shell: instance.shell.clone(),
             cwd,
@@ -4361,6 +4492,209 @@ impl portable_pty::Child for WindowsConPtyChild {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires the production native host via SE_TEST_OBSERVER_BINARY and SE_TEST_OBSERVER_BUILD_ID"]
+    async fn native_self_exec_pty_resize_view_detach_and_claim_transfer() {
+        use crate::screen::{ScreenObservationState, TerminalScreenEngine};
+        assert!(std::env::var_os("SE_TEST_OBSERVER_BINARY").is_some());
+        let manager = crate::test_pty_manager();
+        let temp = tempfile::tempdir().unwrap();
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    program: Some("/bin/cat".into()),
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    terminal_screen_engine: TerminalScreenEngine::GhosttyVt,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let id = &spawned.info.id;
+        let instance = manager.get(id).unwrap();
+        let observer = instance.screen_observer.as_ref().unwrap();
+        async fn ready(observer: &crate::screen::ScreenObserver) {
+            tokio::time::timeout(Duration::from_secs(4), async {
+                loop {
+                    let status = observer.status();
+                    assert_ne!(status.state, ScreenObservationState::Degraded, "{status:?}");
+                    if status.state == ScreenObservationState::Ready {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        ready(observer).await;
+        let seq = observer.status().captured_seq;
+        manager.resize(id, 100, 30, Some((8, 16))).await.unwrap();
+        ready(observer).await;
+        assert_eq!(
+            observer.status().captured_seq,
+            seq + 1,
+            "successful ioctl must enter the observer stream"
+        );
+        manager
+            .set_display_mode(
+                id,
+                TerminalDisplayMode::Phone,
+                Some(40),
+                Some(15),
+                "native-test",
+                false,
+            )
+            .await
+            .unwrap();
+        ready(observer).await;
+        assert_eq!(observer.status().captured_seq, seq + 2);
+        manager.resize(id, 120, 35, None).await.unwrap();
+        assert_eq!(
+            observer.status().captured_seq,
+            seq + 2,
+            "parked desktop size must not change live observer geometry"
+        );
+        manager
+            .set_display_mode(
+                id,
+                TerminalDisplayMode::Desktop,
+                None,
+                None,
+                "native-test",
+                false,
+            )
+            .await
+            .unwrap();
+        ready(observer).await;
+        assert_eq!(observer.status().captured_seq, seq + 3);
+
+        manager.note_view_closed(id);
+        manager
+            .write(id, "native-pty-after-view-close\n")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let reply = manager.screen_read(id, &spawned.claim, 35).await.unwrap();
+                if reply
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.contains("native-pty-after-view-close"))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let rotated = manager.rotate_claim(id, &spawned.claim).unwrap();
+        assert!(manager.screen_read(id, &spawned.claim, 35).await.is_err());
+        ready(observer).await;
+        assert!(manager
+            .screen_read(id, &rotated, 35)
+            .await
+            .unwrap()
+            .text
+            .is_some());
+        manager.terminate(id).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn screen_observation_is_claim_scoped_and_never_changes_pty_mode_or_output() {
+        let manager = crate::test_pty_manager();
+        let temp = tempfile::tempdir().unwrap();
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    shell: Some("/bin/sh".into()),
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    project_id: Some("not-an-authorization-key".into()),
+                    terminal_screen_engine: crate::screen::TerminalScreenEngine::GhosttyVt,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let id = &spawned.info.id;
+        let instance = manager.get(id).unwrap();
+        let generation = manager.claim_generation(id).unwrap();
+        assert!(manager.screen_read(id, "wrong-claim", 10).await.is_err());
+        assert!(manager
+            .screen_status_scoped(id, generation + 1, Some(instance.conversation_id))
+            .await
+            .is_err());
+        if instance.workspace_ref_tracked {
+            assert!(manager
+                .screen_read_scoped(id, generation, None, 10)
+                .await
+                .is_err());
+        } else {
+            assert!(manager
+                .screen_read_scoped(id, generation, None, 10)
+                .await
+                .is_ok());
+        }
+        let wrong_conversation =
+            ConversationId::parse("018f7a1c-1b4d-7c8a-9f01-0123456789ab").unwrap();
+        assert!(manager
+            .screen_read_scoped(id, generation, Some(wrong_conversation), 10)
+            .await
+            .is_err());
+        assert_eq!(
+            manager
+                .screen_status(id, &spawned.claim)
+                .await
+                .unwrap()
+                .terminal_screen_engine,
+            crate::screen::TerminalScreenEngine::GhosttyVt
+        );
+        let rotated = manager.rotate_claim(id, &spawned.claim).unwrap();
+        assert!(manager.screen_read(id, &spawned.claim, 10).await.is_err());
+        assert!(manager
+            .screen_read_scoped(id, generation, Some(instance.conversation_id), 10)
+            .await
+            .is_err());
+        // Closing a view and adopting never retrofits the mode from new config.
+        manager.note_view_closed(id);
+        let replay = instance.subscribe_from(0);
+        assert_eq!(
+            manager
+                .build_attach_result(&instance, &replay)
+                .terminal_screen_engine,
+            crate::screen::TerminalScreenEngine::GhosttyVt
+        );
+        manager
+            .write(id, "printf 'screen-observer-pty-still-alive\n'\n")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let replay = instance.subscribe_from(0);
+                if replay.chunks.iter().any(|frame| {
+                    String::from_utf8_lossy(&frame.data).contains("screen-observer-pty-still-alive")
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(manager
+            .screen_read(id, &rotated, 20)
+            .await
+            .unwrap()
+            .text
+            .is_none());
+        manager.terminate(id).await.unwrap();
+    }
+
     #[derive(Debug)]
     struct FakeCleanupChild {
         exited: bool,
@@ -4417,6 +4751,8 @@ mod tests {
             ConversationId::parse("018f7a1c-1b4d-7c8a-9f01-0123456789ab").unwrap();
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(8);
         let instance = Arc::new(TerminalInstance {
+            terminal_screen_engine: Default::default(),
+            screen_observer: None,
             id: terminal_id.to_string(),
             conversation_id,
             workspace_ref_tracked: true,
@@ -6242,6 +6578,8 @@ mod tests {
             },
         ]);
         let instance = Arc::new(TerminalInstance {
+            terminal_screen_engine: Default::default(),
+            screen_observer: None,
             id: terminal_id.clone(),
             conversation_id,
             workspace_ref_tracked: true,
@@ -6350,6 +6688,7 @@ mod tests {
     #[test]
     fn test_terminal_info_serialization() {
         let info = TerminalInfo {
+            terminal_screen_engine: Default::default(),
             id: "test-123".to_string(),
             shell: "/bin/bash".to_string(),
             cwd: "/home/user".to_string(),
@@ -6391,6 +6730,7 @@ mod tests {
     fn test_spawned_terminal_serializes_flat_with_claim() {
         let spawned = SpawnedTerminal {
             info: TerminalInfo {
+                terminal_screen_engine: Default::default(),
                 id: "terminal-123-0".to_string(),
                 shell: "pwsh".to_string(),
                 cwd: "C:\\work".to_string(),
@@ -6428,15 +6768,25 @@ mod tests {
         let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["cols", "cwd", "id", "pid", "rows", "shell", "claim"]
-                .into_iter()
-                .collect::<std::collections::BTreeSet<&str>>()
+            [
+                "cols",
+                "cwd",
+                "id",
+                "pid",
+                "rows",
+                "shell",
+                "claim",
+                "terminalScreenEngine"
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<&str>>()
         );
     }
 
     #[test]
     fn test_terminal_attach_result_serializes_camelcase_without_claim() {
         let result = TerminalAttachResult {
+            terminal_screen_engine: Default::default(),
             id: "terminal-123-0".to_string(),
             shell: "pwsh".to_string(),
             cwd: "C:\\work".to_string(),
@@ -6473,6 +6823,7 @@ mod tests {
                 "cols",
                 "rows",
                 "latestSeq",
+                "terminalScreenEngine",
                 "gap"
             ]
             .into_iter()
@@ -6484,6 +6835,7 @@ mod tests {
     fn terminal_resume_grant_serializes_exact_camelcase_shape() {
         let grant = TerminalResumeGrant {
             terminal: TerminalAttachResult {
+                terminal_screen_engine: Default::default(),
                 id: "terminal-123-0".to_string(),
                 shell: "pwsh".to_string(),
                 cwd: "C:\\work".to_string(),

@@ -7,6 +7,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    let observer_build_id =
+        option_env!("TERMUL_TERMINAL_CORE_BUILD_ID").unwrap_or(env!("CARGO_PKG_VERSION"));
+    if let Some(code) = se_ghostty_observer::dispatch(observer_build_id) {
+        std::process::exit(code);
+    }
+    se_pty::screen::configure_observer(cfg!(feature = "ghostty-vt"), observer_build_id);
+
     std::process::exit(se_terminal_core::process::run_terminal_core_process(
         se_pty::TerminalProgram {
             name: se_foundation::brand::canonical().display_name.to_string(),

@@ -1,0 +1,18 @@
+[package]
+name = "se-ghostty-observer"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+ghostty-vt = ["se-ghostty-vt/native"]
+
+[[bin]]
+name = "se-ghostty-observer"
+path = "src/main.rs"
+required-features = ["ghostty-vt"]
+
+[dependencies]
+se-screen-protocol = { path = "../se-screen-protocol" }
+se-ghostty-vt = { path = "../se-ghostty-vt", default-features = false }
+base64 = "0.22"

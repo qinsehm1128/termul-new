@@ -43,7 +43,9 @@ const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub const METHOD_SPAWN: &str = "spawn";
 pub const METHOD_LIST: &str = "list";
-pub const METHOD_STATUS: &str = "status";
+pub const METHOD_SCREEN_STATUS: &str = "terminal.screen-status";
+const METHOD_SCREEN_READ: &str = "terminal.screen-read";
+const METHOD_STATUS: &str = "status";
 pub const METHOD_ATTACH: &str = "attach";
 pub const METHOD_WATCH: &str = "watch";
 pub const METHOD_DETACH: &str = "detach";
@@ -96,6 +98,10 @@ pub struct TerminalStatus {
     pub lifecycle: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claim_generation: Option<u64>,
+    #[serde(default)]
+    pub terminal_screen_engine: se_pty::screen::TerminalScreenEngine,
+    #[serde(default = "se_pty::screen::ScreenObservationStatus::disabled")]
+    pub screen_observation: se_pty::screen::ScreenObservationStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +210,8 @@ struct DisplayModeParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AttachReply {
+    #[serde(default)]
+    terminal_screen_engine: se_pty::screen::TerminalScreenEngine,
     id: String,
     shell: String,
     cwd: String,
@@ -224,6 +232,7 @@ impl AttachReply {
         conversation_id: ConversationId,
     ) -> Self {
         Self {
+            terminal_screen_engine: result.terminal_screen_engine,
             id: result.id,
             shell: result.shell,
             cwd: result.cwd,
@@ -239,6 +248,7 @@ impl AttachReply {
 
     fn into_result(self) -> TerminalAttachResult {
         TerminalAttachResult {
+            terminal_screen_engine: self.terminal_screen_engine,
             id: self.id,
             shell: self.shell,
             cwd: self.cwd,
@@ -386,6 +396,8 @@ pub(crate) fn status_from_instance(
         active: instance.is_active(),
         lifecycle: instance.lifecycle_state().as_str().to_string(),
         claim_generation: pty.claim_generation(&instance.id),
+        terminal_screen_engine: instance.terminal_screen_engine,
+        screen_observation: instance.screen_observation(),
     }
 }
 
@@ -664,6 +676,57 @@ async fn handle_method(
         METHOD_LIST => {
             let statuses = list_terminal_statuses(pty);
             serde_json::to_value(&statuses).map_err(|error| invalid(error.to_string()))
+        }
+        METHOD_SCREEN_STATUS | METHOD_SCREEN_READ => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                terminal_id: String,
+                claim: Option<String>,
+                claim_generation: Option<u64>,
+                conversation_id: Option<ConversationId>,
+                max_lines: Option<usize>,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|_| invalid("invalid screen request"))?;
+            let max_lines = params.max_lines.unwrap_or(80);
+            let result = match (
+                params.claim,
+                params.claim_generation,
+                request.method.as_str(),
+            ) {
+                (Some(claim), None, METHOD_SCREEN_STATUS) => serde_json::to_value(
+                    pty.screen_status(&params.terminal_id, &claim)
+                        .await
+                        .map_err(|_| invalid("screen access denied"))?,
+                ),
+                (Some(claim), None, _) => serde_json::to_value(
+                    pty.screen_read(&params.terminal_id, &claim, max_lines)
+                        .await
+                        .map_err(|_| invalid("screen access denied or busy"))?,
+                ),
+                (None, Some(generation), METHOD_SCREEN_STATUS) => serde_json::to_value(
+                    pty.screen_status_scoped(
+                        &params.terminal_id,
+                        generation,
+                        params.conversation_id,
+                    )
+                    .await
+                    .map_err(|_| invalid("screen scope denied"))?,
+                ),
+                (None, Some(generation), _) => serde_json::to_value(
+                    pty.screen_read_scoped(
+                        &params.terminal_id,
+                        generation,
+                        params.conversation_id,
+                        max_lines,
+                    )
+                    .await
+                    .map_err(|_| invalid("screen scope denied or busy"))?,
+                ),
+                _ => return Err(invalid("screen authorization required")),
+            };
+            result.map_err(|_| invalid("screen reply encoding"))
         }
         METHOD_STATUS => {
             let params: TerminalIdParams = serde_json::from_value(request.params.clone())
@@ -1643,6 +1706,54 @@ impl TerminalCoreClient {
         serde_json::from_value(value).map_err(|error| invalid(error.to_string()))
     }
 
+    pub async fn screen_status(
+        &self,
+        terminal_id: &str,
+        claim: &str,
+    ) -> Result<se_pty::screen::ScreenObservationStatus, CoreError> {
+        let value = self
+            .rpc(
+                METHOD_SCREEN_STATUS,
+                json!({ "terminalId":terminal_id, "claim":claim }),
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|_| invalid("screen status encoding"))
+    }
+    pub async fn screen_read(
+        &self,
+        terminal_id: &str,
+        claim: &str,
+        max_lines: usize,
+    ) -> Result<se_pty::screen::ScreenReadReply, CoreError> {
+        let value = self
+            .rpc(
+                METHOD_SCREEN_READ,
+                json!({ "terminalId":terminal_id, "claim":claim, "maxLines":max_lines }),
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|_| invalid("screen reply encoding"))
+    }
+
+    pub async fn screen_status_scoped(
+        &self,
+        terminal_id: &str,
+        generation: u64,
+        conversation_id: Option<ConversationId>,
+    ) -> Result<se_pty::screen::ScreenObservationStatus, CoreError> {
+        let value = self.rpc(METHOD_SCREEN_STATUS,json!({"terminalId":terminal_id,"claimGeneration":generation,"conversationId":conversation_id})).await?;
+        serde_json::from_value(value).map_err(|_| invalid("screen status encoding"))
+    }
+    pub async fn screen_read_scoped(
+        &self,
+        terminal_id: &str,
+        generation: u64,
+        conversation_id: Option<ConversationId>,
+        max_lines: usize,
+    ) -> Result<se_pty::screen::ScreenReadReply, CoreError> {
+        let value = self.rpc(METHOD_SCREEN_READ,json!({"terminalId":terminal_id,"claimGeneration":generation,"conversationId":conversation_id,"maxLines":max_lines})).await?;
+        serde_json::from_value(value).map_err(|_| invalid("screen reply encoding"))
+    }
+
     pub async fn status(&self, terminal_id: &str) -> Result<TerminalStatus, CoreError> {
         let value = self
             .rpc(METHOD_STATUS, json!({ "terminalId": terminal_id }))
@@ -2313,6 +2424,42 @@ mod tests {
         };
         assert_eq!(error.code(), "UNAUTHORIZED");
         assert_eq!(error.client_message(), "unauthorized");
+
+        // Screen body never has a claim-free RPC path. Defaults remain inert.
+        assert!(client
+            .screen_read(&terminal_id, "wrong-claim", 20)
+            .await
+            .is_err());
+        assert!(client
+            .rpc(METHOD_SCREEN_READ, json!({"terminalId":terminal_id}))
+            .await
+            .is_err());
+        let screen = client.screen_status(&terminal_id, &claim).await.unwrap();
+        assert_eq!(
+            screen.state,
+            se_pty::screen::ScreenObservationState::Disabled
+        );
+        assert!(client
+            .screen_read(&terminal_id, &claim, 20)
+            .await
+            .unwrap()
+            .text
+            .is_none());
+        let status = client.status(&terminal_id).await.unwrap();
+        let generation = status.claim_generation.unwrap();
+        let conversation_id = ConversationId::parse(&status.conversation_id).ok();
+        assert!(client
+            .screen_read_scoped(&terminal_id, generation + 1, conversation_id, 20)
+            .await
+            .is_err());
+        // No conversation exists on this legacy terminal, so generation-bound
+        // connection scope is sufficient; a project id alone is never accepted.
+        assert!(client
+            .screen_read_scoped(&terminal_id, generation, conversation_id, 20)
+            .await
+            .unwrap()
+            .text
+            .is_none());
 
         client
             .detach(&terminal_id)

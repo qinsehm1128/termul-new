@@ -117,6 +117,7 @@ mod tests {
                 is_archived: false,
                 is_default: true,
                 live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
             }],
             Some("p1".to_string()),
         );
