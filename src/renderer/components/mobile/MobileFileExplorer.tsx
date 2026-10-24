@@ -37,7 +37,7 @@ import {
 } from '@/components/ui/sheet'
 import { filesystemApi, persistenceApi } from '@/lib/api'
 import { sortDirectoryEntries } from '@/lib/filesystem-sort'
-import { useEditorStore } from '@/stores/editor-store'
+import { useActiveFilePath, useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
 import { useActiveProjectId } from '@/stores/project-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
@@ -122,6 +122,7 @@ export function MobileFileExplorer({
   const roots = rawRoots ?? []
   const { toggleDirectory, refreshDirectory, selectPath, setFocusedRoot } = useFileExplorerActions()
   const reducedMotion = useReducedMotion() ?? false
+  const activeFilePath = useActiveFilePath()
   const projectId = useActiveProjectId()
   const focusedProjectId = roots.find((root) => root.path === rootPath)?.projectId || projectId
 
@@ -347,6 +348,10 @@ export function MobileFileExplorer({
 
   function renderRow(entry: DirectoryEntry): React.ReactNode {
     const isRenaming = renaming?.path === entry.path
+    const isActiveFile =
+      entry.type === 'file' &&
+      activeFilePath !== null &&
+      comparePath(entry.path) === comparePath(activeFilePath)
     return (
       <li key={entry.path}>
         {isRenaming ? (
@@ -363,11 +368,16 @@ export function MobileFileExplorer({
             aria-label={t('files.renameAria', { name: entry.name })}
           />
         ) : (
-          <div className="flex h-11 items-center gap-2 px-2">
+          <div
+            className={`flex h-11 items-center gap-2 border-l-2 px-2 ${
+              isActiveFile ? 'border-primary bg-primary/10' : 'border-transparent'
+            }`}
+          >
             <button
               type="button"
               className="flex h-11 min-w-0 flex-1 items-center gap-2 text-left"
               onClick={() => handleRowTap(entry)}
+              aria-current={isActiveFile ? 'true' : undefined}
               aria-label={
                 entry.type === 'directory'
                   ? t('files.openFolderAria', { name: entry.name })

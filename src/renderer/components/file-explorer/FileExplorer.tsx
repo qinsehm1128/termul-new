@@ -30,7 +30,7 @@ import { readPasteboardFilePaths } from '@/lib/file-pasteboard'
 import { getPreviewKind, isTextPreview } from '@/lib/file-preview'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
-import { useEditorStore } from '@/stores/editor-store'
+import { useActiveFilePath, useEditorStore } from '@/stores/editor-store'
 import {
   useFileExplorer,
   useFileExplorerActions,
@@ -41,6 +41,7 @@ import { useProjectStore } from '@/stores/project-store'
 
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { FileTreeContextMenuContent } from './FileTreeContextMenu'
+import { useRevealActiveFile } from './use-reveal-active-file'
 
 // Read at keydown time so a key recorded in settings applies at once.
 function getShortcutKey(id: string): string {
@@ -92,9 +93,11 @@ export function FileExplorer({
   fillContainer = false
 }: FileExplorerProps): React.JSX.Element {
   const { t } = useTranslation('workspace')
+  const activeFilePath = useActiveFilePath()
   const {
     roots: rawRoots,
     rootPath,
+    isVisible,
     expandedDirs,
     directoryContents,
     loadingDirs,
@@ -712,11 +715,28 @@ export function FileExplorer({
 
   /** Best-effort scroll of a tree row (by entry path) into view. */
   const revealTreePath = useCallback((path: string) => {
-    window.requestAnimationFrame(() => {
-      const row = containerRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+    return window.requestAnimationFrame(() => {
+      const container = containerRef.current
+      const row =
+        container?.querySelector(`[data-path="${CSS.escape(path)}"]`) ??
+        Array.from(container?.querySelectorAll<HTMLElement>('[data-path]') ?? []).find((entry) =>
+          isSameTreePath(entry.dataset.path ?? '', path)
+        )
       row?.scrollIntoView({ block: 'nearest' })
     })
   }, [])
+
+  useRevealActiveFile({
+    activeFilePath,
+    rootPaths: isMultiRoot ? roots.map((root) => root.path) : rootPath ? [rootPath] : [],
+    rootScope: rawRoots,
+    expandedDirs,
+    directoryContents,
+    loadingDirs,
+    enabled: isVisible && !isSearchActive && inlineInput === null,
+    toggleDirectory,
+    revealPath: revealTreePath
+  })
 
   /** Select a newly created entry and scroll its row into view (best-effort). */
   const revealCreatedEntry = useCallback(

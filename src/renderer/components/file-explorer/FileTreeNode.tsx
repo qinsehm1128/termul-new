@@ -10,6 +10,7 @@ import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { useTreeLongPressDrag } from '@/hooks/use-tree-long-press-drag'
 import { isFilePasteboardSupported } from '@/lib/file-pasteboard'
 import { cn } from '@/lib/utils'
+import { useActiveFilePath } from '@/stores/editor-store'
 import { isRejectedMove, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { MaterialFileIcon } from './MaterialFileIcon'
 
@@ -82,6 +83,9 @@ export function FileTreeNode({
 }: FileTreeNodeProps): React.JSX.Element {
   const { t } = useTranslation('projects')
   const isDir = entry.type === 'directory'
+  const activeFilePath = useActiveFilePath()
+  const isActiveFile =
+    !isDir && activeFilePath !== null && isSameTreePath(activeFilePath, entry.path)
   const isIgnored = entry.ignored === true
   const suppressTreeAnimations = useFileExplorerStore((state) => state.suppressTreeAnimations)
   const finalizeDirectoryCollapse = useFileExplorerStore((state) => state.finalizeDirectoryCollapse)
@@ -234,6 +238,7 @@ export function FileTreeNode({
         <ContextMenuTrigger asChild>
           <div
             data-path={entry.path}
+            aria-current={isActiveFile ? 'true' : undefined}
             className={cn(
               'group relative flex h-7 min-w-0 cursor-pointer select-none items-center text-tree-row transition-colors duration-150 ease-[var(--ease-out)]',
               isIgnored && 'opacity-50',
@@ -242,7 +247,11 @@ export function FileTreeNode({
                 ? 'bg-primary/15 ring-1 ring-inset ring-primary'
                 : isSelected
                   ? 'bg-sidebar-accent text-foreground ring-1 ring-inset ring-primary/35'
-                  : 'hover:bg-sidebar-accent/50'
+                  : isActiveFile
+                    ? 'bg-primary/10 text-foreground'
+                    : 'hover:bg-sidebar-accent/50',
+              isActiveFile &&
+                'font-medium before:absolute before:inset-y-1 before:left-0 before:w-0.5 before:rounded-full before:bg-primary'
             )}
             title={isIgnored ? t('fileContext.gitIgnored', { name: entry.name }) : undefined}
             style={{ paddingLeft: depth * 16 + 4 }}

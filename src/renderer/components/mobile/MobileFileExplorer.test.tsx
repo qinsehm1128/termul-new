@@ -35,6 +35,7 @@ const mockRemoveTab = vi.fn()
 // Stable editor state object so tests can seed `openFiles` and have the
 // component read the same map via `useEditorStore.getState()`.
 const mockEditorStore = {
+  activeFilePath: null as string | null,
   openFile: mockOpenFile,
   openFiles: new Map<string, unknown>(),
   closeFile: mockCloseFile
@@ -72,6 +73,7 @@ vi.mock('@/stores/file-explorer-store', () => ({
 }))
 
 vi.mock('@/stores/editor-store', () => ({
+  useActiveFilePath: () => mockEditorStore.activeFilePath,
   useEditorStore: {
     getState: () => mockEditorStore
   }
@@ -159,6 +161,7 @@ describe('MobileFileExplorer', () => {
     mockRenameFile.mockResolvedValue({ success: true, data: undefined })
     mockCopyFile.mockResolvedValue({ success: true, data: undefined })
     mockEditorStore.openFiles.clear()
+    mockEditorStore.activeFilePath = null
   })
 
   it('renders the project folder context and lists root entries when open', async () => {
@@ -171,6 +174,35 @@ describe('MobileFileExplorer', () => {
     expect(await screen.findByText('a.txt')).toBeInTheDocument()
     expect(screen.getByText('sub')).toBeInTheDocument()
     expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
+  it('marks only the active file path and leaves manual selection behavior unchanged', async () => {
+    mockEditorStore.activeFilePath = '/proj/a.txt'
+    setRoot([entry('a.txt', 'file'), entry('b.txt', 'file'), entry('sub', 'directory')])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    const activeRow = await screen.findByRole('button', { name: 'Open a.txt' })
+    expect(activeRow).toHaveAttribute('aria-current', 'true')
+    expect(activeRow.parentElement).toHaveClass('bg-primary/10', 'border-primary')
+    expect(screen.getByRole('button', { name: 'Open b.txt' })).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('button', { name: 'Open folder sub' })).not.toHaveAttribute(
+      'aria-current'
+    )
+
+    fireEvent.contextMenu(activeRow)
+    expect(mockSelectPath).not.toHaveBeenCalled()
+  })
+
+  it('clears the active marker when the editor has no active file', async () => {
+    mockEditorStore.activeFilePath = null
+    setRoot([entry('a.txt', 'file')])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('button', { name: 'Open a.txt' })).not.toHaveAttribute(
+      'aria-current'
+    )
   })
 
   it('lazy-loads the root listing via toggleDirectory when opening with an empty root', async () => {

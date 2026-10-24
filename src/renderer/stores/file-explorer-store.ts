@@ -534,8 +534,14 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       newLoading.add(normalized)
       set({ loadingDirs: newLoading })
 
+      // Root replacement clears loading state and can start another request
+      // for the same path. A late result must not overwrite that tree or clear
+      // its loading flag (including an A -> B -> A project switch).
+      const isCurrentRootSet = (): boolean =>
+        get().roots === roots && (roots.length > 0 || get().rootPath === rootPath)
       try {
         const result = await filesystemApi.readDirectory(normalized)
+        if (!isCurrentRootSet()) return
         if (result.success) {
           const {
             expandedDirs: currentExpanded,
@@ -568,6 +574,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
           })
         }
       } catch (error) {
+        if (!isCurrentRootSet()) return
         if (isRootLoad) {
           const message =
             error instanceof Error
@@ -586,9 +593,11 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
           })
         }
       } finally {
-        const newLoadingDone = new Set(get().loadingDirs)
-        newLoadingDone.delete(normalized)
-        set({ loadingDirs: newLoadingDone })
+        if (isCurrentRootSet()) {
+          const newLoadingDone = new Set(get().loadingDirs)
+          newLoadingDone.delete(normalized)
+          set({ loadingDirs: newLoadingDone })
+        }
       }
     }
   },

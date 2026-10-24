@@ -6,6 +6,8 @@ import { PENDING_REVEAL_LINE_GLOBAL, type PendingRevealLineWindow } from '@/lib/
 import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { FileExplorer } from './FileExplorer'
 
+HTMLElement.prototype.scrollIntoView = vi.fn()
+
 const { mockToastError } = vi.hoisted(() => ({ mockToastError: vi.fn() }))
 
 vi.mock('sonner', () => ({
@@ -40,6 +42,7 @@ const mockSetViewMode = vi.fn()
 const mockUpdateCursorPosition = vi.fn()
 const mockAddEditorTab = vi.fn()
 const mockRemoveTab = vi.fn()
+const mockActiveFilePath = { value: null as string | null }
 
 const mockCreateFile = vi.fn()
 const mockCreateDirectory = vi.fn()
@@ -67,6 +70,7 @@ const mockExplorerState = {
   searchTruncated: false,
   searchScannedFiles: 0,
   searchFailedFiles: 0,
+  loadingDirs: new Set<string>(),
   searchLastCompletedQuery: '',
   // The hook and getState() read one store; share the set the expand-chain mutates.
   get expandedDirs(): Set<string> {
@@ -132,6 +136,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 vi.mock('@/stores/editor-store', () => ({
+  useActiveFilePath: () => mockActiveFilePath.value,
   useEditorStore: {
     getState: vi.fn(() => ({
       openFile: mockOpenFile,
@@ -175,7 +180,11 @@ vi.mock('./FileTreeNode', async (importOriginal) => {
     const expanded = mockStoreGetState.expandedDirs.has(entry.path)
     const children = expanded ? (mockExplorerState.directoryContents.get(entry.path) ?? []) : []
     return (
-      <div data-testid="tree-node">
+      <div
+        data-testid="tree-node"
+        data-path={entry.path}
+        data-expanded={expanded ? 'true' : 'false'}
+      >
         <button type="button" onClick={(e) => onClick?.(e, entry)}>
           {entry.name}
         </button>
@@ -237,6 +246,7 @@ beforeEach(() => {
   mockStoreGetState.loadingDirs = new Set<string>()
   mockStoreGetState.lastClickedPath = null
   mockStoreGetState.rootPath = null
+  mockActiveFilePath.value = null
   mockExplorerState.rootPath = null
   mockExplorerState.directoryContents = new Map()
   mockExplorerState.isVisible = true
@@ -251,6 +261,7 @@ beforeEach(() => {
   mockExplorerState.searchTruncated = false
   mockExplorerState.searchScannedFiles = 0
   mockExplorerState.searchFailedFiles = 0
+  mockExplorerState.loadingDirs = mockStoreGetState.loadingDirs
   mockExplorerState.searchLastCompletedQuery = ''
   delete (window as unknown as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL]
 })
@@ -710,6 +721,74 @@ describe('FileExplorer', () => {
 
     expect(mockSearchFileNamesStreamCancel).not.toHaveBeenCalled()
     expect(mockSearchContentStreamCancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('FileExplorer active-file reveal', () => {
+  const nestedEntries = [{ path: '/project/src', name: 'src', type: 'directory' as const }]
+
+  it('expands ancestors and reveals the latest active file without changing manual selection', async () => {
+    mockExplorerState.rootPath = '/project'
+    mockStoreGetState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([
+      ['/project', nestedEntries],
+      ['/project/src', [{ path: '/project/src/app.ts', name: 'app.ts', type: 'file' as const }]]
+    ])
+    mockExplorerState.selectedPaths = new Set(['/project/manual.ts'])
+    mockStoreGetState.selectedPaths = new Set(['/project/manual.ts'])
+    mockActiveFilePath.value = '/project/src/app.ts'
+
+    render(<FileExplorer />)
+
+    await waitFor(() => expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src'))
+    expect(mockExplorerState.selectedPaths).toEqual(new Set(['/project/manual.ts']))
+    expect(mockStoreGetState.selectedPaths).toEqual(new Set(['/project/manual.ts']))
+  })
+
+  it('ignores active files outside the current root, while hidden and search views do not reveal', async () => {
+    mockExplorerState.rootPath = '/project'
+    mockStoreGetState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', nestedEntries]])
+    mockActiveFilePath.value = '/other/app.ts'
+
+    const { rerender } = render(<FileExplorer />)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockToggleDirectory).not.toHaveBeenCalled()
+
+    mockExplorerState.isVisible = false
+    mockActiveFilePath.value = '/project/src/app.ts'
+    rerender(<FileExplorer />)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockToggleDirectory).not.toHaveBeenCalled()
+
+    mockExplorerState.isVisible = true
+    mockExplorerState.searchQuery = 'app'
+    mockActiveFilePath.value = '/project/src/app.ts'
+    rerender(<FileExplorer />)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockToggleDirectory).not.toHaveBeenCalled()
+  })
+
+  it('does not let a stale active path trigger a later reveal after a rapid switch', async () => {
+    mockExplorerState.rootPath = '/project'
+    mockStoreGetState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([
+      ['/project', nestedEntries],
+      ['/project/src', [{ path: '/project/src/old.ts', name: 'old.ts', type: 'file' as const }]],
+      [
+        '/project/new',
+        [{ path: '/project/new/current.ts', name: 'current.ts', type: 'file' as const }]
+      ]
+    ])
+    mockActiveFilePath.value = '/project/src/old.ts'
+
+    const { rerender } = render(<FileExplorer />)
+    mockToggleDirectory.mockClear()
+    mockActiveFilePath.value = '/project/new/current.ts'
+    rerender(<FileExplorer />)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockToggleDirectory).not.toHaveBeenCalledWith('/project/src')
   })
 })
 

@@ -7,6 +7,12 @@ import { LONG_PRESS_MS } from '@/hooks/use-tree-long-press-drag'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { FileTreeNode, InlineInputContext, type InlineInputPlacement } from './FileTreeNode'
 
+const activeEditor = vi.hoisted(() => ({ path: null as string | null }))
+
+vi.mock('@/stores/editor-store', () => ({
+  useActiveFilePath: () => activeEditor.path
+}))
+
 // The store's own suite covers moveEntries; here the question is only whether
 // the row decides to call it.
 const moveEntries = vi.fn(async () => null)
@@ -74,6 +80,168 @@ vi.mock('@/components/ui/context-menu', async () => {
 })
 
 describe('FileTreeNode', () => {
+  beforeEach(() => {
+    activeEditor.path = null
+  })
+
+  it('marks the editor-active file separately from manual selection', () => {
+    activeEditor.path = '/project/src/app.ts'
+
+    render(
+      <FileTreeNode
+        entry={{
+          path: '/project/src/app.ts',
+          name: 'app.ts',
+          type: 'file',
+          extension: 'ts',
+          size: 1,
+          modifiedAt: 0
+        }}
+        depth={1}
+        isExpanded={false}
+        isSelected={false}
+        isLoading={false}
+        onToggle={vi.fn()}
+        onSelect={vi.fn()}
+        onContextMenu={vi.fn()}
+      />
+    )
+
+    const row = document.querySelector('[data-path="/project/src/app.ts"]')
+    expect(row).toHaveAttribute('aria-current', 'true')
+    expect(row).toHaveClass('bg-primary/10')
+  })
+
+  it('keeps active highlighting independent when manual multi-selection changes', () => {
+    activeEditor.path = '/project/active.ts'
+
+    const { rerender } = render(
+      <FileTreeNode
+        entry={{
+          path: '/project/active.ts',
+          name: 'active.ts',
+          type: 'file',
+          extension: 'ts',
+          size: 1,
+          modifiedAt: 0
+        }}
+        depth={0}
+        isExpanded={false}
+        isSelected={false}
+        isLoading={false}
+        onToggle={vi.fn()}
+        onSelect={vi.fn()}
+        onContextMenu={vi.fn()}
+      />
+    )
+
+    expect(document.querySelector('[data-path="/project/active.ts"]')).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+
+    rerender(
+      <FileTreeNode
+        entry={{
+          path: '/project/active.ts',
+          name: 'active.ts',
+          type: 'file',
+          extension: 'ts',
+          size: 1,
+          modifiedAt: 0
+        }}
+        depth={0}
+        isExpanded={false}
+        isSelected
+        isLoading={false}
+        onToggle={vi.fn()}
+        onSelect={vi.fn()}
+        onContextMenu={vi.fn()}
+      />
+    )
+
+    const row = document.querySelector('[data-path="/project/active.ts"]')
+    expect(row).toHaveAttribute('aria-current', 'true')
+    expect(row).toHaveClass('bg-sidebar-accent')
+  })
+
+  it('matches active paths across Windows and POSIX separators', () => {
+    activeEditor.path = 'C:\\project\\src\\app.ts'
+
+    render(
+      <FileTreeNode
+        entry={{
+          path: 'C:/project/src/app.ts',
+          name: 'app.ts',
+          type: 'file',
+          extension: 'ts',
+          size: 1,
+          modifiedAt: 0
+        }}
+        depth={0}
+        isExpanded={false}
+        isSelected={false}
+        isLoading={false}
+        onToggle={vi.fn()}
+        onSelect={vi.fn()}
+        onContextMenu={vi.fn()}
+      />
+    )
+
+    expect(document.querySelector('[data-path="C:/project/src/app.ts"]')).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+  })
+
+  it('does not mark directories or rows when there is no active file', () => {
+    const { rerender } = render(
+      <FileTreeNode
+        entry={{
+          path: '/project/src',
+          name: 'src',
+          type: 'directory',
+          extension: null,
+          size: 0,
+          modifiedAt: 0
+        }}
+        depth={0}
+        isExpanded={false}
+        isSelected={false}
+        isLoading={false}
+        onToggle={vi.fn()}
+        onSelect={vi.fn()}
+        onContextMenu={vi.fn()}
+      />
+    )
+
+    expect(document.querySelector('[data-path="/project/src"]')).not.toHaveAttribute('aria-current')
+
+    rerender(
+      <FileTreeNode
+        entry={{
+          path: '/project/other.ts',
+          name: 'other.ts',
+          type: 'file',
+          extension: 'ts',
+          size: 1,
+          modifiedAt: 0
+        }}
+        depth={0}
+        isExpanded={false}
+        isSelected={false}
+        isLoading={false}
+        onToggle={vi.fn()}
+        onSelect={vi.fn()}
+        onContextMenu={vi.fn()}
+      />
+    )
+
+    expect(document.querySelector('[data-path="/project/other.ts"]')).not.toHaveAttribute(
+      'aria-current'
+    )
+  })
+
   it('keeps long names on the truncate path without forcing the row wider', () => {
     const longName =
       'xxxxxxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxxxxxxxxx_rev.docx'
