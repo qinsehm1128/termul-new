@@ -66,8 +66,10 @@ function applyModeSet(modes: TerminalModes, modeNum: number): void {
       break
     case 1006:
       modes.sgrMouseMode = true
+      modes.sgrMousePixelsMode = false
       break
     case 1016:
+      modes.sgrMouseMode = false
       modes.sgrMousePixelsMode = true
       break
   }
@@ -87,19 +89,18 @@ function applyModeReset(modes: TerminalModes, modeNum: number): void {
     case 1:
       modes.applicationCursor = false
       break
+    case 9:
     case 1000:
-      if (modes.mouseTracking === 'x10') modes.mouseTracking = null
-      break
     case 1002:
-      if (modes.mouseTracking === 'drag') modes.mouseTracking = null
-      break
     case 1003:
-      if (modes.mouseTracking === 'any') modes.mouseTracking = null
+      // xterm has one active protocol. Any mouse-protocol DECRST clears it,
+      // even when the number differs from the most recent DECSET.
+      modes.mouseTracking = null
       break
     case 1006:
-      modes.sgrMouseMode = false
-      break
     case 1016:
+      // Mouse encodings are also mutually exclusive in xterm.
+      modes.sgrMouseMode = false
       modes.sgrMousePixelsMode = false
       break
   }
@@ -130,6 +131,7 @@ export function startTrackingModes(terminalId: string, terminal: Terminal): void
           id: { prefix?: string; intermediates?: string; final: string },
           callback: (params: (number | number[])[]) => boolean
         ) => IDisposable
+        registerEscHandler?: (id: { final: string }, callback: () => boolean) => IDisposable
       }
     }
   ).parser
@@ -155,6 +157,16 @@ export function startTrackingModes(terminalId: string, terminal: Terminal): void
     return false
   })
   disposables.push(setHandler, resetHandler)
+  if (typeof parser.registerEscHandler === 'function') {
+    disposables.push(
+      parser.registerEscHandler({ final: 'c' }, () => {
+        // RIS resets the real terminal too. Do not persist modes from before
+        // the reset and resurrect mouse capture on the next restore.
+        Object.assign(modes, EMPTY_MODES)
+        return false
+      })
+    )
+  }
   modeTrackers.set(terminalId, { modes, disposables })
 }
 

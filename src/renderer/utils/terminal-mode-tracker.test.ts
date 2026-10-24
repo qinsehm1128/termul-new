@@ -22,6 +22,8 @@ function createMockParserTerminal(): {
   terminal: Terminal
   invokeCsi: (prefix: string | undefined, final: string, params: (number | number[])[]) => void
   activeCount: () => number
+  invokeEsc: (final: string) => boolean | undefined
+  escActiveCount: () => number
 } {
   interface Handler {
     prefix: string | undefined
@@ -29,8 +31,15 @@ function createMockParserTerminal(): {
     cb: (params: (number | number[])[]) => boolean
     disposed: boolean
   }
+  interface EscHandler {
+    final: string
+    cb: () => boolean
+    disposed: boolean
+  }
   const handlers: Handler[] = []
+  const escHandlers: EscHandler[] = []
   const active = (): Handler[] => handlers.filter((h) => !h.disposed)
+  const activeEsc = (): EscHandler[] => escHandlers.filter((h) => !h.disposed)
   const terminal = {
     parser: {
       registerCsiHandler: vi.fn(
@@ -46,7 +55,16 @@ function createMockParserTerminal(): {
             }
           }
         }
-      )
+      ),
+      registerEscHandler: vi.fn((id: { final: string }, cb: () => boolean) => {
+        const entry: EscHandler = { final: id.final, cb, disposed: false }
+        escHandlers.push(entry)
+        return {
+          dispose: () => {
+            entry.disposed = true
+          }
+        }
+      })
     },
     write: vi.fn()
   } as unknown as Terminal
@@ -59,7 +77,17 @@ function createMockParserTerminal(): {
       if (h.prefix === prefix && h.final === final) h.cb(params)
     }
   }
-  return { terminal, invokeCsi, activeCount: () => active().length }
+  const invokeEsc = (final: string): boolean | undefined => {
+    const handler = activeEsc().find((h) => h.final === final)
+    return handler?.cb()
+  }
+  return {
+    terminal,
+    invokeCsi,
+    activeCount: () => active().length,
+    invokeEsc,
+    escActiveCount: () => activeEsc().length
+  }
 }
 
 describe('terminal-mode-tracker — DEC private mode capture', () => {
@@ -116,13 +144,16 @@ describe('terminal-mode-tracker — DEC private mode capture', () => {
     expect(getTerminalModes('tmux')?.mouseTracking).toBe('x10')
   })
 
-  it('captures SGR mouse modes (1006 / 1016)', () => {
+  it('captures SGR mouse modes (1006 / 1016) as mutually exclusive', () => {
     const { terminal, invokeCsi } = createMockParserTerminal()
     startTrackingModes('sgr', terminal)
     invokeCsi('?', 'h', [1006])
+    expect(getTerminalModes('sgr')).toEqual(
+      expect.objectContaining({ sgrMouseMode: true, sgrMousePixelsMode: false })
+    )
     invokeCsi('?', 'h', [1016])
     const modes = getTerminalModes('sgr')
-    expect(modes?.sgrMouseMode).toBe(true)
+    expect(modes?.sgrMouseMode).toBe(false)
     expect(modes?.sgrMousePixelsMode).toBe(true)
   })
 
@@ -142,13 +173,11 @@ describe('terminal-mode-tracker — DEC private mode capture', () => {
     expect(modes?.sgrMouseMode).toBe(false)
   })
 
-  it('reset of a mouse mode clears only the matching enum value', () => {
+  it('any mouse reset clears the tracked mouse mode, even when the reset differs', () => {
     const { terminal, invokeCsi } = createMockParserTerminal()
     startTrackingModes('mouse-reset', terminal)
     invokeCsi('?', 'h', [1002]) // drag
-    invokeCsi('?', 'l', [1000]) // x10 reset — 1000 was not active, no change
-    expect(getTerminalModes('mouse-reset')?.mouseTracking).toBe('drag')
-    invokeCsi('?', 'l', [1002]) // matching reset clears
+    invokeCsi('?', 'l', [1000]) // any mouse reset clears active protocol
     expect(getTerminalModes('mouse-reset')?.mouseTracking).toBe(null)
   })
 
@@ -196,13 +225,69 @@ describe('terminal-mode-tracker — DEC private mode capture', () => {
   })
 
   it('startTracking is idempotent (re-start disposes prior handlers)', () => {
-    const { terminal, activeCount } = createMockParserTerminal()
+    const { terminal, activeCount, escActiveCount } = createMockParserTerminal()
     startTrackingModes('reuse', terminal)
     expect(activeCount()).toBe(2)
     startTrackingModes('reuse', terminal) // re-register
     expect(activeCount()).toBe(2) // old disposed, new active
+    expect(escActiveCount()).toBe(1)
   })
 
+  it.each([
+    9, 1000, 1002, 1003
+  ])('any mouse reset %s clears tracked mouse mode regardless of active protocol', (resetMode) => {
+    const { terminal, invokeCsi } = createMockParserTerminal()
+    startTrackingModes(`mouse-reset-${resetMode}`, terminal)
+    invokeCsi('?', 'h', [1002])
+    expect(getTerminalModes(`mouse-reset-${resetMode}`)?.mouseTracking).toBe('drag')
+
+    invokeCsi('?', 'l', [resetMode])
+    expect(getTerminalModes(`mouse-reset-${resetMode}`)?.mouseTracking).toBe(null)
+  })
+
+  it('tracks SGR encoding modes as mutually exclusive and clears either reset', () => {
+    const { terminal, invokeCsi } = createMockParserTerminal()
+    startTrackingModes('sgr-mutual', terminal)
+
+    invokeCsi('?', 'h', [1006])
+    expect(getTerminalModes('sgr-mutual')).toEqual(
+      expect.objectContaining({ sgrMouseMode: true, sgrMousePixelsMode: false })
+    )
+
+    invokeCsi('?', 'h', [1016])
+    expect(getTerminalModes('sgr-mutual')).toEqual(
+      expect.objectContaining({ sgrMouseMode: false, sgrMousePixelsMode: true })
+    )
+
+    invokeCsi('?', 'l', [1006])
+    expect(getTerminalModes('sgr-mutual')).toEqual(
+      expect.objectContaining({ sgrMouseMode: false, sgrMousePixelsMode: false })
+    )
+
+    invokeCsi('?', 'h', [1006])
+    invokeCsi('?', 'l', [1016])
+    expect(getTerminalModes('sgr-mutual')).toEqual(
+      expect.objectContaining({ sgrMouseMode: false, sgrMousePixelsMode: false })
+    )
+  })
+
+  it('registers RIS ESC c when supported, resets modes to EMPTY, and returns false', () => {
+    const { terminal, invokeCsi, invokeEsc, escActiveCount } = createMockParserTerminal()
+    startTrackingModes('ris-boundary', terminal)
+    invokeCsi('?', 'h', [1002])
+    invokeCsi('?', 'h', [1006])
+    expect(escActiveCount()).toBe(1)
+
+    expect(invokeEsc('c')).toBe(false)
+    expect(getTerminalModes('ris-boundary')).toEqual({
+      alternateScreen: false,
+      bracketedPaste: false,
+      applicationCursor: false,
+      mouseTracking: null,
+      sgrMouseMode: false,
+      sgrMousePixelsMode: false
+    })
+  })
   it('stopTracking disposes handlers and clears the snapshot', () => {
     const { terminal, activeCount } = createMockParserTerminal()
     startTrackingModes('stop', terminal)

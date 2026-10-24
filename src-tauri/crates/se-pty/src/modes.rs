@@ -22,6 +22,8 @@ const TRACKED_MODES: &[u16] = &[
     2004, // bracketed paste
 ];
 
+const MOUSE_PROTOCOLS: &[u16] = &[1000, 1002, 1003];
+
 /// Longest partial escape sequence carried to the next chunk. Anything longer
 /// is not a mode switch.
 const MAX_CARRY: usize = 64;
@@ -85,6 +87,24 @@ impl ModeTracker {
     }
 
     fn set(&mut self, mode: u16, on: bool) {
+        if MOUSE_PROTOCOLS.contains(&mode) {
+            // xterm keeps one active mouse protocol: each SET replaces the
+            // previous protocol, while any supported protocol RESET disables
+            // mouse reporting altogether.
+            self.modes
+                .retain(|(tracked, _)| !MOUSE_PROTOCOLS.contains(tracked));
+            if on {
+                self.modes.push((mode, true));
+            }
+            return;
+        }
+        if mode == 9 && !on {
+            // xterm's legacy mode 9 reset also resets the active mouse
+            // protocol, although mode 9 itself is not tracked/restored.
+            self.modes
+                .retain(|(tracked, _)| !MOUSE_PROTOCOLS.contains(tracked));
+            return;
+        }
         if !TRACKED_MODES.contains(&mode) {
             return;
         }
@@ -171,7 +191,7 @@ mod tests {
         let startup = b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h\x1b[?2004h\x1b[?1004h\x1b[?25lhello";
         assert_eq!(
             preamble_after(&[startup]),
-            "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1015h\x1b[?1004h\x1b[?2004h"
+            "\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1015h\x1b[?1004h\x1b[?2004h"
         );
     }
 
@@ -191,6 +211,37 @@ mod tests {
             "\x1b[?1006h\x1b[?2004h"
         );
         assert_eq!(preamble_after(&[b"\x1b", b"[?1000h"]), "\x1b[?1000h");
+    }
+
+    #[test]
+    fn mouse_protocol_set_is_mutually_exclusive_and_any_reset_clears_it() {
+        // xterm's 1000/1002/1003 modes share one active protocol; the last SET
+        // wins, and resetting any supported protocol disables mouse reporting.
+        assert_eq!(preamble_after(&[b"\x1b[?1002h\x1b[?1000h"]), "\x1b[?1000h");
+        assert_eq!(preamble_after(&[b"\x1b[?1002h\x1b[?1000h\x1b[?1002l"]), "");
+    }
+
+    #[test]
+    fn mouse_protocol_handles_reverse_order_combined_and_split_csi() {
+        assert_eq!(
+            preamble_after(&[b"\x1b[?1003h\x1b[?1002h\x1b[?1000h"]),
+            "\x1b[?1000h"
+        );
+        assert_eq!(preamble_after(&[b"\x1b[?1000;1002h"]), "\x1b[?1002h");
+        assert_eq!(preamble_after(&[b"\x1b[?1003", b"h"]), "\x1b[?1003h");
+    }
+
+    #[test]
+    fn mouse_reset_and_ris_do_not_change_non_mouse_modes() {
+        assert_eq!(
+            preamble_after(&[b"\x1b[?1006h\x1b[?2004h\x1b[?1003h\x1b[?9l"]),
+            "\x1b[?1006h\x1b[?2004h"
+        );
+        assert_eq!(preamble_after(&[b"\x1b[?1006h\x1b[?1003h\x1bc"]), "");
+        assert_eq!(
+            preamble_after(&[b"\x1b[?1003h\x1b[?1000l\x1b[?1002h"]),
+            "\x1b[?1002h"
+        );
     }
 
     #[test]
