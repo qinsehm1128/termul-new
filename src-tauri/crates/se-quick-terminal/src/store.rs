@@ -66,7 +66,17 @@ impl QuickTerminalStore {
     }
 
     /// Persist `record`, replacing any record with the same id.
-    pub fn put(&self, record: QuickTerminalRecord) -> io::Result<()> {
+    pub fn put(&self, mut record: QuickTerminalRecord) -> io::Result<()> {
+        if !matches!(record.schema_version, 1 | QUICK_TERMINAL_SCHEMA_VERSION) {
+            return Err(io::Error::other("unsupported quick-terminal schema"));
+        }
+        if !self.records.read().contains_key(&record.id) && self.path_for(record.id).exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "preserving an unreadable or unsupported quick-terminal record",
+            ));
+        }
+        record.upgrade();
         let bytes = serde_json::to_vec_pretty(&record).map_err(io::Error::other)?;
         self.fs
             .replace_bytes(&self.path_for(record.id), &bytes)
@@ -100,14 +110,15 @@ fn record_stem(path: &Path) -> Option<&str> {
 
 fn load_record(path: &Path, stem: &str) -> Result<QuickTerminalRecord, String> {
     let bytes = fs::read(path).map_err(|error| error.kind().to_string())?;
-    let record: QuickTerminalRecord =
+    let mut record: QuickTerminalRecord =
         serde_json::from_slice(&bytes).map_err(|_| "INVALID_JSON".to_string())?;
-    if record.schema_version != QUICK_TERMINAL_SCHEMA_VERSION {
+    if !matches!(record.schema_version, 1 | QUICK_TERMINAL_SCHEMA_VERSION) {
         return Err(format!("SCHEMA_{}", record.schema_version));
     }
     if record.id.to_string() != stem {
         return Err("ID_MISMATCH".to_string());
     }
+    record.upgrade();
     Ok(record)
 }
 
@@ -145,6 +156,7 @@ mod tests {
             created_at_utc: "2026-09-29T00:00:00.000Z".to_string(),
             updated_at_utc: updated.to_string(),
             terminal_id: None,
+            terminal_ids: Vec::new(),
             origin: QuickTerminalOrigin::Created,
         }
     }
@@ -209,5 +221,53 @@ mod tests {
         assert_eq!(reopened.list().len(), 1);
         assert!(corrupt.exists(), "a record we cannot read is never deleted");
         assert!(renamed.exists());
+    }
+    #[test]
+    fn v1_upgrades_in_memory_and_writes_v2_only_when_modified() {
+        let (_guard, dir) = tempdir();
+        let id = QuickTerminalId::new_v4();
+        let mut legacy = serde_json::to_value(record(id, "old")).unwrap();
+        legacy["schemaVersion"] = 1.into();
+        legacy["terminalId"] = "legacy-shell".into();
+        legacy.as_object_mut().unwrap().remove("terminalIds");
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        let path = dir.join(format!("{id}.json"));
+        fs::write(&path, &bytes).unwrap();
+        let store = QuickTerminalStore::open(&dir).unwrap();
+        let mut upgraded = store.get(id).unwrap();
+        assert_eq!(upgraded.schema_version, 2);
+        assert_eq!(upgraded.terminal_ids, vec!["legacy-shell"]);
+        assert_eq!(upgraded.terminal_id.as_deref(), Some("legacy-shell"));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        upgraded.title = Some("modified".into());
+        store.put(upgraded).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(written["schemaVersion"], 2);
+        assert_eq!(written["terminalIds"], serde_json::json!(["legacy-shell"]));
+    }
+
+    #[test]
+    fn future_and_corrupt_records_are_preserved_byte_for_byte() {
+        let (_guard, dir) = tempdir();
+        let id = QuickTerminalId::new_v4();
+        let mut future = serde_json::to_value(record(id, "old")).unwrap();
+        future["schemaVersion"] = 99.into();
+        let bytes = serde_json::to_vec(&future).unwrap();
+        let future_path = dir.join(format!("{id}.json"));
+        let corrupt_path = dir.join(format!("{}.json", QuickTerminalId::new_v4()));
+        fs::write(&future_path, &bytes).unwrap();
+        fs::write(&corrupt_path, b"unreadable").unwrap();
+        let store = QuickTerminalStore::open(&dir).unwrap();
+        assert!(store.list().is_empty());
+        assert_eq!(
+            store
+                .put(record(id, "must not overwrite"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists,
+        );
+        store.put(record(QuickTerminalId::new_v4(), "new")).unwrap();
+        assert_eq!(fs::read(future_path).unwrap(), bytes);
+        assert_eq!(fs::read(corrupt_path).unwrap(), b"unreadable");
     }
 }

@@ -10,9 +10,10 @@ use serde_json::Value;
 
 use crate::commands::IpcResult;
 use crate::quick_terminal::{
-    CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
-    QuickTerminalRecord, RenameQuickTerminal, METHOD_CLOSE, METHOD_CREATE, METHOD_DELETE,
-    METHOD_LIST, METHOD_OPEN, METHOD_RENAME,
+    CloseQuickTerminalTerminal, CreateQuickTerminal, CreateQuickTerminalTerminal,
+    OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened, QuickTerminalRecord,
+    RenameQuickTerminal, METHOD_CLOSE, METHOD_CLOSE_TERMINAL, METHOD_CREATE,
+    METHOD_CREATE_TERMINAL, METHOD_DELETE, METHOD_LIST, METHOD_OPEN, METHOD_RENAME,
 };
 use crate::quick_terminal_commands::request;
 use crate::web::ws::AppState;
@@ -86,9 +87,24 @@ pub async fn close(
     reply(request(&state.terminal, METHOD_CLOSE, &payload).await)
 }
 
+pub async fn create_terminal(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateQuickTerminalTerminal>,
+) -> Reply<QuickTerminalOpened> {
+    reply(request(&state.terminal, METHOD_CREATE_TERMINAL, &payload).await)
+}
+
+pub async fn close_terminal(
+    State(state): State<AppState>,
+    Json(payload): Json<CloseQuickTerminalTerminal>,
+) -> Reply<QuickTerminalRecord> {
+    reply(request(&state.terminal, METHOD_CLOSE_TERMINAL, &payload).await)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::quick_terminal::QuickTerminalId;
     use crate::web::project_registry::{ProjectRegistry, ProjectSummary};
     use crate::web::ws::HistoryMode;
     use std::sync::Arc;
@@ -154,6 +170,86 @@ mod tests {
             store: None,
         };
         (roots, state)
+    }
+
+    #[test]
+    fn terminal_tab_bodies_do_not_accept_host_spawn_fields() {
+        let id = QuickTerminalId::new_v4();
+        assert!(
+            serde_json::from_value::<CreateQuickTerminalTerminal>(serde_json::json!({
+                "id": id, "cols": 80, "rows": 24
+            }))
+            .is_ok()
+        );
+        for field in ["terminalId", "cwd", "shell", "env"] {
+            let mut payload = serde_json::json!({"id": id, "cols": 80, "rows": 24});
+            payload[field] = serde_json::json!("untrusted");
+            assert!(
+                serde_json::from_value::<CreateQuickTerminalTerminal>(payload).is_err(),
+                "{field}"
+            );
+        }
+        assert!(
+            serde_json::from_value::<CloseQuickTerminalTerminal>(serde_json::json!({
+                "id": id, "terminalId": "tab"
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<CloseQuickTerminalTerminal>(serde_json::json!({
+                "id": id, "terminalId": "tab", "cwd": "/tmp"
+            }))
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_tab_routes_preserve_host_errors() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::routing::post;
+        use tower::ServiceExt;
+
+        let (_roots, state) = state();
+        let app = axum::Router::new()
+            .route("/quick-terminals/open", post(open))
+            .route("/quick-terminals/create-terminal", post(create_terminal))
+            .route("/quick-terminals/close-terminal", post(close_terminal))
+            .with_state(state);
+        let id = QuickTerminalId::new_v4();
+        for (path, payload) in [
+            (
+                "/quick-terminals/open".to_string(),
+                serde_json::json!({"id": id, "cols": 80, "rows": 24, "terminalId": "missing"}),
+            ),
+            (
+                "/quick-terminals/create-terminal".to_string(),
+                serde_json::json!({"id": id, "cols": 80, "rows": 24}),
+            ),
+            (
+                "/quick-terminals/close-terminal".to_string(),
+                serde_json::json!({"id": id, "terminalId": "missing"}),
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(&path)
+                        .header("content-type", "application/json")
+                        .body(Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["code"], "QUICK_TERMINAL_NOT_FOUND", "{path}: {body}");
+        }
     }
 
     #[tokio::test]

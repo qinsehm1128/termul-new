@@ -16,9 +16,17 @@ export function createTauriQuickTerminalApi(): QuickTerminalApi {
       invokeDecodedIpcResult('quick_terminal_create', parseQuickTerminalRecord, {
         payload: { target: input.target, title: input.title ?? null }
       }),
-    open: (id, cols, rows) =>
+    open: (id, cols, rows, terminalId) =>
       invokeDecodedIpcResult('quick_terminal_open', parseQuickTerminalOpened, {
+        payload: { id, cols, rows, ...(terminalId !== undefined ? { terminalId } : {}) }
+      }),
+    createTerminal: (id, cols, rows) =>
+      invokeDecodedIpcResult('quick_terminal_create_terminal', parseQuickTerminalOpened, {
         payload: { id, cols, rows }
+      }),
+    closeTerminal: (id, terminalId) =>
+      invokeDecodedIpcResult('quick_terminal_close_terminal', parseQuickTerminalRecord, {
+        payload: { id, terminalId }
       }),
     rename: (id, title) =>
       invokeDecodedIpcResult('quick_terminal_rename', parseQuickTerminalRecord, {

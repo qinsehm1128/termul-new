@@ -39,8 +39,16 @@ export function createWebQuickTerminalApi(): QuickTerminalApi {
         { target: input.target, title: input.title ?? null },
         parseQuickTerminalRecord
       ),
-    open: (id, cols, rows) =>
-      post('/quick-terminals/open', { id, cols, rows }, parseQuickTerminalOpened),
+    open: (id, cols, rows, terminalId) =>
+      post(
+        '/quick-terminals/open',
+        { id, cols, rows, ...(terminalId !== undefined ? { terminalId } : {}) },
+        parseQuickTerminalOpened
+      ),
+    createTerminal: (id, cols, rows) =>
+      post('/quick-terminals/create-terminal', { id, cols, rows }, parseQuickTerminalOpened),
+    closeTerminal: (id, terminalId) =>
+      post('/quick-terminals/close-terminal', { id, terminalId }, parseQuickTerminalRecord),
     rename: (id, title) => post('/quick-terminals/rename', { id, title }, parseQuickTerminalRecord),
     remove: (id) => post('/quick-terminals/delete', { id }, decodeVoid),
     close: (id) => post('/quick-terminals/close', { id }, parseQuickTerminalRecord),

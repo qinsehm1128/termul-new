@@ -345,7 +345,15 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             .route("/quick-terminals/open", post(quick_terminal_api::open))
             .route("/quick-terminals/rename", post(quick_terminal_api::rename))
             .route("/quick-terminals/delete", post(quick_terminal_api::delete))
-            .route("/quick-terminals/close", post(quick_terminal_api::close)),
+            .route("/quick-terminals/close", post(quick_terminal_api::close))
+            .route(
+                "/quick-terminals/create-terminal",
+                post(quick_terminal_api::create_terminal),
+            )
+            .route(
+                "/quick-terminals/close-terminal",
+                post(quick_terminal_api::close_terminal),
+            ),
         RemoteRouteClass::QuickTerminal,
     ))
     .merge(classified_routes(
@@ -985,6 +993,36 @@ mod tests {
         let registered = status("/quick-terminals/delete").await;
         assert_ne!(registered, status("/quick-terminals/not-a-route").await);
         assert_eq!(status("/quick-terminals/close").await, registered);
+        assert_eq!(status("/quick-terminals/create-terminal").await, registered);
+        assert_eq!(status("/quick-terminals/close-terminal").await, registered);
+    }
+
+    #[tokio::test]
+    async fn quick_terminal_tab_routes_require_bearer_before_body_extraction() {
+        let _log_guard = crate::web::auth::test_tracing::lock().await;
+        let authority = Arc::new(RemoteAccessAuthority::for_tests("quick-tabs-token"));
+        let app = api_routes(IngressProvenance::LocalOperator)
+            .with_state(route_test_state(std::env::temp_dir().as_path()))
+            .layer(Extension(IngressProvenance::LocalOperator))
+            .layer(Extension(authority));
+        for path in [
+            "/quick-terminals/create-terminal",
+            "/quick-terminals/close-terminal",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
     }
 
     #[tokio::test]

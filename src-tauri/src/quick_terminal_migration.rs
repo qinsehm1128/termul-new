@@ -95,6 +95,7 @@ pub fn quick_terminal_from_conversation(
         created_at_utc: created.clone(),
         updated_at_utc: created,
         terminal_id: terminal_ids.iter().max().cloned(),
+        terminal_ids: terminal_ids.iter().max().cloned().into_iter().collect(),
         origin: QuickTerminalOrigin::MigratedConversation,
     }
 }
@@ -313,7 +314,16 @@ mod tests {
         // The shell always ran in the Conversation's own folder.
         assert_eq!(record.target, QuickTerminalTarget::Workspace);
         assert_eq!(record.cwd, legacy.workspace_cwd);
-        assert_eq!(record.terminal_id.as_deref(), Some("1790563536869"));
+        // The migration keeps its legacy selected ID in schema v2, but list
+        // reconciles IDs absent from this isolated fixture's PTY manager.
+        let imported = quick_terminal_from_conversation(
+            &legacy,
+            &["1790562967946".into(), "1790563536869".into()],
+        );
+        assert_eq!(imported.terminal_id.as_deref(), Some("1790563536869"));
+        assert_eq!(imported.terminal_ids, vec!["1790563536869"]);
+        assert!(record.terminal_id.is_none());
+        assert!(record.terminal_ids.is_empty());
         assert_eq!(record.origin, QuickTerminalOrigin::MigratedConversation);
 
         let second = migrate(&source, &terminal).await;

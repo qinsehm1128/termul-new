@@ -30,6 +30,8 @@ pub struct OpenQuickTerminal {
     pub id: QuickTerminalId,
     pub cols: u16,
     pub rows: u16,
+    #[serde(default)]
+    pub terminal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +91,10 @@ pub struct QuickTerminalService {
     pty: Arc<PtyManager>,
     fs: DurableFileSystem,
     locks: parking_lot::Mutex<HashMap<QuickTerminalId, Arc<tokio::sync::Mutex<()>>>>,
+    // Retain ownership if a persist failure is followed by a failed rollback.
+    pending_cleanup: parking_lot::Mutex<HashMap<QuickTerminalId, Vec<String>>>,
+    #[cfg(test)]
+    fail_cleanup: parking_lot::Mutex<std::collections::HashSet<String>>,
 }
 
 impl QuickTerminalService {
@@ -99,15 +105,23 @@ impl QuickTerminalService {
             pty,
             fs: DurableFileSystem::new(),
             locks: parking_lot::Mutex::new(HashMap::new()),
+            pending_cleanup: parking_lot::Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            fail_cleanup: parking_lot::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
     pub fn list(&self) -> Vec<QuickTerminalRecord> {
-        self.store.list()
+        self.store
+            .list()
+            .into_iter()
+            .map(|record| self.live_record(self.stored_record(record.id).unwrap_or(record)))
+            .collect()
     }
 
     pub fn get(&self, id: QuickTerminalId) -> Result<QuickTerminalRecord> {
-        self.store.get(id).ok_or(QuickTerminalError::NotFound)
+        self.stored_record(id)
+            .map(|record| self.live_record(record))
     }
 
     pub fn create(&self, request: CreateQuickTerminal) -> Result<QuickTerminalRecord> {
@@ -160,6 +174,7 @@ impl QuickTerminalService {
             created_at_utc: stamp.clone(),
             updated_at_utc: stamp,
             terminal_id: None,
+            terminal_ids: Vec::new(),
             origin: QuickTerminalOrigin::Created,
         };
         self.store.put(record.clone()).map_err(storage)?;
@@ -171,33 +186,56 @@ impl QuickTerminalService {
         Ok(record)
     }
 
-    /// Reuse the quick terminal's live PTY, or start a new shell in its folder.
+    /// Reuse a specific owned live shell, or the first remaining live shell.
     pub async fn open(&self, request: OpenQuickTerminal) -> Result<QuickTerminalOpened> {
         let lock = self.lock_for(request.id);
         let _guard = lock.lock().await;
-        let mut record = self.get(request.id)?;
-        if let Some(terminal_id) = record.terminal_id.clone() {
-            if self.shell_is_running(&terminal_id) {
-                return Ok(QuickTerminalOpened {
-                    record,
-                    terminal_id,
-                    claim: None,
-                    spawned: false,
-                });
-            }
-            // A shell that exited on its own stays registered until someone
-            // cleans it up; release it before starting the replacement.
-            if self.pty.get(&terminal_id).is_some() {
-                if let Err(failure) = self.pty.terminate(&terminal_id).await {
-                    log::warn!(
-                        target: "se_manager::quick_terminal",
-                        "operation=open id={} terminal_id={terminal_id} stable_code=STALE_PTY_CLEANUP_FAILED detail={failure:?}",
-                        record.id
-                    );
-                }
-            }
+        self.retry_pending(request.id).await?;
+        let mut record = self.stored_record(request.id)?;
+        if let Some(target) = &request.terminal_id {
+            self.require_owned(&record, target)?;
         }
-        if request.cols == 0 || request.rows == 0 {
+        self.reconcile(&mut record).await?;
+        let selected = request.terminal_id.as_ref().or(record.terminal_ids.first());
+        if let Some(terminal_id) = selected.cloned() {
+            if !record.terminal_ids.contains(&terminal_id) {
+                return Err(invalid_terminal());
+            }
+            return Ok(QuickTerminalOpened {
+                record,
+                terminal_id,
+                claim: None,
+                spawned: false,
+            });
+        }
+        self.spawn_shell(record, request.cols, request.rows, "open")
+            .await
+    }
+
+    /// Explicitly add one shell without changing the primary/legacy alias.
+    pub async fn create_terminal(
+        &self,
+        id: QuickTerminalId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<QuickTerminalOpened> {
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().await;
+        self.retry_pending(id).await?;
+        let mut record = self.stored_record(id)?;
+        self.reconcile(&mut record).await?;
+        self.spawn_shell(record, cols, rows, "create_terminal")
+            .await
+    }
+
+    async fn spawn_shell(
+        &self,
+        mut record: QuickTerminalRecord,
+        cols: u16,
+        rows: u16,
+        operation: &str,
+    ) -> Result<QuickTerminalOpened> {
+        if cols == 0 || rows == 0 {
             return Err(QuickTerminalError::InvalidTarget(
                 "terminal dimensions must be greater than zero".to_string(),
             ));
@@ -208,7 +246,6 @@ impl QuickTerminalService {
                     "the quick terminal's directory no longer exists".to_string(),
                 ));
             }
-            // The user removed the private folder; give the shell a fresh one.
             self.fs
                 .create_dir_durable(Path::new(&record.cwd), DirectoryPermissions::Inherit)
                 .map_err(|error| QuickTerminalError::Storage(error.to_string()))?;
@@ -219,12 +256,10 @@ impl QuickTerminalService {
                 SpawnOptions {
                     cwd: Some(record.cwd.clone()),
                     conversation_id: Some(record.id),
-                    // Project attribution stays on the quick terminal record. A
-                    // spawn carrying a project id is adopted into that project's
-                    // tab bar by the renderer's host terminal catalog.
+                    // Never adopt a quick shell into a project's terminal catalog.
                     project_id: None,
-                    cols: Some(request.cols),
-                    rows: Some(request.rows),
+                    cols: Some(cols),
+                    rows: Some(rows),
                     ..Default::default()
                 },
                 None,
@@ -232,14 +267,29 @@ impl QuickTerminalService {
             .await
             .map_err(QuickTerminalError::Spawn)?;
         let terminal_id = spawned.info.id.clone();
-        record.terminal_id = Some(terminal_id.clone());
+        record.terminal_ids.push(terminal_id.clone());
+        record.sync_primary();
         record.updated_at_utc = timestamp(Utc::now());
-        self.store.put(record.clone()).map_err(storage)?;
-        log::info!(
-            target: "se_manager::quick_terminal",
-            "operation=open id={} terminal_id={terminal_id} spawned=true stable_code=OK",
-            record.id
-        );
+        if let Err(error) = self.store.put(record.clone()) {
+            log::error!(target: "se_manager::quick_terminal",
+                "operation={operation} id={} terminal_id={terminal_id} stable_code=PERSIST_FAILED_ROLLBACK", record.id);
+            if let Err(failure) = self
+                .end_shell(record.id, &terminal_id, "spawn_rollback")
+                .await
+            {
+                log::error!(target: "se_manager::quick_terminal",
+                    "operation=spawn_rollback id={} terminal_id={terminal_id} stable_code=QUICK_TERMINAL_TERMINATE_FAILED", record.id);
+                self.pending_cleanup
+                    .lock()
+                    .entry(record.id)
+                    .or_default()
+                    .push(terminal_id.clone());
+                return Err(failure);
+            }
+            return Err(storage(error));
+        }
+        log::info!(target: "se_manager::quick_terminal",
+            "operation={operation} id={} terminal_id={terminal_id} spawned=true stable_code=DURABLE_OK", record.id);
         Ok(QuickTerminalOpened {
             record,
             terminal_id,
@@ -255,46 +305,172 @@ impl QuickTerminalService {
     ) -> Result<QuickTerminalRecord> {
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
-        let mut record = self.get(id)?;
+        self.retry_pending(id).await?;
+        let mut record = self.stored_record(id)?;
+        self.reconcile(&mut record).await?;
         record.title = normalize_title(title);
         record.updated_at_utc = timestamp(Utc::now());
         self.store.put(record.clone()).map_err(storage)?;
+        log::info!(target: "se_manager::quick_terminal", "operation=rename id={id} stable_code=DURABLE_OK");
         Ok(record)
     }
 
-    /// End the shell but keep the quick terminal; the next open starts a new
-    /// shell in the same folder. Closing one with no shell is a no-op.
+    /// Close only the selected shell, leaving all siblings running.
+    pub async fn close_terminal(
+        &self,
+        id: QuickTerminalId,
+        terminal_id: &str,
+    ) -> Result<QuickTerminalRecord> {
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().await;
+        self.retry_pending(id).await?;
+        let mut record = self.stored_record(id)?;
+        self.require_owned(&record, terminal_id)?;
+        self.end_shell(id, terminal_id, "close_terminal").await?;
+        record.terminal_ids.retain(|owned| owned != terminal_id);
+        self.reconcile(&mut record).await?;
+        record.sync_primary();
+        record.updated_at_utc = timestamp(Utc::now());
+        self.store.put(record.clone()).map_err(storage)?;
+        log::info!(target: "se_manager::quick_terminal",
+            "operation=close_terminal id={id} terminal_id={terminal_id} stable_code=DURABLE_OK");
+        Ok(record)
+    }
+
+    /// End all owned shells but retain the entry and its folder.
     pub async fn close(&self, id: QuickTerminalId) -> Result<QuickTerminalRecord> {
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
-        let mut record = self.get(id)?;
-        let Some(terminal_id) = record.terminal_id.take() else {
+        let mut record = self.stored_record(id)?;
+        if record.terminal_ids.is_empty() {
             return Ok(record);
-        };
-        self.end_shell(id, &terminal_id, "close").await?;
+        }
+        self.end_all(&record, "close").await?;
+        record.terminal_ids.clear();
+        record.sync_primary();
+        record.updated_at_utc = timestamp(Utc::now());
         self.store.put(record.clone()).map_err(storage)?;
-        log::info!(
-            target: "se_manager::quick_terminal",
-            "operation=close id={id} terminal_id={terminal_id} stable_code=OK"
-        );
+        log::info!(target: "se_manager::quick_terminal", "operation=close id={id} stable_code=DURABLE_OK");
         Ok(record)
     }
 
-    /// End the shell and forget the quick terminal. Its folder is kept: it may
-    /// hold the user's files.
+    /// Remove the entry only after every owned shell is safely cleaned up.
     pub async fn delete(&self, id: QuickTerminalId) -> Result<()> {
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
-        let record = self.get(id)?;
-        if let Some(terminal_id) = record.terminal_id.as_deref() {
-            self.end_shell(id, terminal_id, "delete").await?;
-        }
+        let record = self.stored_record(id)?;
+        self.end_all(&record, "delete").await?;
         self.store.remove(id).map_err(storage)?;
-        self.locks.lock().remove(&id);
-        log::info!(
-            target: "se_manager::quick_terminal",
-            "operation=delete id={id} stable_code=OK"
-        );
+        // Keep the gate: queued operations must never switch to a new lock.
+        log::info!(target: "se_manager::quick_terminal", "operation=delete id={id} stable_code=DURABLE_OK");
+        Ok(())
+    }
+
+    async fn end_all(&self, record: &QuickTerminalRecord, operation: &str) -> Result<()> {
+        // Validate every target before touching any shell.
+        for terminal_id in &record.terminal_ids {
+            self.require_owned(record, terminal_id)?;
+        }
+        let mut first_failure = None;
+        for terminal_id in &record.terminal_ids {
+            match self.end_shell(record.id, terminal_id, operation).await {
+                Ok(()) => self.forget_pending(record.id, terminal_id),
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        first_failure.map_or(Ok(()), Err)
+    }
+
+    fn forget_pending(&self, id: QuickTerminalId, terminal_id: &str) {
+        let mut pending = self.pending_cleanup.lock();
+        if let Some(ids) = pending.get_mut(&id) {
+            ids.retain(|owned| owned != terminal_id);
+            if ids.is_empty() {
+                pending.remove(&id);
+            }
+        }
+    }
+
+    async fn retry_pending(&self, id: QuickTerminalId) -> Result<()> {
+        let ids = self
+            .pending_cleanup
+            .lock()
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
+        let mut first_failure = None;
+        for terminal_id in ids {
+            match self.end_shell(id, &terminal_id, "pending_rollback").await {
+                Ok(()) => self.forget_pending(id, &terminal_id),
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        first_failure.map_or(Ok(()), Err)
+    }
+
+    fn stored_record(&self, id: QuickTerminalId) -> Result<QuickTerminalRecord> {
+        let mut record = self.store.get(id).ok_or(QuickTerminalError::NotFound)?;
+        if let Some(pending) = self.pending_cleanup.lock().get(&id) {
+            for terminal_id in pending {
+                if !record.terminal_ids.contains(terminal_id) {
+                    record.terminal_ids.push(terminal_id.clone());
+                }
+            }
+        }
+        record.sync_primary();
+        Ok(record)
+    }
+
+    fn require_owned(&self, record: &QuickTerminalRecord, terminal_id: &str) -> Result<()> {
+        if !record.terminal_ids.iter().any(|id| id == terminal_id) {
+            return Err(invalid_terminal());
+        }
+        self.require_runtime_owner(record.id, terminal_id)
+    }
+
+    fn require_runtime_owner(&self, id: QuickTerminalId, terminal_id: &str) -> Result<()> {
+        if self
+            .pty
+            .get(terminal_id)
+            .is_some_and(|instance| instance.conversation_id != id || instance.project_id.is_some())
+        {
+            log::warn!(target: "se_manager::quick_terminal",
+                "operation=ownership id={id} terminal_id={terminal_id} stable_code=QUICK_TERMINAL_INVALID_TARGET");
+            return Err(invalid_terminal());
+        }
+        Ok(())
+    }
+
+    fn live_record(&self, mut record: QuickTerminalRecord) -> QuickTerminalRecord {
+        record.terminal_ids.retain(|terminal_id| {
+            self.require_runtime_owner(record.id, terminal_id).is_ok()
+                && self.shell_is_running(terminal_id)
+        });
+        record.sync_primary();
+        record
+    }
+
+    async fn reconcile(&self, record: &mut QuickTerminalRecord) -> Result<()> {
+        let mut remaining = Vec::new();
+        for terminal_id in &record.terminal_ids {
+            self.require_owned(record, terminal_id)?;
+            if self.shell_is_running(terminal_id) {
+                remaining.push(terminal_id.clone());
+            } else {
+                self.end_shell(record.id, terminal_id, "stale_cleanup")
+                    .await?;
+            }
+        }
+        if record.terminal_ids != remaining {
+            record.terminal_ids = remaining;
+            record.sync_primary();
+            record.updated_at_utc = timestamp(Utc::now());
+            self.store.put(record.clone()).map_err(storage)?;
+        }
         Ok(())
     }
 
@@ -304,6 +480,14 @@ impl QuickTerminalService {
         terminal_id: &str,
         operation: &str,
     ) -> Result<()> {
+        self.require_runtime_owner(id, terminal_id)?;
+        #[cfg(test)]
+        if self.fail_cleanup.lock().contains(terminal_id) || self.fail_cleanup.lock().contains("*")
+        {
+            return Err(QuickTerminalError::Terminate(
+                "injected isolated fixture cleanup failure".into(),
+            ));
+        }
         if self.pty.get(terminal_id).is_none() {
             return Ok(());
         }
@@ -355,7 +539,12 @@ impl QuickTerminalService {
     }
 }
 
+fn invalid_terminal() -> QuickTerminalError {
+    QuickTerminalError::InvalidTarget("terminal is not an owned live quick terminal".to_string())
+}
+
 fn storage(error: std::io::Error) -> QuickTerminalError {
+    log::error!(target: "se_manager::quick_terminal", "operation=store_write stable_code=QUICK_TERMINAL_STORAGE_FAILED kind={:?}", error.kind());
     QuickTerminalError::Storage(error.to_string())
 }
 
@@ -440,6 +629,7 @@ mod tests {
             id,
             cols: 80,
             rows: 24,
+            terminal_id: None,
         }
     }
 
@@ -728,5 +918,246 @@ mod tests {
             fixture.service.get(created.id).unwrap().title.as_deref(),
             Some("mine")
         );
+    }
+    fn entry(fixture: &Fixture) -> QuickTerminalRecord {
+        fixture
+            .service
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::Workspace,
+                title: None,
+            })
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn multiple_shells_reuse_selection_and_close_only_the_owned_target() {
+        let f = fixture();
+        let record = entry(&f);
+        let first = f.service.open(open(record.id)).await.unwrap();
+        let second = f.service.create_terminal(record.id, 90, 30).await.unwrap();
+        assert_ne!(first.terminal_id, second.terminal_id);
+        assert!(second.spawned && second.claim.is_some());
+        assert_eq!(
+            second.record.terminal_ids,
+            vec![first.terminal_id.clone(), second.terminal_id.clone()]
+        );
+        assert_eq!(second.record.terminal_id, Some(first.terminal_id.clone()));
+        for terminal_id in &second.record.terminal_ids {
+            let instance = f.pty.get(terminal_id).unwrap();
+            assert_eq!(instance.cwd, record.cwd);
+            assert_eq!(instance.conversation_id, record.id);
+            assert_eq!(instance.project_id, None);
+        }
+        let primary = f.service.open(open(record.id)).await.unwrap();
+        assert!(!primary.spawned);
+        assert_eq!(primary.terminal_id, first.terminal_id);
+        let mut selected = open(record.id);
+        selected.terminal_id = Some(second.terminal_id.clone());
+        let reused = f.service.open(selected).await.unwrap();
+        assert!(!reused.spawned && reused.claim.is_none());
+        assert_eq!(reused.terminal_id, second.terminal_id);
+        let closed = f
+            .service
+            .close_terminal(record.id, &first.terminal_id)
+            .await
+            .unwrap();
+        assert_eq!(closed.terminal_ids, vec![second.terminal_id.clone()]);
+        assert_eq!(closed.terminal_id, Some(second.terminal_id.clone()));
+        assert!(!f.service.shell_is_running(&first.terminal_id));
+        assert!(f.service.shell_is_running(&second.terminal_id));
+        f.service.delete(record.id).await.unwrap();
+        assert!(!f.service.shell_is_running(&second.terminal_id));
+    }
+
+    #[tokio::test]
+    async fn close_all_and_delete_end_every_shell() {
+        let f = fixture();
+        let record = entry(&f);
+        let first = f.service.create_terminal(record.id, 80, 24).await.unwrap();
+        let second = f.service.create_terminal(record.id, 80, 24).await.unwrap();
+        let closed = f.service.close(record.id).await.unwrap();
+        assert!(closed.terminal_ids.is_empty() && closed.terminal_id.is_none());
+        assert!(!f.service.shell_is_running(&first.terminal_id));
+        assert!(!f.service.shell_is_running(&second.terminal_id));
+        let third = f.service.create_terminal(record.id, 80, 24).await.unwrap();
+        let fourth = f.service.create_terminal(record.id, 80, 24).await.unwrap();
+        f.service.delete(record.id).await.unwrap();
+        assert!(!f.service.shell_is_running(&third.terminal_id));
+        assert!(!f.service.shell_is_running(&fourth.terminal_id));
+        assert_eq!(f.service.get(record.id), Err(QuickTerminalError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn unknown_and_forged_foreign_ownership_never_adopt_or_kill() {
+        let f = fixture();
+        let own = entry(&f);
+        let foreign = entry(&f);
+        let theirs = f.service.open(open(foreign.id)).await.unwrap();
+        let mut request = open(own.id);
+        request.terminal_id = Some(theirs.terminal_id.clone());
+        assert_eq!(
+            f.service.open(request).await.unwrap_err().code(),
+            "QUICK_TERMINAL_INVALID_TARGET"
+        );
+        assert_eq!(
+            f.service
+                .close_terminal(own.id, &theirs.terminal_id)
+                .await
+                .unwrap_err()
+                .code(),
+            "QUICK_TERMINAL_INVALID_TARGET"
+        );
+        // Even a tampered durable record cannot grant ownership of another PTY.
+        let mut forged = own.clone();
+        forged.terminal_ids.push(theirs.terminal_id.clone());
+        forged.sync_primary();
+        f.service.store.put(forged).unwrap();
+        assert_eq!(
+            f.service.close(own.id).await.unwrap_err().code(),
+            "QUICK_TERMINAL_INVALID_TARGET"
+        );
+        assert_eq!(
+            f.service.delete(own.id).await.unwrap_err().code(),
+            "QUICK_TERMINAL_INVALID_TARGET"
+        );
+        assert!(f.service.shell_is_running(&theirs.terminal_id));
+        assert!(f.service.get(own.id).unwrap().terminal_ids.is_empty());
+        f.service.delete(foreign.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dead_target_is_pruned_without_replacing_or_affecting_other_live_shells() {
+        let f = fixture();
+        let record = entry(&f);
+        let first = f.service.open(open(record.id)).await.unwrap();
+        let second = f.service.create_terminal(record.id, 80, 24).await.unwrap();
+        f.pty.terminate(&first.terminal_id).await.unwrap();
+        assert_eq!(
+            f.service.list()[0].terminal_ids,
+            vec![second.terminal_id.clone()]
+        );
+        let mut request = open(record.id);
+        request.terminal_id = Some(first.terminal_id.clone());
+        assert_eq!(
+            f.service.open(request).await.unwrap_err().code(),
+            "QUICK_TERMINAL_INVALID_TARGET"
+        );
+        let reused = f.service.open(open(record.id)).await.unwrap();
+        assert!(!reused.spawned);
+        assert_eq!(reused.terminal_id, second.terminal_id);
+        f.service.delete(record.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn persist_failure_rolls_back_only_the_newly_spawned_shell() {
+        let f = fixture();
+        let record = entry(&f);
+        let first = f.service.open(open(record.id)).await.unwrap();
+        let dir = f
+            ._state
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("quick-terminals");
+        let path = dir.join(format!("{}.json", record.id));
+        // Durable writer refuses a symlink destination. No live user state touched.
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(dir.join("blocked"), &path).unwrap();
+        let error = f
+            .service
+            .create_terminal(record.id, 80, 24)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "QUICK_TERMINAL_STORAGE_FAILED");
+        assert!(f.service.shell_is_running(&first.terminal_id));
+        assert_eq!(
+            f.pty.get_by_conversation(record.id).len(),
+            1,
+            "failed spawn is rolled back"
+        );
+        assert_eq!(
+            f.service.store.get(record.id).unwrap().terminal_ids,
+            vec![first.terminal_id.clone()]
+        );
+        std::fs::remove_file(path).unwrap();
+        f.service.delete(record.id).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_creates_and_opens_preserve_all_owned_shells() {
+        let f = fixture();
+        let record = entry(&f);
+        let service = Arc::new(f.service);
+        let mut tasks = Vec::new();
+        for _ in 0..3 {
+            let service = Arc::clone(&service);
+            tasks.push(tokio::spawn(async move {
+                service.create_terminal(record.id, 80, 24).await.unwrap()
+            }));
+        }
+        let mut ids = Vec::new();
+        for task in tasks {
+            ids.push(task.await.unwrap().terminal_id);
+        }
+        assert_eq!(service.get(record.id).unwrap().terminal_ids.len(), 3);
+        assert!(ids.iter().all(|id| service.shell_is_running(id)));
+        let reused = service.open(open(record.id)).await.unwrap();
+        assert!(!reused.spawned && ids.contains(&reused.terminal_id));
+        service.delete(record.id).await.unwrap();
+        assert!(ids.iter().all(|id| !service.shell_is_running(id)));
+    }
+    #[tokio::test]
+    async fn failed_rollback_retains_ownership_and_delete_retries_cleanup() {
+        let f = fixture();
+        let record = entry(&f);
+        let dir = f
+            ._state
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("quick-terminals");
+        let path = dir.join(format!("{}.json", record.id));
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(dir.join("blocked"), &path).unwrap();
+        f.service.fail_cleanup.lock().insert("*".into());
+        assert_eq!(
+            f.service
+                .create_terminal(record.id, 80, 24)
+                .await
+                .unwrap_err()
+                .code(),
+            "QUICK_TERMINAL_TERMINATE_FAILED"
+        );
+        let owned = f.service.stored_record(record.id).unwrap().terminal_ids;
+        assert_eq!(owned.len(), 1);
+        assert!(f.service.delete(record.id).await.is_err());
+        assert!(f.service.store.get(record.id).is_some());
+        // New opens cannot compound the failed rollback.
+        assert!(f.service.open(open(record.id)).await.is_err());
+        assert_eq!(f.pty.get_by_conversation(record.id).len(), 1);
+        f.service.fail_cleanup.lock().clear();
+        std::fs::remove_file(path).unwrap();
+        f.service.delete(record.id).await.unwrap();
+        assert!(!f.service.shell_is_running(&owned[0]));
+        assert!(f.service.pending_cleanup.lock().get(&record.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn close_all_attempts_later_siblings_after_cleanup_failure() {
+        let f = fixture();
+        let record = entry(&f);
+        let first = f.service.create_terminal(record.id, 80, 24).await.unwrap();
+        let second = f.service.create_terminal(record.id, 80, 24).await.unwrap();
+        f.service
+            .fail_cleanup
+            .lock()
+            .insert(first.terminal_id.clone());
+        assert!(f.service.close(record.id).await.is_err());
+        assert!(f.service.shell_is_running(&first.terminal_id));
+        assert!(!f.service.shell_is_running(&second.terminal_id));
+        assert!(f.service.store.get(record.id).is_some());
+        f.service.fail_cleanup.lock().clear();
+        f.service.delete(record.id).await.unwrap();
+        assert!(!f.service.shell_is_running(&first.terminal_id));
     }
 }

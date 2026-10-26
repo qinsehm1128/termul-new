@@ -18,8 +18,8 @@ use crate::handles::TerminalServiceHandle;
 use se_pty::PtyManager;
 
 pub use se_quick_terminal::{
-    CreateQuickTerminal, OpenQuickTerminal, QuickTerminalError, QuickTerminalId,
-    QuickTerminalOpened, QuickTerminalRecord, QuickTerminalService, QuickTerminalStore,
+    CreateQuickTerminal, QuickTerminalError, QuickTerminalId, QuickTerminalOpened,
+    QuickTerminalRecord, QuickTerminalService, QuickTerminalStore,
 };
 
 pub const METHOD_LIST: &str = "quickTerminalList";
@@ -28,6 +28,8 @@ pub const METHOD_OPEN: &str = "quickTerminalOpen";
 pub const METHOD_RENAME: &str = "quickTerminalRename";
 pub const METHOD_DELETE: &str = "quickTerminalDelete";
 pub const METHOD_CLOSE: &str = "quickTerminalClose";
+pub const METHOD_CREATE_TERMINAL: &str = "quickTerminalCreateTerminal";
+pub const METHOD_CLOSE_TERMINAL: &str = "quickTerminalCloseTerminal";
 /// Host-internal: adopt a record migrated from a legacy terminal Conversation.
 pub const METHOD_IMPORT: &str = "quickTerminalImport";
 
@@ -43,6 +45,8 @@ pub fn is_quick_terminal_method(method: &str) -> bool {
             | METHOD_RENAME
             | METHOD_DELETE
             | METHOD_CLOSE
+            | METHOD_CREATE_TERMINAL
+            | METHOD_CLOSE_TERMINAL
             | METHOD_IMPORT
     )
 }
@@ -89,6 +93,31 @@ pub fn with_local_service(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QuickTerminalIdParams {
     pub id: QuickTerminalId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenQuickTerminal {
+    pub id: QuickTerminalId,
+    pub cols: u16,
+    pub rows: u16,
+    #[serde(default)]
+    pub terminal_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateQuickTerminalTerminal {
+    pub id: QuickTerminalId,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloseQuickTerminalTerminal {
+    pub id: QuickTerminalId,
+    pub terminal_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,7 +174,32 @@ pub async fn dispatch(
             Err(reply) => reply,
         },
         METHOD_OPEN => match params::<OpenQuickTerminal>(value) {
-            Ok(request) => QuickTerminalReply::from_result(service.open(request).await),
+            Ok(request) => QuickTerminalReply::from_result(
+                service
+                    .open(se_quick_terminal::OpenQuickTerminal {
+                        id: request.id,
+                        cols: request.cols,
+                        rows: request.rows,
+                        terminal_id: request.terminal_id,
+                    })
+                    .await,
+            ),
+            Err(reply) => reply,
+        },
+        METHOD_CREATE_TERMINAL => match params::<CreateQuickTerminalTerminal>(value) {
+            Ok(request) => QuickTerminalReply::from_result(
+                service
+                    .create_terminal(request.id, request.cols, request.rows)
+                    .await,
+            ),
+            Err(reply) => reply,
+        },
+        METHOD_CLOSE_TERMINAL => match params::<CloseQuickTerminalTerminal>(value) {
+            Ok(request) => QuickTerminalReply::from_result(
+                service
+                    .close_terminal(request.id, &request.terminal_id)
+                    .await,
+            ),
             Err(reply) => reply,
         },
         METHOD_RENAME => match params::<RenameQuickTerminal>(value) {
@@ -195,10 +249,95 @@ mod tests {
             METHOD_RENAME,
             METHOD_DELETE,
             METHOD_CLOSE,
+            METHOD_CREATE_TERMINAL,
+            METHOD_CLOSE_TERMINAL,
             METHOD_IMPORT,
         ] {
             assert!(is_quick_terminal_method(method), "{method}");
         }
         assert!(!is_quick_terminal_method("terminalSpawn"));
+    }
+
+    #[test]
+    fn terminal_tab_payloads_preserve_open_compatibility_and_reject_spawn_options() {
+        let id = QuickTerminalId::new_v4();
+        let legacy: OpenQuickTerminal = serde_json::from_value(serde_json::json!({
+            "id": id, "cols": 80, "rows": 24
+        }))
+        .unwrap();
+        assert_eq!(legacy.terminal_id, None);
+        let selected: OpenQuickTerminal = serde_json::from_value(serde_json::json!({
+            "id": id, "cols": 80, "rows": 24, "terminalId": "terminal-tab"
+        }))
+        .unwrap();
+        assert_eq!(selected.terminal_id.as_deref(), Some("terminal-tab"));
+        assert!(
+            serde_json::from_value::<OpenQuickTerminal>(serde_json::json!({
+                "id": id, "cols": 80, "rows": 24, "cwd": "/tmp"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<CreateQuickTerminalTerminal>(serde_json::json!({
+                "id": id, "cols": 80, "rows": 24, "shell": "/bin/sh"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<CloseQuickTerminalTerminal>(serde_json::json!({
+                "id": id
+            }))
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_tab_dispatch_preserves_service_not_found_and_validation_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let service = QuickTerminalService::new(
+            QuickTerminalStore::open(root.path().join("quick-terminals")).unwrap(),
+            root.path().join("workspace"),
+            se_pty::test_pty_manager(),
+        );
+        let id = QuickTerminalId::new_v4();
+        for (method, payload) in [
+            (
+                METHOD_OPEN,
+                serde_json::json!({"id": id, "cols": 80, "rows": 24, "terminalId": "missing"}),
+            ),
+            (
+                METHOD_CREATE_TERMINAL,
+                serde_json::json!({"id": id, "cols": 80, "rows": 24}),
+            ),
+            (
+                METHOD_CLOSE_TERMINAL,
+                serde_json::json!({"id": id, "terminalId": "missing"}),
+            ),
+        ] {
+            assert!(
+                matches!(
+                    dispatch(&service, method, payload).await,
+                    QuickTerminalReply::Err {
+                        code,
+                        ..
+                    } if code == "QUICK_TERMINAL_NOT_FOUND"
+                ),
+                "{method}"
+            );
+        }
+        assert!(matches!(
+            dispatch(
+                &service,
+                METHOD_CREATE_TERMINAL,
+                serde_json::json!({
+                    "id": id, "cols": 80, "rows": 24, "env": {}
+                })
+            )
+            .await,
+            QuickTerminalReply::Err {
+                code,
+                ..
+            } if code == INVALID_REQUEST
+        ));
     }
 }

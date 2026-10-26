@@ -1,5 +1,5 @@
 /**
- * Quick terminals: a folder with a live shell, independent of agent sessions.
+ * Quick terminals: a folder with independently managed shells and file tabs.
  * Mirrors `se-quick-terminal` (Rust). The host owns the record; the renderer
  * only asks it to create, open, rename, or delete one.
  */
@@ -7,7 +7,7 @@
 import { isRecord } from './contract-guards'
 import type { IpcResult } from './ipc.types'
 
-export const QUICK_TERMINAL_SCHEMA_VERSION = 1 as const
+export const QUICK_TERMINAL_SCHEMA_VERSION = 2 as const
 
 export type QuickTerminalTarget =
   | { kind: 'workspace' }
@@ -17,7 +17,7 @@ export type QuickTerminalTarget =
 export type QuickTerminalOrigin = 'created' | 'migrated_conversation'
 
 export interface QuickTerminalRecord {
-  schemaVersion: typeof QUICK_TERMINAL_SCHEMA_VERSION
+  schemaVersion: 1 | typeof QUICK_TERMINAL_SCHEMA_VERSION
   id: string
   title?: string
   target: QuickTerminalTarget
@@ -25,8 +25,10 @@ export interface QuickTerminalRecord {
   cwd: string
   createdAtUtc: string
   updatedAtUtc: string
-  /** PTY last opened for this quick terminal; may no longer be live. */
+  /** Primary PTY alias retained for legacy consumers. */
   terminalId?: string
+  /** Host-owned PTYs. Absent only on a legacy schema-1 record. */
+  terminalIds?: string[]
   origin: QuickTerminalOrigin
 }
 
@@ -46,16 +48,30 @@ export interface CreateQuickTerminalInput {
 export interface QuickTerminalApi {
   list(): Promise<IpcResult<QuickTerminalRecord[]>>
   create(input: CreateQuickTerminalInput): Promise<IpcResult<QuickTerminalRecord>>
-  open(id: string, cols: number, rows: number): Promise<IpcResult<QuickTerminalOpened>>
+  open(
+    id: string,
+    cols: number,
+    rows: number,
+    terminalId?: string
+  ): Promise<IpcResult<QuickTerminalOpened>>
+  /** Start another shell in this entry, without replacing its existing shells. */
+  createTerminal(id: string, cols: number, rows: number): Promise<IpcResult<QuickTerminalOpened>>
+  /** End only this entry's specified shell. */
+  closeTerminal(id: string, terminalId: string): Promise<IpcResult<QuickTerminalRecord>>
   rename(id: string, title: string | null): Promise<IpcResult<QuickTerminalRecord>>
   remove(id: string): Promise<IpcResult<void>>
-  /** End the shell but keep the quick terminal; opening it again starts a new one. */
+  /** End all of the entry's shells but keep the quick terminal itself. */
   close(id: string): Promise<IpcResult<QuickTerminalRecord>>
   /** Quick terminals changed outside this renderer's own calls (e.g. migration). */
   onChanged(handler: () => void): () => void
 }
 
 const INVALID = 'quick terminal is invalid'
+
+/** Compatibility accessor for legacy in-memory records and older hosts. */
+export function quickTerminalIds(record: QuickTerminalRecord): string[] {
+  return record.terminalIds ?? (record.terminalId ? [record.terminalId] : [])
+}
 
 /** TypeError so IPC decoding reports it like any other malformed payload. */
 function invalid(): never {
@@ -91,12 +107,24 @@ function parseTarget(value: unknown): QuickTerminalTarget {
 }
 
 export function parseQuickTerminalRecord(value: unknown): QuickTerminalRecord {
-  if (!isRecord(value) || value.schemaVersion !== QUICK_TERMINAL_SCHEMA_VERSION) {
+  if (
+    !isRecord(value) ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== QUICK_TERMINAL_SCHEMA_VERSION)
+  ) {
     invalid()
   }
   if (value.origin !== 'created' && value.origin !== 'migrated_conversation') invalid()
   if (value.title !== undefined && typeof value.title !== 'string') invalid()
-  if (value.terminalId !== undefined && typeof value.terminalId !== 'string') invalid()
+  if (value.terminalId !== undefined) requireString(value.terminalId)
+  let terminalIds: string[]
+  if (value.schemaVersion === 1 && value.terminalIds === undefined) {
+    terminalIds = value.terminalId ? [value.terminalId as string] : []
+  } else {
+    if (!Array.isArray(value.terminalIds)) invalid()
+    terminalIds = value.terminalIds.map(requireString)
+    if (new Set(terminalIds).size !== terminalIds.length) invalid()
+    if (value.terminalId !== undefined && value.terminalId !== terminalIds[0]) invalid()
+  }
   return {
     schemaVersion: QUICK_TERMINAL_SCHEMA_VERSION,
     id: requireString(value.id),
@@ -105,7 +133,8 @@ export function parseQuickTerminalRecord(value: unknown): QuickTerminalRecord {
     cwd: requireString(value.cwd),
     createdAtUtc: requireString(value.createdAtUtc),
     updatedAtUtc: requireString(value.updatedAtUtc),
-    ...(value.terminalId !== undefined ? { terminalId: value.terminalId } : {}),
+    ...(terminalIds[0] ? { terminalId: terminalIds[0] } : {}),
+    terminalIds,
     origin: value.origin
   }
 }
@@ -118,9 +147,17 @@ export function parseQuickTerminalRecords(value: unknown): QuickTerminalRecord[]
 export function parseQuickTerminalOpened(value: unknown): QuickTerminalOpened {
   if (!isRecord(value) || typeof value.spawned !== 'boolean') invalid()
   if (value.claim !== undefined && typeof value.claim !== 'string') invalid()
+  const record = parseQuickTerminalRecord(value.record)
+  const terminalId = requireString(value.terminalId)
+  if (
+    isRecord(value.record) &&
+    value.record.schemaVersion === QUICK_TERMINAL_SCHEMA_VERSION &&
+    !quickTerminalIds(record).includes(terminalId)
+  )
+    invalid()
   return {
-    record: parseQuickTerminalRecord(value.record),
-    terminalId: requireString(value.terminalId),
+    record,
+    terminalId,
     ...(value.claim !== undefined ? { claim: value.claim } : {}),
     spawned: value.spawned
   }

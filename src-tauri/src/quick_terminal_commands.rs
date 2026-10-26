@@ -10,9 +10,11 @@ use tauri::State;
 use crate::commands::IpcResult;
 use crate::core::TerminalServiceHandle;
 use crate::quick_terminal::{
-    dispatch, CreateQuickTerminal, OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened,
-    QuickTerminalRecord, QuickTerminalReply, RenameQuickTerminal, INVALID_REQUEST, METHOD_CLOSE,
-    METHOD_CREATE, METHOD_DELETE, METHOD_LIST, METHOD_OPEN, METHOD_RENAME, UNAVAILABLE,
+    dispatch, CloseQuickTerminalTerminal, CreateQuickTerminal, CreateQuickTerminalTerminal,
+    OpenQuickTerminal, QuickTerminalIdParams, QuickTerminalOpened, QuickTerminalRecord,
+    QuickTerminalReply, RenameQuickTerminal, INVALID_REQUEST, METHOD_CLOSE, METHOD_CLOSE_TERMINAL,
+    METHOD_CREATE, METHOD_CREATE_TERMINAL, METHOD_DELETE, METHOD_LIST, METHOD_OPEN, METHOD_RENAME,
+    UNAVAILABLE,
 };
 
 fn into_ipc<T: DeserializeOwned>(reply: QuickTerminalReply) -> IpcResult<T> {
@@ -100,6 +102,22 @@ pub async fn quick_terminal_close(
     Ok(request(terminal.inner(), METHOD_CLOSE, &payload).await)
 }
 
+#[tauri::command]
+pub async fn quick_terminal_create_terminal(
+    terminal: State<'_, TerminalServiceHandle>,
+    payload: CreateQuickTerminalTerminal,
+) -> Result<IpcResult<QuickTerminalOpened>, String> {
+    Ok(request(terminal.inner(), METHOD_CREATE_TERMINAL, &payload).await)
+}
+
+#[tauri::command]
+pub async fn quick_terminal_close_terminal(
+    terminal: State<'_, TerminalServiceHandle>,
+    payload: CloseQuickTerminalTerminal,
+) -> Result<IpcResult<QuickTerminalRecord>, String> {
+    Ok(request(terminal.inner(), METHOD_CLOSE_TERMINAL, &payload).await)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -175,6 +193,74 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_tab_error_codes_match_local_and_shared_core_without_spawning() {
+        use crate::core::{CoreEndpoint, CoreRole, TerminalCoreClient};
+
+        let profile_dir = tempfile::tempdir().unwrap();
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let profile = profile_dir.path().canonicalize().unwrap();
+        let workspace = workspace_dir.path().canonicalize().unwrap();
+        let local = with_local_service(
+            TerminalServiceHandle::in_process(crate::pty::test_pty_manager()),
+            &profile,
+            &workspace,
+        );
+        let endpoint = CoreEndpoint::for_profile(&profile, CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let roots = (profile.clone(), workspace.clone());
+        let program = crate::terminal_program();
+        let server = tokio::spawn(async move {
+            crate::core::terminal::run_terminal_core_with(server_endpoint, Some(roots), program)
+                .await
+        });
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let client = loop {
+            match TerminalCoreClient::connect(&endpoint).await {
+                Ok(client) => break client,
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(error) => panic!("terminal core did not become ready: {error}"),
+            }
+        };
+        let shared = TerminalServiceHandle::from_core_client(client);
+        let id = QuickTerminalId::new_v4();
+        for handle in [&local, &shared] {
+            for (method, payload) in [
+                (
+                    METHOD_OPEN,
+                    serde_json::json!({"id": id, "cols": 80, "rows": 24, "terminalId": "missing"}),
+                ),
+                (
+                    METHOD_CREATE_TERMINAL,
+                    serde_json::json!({"id": id, "cols": 80, "rows": 24}),
+                ),
+                (
+                    METHOD_CLOSE_TERMINAL,
+                    serde_json::json!({"id": id, "terminalId": "missing"}),
+                ),
+            ] {
+                let result: IpcResult<Value> = request(handle, method, &payload).await;
+                assert_eq!(
+                    result.code.as_deref(),
+                    Some("QUICK_TERMINAL_NOT_FOUND"),
+                    "{method}"
+                );
+            }
+            let result: IpcResult<Value> = request(
+                handle,
+                METHOD_CREATE_TERMINAL,
+                &serde_json::json!({
+                    "id": id, "cols": 80, "rows": 24, "cwd": "/tmp"
+                }),
+            )
+            .await;
+            assert_eq!(result.code.as_deref(), Some(INVALID_REQUEST));
+        }
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn terminal_core_serves_quick_terminals_with_their_error_codes() {
         use crate::core::{CoreEndpoint, CoreRole, TerminalCoreClient};
         use crate::quick_terminal::{
@@ -231,6 +317,7 @@ mod tests {
                 id: record.id,
                 cols: 80,
                 rows: 24,
+                terminal_id: None,
             },
         )
         .await;
@@ -244,6 +331,7 @@ mod tests {
                 id: crate::quick_terminal::QuickTerminalId::new_v4(),
                 cols: 80,
                 rows: 24,
+                terminal_id: None,
             },
         )
         .await;

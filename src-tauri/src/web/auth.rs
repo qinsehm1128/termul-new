@@ -2336,6 +2336,14 @@ mod tests {
             ("/ws", RemoteRouteClass::AcpWebSocket),
             ("/terminal/ws", RemoteRouteClass::TerminalWebSocket),
             ("/quick-terminals/open", RemoteRouteClass::QuickTerminal),
+            (
+                "/quick-terminals/create-terminal",
+                RemoteRouteClass::QuickTerminal,
+            ),
+            (
+                "/quick-terminals/close-terminal",
+                RemoteRouteClass::QuickTerminal,
+            ),
         ] {
             assert_eq!(RemoteRouteClass::from_path(path), Some(expected));
             assert!(!expected.as_str().contains("secret"));
