@@ -41,5 +41,14 @@
   "untitled": "未命名终端",
   "preview": "{{name}} 的预览",
   "closePreview": "关闭预览",
-  "resizePreview": "拖动调整预览宽度"
+  "resizePreview": "拖动调整预览宽度",
+  "workspaceTabs": "终端与文件标签",
+  "terminalTab": "终端 {{number}}",
+  "newTerminalTab": "新建终端标签",
+  "closeTerminalTab": "关闭终端标签",
+  "closeAll": "关闭全部终端",
+  "backToList": "返回列表",
+  "fileLoadFailed": "文件不存在或无法读取。请重试或关闭此标签页。",
+  "retryFile": "重新加载文件",
+  "fileBusy": "请先保存未保存的修改，并等待文件操作完成后再关闭标签。"
 }

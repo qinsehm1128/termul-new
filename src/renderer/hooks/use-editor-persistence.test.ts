@@ -7,8 +7,13 @@ import {
   useEditorPersistence
 } from './use-editor-persistence'
 
-const { mockLoadPersistedTerminals } = vi.hoisted(() => ({
-  mockLoadPersistedTerminals: vi.fn()
+const { mockLoadPersistedTerminals, quickEditorPaths } = vi.hoisted(() => ({
+  mockLoadPersistedTerminals: vi.fn(),
+  quickEditorPaths: new Set<string>()
+}))
+
+vi.mock('@/features/quick-terminal/quick-terminal-editor-drafts', () => ({
+  isQuickEditorFile: (filePath: string) => quickEditorPaths.has(filePath)
 }))
 
 const { mockPersistenceRead, mockPersistenceWriteDebounced } = vi.hoisted(() => ({
@@ -33,6 +38,7 @@ function createEditorFileState(filePath: string): {
   viewMode: 'code' | 'markdown'
   cursorPosition: { line: number; col: number }
   scrollTop: number
+  operationStatus: 'idle' | 'saving' | 'reloading' | 'saved'
 } {
   return {
     filePath,
@@ -43,7 +49,8 @@ function createEditorFileState(filePath: string): {
     lastModified: Date.now(),
     viewMode: 'code',
     cursorPosition: { line: 1, col: 1 },
-    scrollTop: 0
+    scrollTop: 0,
+    operationStatus: 'idle'
   }
 }
 
@@ -108,6 +115,9 @@ vi.mock('@/stores/editor-store', async () => {
     getDefaultViewMode: actual.getDefaultViewMode,
     useEditorStore: {
       getState: vi.fn(() => mockEditorState),
+      setState: vi.fn((state: Partial<typeof mockEditorState>) => {
+        Object.assign(mockEditorState, state)
+      }),
       subscribe: vi.fn(() => vi.fn())
     }
   }
@@ -234,6 +244,7 @@ vi.mock('@/stores/workspace-manifest-sync-store', () => ({
 // loadProjectWorkspace). The sync-store + log facades are mocked above.
 
 beforeEach(() => {
+  quickEditorPaths.clear()
   mockPersistenceRead.mockReset()
   mockPersistenceWriteDebounced.mockReset()
   mockLoadPersistedTerminals.mockReset()
@@ -312,6 +323,276 @@ describe('workspace scoping', () => {
     // from every tab having been closed. Re-exporting a reader for
     // `editor-state/group-<id>` is how that second workspace comes back.
     expect(Object.keys(persistence)).not.toContain('restoreProjectGroupWorkspace')
+  })
+})
+
+describe('quick editor isolation (RV006)', () => {
+  it('excludes current, inactive and deleted quick-only files regardless of cwd, but keeps legacy files', () => {
+    const quickPaths = [
+      '/projects/a/current-quick.ts',
+      '/elsewhere/inactive-quick.ts',
+      '/deleted-layout/draft.ts'
+    ]
+    const legacyPath = '/unowned/legacy.ts'
+    for (const path of [...quickPaths, legacyPath]) {
+      mockEditorState.openFiles.set(path, {
+        ...createEditorFileState(path),
+        isDirty: true,
+        content: `draft for ${path}`
+      })
+    }
+    for (const path of quickPaths) quickEditorPaths.add(path)
+    mockEditorState.activeFilePath = quickPaths[0]
+
+    persistState('project-a')
+
+    expect(mockPersistenceWriteDebounced.mock.calls[0][1]).toMatchObject({
+      openFiles: [{ filePath: legacyPath, draftContent: `draft for ${legacyPath}` }],
+      activeFilePath: null
+    })
+    expect(mockPersistenceWriteDebounced.mock.calls[0][1].openFiles).toHaveLength(1)
+  })
+
+  it('keeps a shared dirty buffer explicitly referenced by any project leaf', () => {
+    const path = '/shared/draft.ts'
+    quickEditorPaths.add(path)
+    mockEditorState.openFiles.set(path, {
+      ...createEditorFileState(path),
+      isDirty: true,
+      content: 'shared unsaved content'
+    })
+    mockEditorState.activeFilePath = path
+    mockWorkspaceState.root = {
+      type: 'split',
+      id: 'split-root',
+      direction: 'horizontal',
+      sizes: [50, 50],
+      children: [
+        { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null },
+        {
+          type: 'leaf',
+          id: 'pane-inactive',
+          tabs: [{ type: 'editor', id: `edit-${path}`, filePath: path }],
+          activeTabId: `edit-${path}`
+        }
+      ]
+    }
+
+    persistState('project-a')
+
+    expect(mockPersistenceWriteDebounced.mock.calls[0][1]).toMatchObject({
+      openFiles: [{ filePath: path, isDirty: true, draftContent: 'shared unsaved content' }],
+      activeFilePath: null
+    })
+  })
+
+  it.each([
+    ['quick-only', 'editor', '/projects/a/project.ts'],
+    ['shared', 'editor', '/projects/a/project.ts'],
+    ['shared', 'other-editor', '/projects/a/other.ts'],
+    ['null', 'editor', '/projects/a/project.ts'],
+    ['quick-only', 'terminal', null],
+    ['shared', 'terminal', null],
+    ['null', 'terminal', null],
+    ['quick-only', 'missing-editor', null],
+    ['legacy', 'terminal', '/unowned/legacy.ts']
+  ] as const)('uses project selection for global %s and active project %s tab', (globalSelection, projectSelection, expected) => {
+    const projectPath = '/projects/a/project.ts'
+    const quickPath = '/projects/a/quick.ts'
+    const legacyPath = '/unowned/legacy.ts'
+    const otherProjectPath = '/projects/a/other.ts'
+    for (const path of [projectPath, otherProjectPath, quickPath, legacyPath]) {
+      mockEditorState.openFiles.set(path, createEditorFileState(path))
+    }
+    quickEditorPaths.add(quickPath)
+    if (globalSelection === 'shared') quickEditorPaths.add(projectPath)
+    mockEditorState.activeFilePath =
+      globalSelection === 'null'
+        ? null
+        : globalSelection === 'shared'
+          ? projectPath
+          : globalSelection === 'legacy'
+            ? legacyPath
+            : quickPath
+    mockWorkspaceState.root = {
+      type: 'leaf',
+      id: 'pane-root',
+      tabs: [
+        { type: 'editor', id: `edit-${projectPath}`, filePath: projectPath },
+        { type: 'editor', id: `edit-${otherProjectPath}`, filePath: otherProjectPath },
+        { type: 'terminal', id: 'term-project', terminalId: 'project' },
+        { type: 'editor', id: 'edit-missing', filePath: '/missing.ts' }
+      ],
+      activeTabId:
+        projectSelection === 'editor'
+          ? `edit-${projectPath}`
+          : projectSelection === 'other-editor'
+            ? `edit-${otherProjectPath}`
+            : projectSelection === 'terminal'
+              ? 'term-project'
+              : 'edit-missing'
+    }
+
+    persistState('project-a')
+
+    expect(mockPersistenceWriteDebounced.mock.calls[0][1].activeFilePath).toBe(expected)
+  })
+
+  it.each([
+    'payload-read',
+    'file-open'
+  ] as const)('preserves quick dirty memory inserted during project %s', async (phase) => {
+    const path = '/shared/late.ts'
+    quickEditorPaths.add(path)
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const persisted = {
+      success: true,
+      data: {
+        openFiles: [
+          {
+            filePath: path,
+            cursorPosition: { line: 9, col: 9 },
+            scrollTop: 999,
+            viewMode: 'code',
+            isDirty: true,
+            lastModified: 999999,
+            draftContent: 'stale project draft'
+          }
+        ],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null
+      }
+    }
+    mockPersistenceRead.mockImplementationOnce(async () => {
+      if (phase === 'payload-read') await pending
+      return persisted
+    })
+    if (phase === 'file-open')
+      mockEditorState.openFile.mockImplementationOnce(async () => {
+        await pending
+      })
+    renderHook(() => useEditorPersistence('project-a'))
+    await waitFor(() =>
+      expect(
+        phase === 'payload-read' ? mockPersistenceRead : mockEditorState.openFile
+      ).toHaveBeenCalled()
+    )
+    const live = {
+      ...createEditorFileState(path),
+      content: 'new quick draft',
+      isDirty: true,
+      lastModified: 1
+    }
+    mockEditorState.openFiles.set(path, live)
+    release()
+    await waitFor(() => expect(mockSetRestoredWorkspaceScope).toHaveBeenCalledWith('project-a'))
+    expect(mockEditorState.openFiles.get(path)).toBe(live)
+    expect(mockEditorState.updateContent).not.toHaveBeenCalledWith(path, 'stale project draft')
+    expect(mockEditorState.updateCursorPosition).not.toHaveBeenCalledWith(path, 9, 9)
+  })
+
+  it.each([
+    'legacy',
+    'pane-layout'
+  ] as const)('retains quick dirty/busy buffers through project changes without applying stale %s drafts', async (layout) => {
+    const quickPath = '/projects/a/quick-only.ts'
+    const sharedPath = '/shared/draft.ts'
+    const savingPath = '/inactive/saving.ts'
+    const reloadingPath = '/deleted/reloading.ts'
+    const cleanPath = '/quick/clean.ts'
+    const projectPath = '/projects/b/project.ts'
+    for (const path of [quickPath, sharedPath, savingPath, reloadingPath, cleanPath]) {
+      quickEditorPaths.add(path)
+      mockEditorState.openFiles.set(path, createEditorFileState(path))
+    }
+    const quickDraft = {
+      ...mockEditorState.openFiles.get(quickPath)!,
+      isDirty: true,
+      content: 'live quick'
+    }
+    const sharedDraft = {
+      ...mockEditorState.openFiles.get(sharedPath)!,
+      isDirty: true,
+      content: 'live shared',
+      lastModified: 1
+    }
+    mockEditorState.openFiles.set(quickPath, quickDraft)
+    mockEditorState.openFiles.set(sharedPath, sharedDraft)
+    mockEditorState.openFiles.get(savingPath)!.operationStatus = 'saving'
+    mockEditorState.openFiles.get(reloadingPath)!.operationStatus = 'reloading'
+    mockEditorState.openFiles.set('/old-project.ts', createEditorFileState('/old-project.ts'))
+    const persistedFiles = [sharedPath, projectPath].map((filePath) => ({
+      filePath,
+      cursorPosition: { line: 9, col: 2 },
+      scrollTop: 50,
+      viewMode: 'code',
+      isDirty: true,
+      lastModified: 9999999999999,
+      draftContent: 'stale persisted content'
+    }))
+    mockPersistenceRead.mockResolvedValueOnce({ success: true, data: null }).mockResolvedValueOnce({
+      success: true,
+      data: {
+        openFiles: persistedFiles,
+        activeFilePath: sharedPath,
+        expandedDirs: [],
+        activeTabId: `edit-${sharedPath}`,
+        ...(layout === 'pane-layout'
+          ? {
+              paneLayout: {
+                type: 'leaf',
+                id: 'pane-b',
+                tabs: [{ type: 'editor', filePath: sharedPath }],
+                activeTabId: `edit-${sharedPath}`
+              }
+            }
+          : {})
+      }
+    })
+    const { rerender } = renderHook(({ projectId }) => useEditorPersistence(projectId), {
+      initialProps: { projectId: 'project-a' }
+    })
+    await waitFor(() => {
+      expect(mockSetRestoredWorkspaceScope).toHaveBeenCalledWith('project-a')
+    })
+    expect(mockEditorState.openFiles.get(quickPath)).toBe(quickDraft)
+    expect(mockEditorState.openFiles.has(cleanPath)).toBe(false)
+    expect(mockEditorState.openFiles.has('/old-project.ts')).toBe(false)
+
+    rerender({ projectId: 'project-b' })
+
+    await waitFor(() => {
+      expect(mockSetRestoredWorkspaceScope).toHaveBeenCalledWith('project-b')
+    })
+    expect(mockEditorState.clearAllFiles).toHaveBeenCalledTimes(2)
+    expect(mockEditorState.openFiles.get(quickPath)).toBe(quickDraft)
+    expect(mockEditorState.openFiles.get(sharedPath)).toBe(sharedDraft)
+    expect(mockEditorState.openFiles.get(savingPath)?.operationStatus).toBe('saving')
+    expect(mockEditorState.openFiles.get(reloadingPath)?.operationStatus).toBe('reloading')
+    expect(mockEditorState.openFile).not.toHaveBeenCalledWith(sharedPath)
+    expect(mockEditorState.updateContent).not.toHaveBeenCalledWith(sharedPath, expect.anything())
+    expect(mockEditorState.updateCursorPosition).not.toHaveBeenCalledWith(sharedPath, 9, 2)
+    expect(mockEditorState.updateContent).toHaveBeenCalledWith(
+      projectPath,
+      'stale persisted content'
+    )
+    if (layout === 'legacy') {
+      expect(mockWorkspaceState.syncEditorTabs).toHaveBeenCalledWith(
+        [sharedPath, projectPath],
+        `edit-${sharedPath}`
+      )
+    } else {
+      expect(mockWorkspaceState.loadProjectWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tabs: [{ type: 'editor', id: `edit-${sharedPath}`, filePath: sharedPath }]
+        }),
+        undefined
+      )
+    }
   })
 })
 

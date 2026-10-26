@@ -4,6 +4,8 @@ const api = vi.hoisted(() => ({
   list: vi.fn(),
   create: vi.fn(),
   open: vi.fn(),
+  createTerminal: vi.fn(),
+  closeTerminal: vi.fn(),
   rename: vi.fn(),
   remove: vi.fn(),
   close: vi.fn(),
@@ -11,6 +13,14 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
+vi.mock('@/lib/persistence-api', () => ({
+  persistenceApi: {
+    read: vi.fn(async () => ({ success: true, data: null })),
+    writeDebounced: vi.fn(async () => ({ success: true })),
+    flushPendingWrites: vi.fn(async () => ({ success: true })),
+    delete: vi.fn(async () => ({ success: true }))
+  }
+}))
 
 import { useTerminalStore } from '@/stores/terminal-store'
 import {
@@ -44,7 +54,7 @@ function opened(terminalId: string, spawned: boolean) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   resetQuickTerminalStore()
   useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
 })
@@ -146,5 +156,88 @@ describe('quick terminal store', () => {
     expect(quickTerminalName(untitled)).toBe('Untitled terminal')
     expect(quickTerminalName({ ...record, title: undefined })).toBe('p1')
     expect(quickTerminalName(record)).toBe('build')
+  })
+  it('registers new shells without claims, preserves siblings, closes one versus all', async () => {
+    const host = {
+      ...record,
+      schemaVersion: 2 as const,
+      terminalIds: ['pty-1', 'pty-2'],
+      terminalId: 'pty-1'
+    }
+    api.open.mockResolvedValue({
+      success: true,
+      data: { record: host, terminalId: 'pty-1', spawned: false }
+    })
+    await useQuickTerminalStore.getState().open(id, 90, 30, 'pty-1')
+    api.createTerminal.mockResolvedValue({
+      success: true,
+      data: { record: host, terminalId: 'pty-2', spawned: true, claim: 'OUTPUT-CLAIM' }
+    })
+    await useQuickTerminalStore.getState().createTerminal(id, 90, 30)
+    expect(useTerminalStore.getState().terminals.map((item) => item.ptyId)).toEqual([
+      'pty-1',
+      'pty-2'
+    ])
+    expect(
+      useTerminalStore.getState().terminals.every((item) => !item.claim && !item.projectId)
+    ).toBe(true)
+    expect(api.open).toHaveBeenCalledWith(id, 90, 30, 'pty-1')
+    api.closeTerminal.mockResolvedValue({
+      success: true,
+      data: { ...host, terminalIds: ['pty-2'], terminalId: 'pty-2' }
+    })
+    await useQuickTerminalStore.getState().closeTerminal(id, 'pty-1')
+    expect(useTerminalStore.getState().terminals.map((item) => item.ptyId)).toEqual(['pty-2'])
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-1')).toBeUndefined()
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-2')).toBeDefined()
+    expect(api.close).not.toHaveBeenCalled()
+    api.close.mockResolvedValue({
+      success: true,
+      data: { ...host, terminalIds: [], terminalId: undefined }
+    })
+    await useQuickTerminalStore.getState().close(id)
+    expect(useTerminalStore.getState().terminals).toEqual([])
+  })
+
+  it('orders requests for one entry but lets other entries proceed independently', async () => {
+    let resolveOpen!: (value: unknown) => void
+    api.open.mockReturnValue(
+      new Promise((resolve) => {
+        resolveOpen = resolve
+      })
+    )
+    api.createTerminal.mockResolvedValue({
+      success: true,
+      data: { record: { ...record, terminalIds: ['one', 'two'] }, terminalId: 'two', spawned: true }
+    })
+    const opening = useQuickTerminalStore.getState().open(id, 80, 24)
+    const creating = useQuickTerminalStore.getState().createTerminal(id, 80, 24)
+    await vi.waitFor(() => expect(api.open).toHaveBeenCalledOnce())
+    expect(api.createTerminal).not.toHaveBeenCalled()
+    resolveOpen({
+      success: true,
+      data: { record: { ...record, terminalIds: ['one'] }, terminalId: 'one', spawned: true }
+    })
+    await Promise.all([opening, creating])
+    expect(useQuickTerminalStore.getState().records[0].terminalIds).toEqual(['one', 'two'])
+    expect(useTerminalStore.getState().terminals.map((item) => item.ptyId)).toEqual(['one', 'two'])
+  })
+
+  it('ignores a stale list response that predates a newer terminal create', async () => {
+    let resolveList!: (value: unknown) => void
+    api.list.mockReturnValue(
+      new Promise((resolve) => {
+        resolveList = resolve
+      })
+    )
+    const listing = useQuickTerminalStore.getState().load()
+    api.createTerminal.mockResolvedValue({
+      success: true,
+      data: { record: { ...record, terminalIds: ['new'] }, terminalId: 'new', spawned: true }
+    })
+    await useQuickTerminalStore.getState().createTerminal(id, 80, 24)
+    resolveList({ success: true, data: [record] })
+    await listing
+    expect(useQuickTerminalStore.getState().records[0].terminalIds).toEqual(['new'])
   })
 })

@@ -44,6 +44,7 @@ import { AgentLauncher } from '@/features/agent-session/agents/AgentLauncher'
 import { ConversationSidebar } from '@/features/agent-session/conversation/ConversationSidebar'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import { closeQuickTab, isQuickTerminalPath } from '@/features/quick-terminal/quick-tab-close'
 import { useQuickTerminalStore } from '@/features/quick-terminal/quick-terminal-store'
 import {
   useUpdateAppSetting,
@@ -71,6 +72,7 @@ import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import { useSessionWorkspaceSync } from '@/hooks/use-session-workspace-sync'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
+import { useWorkspaceActiveTabSync } from '@/hooks/use-workspace-active-tab-sync'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { isProjectTerminalRestoreInProgress, saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
 import { runtimeT } from '@/i18n/runtime'
@@ -160,8 +162,6 @@ import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-
 import {
   editorTabId,
   findPaneById,
-  getActiveFilePathFromTree,
-  getActiveTerminalIdFromTree,
   getAllLeafPanes,
   useActiveTab,
   useFullscreenPaneId,
@@ -1052,26 +1052,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [terminals, activeProjectId, activeConversationId])
 
-  // Sync legacy stores (activeTerminalId, activeFilePath) from workspace pane tree
-  useEffect(() => {
-    return useWorkspaceStore.subscribe((state, prevState) => {
-      if (state.root === prevState.root && state.activePaneId === prevState.activePaneId) return
-
-      const terminalId = getActiveTerminalIdFromTree(state)
-      if (terminalId !== null) {
-        const termStore = useTerminalStore.getState()
-        if (termStore.activeTerminalId !== terminalId) {
-          termStore.selectTerminal(terminalId)
-        }
-      }
-
-      const filePath = getActiveFilePathFromTree(state)
-      const editorStore = useEditorStore.getState()
-      if (editorStore.activeFilePath !== filePath) {
-        editorStore.setActiveFilePath(filePath)
-      }
-    })
-  }, [])
+  // Quick workspaces own their terminal/editor tabs, not the hidden project panes.
+  useWorkspaceActiveTabSync(!isQuickTerminalPath(location.pathname))
 
   // Set by the native "Quit and End All Terminals" item; any other close keeps
   // the Cores (and every terminal) running for the next launch to adopt.
@@ -1185,19 +1167,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Listen for native menu "Close Tab" event (macOS Cmd+W intercepted by menu bar)
   useEffect(() => {
     let unlisten: UnlistenFn | undefined
+    let disposed = false
     listen<void>('menu:close-tab', () => {
+      if (isQuickTerminalPath(locationPathRef.current)) {
+        closeQuickTab()
+        return
+      }
       // Skip when Agent Launcher is open to avoid accidental tab closure
       if (!isAgentLauncherOpen) {
         closeActiveTab()
       }
     })
       .then((fn) => {
-        unlisten = fn
+        if (disposed) fn()
+        else unlisten = fn
       })
       .catch(() => {
         // Not in Tauri context — ignore
       })
     return () => {
+      disposed = true
       unlisten?.()
     }
   }, [closeActiveTab, isAgentLauncherOpen])
@@ -1742,7 +1731,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       e.preventDefault()
       e.stopPropagation()
       const path =
-        activeTab?.type === 'editor' ? activeTab.filePath : useEditorStore.getState().activeFilePath
+        isWorkspaceRoute && activeTab?.type === 'editor'
+          ? activeTab.filePath
+          : useEditorStore.getState().activeFilePath
       if (path) {
         void requestSaveEditorFile(path)
       }
@@ -1750,7 +1741,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
     window.addEventListener('keydown', handleSaveShortcut, { capture: true })
     return () => window.removeEventListener('keydown', handleSaveShortcut, { capture: true })
-  }, [activeTab])
+  }, [activeTab, isWorkspaceRoute])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: handler reads latest values via closure; deps intentionally narrow
   useEffect(() => {
@@ -1771,6 +1762,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // close the tab when the Agent Launcher is not open.
       if (matchesShortcut(e, getActiveKey('closeTab'))) {
         e.preventDefault()
+        if (isQuickTerminalPath(locationPathRef.current)) {
+          closeQuickTab()
+          return
+        }
         if (!isAgentLauncherOpen) {
           closeActiveTab()
         }

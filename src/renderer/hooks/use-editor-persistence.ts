@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import { isQuickEditorFile } from '@/features/quick-terminal/quick-terminal-editor-drafts'
 import { persistenceApi } from '@/lib/api'
 import { randomUUID } from '@/lib/uuid'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
@@ -614,9 +615,22 @@ export function useEditorPersistence(
           persistState(oldProjectId)
         }
 
-        // Clear editor files (in-memory state), but defer workspace pane reset
-        // until we know the destination layout to avoid a flash of empty pane.
+        // Quick drafts belong to their own layouts, not the outgoing project.
+        // Keep dirty/in-flight buffers alive while clearing project-local files.
+        const retainedQuickFiles = new Map(
+          [...useEditorStore.getState().openFiles].filter(
+            ([filePath, file]) =>
+              isQuickEditorFile(filePath) &&
+              (file.isDirty ||
+                file.operationStatus === 'saving' ||
+                file.operationStatus === 'reloading')
+          )
+        )
+        // Defer workspace pane reset until the destination layout is known.
         useEditorStore.getState().clearAllFiles()
+        if (retainedQuickFiles.size > 0) {
+          useEditorStore.setState({ openFiles: retainedQuickFiles })
+        }
 
         // Read new project's persisted state
         const result = await persistenceApi.read<PersistedEditorState>(editorStateKey(projectId))
@@ -659,11 +673,26 @@ export function useEditorPersistence(
             return
           }
 
+          // A retained quick buffer is live state, even when the project also
+          // references it. Never replace its content or view state with a draft.
+          const hasLiveQuickBuffer = (): boolean => {
+            const current = useEditorStore.getState().openFiles.get(file.filePath)
+            return (
+              isQuickEditorFile(file.filePath) &&
+              !!current &&
+              (current.isDirty ||
+                current.operationStatus === 'saving' ||
+                current.operationStatus === 'reloading')
+            )
+          }
+          if (retainedQuickFiles.has(file.filePath) || hasLiveQuickBuffer()) continue
+
           try {
             await editorStore.openFile(file.filePath)
             if (isStale()) {
               return
             }
+            if (hasLiveQuickBuffer()) continue
 
             editorStore.updateCursorPosition(
               file.filePath,
@@ -742,7 +771,10 @@ export function useEditorPersistence(
           } else {
             // Legacy fallback: build a fresh layout with editor tabs
             useWorkspaceStore.getState().resetLayout()
-            const openFilePaths = Array.from(useEditorStore.getState().openFiles.keys())
+            const openFiles = useEditorStore.getState().openFiles
+            const openFilePaths = persisted.openFiles
+              .map((file) => file.filePath)
+              .filter((filePath) => openFiles.has(filePath))
             useWorkspaceStore.getState().syncEditorTabs(openFilePaths, persisted.activeTabId)
           }
         }
@@ -872,8 +904,14 @@ export function persistState(projectId: string): void {
   const explorerState = useFileExplorerStore.getState()
   const workspaceState = useWorkspaceStore.getState()
 
+  const projectFilePaths = new Set(
+    getAllLeafPanes(workspaceState.root).flatMap((pane) =>
+      pane.tabs.flatMap((tab) => (tab.type === 'editor' ? [tab.filePath] : []))
+    )
+  )
   const openFiles: PersistedEditorFile[] = []
   editorState.openFiles.forEach((file: EditorFileState) => {
+    if (isQuickEditorFile(file.filePath) && !projectFilePaths.has(file.filePath)) return
     const persisted: PersistedEditorFile = {
       filePath: file.filePath,
       cursorPosition: file.cursorPosition,
@@ -892,9 +930,24 @@ export function persistState(projectId: string): void {
   // expanded directories are the set-aside ones.
   const expandedDirs = Array.from(explorerState.setAsideExpandedDirs ?? explorerState.expandedDirs)
 
+  const includedFilePaths = new Set(openFiles.map((file) => file.filePath))
+  const activePane = findPaneById(workspaceState.root, workspaceState.activePaneId)
+  const activeTab =
+    activePane?.type === 'leaf'
+      ? activePane.tabs.find((tab) => tab.id === activePane.activeTabId)
+      : undefined
+  const projectActiveFilePath =
+    activeTab?.type === 'editor' && includedFilePaths.has(activeTab.filePath)
+      ? activeTab.filePath
+      : null
+  const activeFilePath =
+    editorState.activeFilePath === null || isQuickEditorFile(editorState.activeFilePath)
+      ? projectActiveFilePath
+      : editorState.activeFilePath
+
   const data: PersistedEditorState = {
     openFiles,
-    activeFilePath: editorState.activeFilePath,
+    activeFilePath,
     expandedDirs,
     activeTabId: (() => {
       const pane = findPaneById(workspaceState.root, workspaceState.activePaneId)

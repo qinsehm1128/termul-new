@@ -41,5 +41,14 @@
   "untitled": "Untitled terminal",
   "preview": "Preview of {{name}}",
   "closePreview": "Close preview",
-  "resizePreview": "Drag to resize the preview"
+  "resizePreview": "Drag to resize the preview",
+  "workspaceTabs": "Terminal and file tabs",
+  "terminalTab": "Terminal {{number}}",
+  "newTerminalTab": "New terminal tab",
+  "closeTerminalTab": "Close terminal tab",
+  "closeAll": "Close all terminals",
+  "backToList": "Back to list",
+  "fileLoadFailed": "This file is missing or could not be read. Retry or close this tab.",
+  "retryFile": "Retry loading file",
+  "fileBusy": "Save unsaved changes and wait for file operations before closing this tab."
 }

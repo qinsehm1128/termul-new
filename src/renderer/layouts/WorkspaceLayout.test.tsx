@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import { claimQuickTabClose } from '@/features/quick-terminal/quick-tab-close'
 import {
   resetQuickTerminalStore,
   useQuickTerminalStore
@@ -14,7 +15,10 @@ import {
   restoreProjectWorkspace,
   subscribeProjectWorkspaceRestored
 } from '@/hooks/use-editor-persistence'
+import * as editorSave from '@/lib/editor-save'
+import * as nativeEvents from '@/lib/tauri-event'
 import WorkspaceDashboard from '@/pages/WorkspaceDashboard'
+import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
@@ -251,11 +255,12 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
 
   return {
     ...actual,
-    useKeyboardShortcutsStore: vi.fn(
-      (selector?: (state: { shortcuts: typeof shortcuts }) => unknown) => {
+    useKeyboardShortcutsStore: Object.assign(
+      vi.fn((selector?: (state: { shortcuts: typeof shortcuts }) => unknown) => {
         const state = { shortcuts }
         return selector ? selector(state) : state
-      }
+      }),
+      { getState: () => ({ shortcuts }) }
     ),
     matchesShortcut: actual.matchesShortcut
   }
@@ -544,6 +549,97 @@ const renderWithRouter = (initialEntries = ['/c/018f7a1c-1b4d-7c8a-9f01-01234567
     </TooltipProvider>
   )
 }
+
+describe('quick workspace save shortcut ownership', () => {
+  it.each([
+    '/quick-terminals/quick-a',
+    '/quick-terminals'
+  ])('saves only the visible quick editor on %s and ignores a quick terminal tab', (route) => {
+    const previousWorkspace = useWorkspaceStore.getState()
+    const previousPath = useEditorStore.getState().activeFilePath
+    const save = vi.spyOn(editorSave, 'requestSaveEditorFile').mockResolvedValue(true)
+    useWorkspaceStore.getState().addEditorTab('/project/hidden.ts')
+    useEditorStore.getState().setActiveFilePath('/quick/visible.ts')
+    const view = renderWithRouter([route])
+    try {
+      fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+      expect(save).toHaveBeenCalledExactlyOnceWith('/quick/visible.ts')
+      save.mockClear()
+      act(() => useEditorStore.getState().setActiveFilePath(null))
+      fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+      expect(save).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+      save.mockRestore()
+      useWorkspaceStore.setState(previousWorkspace)
+      useEditorStore.getState().setActiveFilePath(previousPath)
+    }
+  })
+})
+
+describe('quick workspace close command ownership', () => {
+  it('disposes a native close listener that resolves after unmount', async () => {
+    let resolveMenu: ((unlisten: () => void) => void) | undefined
+    const dispose = vi.fn()
+    const listen = vi.spyOn(nativeEvents, 'listen').mockImplementation((event) => {
+      if (event === 'menu:close-tab') {
+        return new Promise((resolve) => {
+          resolveMenu = resolve
+        })
+      }
+      return Promise.resolve(() => {})
+    })
+    const view = renderWithRouter(['/quick-terminals'])
+    try {
+      expect(resolveMenu).toBeDefined()
+      view.unmount()
+      await act(async () => resolveMenu?.(dispose))
+      expect(dispose).toHaveBeenCalledOnce()
+    } finally {
+      view.unmount()
+      listen.mockRestore()
+    }
+  })
+
+  it.each([
+    { route: '/quick-terminals/quick-a', hasOwner: true },
+    { route: '/quick-terminals/quick-a', hasOwner: false },
+    { route: '/quick-terminals', hasOwner: false }
+  ])('protects hidden project tabs from native and DOM close on $route (owner=$hasOwner)', ({
+    route,
+    hasOwner
+  }) => {
+    const previousWorkspace = useWorkspaceStore.getState()
+    useWorkspaceStore.getState().addEditorTab('/project/do-not-close.ts')
+    const root = useWorkspaceStore.getState().root
+    const quickClose = vi.fn()
+    const release = hasOwner ? claimQuickTabClose(quickClose) : () => {}
+    let menuClose: (() => void) | undefined
+    const listen = vi.spyOn(nativeEvents, 'listen').mockImplementation(async (event, handler) => {
+      if (event === 'menu:close-tab') {
+        menuClose = () => handler({ event: 'menu:close-tab', id: 1, payload: undefined })
+      }
+      return () => {}
+    })
+    const view = renderWithRouter([route])
+    try {
+      expect(menuClose).toBeDefined()
+      act(() => menuClose?.())
+      const key = new KeyboardEvent('keydown', { key: 'w', ctrlKey: true, cancelable: true })
+      act(() => window.dispatchEvent(key))
+      expect(key.defaultPrevented).toBe(true)
+      expect(quickClose).toHaveBeenCalledTimes(hasOwner ? 2 : 0)
+      expect(useWorkspaceStore.getState().root).toBe(root)
+      expect(mockCloseTerminalView).not.toHaveBeenCalled()
+      expect(mockTerminateTerminalResource).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+      release()
+      listen.mockRestore()
+      useWorkspaceStore.setState(previousWorkspace)
+    }
+  })
+})
 
 function WorkspaceLayoutWithNavigate({
   navigateRef

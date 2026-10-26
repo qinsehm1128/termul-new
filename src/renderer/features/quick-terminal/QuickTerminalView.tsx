@@ -1,4 +1,5 @@
-import type { QuickTerminalRecord } from '@shared/types/quick-terminal.types'
+import type { IpcResult } from '@shared/types/ipc.types'
+import type { QuickTerminalOpened, QuickTerminalRecord } from '@shared/types/quick-terminal.types'
 import { LoaderCircle, Power, RotateCcw } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -12,6 +13,10 @@ const ConnectedTerminal = lazy(() =>
   }))
 )
 
+// Re-entering an entry while its measured spawn is pending must join it, not
+// launch a second shell. Requests outlive React mounts, just like the PTYs.
+const pendingAttaches = new Map<string, Promise<IpcResult<QuickTerminalOpened>>>()
+
 type Phase =
   // A throwaway terminal is mounted to learn the viewport's grid, so the shell
   // starts at the size it is shown at. Starting it smaller and resizing it
@@ -23,30 +28,70 @@ type Phase =
   | { kind: 'exited'; ptyId: string }
   // The user closed the shell; the quick terminal stays until reopened.
   | { kind: 'closed' }
-  | { kind: 'failed'; message: string }
+  | { kind: 'failed'; message: string; dead?: boolean }
 
 /** The live shell of one quick terminal. Remount (via `key`) per quick terminal. */
-export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): React.JSX.Element {
+export function QuickTerminalView({
+  record,
+  terminalId,
+  createNew = false,
+  isVisible = true,
+  onOpened,
+  tabId = 'default'
+}: {
+  record: QuickTerminalRecord
+  terminalId?: string
+  createNew?: boolean
+  isVisible?: boolean
+  onOpened?: (terminalId: string) => void
+  tabId?: string
+}): React.JSX.Element {
   const { t } = useTranslation('quickTerminal')
   const open = useQuickTerminalStore((state) => state.open)
-  const close = useQuickTerminalStore((state) => state.close)
+  const createTerminal = useQuickTerminalStore((state) => state.createTerminal)
+  const close = useQuickTerminalStore((state) => state.closeTerminal)
   const [phase, setPhase] = useState<Phase>({ kind: 'measuring' })
   const [closing, setClosing] = useState(false)
   const current = useRef(0)
+  const inFlight = useRef(false)
+  const openedPty = useRef<string | null>(null)
+  const createOnReopen = useRef(false)
+  const openedCallback = useRef(onOpened)
+  openedCallback.current = onOpened
 
   const attach = useCallback(
     async (cols: number, rows: number) => {
+      if (inFlight.current || openedPty.current) return
+      inFlight.current = true
       const attempt = ++current.current
       setPhase({ kind: 'opening' })
-      const result = await open(record.id, cols, rows)
+      const requestKey = `${record.id}:${tabId}`
+      let pending = pendingAttaches.get(requestKey)
+      if (!pending) {
+        pending =
+          (createNew && !terminalId) || createOnReopen.current
+            ? createTerminal(record.id, cols, rows)
+            : open(record.id, cols, rows, terminalId)
+        pendingAttaches.set(requestKey, pending)
+      }
+      const result = await pending
+      if (pendingAttaches.get(requestKey) === pending) pendingAttaches.delete(requestKey)
+      inFlight.current = false
+      // Bind even if this entry was navigated away from while the host spawned.
+      if (result.success) openedCallback.current?.(result.data.terminalId)
       if (attempt !== current.current) return
       if (result.success && result.data) {
+        openedPty.current = result.data.terminalId
         setPhase({ kind: 'ready', ptyId: result.data.terminalId })
       } else {
-        setPhase({ kind: 'failed', message: failureMessage(result, t('openFailed')) })
+        setPhase({
+          kind: 'failed',
+          message: failureMessage(result, t('openFailed')),
+          dead: !result.success && result.code === 'QUICK_TERMINAL_INVALID_TARGET'
+        })
       }
     },
-    [open, record.id, t]
+    [open, createTerminal, createNew, terminalId, record.id, tabId, t]
   )
 
   useEffect(
@@ -56,17 +101,18 @@ export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): 
     []
   )
 
-  // Closed here or from the list: the record no longer names a shell.
-  const attached = phase.kind === 'ready' || phase.kind === 'exited'
-  useEffect(() => {
-    if (attached && !record.terminalId) setPhase({ kind: 'closed' })
-  }, [attached, record.terminalId])
-
-  const reopen = (): void => setPhase({ kind: 'measuring' })
+  const reopen = (): void => {
+    // Once this tab is dead, every explicit retry must create its replacement.
+    // Falling back to open() could attach a sibling (or retry the pruned ID).
+    createOnReopen.current ||= phase.kind === 'exited' || (phase.kind === 'failed' && !!phase.dead)
+    openedPty.current = null
+    setPhase({ kind: 'measuring' })
+  }
 
   const closeShell = async (): Promise<void> => {
     setClosing(true)
-    const result = await close(record.id)
+    if (phase.kind !== 'ready') return
+    const result = await close(record.id, phase.ptyId)
     setClosing(false)
     if (!result.success) toast.error(failureMessage(result, t('closeFailed')))
   }
@@ -86,7 +132,7 @@ export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): 
           <Suspense fallback={null}>
             <ConnectedTerminal
               autoSpawn={false}
-              isVisible
+              isVisible={isVisible}
               autoFocus={false}
               onInitialGrid={(cols, rows) => void attach(cols, rows)}
             />
@@ -122,8 +168,8 @@ export function QuickTerminalView({ record }: { record: QuickTerminalRecord }): 
             terminalId={phase.ptyId}
             storeTerminalId={phase.ptyId}
             autoSpawn={false}
-            isVisible
-            autoFocus
+            isVisible={isVisible}
+            autoFocus={isVisible}
             onExit={() => setPhase({ kind: 'exited', ptyId: phase.ptyId })}
           />
         </Suspense>

@@ -94,7 +94,7 @@ export interface EditorState {
   openFiles: Map<string, EditorFileState>
   activeFilePath: string | null
 
-  openFile: (path: string) => Promise<void>
+  openFile: (path: string, options?: { activate?: boolean }) => Promise<void>
   closeFile: (path: string) => void
   closeFileIfIdle: (path: string) => boolean
   updateContent: (path: string, content: string) => void
@@ -115,12 +115,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   openFiles: new Map<string, EditorFileState>(),
   activeFilePath: null,
 
-  openFile: async (path: string): Promise<void> => {
+  openFile: async (path, { activate = true } = {}): Promise<void> => {
     const { openFiles } = get()
 
-    // Already open, just activate
+    // Already open, just activate if requested
     if (openFiles.has(path)) {
-      set({ activeFilePath: path })
+      if (activate) set({ activeFilePath: path })
       return
     }
 
@@ -133,6 +133,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     const newFiles = new Map(get().openFiles)
+    // Another owner may have loaded and edited this file while the disk read was pending.
+    // Reuse that live buffer rather than replacing its draft with the stale read result.
+    if (newFiles.has(path)) {
+      if (activate) set({ activeFilePath: path })
+      return
+    }
 
     // Check tab limit - close oldest inactive non-dirty tab
     if (newFiles.size >= EDITOR_TAB_LIMIT) {
@@ -175,7 +181,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     newFiles.set(path, fileState)
-    set({ openFiles: newFiles, activeFilePath: path })
+    set(activate ? { openFiles: newFiles, activeFilePath: path } : { openFiles: newFiles })
   },
 
   closeFile: (path: string): void => {
