@@ -1598,6 +1598,64 @@ describe('ProjectSidebar worktree menu', () => {
     expect(screen.queryByRole('menuitem', { name: /^repo/ })).not.toBeInTheDocument()
   })
 
+  it('exposes the full worktree name, branch and path in the hover title', async () => {
+    const worktree = {
+      id: 'long-worktree',
+      name: 'vms_python-完整工作树名称-with-a-long-feature-name',
+      branch: 'feat/nsreq-data-integration-with-a-long-branch-name',
+      path: '/repo/.se-manager/worktrees/vms_python-complete-feature-directory',
+      createdAt: ''
+    }
+    const onOpenWorktreeTerminal = vi.fn()
+    renderWithRouter({
+      projects: [{ ...gitProject, worktrees: [worktree] }],
+      onOpenWorktreeTerminal
+    })
+
+    openWorktreeMenu('1')
+
+    const item = await screen.findByRole('menuitem', {
+      name: (name) => name.includes(worktree.name) && name.includes(worktree.branch)
+    })
+    expect(item).toHaveAttribute('title', `${worktree.name}\n${worktree.branch}\n${worktree.path}`)
+    expect(screen.getByText(worktree.name)).toHaveClass('truncate')
+    expect(screen.getByText(worktree.branch)).toHaveClass('truncate')
+    fireEvent.mouseOver(item)
+    expect(onOpenWorktreeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('does not repeat the branch in the hover title when it is the worktree name', async () => {
+    const worktree = {
+      id: 'same-name',
+      name: 'feature-shared-name',
+      branch: 'feature-shared-name',
+      path: 'C:\\Projects\\Repo Worktrees\\feature-shared-name',
+      createdAt: ''
+    }
+    renderWithRouter({
+      projects: [{ ...gitProject, worktrees: [worktree] }],
+      onOpenWorktreeTerminal: vi.fn()
+    })
+
+    openWorktreeMenu('1')
+
+    expect(await screen.findByRole('menuitem', { name: worktree.name })).toHaveAttribute(
+      'title',
+      `${worktree.name}\n${worktree.path}`
+    )
+  })
+
+  it('exposes the project name, main branch and path on the main checkout', async () => {
+    renderWithRouter({ projects: [gitProject], onOpenWorktreeTerminal: vi.fn() })
+
+    openWorktreeMenu('1')
+
+    expect(await screen.findByRole('menuitem', { name: /Main checkout/ })).toHaveAttribute(
+      'title',
+      'Repo\nmain\n/repo'
+    )
+  })
+
   it('opens a terminal in the picked worktree without selecting the row', async () => {
     const onOpenWorktreeTerminal = vi.fn()
     const onSelectProject = vi.fn()

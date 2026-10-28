@@ -81,7 +81,12 @@ export function ProjectWorktreeMenu({
         onContextMenu={stopRowEvent}
       >
         <DropdownMenuLabel>{t('worktreeMenu.title')}</DropdownMenuLabel>
-        <DropdownMenuItem onSelect={() => onOpenWorktreeTerminal(project.id, null)}>
+        <DropdownMenuItem
+          title={[project.name, mainCheckout?.branch ?? project.gitBranch, projectPath]
+            .filter(Boolean)
+            .join('\n')}
+          onSelect={() => onOpenWorktreeTerminal(project.id, null)}
+        >
           <FolderGit2 className="mr-2 h-4 w-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{t('worktreeMenu.root')}</span>
           {mainCheckout && (
@@ -94,7 +99,13 @@ export function ProjectWorktreeMenu({
         {linked.map((worktree) => (
           <DropdownMenuItem
             key={worktree.id}
-            title={worktree.path}
+            title={[
+              worktree.name,
+              worktree.branch !== worktree.name ? worktree.branch : null,
+              worktree.path
+            ]
+              .filter(Boolean)
+              .join('\n')}
             onSelect={() => onOpenWorktreeTerminal(project.id, worktree.id)}
           >
             <GitBranch className="mr-2 h-4 w-4 shrink-0" />
