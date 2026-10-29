@@ -44,6 +44,65 @@ describe('resolveLongPressDropTarget', () => {
     expect(resolveLongPressDropTarget(label)).toEqual({ kind: 'entry', path: '/project/src' })
   })
 
+  it('should resolve a marked root header and its child to a root target', () => {
+    const header = row({ 'data-tree-root-path': '/project' })
+    const label = document.createElement('span')
+    header.appendChild(label)
+    expect(resolveLongPressDropTarget(header)).toEqual({ kind: 'root', path: '/project' })
+    expect(resolveLongPressDropTarget(label)).toEqual({ kind: 'root', path: '/project' })
+  })
+
+  it('should resolve a marked blank tree container to a root target', () => {
+    const container = row({ 'data-tree-root-path': '/project' })
+    expect(resolveLongPressDropTarget(container)).toEqual({ kind: 'root', path: '/project' })
+  })
+
+  it('should prefer nested directory entries over the enclosing root', () => {
+    const root = row({ 'data-tree-root-path': '/project' })
+    const directory = document.createElement('div')
+    directory.setAttribute('data-path', '/project/src')
+    directory.setAttribute('data-entry-type', 'directory')
+    root.appendChild(directory)
+    expect(resolveLongPressDropTarget(directory)).toEqual({ kind: 'entry', path: '/project/src' })
+  })
+
+  it('should reject file descendants instead of falling back to the root', () => {
+    const root = row({ 'data-tree-root-path': '/project' })
+    const file = document.createElement('span')
+    file.setAttribute('data-path', '/project/a.ts')
+    file.setAttribute('data-entry-type', 'file')
+    root.appendChild(file)
+    expect(resolveLongPressDropTarget(file)).toBeNull()
+  })
+
+  it.each(['input', 'textarea', 'select'])('should reject a root drop from an inline %s', (tag) => {
+    const root = row({ 'data-tree-root-path': '/project' })
+    const control = document.createElement(tag)
+    root.appendChild(control)
+    expect(resolveLongPressDropTarget(control)).toBeNull()
+  })
+
+  it('should reject contenteditable controls but allow explicit root header buttons', () => {
+    const root = row({ 'data-tree-root-path': '/project' })
+    const editor = document.createElement('div')
+    editor.setAttribute('contenteditable', 'true')
+    root.appendChild(editor)
+    const button = document.createElement('button')
+    root.appendChild(button)
+    expect(resolveLongPressDropTarget(editor)).toBeNull()
+    expect(resolveLongPressDropTarget(button)).toEqual({ kind: 'root', path: '/project' })
+  })
+
+  it('should reject an unmarked multiroot blank container', () => {
+    const container = row({})
+    expect(resolveLongPressDropTarget(container)).toBeNull()
+  })
+
+  it('should preserve project row targets', () => {
+    const node = row({ 'data-project-path': '/work/other', 'data-tree-root-path': '/project' })
+    expect(resolveLongPressDropTarget(node)).toEqual({ kind: 'project', path: '/work/other' })
+  })
+
   it('should resolve nothing outside any row', () => {
     expect(resolveLongPressDropTarget(document.body)).toBeNull()
     expect(resolveLongPressDropTarget(null)).toBeNull()
@@ -135,6 +194,21 @@ describe('useTreeLongPressDrag', () => {
     expect(onDrop).toHaveBeenCalledWith(['/project/a.ts'], {
       kind: 'entry',
       path: '/project/src'
+    })
+  })
+
+  it('should carry a root path when dropping under the finger', () => {
+    const target = row({ 'data-tree-root-path': '/project' })
+    elementFromPoint.mockReturnValue(target)
+    const { result } = setup()
+
+    act(() => result.current.handlers.onPointerDown(touch()))
+    act(() => vi.advanceTimersByTime(LONG_PRESS_MS))
+    act(() => result.current.handlers.onPointerUp(touch({ clientX: 5, clientY: 5 })))
+
+    expect(onDrop).toHaveBeenCalledWith(['/project/a.ts'], {
+      kind: 'root',
+      path: '/project'
     })
   })
 

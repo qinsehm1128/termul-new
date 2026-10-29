@@ -7,7 +7,7 @@ export const LONG_PRESS_MS = 450
 export const LONG_PRESS_SLOP_PX = 10
 
 export interface LongPressDropTarget {
-  kind: 'entry' | 'project'
+  kind: 'entry' | 'project' | 'root'
   path: string
 }
 
@@ -27,11 +27,24 @@ export function resolveLongPressDropTarget(element: Element | null): LongPressDr
   const projectPath = projectRow?.getAttribute('data-project-path')
   if (projectPath) return { kind: 'project', path: projectPath }
 
+  // Entry rows always win over an enclosing root marker. In particular, files
+  // must not fall through to the root and accidentally move into it.
   const entryRow = element.closest('[data-path]')
-  if (!entryRow) return null
-  if (entryRow.getAttribute('data-entry-type') !== 'directory') return null
-  const path = entryRow.getAttribute('data-path')
-  return path ? { kind: 'entry', path } : null
+  if (entryRow) {
+    if (entryRow.getAttribute('data-entry-type') !== 'directory') return null
+    const path = entryRow.getAttribute('data-path')
+    return path ? { kind: 'entry', path } : null
+  }
+
+  const rootMarker = element.closest('[data-tree-root-path]')
+  const rootPath = rootMarker?.getAttribute('data-tree-root-path')
+  if (!rootPath) return null
+  if (
+    element.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
+  ) {
+    return null
+  }
+  return { kind: 'root', path: rootPath }
 }
 
 interface LongPressDragOptions {

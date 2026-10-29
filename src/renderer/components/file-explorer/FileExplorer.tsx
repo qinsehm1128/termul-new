@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { readPersistedPanelSize } from '@/hooks/use-persisted-panel-size'
+import { resolveLongPressDropTarget } from '@/hooks/use-tree-long-press-drag'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import {
   EDITOR_REVEAL_LINE_EVENT,
@@ -28,10 +29,12 @@ import {
 import { showOpenedFile } from '@/lib/file-open-target'
 import { readPasteboardFilePaths } from '@/lib/file-pasteboard'
 import { getPreviewKind, isTextPreview } from '@/lib/file-preview'
+import { logFrontendError } from '@/lib/log-api'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { useActiveFilePath, useEditorStore } from '@/stores/editor-store'
 import {
+  isRejectedMove,
   useFileExplorer,
   useFileExplorerActions,
   useFileExplorerStore
@@ -93,6 +96,7 @@ export function FileExplorer({
   fillContainer = false
 }: FileExplorerProps): React.JSX.Element {
   const { t } = useTranslation('workspace')
+  const { t: tProjects } = useTranslation('projects')
   const activeFilePath = useActiveFilePath()
   const {
     roots: rawRoots,
@@ -142,6 +146,7 @@ export function FileExplorer({
   // Files copied in Finder are pasteable too, so the menu's Paste also asks
   // the system pasteboard; refreshed whenever a row's menu opens.
   const [pasteboardHasFiles, setPasteboardHasFiles] = useState(false)
+  const [rootDropPath, setRootDropPath] = useState<string | null>(null)
   const [inputValue, setInputValue] = useState('')
   // A list, not a single entry: the confirm dialog reports `selectedPaths.size`,
   // so holding one entry made it promise "delete 3" and then delete one.
@@ -483,26 +488,64 @@ export function FileExplorer({
     [paste, t]
   )
 
-  // Finder files dropped on the tree's empty space land in the project root.
+  // Only explicitly marked root surfaces accept a root drop. The shared hit
+  // test rejects file rows/editable controls instead of falling back to their
+  // enclosing root, and leaves folder rows to their own drop handlers.
   const handleTreeDragOver = useCallback((e: React.DragEvent) => {
-    if (!isExternalFileDrag(e, useFileExplorerStore.getState().dragPaths)) return
+    const target = resolveLongPressDropTarget(e.target instanceof Element ? e.target : null)
+    const { dragPaths } = useFileExplorerStore.getState()
+    if (
+      target?.kind !== 'root' ||
+      (!isExternalFileDrag(e, dragPaths) &&
+        !dragPaths.some((path) => !isRejectedMove(path, target.path)))
+    ) {
+      setRootDropPath(null)
+      return
+    }
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = dragPaths.length > 0 ? 'move' : 'copy'
+    setRootDropPath(target.path)
   }, [])
 
   const handleTreeDrop = useCallback(
     (e: React.DragEvent) => {
-      if (!rootPath || !isExternalFileDrag(e, useFileExplorerStore.getState().dragPaths)) return
+      setRootDropPath(null)
+      const target = resolveLongPressDropTarget(e.target instanceof Element ? e.target : null)
+      if (target?.kind !== 'root') return
+      const state = useFileExplorerStore.getState()
+      const paths = [...state.dragPaths]
+      const external = isExternalFileDrag(e, paths)
+      if (!external && !paths.some((path) => !isRejectedMove(path, target.path))) return
       e.preventDefault()
-      const names = Array.from(e.dataTransfer.files, (file) => file.name)
-      void useFileExplorerStore
-        .getState()
-        .importDroppedFiles(rootPath, names)
-        .then((error) => {
-          if (error) toast.error(t('fileExplorer.dropFailed'), { description: error })
+      e.stopPropagation()
+      const names = external ? Array.from(e.dataTransfer.files, (file) => file.name) : []
+      const reportFailure = (error: unknown): void => {
+        // Keep paths and backend error contents out of durable logs.
+        void logFrontendError({
+          source: 'FileExplorer.rootDrop',
+          level: 'warn',
+          message: `Root ${external ? 'copy' : 'move'} failed (${external ? names.length : paths.length} entries)`
         })
+        toast.error(external ? t('fileExplorer.dropFailed') : tProjects('fileContext.moveFailed'), {
+          description: error instanceof Error ? error.message : String(error)
+        })
+      }
+      if (!external) state.endEntryDrag()
+      try {
+        const result = external
+          ? state.importDroppedFiles(target.path, names)
+          : state.moveEntries(paths, target.path)
+        void result
+          .then((error) => {
+            if (error) reportFailure(error)
+          })
+          .catch(reportFailure)
+      } catch (error) {
+        reportFailure(error)
+      }
     },
-    [rootPath, t]
+    [t, tProjects]
   )
 
   // Handle keyboard shortcuts
@@ -1236,6 +1279,12 @@ export function FileExplorer({
     : !isSearchActive ||
       isSearchTooShort ||
       (searchLoading && searchLastCompletedQuery !== trimmedSearchQuery)
+  const singleRootDropPath =
+    !isMultiRoot && !isSearchActive && !rootLoadError ? (rootPath ?? undefined) : undefined
+  const singleRootName =
+    roots.find((root) => isSameTreePath(root.path, rootPath ?? ''))?.name ??
+    rootPath?.split(/[\\/]/).filter(Boolean).pop() ??
+    rootPath
 
   /** The inline create/rename input as a tree row, indented to `depth`. */
   const renderInlineInput = (depth: number): React.JSX.Element | null =>
@@ -1398,11 +1447,45 @@ export function FileExplorer({
         </div>
       </div>
 
+      {/* A visible root destination remains reachable even when the tree fills
+          the scrolling area. It names the displayed checkout/worktree, not a
+          possibly different project root stored in the sidebar. */}
+      {!isMultiRoot && rootPath && !isSearchActive && (
+        <section
+          data-testid="file-tree-root-target"
+          aria-label={singleRootName ?? rootPath}
+          data-tree-root-path={singleRootDropPath}
+          title={rootPath}
+          className={cn(
+            'mx-1 mt-1 flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-1.5 text-sidebar-row text-sidebar-foreground',
+            singleRootDropPath &&
+              rootDropPath === singleRootDropPath &&
+              'bg-primary/15 ring-1 ring-inset ring-primary'
+          )}
+          onDragOver={handleTreeDragOver}
+          onDrop={handleTreeDrop}
+          onDragLeave={() => setRootDropPath(null)}
+        >
+          <FolderGit2 size={13} className="shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate leading-4">{singleRootName}</span>
+        </section>
+      )}
+
       {/* Tree / Search Results */}
-      <div
-        className="flex-1 overflow-y-auto overflow-x-hidden py-1"
+      <section
+        data-testid="file-tree-drop-area"
+        aria-label={t('fileExplorer.title')}
+        data-tree-root-path={singleRootDropPath}
+        className={cn(
+          'min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1',
+          singleRootDropPath &&
+            rootDropPath === singleRootDropPath &&
+            'ring-1 ring-inset ring-primary'
+        )}
         onDragOver={handleTreeDragOver}
         onDrop={handleTreeDrop}
+        onDragLeave={() => setRootDropPath(null)}
+        onDragEnd={() => setRootDropPath(null)}
       >
         {roots.length === 0 && !rootPath && (
           <div className="px-3 py-5" role="status">
@@ -1466,12 +1549,19 @@ export function FileExplorer({
                 key={`${root.projectId}:${root.path}`}
                 data-testid={`file-root-${root.projectId}`}
               >
-                <div
+                <section
+                  aria-label={root.name}
+                  data-tree-root-path={error ? undefined : root.path}
+                  onDragOver={handleTreeDragOver}
+                  onDrop={handleTreeDrop}
+                  onDragLeave={() => setRootDropPath(null)}
                   className={cn(
                     'group mx-1 flex h-7 min-w-0 items-center gap-1 rounded-sm px-1.5 text-sidebar-row transition-colors duration-150 ease-[var(--ease-out)]',
-                    focused
-                      ? 'bg-sidebar-accent text-foreground ring-1 ring-inset ring-primary/35'
-                      : 'text-sidebar-foreground hover:bg-sidebar-accent/50'
+                    !error && rootDropPath === root.path
+                      ? 'bg-primary/15 text-foreground ring-1 ring-inset ring-primary'
+                      : focused
+                        ? 'bg-sidebar-accent text-foreground ring-1 ring-inset ring-primary/35'
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent/50'
                   )}
                 >
                   <button
@@ -1504,7 +1594,7 @@ export function FileExplorer({
                   >
                     <SquareTerminal size={13} />
                   </button>
-                </div>
+                </section>
 
                 {error ? (
                   <div className="px-3 py-3" role="alert">
@@ -1739,7 +1829,7 @@ export function FileExplorer({
         )}
 
         {inlineInput && !isInlineInputAnchored && renderInlineInput(0)}
-      </div>
+      </section>
 
       {fillContainer ? null : (
         <button

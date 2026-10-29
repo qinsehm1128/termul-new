@@ -3,12 +3,21 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PENDING_REVEAL_LINE_GLOBAL, type PendingRevealLineWindow } from '@/lib/editor-events'
-import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
+import {
+  type FileExplorerRoot,
+  type FileExplorerState,
+  useFileExplorerStore
+} from '@/stores/file-explorer-store'
 import { FileExplorer } from './FileExplorer'
 
 HTMLElement.prototype.scrollIntoView = vi.fn()
 
 const { mockToastError } = vi.hoisted(() => ({ mockToastError: vi.fn() }))
+const { mockLogFrontendError } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn().mockResolvedValue(undefined)
+}))
+
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
 
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { error: mockToastError, success: vi.fn(), warning: vi.fn() })
@@ -30,6 +39,7 @@ const mockSetRootLoadError = vi.fn()
 const mockSetSearchQuery = vi.fn()
 const mockSearchInRoot = vi.fn()
 const mockResetSearch = vi.fn()
+const mockSetFocusedRoot = vi.fn()
 
 const mockSearchFileNamesStreamCancel = vi
   .fn()
@@ -50,6 +60,8 @@ const mockRenameFile = vi.fn()
 const mockRefreshTree = vi.fn().mockResolvedValue(undefined)
 
 const mockExplorerState = {
+  roots: [] as FileExplorerRoot[],
+  rootLoadErrors: new Map<string, { message: string }>(),
   rootPath: null as string | null,
   directoryContents: new Map<
     string,
@@ -83,10 +95,16 @@ const mockDeletePath = vi.fn(async () => ({ success: true, data: undefined }))
 const mockUnwatchDirectory = vi.fn(async () => ({ success: true, data: undefined }))
 
 const mockImportDroppedFiles = vi.fn(async () => null)
+const mockMoveEntries = vi.fn<(...args: [string[], string]) => Promise<string | null>>()
+const mockEndEntryDrag = vi.fn(() => {
+  mockStoreGetState.dragPaths = []
+})
 
 const mockStoreGetState = {
   dragPaths: [] as string[],
   importDroppedFiles: mockImportDroppedFiles,
+  moveEntries: mockMoveEntries,
+  endEntryDrag: mockEndEntryDrag,
   expandedDirs: new Set<string>(),
   selectedPaths: new Set<string>(),
   loadingDirs: new Set<string>(),
@@ -95,7 +113,9 @@ const mockStoreGetState = {
   clearSelection: mockClearSelection
 }
 
-vi.mock('@/stores/file-explorer-store', () => ({
+vi.mock('@/stores/file-explorer-store', async (importOriginal) => ({
+  isRejectedMove: (await importOriginal<typeof import('@/stores/file-explorer-store')>())
+    .isRejectedMove,
   useFileExplorer: () => mockExplorerState,
   useFileExplorerActions: () => ({
     toggleDirectory: (...args: unknown[]) => mockToggleDirectory(...args),
@@ -111,6 +131,7 @@ vi.mock('@/stores/file-explorer-store', () => ({
     collapseAll: mockCollapseAll,
     refreshDirectory: mockRefreshDirectory,
     refreshTree: mockRefreshTree,
+    setFocusedRoot: mockSetFocusedRoot,
     setRootLoadError: mockSetRootLoadError,
     setSearchQuery: mockSetSearchQuery,
     searchInRoot: mockSearchInRoot,
@@ -183,6 +204,7 @@ vi.mock('./FileTreeNode', async (importOriginal) => {
       <div
         data-testid="tree-node"
         data-path={entry.path}
+        data-entry-type={entry.type}
         data-expanded={expanded ? 'true' : 'false'}
       >
         <button type="button" onClick={(e) => onClick?.(e, entry)}>
@@ -247,7 +269,10 @@ beforeEach(() => {
   mockStoreGetState.lastClickedPath = null
   mockStoreGetState.rootPath = null
   mockActiveFilePath.value = null
+  mockExplorerState.roots = []
+  mockExplorerState.rootLoadErrors = new Map()
   mockExplorerState.rootPath = null
+  mockMoveEntries.mockResolvedValue(null)
   mockExplorerState.directoryContents = new Map()
   mockExplorerState.isVisible = true
   mockExplorerState.rootLoadError = null
@@ -264,6 +289,187 @@ beforeEach(() => {
   mockExplorerState.loadingDirs = mockStoreGetState.loadingDirs
   mockExplorerState.searchLastCompletedQuery = ''
   delete (window as unknown as PendingRevealLineWindow)[PENDING_REVEAL_LINE_GLOBAL]
+})
+
+describe('FileExplorer root drops', () => {
+  function prepareRoot(path = '/project'): void {
+    mockExplorerState.rootPath = path
+    mockStoreGetState.rootPath = path
+    mockExplorerState.directoryContents = new Map([
+      [
+        path,
+        [
+          { path: `${path}/src`, name: 'src', type: 'directory' },
+          { path: `${path}/README.md`, name: 'README.md', type: 'file' }
+        ]
+      ]
+    ])
+  }
+
+  function tree(): HTMLElement {
+    return document.querySelector('#file-explorer-panel > .overflow-y-auto') as HTMLElement
+  }
+
+  function transfer(types = ['application/json']): DataTransfer {
+    return {
+      types,
+      files: [],
+      dropEffect: 'none',
+      getData: vi.fn(() => {
+        throw new Error('dragover data is protected')
+      })
+    } as unknown as DataTransfer
+  }
+
+  it('moves selected nested entries onto single-root blank space exactly once', async () => {
+    prepareRoot()
+    mockStoreGetState.dragPaths = ['/project/src/a.ts', '/project/src/nested']
+    render(<FileExplorer />)
+    const dataTransfer = transfer()
+
+    expect(fireEvent.dragOver(tree(), { dataTransfer })).toBe(false)
+    expect(dataTransfer.dropEffect).toBe('move')
+    fireEvent.drop(tree(), { dataTransfer })
+
+    await waitFor(() =>
+      expect(mockMoveEntries).toHaveBeenCalledExactlyOnceWith(
+        ['/project/src/a.ts', '/project/src/nested'],
+        '/project'
+      )
+    )
+    expect(mockEndEntryDrag).toHaveBeenCalledTimes(1)
+    expect(mockImportDroppedFiles).not.toHaveBeenCalled()
+    expect(mockOpenFile).not.toHaveBeenCalled()
+  })
+
+  it('offers a visible root row even when the tree has no blank space', () => {
+    prepareRoot('/repo/.worktrees/feature')
+    mockStoreGetState.dragPaths = ['/repo/.worktrees/feature/src/a.ts']
+    render(<FileExplorer />)
+    const root = screen.getByTestId('file-tree-root-target')
+
+    expect(root).toHaveTextContent('feature')
+    expect(root).toHaveAttribute('title', '/repo/.worktrees/feature')
+    fireEvent.drop(root, { dataTransfer: transfer() })
+
+    expect(mockMoveEntries).toHaveBeenCalledWith(
+      ['/repo/.worktrees/feature/src/a.ts'],
+      '/repo/.worktrees/feature'
+    )
+  })
+
+  it('does not turn drops on file rows into root moves', () => {
+    prepareRoot()
+    mockStoreGetState.dragPaths = ['/project/src/a.ts']
+    render(<FileExplorer />)
+    const file = screen.getByRole('button', { name: 'README.md' })
+    const dataTransfer = transfer()
+
+    expect(fireEvent.dragOver(file, { dataTransfer })).toBe(true)
+    fireEvent.drop(file, { dataTransfer })
+
+    expect(mockMoveEntries).not.toHaveBeenCalled()
+    expect(mockImportDroppedFiles).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { paths: [] },
+    { paths: ['/project/README.md'] },
+    { paths: ['/project'] }
+  ])('ignores pane drags and rejected root moves: $paths', ({ paths }) => {
+    prepareRoot()
+    mockStoreGetState.dragPaths = paths
+    render(<FileExplorer />)
+    const dataTransfer = transfer()
+
+    expect(fireEvent.dragOver(tree(), { dataTransfer })).toBe(true)
+    fireEvent.drop(tree(), { dataTransfer })
+
+    expect(mockMoveEntries).not.toHaveBeenCalled()
+    expect(mockImportDroppedFiles).not.toHaveBeenCalled()
+  })
+
+  function prepareMultipleRoots(): void {
+    prepareRoot()
+    mockExplorerState.roots = [
+      { projectId: 'one', name: 'Project', path: '/project' },
+      { projectId: 'two', name: 'Other', path: '/other' }
+    ]
+    mockExplorerState.directoryContents.set('/other', [])
+  }
+
+  it('moves to the explicitly targeted root without switching or expanding it', () => {
+    prepareMultipleRoots()
+    mockStoreGetState.dragPaths = ['/project/src/a.ts']
+    render(<FileExplorer />)
+    const header = screen.getByRole('button', { name: 'Other' })
+    const dataTransfer = transfer()
+
+    expect(fireEvent.dragOver(header, { dataTransfer })).toBe(false)
+    fireEvent.drop(header, { dataTransfer })
+
+    expect(mockMoveEntries).toHaveBeenCalledExactlyOnceWith(['/project/src/a.ts'], '/other')
+    expect(mockSetFocusedRoot).not.toHaveBeenCalled()
+    expect(mockToggleDirectory).not.toHaveBeenCalled()
+  })
+
+  it('copies external files to the explicit root and rejects ambiguous multi-root space', () => {
+    prepareMultipleRoots()
+    render(<FileExplorer />)
+    const dataTransfer = {
+      types: ['Files'],
+      files: [new File([''], 'photo.png')],
+      dropEffect: 'none'
+    } as unknown as DataTransfer
+
+    expect(fireEvent.dragOver(tree(), { dataTransfer })).toBe(true)
+    fireEvent.drop(tree(), { dataTransfer })
+    expect(mockImportDroppedFiles).not.toHaveBeenCalled()
+
+    const header = screen.getByRole('button', { name: 'Other' })
+    expect(fireEvent.dragOver(header, { dataTransfer })).toBe(false)
+    expect(dataTransfer.dropEffect).toBe('copy')
+    fireEvent.drop(header, { dataTransfer })
+    expect(mockImportDroppedFiles).toHaveBeenCalledExactlyOnceWith('/other', ['photo.png'])
+    expect(mockMoveEntries).not.toHaveBeenCalled()
+  })
+
+  it.each(['error', 'search'])('rejects root drops in a %s view', (mode) => {
+    prepareRoot()
+    mockStoreGetState.dragPaths = ['/project/src/a.ts']
+    if (mode === 'error') mockExplorerState.rootLoadError = { message: 'Unavailable' }
+    else mockExplorerState.searchQuery = 'needle'
+    render(<FileExplorer />)
+
+    fireEvent.drop(tree(), { dataTransfer: transfer() })
+
+    expect(mockMoveEntries).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'returned',
+    'rejected'
+  ])('reports a %s move failure without leaking paths to logs', async (kind) => {
+    prepareRoot()
+    mockStoreGetState.dragPaths = ['/project/private/a.ts']
+    if (kind === 'returned') mockMoveEntries.mockResolvedValueOnce('Name already exists')
+    else mockMoveEntries.mockRejectedValueOnce(new Error('Name already exists'))
+    render(<FileExplorer />)
+
+    fireEvent.drop(tree(), { dataTransfer: transfer() })
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(expect.any(String), {
+        description: 'Name already exists'
+      })
+    )
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'FileExplorer.rootDrop',
+        message: expect.not.stringContaining('/project')
+      })
+    )
+  })
 })
 
 describe('FileExplorer', () => {
