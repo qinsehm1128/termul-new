@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "org.termul.example",
+  "name": "Configured Counter",
+  "version": "0.1.1",
+  "abi": { "min": 1, "max": 1 },
+  "contributes": {
+    "commands": [
+      { "id": "example.reset", "title": "Reset counter", "description": "Reset the counter to zero" }
+    ],
+    "configuration": {
+      "title": "Counter settings",
+      "properties": {
+        "greeting": { "type": "string", "title": "Greeting", "description": "Greeting shown in the panel", "default": "Hello" },
+        "step": { "type": "number", "title": "Step", "description": "Increment per click", "default": 1, "minimum": 1, "maximum": 100 },
+        "showCount": { "type": "boolean", "title": "Show count", "description": "Show the current count", "default": true },
+        "tone": { "type": "string", "title": "Tone", "description": "Text emphasis", "default": "normal", "enum": ["normal", "muted"], "enumLabels": ["Normal", "Muted"] }
+      }
+    },
+    "views": [ { "id": "example.counter", "title": "Counter v2", "location": "panel" } ]
+  },
+  "services": {
+    "provides": [ { "name": "org.termul.example.counter", "version": 1 } ],
+    "requires": []
+  }
+}
