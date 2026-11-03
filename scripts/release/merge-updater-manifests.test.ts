@@ -114,7 +114,10 @@ describe('mergeUpdaterManifests', () => {
       componentPolicy
     })
 
-    expect(merged.termul.componentPolicy).toEqual(componentPolicy)
+    expect(merged.termul.componentPolicy).toEqual({
+      ...componentPolicy,
+      pluginCore: { buildId: `legacy:${version}:pluginCore`, action: 'unsupported' }
+    })
   })
 
   test.each([
@@ -470,5 +473,87 @@ describe('mergeUpdaterManifests', () => {
         `/releases/download/v${rcVersion}/`
       )
     })
+  })
+})
+
+describe('Plugin Core wire policy extension', () => {
+  const plugin = {
+    buildId: `termul-pluginCore-v1-sha256:${'a'.repeat(64)}`,
+    action: 'defer-if-active'
+  }
+  const componentPolicy = {
+    schemaVersion: 1,
+    targetVersion: version,
+    metadataState: 'declared',
+    components: {
+      renderer: { buildId: 'renderer-old', action: 'restart' },
+      guiNative: { buildId: 'gui-old', action: 'restart' },
+      acpCore: { buildId: 'acp-old', action: 'defer-if-active' },
+      terminalCore: { buildId: 'terminal-old', action: 'defer-if-active' }
+    }
+  }
+  async function mergePolicy(policy?: unknown) {
+    const dir = await fixtureDir()
+    const input = join(dir, 'platform.json')
+    await writeManifest(input, completePlatforms())
+    return mergeUpdaterManifests({
+      inputPaths: [input],
+      outputPath: join(dir, 'latest.json'),
+      version,
+      notes: 'notes',
+      pubDate: '2026-01-01T00:00:00.000Z',
+      componentPolicy: policy
+    })
+  }
+  test('emits exactly four public keys and a sibling extension from internal five-key input', async () => {
+    const merged = await mergePolicy({
+      ...componentPolicy,
+      components: { ...componentPolicy.components, pluginCore: plugin }
+    })
+    expect(merged.termul.componentPolicy).toEqual({ ...componentPolicy, pluginCore: plugin })
+    expect(Object.keys(merged.termul.componentPolicy.components).sort()).toEqual(
+      ['renderer', 'guiNative', 'acpCore', 'terminalCore'].sort()
+    )
+  })
+  test('normalizes matching duplicates before checking component keys, rejects differing IDs or actions', async () => {
+    const policy = {
+      ...componentPolicy,
+      components: { ...componentPolicy.components, pluginCore: plugin },
+      pluginCore: { ...plugin }
+    }
+    expect((await mergePolicy(policy)).termul.componentPolicy.pluginCore).toEqual(plugin)
+    for (const replacement of [
+      { ...plugin, action: 'restart' },
+      { ...plugin, buildId: `termul-pluginCore-v1-sha256:${'b'.repeat(64)}` }
+    ]) {
+      await expect(mergePolicy({ ...policy, pluginCore: replacement })).rejects.toThrow(
+        /conflicting duplicate pluginCore/
+      )
+    }
+  })
+  test('rejects malformed extensions, noncanonical plugin IDs and unknown components', async () => {
+    for (const pluginCore of [
+      null,
+      'bad',
+      { ...plugin, buildId: 'plugin-v1' },
+      { ...plugin, action: 'invalid' }
+    ]) {
+      await expect(mergePolicy({ ...componentPolicy, pluginCore })).rejects.toThrow()
+    }
+    await expect(
+      mergePolicy({
+        ...componentPolicy,
+        pluginCore: plugin,
+        components: { ...componentPolicy.components, unknown: plugin }
+      })
+    ).rejects.toThrow(/exactly/)
+  })
+  test('four-key and absent policies both synthesize an unsupported legacy Plugin Core extension', async () => {
+    for (const policy of [componentPolicy, undefined]) {
+      expect((await mergePolicy(policy)).termul.componentPolicy.pluginCore).toEqual({
+        buildId: `legacy:${version}:pluginCore`,
+        action: 'unsupported'
+      })
+    }
   })
 })

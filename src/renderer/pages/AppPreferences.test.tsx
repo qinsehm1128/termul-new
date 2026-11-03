@@ -6,6 +6,7 @@ import type {
   UpdateComponentPolicy
 } from '@shared/types/updater.types'
 import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
+import { invoke } from '@tauri-apps/api/core'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
@@ -219,6 +220,23 @@ describe('AppPreferences settings controls', () => {
 
   afterEach(() => {
     vi.mocked(confirm).mockReset()
+  })
+
+  it('hides local runtime controls in a browser without querying or restarting Cores', async () => {
+    expect(
+      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+    ).toBeUndefined()
+    renderPage()
+
+    await screen.findByRole('switch', { name: 'Enable auto save' })
+    expect(screen.queryByTestId('runtime-restart-pluginCore')).not.toBeInTheDocument()
+    expect(document.querySelector('[data-runtime-card]')).toBeNull()
+    expect(document.getElementById('runtime')).toBeNull()
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => ['core_runtime_status', 'restart_core'].includes(command))
+    ).toBe(false)
   })
 
   it('toggling the auto-save switch writes editorAutoSave (with correct negation)', async () => {
@@ -558,12 +576,14 @@ describe('AppPreferences update component diff and forced install', () => {
       renderer: 'restart',
       guiNative: 'restart',
       acpCore: 'defer-if-active',
-      terminalCore: 'defer-if-active'
+      terminalCore: 'defer-if-active',
+      pluginCore: 'defer-if-active'
     })
     fetchComponentRuntimeIdentities.mockResolvedValue({
       guiNative: 'build-guiNative',
       acpCore: { buildId: 'build-acpCore', activeResources: 2 },
-      terminalCore: { buildId: 'old-terminal', activeResources: 3 }
+      terminalCore: { buildId: 'old-terminal', activeResources: 3 },
+      pluginCore: { buildId: 'old-plugin', activeResources: 1 }
     })
     useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
   })
@@ -583,6 +603,8 @@ describe('AppPreferences update component diff and forced install', () => {
     expect(status('guiNative')).toBe('same')
     expect(status('acpCore')).toBe('same')
     expect(status('terminalCore')).toBe('replace')
+    expect(status('pluginCore')).toBe('replace')
+    expect(table).toHaveTextContent('old-plugin')
     expect(table).toHaveTextContent('old-terminal')
     expect(table).toHaveTextContent('3 terminal(s) running')
   })
@@ -594,6 +616,8 @@ describe('AppPreferences update component diff and forced install', () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
     const message = vi.mocked(confirm).mock.calls[0]?.[0] as string
     expect(message).toContain('This ends 3 running terminal(s) and 0 agent session(s).')
+    expect(message).toContain('their private runtime state resets')
+    expect(message).toContain('plugin installation records and configuration are preserved')
     expect(updaterActions.forceInstallAndRestart).not.toHaveBeenCalled()
 
     vi.mocked(confirm).mockResolvedValue(true)

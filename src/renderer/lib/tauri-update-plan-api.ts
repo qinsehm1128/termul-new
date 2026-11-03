@@ -38,7 +38,12 @@ function requiresComponentReconciliation(
   // Core `preserve` remains identity-aware: it means adopt when the build ID
   // matches and reconcile when it does not. Renderer/native preserve keeps its
   // historical no-op meaning.
-  return action !== 'preserve' || component === 'acpCore' || component === 'terminalCore'
+  return (
+    action !== 'preserve' ||
+    component === 'acpCore' ||
+    component === 'terminalCore' ||
+    component === 'pluginCore'
+  )
 }
 
 function isComponent(value: unknown): value is UpdateComponent {
@@ -68,7 +73,7 @@ function hasValidActionMetadata(plan: PendingUpdatePlan): boolean {
  */
 export function forceComponentPolicy(policy: UpdateComponentPolicy): UpdateComponentPolicy {
   const components = { ...policy.components }
-  for (const component of ['acpCore', 'terminalCore'] as const) {
+  for (const component of ['acpCore', 'terminalCore', 'pluginCore'] as const) {
     if (components[component].action === 'defer-if-active') {
       components[component] = { ...components[component], action: 'restart' }
     }

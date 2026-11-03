@@ -41,7 +41,8 @@ const declaredPolicy = {
     guiNative: { buildId: 'gui-next', action: 'restart' },
     acpCore: { buildId: 'acp-next', action: 'defer-if-active' },
     terminalCore: { buildId: 'terminal-next', action: 'defer-if-active' }
-  }
+  },
+  pluginCore: { buildId: 'plugin-next', action: 'defer-if-active' }
 }
 
 async function downloadDeclaredUpdate(): Promise<void> {
@@ -77,9 +78,10 @@ describe('installAndRestart force option', () => {
 
     expect(savedPlan().componentPolicy.components.terminalCore.action).toBe('defer-if-active')
     expect(savedPlan().componentPolicy.components.acpCore.action).toBe('defer-if-active')
+    expect(savedPlan().componentPolicy.components.pluginCore.action).toBe('defer-if-active')
   })
 
-  it('persists a plan that restarts both Cores for a forced install', async () => {
+  it('persists a plan that restarts all three Cores for a forced install', async () => {
     await downloadDeclaredUpdate()
 
     await installAndRestart({ force: true })
@@ -87,5 +89,6 @@ describe('installAndRestart force option', () => {
     const { components } = savedPlan().componentPolicy
     expect(components.terminalCore).toEqual({ buildId: 'terminal-next', action: 'restart' })
     expect(components.acpCore).toEqual({ buildId: 'acp-next', action: 'restart' })
+    expect(components.pluginCore).toEqual({ buildId: 'plugin-next', action: 'restart' })
   })
 })

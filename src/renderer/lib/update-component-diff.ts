@@ -16,6 +16,7 @@ export interface ComponentRuntimeIdentities {
   guiNative: string
   acpCore: CoreRuntimeIdentity | null
   terminalCore: CoreRuntimeIdentity | null
+  pluginCore: CoreRuntimeIdentity | null
 }
 
 /**
@@ -52,7 +53,8 @@ function currentIdentity(
     case 'guiNative':
       return { running: true, buildId: runtime.guiNative, activeResources: null }
     case 'acpCore':
-    case 'terminalCore': {
+    case 'terminalCore':
+    case 'pluginCore': {
       const core = runtime[component]
       return core
         ? { running: true, buildId: core.buildId, activeResources: core.activeResources }

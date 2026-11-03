@@ -270,6 +270,7 @@ jobs:
           # option_env! is not a Cargo env dependency. Touch the crate that
           # reads it so a restored rust cache cannot keep version-derived IDs.
           touch src-tauri/crates/se-terminal-core/src/ipc.rs
+          touch src-tauri/src/core/plugin.rs src-tauri/crates/se-plugin-host/src/lib.rs
 
       - name: Build platform artifacts locally
         id: tauri
@@ -278,6 +279,7 @@ jobs:
           TERMUL_GUI_BUILD_ID: ${{ steps.component-identity.outputs.TERMUL_GUI_BUILD_ID }}
           TERMUL_ACP_CORE_BUILD_ID: ${{ steps.component-identity.outputs.TERMUL_ACP_CORE_BUILD_ID }}
           TERMUL_TERMINAL_CORE_BUILD_ID: ${{ steps.component-identity.outputs.TERMUL_TERMINAL_CORE_BUILD_ID }}
+          TERMUL_PLUGIN_CORE_BUILD_ID: ${{ steps.component-identity.outputs.TERMUL_PLUGIN_CORE_BUILD_ID }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

@@ -4,6 +4,12 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
+import {
+  assertCanonicalBuildId,
+  identityComponents,
+  normalizeComponentPolicy as normalizePolicyComponents,
+  publicComponentPolicy
+} from './component-identity-release.mjs'
 
 /**
  * Every key a merged manifest must carry. This is the gate that fails a release
@@ -46,7 +52,7 @@ function assertStringArray(value, description) {
   }
 }
 
-const updateComponents = ['renderer', 'guiNative', 'acpCore', 'terminalCore']
+const updateComponents = identityComponents
 const updateActions = ['preserve', 'restart', 'defer-if-active', 'unsupported']
 const versionDerivedBuildId = /:(?:acp-core|terminal-core|renderer|gui)$/
 
@@ -60,7 +66,12 @@ function legacyComponentPolicy(version) {
         component,
         {
           buildId: `legacy:${version}:${component}`,
-          action: component === 'terminalCore' ? 'defer-if-active' : 'restart'
+          action:
+            component === 'pluginCore'
+              ? 'unsupported'
+              : component === 'terminalCore'
+                ? 'defer-if-active'
+                : 'restart'
         }
       ])
     )
@@ -68,7 +79,7 @@ function legacyComponentPolicy(version) {
 }
 
 function normalizeComponentPolicy(value, version) {
-  if (value === undefined) return legacyComponentPolicy(version)
+  if (value === undefined) return publicComponentPolicy(legacyComponentPolicy(version))
   assertPlainObject(value, 'termul.componentPolicy')
   if (value.schemaVersion !== 1) {
     throw new Error('termul.componentPolicy schemaVersion must be 1')
@@ -81,22 +92,21 @@ function normalizeComponentPolicy(value, version) {
   if (value.metadataState !== 'declared' && value.metadataState !== 'legacy') {
     throw new Error('termul.componentPolicy metadataState must be declared or legacy')
   }
-  assertPlainObject(value.components, 'termul.componentPolicy components')
-  const actualComponents = Object.keys(value.components).sort()
-  const expectedComponents = [...updateComponents].sort()
-  if (JSON.stringify(actualComponents) !== JSON.stringify(expectedComponents)) {
-    throw new Error(
-      `termul.componentPolicy components must be exactly: ${updateComponents.join(', ')}`
-    )
-  }
+  const normalized = normalizePolicyComponents(value, version)
 
   const components = {}
   for (const component of updateComponents) {
-    const entry = value.components[component]
+    const entry = normalized[component]
     assertPlainObject(entry, `termul.componentPolicy component ${component}`)
     assertNonEmptyString(entry.buildId, `termul.componentPolicy component ${component} buildId`)
     if (value.metadataState === 'declared' && versionDerivedBuildId.test(entry.buildId.trim())) {
       throw new Error(`version-derived component buildId: ${component}`)
+    }
+    if (
+      component === 'pluginCore' &&
+      !(entry.buildId === `legacy:${version}:pluginCore` && entry.action === 'unsupported')
+    ) {
+      assertCanonicalBuildId(component, entry.buildId)
     }
     if (!updateActions.includes(entry.action)) {
       throw new Error(
@@ -106,12 +116,12 @@ function normalizeComponentPolicy(value, version) {
     components[component] = { buildId: entry.buildId.trim(), action: entry.action }
   }
 
-  return {
+  return publicComponentPolicy({
     schemaVersion: 1,
     targetVersion: version,
     metadataState: value.metadataState,
     components
-  }
+  })
 }
 
 function releaseUrlAssetName(url, tag, description) {

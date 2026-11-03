@@ -360,6 +360,8 @@
     "gui": "App (GUI)",
     "terminalCore": "Terminal Core",
     "acpCore": "ACP Core",
+    "pluginCore": "Plugin Core",
+    "activePlugins": "{{count}} active plugin instance(s)",
     "state": {
       "running": "Running",
       "stopped": "Not running",
@@ -378,6 +380,8 @@
     "restartGuiMessage": "Only the app process restarts. Terminals and agents keep running in their Cores and are picked up again when the app starts.",
     "restartTerminalCoreTitle": "Restart the Terminal Core",
     "restartTerminalCoreMessage": "Ends all {{count}} terminals and any agent running in them. This cannot be undone.",
+    "restartPluginCoreTitle": "Restart the Plugin Core",
+    "restartPluginCoreMessage": "Stops all {{count}} active plugin instances and resets their private runtime state. Plugin installation records and configuration are preserved. This cannot be undone.",
     "restartAcpCoreTitle": "Restart the ACP Core",
     "restartAcpCoreMessage": "Ends all {{count}} ACP agent sessions and interrupts any reply in progress. This cannot be undone."
   },

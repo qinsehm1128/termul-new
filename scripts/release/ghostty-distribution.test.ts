@@ -33,6 +33,14 @@ describe('Ghostty production distribution', () => {
   ])('%s provisions verified Zig and runs native behavior gates', (name) => {
     const jobs = productBuildJobs(read(`.github/workflows/${name}.yml`))
     expect(jobs).toHaveLength(2)
+    const workflow = read(`.github/workflows/${name}.yml`)
+    expect(workflow).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression, not JavaScript interpolation.
+      'TERMUL_PLUGIN_CORE_BUILD_ID: ${{ steps.component-identity.outputs.TERMUL_PLUGIN_CORE_BUILD_ID }}'
+    )
+    expect(workflow).toContain(
+      'touch src-tauri/src/core/plugin.rs src-tauri/crates/se-plugin-host/src/lib.rs'
+    )
     for (const job of jobs) {
       const python = job.indexOf('- name: Setup Python')
       const toolchain = job.indexOf('- name: Prepare checksum-pinned Ghostty build toolchain')
@@ -67,6 +75,7 @@ describe('Ghostty production distribution', () => {
     expect(Object.keys(inputs.components).sort()).toEqual([
       'acpCore',
       'guiNative',
+      'pluginCore',
       'renderer',
       'terminalCore'
     ])

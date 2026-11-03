@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -11,6 +11,7 @@ const inputs = {
   components: {
     renderer: [],
     guiNative: [],
+    pluginCore: [],
     acpCore: ['src-tauri/src/acp.rs'],
     terminalCore: ['src-tauri/src/pty.rs']
   }
@@ -136,6 +137,7 @@ describe('scoped Cargo material for Core identities', () => {
     components: {
       renderer: [],
       guiNative: ['src-tauri/Cargo.toml', 'src-tauri/Cargo.lock'],
+      pluginCore: [],
       acpCore: ['src-tauri/src/acp.rs'],
       terminalCore: ['src-tauri/src/pty.rs', 'src-tauri/crates/se-pty']
     }
@@ -387,6 +389,7 @@ describe('crate-built Core identities', () => {
     components: {
       renderer: [],
       guiNative: ['src-tauri/Cargo.toml', 'src-tauri/Cargo.lock'],
+      pluginCore: [],
       acpCore: [],
       terminalCore: ['src-tauri/src/terminal_core_main.rs']
     }
@@ -589,12 +592,14 @@ describe('explainIdentityChange', () => {
       components: {
         renderer: { buildId: 'r' },
         guiNative: { buildId: 'g' },
+        pluginCore: { buildId: 'p' },
         acpCore: { buildId: 'a' },
         terminalCore: { buildId: id }
       },
       payloads: {
         renderer: payload([]),
         guiNative: payload([]),
+        pluginCore: payload([]),
         acpCore: payload([]),
         terminalCore: { ...payload(terminalFiles), cargo }
       }
@@ -626,7 +631,162 @@ describe('explainIdentityChange', () => {
       '  - core/launcher.rs',
       '  + cargo dependency uuid',
       '  - cargo dependency tauri-plugin-log',
-      '  ~ Cargo.lock (scoped part)'
+      '  ~ Cargo.lock (scoped part)',
+      'pluginCore: unchanged'
     ])
+  })
+})
+
+describe('Plugin Core identity complete fixture', () => {
+  const pluginSpec = {
+    schemaVersion: 1,
+    sharedFiles: ['src-tauri/src/core/ipc.rs'],
+    cargo: {
+      manifest: 'src-tauri/Cargo.toml',
+      lock: 'src-tauri/Cargo.lock',
+      package: 'se-manager',
+      crateSource: 'src-tauri/src',
+      workspaceCrates: 'src-tauri/crates',
+      scopedComponents: [],
+      crateComponents: { pluginCore: 'se-plugin-host' }
+    },
+    components: {
+      renderer: [],
+      guiNative: ['src-tauri/src', 'src-tauri/crates'],
+      acpCore: [],
+      terminalCore: [],
+      pluginCore: [
+        'src-tauri/src/main.rs',
+        'src-tauri/src/core/process.rs',
+        'src-tauri/src/core/plugin.rs',
+        'src-tauri/tauri.conf.prod.json'
+      ]
+    }
+  }
+  const generate = (root: string, inputs = pluginSpec) =>
+    generateComponentIdentities({ root, inputs })
+  async function write(root: string, path: string, value: string) {
+    await mkdir(join(root, path, '..'), { recursive: true })
+    await writeFile(join(root, path), value)
+  }
+  async function pluginFixture() {
+    const root = await mkdtemp(join(tmpdir(), 'termul-plugin-identity-'))
+    await write(root, 'src-tauri/Cargo.toml', '[package]\nname = "se-manager"\nversion = "0.1.0"\n')
+    for (const name of ['se-plugin-host', 'se-foundation']) {
+      await write(
+        root,
+        `src-tauri/crates/${name}/Cargo.toml`,
+        `[package]\nname = "${name}"\nversion = "0.1.0"\n`
+      )
+      await write(root, `src-tauri/crates/${name}/src/lib.rs`, 'pub fn fixture() {}\n')
+    }
+    await write(
+      root,
+      'src-tauri/src/core/plugin.rs',
+      'pub fn run() { se_plugin_host::fixture(); }\n'
+    )
+    await write(root, 'src-tauri/src/core/ipc.rs', 'pub const VERSION: u8 = 1;\n')
+    await write(root, 'src-tauri/src/main.rs', 'fn main() { /* plugin self-exec dispatch */ }\n')
+    await write(root, 'src-tauri/src/core/process.rs', 'pub fn dispatch() {}\n')
+    await write(root, 'src-tauri/tauri.conf.prod.json', '{"identifier":"plugin-fixture"}')
+    await write(
+      root,
+      'src-tauri/Cargo.lock',
+      `version = 4
+[[package]]
+name = "se-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "se-foundation",
+ "socket-dep",
+]
+[[package]]
+name = "se-foundation"
+version = "0.1.0"
+[[package]]
+name = "socket-dep"
+version = "1.0.0"
+checksum = "socket-old"
+`
+    )
+    return root
+  }
+
+  test('canonical plugin ID hashes branch, crate, IPC and dependency closure, not unrelated GUI/renderer files', async () => {
+    const root = await pluginFixture()
+    try {
+      const identity = await generate(root)
+      expect(identity.components.pluginCore.buildId).toMatch(
+        /^termul-pluginCore-v1-sha256:[0-9a-f]{64}$/
+      )
+      const files = identity.payloads.pluginCore.files.map((entry: { path: string }) => entry.path)
+      expect(files).toEqual(
+        expect.arrayContaining([
+          'src-tauri/src/main.rs',
+          'src-tauri/src/core/process.rs',
+          'src-tauri/src/core/plugin.rs',
+          'src-tauri/tauri.conf.prod.json',
+          'src-tauri/src/core/ipc.rs',
+          'src-tauri/crates/se-plugin-host/src/lib.rs',
+          'src-tauri/crates/se-foundation/src/lib.rs'
+        ])
+      )
+      for (const path of files) {
+        const original = await readFile(join(root, path), 'utf8')
+        await write(
+          root,
+          path,
+          original +
+            (path.endsWith('.toml')
+              ? '\ndescription = "identity mutation"\n'
+              : '\n// identity mutation\n')
+        )
+        const changed = await generate(root)
+        expect(changed.components.pluginCore.buildId, path).not.toBe(
+          identity.components.pluginCore.buildId
+        )
+        if (path.endsWith('/plugin.rs') || path.endsWith('se-plugin-host/src/lib.rs')) {
+          expect(changed.components.guiNative.buildId, path).not.toBe(
+            identity.components.guiNative.buildId
+          )
+        }
+        await write(root, path, original)
+      }
+      await write(root, 'src-tauri/src/window.rs', 'pub fn gui_only() {}')
+      await write(root, 'renderer/main.ts', 'export const guiOnly = true')
+      expect((await generate(root)).components.pluginCore.buildId).toBe(
+        identity.components.pluginCore.buildId
+      )
+      const lockPath = join(root, 'src-tauri/Cargo.lock')
+      const lock = await readFile(lockPath, 'utf8')
+      await writeFile(lockPath, lock.replace('checksum = "socket-old"', 'checksum = "socket-new"'))
+      expect((await generate(root)).components.pluginCore.buildId).not.toBe(
+        identity.components.pluginCore.buildId
+      )
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  test('production hashing fails closed when concurrently delivered crate or branch is absent', async () => {
+    const root = await pluginFixture()
+    try {
+      const lockPath = join(root, 'src-tauri/Cargo.lock')
+      const lock = await readFile(lockPath, 'utf8')
+      await writeFile(
+        lockPath,
+        lock.replace('name = "se-plugin-host"', 'name = "not-the-plugin-host"')
+      )
+      await expect(generate(root)).rejects.toThrow(/Cargo.lock.*se-plugin-host/)
+      await writeFile(lockPath, lock)
+      const spec = structuredClone(pluginSpec)
+      spec.cargo.crateComponents.pluginCore = 'se-plugin-host-missing'
+      await expect(generate(root, spec)).rejects.toThrow(/se-plugin-host-missing/)
+      spec.cargo.crateComponents.pluginCore = 'se-plugin-host'
+      spec.components.pluginCore[2] = 'src-tauri/src/core/plugin-missing.rs'
+      await expect(generate(root, spec)).rejects.toThrow(/ENOENT|missing|Missing/)
+    } finally {
+      await rm(root, { recursive: true })
+    }
   })
 })

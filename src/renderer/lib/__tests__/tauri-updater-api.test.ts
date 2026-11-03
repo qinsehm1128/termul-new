@@ -2,6 +2,8 @@ import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
 import type { DownloadEvent } from '@tauri-apps/plugin-updater'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
+
 vi.mock('@tauri-apps/api/app', () => ({
   getVersion: vi.fn()
 }))
@@ -33,6 +35,7 @@ vi.mock('../tauri-rollback-api', () => ({
 }))
 
 import { getVersion } from '@tauri-apps/api/app'
+import { invoke } from '@tauri-apps/api/core'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check } from '@tauri-apps/plugin-updater'
 import { createBackup, setAppVersion } from '../tauri-backup-api'
@@ -130,6 +133,10 @@ describe('tauri-updater-api', () => {
         releaseNotes: 'release notes',
         componentPolicy: legacyUpdateComponentPolicy('2.0.0'),
         isSecurityUpdate: false
+      })
+      expect(result?.componentPolicy?.components.pluginCore).toEqual({
+        buildId: 'legacy:2.0.0:pluginCore',
+        action: 'unsupported'
       })
     })
 
@@ -385,6 +392,34 @@ describe('tauri-updater-api', () => {
         componentPolicy: legacyUpdateComponentPolicy('3.0.0'),
         isSecurityUpdate: false
       })
+    })
+
+    it('normalizes the public Plugin Core extension from a signed update manifest', async () => {
+      const legacy = legacyUpdateComponentPolicy('3.0.0')
+      const { pluginCore: _unsupported, ...components } = legacy.components
+      const pluginCore = {
+        buildId: `termul-pluginCore-v1-sha256:${'b'.repeat(64)}`,
+        action: 'defer-if-active'
+      }
+      const update = createMockUpdate('3.0.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      vi.mocked(invoke).mockResolvedValueOnce({
+        success: true,
+        data: {
+          version: '3.0.0',
+          termul: {
+            componentPolicy: {
+              ...legacy,
+              metadataState: 'declared',
+              components,
+              pluginCore
+            }
+          }
+        }
+      })
+      const info = await checkForUpdates()
+      expect(info?.componentPolicy?.components.pluginCore).toEqual(pluginCore)
+      expect(Object.keys(info?.componentPolicy?.components ?? {})).toHaveLength(5)
     })
 
     it('isUpdateAvailable returns boolean guard semantics', () => {

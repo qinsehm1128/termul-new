@@ -18,14 +18,16 @@ const policy: UpdateComponentPolicy = {
     renderer: { buildId: 'renderer-next', action: 'restart' },
     guiNative: { buildId: 'gui-next', action: 'restart' },
     acpCore: { buildId: 'acp-next', action: 'defer-if-active' },
-    terminalCore: { buildId: 'terminal-same', action: 'defer-if-active' }
+    terminalCore: { buildId: 'terminal-same', action: 'defer-if-active' },
+    pluginCore: { buildId: 'plugin-next', action: 'defer-if-active' }
   }
 }
 
 const runtime: ComponentRuntimeIdentities = {
   guiNative: 'gui-old',
   acpCore: { buildId: 'acp-old', activeResources: 2 },
-  terminalCore: { buildId: 'terminal-same', activeResources: 5 }
+  terminalCore: { buildId: 'terminal-same', activeResources: 5 },
+  pluginCore: { buildId: 'plugin-old', activeResources: 3 }
 }
 
 describe('buildComponentDiff', () => {
@@ -36,7 +38,8 @@ describe('buildComponentDiff', () => {
       ['renderer', 'bundled'],
       ['guiNative', 'replace'],
       ['acpCore', 'replace'],
-      ['terminalCore', 'same']
+      ['terminalCore', 'same'],
+      ['pluginCore', 'replace']
     ])
     expect(rows[2]).toMatchObject({
       currentBuildId: 'acp-old',
@@ -49,6 +52,15 @@ describe('buildComponentDiff', () => {
     const rows = buildComponentDiff(policy, { ...runtime, terminalCore: null })
 
     expect(rows[3]).toMatchObject({ status: 'notRunning', currentBuildId: null })
+    expect(buildComponentDiff(policy, { ...runtime, pluginCore: null })[4].status).toBe(
+      'notRunning'
+    )
+    expect(
+      buildComponentDiff(policy, {
+        ...runtime,
+        pluginCore: { buildId: 'plugin-next', activeResources: 3 }
+      })[4].status
+    ).toBe('same')
   })
 
   it('treats a Core that reports no build ID as replaced', () => {
@@ -99,6 +111,8 @@ describe('forceComponentPolicy', () => {
     })
     expect(forced.components.renderer).toBe(policy.components.renderer)
     expect(forced.components.guiNative).toBe(policy.components.guiNative)
+    expect(forced.components.pluginCore).toEqual({ buildId: 'plugin-next', action: 'restart' })
+    expect(policy.components.pluginCore.action).toBe('defer-if-active')
     expect(policy.components.acpCore.action).toBe('defer-if-active')
   })
 

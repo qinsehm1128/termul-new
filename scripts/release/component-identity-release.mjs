@@ -4,18 +4,20 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
-export const identityComponents = ['renderer', 'guiNative', 'acpCore', 'terminalCore']
+export const publicIdentityComponents = ['renderer', 'guiNative', 'acpCore', 'terminalCore']
+export const identityComponents = [...publicIdentityComponents, 'pluginCore']
 
-// Both Cores wait while they are in use: replacing the ACP Core ends every
-// running agent session just as replacing the Terminal Core ends its shells.
+// Core processes defer replacement while their sessions or calls are active.
 export const declaredComponentActions = {
   renderer: 'restart',
   guiNative: 'restart',
   acpCore: 'defer-if-active',
-  terminalCore: 'defer-if-active'
+  terminalCore: 'defer-if-active',
+  pluginCore: 'defer-if-active'
 }
 
-const canonicalBuildId = /^termul-(renderer|guiNative|acpCore|terminalCore)-v1-sha256:[0-9a-f]{64}$/
+const canonicalBuildId =
+  /^termul-(renderer|guiNative|acpCore|terminalCore|pluginCore)-v1-sha256:[0-9a-f]{64}$/
 const revisionPattern = /^[0-9a-f]{40}$/
 const versionDerivedBuildId = /:(?:acp-core|terminal-core|renderer|gui)$/
 const updateActions = ['preserve', 'restart', 'defer-if-active', 'unsupported']
@@ -60,6 +62,43 @@ function assertExactComponents(value, description) {
   }
 }
 
+// Public policies retain the frozen four-key components map. Normalize the
+// sibling extension (or an internal five-key map) before exact validation.
+export function normalizeComponentPolicy(policy, version) {
+  assertPlainObject(policy, 'component policy')
+  assertPlainObject(policy.components, 'component policy components')
+  const components = { ...policy.components }
+  const nested = components.pluginCore
+  const extension = policy.pluginCore
+  if (nested !== undefined) assertPlainObject(nested, 'component policy pluginCore')
+  if (extension !== undefined) assertPlainObject(extension, 'component policy pluginCore extension')
+  if (
+    nested !== undefined &&
+    extension !== undefined &&
+    (nested?.buildId !== extension?.buildId || nested?.action !== extension?.action)
+  ) {
+    throw new Error('conflicting duplicate pluginCore component policy')
+  }
+  components.pluginCore = extension ??
+    nested ?? {
+      buildId: `legacy:${version}:pluginCore`,
+      action: 'unsupported'
+    }
+  assertExactComponents(components, 'component policy components')
+  return components
+}
+
+export function publicComponentPolicy(policy) {
+  const components = normalizeComponentPolicy(policy, policy.targetVersion)
+  return {
+    ...policy,
+    components: Object.fromEntries(
+      publicIdentityComponents.map((component) => [component, components[component]])
+    ),
+    pluginCore: components.pluginCore
+  }
+}
+
 export function assertIdentityArtifact(value) {
   assertPlainObject(value, 'component identity')
   if (value.schemaVersion !== 1) {
@@ -89,7 +128,8 @@ export function rustBuildEnv(identity) {
   return {
     TERMUL_GUI_BUILD_ID: identity.components.guiNative.buildId,
     TERMUL_ACP_CORE_BUILD_ID: identity.components.acpCore.buildId,
-    TERMUL_TERMINAL_CORE_BUILD_ID: identity.components.terminalCore.buildId
+    TERMUL_TERMINAL_CORE_BUILD_ID: identity.components.terminalCore.buildId,
+    TERMUL_PLUGIN_CORE_BUILD_ID: identity.components.pluginCore.buildId
   }
 }
 
@@ -172,9 +212,9 @@ export function assertManifestMatchesIdentity(manifest, identity, version) {
   if (policy.metadataState !== 'declared') {
     throw new Error('merged manifest componentPolicy metadataState drift')
   }
-  assertExactComponents(policy.components, 'merged manifest componentPolicy components')
+  const components = normalizeComponentPolicy(policy, version)
   for (const component of identityComponents) {
-    const entry = policy.components[component]
+    const entry = components[component]
     const expectedEntry = expected.components[component]
     assertPlainObject(entry, `merged manifest component ${component}`)
     if (entry.buildId !== expectedEntry.buildId) {
@@ -204,10 +244,10 @@ export function retargetPromotedComponentPolicy(policy, { fromVersion, toVersion
       `promotion componentPolicy targetVersion drift: ${String(policy.targetVersion)}, expected ${fromVersion}`
     )
   }
-  assertExactComponents(policy.components, 'promotion componentPolicy components')
+  const normalized = normalizeComponentPolicy(policy, fromVersion)
   const components = {}
   for (const component of identityComponents) {
-    const entry = policy.components[component]
+    const entry = normalized[component]
     assertPlainObject(entry, `promotion componentPolicy ${component}`)
     assertCanonicalBuildId(component, entry.buildId)
     if (entry.buildId.startsWith(`${fromVersion}:`) || entry.buildId.startsWith(`${toVersion}:`)) {
@@ -218,12 +258,12 @@ export function retargetPromotedComponentPolicy(policy, { fromVersion, toVersion
     }
     components[component] = { buildId: entry.buildId, action: entry.action }
   }
-  return {
+  return publicComponentPolicy({
     schemaVersion: 1,
     targetVersion: toVersion,
     metadataState: 'declared',
     components
-  }
+  })
 }
 
 async function readJson(path, description) {
@@ -456,7 +496,9 @@ async function commandPromote(options) {
   if (!manifest.termul || manifest.termul.componentPolicy === undefined) {
     throw new Error('promotion is missing componentPolicy')
   }
-  const before = componentIdentitySnapshot(manifest.termul.componentPolicy.components)
+  const before = componentIdentitySnapshot(
+    normalizeComponentPolicy(manifest.termul.componentPolicy, manifest.version)
+  )
   manifest.termul.componentPolicy = retargetPromotedComponentPolicy(
     manifest.termul.componentPolicy,
     {
@@ -464,7 +506,9 @@ async function commandPromote(options) {
       toVersion: options.toVersion
     }
   )
-  const after = componentIdentitySnapshot(manifest.termul.componentPolicy.components)
+  const after = componentIdentitySnapshot(
+    normalizeComponentPolicy(manifest.termul.componentPolicy, manifest.version)
+  )
   if (after !== before) throw new Error('promotion changed componentPolicy identities')
   await writeJson(options.output, manifest)
 }

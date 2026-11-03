@@ -179,6 +179,30 @@ function uncoveredReferences(core: (typeof SCOPED_CORES)[number]): Map<string, s
 }
 
 describe('component build inputs', () => {
+  test('Plugin Core identity includes the exact app entry branch plus its crate closure', () => {
+    expect(inputs.cargo.crateComponents.pluginCore).toBe('se-plugin-host')
+    expect(inputs.components.guiNative).toEqual(
+      expect.arrayContaining(['src-tauri/src/core/plugin.rs', 'src-tauri/crates/se-plugin-host'])
+    )
+    expect(inputs.components.pluginCore).toEqual([
+      'src-tauri/src/main.rs',
+      'src-tauri/src/core/process.rs',
+      'src-tauri/src/core/plugin.rs',
+      'src-tauri/tauri.conf.prod.json'
+    ])
+    expect(inputs.sharedFiles).toEqual(
+      expect.arrayContaining([
+        'src-tauri/build.rs',
+        'src-tauri/src/core/mod.rs',
+        'src-tauri/crates/se-terminal-core/src/ipc.rs',
+        'src-tauri/crates/se-ipc'
+      ])
+    )
+    // Plugin Core self-execs the app binary rather than a standalone entry.
+    // Complete crate/input coverage is tested with build-id fixtures even
+    // while that new crate is being delivered concurrently.
+  })
+
   test('host identities cover native VT sources outside the Cargo crate closure', () => {
     // Cargo.lock can follow workspace crates, but not build.rs inputs in
     // vendor/. A source or toolchain pin change must invalidate live hosts
@@ -246,7 +270,7 @@ describe('component build inputs', () => {
   })
 
   test.each(
-    Object.entries(inputs.cargo.crateComponents)
+    Object.entries(inputs.cargo.crateComponents).filter(([core]) => core !== 'pluginCore')
   )('%s entry links only covered crates, not the app library', (core, crate) => {
     // The executable's identity is its crate's Cargo.lock closure. Code that
     // reached into the app library would run without being hashed.

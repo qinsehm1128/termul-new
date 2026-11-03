@@ -30,7 +30,8 @@ function policyWith(
   const base = legacyUpdateComponentPolicy('1.2.3')
   const components = { ...base.components }
   for (const component of UPDATE_COMPONENTS) {
-    const action = actions[component] ?? components[component].action
+    const action =
+      actions[component] ?? (component === 'pluginCore' ? 'preserve' : components[component].action)
     components[component] = { buildId: `${buildPrefix}-${component}`, action }
   }
   return { ...base, metadataState: 'declared', components }
@@ -78,9 +79,11 @@ describe('updater status semantics', () => {
       'renderer',
       'terminalCore'
     ])
-    expect(getMatchingCoreComponents(policy)).toEqual(['acpCore'])
+    expect(getMatchingCoreComponents(policy)).toEqual(['acpCore', 'pluginCore'])
     const lines = getUpdateImpactLines(policy, translateUpdateCopy)
-    expect(lines.join('\n')).toContain('Kept and reconnected because the build matches: ACP Core.')
+    expect(lines.join('\n')).toContain(
+      'Kept and reconnected because the build matches: ACP Core, Plugin Core.'
+    )
     expect(lines.join('\n')).not.toContain('Desktop runtime')
     expect(lines.join('\n')).not.toContain('build-acpCore')
   })
@@ -131,7 +134,7 @@ describe('updater status semantics', () => {
       hasActiveTerminalSessions: true
     })
     expect(matching.guiRestarts).toBe(true)
-    expect(matching.matchingCores).toEqual(['acpCore', 'terminalCore'])
+    expect(matching.matchingCores).toEqual(['acpCore', 'terminalCore', 'pluginCore'])
     expect(matching.terminalDeferred).toBe(false)
     expect(partKeys(matching)).toContain('updates.installSemantics.coreAdopt')
     expect(partKeys(matching)).not.toContain('updates.installSemantics.terminalDefer')
@@ -146,6 +149,7 @@ describe('updater status semantics', () => {
     expect(partKeys(deferred)).toEqual([
       'updates.installSemantics.guiRestart',
       'updates.installSemantics.ptySurvivesGui',
+      'updates.installSemantics.coreAdopt',
       'updates.installSemantics.coreRestart',
       'updates.installSemantics.terminalDefer',
       'updates.installSemantics.reconnect'
@@ -180,7 +184,9 @@ describe('updater status semantics', () => {
     expect(confirmation).toContain(
       'Terminal Core build identity is checked. If it differs, immediate replacement may stop the terminals it owns instead of waiting.'
     )
-    expect(confirmation).toContain('Kept and reconnected because the build matches: ACP Core.')
+    expect(confirmation).toContain(
+      'Kept and reconnected because the build matches: ACP Core, Plugin Core.'
+    )
     expect(confirmation).toContain(
       'Terminal Core build identity is checked. If it differs, immediate replacement may stop the terminals it owns instead of waiting.'
     )
@@ -268,5 +274,28 @@ describe('updater status semantics', () => {
     expect(i18n.t('updates.installSemantics.reconnect', { ns: 'shell' })).toBe(
       '被替换的 Core 会通过重新连接接管。这不是零中断切换。'
     )
+  })
+})
+
+describe('Plugin Core install semantics', () => {
+  it('defers active plugins normally, and explains runtime reset on forced replacement', () => {
+    const deferred = describeUpdateInstallSemantics({
+      policy: policyWith({ pluginCore: 'defer-if-active' }),
+      hasActiveTerminalSessions: false
+    })
+    expect(deferred.otherDeferred).toContain('pluginCore')
+    expect(partKeys(deferred)).not.toContain('updates.installSemantics.pluginRestartState')
+    const restarted = describeUpdateInstallSemantics({
+      policy: policyWith({ pluginCore: 'restart' }),
+      hasActiveTerminalSessions: false
+    })
+    expect(restarted.mismatchedRestartCores).toContain('pluginCore')
+    expect(partKeys(restarted)).toContain('updates.installSemantics.pluginRestartState')
+    const unsupported = describeUpdateInstallSemantics({
+      policy: legacyUpdateComponentPolicy('0.9.0'),
+      hasActiveTerminalSessions: false
+    })
+    expect(unsupported.unsupportedComponents).toContain('pluginCore')
+    expect(unsupported.matchingCores).not.toContain('pluginCore')
   })
 })

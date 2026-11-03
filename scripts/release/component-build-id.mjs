@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url'
 
 const DEFAULT_INPUTS = new URL('./component-build-inputs.json', import.meta.url)
 const ID_SCHEMA_VERSION = 1
-const COMPONENTS = ['renderer', 'guiNative', 'acpCore', 'terminalCore']
+const COMPONENTS = ['renderer', 'guiNative', 'acpCore', 'terminalCore', 'pluginCore']
 
 function assertPlainObject(value, description) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -351,6 +351,9 @@ async function crateComponentMaterial(root, cargo, crateName, additionalRoots = 
   const closure = lockClosureEntries(packages, roots)
   const names = new Set([...closure.values()].map((entry) => entry.name))
   const dirs = await workspaceCrateDirs(root, cargo)
+  for (const name of roots) {
+    if (!dirs.has(name)) throw new Error(`Missing component identity workspace crate: ${name}`)
+  }
   const crateDirs = [...names]
     .filter((name) => dirs.has(name))
     .map((name) => dirs.get(name))
@@ -373,10 +376,11 @@ async function crateComponentMaterial(root, cargo, crateName, additionalRoots = 
 
 /**
  * The files a component's identity hashes. A crate-built Core takes no shared
- * files: what it runs is its own entry files plus its crate closure.
+ * files except Plugin Core, whose self-exec app branch also consumes the shared
+ * build/protocol inputs. Other Cores run only their entry and crate closure.
  */
 function componentPayload(component, inputs, fileDigests, crateMaterial) {
-  const shared = crateMaterial ? [] : [...inputs.sharedFiles].sort()
+  const shared = crateMaterial && component !== 'pluginCore' ? [] : [...inputs.sharedFiles].sort()
   const own = [...inputs.components[component], ...(crateMaterial?.crateDirs ?? [])].sort()
   const paths = new Set([...shared, ...own])
   const files = [...fileDigests.entries()]

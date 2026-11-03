@@ -93,7 +93,9 @@ export function UpdateComponentDiff({ policy }: UpdateComponentDiffProps) {
                       <span className="block text-muted-foreground">
                         {row.component === 'terminalCore'
                           ? t('updates.activeTerminals', { count: row.activeResources })
-                          : t('updates.activeAgentSessions', { count: row.activeResources })}
+                          : row.component === 'pluginCore'
+                            ? t('updates.activePlugins', { count: row.activeResources })
+                            : t('updates.activeAgentSessions', { count: row.activeResources })}
                       </span>
                     )}
                   </td>

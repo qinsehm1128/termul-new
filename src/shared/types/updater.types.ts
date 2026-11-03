@@ -1,6 +1,15 @@
 import type { IpcResult } from './ipc.types'
 
-export const UPDATE_COMPONENTS = ['renderer', 'guiNative', 'acpCore', 'terminalCore'] as const
+// Public manifests retain the original four component keys for old clients;
+// parseUpdateComponentPolicy normalizes the sibling pluginCore extension.
+export const UPDATE_COMPONENTS = [
+  'renderer',
+  'guiNative',
+  'acpCore',
+  'terminalCore',
+  'pluginCore'
+] as const
+const ORIGINAL_UPDATE_COMPONENTS = ['renderer', 'guiNative', 'acpCore', 'terminalCore'] as const
 
 export type UpdateComponent = (typeof UPDATE_COMPONENTS)[number]
 
@@ -44,7 +53,12 @@ export function legacyUpdateComponentPolicy(version: string): UpdateComponentPol
       component,
       {
         buildId: `legacy:${version}:${component}`,
-        action: component === 'terminalCore' ? 'defer-if-active' : 'restart'
+        action:
+          component === 'pluginCore'
+            ? 'unsupported'
+            : component === 'terminalCore'
+              ? 'defer-if-active'
+              : 'restart'
       }
     ])
   ) as Record<UpdateComponent, UpdateComponentPolicyEntry>
@@ -68,6 +82,7 @@ export function parseUpdateComponentPolicy(value: unknown, version: string): Upd
     targetVersion?: unknown
     metadataState?: unknown
     components?: unknown
+    pluginCore?: unknown
   }
   if (candidate.schemaVersion !== 1) {
     throw new Error('Update component policy schemaVersion must be 1')
@@ -87,8 +102,10 @@ export function parseUpdateComponentPolicy(value: unknown, version: string): Upd
   }
 
   const componentRecord = candidate.components as Record<string, unknown>
-  const keys = Object.keys(componentRecord).sort()
-  const expectedKeys = [...UPDATE_COMPONENTS].sort()
+  const keys = Object.keys(componentRecord)
+    .filter((key) => key !== 'pluginCore')
+    .sort()
+  const expectedKeys = [...ORIGINAL_UPDATE_COMPONENTS].sort()
   if (
     keys.length !== expectedKeys.length ||
     keys.some((key, index) => key !== expectedKeys[index])
@@ -96,9 +113,7 @@ export function parseUpdateComponentPolicy(value: unknown, version: string): Upd
     throw new Error('Update component policy components are incomplete or contain unknown entries')
   }
 
-  const components = {} as Record<UpdateComponent, UpdateComponentPolicyEntry>
-  for (const component of UPDATE_COMPONENTS) {
-    const entry = componentRecord[component]
+  const parseEntry = (entry: unknown, component: UpdateComponent): UpdateComponentPolicyEntry => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       throw new Error(`Update component policy entry is invalid: ${component}`)
     }
@@ -114,11 +129,29 @@ export function parseUpdateComponentPolicy(value: unknown, version: string): Upd
     ) {
       throw new Error(`Update component policy action is invalid: ${component}`)
     }
-    components[component] = {
-      buildId: candidateEntry.buildId.trim(),
-      action: candidateEntry.action
-    }
+    return { buildId: candidateEntry.buildId.trim(), action: candidateEntry.action }
   }
+
+  const components = {} as Record<UpdateComponent, UpdateComponentPolicyEntry>
+  for (const component of ORIGINAL_UPDATE_COMPONENTS) {
+    components[component] = parseEntry(componentRecord[component], component)
+  }
+  const hasInternal = Object.hasOwn(componentRecord, 'pluginCore')
+  const hasExtension = Object.hasOwn(candidate, 'pluginCore')
+  const internal = hasInternal ? parseEntry(componentRecord.pluginCore, 'pluginCore') : undefined
+  const extension = hasExtension ? parseEntry(candidate.pluginCore, 'pluginCore') : undefined
+  if (
+    internal &&
+    extension &&
+    (internal.buildId !== extension.buildId || internal.action !== extension.action)
+  ) {
+    throw new Error('Update component policy has conflicting pluginCore entries')
+  }
+  components.pluginCore = internal ??
+    extension ?? {
+      buildId: `legacy:${version}:pluginCore`,
+      action: 'unsupported'
+    }
 
   return {
     schemaVersion: 1,

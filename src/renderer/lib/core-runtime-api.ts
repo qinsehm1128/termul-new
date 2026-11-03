@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { relaunch } from '@tauri-apps/plugin-process'
 
 /** The Cores the user can restart on their own; the GUI restarts via `relaunch`. */
-export type RestartableCore = 'acpCore' | 'terminalCore'
+export type RestartableCore = 'acpCore' | 'terminalCore' | 'pluginCore'
 
 /** One Core as `core_runtime_status` reports it. */
 export interface CoreProcessStatus {
@@ -12,7 +12,7 @@ export interface CoreProcessStatus {
   pid: number | null
   startedAtMs: number | null
   buildId: string | null
-  /** Running terminals (Terminal Core) or agent sessions (ACP Core). */
+  /** Running terminals, ACP agent sessions, or active plugin instances. */
   activeResources: number
 }
 
@@ -40,6 +40,7 @@ export interface CoreRuntimeStatus {
   gui: GuiProcessStatus
   acpCore: CoreProcessStatus
   terminalCore: CoreProcessStatus
+  pluginCore: CoreProcessStatus
   /** `null` when the Terminal Core could not be asked. */
   terminals: CoreTerminalStatus[] | null
   /** Live ACP agent ids; `null` when the ACP Core could not be asked. */

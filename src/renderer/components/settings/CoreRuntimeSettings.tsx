@@ -7,7 +7,8 @@ import {
   type CoreProcessStatus,
   type CoreRuntimeStatus,
   type CoreTerminalStatus,
-  coreRuntimeApi
+  coreRuntimeApi,
+  type RestartableCore
 } from '@/lib/core-runtime-api'
 import { logFrontendError } from '@/lib/log-api'
 import { shortBuildId } from '@/lib/update-component-diff'
@@ -26,7 +27,7 @@ import { useTerminalStore } from '@/stores/terminal-store'
 
 const REFRESH_INTERVAL_MS = 3000
 
-type RestartTarget = 'gui' | 'acpCore' | 'terminalCore'
+type RestartTarget = 'gui' | RestartableCore
 
 function formatTime(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toLocaleString()
@@ -124,6 +125,12 @@ export function CoreRuntimeSettings(): React.JSX.Element {
     acpCore: {
       title: t('runtime.restartAcpCoreTitle'),
       message: t('runtime.restartAcpCoreMessage', { count: agentCount })
+    },
+    pluginCore: {
+      title: t('runtime.restartPluginCoreTitle'),
+      message: t('runtime.restartPluginCoreMessage', {
+        count: status?.pluginCore.activeResources ?? 0
+      })
     }
   }
 
@@ -159,7 +166,7 @@ export function CoreRuntimeSettings(): React.JSX.Element {
   )
 
   const coreCard = (
-    target: 'acpCore' | 'terminalCore',
+    target: RestartableCore,
     core: CoreProcessStatus,
     children: React.ReactNode
   ): React.JSX.Element => {
@@ -305,6 +312,13 @@ export function CoreRuntimeSettings(): React.JSX.Element {
                 )}
               </div>
             )
+          )}
+          {coreCard(
+            'pluginCore',
+            status.pluginCore,
+            <p className="mt-2 text-xs text-muted-foreground" data-testid="runtime-plugins">
+              {t('runtime.activePlugins', { count: status.pluginCore.activeResources })}
+            </p>
           )}
         </>
       )}

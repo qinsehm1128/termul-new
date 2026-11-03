@@ -16,7 +16,8 @@
     "workspaceCrates": "src-tauri/crates",
     "scopedComponents": ["acpCore"],
     "crateComponents": {
-      "terminalCore": "se-terminal-core"
+      "terminalCore": "se-terminal-core",
+      "pluginCore": "se-plugin-host"
     },
     "crateComponentRoots": {
       "terminalCore": ["se-ghostty-observer"]
@@ -32,6 +33,8 @@
       "src-tauri/tauri.conf.json",
       "src-tauri/tauri.conf.prod.json",
       "src-tauri/src/core/launcher.rs",
+      "src-tauri/src/core/plugin.rs",
+      "src-tauri/crates/se-plugin-host",
       "src-tauri/crates/se-terminal-core",
       "src-tauri/crates/se-screen-protocol",
       "src-tauri/crates/se-ghostty-observer",
@@ -75,6 +78,12 @@
       "src-tauri/src/terminal_core_main.rs",
       "src-tauri/build.rs",
       "src-tauri/vendor/ghostty-vt"
+    ],
+    "pluginCore": [
+      "src-tauri/src/main.rs",
+      "src-tauri/src/core/process.rs",
+      "src-tauri/src/core/plugin.rs",
+      "src-tauri/tauri.conf.prod.json"
     ]
   },
   "acknowledgedExternalModules": {

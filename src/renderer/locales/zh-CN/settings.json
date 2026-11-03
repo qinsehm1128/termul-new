@@ -360,6 +360,8 @@
     "gui": "界面（GUI）",
     "terminalCore": "终端核心",
     "acpCore": "ACP 核心",
+    "pluginCore": "插件核心",
+    "activePlugins": "{{count}} 个活动插件实例",
     "state": {
       "running": "运行中",
       "stopped": "未运行",
@@ -378,6 +380,8 @@
     "restartGuiMessage": "只重启界面进程。终端和 agent 在核心里继续运行，界面启动后会自动接回。",
     "restartTerminalCoreTitle": "重启终端核心",
     "restartTerminalCoreMessage": "会结束全部 {{count}} 个终端，以及在其中运行的 agent。此操作无法撤销。",
+    "restartPluginCoreTitle": "重启插件核心",
+    "restartPluginCoreMessage": "会停止全部 {{count}} 个活动插件实例并重置其私有运行态；插件安装记录和配置会保留。此操作无法撤销。",
     "restartAcpCoreTitle": "重启 ACP 核心",
     "restartAcpCoreMessage": "会结束全部 {{count}} 个 ACP agent 会话，正在进行的回复会中断。此操作无法撤销。"
   },

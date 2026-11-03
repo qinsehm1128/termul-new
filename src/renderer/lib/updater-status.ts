@@ -19,7 +19,7 @@ import { runtimeT } from '@/i18n/runtime'
 
 export type UpdateCopyTranslate = (key: string, values?: Record<string, string>) => string
 
-export type UpdateCoreComponent = 'acpCore' | 'terminalCore'
+export type UpdateCoreComponent = 'acpCore' | 'terminalCore' | 'pluginCore'
 
 export type VisiblePendingUpdateStatus = Exclude<PendingUpdatePlanStatus, 'prepared'>
 
@@ -67,7 +67,7 @@ export interface PendingUpdatePresentation {
   label: string
 }
 
-const CORE_COMPONENTS: readonly UpdateCoreComponent[] = ['acpCore', 'terminalCore']
+const CORE_COMPONENTS: readonly UpdateCoreComponent[] = ['acpCore', 'terminalCore', 'pluginCore']
 
 const PENDING_TONE: Record<VisiblePendingUpdateStatus, PendingUpdatePresentation['tone']> = {
   reconciling: 'progress',
@@ -77,7 +77,7 @@ const PENDING_TONE: Record<VisiblePendingUpdateStatus, PendingUpdatePresentation
 }
 
 function isCoreComponent(component: UpdateComponent): component is UpdateCoreComponent {
-  return component === 'acpCore' || component === 'terminalCore'
+  return component === 'acpCore' || component === 'terminalCore' || component === 'pluginCore'
 }
 
 function isKnownComponent(component: UpdateComponent): boolean {
@@ -195,6 +195,9 @@ export function getUpdateInstallMessageParts(
         key: 'updates.installSemantics.coreRestart',
         components: semantics.mismatchedRestartCores
       })
+    }
+    if (semantics.mismatchedRestartCores.includes('pluginCore')) {
+      parts.push({ key: 'updates.installSemantics.pluginRestartState' })
     }
     if (semantics.terminalDeferred) parts.push({ key: 'updates.installSemantics.terminalDefer' })
     if (semantics.terminalReplaceNow) {

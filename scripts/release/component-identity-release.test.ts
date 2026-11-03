@@ -18,6 +18,7 @@ type ComponentPolicy = {
   targetVersion: string
   metadataState: string
   components: Record<string, { buildId: string; action: string }>
+  pluginCore?: { buildId: string; action: string }
 }
 
 type Identity = {
@@ -36,6 +37,11 @@ type ReleaseHelper = {
     versions: { fromVersion: string; toVersion: string }
   ) => ComponentPolicy
   rustBuildEnv: (identity: Identity) => Record<string, string>
+  normalizeComponentPolicy: (
+    policy: ComponentPolicy,
+    version: string
+  ) => ComponentPolicy['components']
+  publicComponentPolicy: (policy: ComponentPolicy) => ComponentPolicy
 }
 
 const {
@@ -45,7 +51,9 @@ const {
   declaredComponentPolicy,
   identityComponents,
   retargetPromotedComponentPolicy,
-  rustBuildEnv
+  rustBuildEnv,
+  normalizeComponentPolicy,
+  publicComponentPolicy
 } = identityRelease as unknown as ReleaseHelper
 const execFileAsync = promisify(execFile)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -130,6 +138,7 @@ describe('component identity release propagation', () => {
         renderer: { buildId: identity.components.renderer.buildId, action: 'restart' },
         guiNative: { buildId: identity.components.guiNative.buildId, action: 'restart' },
         acpCore: { buildId: identity.components.acpCore.buildId, action: 'defer-if-active' },
+        pluginCore: { buildId: identity.components.pluginCore.buildId, action: 'defer-if-active' },
         terminalCore: {
           buildId: identity.components.terminalCore.buildId,
           action: 'defer-if-active'
@@ -141,7 +150,8 @@ describe('component identity release propagation', () => {
     expect(rustBuildEnv(identity)).toEqual({
       TERMUL_GUI_BUILD_ID: identity.components.guiNative.buildId,
       TERMUL_ACP_CORE_BUILD_ID: identity.components.acpCore.buildId,
-      TERMUL_TERMINAL_CORE_BUILD_ID: identity.components.terminalCore.buildId
+      TERMUL_TERMINAL_CORE_BUILD_ID: identity.components.terminalCore.buildId,
+      TERMUL_PLUGIN_CORE_BUILD_ID: identity.components.pluginCore.buildId
     })
     expect(rustBuildEnv(identity)).not.toHaveProperty('TERMUL_RENDERER_BUILD_ID')
   })
@@ -154,6 +164,7 @@ describe('component identity release propagation', () => {
       components: {
         renderer: ['package.json'],
         guiNative: [],
+        pluginCore: [],
         acpCore: ['src-tauri/src/acp.rs'],
         terminalCore: ['src-tauri/src/pty.rs']
       }
@@ -202,7 +213,7 @@ describe('component identity release propagation', () => {
       assertManifestMatchesIdentity(merged, identity, releaseVersion)
       expect(
         JSON.parse(await readFile(join(dir, 'latest.json'), 'utf8')).termul.componentPolicy
-      ).toEqual(policy)
+      ).toEqual(publicComponentPolicy(policy))
     } finally {
       await rm(dir, { recursive: true })
     }
@@ -401,10 +412,15 @@ describe('component identity release propagation', () => {
       const promoted = JSON.parse(await readFile(output, 'utf8'))
 
       expect(promoted.termul.componentPolicy.targetVersion).toBe(toVersion)
-      expect(promoted.termul.componentPolicy.components).toEqual(policy.components)
+      expect(normalizeComponentPolicy(promoted.termul.componentPolicy, toVersion)).toEqual(
+        policy.components
+      )
       expect(promoted.platforms).toEqual(manifest.platforms)
       expect(
-        retargetPromotedComponentPolicy(policy, { fromVersion, toVersion }).components
+        normalizeComponentPolicy(
+          retargetPromotedComponentPolicy(policy, { fromVersion, toVersion }),
+          toVersion
+        )
       ).toEqual(policy.components)
       await expect(
         runCli([
@@ -487,5 +503,185 @@ describe('component identity release propagation', () => {
     expect(nightlyPublish).toContain('--require-baked')
     expect(nightlyPublish).toContain('nightly-component-identity')
     expect(nightlyPublish).toContain('needs.prepare.outputs.commit_sha')
+  })
+})
+
+// Frozen verbatim from HEAD updater.types.ts before the Plugin Core change.
+// Do NOT import the evolving shared parser: this proves shipped clients can parse new manifests.
+const frozenFourKeyParser = (() => {
+  const UPDATE_COMPONENTS = ['renderer', 'guiNative', 'acpCore', 'terminalCore'] as const
+
+  type UpdateComponent = (typeof UPDATE_COMPONENTS)[number]
+
+  type UpdateComponentAction = 'preserve' | 'restart' | 'defer-if-active' | 'unsupported'
+
+  interface UpdateComponentPolicyEntry {
+    buildId: string
+    action: UpdateComponentAction
+  }
+
+  interface UpdateComponentPolicy {
+    schemaVersion: 1
+    targetVersion: string
+    metadataState: 'declared' | 'legacy'
+    components: Record<UpdateComponent, UpdateComponentPolicyEntry>
+  }
+
+  function legacyUpdateComponentPolicy(version: string): UpdateComponentPolicy {
+    const components = Object.fromEntries(
+      UPDATE_COMPONENTS.map((component) => [
+        component,
+        {
+          buildId: `legacy:${version}:${component}`,
+          action: component === 'terminalCore' ? 'defer-if-active' : 'restart'
+        }
+      ])
+    ) as Record<UpdateComponent, UpdateComponentPolicyEntry>
+
+    return {
+      schemaVersion: 1,
+      targetVersion: version,
+      metadataState: 'legacy',
+      components
+    }
+  }
+
+  function parseUpdateComponentPolicy(value: unknown, version: string): UpdateComponentPolicy {
+    if (value === undefined) return legacyUpdateComponentPolicy(version)
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('Update component policy must be an object')
+    }
+
+    const candidate = value as {
+      schemaVersion?: unknown
+      targetVersion?: unknown
+      metadataState?: unknown
+      components?: unknown
+    }
+    if (candidate.schemaVersion !== 1) {
+      throw new Error('Update component policy schemaVersion must be 1')
+    }
+    if (candidate.targetVersion !== version) {
+      throw new Error('Update component policy targetVersion does not match the update version')
+    }
+    if (candidate.metadataState !== 'declared' && candidate.metadataState !== 'legacy') {
+      throw new Error('Update component policy metadataState is invalid')
+    }
+    if (
+      typeof candidate.components !== 'object' ||
+      candidate.components === null ||
+      Array.isArray(candidate.components)
+    ) {
+      throw new Error('Update component policy components must be an object')
+    }
+
+    const componentRecord = candidate.components as Record<string, unknown>
+    const keys = Object.keys(componentRecord).sort()
+    const expectedKeys = [...UPDATE_COMPONENTS].sort()
+    if (
+      keys.length !== expectedKeys.length ||
+      keys.some((key, index) => key !== expectedKeys[index])
+    ) {
+      throw new Error(
+        'Update component policy components are incomplete or contain unknown entries'
+      )
+    }
+
+    const components = {} as Record<UpdateComponent, UpdateComponentPolicyEntry>
+    for (const component of UPDATE_COMPONENTS) {
+      const entry = componentRecord[component]
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+        throw new Error(`Update component policy entry is invalid: ${component}`)
+      }
+      const candidateEntry = entry as { buildId?: unknown; action?: unknown }
+      if (typeof candidateEntry.buildId !== 'string' || candidateEntry.buildId.trim() === '') {
+        throw new Error(`Update component policy buildId is invalid: ${component}`)
+      }
+      if (
+        candidateEntry.action !== 'preserve' &&
+        candidateEntry.action !== 'restart' &&
+        candidateEntry.action !== 'defer-if-active' &&
+        candidateEntry.action !== 'unsupported'
+      ) {
+        throw new Error(`Update component policy action is invalid: ${component}`)
+      }
+      components[component] = {
+        buildId: candidateEntry.buildId.trim(),
+        action: candidateEntry.action
+      }
+    }
+
+    return {
+      schemaVersion: 1,
+      targetVersion: version,
+      metadataState: candidate.metadataState,
+      components
+    }
+  }
+
+  return parseUpdateComponentPolicy
+})()
+
+describe('Plugin Core public wire compatibility', () => {
+  test('frozen current four-key parser accepts new manifests and promotion output', () => {
+    const identity = identityFor('wire')
+    const policy = publicComponentPolicy(declaredComponentPolicy(identity, '1.0.0'))
+    expect(Object.keys(policy.components).sort()).toEqual(
+      ['renderer', 'guiNative', 'acpCore', 'terminalCore'].sort()
+    )
+    expect(policy.pluginCore).toEqual({
+      buildId: identity.components.pluginCore.buildId,
+      action: 'defer-if-active'
+    })
+    expect(frozenFourKeyParser(policy, '1.0.0').components).toEqual(policy.components)
+    const promoted = retargetPromotedComponentPolicy(policy, {
+      fromVersion: '1.0.0',
+      toVersion: '1.0.1'
+    })
+    expect(frozenFourKeyParser(promoted, '1.0.1').components).toEqual(policy.components)
+    expect(promoted.pluginCore).toEqual(policy.pluginCore)
+    expect(normalizeComponentPolicy(policy, '1.0.0')).toEqual(
+      declaredComponentPolicy(identity, '1.0.0').components
+    )
+  })
+
+  test('legacy four-key policies synthesize unsupported plugin metadata', () => {
+    const policy = publicComponentPolicy(declaredComponentPolicy(identityFor('old'), '1.0.0'))
+    delete policy.pluginCore
+    expect(normalizeComponentPolicy(policy, '1.0.0').pluginCore).toEqual({
+      buildId: 'legacy:1.0.0:pluginCore',
+      action: 'unsupported'
+    })
+  })
+
+  test('normalizes matching duplicates and rejects conflicts or unknown components', () => {
+    const internal = declaredComponentPolicy(identityFor('duplicate'), '1.0.0')
+    const duplicate = { ...internal, pluginCore: { ...internal.components.pluginCore } }
+    expect(normalizeComponentPolicy(duplicate, '1.0.0')).toEqual(internal.components)
+    duplicate.pluginCore.action = 'restart'
+    expect(() => normalizeComponentPolicy(duplicate, '1.0.0')).toThrow(
+      /conflicting duplicate pluginCore/
+    )
+    const extra = {
+      ...internal,
+      components: { ...internal.components, unknown: internal.components.pluginCore }
+    }
+    expect(() => normalizeComponentPolicy(extra, '1.0.0')).toThrow(/exactly/)
+  })
+
+  test('canonical Plugin Core IDs are exact 64-hex namespace-bound identities', () => {
+    const identity = identityFor('canonical-plugin')
+    expect(identity.components.pluginCore.buildId).toMatch(
+      /^termul-pluginCore-v1-sha256:[0-9a-f]{64}$/
+    )
+    for (const buildId of [
+      'plugin-v1',
+      canonicalBuildId('terminalCore', 'wrong'),
+      'termul-pluginCore-v1-sha256:abc'
+    ]) {
+      const bad = structuredClone(identity)
+      bad.components.pluginCore.buildId = buildId
+      expect(() => rustBuildEnv(bad)).toThrow(/buildId.*pluginCore/)
+    }
   })
 })

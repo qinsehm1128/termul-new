@@ -40,6 +40,7 @@ function runtime(overrides: Partial<CoreRuntimeStatus> = {}): CoreRuntimeStatus 
     gui: { pid: 34004, startedAtMs: null, buildId: 'gui-build', version: '0.15.4' },
     acpCore: core({ pid: 97103 }),
     terminalCore: core({ activeResources: 2 }),
+    pluginCore: core({ pid: 97120, activeResources: 1 }),
     terminals: [
       {
         id: 'terminal-0',
@@ -157,6 +158,16 @@ describe('CoreRuntimeSettings', () => {
     expect(document.querySelector('[data-runtime-card="terminalCore"]')).toHaveTextContent(
       'pid 97112'
     )
+    expect(document.querySelector('[data-runtime-card="pluginCore"]')).toHaveAttribute(
+      'data-runtime-state',
+      'running'
+    )
+    expect(document.querySelector('[data-runtime-card="pluginCore"]')).toHaveTextContent(
+      'Plugin Core'
+    )
+    expect(document.querySelector('[data-runtime-card="pluginCore"]')).toHaveTextContent(
+      'pid 97120'
+    )
     expect(document.querySelector('[data-runtime-card="acpCore"]')).toHaveAttribute(
       'data-runtime-state',
       'stopped'
@@ -189,6 +200,49 @@ describe('CoreRuntimeSettings', () => {
     await waitFor(() => {
       expect(mockStatus.mock.calls.length).toBeGreaterThan(readsBefore)
     })
+  })
+
+  it('warns that restarting plugins resets private state but preserves installation records and configuration', async () => {
+    await renderPanel()
+
+    expect(screen.getByTestId('runtime-plugins')).toHaveTextContent('1 active plugin instance(s)')
+    fireEvent.click(screen.getByTestId('runtime-restart-pluginCore'))
+    expect(screen.getByText('Restart the Plugin Core')).toBeInTheDocument()
+    expect(screen.getByText(/Stops all 1 active plugin instances/)).toHaveTextContent(
+      'resets their private runtime state. Plugin installation records and configuration are preserved.'
+    )
+    expect(mockRestartCore).not.toHaveBeenCalled()
+
+    const readsBefore = mockStatus.mock.calls.length
+    await act(async () => {
+      fireEvent.click(dialogConfirmButton())
+    })
+    expect(mockRestartCore).toHaveBeenCalledWith('pluginCore')
+    expect(mockRestartGui).not.toHaveBeenCalled()
+    await waitFor(() => expect(mockStatus.mock.calls.length).toBeGreaterThan(readsBefore))
+  })
+
+  it('does not restart plugins when the user cancels', async () => {
+    await renderPanel()
+
+    fireEvent.click(screen.getByTestId('runtime-restart-pluginCore'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(mockRestartCore).not.toHaveBeenCalled()
+  })
+
+  it('shows a stopped Plugin Core without hiding the other processes', async () => {
+    await renderPanel(
+      runtime({ pluginCore: core({ running: false, pid: null, activeResources: 0 }) })
+    )
+
+    expect(document.querySelector('[data-runtime-card="pluginCore"]')).toHaveAttribute(
+      'data-runtime-state',
+      'stopped'
+    )
+    expect(screen.getByTestId('runtime-plugins')).toHaveTextContent('0 active plugin instance(s)')
+    expect(screen.getByTestId('runtime-restart-terminalCore')).toBeEnabled()
+    expect(screen.getByTestId('runtime-restart-acpCore')).toBeEnabled()
   })
 
   it('does nothing when the user cancels the restart', async () => {

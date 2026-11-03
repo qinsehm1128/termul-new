@@ -53,10 +53,12 @@ describe('tauri-update-plan-api', () => {
       metadataState: 'declared',
       components: {
         ...legacy.components,
-        acpCore: { buildId: 'acp-1', action: 'preserve' }
+        acpCore: { buildId: 'acp-1', action: 'preserve' },
+        pluginCore: { buildId: 'plugin-1', action: 'preserve' }
       }
     })
 
+    expect(plan.requiredActions).toContain('pluginCore')
     expect(plan.requiredActions).toContain('acpCore')
     expect(plan.requiredActions).toContain('terminalCore')
   })
