@@ -246,6 +246,10 @@ mod tests {
                     title: "Settings".to_owned(),
                     properties: Default::default(),
                 },
+                event_subscriptions: vec![],
+                menus: vec![],
+                keybindings: vec![],
+                status_items: vec![],
             },
             services: Services {
                 provides: vec![],

@@ -3,6 +3,7 @@
 //! check programmatically constructed DTOs. No plugin code is executed here.
 pub mod config;
 pub mod error;
+pub mod host;
 pub mod manifest;
 pub mod request_validation;
 pub mod rpc;
@@ -10,6 +11,7 @@ pub mod ui;
 
 pub use config::*;
 pub use error::*;
+pub use host::*;
 pub use manifest::*;
 pub use request_validation::*;
 pub use rpc::*;

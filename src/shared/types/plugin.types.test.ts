@@ -9,6 +9,7 @@ import {
   parseConfigurationSchema,
   parseInstallRequest,
   parseManifest,
+  parsePluginEvent,
   parsePluginHealth,
   parsePluginSnapshot,
   parseReloadRequest,
@@ -21,8 +22,40 @@ import {
   validateActionForView,
   validateConfigValues
 } from './plugin.types'
+import * as host from './plugin-host.types'
 
 const decoders: Record<string, (value: unknown) => unknown> = {
+  contextSnapshotRequest: host.parseContextSnapshotRequest,
+  hostUiGet: host.parseHostUiGetRequest,
+  hostAccepted: host.parseHostAcceptedResult,
+  notificationCloseResult: host.parseNotificationCloseResult,
+  statusClearResult: host.parseStatusClearResult,
+  hostRequest: host.parseHostRequest,
+  hostDeliveryRequest: host.parseHostDeliveryRequest,
+  hostReply: host.parseHostReply,
+  hostContextPublish: host.parseHostContextPublishRequest,
+  hostContextHeartbeat: host.parseHostContextHeartbeatRequest,
+  hostContextAck: host.parseHostContextAck,
+  hostContextState: host.parseHostContextState,
+  hostContextSnapshot: host.parseHostContextSnapshot,
+  hostSourceEvent: host.parseHostSourceEvent,
+  hostEventDelivery: host.parseHostEventDelivery,
+  hostDeliveryReply: host.parseHostDeliveryReply,
+  storageGet: host.parseStorageGetRequest,
+  storageSet: host.parseStorageSetRequest,
+  storageDelete: host.parseStorageDeleteRequest,
+  storageTicket: host.parseStorageTicket,
+  storageCompletion: host.parseStorageCompletion,
+  notificationUpsert: host.parseNotificationUpsertRequest,
+  notificationClose: host.parseNotificationCloseRequest,
+  progressUpsert: host.parseProgressUpsertRequest,
+  statusSet: host.parseStatusSetRequest,
+  statusClear: host.parseStatusClearRequest,
+  hostUiSnapshot: host.parseHostUiSnapshot,
+  hostUiDismiss: host.parseHostUiDismissRequest,
+  hostUiDismissResult: host.parseHostUiDismissResult,
+  executeContribution: host.parseExecuteContributionRequest,
+  pluginEvent: parsePluginEvent,
   manifest: parseManifest,
   ui: parseUiTree,
   action: parseActionEvent,
@@ -49,19 +82,28 @@ describe('native plugin shared contract fixtures (also read by Rust)', () => {
       TypeError
     )
     expect(() =>
-      parseCommandRequest({ schemaVersion: 1, commandId: 'reset', args: undefined })
+      parseCommandRequest({
+        schemaVersion: 1,
+        commandId: 'reset',
+        args: undefined
+      })
     ).toThrow(TypeError)
     const cyclic: Record<string, unknown> = {}
     cyclic.self = cyclic
     expect(() => parseServiceReply({ schemaVersion: 1, result: cyclic })).toThrow(TypeError)
     expect(
-      parseServiceReply({ schemaVersion: 1, result: { nested: [null, false, 12, 'text'] } }).result
+      parseServiceReply({
+        schemaVersion: 1,
+        result: { nested: [null, false, 12, 'text'] }
+      }).result
     ).toEqual({ nested: [null, false, 12, 'text'] })
   })
   it('decodes callback and RPC request shapes strictly', () => {
     const bootId = '77bac08a-bcf6-43c6-b0c2-cc971d2a980e'
     const config = (
-      fixtures.find((x) => x.kind === 'config' && x.valid)!.value as { payload: unknown }
+      fixtures.find((x) => x.kind === 'config' && x.valid)!.value as {
+        payload: unknown
+      }
     ).payload
     expect(
       parseActivationPayload({
@@ -86,10 +128,15 @@ describe('native plugin shared contract fixtures (also read by Rust)', () => {
     ).toBe('read')
     expect(parseServiceReply({ schemaVersion: 1, result: false }).result).toBe(false)
     expect(parseInstallRequest({ path: '/native' }).path).toBe('/native')
-    expect(parseReloadRequest({ id: 'org.termul.example' })).toEqual({ id: 'org.termul.example' })
+    expect(parseReloadRequest({ id: 'org.termul.example' })).toEqual({
+      id: 'org.termul.example'
+    })
     expect(
-      parseSetConfigRequest({ id: 'org.termul.example', expectedRevision: 1, values: {} })
-        .expectedRevision
+      parseSetConfigRequest({
+        id: 'org.termul.example',
+        expectedRevision: 1,
+        values: {}
+      }).expectedRevision
     ).toBe(1)
     expect(
       parsePluginHealth({
@@ -129,6 +176,9 @@ describe('native plugin shared contract fixtures (also read by Rust)', () => {
   })
   for (const fixture of fixtures)
     it(fixture.name, () => {
+      expect(decoders[fixture.kind], `missing fixture decoder: ${fixture.kind}`).toBeTypeOf(
+        'function'
+      )
       const decode = () => decoders[fixture.kind](fixture.value)
       if (fixture.valid) expect(decode).not.toThrow()
       else expect(decode).toThrow(TypeError)
@@ -146,7 +196,10 @@ describe('native plugin shared contract fixtures (also read by Rust)', () => {
           id: 'root',
           type: 'column',
           props: {},
-          children: Array.from({ length: 1024 }, (_, i) => ({ ...leaf, id: `n${i}` }))
+          children: Array.from({ length: 1024 }, (_, i) => ({
+            ...leaf,
+            id: `n${i}`
+          }))
         }
       })
     ).toThrow()
@@ -160,7 +213,9 @@ describe('native plugin shared contract fixtures (also read by Rust)', () => {
     ).toThrow()
   })
   it('completes defaults without coercion, accepting only valid override keys', () => {
-    const f = fixtures.find((x) => x.kind === 'config' && x.valid)!.value as { schema: unknown }
+    const f = fixtures.find((x) => x.kind === 'config' && x.valid)!.value as {
+      schema: unknown
+    }
     const schema = parseConfigurationSchema(f.schema)
     expect(validateConfigValues(schema, {})).toEqual({
       greeting: 'Hello',

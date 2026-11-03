@@ -388,6 +388,10 @@ mod tests {
                     title: "Settings".to_owned(),
                     properties: BTreeMap::new(),
                 },
+                event_subscriptions: vec![],
+                menus: vec![],
+                keybindings: vec![],
+                status_items: vec![],
             },
             services: Services {
                 provides: declarations(provides),

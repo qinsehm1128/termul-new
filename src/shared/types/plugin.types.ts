@@ -1,6 +1,26 @@
 /** Runtime-neutral native plugin v1 contracts; mirrored by se-plugin-protocol. */
 import viewIcons from '../plugin-fixtures/view-icons.json'
 import type { IpcResult } from './ipc.types'
+import {
+  type ExecuteContributionRequest,
+  type HostContextAck,
+  type HostContextHeartbeatRequest,
+  type HostContextPublishRequest,
+  type HostUiDismissRequest,
+  type HostUiDismissResult,
+  type HostUiSnapshot,
+  isReservedHostService,
+  type PluginEventSubscription,
+  type PluginKeybinding,
+  type PluginMenu,
+  type PluginStatusItem,
+  parsePluginEventSubscription,
+  parsePluginKeybinding,
+  parsePluginMenu,
+  parsePluginStatusItem
+} from './plugin-host.types'
+
+export * from './plugin-host.types'
 export const PLUGIN_SCHEMA_VERSION = 1 as const
 export const PLUGIN_JSON_MAX_BYTES = 256 * 1024
 export type ConfigValue = string | number | boolean
@@ -46,6 +66,10 @@ export interface Manifest {
     commands: PluginCommand[]
     configuration: ConfigurationSchema
     views: PluginView[]
+    eventSubscriptions?: PluginEventSubscription[]
+    menus?: PluginMenu[]
+    keybindings?: PluginKeybinding[]
+    statusItems?: PluginStatusItem[]
   }
   services: { provides: PluginService[]; requires: PluginService[] }
 }
@@ -239,6 +263,7 @@ export type PluginEventType =
   | 'view_changed'
   | 'config_changed'
   | 'resync_required'
+  | 'host_ui_changed'
 export interface PluginEvent {
   schemaVersion: 1
   bootId: string
@@ -272,6 +297,11 @@ export interface PluginApi {
   executeCommand(request: ExecuteCommandRequest): Promise<IpcResult<CommandReply>>
   getConfig(request: GetConfigRequest): Promise<IpcResult<ConfigSnapshot>>
   setConfig(request: SetConfigRequest): Promise<IpcResult<ConfigSnapshot>>
+  publishHostContext(request: HostContextPublishRequest): Promise<IpcResult<HostContextAck>>
+  heartbeatHostContext(request: HostContextHeartbeatRequest): Promise<IpcResult<HostContextAck>>
+  getHostUi(): Promise<IpcResult<HostUiSnapshot>>
+  dismissHostUi(request: HostUiDismissRequest): Promise<IpcResult<HostUiDismissResult>>
+  executeContribution(request: ExecuteContributionRequest): Promise<IpcResult<CommandReply>>
   onChanged(handler: (event: PluginEvent) => void): () => void
   onConnectionChanged(handler: (event: PluginConnectionChanged) => void): () => void
 }
@@ -293,7 +323,13 @@ function obj(v: unknown, required: string[], optional: string[] = []): Record<st
   return o
 }
 function str(v: unknown, min = 0, max = 8192): string {
-  if (typeof v !== 'string' || [...v].length < min || [...v].length > max) bad()
+  if (
+    typeof v !== 'string' ||
+    [...v].length < min ||
+    [...v].length > max ||
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(v)
+  )
+    bad()
   return v
 }
 function int(v: unknown, min = 1, max = Number.MAX_SAFE_INTEGER): number {
@@ -476,7 +512,11 @@ export function parseManifest(v: unknown): Manifest {
   const min = int(a.min, 1, 0xffffffff),
     max = int(a.max, 1, 0xffffffff)
   if (min > max) bad()
-  const c = obj(o.contributes, ['commands', 'configuration', 'views'])
+  const c = obj(
+    o.contributes,
+    ['commands', 'configuration', 'views'],
+    ['eventSubscriptions', 'menus', 'keybindings', 'statusItems']
+  )
   const commands = arr(c.commands, 64).map((v) => {
     const x = obj(v, ['id', 'title'], ['description'])
     return {
@@ -506,14 +546,44 @@ export function parseManifest(v: unknown): Manifest {
     uniq(r.map((x) => `${x.name}:${x.version}`))
     return r
   }
+  const provides = services(s.provides),
+    requires = services(s.requires)
+  if (provides.some((service) => isReservedHostService(service.name))) bad()
+  const eventSubscriptions = own(c, 'eventSubscriptions')
+    ? arr(c.eventSubscriptions, 16).map(parsePluginEventSubscription)
+    : []
+  const menus = own(c, 'menus') ? arr(c.menus, 32).map(parsePluginMenu) : []
+  const keybindings = own(c, 'keybindings') ? arr(c.keybindings, 16).map(parsePluginKeybinding) : []
+  const statusItems = own(c, 'statusItems') ? arr(c.statusItems, 2).map(parsePluginStatusItem) : []
+  for (const entries of [eventSubscriptions, menus, keybindings, statusItems])
+    uniq(entries.map((x) => x.id))
+  for (const entry of [...menus, ...keybindings, ...statusItems])
+    if (
+      entry.commandId !== undefined &&
+      !commands.some((command) => command.id === entry.commandId)
+    )
+      bad()
+  const hasHost = (name: string): boolean =>
+    requires.some((service) => service.name === name && service.version === 1)
+  if (eventSubscriptions.length && (!hasHost('se.host.context') || !hasHost('se.host.events')))
+    bad()
+  if (statusItems.length && !hasHost('se.host.status')) bad()
   return {
     schemaVersion: sv(o.schemaVersion),
     id: pid(o.id),
     name: str(o.name, 1, 128),
     version: semver(o.version),
     abi: { min, max },
-    contributes: { commands, views, configuration: parseConfigurationSchema(c.configuration) },
-    services: { provides: services(s.provides), requires: services(s.requires) }
+    contributes: {
+      commands,
+      views,
+      configuration: parseConfigurationSchema(c.configuration),
+      eventSubscriptions,
+      menus,
+      keybindings,
+      statusItems
+    },
+    services: { provides, requires }
   }
 }
 export const parsePluginManifest = parseManifest
@@ -905,7 +975,8 @@ export function parsePluginEvent(v: unknown): PluginEvent {
       'state_changed',
       'view_changed',
       'config_changed',
-      'resync_required'
+      'resync_required',
+      'host_ui_changed'
     ]),
     ...(own(o, 'pluginId') ? { pluginId: pid(o.pluginId) } : {}),
     ...(own(o, 'generation') ? { generation: uuid(o.generation) } : {}),

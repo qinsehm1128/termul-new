@@ -288,7 +288,8 @@
             "state_changed",
             "view_changed",
             "config_changed",
-            "resync_required"
+            "resync_required",
+            "host_ui_changed"
           ]
         },
         "pluginId": {
@@ -543,6 +544,30 @@
         "values"
       ],
       "additionalProperties": false
+    },
+    "HostContextPublishRequest": {
+      "$ref": "host.schema.json#/$defs/HostContextPublishRequest"
+    },
+    "HostContextHeartbeatRequest": {
+      "$ref": "host.schema.json#/$defs/HostContextHeartbeatRequest"
+    },
+    "HostContextAck": {
+      "$ref": "host.schema.json#/$defs/HostContextAck"
+    },
+    "HostUiGetRequest": {
+      "$ref": "host.schema.json#/$defs/HostUiGetRequest"
+    },
+    "HostUiSnapshot": {
+      "$ref": "host.schema.json#/$defs/HostUiSnapshot"
+    },
+    "HostUiDismissRequest": {
+      "$ref": "host.schema.json#/$defs/HostUiDismissRequest"
+    },
+    "HostUiDismissResult": {
+      "$ref": "host.schema.json#/$defs/HostUiDismissResult"
+    },
+    "ExecuteContributionRequest": {
+      "$ref": "host.schema.json#/$defs/ExecuteContributionRequest"
     }
   }
 }

@@ -89,15 +89,38 @@
                 "maxLength": 128
               },
               "location": {
-                "enum": ["panel", "sidebar"]
+                "enum": [
+                  "panel",
+                  "sidebar"
+                ]
               },
               "icon": {
                 "type": "string",
                 "enum": [
-                  "puzzle", "calculator", "chart-bar", "terminal", "database", "cloud",
-                  "git-branch", "bug", "book-open", "bell", "calendar", "clock",
-                  "folder", "globe", "key", "list-checks", "message-square", "package",
-                  "play", "rocket", "search", "settings", "shield", "wrench"
+                  "puzzle",
+                  "calculator",
+                  "chart-bar",
+                  "terminal",
+                  "database",
+                  "cloud",
+                  "git-branch",
+                  "bug",
+                  "book-open",
+                  "bell",
+                  "calendar",
+                  "clock",
+                  "folder",
+                  "globe",
+                  "key",
+                  "list-checks",
+                  "message-square",
+                  "package",
+                  "play",
+                  "rocket",
+                  "search",
+                  "settings",
+                  "shield",
+                  "wrench"
                 ],
                 "$comment": "Must match src/shared/plugin-fixtures/view-icons.json."
               }
@@ -113,12 +136,186 @@
           "contains": {
             "type": "object",
             "properties": {
-              "location": { "const": "sidebar" }
+              "location": {
+                "const": "sidebar"
+              }
             },
-            "required": ["location"]
+            "required": [
+              "location"
+            ]
           },
           "minContains": 0,
           "maxContains": 2
+        },
+        "eventSubscriptions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/localId"
+              },
+              "topic": {
+                "enum": [
+                  "project.activeChanged",
+                  "terminal.created",
+                  "terminal.closed",
+                  "terminal.activeChanged",
+                  "agent.session.stateChanged"
+                ]
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              }
+            },
+            "required": [
+              "id",
+              "topic",
+              "scope"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "topic": {
+                      "const": "project.activeChanged"
+                    }
+                  },
+                  "required": [
+                    "topic"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "scope": {
+                      "const": "window"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "maxItems": 16,
+          "default": []
+        },
+        "menus": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/localId"
+              },
+              "location": {
+                "enum": [
+                  "terminal.tab",
+                  "terminal.context",
+                  "project.context",
+                  "agentSession.context"
+                ]
+              },
+              "commandId": {
+                "$ref": "#/$defs/localId"
+              },
+              "order": {
+                "$ref": "#/$defs/order"
+              },
+              "when": {
+                "$ref": "#/$defs/when"
+              }
+            },
+            "required": [
+              "id",
+              "location",
+              "commandId"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 32,
+          "default": []
+        },
+        "keybindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/localId"
+              },
+              "commandId": {
+                "$ref": "#/$defs/localId"
+              },
+              "key": {
+                "$ref": "#/$defs/key"
+              },
+              "mac": {
+                "$ref": "#/$defs/key"
+              },
+              "when": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/when"
+                  },
+                  {
+                    "properties": {
+                      "textInput.focused": {
+                        "const": false
+                      },
+                      "terminal.focused": {
+                        "const": false
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "commandId",
+              "key"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 16,
+          "default": []
+        },
+        "statusItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/localId"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "location": {
+                "const": "statusBar"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "commandId": {
+                "$ref": "#/$defs/localId"
+              },
+              "order": {
+                "$ref": "#/$defs/order"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "location",
+              "scope"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 2,
+          "default": []
         }
       },
       "required": [
@@ -139,7 +336,10 @@
               "name": {
                 "type": "string",
                 "maxLength": 128,
-                "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+                "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$",
+                "not": {
+                  "pattern": "^se\\.host\\."
+                }
               },
               "version": {
                 "type": "integer",
@@ -197,5 +397,163 @@
     "services"
   ],
   "additionalProperties": false,
-  "$comment": "Input is at most 262144 UTF-8 bytes. Runtime validates semver, abi.min <= abi.max, and unique same-kind contribution IDs."
+  "$comment": "Input is at most 262144 UTF-8 bytes. Runtime additionally validates semver, abi.min <= abi.max, unique same-kind contribution IDs, and same-manifest command references. Empty optional contribution arrays are omitted when serialized. All se.host.* providers are reserved; unknown host requirements remain valid but unresolved.",
+  "$defs": {
+    "localId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "scope": {
+      "enum": [
+        "window",
+        "activeProject"
+      ]
+    },
+    "order": {
+      "type": "integer",
+      "minimum": -100,
+      "maximum": 100,
+      "default": 0
+    },
+    "when": {
+      "type": "object",
+      "properties": {
+        "project.exists": {
+          "type": "boolean"
+        },
+        "terminal.exists": {
+          "type": "boolean"
+        },
+        "agentSession.exists": {
+          "type": "boolean"
+        },
+        "textInput.focused": {
+          "type": "boolean"
+        },
+        "terminal.focused": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^(?:|(?:ctrl(?:\\+cmd)?|cmd)(?:\\+shift)?(?:\\+alt)?\\+(?:[a-z0-9]|f(?:[1-9]|1[0-2])|enter|space|tab|escape|backspace|delete|home|end|pageup|pagedown|arrow(?:up|down|left|right)))$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "eventSubscriptions": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "eventSubscriptions"
+            ]
+          }
+        },
+        "required": [
+          "contributes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "const": "se.host.context"
+                        },
+                        "version": {
+                          "const": 1
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ]
+                    }
+                  },
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "const": "se.host.events"
+                        },
+                        "version": {
+                          "const": 1
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "statusItems": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "statusItems"
+            ]
+          }
+        },
+        "required": [
+          "contributes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "const": "se.host.status"
+                        },
+                        "version": {
+                          "const": 1
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

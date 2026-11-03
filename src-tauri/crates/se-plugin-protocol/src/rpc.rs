@@ -17,6 +17,13 @@ pub const METHOD_SHUTDOWN: &str = "shutdown";
 pub const TOPIC_PLUGIN_EVENT: &str = "plugin.event";
 pub const EVENT_PLUGINS_CHANGED: &str = "plugins:changed";
 pub const EVENT_PLUGINS_CONNECTION_CHANGED: &str = "plugins:connection_changed";
+pub const METHOD_HOST_CONTEXT_PUBLISH: &str = "plugins.host.context.publish";
+pub const METHOD_HOST_CONTEXT_HEARTBEAT: &str = "plugins.host.context.heartbeat";
+pub const METHOD_HOST_UI_GET: &str = "plugins.host.ui.get";
+pub const METHOD_HOST_UI_DISMISS: &str = "plugins.host.ui.dismiss";
+pub const METHOD_CONTRIBUTION_EXECUTE: &str = "plugins.contribution.execute";
+/// Advertised and required once Plugin Core serves the host RPCs above (P3).
+pub const HOST_CAPABILITIES_V1: &str = "plugins.host-capabilities.v1";
 pub const PLUGIN_CAPABILITIES: [&str; 4] = [
     "plugins.lifecycle.v1",
     "plugins.ui.v1",
@@ -140,6 +147,7 @@ pub enum PluginEventType {
     ViewChanged,
     ConfigChanged,
     ResyncRequired,
+    HostUiChanged,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

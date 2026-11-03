@@ -166,6 +166,15 @@
         "result"
       ],
       "additionalProperties": false
+    },
+    "HostRequest": {
+      "$ref": "host.schema.json#/$defs/HostRequest"
+    },
+    "HostReply": {
+      "$ref": "host.schema.json#/$defs/HostReply"
+    },
+    "HostDeliveryReply": {
+      "$ref": "host.schema.json#/$defs/HostDeliveryReply"
     }
   }
 }

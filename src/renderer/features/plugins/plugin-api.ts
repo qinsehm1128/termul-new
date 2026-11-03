@@ -12,6 +12,11 @@ import {
   parseUninstallResult,
   parseViewSnapshot
 } from '@shared/types/plugin.types'
+import {
+  parseHostContextAck,
+  parseHostUiDismissResult,
+  parseHostUiSnapshot
+} from '@shared/types/plugin-host.types'
 import { type HostEventSubscription, onHostEvent } from '@/lib/host-events'
 import { invokeDecodedIpcResult } from '@/lib/invoke-decoded-ipc-result'
 import { logFrontendError } from '@/lib/log-api'
@@ -93,6 +98,14 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPlu
     executeCommand: (request) => call('plugin_execute_command', parseCommandReply, request),
     getConfig: (request) => call('plugin_get_config', parseConfigSnapshot, request),
     setConfig: (request) => call('plugin_set_config', parseConfigSnapshot, request),
+    publishHostContext: (request) =>
+      call('plugin_publish_host_context', parseHostContextAck, request),
+    heartbeatHostContext: (request) =>
+      call('plugin_heartbeat_host_context', parseHostContextAck, request),
+    getHostUi: () => call('plugin_get_host_ui', parseHostUiSnapshot),
+    dismissHostUi: (request) => call('plugin_dismiss_host_ui', parseHostUiDismissResult, request),
+    executeContribution: (request) =>
+      call('plugin_execute_contribution', parseCommandReply, request),
     onChanged: (handler) => listen('plugins:changed', parsePluginEvent, handler),
     onConnectionChanged: (handler) =>
       listen('plugins:connection_changed', parsePluginConnectionChanged, handler)
