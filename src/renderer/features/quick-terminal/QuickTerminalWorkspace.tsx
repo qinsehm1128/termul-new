@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { TAB_STRIP_CLASS, tabCloseButtonClass, tabToneClass } from '@/components/workspace/tab-tone'
 import { flushEditorContent } from '@/lib/editor-content-flush'
 import { releaseShownFile } from '@/lib/file-open-target'
 import { logFrontendError } from '@/lib/log-api'
+import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { QuickTerminalFilePreview } from './QuickTerminalFilePreview'
@@ -209,16 +211,19 @@ export function QuickTerminalWorkspace({
   }, [record.id])
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      <div className="flex shrink-0 border-b">
+      <div className={cn(TAB_STRIP_CLASS, 'shrink-0')}>
         <div
           role="tablist"
           aria-label={t('workspaceTabs')}
-          className="flex min-w-0 flex-1 overflow-x-auto"
+          className="flex h-full min-w-0 flex-1 overflow-x-auto"
         >
           {layout?.tabs.map((tab, index) => (
             <div
               key={tab.id}
-              className={`flex h-9 shrink-0 items-center border-r border-b-2 transition-colors ${tab.id === layout.activeTabId ? 'border-b-primary bg-muted text-foreground' : 'border-b-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`}
+              className={cn(
+                'group relative flex h-full shrink-0 items-center gap-1 pr-2 transition-colors duration-150 ease-[var(--ease-out)]',
+                tabToneClass(tab.id === layout.activeTabId)
+              )}
               data-active={tab.id === layout.activeTabId}
             >
               <button
@@ -226,11 +231,14 @@ export function QuickTerminalWorkspace({
                 role="tab"
                 aria-selected={tab.id === layout.activeTabId}
                 onClick={() => activate(tab)}
-                className="flex h-full max-w-56 items-center gap-2 px-3 text-xs text-inherit"
+                className="flex h-full max-w-56 items-center gap-2 pl-2.5 text-xs text-inherit"
                 title={tab.type === 'editor' ? tab.filePath : undefined}
               >
                 {tab.type === 'terminal' ? (
-                  <Terminal className="size-3.5" aria-hidden="true" />
+                  <Terminal
+                    className={cn('size-3.5', tab.id === layout.activeTabId && 'text-primary')}
+                    aria-hidden="true"
+                  />
                 ) : null}
                 <span className="truncate">
                   {tab.type === 'editor'
@@ -238,23 +246,22 @@ export function QuickTerminalWorkspace({
                     : t('terminalTab', { number: String(index + 1) })}
                 </span>
               </button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="mr-1 size-6"
+              <button
+                type="button"
+                className={tabCloseButtonClass(tab.id === layout.activeTabId)}
                 aria-label={tab.type === 'editor' ? t('closePreview') : t('closeTerminalTab')}
                 disabled={closing === tab.id || (tab.type === 'terminal' && !tab.terminalId)}
                 onClick={() => void closeTab(tab)}
               >
                 <X className="size-3" aria-hidden="true" />
-              </Button>
+              </button>
             </div>
           ))}
         </div>
         <Button
           size="icon"
           variant="ghost"
-          className="h-9 w-9 shrink-0"
+          className="h-8 w-8 shrink-0"
           aria-label={t('newTerminalTab')}
           disabled={!layout}
           onClick={() => addQuickTerminalTab(record.id)}

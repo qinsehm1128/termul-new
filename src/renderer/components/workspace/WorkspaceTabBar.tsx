@@ -37,6 +37,7 @@ import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab } from './EditorTab'
 import { type TabBulkCloseHandlers, TabContextMenu } from './tab-context-menu'
+import { TAB_STRIP_CLASS, tabCloseButtonClass, tabToneClass as tabTone } from './tab-tone'
 
 // Helper to compute drop position from mouse coordinates
 function computeTabPosition(target: HTMLElement, clientX: number): TabReorderPosition {
@@ -50,13 +51,7 @@ const TAB_SURFACE =
   'group relative flex h-full min-w-[100px] cursor-grab select-none items-center px-2.5 transition-colors duration-150 ease-[var(--ease-out)]'
 
 function tabToneClass(isActive: boolean, isDragging: boolean): string {
-  return cn(
-    TAB_SURFACE,
-    isActive
-      ? 'z-[1] -mb-px bg-background text-foreground shadow-[inset_0_1px_0_0_hsl(var(--primary)/0.55)]'
-      : 'text-muted-foreground hover:bg-secondary/40 hover:text-foreground',
-    isDragging && 'opacity-50'
-  )
+  return cn(TAB_SURFACE, tabTone(isActive), isDragging && 'opacity-50')
 }
 
 function TabDropMark({
@@ -99,10 +94,7 @@ function TabCloseButton({
         if (!disabled) onClose()
       }}
       disabled={disabled}
-      className={cn(
-        'ml-auto flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground transition-opacity duration-150 ease-[var(--ease-out)] hover:bg-secondary hover:text-foreground disabled:cursor-wait',
-        isActive || spinning ? 'opacity-70 hover:opacity-100' : 'opacity-0 group-hover:opacity-100'
-      )}
+      className={tabCloseButtonClass(isActive || spinning)}
     >
       {spinning ? <Loader2 size={11} className="animate-spin" /> : <XIcon size={11} />}
     </button>
@@ -993,7 +985,7 @@ export function WorkspaceTabBar({
 
   return (
     <div
-      className="flex h-8 items-center border-b border-border/70 bg-sidebar"
+      className={TAB_STRIP_CLASS}
       onDragOver={(e) => {
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'

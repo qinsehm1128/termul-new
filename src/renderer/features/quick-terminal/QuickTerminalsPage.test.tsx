@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { tabToneClass } from '@/components/workspace/tab-tone'
 
 const api = vi.hoisted(() => ({
   list: vi.fn(),
@@ -341,28 +342,23 @@ describe('QuickTerminalsPage', () => {
     const expectActiveSurface = (tab: HTMLElement, closeName: string): void => {
       const surface = tab.parentElement!
       expect(tab).toHaveAttribute('aria-selected', 'true')
-      expect(surface).toHaveClass('bg-muted', 'text-foreground', 'border-b-2', 'border-b-primary')
-      expect(surface).not.toHaveClass('bg-accent', 'bg-primary', 'text-primary')
+      // Same theme-token tone as the workspace terminal tab bar (tab-tone.ts).
+      expect(surface.className).toContain(tabToneClass(true))
+      expect(surface).not.toHaveClass('bg-accent', 'bg-primary', 'bg-muted')
       expect(tab).toHaveClass('text-inherit')
       expect(tab).not.toHaveClass('bg-accent', 'bg-primary', 'text-muted-foreground')
       expect(within(surface).getByRole('button', { name: closeName })).toBeVisible()
     }
     const expectInactiveSurface = (tab: HTMLElement): void => {
       expect(tab).toHaveAttribute('aria-selected', 'false')
-      expect(tab.parentElement).toHaveClass(
-        'border-b-transparent',
-        'text-muted-foreground',
-        'hover:bg-muted/50',
-        'hover:text-foreground'
-      )
-      expect(tab.parentElement).not.toHaveClass('bg-muted', 'border-b-primary')
+      expect(tab.parentElement!.className).toContain(tabToneClass(false))
+      expect(tab.parentElement).not.toHaveClass('bg-background', 'text-foreground')
     }
 
     expectActiveSurface(terminalTab, 'Close terminal tab')
-    expect(terminalTab.querySelector('svg')).not.toHaveAttribute(
-      'class',
-      expect.stringContaining('text-primary')
-    )
+    // Like the workspace tab bar: the active icon takes the theme primary on
+    // the content background, never a primary fill behind primary text.
+    expect(terminalTab.querySelector('svg')).toHaveClass('text-primary')
 
     act(() => showOpenedFile(file))
     const fileTab = await screen.findByRole('tab', { name: 'notes.md' })
