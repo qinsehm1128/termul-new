@@ -34,6 +34,7 @@ pub(crate) enum CallKind {
     Command,
     Config,
     Service,
+    HostDelivery,
     Destroy,
 }
 impl CallKind {
@@ -44,7 +45,7 @@ impl CallKind {
             Self::Action => "on_action",
             Self::Command => "on_command",
             Self::Config => "on_config_changed",
-            Self::Service => "on_service_call",
+            Self::Service | Self::HostDelivery => "on_service_call",
             Self::Destroy => "destroy",
         }
     }
@@ -231,8 +232,20 @@ impl AbiWorker {
                     {
                         continue;
                     }
+                    if matches!(request.kind, CallKind::HostDelivery)
+                        && !state.context.broker.upgrade().is_some_and(|broker| {
+                            broker.generation_live(&state.context.id, &state.context.generation)
+                        })
+                    {
+                        let _ = request.reply.send(Err(error(
+                            PLUGIN_STALE_GENERATION,
+                            "host delivery generation was revoked",
+                        )));
+                        continue;
+                    }
                     state.context.set_call(request.deadline, request.chain);
                     let result = state.invoke(request.kind, &request.input);
+                    let result = entered_result(request.kind, result);
                     if poisoned.load(Ordering::Acquire) {
                         std::mem::forget(request.input);
                         std::mem::forget(result);
@@ -420,6 +433,26 @@ impl AbiWorker {
                 code: failure.code.clone(),
             }));
         }
+    }
+}
+
+fn entered_result(
+    kind: CallKind,
+    result: Result<Vec<u8>, PluginError>,
+) -> Result<Vec<u8>, PluginError> {
+    if matches!(kind, CallKind::HostDelivery) {
+        result.map_err(|e| {
+            if e.code == PLUGIN_BUSY {
+                error(
+                    PLUGIN_CALLBACK_ERROR,
+                    "host delivery callback returned busy after entry",
+                )
+            } else {
+                e
+            }
+        })
+    } else {
+        result
     }
 }
 
@@ -617,7 +650,7 @@ impl WorkerState {
             CallKind::Render => self.api.render_view,
             CallKind::Action => self.api.on_action,
             CallKind::Command => self.api.on_command,
-            CallKind::Service => self.api.on_service_call,
+            CallKind::Service | CallKind::HostDelivery => self.api.on_service_call,
             _ => None,
         }
         .ok_or_else(|| error(PLUGIN_NOT_SUPPORTED, "native callback is absent"))?;
@@ -635,5 +668,34 @@ impl WorkerState {
             return Err(error(PLUGIN_CALLBACK_ERROR, "invalid native output buffer"));
         }
         Ok(self.output_bytes[..self.output.len].to_vec())
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    #[test]
+    fn busy_after_native_entry_is_not_replayed() {
+        assert_eq!(
+            entered_result(CallKind::HostDelivery, Err(error(PLUGIN_BUSY, "busy")))
+                .unwrap_err()
+                .code,
+            PLUGIN_CALLBACK_ERROR
+        );
+        assert_eq!(
+            entered_result(CallKind::Service, Err(error(PLUGIN_BUSY, "busy")))
+                .unwrap_err()
+                .code,
+            PLUGIN_BUSY
+        );
+        assert_eq!(
+            entered_result(
+                CallKind::HostDelivery,
+                Err(error(PLUGIN_TIMEOUT, "expired"))
+            )
+            .unwrap_err()
+            .code,
+            PLUGIN_TIMEOUT
+        );
     }
 }

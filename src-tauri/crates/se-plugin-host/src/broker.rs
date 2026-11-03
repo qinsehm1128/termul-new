@@ -35,6 +35,7 @@ struct Registrations {
 #[derive(Default)]
 pub struct PluginBroker {
     registrations: Mutex<Registrations>,
+    host: std::sync::OnceLock<Arc<crate::host_services::HostServices>>,
 }
 
 impl cordis_core::Service for PluginBroker {
@@ -44,6 +45,19 @@ impl cordis_core::Service for PluginBroker {
 impl PluginBroker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn attach_host(&self, host: Arc<crate::host_services::HostServices>) {
+        let _ = self.host.set(host);
+    }
+
+    pub(crate) fn generation_live(&self, id: &str, generation: &str) -> bool {
+        let state = self.registrations.lock().unwrap_or_else(|p| p.into_inner());
+        state.admitted.contains(id)
+            && state
+                .plugins
+                .get(id)
+                .is_some_and(|entry| entry.generation == generation)
     }
 
     /// Validate the whole desired-enabled graph, then return only resolvable IDs.
@@ -85,6 +99,11 @@ impl PluginBroker {
         for (&id, manifest) in &plugins {
             let mut required = BTreeSet::new();
             for service in &manifest.services.requires {
+                if se_plugin_protocol::known_host_service(&service.name, service.version)
+                    == Some(se_plugin_protocol::HostServiceAvailability::Available)
+                {
+                    continue;
+                }
                 if let Some(&provider) = providers.get(&(service.name.as_str(), service.version)) {
                     required.insert(provider);
                     consumers.entry(provider).or_default().insert(id);
@@ -147,6 +166,9 @@ impl PluginBroker {
         manifest: &Manifest,
     ) -> Result<(), PluginError> {
         validate_manifest(manifest)?;
+        if let Some(host) = self.host.get() {
+            host.begin(manifest, generation)?;
+        }
         let mut state = self.registrations.lock().map_err(|_| unavailable())?;
         state.activating.insert(
             manifest.id.clone(),
@@ -190,6 +212,9 @@ impl PluginBroker {
             ));
         }
         // No mutation until the entire candidate graph has passed validation.
+        if let Some(host) = self.host.get() {
+            host.activate(&id, &generation)?;
+        }
         state.activating.remove(&id);
         state.plugins.insert(
             id,
@@ -206,6 +231,9 @@ impl PluginBroker {
     /// Close routing synchronously, ignoring stale cleanup from an older lease.
     /// Already admitted calls own their worker Arc and may finish until deadline.
     pub fn withdraw(&self, id: &str, generation: &str) {
+        if let Some(host) = self.host.get() {
+            host.revoke(id, generation);
+        }
         let removed = {
             let mut state = self
                 .registrations
@@ -237,6 +265,13 @@ impl PluginBroker {
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
+            if let Some(host) = self.host.get() {
+                for (plugin_id, entry) in &state.plugins {
+                    if !state.admitted.contains(plugin_id) {
+                        host.revoke(plugin_id, &entry.generation);
+                    }
+                }
+            }
             removed
         };
         // Even destruction of the channel handle stays outside the routing lock.
@@ -278,52 +313,76 @@ impl PluginBroker {
         }
         let input = serde_json::to_vec(&request)
             .map_err(|_| PluginError::new(PLUGIN_INVALID_REQUEST, "invalid service request"))?;
-        let (worker, chain) = {
-            let state = self.registrations.lock().map_err(|_| unavailable())?;
-            let (source_generation, source_manifest, admitted) =
-                if let Some(source) = state.plugins.get(caller) {
-                    (
-                        &source.generation,
-                        &source.manifest,
-                        state.admitted.contains(caller),
-                    )
-                } else if let Some((generation, manifest)) = state.activating.get(caller) {
-                    (generation, manifest, true)
-                } else {
-                    return Err(unavailable());
-                };
-            if source_generation != generation {
-                return Err(PluginError::new(
-                    PLUGIN_STALE_GENERATION,
-                    "caller generation is no longer active",
-                ));
-            }
-            if !admitted
-                || !source_manifest.services.requires.iter().any(|service| {
-                    service.name == request.service && service.version == request.version
-                })
+        let (worker, chain) =
             {
-                return Err(unavailable());
-            }
-            let (provider_id, provider) = state
-                .plugins
-                .iter()
-                .find(|(id, registration)| {
-                    state.admitted.contains(*id)
-                        && registration
-                            .manifest
-                            .services
-                            .provides
-                            .iter()
-                            .any(|service| {
-                                service.name == request.service
-                                    && service.version == request.version
-                            })
-                })
-                .ok_or_else(unavailable)?;
-            let chain = extend_chain(caller, provider_id, chain)?;
-            (Arc::clone(&provider.worker), chain)
-        };
+                let state = self.registrations.lock().map_err(|_| unavailable())?;
+                let (source_generation, source_manifest, admitted) =
+                    if let Some(source) = state.plugins.get(caller) {
+                        (
+                            &source.generation,
+                            &source.manifest,
+                            state.admitted.contains(caller),
+                        )
+                    } else if let Some((generation, manifest)) = state.activating.get(caller) {
+                        (generation, manifest, true)
+                    } else {
+                        return Err(unavailable());
+                    };
+                if source_generation != generation {
+                    return Err(PluginError::new(
+                        PLUGIN_STALE_GENERATION,
+                        "caller generation is no longer active",
+                    ));
+                }
+                if !admitted
+                    || !source_manifest.services.requires.iter().any(|service| {
+                        service.name == request.service && service.version == request.version
+                    })
+                {
+                    return Err(unavailable());
+                }
+                // Built-ins never acquire runtime state or synchronously call a worker.
+                if se_plugin_protocol::is_reserved_host_service(&request.service) {
+                    drop(state);
+                    let reply = self
+                        .host
+                        .get()
+                        .ok_or_else(unavailable)?
+                        .call(caller, generation, &request);
+                    let result =
+                        match reply {
+                            Ok(value) => se_plugin_protocol::HostResult::Ok(
+                                se_plugin_protocol::HostSuccess { ok: true, value },
+                            ),
+                            Err(error) => se_plugin_protocol::HostResult::Err(
+                                se_plugin_protocol::HostFailure { ok: false, error },
+                            ),
+                        };
+                    let host_reply = se_plugin_protocol::HostReply {
+                        schema_version: 1,
+                        result,
+                    };
+                    return serde_json::to_vec(&host_reply).map_err(|_| unavailable());
+                }
+                let (provider_id, provider) = state
+                    .plugins
+                    .iter()
+                    .find(|(id, registration)| {
+                        state.admitted.contains(*id)
+                            && registration
+                                .manifest
+                                .services
+                                .provides
+                                .iter()
+                                .any(|service| {
+                                    service.name == request.service
+                                        && service.version == request.version
+                                })
+                    })
+                    .ok_or_else(unavailable)?;
+                let chain = extend_chain(caller, provider_id, chain)?;
+                (Arc::clone(&provider.worker), chain)
+            };
         // In particular, nested HostApi broker callbacks can acquire the lock.
         let output = worker.call_blocking(CallKind::Service, input, deadline, chain)?;
         parse_service_reply(&output)?;
@@ -398,6 +457,61 @@ mod tests {
                 requires: declarations(requires),
             },
         }
+    }
+
+    #[test]
+    fn host_requirements_resolve_without_plugin_providers() {
+        let plugin = manifest(
+            "test.host",
+            &[],
+            &[
+                ("se.host.context", 1),
+                ("se.host.events", 1),
+                ("se.host.storage", 1),
+                ("se.host.feedback", 1),
+                ("se.host.status", 1),
+            ],
+        );
+        assert_eq!(PluginBroker::order(&[plugin]).unwrap(), vec!["test.host"]);
+        let unsupported = manifest("test.unsupported", &[], &[("se.host.context", 2)]);
+        assert!(PluginBroker::order(&[unsupported]).unwrap().is_empty());
+    }
+    #[test]
+    fn secrets_dependency_has_no_plaintext_fallback() {
+        let plugin = manifest("test.secret", &[], &[("se.host.secrets", 1)]);
+        assert!(PluginBroker::order(&[plugin]).unwrap().is_empty());
+        assert_ne!(
+            se_plugin_protocol::known_host_service("se.host.secrets", 1),
+            Some(se_plugin_protocol::HostServiceAvailability::Available)
+        );
+    }
+    #[test]
+    fn reserved_host_services_never_reenter_caller() {
+        let root = tempfile::tempdir().unwrap();
+        let broker = PluginBroker::new();
+        let host = Arc::new(crate::host_services::HostServices::new(
+            root.path().into(),
+            "00000000-0000-4000-8000-000000000001".into(),
+        ));
+        broker.attach_host(host.clone());
+        let manifest = manifest(
+            "test.host",
+            &[],
+            &[("se.host.context", 1), ("se.host.events", 1)],
+        );
+        broker
+            .begin_activation("00000000-0000-4000-8000-000000000002", &manifest)
+            .unwrap();
+        // An activating caller has no native worker registered. Built-in dispatch still
+        // produces the business envelope, even with a chain that forbids self reentry.
+        let result = broker.call("test.host", "00000000-0000-4000-8000-000000000002",
+            serde_json::from_slice(br#"{"schemaVersion":1,"service":"se.host.context","version":1,"method":"snapshot","input":{"scope":"window"}}"#).unwrap(),
+            Instant::now() + std::time::Duration::from_secs(1), vec!["test.host".into()]).unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(reply["result"]["ok"], false);
+        assert_eq!(reply["result"]["error"]["code"], PLUGIN_SERVICE_UNAVAILABLE);
+        broker.withdraw("test.host", "00000000-0000-4000-8000-000000000002");
+        assert_eq!(host.counts(), (0, 0));
     }
 
     #[test]

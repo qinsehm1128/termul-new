@@ -470,7 +470,7 @@ fn io_error(error: impl std::fmt::Display) -> PluginError {
     PluginError::new(PLUGIN_IO, error.to_string())
 }
 
-fn reject_non_regular(path: &Path) -> Result<()> {
+pub(crate) fn reject_non_regular(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(()),
         Ok(_) => Err(corrupt("plugin metadata path is not a regular file")),
@@ -479,7 +479,7 @@ fn reject_non_regular(path: &Path) -> Result<()> {
     }
 }
 
-fn owner_only_directory(path: &Path) -> Result<()> {
+pub(crate) fn owner_only_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -489,7 +489,7 @@ fn owner_only_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
+pub(crate) fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
     reject_non_regular(path)?;
     let file = match File::open(path) {
         Ok(file) => file,
@@ -543,7 +543,7 @@ fn persist(fs: &DurableFileSystem, path: &Path, value: &impl Serialize) -> Resul
 // Publication is the commit point for live state, including journal tokens. Returning an
 // error after publication would tell callers to roll back even though disk has new bytes.
 // Keep the new state and surface uncertain crash durability as a structured log warning.
-fn finish_persist(
+pub(crate) fn finish_persist(
     path: &Path,
     result: se_foundation::durable_fs::Result<se_foundation::durable_fs::DurableWriteOutcome>,
 ) -> Result<()> {

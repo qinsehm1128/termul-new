@@ -63,6 +63,27 @@ pub(crate) fn status(status: se_plugin_abi::SeStatus) -> Result<(), PluginError>
     ))
 }
 
+pub(crate) fn host_delivery_reply(
+    bytes: &[u8],
+    manifest: &se_plugin_protocol::Manifest,
+) -> Result<se_plugin_protocol::HostDeliveryReply, PluginError> {
+    let reply = se_plugin_protocol::parse_host_delivery_reply(bytes)
+        .map_err(|_| error(PLUGIN_CALLBACK_ERROR, "invalid host delivery reply"))?;
+    if reply.result.invalidate_views.iter().any(|view| {
+        !manifest
+            .contributes
+            .views
+            .iter()
+            .any(|declared| &declared.id == view)
+    }) {
+        return Err(error(
+            PLUGIN_CALLBACK_ERROR,
+            "host delivery invalidated undeclared view",
+        ));
+    }
+    Ok(reply)
+}
+
 pub(crate) fn fatal(error: &PluginError) -> bool {
     error.code == PLUGIN_TIMEOUT || error.code == PLUGIN_PANIC
 }
@@ -70,6 +91,30 @@ pub(crate) fn fatal(error: &PluginError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_delivery_invalidations_are_validated_all_or_nothing() {
+        let manifest: se_plugin_protocol::Manifest = serde_json::from_value(serde_json::json!({
+            "schemaVersion":1,"id":"test.reply","name":"Reply","version":"1.0.0",
+            "abi":{"min":1,"max":1},"services":{"provides":[],"requires":[]},
+            "contributes":{"commands":[],"views":[],"configuration":{"title":"Settings","properties":{}}}
+        })).unwrap();
+        assert!(host_delivery_reply(
+            br#"{"schemaVersion":1,"result":{"invalidateViews":[]}}"#,
+            &manifest
+        )
+        .is_ok());
+        for bytes in [
+            br#"{"schemaVersion":1,"result":{"invalidateViews":["missing"]}}"#.as_slice(),
+            br#"{"schemaVersion":1,"result":{"invalidateViews":["duplicate","duplicate"]}}"#
+                .as_slice(),
+            br#"{"schemaVersion":1,"result":{"invalidateViews":[],"extra":true}}"#.as_slice(),
+        ] {
+            assert_eq!(
+                host_delivery_reply(bytes, &manifest).unwrap_err().code,
+                PLUGIN_CALLBACK_ERROR
+            );
+        }
+    }
     #[test]
     fn unknown_status_is_not_success() {
         assert_eq!(status(999).unwrap_err().code, PLUGIN_CALLBACK_ERROR);

@@ -50,6 +50,12 @@ pub struct HostDiagnostics {
     pub command_count: usize,
     pub destroy_attempts: usize,
     pub loaded_libraries: usize,
+    pub host_generation_leases: usize,
+    pub host_deliveries_inflight: usize,
+    pub host_storage_tickets: usize,
+    pub host_event_resources: usize,
+    pub host_subscriptions: usize,
+    pub host_ui_records: usize,
 }
 struct Active {
     manifest: Manifest,
@@ -75,6 +81,7 @@ pub struct PluginHost {
     journal: Arc<Journal>,
     context: Context,
     broker: Arc<PluginBroker>,
+    host_services: Arc<crate::host_services::HostServices>,
     state: Mutex<State>,
     events: broadcast::Sender<PluginEvent>,
     restart: watch::Sender<Option<RestartReason>>,
@@ -121,6 +128,11 @@ impl PluginHost {
         gc(&root, &registry, &boot_id);
         let context = Context::new();
         let broker = Arc::new(PluginBroker::new());
+        let host_services = Arc::new(crate::host_services::HostServices::new(
+            profile_root,
+            boot_id.clone(),
+        ));
+        broker.attach_host(host_services.clone());
         let _publication = context.provide(broker.clone()).map_err(|_| {
             error(
                 PLUGIN_CALLBACK_ERROR,
@@ -138,6 +150,7 @@ impl PluginHost {
             journal,
             context,
             broker,
+            host_services,
             state: Mutex::new(State {
                 registry,
                 active: BTreeMap::new(),
@@ -163,6 +176,79 @@ impl PluginHost {
         }
         host.ready.store(true, Ordering::Release);
         // Timeout withdrawal is independent of the caller continuing to poll its RPC.
+        let weak_delivery = Arc::downgrade(&host);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(10));
+            loop {
+                tick.tick().await;
+                let Some(host) = weak_delivery.upgrade() else {
+                    break;
+                };
+                if host.host_services.take_ui_changed() {
+                    let mut state = host.state.lock().await;
+                    host.emit(&mut state, PluginEventType::HostUiChanged, None, None, None);
+                }
+                // Clone leases only: never retain control state across native delivery.
+                let workers: Vec<_> = {
+                    let state = host.state.lock().await;
+                    state
+                        .active
+                        .iter()
+                        .map(|(id, active)| {
+                            (
+                                id.clone(),
+                                active.generation.clone(),
+                                active.worker.clone(),
+                                active.manifest.clone(),
+                            )
+                        })
+                        .collect()
+                };
+                for (id, generation, worker, manifest) in workers {
+                    let Some(delivery) = host.host_services.next_delivery(&id, &generation) else {
+                        continue;
+                    };
+                    let host = host.clone();
+                    tokio::spawn(async move {
+                        let encoded =
+                            serde_json::to_vec(&delivery).expect("bounded host delivery JSON");
+                        let result = worker.call(CallKind::HostDelivery, encoded).await;
+                        let busy = result.as_ref().is_err_and(|e| e.code == PLUGIN_BUSY);
+                        host.host_services
+                            .delivery_done(&id, &generation, delivery, busy);
+                        let result = result.and_then(|bytes| {
+                            crate::validation::host_delivery_reply(&bytes, &manifest)
+                        });
+                        let mut state = host.state.lock().await;
+                        if state
+                            .active
+                            .get(&id)
+                            .is_none_or(|a| a.generation != generation)
+                        {
+                            return;
+                        }
+                        match result {
+                            Ok(reply) => {
+                                for view in reply.result.invalidate_views {
+                                    if let Err(e) = host.refresh_view(&mut state, &id, &view).await
+                                    {
+                                        state.errors.insert(id.clone(), e);
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(_) if busy => {}
+                            Err(e) => {
+                                state.errors.insert(id.clone(), e.clone());
+                                if crate::validation::fatal(&e) {
+                                    host.quarantine(&mut state, &id, e).await;
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        });
         let weak_faults = Arc::downgrade(&host);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(10));
@@ -656,7 +742,15 @@ impl PluginHost {
         validate_execute_command_request(&request)?;
         let mut state = self.control_lock().await?;
         self.ensure_open(&state)?;
-        let index = index(&state, &request.id)?;
+        self.execute_command_locked(&mut state, request).await
+    }
+
+    async fn execute_command_locked(
+        &self,
+        state: &mut State,
+        request: ExecuteCommandRequest,
+    ) -> Result<CommandReply, PluginError> {
+        let index = index(state, &request.id)?;
         if !state.registry.plugins[index]
             .manifest
             .contributes
@@ -666,7 +760,7 @@ impl PluginHost {
         {
             return Err(error(PLUGIN_NOT_FOUND, "command is not declared"));
         }
-        let active = live(&state, &request.id)?;
+        let active = live(state, &request.id)?;
         if active.generation != request.generation {
             return Err(error(
                 PLUGIN_STALE_GENERATION,
@@ -687,7 +781,7 @@ impl PluginHost {
             Ok(reply) => reply,
             Err(e) => {
                 if crate::validation::fatal(&e) {
-                    self.quarantine(&mut state, &request.id, e.clone()).await;
+                    self.quarantine(state, &request.id, e.clone()).await;
                 }
                 return Err(e);
             }
@@ -707,7 +801,7 @@ impl PluginHost {
             }
         }
         for view in &reply.invalidate_views {
-            self.refresh_view(&mut state, &request.id, view).await?;
+            self.refresh_view(state, &request.id, view).await?;
         }
         Ok(reply)
     }
@@ -855,6 +949,65 @@ impl PluginHost {
     pub fn safe_mode(&self) -> bool {
         self.safe_mode
     }
+    pub async fn publish_host_context(
+        &self,
+        owner: &str,
+        request: HostContextPublishRequest,
+    ) -> Result<HostContextAck, PluginError> {
+        self.host_services.publish(owner, request)
+    }
+    pub fn heartbeat_host_context(
+        &self,
+        owner: &str,
+        source_id: &str,
+    ) -> Result<HostContextAck, PluginError> {
+        self.host_services.heartbeat(owner, source_id)
+    }
+    pub fn detach_host_context(&self, owner: &str) {
+        self.host_services.detach(owner);
+    }
+    pub async fn host_ui_snapshot(&self) -> Result<HostUiSnapshot, PluginError> {
+        self.host_services.ui_snapshot()
+    }
+    pub async fn dismiss_host_ui(
+        &self,
+        request: HostUiDismissRequest,
+    ) -> Result<HostUiDismissResult, PluginError> {
+        self.host_services.dismiss(request)
+    }
+    pub async fn execute_contribution(
+        &self,
+        request: ExecuteContributionRequest,
+    ) -> Result<CommandReply, PluginError> {
+        let host = self
+            .self_ref
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| error(PLUGIN_DISABLED, "plugin host is closed"))?;
+        let deadline = std::time::Instant::now() + self.options.control_timeout;
+        tokio::spawn(async move {
+            crate::validation::CONTROL_DEADLINE
+                .scope(deadline, async {
+                    let mut state = host.control_lock().await?;
+                    host.ensure_open(&state)?;
+                    let (command_id, args) = host.host_services.resolve_action(&request)?;
+                    host.execute_command_locked(
+                        &mut state,
+                        ExecuteCommandRequest {
+                            id: request.plugin_id,
+                            generation: request.generation,
+                            command_id,
+                            args,
+                        },
+                    )
+                    .await
+                })
+                .await
+        })
+        .await
+        .map_err(io)?
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<PluginEvent> {
         self.events.subscribe()
     }
@@ -874,6 +1027,12 @@ impl PluginHost {
             command_count: self.commands.load(Ordering::Acquire),
             destroy_attempts: self.metrics.destroy_attempts.load(Ordering::Acquire),
             loaded_libraries: self.metrics.loaded_libraries.load(Ordering::Acquire),
+            host_generation_leases: self.host_services.counts().0,
+            host_deliveries_inflight: self.host_services.counts().1,
+            host_storage_tickets: self.host_services.storage_count(),
+            host_event_resources: self.host_services.context_counts().0,
+            host_subscriptions: self.host_services.context_counts().1,
+            host_ui_records: self.host_services.ui_count(),
         }
     }
     pub async fn shutdown(&self) -> Result<(), PluginError> {
@@ -948,6 +1107,14 @@ impl PluginHost {
             PluginState::Disabled
         } else if active.is_some() {
             PluginState::Active
+        } else if entry
+            .manifest
+            .services
+            .requires
+            .iter()
+            .any(|s| s.name == "se.host.secrets")
+        {
+            PluginState::Pending
         } else if state.errors.contains_key(&entry.id) {
             PluginState::Failed
         } else {
@@ -1119,17 +1286,38 @@ impl PluginHost {
                 }
             }
         }
+        for entry in &state.registry.plugins {
+            if entry.desired_enabled
+                && !state.active.contains_key(&entry.id)
+                && entry
+                    .manifest
+                    .services
+                    .requires
+                    .iter()
+                    .any(|s| s.name == "se.host.secrets")
+            {
+                state.errors.insert(
+                    entry.id.clone(),
+                    error(
+                        PLUGIN_NOT_SUPPORTED,
+                        "se.host.secrets requires an unavailable OS credential backend",
+                    ),
+                );
+            }
+        }
         self.update_counts(state);
         first_error.map_or(Ok(()), Err)
     }
     fn dependencies_live(&self, state: &State, manifest: &Manifest) -> bool {
         manifest.services.requires.iter().all(|required| {
-            state.registry.plugins.iter().any(|provider| {
-                state.active.contains_key(&provider.id)
-                    && provider.manifest.services.provides.iter().any(|provided| {
-                        provided.name == required.name && provided.version == required.version
-                    })
-            })
+            se_plugin_protocol::known_host_service(&required.name, required.version)
+                == Some(se_plugin_protocol::HostServiceAvailability::Available)
+                || state.registry.plugins.iter().any(|provider| {
+                    state.active.contains_key(&provider.id)
+                        && provider.manifest.services.provides.iter().any(|provided| {
+                            provided.name == required.name && provided.version == required.version
+                        })
+                })
         })
     }
     async fn stop_one(&self, state: &mut State, id: &str) {
@@ -1416,6 +1604,89 @@ fn gc(root: &Path, registry: &Registry, boot: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn host_delivery_waits_for_callback_return() {
+        let barrier = delivery_barrier().get_or_init(|| DeliveryBarrier {
+            entered: std::sync::Barrier::new(2),
+            release: std::sync::Barrier::new(2),
+            returned: std::sync::atomic::AtomicBool::new(false),
+            delivered: tokio::sync::Notify::new(),
+        });
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        let mut manifest = manifest(
+            "test.host-delivery",
+            &[],
+            &["se.host.context", "se.host.events"],
+        );
+        manifest
+            .contributes
+            .event_subscriptions
+            .push(EventSubscriptionContribution {
+                id: "project".into(),
+                topic: HostEventTopic::ProjectActiveChanged,
+                scope: HostScope::Window,
+            });
+        install_fixture(&host, root.path(), manifest).await;
+        let info = enabled(&host, "test.host-delivery", true).await.unwrap();
+        let generation = info.generation.unwrap();
+        let command_host = host.clone();
+        let command = tokio::spawn(async move {
+            command_host
+                .execute_command(ExecuteCommandRequest {
+                    id: "test.host-delivery".into(),
+                    generation,
+                    command_id: "echo".into(),
+                    args: serde_json::Value::Null,
+                })
+                .await
+        });
+        tokio::task::spawn_blocking(move || barrier.entered.wait())
+            .await
+            .unwrap();
+        let request = parse_host_context_publish_request(br#"{"sourceId":"00000000-0000-4000-8000-000000000010","sourceSequence":1,"reset":true,"snapshot":{"activeProject":null,"projectIds":[],"activeTerminalId":null,"activeSessionId":null,"terminals":[],"agentSessions":[],"focus":{"textInput":false,"terminal":false},"truncated":false},"events":[]}"#).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            host.publish_host_context("owner", request),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!barrier.returned.load(Ordering::Acquire));
+        barrier.release.wait();
+        command.await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), barrier.delivered.notified())
+            .await
+            .unwrap();
+        assert!(barrier.returned.load(Ordering::Acquire));
+        enabled(&host, "test.host-delivery", false).await.unwrap();
+        assert_eq!(host.host_services.counts(), (0, 0));
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn secrets_dependency_stays_pending_with_unsupported_diagnostic() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(
+            &host,
+            root.path(),
+            manifest("test.secrets", &[], &["se.host.secrets"]),
+        )
+        .await;
+        let info = enabled(&host, "test.secrets", true).await.unwrap();
+        assert_eq!(info.state, PluginState::Pending);
+        assert_eq!(info.last_error.unwrap().code, PLUGIN_NOT_SUPPORTED);
+        assert!(info.generation.is_none());
+        assert_eq!(host.diagnostics().host_generation_leases, 0);
+        assert!(!root.path().join("plugins/data/test.secrets.json").exists());
+        host.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn empty_host_lifecycle_has_no_resources() {
         let root = tempfile::tempdir().unwrap();
@@ -1431,6 +1702,16 @@ mod tests {
         static DESTROYED: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> =
             std::sync::OnceLock::new();
         DESTROYED.get_or_init(Default::default)
+    }
+    struct DeliveryBarrier {
+        entered: std::sync::Barrier,
+        release: std::sync::Barrier,
+        returned: std::sync::atomic::AtomicBool,
+        delivered: tokio::sync::Notify,
+    }
+    fn delivery_barrier() -> &'static std::sync::OnceLock<DeliveryBarrier> {
+        static BARRIER: std::sync::OnceLock<DeliveryBarrier> = std::sync::OnceLock::new();
+        &BARRIER
     }
     struct Fixture {
         mode: String,
@@ -1482,6 +1763,12 @@ mod tests {
             _input: &[u8],
             out: &mut se_plugin_abi::OutputWriter<'_>,
         ) -> Result<(), se_plugin_abi::SeStatus> {
+            if self.mode == "test.host-delivery" {
+                let barrier = delivery_barrier().get().unwrap();
+                barrier.entered.wait();
+                barrier.release.wait();
+                barrier.returned.store(true, Ordering::Release);
+            }
             out.write(br#"{"schemaVersion":1,"result":null,"invalidateViews":[]}"#)
         }
         fn on_service_call(
@@ -1489,6 +1776,12 @@ mod tests {
             _input: &[u8],
             out: &mut se_plugin_abi::OutputWriter<'_>,
         ) -> Result<(), se_plugin_abi::SeStatus> {
+            if self.mode == "test.host-delivery" {
+                let barrier = delivery_barrier().get().unwrap();
+                assert!(barrier.returned.load(Ordering::Acquire));
+                barrier.delivered.notify_one();
+                return out.write(br#"{"schemaVersion":1,"result":{"invalidateViews":[]}}"#);
+            }
             out.write(br#"{"schemaVersion":1,"result":{"ok":true}}"#)
         }
         fn destroy(self) -> Result<(), se_plugin_abi::SeStatus> {

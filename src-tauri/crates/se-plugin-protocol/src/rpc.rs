@@ -24,7 +24,8 @@ pub const METHOD_HOST_UI_DISMISS: &str = "plugins.host.ui.dismiss";
 pub const METHOD_CONTRIBUTION_EXECUTE: &str = "plugins.contribution.execute";
 /// Advertised and required once Plugin Core serves the host RPCs above (P3).
 pub const HOST_CAPABILITIES_V1: &str = "plugins.host-capabilities.v1";
-pub const PLUGIN_CAPABILITIES: [&str; 4] = [
+pub const PLUGIN_CAPABILITIES: [&str; 5] = [
+    HOST_CAPABILITIES_V1,
     "plugins.lifecycle.v1",
     "plugins.ui.v1",
     "plugins.configuration.v1",
