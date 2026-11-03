@@ -10,6 +10,7 @@ import {
   Monitor,
   Palette,
   Pin,
+  Puzzle,
   RotateCw,
   Save,
   Settings,
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import {
   Command,
   CommandEmpty,
@@ -28,13 +30,16 @@ import {
   CommandList,
   CommandShortcut
 } from '@/components/ui/command'
+import { pluginApi } from '@/features/plugins/plugin-api'
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 import { recoverTerminals, reloadAndRecover } from '@/hooks/use-terminal-recovery'
 import { getColorClasses } from '@/lib/colors'
+import { logFrontendError } from '@/lib/log-api'
 import { navigateToPath } from '@/lib/router-navigate'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { usePluginsStore } from '@/stores/plugins-store'
 import type { Project, ProjectColor } from '@/types/project'
 
 type CommandShortcutId =
@@ -110,12 +115,52 @@ export function CommandPalette({
   getProjectShortcutLabel
 }: CommandPaletteProps): React.JSX.Element {
   const { t } = useTranslation('shell')
+  const { t: tPlugins } = useTranslation('plugins')
+  const plugins = usePluginsStore((state) => state.plugins)
+  const pluginsConnected = usePluginsStore((state) => state.connected)
   const reducedMotion = useReducedMotion() ?? false
   const [query, setQuery] = useState('')
   const recentCommandIds = useRecentCommandIds()
   const saveRecentCommand = useSaveRecentCommand()
   const pinnedCommandIds = usePinnedCommandIds()
   const togglePinnedCommand = useTogglePinnedCommand()
+
+  const executePluginCommand = useCallback(
+    async (pluginId: string, commandId: string) => {
+      const state = usePluginsStore.getState()
+      const plugin = state.plugins.find((candidate) => candidate.id === pluginId)
+      if (
+        !isTauriContext() ||
+        !state.connected ||
+        plugin?.state !== 'active' ||
+        !plugin.generation ||
+        !plugin.manifest.contributes.commands.some((command) => command.id === commandId)
+      ) {
+        return
+      }
+
+      const reportFailure = () => {
+        toast.error(tPlugins('errors.generic'))
+        // Do not log plugin-controlled error text or command arguments.
+        void logFrontendError({
+          source: 'CommandPalette:plugins',
+          message: 'Plugin command execution failed'
+        })
+      }
+      try {
+        const result = await pluginApi.executeCommand({
+          id: plugin.id,
+          generation: plugin.generation,
+          commandId,
+          args: null
+        })
+        if (!result.success) reportFailure()
+      } catch {
+        reportFailure()
+      }
+    },
+    [tPlugins]
+  )
 
   const commands: CommandDef[] = useMemo(
     () => [
@@ -239,6 +284,31 @@ export function CommandPalette({
         keywords: ['terminal', 'board', 'pty', 'group', 'project'],
         execute: () => navigateToPath('/terminals')
       },
+      {
+        id: 'open-plugins',
+        category: 'navigation' as const,
+        icon: <Puzzle aria-hidden="true" size={16} />,
+        label: tPlugins('manager.title'),
+        keywords: ['plugins', 'extensions'],
+        execute: () => navigateToPath('/plugins')
+      },
+      ...(isTauriContext() && pluginsConnected
+        ? plugins
+            .filter((plugin) => plugin.state === 'active' && plugin.generation)
+            .flatMap((plugin) =>
+              plugin.manifest.contributes.commands.map((command) => ({
+                id: `plugin:${plugin.id}:${command.id}`,
+                category: 'tools' as const,
+                icon: <Puzzle aria-hidden="true" size={16} />,
+                label: command.title,
+                description: command.description ?? plugin.manifest.name,
+                keywords: ['plugin', plugin.id, plugin.manifest.name, command.id],
+                execute: () => {
+                  void executePluginCommand(plugin.id, command.id)
+                }
+              }))
+            )
+        : []),
       ...projects.map((project, index) => ({
         id: `project-${project.id}`,
         category: 'projects' as const,
@@ -360,7 +430,11 @@ export function CommandPalette({
       sshProfiles,
       getShortcutLabel,
       getProjectShortcutLabel,
-      t
+      t,
+      tPlugins,
+      plugins,
+      pluginsConnected,
+      executePluginCommand
     ]
   )
 

@@ -1,5 +1,12 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { PluginInfo } from '@shared/types/plugin.types'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { pluginApi } from '@/features/plugins/plugin-api'
+import { i18n } from '@/i18n'
+import { logFrontendError } from '@/lib/log-api'
+import { setRouterNavigate } from '@/lib/router-navigate'
+import { usePluginsStore } from '@/stores/plugins-store'
 import type { Project } from '@/types/project'
 import { CommandPalette } from './CommandPalette'
 
@@ -20,6 +27,51 @@ vi.mock('@/hooks/use-pinned-commands', () => ({
   usePinnedCommandIds: () => pinnedCommandIds,
   useTogglePinnedCommand: () => togglePinnedCommand
 }))
+
+vi.mock('@/stores/plugins-store', async () => {
+  const { create } = await import('zustand')
+  return {
+    usePluginsStore: create<{ plugins: PluginInfo[]; connected: boolean }>(() => ({
+      plugins: [],
+      connected: false
+    }))
+  }
+})
+
+vi.mock('@/features/plugins/plugin-api', () => ({
+  pluginApi: { executeCommand: vi.fn() }
+}))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(async () => {}) }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+
+function activePlugin(overrides: Partial<PluginInfo> = {}): PluginInfo {
+  return {
+    id: 'com.example.palette',
+    manifest: {
+      schemaVersion: 1,
+      id: 'com.example.palette',
+      name: 'Palette Plugin',
+      version: '1.0.0',
+      abi: { min: 1, max: 1 },
+      services: { provides: [], requires: [] },
+      contributes: {
+        configuration: { title: 'Palette', properties: {} },
+        views: [],
+        commands: [
+          { id: 'palette.hello', title: 'Plugin Hello', description: 'Say hello' },
+          { id: 'palette.goodbye', title: 'Plugin Goodbye' }
+        ]
+      }
+    },
+    desiredEnabled: true,
+    state: 'active',
+    generation: 'generation-1',
+    configRevision: 1,
+    sha256: '0'.repeat(64),
+    lastError: null,
+    ...overrides
+  }
+}
 
 const projects: Project[] = [
   {
@@ -76,6 +128,171 @@ describe('CommandPalette', () => {
     pinnedCommandIds = []
     saveRecentCommand.mockClear()
     togglePinnedCommand.mockClear()
+    usePluginsStore.setState({ plugins: [], connected: false })
+    vi.mocked(pluginApi.executeCommand).mockReset()
+    vi.mocked(pluginApi.executeCommand).mockResolvedValue({
+      success: true,
+      data: { schemaVersion: 1, result: null, invalidateViews: [] }
+    })
+    vi.mocked(logFrontendError).mockClear()
+    vi.mocked(toast.error).mockClear()
+    window.history.replaceState(null, '', '/')
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
+  })
+
+  it('navigates to Plugins using the plugins namespace title', async () => {
+    const navigate = vi.fn()
+    setRouterNavigate(navigate)
+    const { props } = renderPalette()
+    fireEvent.click(screen.getByText(i18n.t('manager.title', { ns: 'plugins' })))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/plugins'))
+    setRouterNavigate(null)
+    expect(props.onClose).toHaveBeenCalledOnce()
+    expect(pluginApi.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('shows each active contribution and executes with the current store generation', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    usePluginsStore.setState({ plugins: [activePlugin()], connected: true })
+    renderPalette()
+    expect(screen.getAllByText('Plugin Hello')).toHaveLength(1)
+    expect(screen.getAllByText('Plugin Goodbye')).toHaveLength(1)
+
+    // Return a newer authoritative snapshot without rerendering the captured entry.
+    const getState = vi.spyOn(usePluginsStore, 'getState').mockReturnValue({
+      ...usePluginsStore.getState(),
+      plugins: [activePlugin({ generation: 'generation-2' })]
+    })
+    fireEvent.click(screen.getByText('Plugin Hello'))
+    await waitFor(() =>
+      expect(pluginApi.executeCommand).toHaveBeenCalledWith({
+        id: 'com.example.palette',
+        generation: 'generation-2',
+        commandId: 'palette.hello',
+        args: null
+      })
+    )
+    getState.mockRestore()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('removes disabled contributions even from pinned and recent commands', () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    pinnedCommandIds = ['plugin:com.example.palette:palette.hello']
+    recentCommandIds = ['plugin:com.example.palette:palette.goodbye']
+    usePluginsStore.setState({ plugins: [activePlugin()], connected: true })
+    renderPalette()
+    expect(screen.getAllByText('Plugin Hello').length).toBeGreaterThan(0)
+    act(() => usePluginsStore.setState({ plugins: [activePlugin({ state: 'disabled' })] }))
+    expect(screen.queryByText('Plugin Hello')).not.toBeInTheDocument()
+    expect(screen.queryByText('Plugin Goodbye')).not.toBeInTheDocument()
+    expect(pluginApi.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'installed',
+    'disabled',
+    'pending',
+    'activating',
+    'reloading',
+    'failed',
+    'quarantined'
+  ] as const)('does not expose contributions in the %s state', (state) => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    usePluginsStore.setState({ plugins: [activePlugin({ state })], connected: true })
+    renderPalette()
+    expect(screen.queryByText('Plugin Hello')).not.toBeInTheDocument()
+    expect(pluginApi.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('hides contributions on disconnect or missing generation', () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    usePluginsStore.setState({ plugins: [activePlugin()], connected: true })
+    renderPalette()
+    act(() => usePluginsStore.setState({ connected: false }))
+    expect(screen.queryByText('Plugin Hello')).not.toBeInTheDocument()
+    act(() =>
+      usePluginsStore.setState({ connected: true, plugins: [activePlugin({ generation: null })] })
+    )
+    expect(screen.queryByText('Plugin Hello')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    'disabled',
+    'disconnected',
+    'missing-command',
+    'missing-generation'
+  ])('rechecks %s in the current store before executing a stale entry', async (condition) => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    usePluginsStore.setState({ plugins: [activePlugin()], connected: true })
+    renderPalette()
+    const plugin = activePlugin({
+      state: condition === 'disabled' ? 'disabled' : 'active',
+      generation: condition === 'missing-generation' ? null : 'generation-2'
+    })
+    if (condition === 'missing-command') plugin.manifest.contributes.commands = []
+    const getState = vi.spyOn(usePluginsStore, 'getState').mockReturnValue({
+      ...usePluginsStore.getState(),
+      connected: condition !== 'disconnected',
+      plugins: [plugin]
+    })
+    fireEvent.click(screen.getByText('Plugin Hello'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(getState).toHaveBeenCalled()
+    getState.mockRestore()
+    expect(pluginApi.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('never exposes or executes plugin commands in a browser', () => {
+    usePluginsStore.setState({ plugins: [activePlugin()], connected: true })
+    renderPalette()
+    expect(screen.queryByText('Plugin Hello')).not.toBeInTheDocument()
+    expect(pluginApi.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('rechecks native runtime before executing a captured command', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    usePluginsStore.setState({ plugins: [activePlugin()], connected: true })
+    renderPalette()
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
+    fireEvent.click(screen.getByText('Plugin Hello'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(pluginApi.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'result',
+    'rejection'
+  ])('shows generic feedback and durable sanitized logging for an API %s failure', async (failure) => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    usePluginsStore.setState({ plugins: [activePlugin()], connected: true })
+    if (failure === 'result') {
+      vi.mocked(pluginApi.executeCommand).mockResolvedValueOnce({
+        success: false,
+        code: 'PLUGIN_COMMAND_FAILED',
+        error: 'sensitive plugin payload'
+      })
+    } else {
+      vi.mocked(pluginApi.executeCommand).mockRejectedValueOnce(
+        new Error('sensitive plugin payload')
+      )
+    }
+    renderPalette()
+    fireEvent.click(screen.getByText('Plugin Hello'))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(i18n.t('errors.generic', { ns: 'plugins' }))
+    )
+    expect(logFrontendError).toHaveBeenCalledWith({
+      source: 'CommandPalette:plugins',
+      message: 'Plugin command execution failed'
+    })
+    expect(JSON.stringify(vi.mocked(logFrontendError).mock.calls)).not.toContain(
+      'sensitive plugin payload'
+    )
   })
 
   it('renders a compact command-center layout with metadata, categories, shortcuts, and footer hints', () => {

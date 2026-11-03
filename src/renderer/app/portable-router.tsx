@@ -15,6 +15,8 @@ const ScheduledTasks = lazy(() => import('@/pages/ScheduledTasks'))
 const Skills = lazy(() => import('@/pages/Skills'))
 const McpPage = lazy(() => import('@/pages/McpPage'))
 const AiChannelsPage = lazy(() => import('@/pages/AiChannelsPage'))
+const PluginsPage = lazy(() => import('@/pages/PluginsPage'))
+const PluginViewPage = lazy(() => import('@/features/plugins/PluginViewPage'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
 
 function RouteFallback(): React.JSX.Element {
@@ -69,6 +71,11 @@ export const portableRouteObjects: RouteObject[] = [
       { path: 'skills', element: deferred(<Skills />) },
       { path: 'mcp', element: deferred(<McpPage />) },
       { path: 'ai-channels', element: deferred(<AiChannelsPage />) },
+      { path: 'plugins', element: deferred(<PluginsPage />) },
+      {
+        path: 'plugins/:pluginId/views/:viewId',
+        element: deferred(<PluginViewPage />)
+      },
       { path: 'settings', element: deferred(<ProjectSettings />) },
       { path: 'preferences', element: deferred(<AppPreferences />) }
     ]

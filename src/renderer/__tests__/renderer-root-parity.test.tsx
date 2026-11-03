@@ -55,6 +55,14 @@ vi.mock('@/pages/AiChannelsPage', () => ({
   default: () => <div data-testid="portable-route" data-component="ai-channels" />
 }))
 
+vi.mock('@/pages/PluginsPage', () => ({
+  default: () => <div data-testid="portable-route" data-component="plugins" />
+}))
+
+vi.mock('@/features/plugins/PluginViewPage', () => ({
+  default: () => <div data-testid="portable-route" data-component="plugin-view" />
+}))
+
 vi.mock('@/pages/NotFound', () => ({
   default: () => <div data-testid="portable-route" data-component="not-found" />
 }))
@@ -138,6 +146,8 @@ const routeCases = [
   ['/preferences', 'preferences'],
   ['/mcp', 'mcp'],
   ['/ai-channels', 'ai-channels'],
+  ['/plugins', 'plugins'],
+  ['/plugins/org.termul.example/views/counter', 'plugin-view'],
   ['/missing-route', 'not-found']
 ] as const
 
@@ -157,6 +167,7 @@ async function navigateRoot(
   await waitFor(() => {
     expect(screen.getByTestId('portable-route')).toHaveAttribute('data-component', expected)
   })
+  expect(screen.getAllByTestId('portable-app-effects')).toHaveLength(1)
   const result = {
     route: screen.getByTestId('portable-route').getAttribute('data-component') ?? '',
     hasPortableEffects: screen.queryByTestId('portable-app-effects') !== null,

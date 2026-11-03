@@ -623,7 +623,9 @@ describe('Parity Checklist Automation', () => {
         'snapshots',
         'settings',
         'preferences',
-        'mcp'
+        'mcp',
+        'plugins',
+        'plugins/:pluginId/views/:viewId'
       ]) {
         expect(routes, `portable router missing ${route}`).toContain(route)
       }
@@ -637,6 +639,19 @@ describe('Parity Checklist Automation', () => {
       ]) {
         expect(hasCallNamed(portableEffects, hook), `portable effects missing ${hook}()`).toBe(true)
       }
+      expect(
+        hasImportedCall(portableEffects, '@/stores/plugins-store', 'usePluginsStore', 'getState')
+      ).toBe(true)
+      for (const root of [app, tauri]) {
+        expect(hasImportedCall(root, '@/stores/plugins-store', 'usePluginsStore', 'getState')).toBe(
+          false
+        )
+      }
+      expect(
+        [...importedSymbols(portableEffects).values()].some(
+          (symbol) => symbol.module === '@/features/plugins/plugin-api'
+        )
+      ).toBe(false)
     })
   })
 

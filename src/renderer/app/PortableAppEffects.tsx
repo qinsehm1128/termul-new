@@ -39,6 +39,7 @@ import { useUpdateCheck } from '@/hooks/use-updater'
 import { useVisibilityState } from '@/hooks/use-visibility-state'
 import { useTerminalAutoSave } from '@/hooks/useTerminalAutoSave'
 import { initNotificationPermissions } from '@/lib/tauri-notification-api'
+import { usePluginsStore } from '@/stores/plugins-store'
 import { useProjectStore } from '@/stores/project-store'
 
 /** Portable application effects, mounted in this fixed order by every renderer root. */
@@ -104,6 +105,10 @@ export function PortableAppEffects(): React.JSX.Element | null {
   // Bubble-phase suppression preserves the Radix global context-menu trigger
   // while covering portaled overlays on both browser and native webview roots.
   usePreventNativeContextMenu()
+
+  useEffect(() => {
+    return usePluginsStore.getState().subscribe()
+  }, [])
 
   useEffect(() => {
     void initNotificationPermissions()

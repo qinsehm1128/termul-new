@@ -7,6 +7,7 @@ import conversationEn from '@/locales/en/conversation.json'
 import gitEn from '@/locales/en/git.json'
 import mcpEn from '@/locales/en/mcp.json'
 import mobileEn from '@/locales/en/mobile.json'
+import pluginsEn from '@/locales/en/plugins.json'
 import projectsEn from '@/locales/en/projects.json'
 import quickTerminalEn from '@/locales/en/quickTerminal.json'
 import settingsEn from '@/locales/en/settings.json'
@@ -23,6 +24,7 @@ import conversationZhCn from '@/locales/zh-CN/conversation.json'
 import gitZhCn from '@/locales/zh-CN/git.json'
 import mcpZhCn from '@/locales/zh-CN/mcp.json'
 import mobileZhCn from '@/locales/zh-CN/mobile.json'
+import pluginsZhCn from '@/locales/zh-CN/plugins.json'
 import projectsZhCn from '@/locales/zh-CN/projects.json'
 import quickTerminalZhCn from '@/locales/zh-CN/quickTerminal.json'
 import settingsZhCn from '@/locales/zh-CN/settings.json'
@@ -48,6 +50,7 @@ export const resources = {
     ai: aiEn,
     chat: chatEn,
     mcp: mcpEn,
+    plugins: pluginsEn,
     ssh: sshEn,
     browser: browserEn,
     mobile: mobileEn
@@ -66,6 +69,7 @@ export const resources = {
     ai: aiZhCn,
     chat: chatZhCn,
     mcp: mcpZhCn,
+    plugins: pluginsZhCn,
     ssh: sshZhCn,
     browser: browserZhCn,
     mobile: mobileZhCn

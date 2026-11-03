@@ -1,0 +1,55 @@
+{
+  "manager": {
+    "title": "Plugins",
+    "install": "Install plugin",
+    "enable": "Enable",
+    "disable": "Disable",
+    "reload": "Reload",
+    "upgrade": "Upgrade from file",
+    "uninstall": "Uninstall",
+    "trustWarning": "Native plugins run with your current user's permissions and are not sandboxed. Only install or upgrade plugins from sources you trust.",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "unsupported": "Native plugins are available only in the desktop application. They cannot be managed from a browser or phone.",
+    "subtitle": "Manage trusted native plugins, their settings and panels.",
+    "empty": "No plugins installed.",
+    "fileType": "Native plugin library",
+    "uninstallWarning": "Uninstall this plugin? Its saved configuration will also be deleted.",
+    "quarantineWarning": "This plugin is quarantined after an abnormal start. Enable it explicitly to try again.",
+    "views": "Plugin panels",
+    "lastError": "Last error",
+    "version": "Version",
+    "refresh": "Refresh list"
+  },
+  "state": {
+    "installed": "Installed",
+    "disabled": "Disabled",
+    "pending": "Waiting for dependencies",
+    "activating": "Activating",
+    "active": "Active",
+    "reloading": "Reloading",
+    "failed": "Failed",
+    "quarantined": "Quarantined",
+    "disconnected": "Plugin Core disconnected. Reconnect or retry to continue."
+  },
+  "settings": {
+    "title": "Plugin settings",
+    "default": "Default",
+    "empty": "This plugin has no settings.",
+    "reload": "Reload settings",
+    "reset": "Restore defaults",
+    "save": "Save settings",
+    "saving": "Saving…",
+    "conflict": "Settings changed elsewhere. Your draft has been kept. Reload the latest settings before saving again.",
+    "invalid": "Some settings are invalid. Check the field values and try again."
+  },
+  "view": {
+    "invalid": "The plugin returned an invalid panel. No controls were loaded.",
+    "loading": "Loading…",
+    "retry": "Retry",
+    "unavailable": "This plugin panel is unavailable."
+  },
+  "errors": {
+    "generic": "The plugin operation failed. Please try again."
+  }
+}
