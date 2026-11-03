@@ -20,7 +20,8 @@
       "pluginCore": "se-plugin-host"
     },
     "crateComponentRoots": {
-      "terminalCore": ["se-ghostty-observer"]
+      "terminalCore": ["se-ghostty-observer"],
+      "pluginCore": ["se-terminal-core"]
     }
   },
   "components": {

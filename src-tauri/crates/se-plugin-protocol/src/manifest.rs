@@ -109,12 +109,18 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), PluginError> {
         .map_err(|_| PluginError::new(code, "invalid configuration schema"))?;
     for services in [&manifest.services.provides, &manifest.services.requires] {
         require(services.len() <= 32, code, "too many service declarations")?;
+        let mut seen = std::collections::BTreeSet::new();
         for service in services {
             require(is_plugin_id(&service.name), code, "invalid service name")?;
             require(
                 (1..=i32::MAX as u32).contains(&service.version),
                 code,
                 "invalid service version",
+            )?;
+            require(
+                seen.insert((service.name.as_str(), service.version)),
+                code,
+                "duplicate service declaration",
             )?;
         }
     }

@@ -2148,7 +2148,7 @@
             "props": {
               "items": [
                 {
-                  "id": "record \u4e00",
+                  "id": "record 一",
                   "text": "One"
                 },
                 {
@@ -2164,6 +2164,160 @@
             "props": {}
           }
         ]
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "manifest duplicate services.requires",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [],
+        "requires": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          },
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "manifest duplicate services.provides",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          },
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
       }
     }
   }

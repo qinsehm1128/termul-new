@@ -181,6 +181,9 @@ function uncoveredReferences(core: (typeof SCOPED_CORES)[number]): Map<string, s
 describe('component build inputs', () => {
   test('Plugin Core identity includes the exact app entry branch plus its crate closure', () => {
     expect(inputs.cargo.crateComponents.pluginCore).toBe('se-plugin-host')
+    // process.rs runs Plugin Core through se_terminal_core::process, so that
+    // shared wrapper (and its lock closure) must move the pluginCore identity.
+    expect(inputs.cargo.crateComponentRoots?.pluginCore).toEqual(['se-terminal-core'])
     expect(inputs.components.guiNative).toEqual(
       expect.arrayContaining(['src-tauri/src/core/plugin.rs', 'src-tauri/crates/se-plugin-host'])
     )
