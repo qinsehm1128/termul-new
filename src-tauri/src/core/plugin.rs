@@ -325,6 +325,13 @@ impl PluginCoreClient {
         disconnect_state(&mut state, &self.inner.events);
     }
     pub async fn reconnect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
+        // Existing read deadlines alone do not bound connect or backpressured
+        // writes. Keep their five-second allowances within one total budget.
+        tokio::time::timeout(Duration::from_secs(10), self.reconnect_inner(endpoint))
+            .await
+            .map_err(|_| CoreError::Io("plugin connection timed out".into()))?
+    }
+    async fn reconnect_inner(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         let _guard = self.inner.reconnect.lock().await;
         self.disconnect().await;
         let mut stream = connect_core(endpoint).await?;
@@ -545,6 +552,11 @@ impl PluginServiceHandle {
         }
     }
     pub async fn connect(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
+        tokio::time::timeout(Duration::from_secs(10), self.connect_inner(endpoint))
+            .await
+            .map_err(|_| CoreError::Io("plugin service connection timed out".into()))?
+    }
+    async fn connect_inner(&self, endpoint: &CoreEndpoint) -> Result<(), CoreError> {
         let _guard = self.connect_lock.lock().await;
         if let Some(client) = self.client() {
             return client.reconnect(endpoint).await;
@@ -720,6 +732,23 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_service_connect_is_bounded_and_stays_disconnected() {
+        let profile = tempfile::tempdir().unwrap();
+        let service = PluginServiceHandle::default();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
+        let _blocked = service.connect_lock.lock().await;
+        let started = tokio::time::Instant::now();
+        let result = service.connect(&endpoint).await;
+        assert!(matches!(
+            result,
+            Err(CoreError::Io(message)) if message.contains("connection timed out")
+        ));
+        assert_eq!(started.elapsed(), Duration::from_secs(10));
+        assert!(!service.is_connected());
+        assert!(service.client().is_none());
     }
 
     #[tokio::test]

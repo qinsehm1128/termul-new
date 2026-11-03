@@ -276,6 +276,8 @@ pub(crate) enum EndpointPresence {
     Absent,
     LiveCompatible(CoreHelloAck),
     LiveIncompatible(CoreError),
+    /// Occupancy is uncertain: do not replace/unlink a nonresponsive peer.
+    Unreachable(CoreError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -471,6 +473,24 @@ fn take_owned_core(role: CoreRole) -> Option<OwnedCore> {
         .remove(&role)
 }
 
+/// A deadline may cancel termination while its child is temporarily removed.
+/// Restore ownership on drop unless the child has been reaped.
+struct TerminatingCore {
+    role: CoreRole,
+    owned: Option<OwnedCore>,
+}
+
+impl Drop for TerminatingCore {
+    fn drop(&mut self) {
+        if let Some(owned) = self.owned.take() {
+            owned_cores()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(self.role, owned);
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn owned_child_pid(role: CoreRole) -> Option<u32> {
     owned_cores()
@@ -489,7 +509,7 @@ fn send_sigterm(pid: u32) {
 
 async fn wait_for_owned_exit(
     child: &mut Child,
-    endpoint: &CoreEndpoint,
+    _endpoint: &CoreEndpoint,
     timeout: Duration,
 ) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
@@ -497,9 +517,8 @@ async fn wait_for_owned_exit(
         if child.try_wait().ok().flatten().is_some() {
             return true;
         }
-        if connect_core(endpoint).await.is_err() && child.try_wait().ok().flatten().is_some() {
-            return true;
-        }
+        // Child exit is authoritative. A connect here can itself stall (for
+        // example a full socket backlog), defeating this cleanup deadline.
         if tokio::time::Instant::now() >= deadline {
             return child.try_wait().ok().flatten().is_some();
         }
@@ -514,32 +533,65 @@ async fn wait_for_owned_exit(
 /// own a live process. Windows uses the same `try_wait` poll as Unix; it must
 /// not block the async worker on `Child::wait`.
 pub(crate) async fn terminate_owned_core(role: CoreRole, endpoint: &CoreEndpoint) -> bool {
-    let Some(mut owned) = take_owned_core(role) else {
+    let Some(owned) = take_owned_core(role) else {
         return true;
     };
+    let mut guard = TerminatingCore {
+        role,
+        owned: Some(owned),
+    };
+    let owned = guard
+        .owned
+        .as_mut()
+        .expect("owned child retained until reap");
     #[cfg(unix)]
     send_sigterm(owned.pid);
     #[cfg(not(unix))]
     let _ = owned.child.kill();
 
     let exited = wait_for_owned_exit(&mut owned.child, endpoint, Duration::from_secs(3)).await;
-
     if exited {
-        true
-    } else {
-        insert_owned_core(role, owned.child);
-        false
+        guard.owned.take();
     }
+    exited
+}
+
+/// One budget covers connect, Hello write and HelloAck read for every role.
+/// A timeout is unreachable, not evidence that it is safe to unlink a socket.
+const CORE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn probe_timeout_error() -> CoreError {
+    CoreError::Io("core endpoint handshake timed out".into())
+}
+
+async fn probe_presence_with_pid(
+    endpoint: &CoreEndpoint,
+    expected_role: CoreRole,
+    timeout: Duration,
+) -> (EndpointPresence, Option<u32>) {
+    tokio::time::timeout(timeout, async {
+        match connect_core(endpoint).await {
+            Ok(mut stream) => {
+                let pid = peer_pid(&stream);
+                (handshake_presence(&mut stream, expected_role).await, pid)
+            }
+            Err(error) => (
+                EndpointPresence::from_connect_and_handshake(Err(error), None),
+                None,
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| (EndpointPresence::Unreachable(probe_timeout_error()), None))
 }
 
 pub(crate) async fn probe_endpoint_presence(
     endpoint: &CoreEndpoint,
     expected_role: CoreRole,
 ) -> EndpointPresence {
-    match connect_core(endpoint).await {
-        Ok(mut stream) => handshake_presence(&mut stream, expected_role).await,
-        Err(error) => EndpointPresence::from_connect_and_handshake(Err(error), None),
-    }
+    probe_presence_with_pid(endpoint, expected_role, CORE_PROBE_TIMEOUT)
+        .await
+        .0
 }
 
 async fn handshake_presence(stream: &mut CoreStream, expected_role: CoreRole) -> EndpointPresence {
@@ -576,7 +628,9 @@ pub(crate) async fn probe_endpoint(
     match probe_endpoint_presence(endpoint, expected_role).await {
         EndpointPresence::LiveCompatible(ack) => Ok(ack),
         EndpointPresence::Absent => Err(CoreError::Io("core endpoint is not listening".into())),
-        EndpointPresence::LiveIncompatible(error) => Err(error),
+        EndpointPresence::LiveIncompatible(error) | EndpointPresence::Unreachable(error) => {
+            Err(error)
+        }
     }
 }
 
@@ -588,14 +642,21 @@ pub(crate) async fn probe_endpoint_with_pid(
     endpoint: &CoreEndpoint,
     expected_role: CoreRole,
 ) -> Result<(CoreHelloAck, Option<u32>), CoreError> {
-    let mut stream = connect_core(endpoint)
-        .await
-        .map_err(|_| CoreError::Io("core endpoint is not listening".into()))?;
-    let pid = peer_pid(&stream);
-    match handshake_presence(&mut stream, expected_role).await {
+    probe_endpoint_with_pid_timeout(endpoint, expected_role, CORE_PROBE_TIMEOUT).await
+}
+
+async fn probe_endpoint_with_pid_timeout(
+    endpoint: &CoreEndpoint,
+    expected_role: CoreRole,
+    timeout: Duration,
+) -> Result<(CoreHelloAck, Option<u32>), CoreError> {
+    let (presence, pid) = probe_presence_with_pid(endpoint, expected_role, timeout).await;
+    match presence {
         EndpointPresence::LiveCompatible(ack) => Ok((ack, pid)),
         EndpointPresence::Absent => Err(CoreError::Io("core endpoint is not listening".into())),
-        EndpointPresence::LiveIncompatible(error) => Err(error),
+        EndpointPresence::LiveIncompatible(error) | EndpointPresence::Unreachable(error) => {
+            Err(error)
+        }
     }
 }
 
@@ -685,40 +746,34 @@ async fn replace_incompatible_core(
 }
 
 async fn try_shutdown_core(endpoint: &CoreEndpoint, role: CoreRole) -> bool {
-    let Ok(mut stream) = connect_core(endpoint).await else {
-        return true; // nothing listening; socket file is stale
+    // Bound the whole pre-shutdown exchange, including connect and writes.
+    // Keep the separate eight-second response budget for graceful Core cleanup.
+    let exchange = tokio::time::timeout(CORE_PROBE_TIMEOUT, async {
+        let Ok(mut stream) = connect_core(endpoint).await else {
+            return Ok(None); // nothing listening; socket file is stale
+        };
+        let hello = CoreHello {
+            role,
+            protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+            client_name: "termul-gui-replacer".to_string(),
+        };
+        write_json_frame(&mut stream, &hello).await?;
+        // Only a peer that wrote HelloAck has entered the request loop.
+        let _: CoreHelloAck = read_json_frame(&mut stream).await?;
+        let request = CoreRequest {
+            id: 1,
+            method: "shutdown".to_string(),
+            params: serde_json::Value::Null,
+        };
+        write_json_frame(&mut stream, &request).await?;
+        Ok::<_, CoreError>(Some((stream, request)))
+    })
+    .await;
+    let (mut stream, request) = match exchange {
+        Ok(Ok(Some(exchange))) => exchange,
+        Ok(Ok(None)) => return true,
+        Ok(Err(_)) | Err(_) => return false,
     };
-    let hello = CoreHello {
-        role,
-        protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
-        client_name: "termul-gui-replacer".to_string(),
-    };
-    if super::ipc::write_json_frame(&mut stream, &hello)
-        .await
-        .is_err()
-    {
-        return false;
-    }
-    // Only a peer that wrote HelloAck has entered the request loop. A core
-    // that rejected Hello (role/protocol) drops this socket before shutdown
-    // can be processed; best-effort wire shutdown applies only after ack.
-    if super::ipc::read_json_frame::<_, CoreHelloAck>(&mut stream)
-        .await
-        .is_err()
-    {
-        return false;
-    }
-    let request = CoreRequest {
-        id: 1,
-        method: "shutdown".to_string(),
-        params: serde_json::Value::Null,
-    };
-    if super::ipc::write_json_frame(&mut stream, &request)
-        .await
-        .is_err()
-    {
-        return false;
-    }
     // Stay connected until the Core answers. Both Cores write the reply before
     // they stop, and give up without stopping when that write fails — which it
     // does if this socket is already closed. The Terminal Core has killed its
@@ -830,6 +885,7 @@ pub async fn ensure_core(
                 }
             }
         }
+        EndpointPresence::Unreachable(error) => return Err(error),
         EndpointPresence::LiveIncompatible(_) => {
             log::error!(
                 target: "se_manager::core",
@@ -907,24 +963,30 @@ pub async fn ensure_core(
 
     let deadline = tokio::time::Instant::now() + config.ready_timeout;
     loop {
-        if let Ok((ack, peer_pid)) = probe_endpoint_with_pid(&endpoint, role).await {
-            let pid = spawned_pid.or(peer_pid).unwrap_or(0);
-            log::info!(
-                target: "se_manager::core",
-                "operation=core_ready role={} stable_code=READY pid={pid}",
-                role.endpoint_name()
-            );
-            return Ok(CoreProcess {
-                role,
-                endpoint,
-                pid,
-                reused: false,
-                remote_build_id: ack.component_build_id,
-                remote_capabilities: ack.capabilities,
-                active_resources: ack.active_resources,
-                reconciliation_deferred: false,
-                child: None,
-            });
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if !remaining.is_zero() {
+            if let Ok((ack, peer_pid)) =
+                probe_endpoint_with_pid_timeout(&endpoint, role, remaining.min(CORE_PROBE_TIMEOUT))
+                    .await
+            {
+                let pid = spawned_pid.or(peer_pid).unwrap_or(0);
+                log::info!(
+                    target: "se_manager::core",
+                    "operation=core_ready role={} stable_code=READY pid={pid}",
+                    role.endpoint_name()
+                );
+                return Ok(CoreProcess {
+                    role,
+                    endpoint,
+                    pid,
+                    reused: false,
+                    remote_build_id: ack.component_build_id,
+                    remote_capabilities: ack.capabilities,
+                    active_resources: ack.active_resources,
+                    reconciliation_deferred: false,
+                    child: None,
+                });
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             log::error!(
@@ -939,7 +1001,10 @@ pub async fn ensure_core(
                 config.ready_timeout
             )));
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        tokio::time::sleep_until(
+            deadline.min(tokio::time::Instant::now() + Duration::from_millis(25)),
+        )
+        .await;
     }
 }
 
@@ -1788,6 +1853,139 @@ mod tests {
         assert_eq!(sid, pid, "the Core leads a session of its own");
         assert_eq!(pgid, pid, "and a process group of its own");
         assert_ne!(pgid, i64::from(unsafe { libc::getpgrp() }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_owned_termination_restores_child_tracking() {
+        let lock = role_lock(CoreRole::PluginCore).await;
+        let _guard = lock.lock().await;
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        insert_owned_core(CoreRole::PluginCore, child);
+        {
+            let termination = terminate_owned_core(CoreRole::PluginCore, &endpoint);
+            tokio::pin!(termination);
+            // Poll exactly once through the remove/signal/first sleep boundary,
+            // then cancel. A synchronous reap also satisfies the safety contract.
+            let pending = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(
+                    std::future::Future::poll(termination.as_mut(), cx).is_pending(),
+                )
+            })
+            .await;
+            if !pending {
+                assert!(owned_child_pid(CoreRole::PluginCore).is_none());
+                return;
+            }
+        }
+        assert_eq!(owned_child_pid(CoreRole::PluginCore), Some(pid));
+        assert!(terminate_owned_core(CoreRole::PluginCore, &endpoint).await);
+        assert!(owned_child_pid(CoreRole::PluginCore).is_none());
+    }
+
+    /// Read Hello on a real socket but keep the stream open without an ack.
+    #[cfg(unix)]
+    fn silent_endpoint(
+        profile: &std::path::Path,
+        role: CoreRole,
+    ) -> (
+        CoreEndpoint,
+        tokio::task::JoinHandle<()>,
+        tokio::sync::oneshot::Receiver<CoreRole>,
+    ) {
+        let endpoint = CoreEndpoint::for_profile(profile, role);
+        let socket = endpoint.as_path().unwrap();
+        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        let (hello_tx, hello_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let hello: CoreHello = read_json_frame(&mut stream).await.unwrap();
+            let _ = hello_tx.send(hello.role);
+            std::future::pending::<()>().await;
+            drop(stream);
+        });
+        (endpoint, server, hello_rx)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_hello_ack_is_bounded_for_every_core_role() {
+        for role in [
+            CoreRole::TerminalCore,
+            CoreRole::AcpCore,
+            CoreRole::PluginCore,
+        ] {
+            let profile = tempfile::Builder::new()
+                .prefix("probe-")
+                .tempdir_in("/tmp")
+                .unwrap();
+            let (endpoint, server, hello_rx) = silent_endpoint(profile.path(), role);
+            let cap = Duration::from_millis(50);
+            let started = tokio::time::Instant::now();
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                probe_endpoint_with_pid_timeout(&endpoint, role, cap),
+            )
+            .await;
+            server.abort();
+            let error = result.expect("probe exceeded watchdog").unwrap_err();
+            assert!(matches!(
+                error,
+                CoreError::Io(message) if message.contains("handshake timed out")
+            ));
+            assert!(started.elapsed() >= cap);
+            assert_eq!(hello_rx.await.unwrap(), role, "peer must have read Hello");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_presence_probe_preserves_live_socket() {
+        let profile = tempfile::Builder::new()
+            .prefix("presence-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let role = CoreRole::PluginCore;
+        let (endpoint, server, hello_rx) = silent_endpoint(profile.path(), role);
+        let presence = tokio::time::timeout(
+            CORE_PROBE_TIMEOUT + Duration::from_secs(1),
+            probe_endpoint_presence(&endpoint, role),
+        )
+        .await;
+        server.abort();
+        let presence = presence.expect("presence probe exceeded watchdog");
+        assert!(!presence.allows_unlink_and_spawn());
+        assert!(!presence.allows_in_process_fallback());
+        assert!(matches!(
+            presence,
+            EndpointPresence::Unreachable(CoreError::Io(message))
+                if message.contains("handshake timed out")
+        ));
+        assert_eq!(hello_rx.await.unwrap(), role);
+        assert!(endpoint.as_path().unwrap().exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_shutdown_hello_ack_is_bounded() {
+        let profile = tempfile::Builder::new()
+            .prefix("shutdown-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let role = CoreRole::PluginCore;
+        let (endpoint, server, hello_rx) = silent_endpoint(profile.path(), role);
+        let result = tokio::time::timeout(
+            CORE_PROBE_TIMEOUT + Duration::from_secs(1),
+            try_shutdown_core(&endpoint, role),
+        )
+        .await;
+        server.abort();
+        assert!(!result.expect("shutdown handshake exceeded watchdog"));
+        assert_eq!(hello_rx.await.unwrap(), role);
     }
 
     #[tokio::test]

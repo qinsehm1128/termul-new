@@ -2502,15 +2502,27 @@ fn desktop_plugin_service(
     let service = crate::core::PluginServiceHandle::default();
     #[cfg(any(unix, windows))]
     {
+        // Keep startup ordered with supervision/restart/exit. A detached initial
+        // connect could reconnect after cleanup; instead bound the entire attempt
+        // and keep the permanent handle disconnected on failure.
         let result = tauri::async_runtime::block_on(async {
-            let config = crate::core::CoreLaunchConfig::for_current_executable(profile_root)?;
-            let process =
-                crate::core::ensure_core(crate::core::CoreRole::PluginCore, &config).await?;
-            note_component_reconciled(app_handle, "pluginCore");
-            service.connect(&process.endpoint).await
+            tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                let config = crate::core::CoreLaunchConfig::for_current_executable(profile_root)?;
+                let process =
+                    crate::core::ensure_core(crate::core::CoreRole::PluginCore, &config).await?;
+                note_component_reconciled(app_handle, "pluginCore");
+                service.connect(&process.endpoint).await
+            })
+            .await
         });
-        if let Err(error) = result {
-            log::warn!(target: "se_manager::core", "operation=plugin_core_connect role=plugin-core error={error}");
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                log::warn!(target: "se_manager::core", "operation=plugin_core_connect role=plugin-core error={error}");
+            }
+            Err(_) => {
+                log::warn!(target: "se_manager::core", "operation=plugin_core_connect role=plugin-core error=startup_timeout");
+            }
         }
     }
     #[cfg(not(any(unix, windows)))]
