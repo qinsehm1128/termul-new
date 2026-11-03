@@ -25,6 +25,7 @@ pub enum CoreRole {
     Gui,
     TerminalCore,
     AcpCore,
+    PluginCore,
 }
 
 impl CoreRole {
@@ -33,6 +34,7 @@ impl CoreRole {
             Self::Gui => "gui",
             Self::TerminalCore => "terminal-core",
             Self::AcpCore => "acp-core",
+            Self::PluginCore => "plugin-core",
         }
     }
 }
@@ -354,6 +356,36 @@ pub fn remove_stale_socket(_endpoint: &CoreEndpoint) -> Result<bool, CoreError> 
 mod tests {
     use super::*;
     use tokio::io::duplex;
+
+    #[test]
+    fn plugin_core_role_round_trips_and_has_a_separate_profile_endpoint() {
+        assert_eq!(
+            serde_json::to_value(CoreRole::PluginCore).unwrap(),
+            serde_json::json!("plugin-core")
+        );
+        assert_eq!(
+            serde_json::from_value::<CoreRole>(serde_json::json!("plugin-core")).unwrap(),
+            CoreRole::PluginCore
+        );
+        let profile = Path::new("/tmp/termul-plugin-role-test");
+        let plugin = CoreEndpoint::for_profile(profile, CoreRole::PluginCore);
+        assert_eq!(
+            plugin,
+            CoreEndpoint::for_profile(profile, CoreRole::PluginCore)
+        );
+        assert_ne!(
+            plugin,
+            CoreEndpoint::for_profile(profile, CoreRole::AcpCore)
+        );
+        assert_ne!(
+            plugin,
+            CoreEndpoint::for_profile(profile, CoreRole::TerminalCore)
+        );
+        assert_ne!(
+            plugin,
+            CoreEndpoint::for_profile(Path::new("/tmp/termul-plugin-other"), CoreRole::PluginCore)
+        );
+    }
 
     #[test]
     fn negotiates_current_protocol() {

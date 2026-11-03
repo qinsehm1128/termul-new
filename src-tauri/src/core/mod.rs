@@ -9,7 +9,9 @@ pub mod acp_handles;
 #[cfg(target_os = "macos")]
 pub(crate) mod app_host;
 pub mod launcher;
+pub mod plugin;
 pub mod process;
+pub use plugin::{run_plugin_core, PluginCoreClient, PluginServiceHandle};
 pub mod web_host;
 pub use se_terminal_core::{handles, ipc, terminal, transport};
 

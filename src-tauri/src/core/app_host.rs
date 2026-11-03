@@ -48,6 +48,10 @@ pub(crate) const ACP_CORE: HostedProcess = HostedProcess {
     id_suffix: "acp-core",
     label: "Agent Core",
 };
+pub(crate) const PLUGIN_CORE: HostedProcess = HostedProcess {
+    id_suffix: "plugin-core",
+    label: "Plugin Core",
+};
 pub(crate) const MCP_GATEWAY: HostedProcess = HostedProcess {
     id_suffix: "mcp-gateway",
     label: "MCP Gateway",
@@ -312,6 +316,30 @@ mod tests {
 
         host.ensure(&moved).unwrap();
         assert_eq!(std::fs::read_link(&link).unwrap(), moved);
+    }
+
+    #[test]
+    fn plugin_core_has_a_distinct_host_and_main_binary_flag() {
+        let host = HostApp::new(
+            Path::new("/p"),
+            Path::new("/Applications/Se Manager.app"),
+            "com.se-manager.app",
+            PLUGIN_CORE,
+        );
+        let plist = host.info_plist("se-manager");
+        assert!(plist.contains("com.se-manager.app.plugin-core"));
+        let args = host.open_args(
+            &[OsStr::new("--plugin-core")],
+            &[("TERMUL_CORE_PROFILE_ROOT", Path::new("/p"))],
+            None,
+        );
+        let args: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"/p/core-hosts/Se Manager Plugin Core.app".to_string()));
+        assert!(args.contains(&"TERMUL_CORE_PROFILE_ROOT=/p".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("--plugin-core"));
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub fn component_build_id(role: CoreRole) -> String {
         CoreRole::Gui => option_env!("TERMUL_GUI_BUILD_ID"),
         CoreRole::TerminalCore => option_env!("TERMUL_TERMINAL_CORE_BUILD_ID"),
         CoreRole::AcpCore => option_env!("TERMUL_ACP_CORE_BUILD_ID"),
+        CoreRole::PluginCore => option_env!("TERMUL_PLUGIN_CORE_BUILD_ID"),
     };
     configured
         .map(str::to_owned)
@@ -27,6 +28,12 @@ pub fn component_capabilities(role: CoreRole) -> Vec<String> {
             "acp-event-replay".to_string(),
             "acp-active-resource-count".to_string(),
             "acp-single-writer".to_string(),
+        ],
+        CoreRole::PluginCore => vec![
+            "plugins.lifecycle.v1".to_string(),
+            "plugins.ui.v1".to_string(),
+            "plugins.configuration.v1".to_string(),
+            "plugins.broker.v1".to_string(),
         ],
     }
 }
@@ -72,6 +79,43 @@ mod tests {
             Err(CoreError::Unauthorized)
         );
         assert_eq!(CoreError::Unauthorized.client_message(), "unauthorized");
+    }
+
+    #[test]
+    fn plugin_core_ack_uses_its_own_identity_and_capabilities() {
+        let hello = CoreHello {
+            role: CoreRole::PluginCore,
+            protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+            client_name: "test".to_string(),
+        };
+        let ack = validate_hello_with_runtime(&hello, CoreRole::PluginCore, 2).unwrap();
+        assert_eq!(ack.role, CoreRole::PluginCore);
+        assert_eq!(
+            ack.component_build_id,
+            Some(component_build_id(CoreRole::PluginCore))
+        );
+        assert_eq!(
+            ack.capabilities,
+            vec![
+                "plugins.lifecycle.v1",
+                "plugins.ui.v1",
+                "plugins.configuration.v1",
+                "plugins.broker.v1",
+            ]
+        );
+        assert!(!ack
+            .capabilities
+            .iter()
+            .any(|capability| capability.starts_with("acp-")));
+        assert_eq!(ack.active_resources, 2);
+        assert_eq!(
+            validate_hello(&hello, CoreRole::AcpCore),
+            Err(CoreError::Unauthorized)
+        );
+        assert_eq!(
+            validate_hello(&hello, CoreRole::TerminalCore),
+            Err(CoreError::Unauthorized)
+        );
     }
 
     #[test]

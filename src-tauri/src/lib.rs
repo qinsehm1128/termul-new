@@ -10,6 +10,7 @@ pub use se_foundation::brand;
 mod browser_tab_manager;
 mod cli_session;
 mod commands;
+mod plugin_commands;
 pub use se_agent_session as conversation;
 pub mod core;
 /// The injectable seam every OS-keychain read/write goes through. Public
@@ -1699,6 +1700,7 @@ struct ComponentRuntimeIdentities {
     gui_native: String,
     acp_core: Option<CoreRuntimeIdentity>,
     terminal_core: Option<CoreRuntimeIdentity>,
+    plugin_core: Option<CoreRuntimeIdentity>,
 }
 
 async fn probe_core_runtime_identity(
@@ -1739,6 +1741,8 @@ async fn component_runtime_identities(
             crate::core::CoreRole::TerminalCore,
         )
         .await,
+        plugin_core: probe_core_runtime_identity(&profile_root, crate::core::CoreRole::PluginCore)
+            .await,
     })
 }
 
@@ -1774,6 +1778,7 @@ struct CoreRuntimeStatus {
     gui: GuiProcessStatus,
     acp_core: CoreProcessStatus,
     terminal_core: CoreProcessStatus,
+    plugin_core: CoreProcessStatus,
     terminals: Option<Vec<crate::core::terminal::TerminalStatus>>,
     agents: Option<Vec<crate::acp::AgentId>>,
 }
@@ -1906,20 +1911,24 @@ async fn core_runtime_status(app: tauri::AppHandle) -> Result<CoreRuntimeStatus,
             terminal_client.is_some(),
         )
         .await,
+        // Even an absent Plugin Core is separate: foreign code never runs in the GUI.
+        plugin_core: core_process_status(&profile_root, crate::core::CoreRole::PluginCore, true)
+            .await,
         terminals,
         agents,
     })
 }
 
-/// Restart one Core on the user's request. Everything it runs ends: every
-/// terminal for the Terminal Core, every agent for the ACP Core.
+/// Restart one Core on the user's request. ACP/Terminal resources end;
+/// Plugin Core restarts reconnect the GUI's plugin RPC/event client.
 #[tauri::command]
 async fn restart_core(app: tauri::AppHandle, role: String) -> Result<(), String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let role = match role.as_str() {
             "acpCore" => crate::core::CoreRole::AcpCore,
             "terminalCore" => crate::core::CoreRole::TerminalCore,
+            "pluginCore" => crate::core::CoreRole::PluginCore,
             other => return Err(format!("unknown core: {other}")),
         };
         let profile_root = app
@@ -1928,10 +1937,10 @@ async fn restart_core(app: tauri::AppHandle, role: String) -> Result<(), String>
             .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
         restart_core_on_request(&app, &profile_root, role).await
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (app, role);
-        Err("Cores run inside the app on this platform".to_string())
+        Err("separate Core restart is unsupported on this platform".to_string())
     }
 }
 
@@ -2159,6 +2168,7 @@ fn core_update_component_name(role: crate::core::CoreRole) -> &'static str {
     match role {
         crate::core::CoreRole::AcpCore => "acpCore",
         crate::core::CoreRole::TerminalCore => "terminalCore",
+        crate::core::CoreRole::PluginCore => "pluginCore",
         crate::core::CoreRole::Gui => "guiNative",
     }
 }
@@ -2167,6 +2177,7 @@ fn required_update_cores(plan: &serde_json::Value) -> Vec<(&'static str, crate::
     let cores = [
         ("acpCore", crate::core::CoreRole::AcpCore),
         ("terminalCore", crate::core::CoreRole::TerminalCore),
+        ("pluginCore", crate::core::CoreRole::PluginCore),
     ];
     match plan
         .get("requiredActions")
@@ -2186,7 +2197,7 @@ fn configure_pending_core_update_policy(app_handle: &tauri::AppHandle) {
     crate::core::launcher::configure_update_policy(policy.as_ref());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn finalize_pending_core_update_plan(app_handle: &tauri::AppHandle, profile_root: &Path) {
     let Some(plan) = pending_update_plan(app_handle) else {
         return;
@@ -2462,31 +2473,98 @@ fn launch_desktop_acp_core(
     })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const CORE_SUPERVISE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const ACP_CONNECTION_CHANGED_EVENT: &str = "acp:connection_changed";
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const TERMINAL_CORE_RESTARTED_EVENT: &str = "terminal:core_restarted";
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Clone, Serialize)]
 struct AcpConnectionChangedPayload {
     connected: bool,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TerminalCoreRestartedPayload {
     live_terminal_ids: Vec<String>,
 }
 
-/// Probe both desktop cores on a fixed 3s tick. Dead endpoints are respawned
+/// Plugin code is never loaded by the GUI. Startup failure leaves an empty,
+/// managed handle so commands can report unavailable and supervision can recover.
+fn desktop_plugin_service(
+    profile_root: &Path,
+    app_handle: &tauri::AppHandle,
+) -> crate::core::PluginServiceHandle {
+    let service = crate::core::PluginServiceHandle::default();
+    #[cfg(any(unix, windows))]
+    {
+        let result = tauri::async_runtime::block_on(async {
+            let config = crate::core::CoreLaunchConfig::for_current_executable(profile_root)?;
+            let process =
+                crate::core::ensure_core(crate::core::CoreRole::PluginCore, &config).await?;
+            note_component_reconciled(app_handle, "pluginCore");
+            service.connect(&process.endpoint).await
+        });
+        if let Err(error) = result {
+            log::warn!(target: "se_manager::core", "operation=plugin_core_connect role=plugin-core error={error}");
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = (profile_root, app_handle);
+    service
+}
+
+fn emit_plugin_connection(app_handle: &tauri::AppHandle, connected: bool, boot_id: Option<String>) {
+    use se_plugin_protocol::{ConnectionState, PluginConnectionEvent};
+    let _ = app_handle.emit(
+        "plugins:connection_changed",
+        PluginConnectionEvent {
+            state: if connected {
+                ConnectionState::Connected
+            } else {
+                ConnectionState::Disconnected
+            },
+            boot_id,
+        },
+    );
+}
+
+fn bridge_plugin_events(app_handle: tauri::AppHandle, service: crate::core::PluginServiceHandle) {
+    // Subscribe to the permanent handle, not a replaceable startup client.
+    let mut events = service.subscribe_events();
+    emit_plugin_connection(&app_handle, service.is_connected(), service.boot_id());
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(crate::core::plugin::PluginClientEvent::Changed(event)) => {
+                    let _ = app_handle.emit("plugins:changed", event);
+                }
+                Ok(crate::core::plugin::PluginClientEvent::ConnectionChanged(event)) => {
+                    let _ = app_handle.emit("plugins:connection_changed", event);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Force consumers to discard stale views and fetch a snapshot.
+                    // Do not invent a sequence number in the Core's event stream.
+                    emit_plugin_connection(&app_handle, false, None);
+                    if service.is_connected() {
+                        emit_plugin_connection(&app_handle, true, service.boot_id());
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+/// Probe all separate desktop cores on a fixed 3s tick. Dead endpoints are respawned
 /// via `ensure_core` and the live client is reconnected in place so event
 /// mirrors keep their broadcast receivers. In-process fallback is skipped
 /// (no core client in app state). GUI exit tears the task down with the runtime.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path::PathBuf) {
     let supervise_acp = app_handle
         .try_state::<crate::core::AcpServiceHandle>()
@@ -2499,6 +2577,11 @@ fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path
         let mut terminal_ready = supervise_terminal;
         let mut acp_misses = 0u32;
         let mut terminal_misses = 0u32;
+        // Always supervise Plugin Core, including failed initial launch/connect.
+        let mut plugin_ready = app_handle
+            .try_state::<crate::core::PluginServiceHandle>()
+            .is_some_and(|handle| handle.is_connected());
+        let mut plugin_misses = 0u32;
         let mut ticker = tokio::time::interval(CORE_SUPERVISE_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
@@ -2528,11 +2611,20 @@ fn supervise_desktop_cores(app_handle: tauri::AppHandle, profile_root: std::path
                 supervise_terminal,
             )
             .await;
+            supervise_one_core(
+                &app_handle,
+                &profile_root,
+                crate::core::CoreRole::PluginCore,
+                &mut plugin_ready,
+                &mut plugin_misses,
+                true,
+            )
+            .await;
         }
     });
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn supervise_one_core(
     app_handle: &tauri::AppHandle,
     profile_root: &Path,
@@ -2562,7 +2654,16 @@ async fn supervise_one_core(
         .is_ok()
     {
         *consecutive_misses = 0;
-        *ready = true;
+        // Endpoint health alone does not mean the GUI event/RPC client survived.
+        if role == crate::core::CoreRole::PluginCore
+            && !app_handle
+                .try_state::<crate::core::PluginServiceHandle>()
+                .is_some_and(|handle| handle.is_connected())
+        {
+            *ready = reconnect_supervised_core(app_handle, &endpoint, role).await;
+        } else {
+            *ready = true;
+        }
         return;
     }
     *consecutive_misses = consecutive_misses.saturating_add(1);
@@ -2582,6 +2683,11 @@ async fn supervise_one_core(
             );
         }
     }
+    if role == crate::core::CoreRole::PluginCore {
+        if let Some(handle) = app_handle.try_state::<crate::core::PluginServiceHandle>() {
+            handle.disconnect().await;
+        }
+    }
     *ready = false;
     if restart_and_reconnect(app_handle, profile_root, role).await {
         finalize_pending_core_update_plan(app_handle, profile_root);
@@ -2591,25 +2697,29 @@ async fn supervise_one_core(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 static ACP_CORE_MANUAL_RESTART: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 static TERMINAL_CORE_MANUAL_RESTART: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(any(unix, windows))]
+static PLUGIN_CORE_MANUAL_RESTART: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn manual_restart_flag(
     role: crate::core::CoreRole,
 ) -> Option<&'static std::sync::atomic::AtomicBool> {
     match role {
         crate::core::CoreRole::AcpCore => Some(&ACP_CORE_MANUAL_RESTART),
         crate::core::CoreRole::TerminalCore => Some(&TERMINAL_CORE_MANUAL_RESTART),
+        crate::core::CoreRole::PluginCore => Some(&PLUGIN_CORE_MANUAL_RESTART),
         crate::core::CoreRole::Gui => None,
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn announce_core_restarted(app_handle: &tauri::AppHandle, role: crate::core::CoreRole) {
     match role {
         crate::core::CoreRole::AcpCore => {
@@ -2621,18 +2731,23 @@ async fn announce_core_restarted(app_handle: &tauri::AppHandle, role: crate::cor
         crate::core::CoreRole::TerminalCore => {
             emit_terminal_core_restarted(app_handle).await;
         }
+        crate::core::CoreRole::PluginCore => {
+            if let Some(handle) = app_handle.try_state::<crate::core::PluginServiceHandle>() {
+                emit_plugin_connection(app_handle, handle.is_connected(), handle.boot_id());
+            }
+        }
         crate::core::CoreRole::Gui => {}
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn restart_core_on_request(
     app_handle: &tauri::AppHandle,
     profile_root: &Path,
     role: crate::core::CoreRole,
 ) -> Result<(), String> {
     let Some(flag) = manual_restart_flag(role) else {
-        return Err("only the ACP Core and the Terminal Core can be restarted".to_string());
+        return Err("only the ACP, Terminal and Plugin Cores can be restarted".to_string());
     };
     let runs_separately = match role {
         crate::core::CoreRole::AcpCore => app_handle
@@ -2641,6 +2756,7 @@ async fn restart_core_on_request(
         crate::core::CoreRole::TerminalCore => app_handle
             .try_state::<crate::core::TerminalServiceHandle>()
             .is_some_and(|handle| handle.core_client().is_some()),
+        crate::core::CoreRole::PluginCore => true,
         crate::core::CoreRole::Gui => false,
     };
     if !runs_separately {
@@ -2660,6 +2776,11 @@ async fn restart_core_on_request(
             AcpConnectionChangedPayload { connected: false },
         );
     }
+    if role == crate::core::CoreRole::PluginCore {
+        if let Some(handle) = app_handle.try_state::<crate::core::PluginServiceHandle>() {
+            handle.disconnect().await;
+        }
+    }
     let endpoint = crate::core::CoreEndpoint::for_profile(profile_root, role);
     let result = if !crate::core::launcher::stop_core(&endpoint, role).await {
         Err("the Core did not stop in time".to_string())
@@ -2676,7 +2797,7 @@ async fn restart_core_on_request(
 
 /// After Terminal Core restart+reconnect, tell the renderer which PTYs still
 /// exist so stale store records can degrade to `exited` without retirement.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn emit_terminal_core_restarted(app_handle: &tauri::AppHandle) {
     let live_terminal_ids = match app_handle
         .try_state::<crate::core::TerminalServiceHandle>()
@@ -2700,7 +2821,7 @@ async fn emit_terminal_core_restarted(app_handle: &tauri::AppHandle) {
 /// this does not call `ensure_core` again, so a failed reconnect cannot spawn
 /// a second peer. Failures persist `failed` / `lastError` and do not clear the
 /// plan or the other component's deferral.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn reconcile_pending_core(
     app_handle: &tauri::AppHandle,
     profile_root: &Path,
@@ -2732,7 +2853,11 @@ async fn reconcile_pending_core(
         return true;
     }
     note_component_reconciled(app_handle, component);
-    if process.reused {
+    let plugin_client_ready = role != crate::core::CoreRole::PluginCore
+        || app_handle
+            .try_state::<crate::core::PluginServiceHandle>()
+            .is_some_and(|handle| handle.is_connected());
+    if process.reused && plugin_client_ready {
         finalize_pending_core_update_plan(app_handle, profile_root);
         return true;
     }
@@ -2746,7 +2871,7 @@ async fn reconcile_pending_core(
     true
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn reconnect_supervised_core(
     app_handle: &tauri::AppHandle,
     endpoint: &crate::core::CoreEndpoint,
@@ -2771,11 +2896,17 @@ async fn reconnect_supervised_core(
             };
             client.reconnect(endpoint).await.is_ok()
         }
+        crate::core::CoreRole::PluginCore => {
+            let Some(handle) = app_handle.try_state::<crate::core::PluginServiceHandle>() else {
+                return false;
+            };
+            handle.connect(endpoint).await.is_ok()
+        }
         crate::core::CoreRole::Gui => false,
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn restart_and_reconnect(
     app_handle: &tauri::AppHandle,
     profile_root: &Path,
@@ -3047,7 +3178,10 @@ pub fn run() {
             )?;
             app.manage(pty_manager.clone());
             app.manage(terminal_handle.clone());
-            #[cfg(unix)]
+            let plugin_service = desktop_plugin_service(&app_data_dir, &handle);
+            bridge_plugin_events(handle.clone(), plugin_service.clone());
+            app.manage(plugin_service);
+            #[cfg(any(unix, windows))]
             finalize_pending_core_update_plan(&handle, &app_data_dir);
 
             // Create Browser Tab Manager
@@ -3398,7 +3532,7 @@ pub fn run() {
                 );
             }
 
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             supervise_desktop_cores(handle.clone(), app_data_dir.clone());
 
             // In-memory project registry (Epic-4 bridge) — renderer-fed via
@@ -3618,6 +3752,16 @@ pub fn run() {
             component_runtime_identities,
             core_runtime_status,
             restart_core,
+            plugin_commands::plugin_list,
+            plugin_commands::plugin_install,
+            plugin_commands::plugin_set_enabled,
+            plugin_commands::plugin_reload,
+            plugin_commands::plugin_uninstall,
+            plugin_commands::plugin_get_view,
+            plugin_commands::plugin_dispatch_action,
+            plugin_commands::plugin_execute_command,
+            plugin_commands::plugin_get_config,
+            plugin_commands::plugin_set_config,
             // Restart-required Conversation migration maintenance
             commands::conversation_migration_control,
             // Terminal commands
@@ -3952,6 +4096,11 @@ pub fn run() {
         // processes, skip the durable-persistence stages that need real async
         // time. When the graceful path did run, `CLEANUP_DONE` short-circuits it.
         if matches!(event, RunEvent::Exit) {
+            CLEANUP_IN_PROGRESS.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(service) = app_handle.try_state::<crate::core::PluginServiceHandle>() {
+                tauri::async_runtime::block_on(service.disconnect());
+            }
+            crate::core::launcher::detach_owned_cores();
             if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
@@ -4239,6 +4388,10 @@ mod tests {
                 build_id: Some("terminal-build".to_string()),
                 active_resources: 3,
             }),
+            plugin_core: Some(CoreRuntimeIdentity {
+                build_id: Some("plugin-build".to_string()),
+                active_resources: 2,
+            }),
         })
         .expect("serialize");
         assert_eq!(
@@ -4246,9 +4399,78 @@ mod tests {
             serde_json::json!({
                 "guiNative": "gui-build",
                 "acpCore": null,
-                "terminalCore": { "buildId": "terminal-build", "activeResources": 3 }
+                "terminalCore": { "buildId": "terminal-build", "activeResources": 3 },
+                "pluginCore": { "buildId": "plugin-build", "activeResources": 2 }
             })
         );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn plugin_core_has_an_independent_restart_flag_and_update_identity() {
+        use crate::core::CoreRole;
+        assert_eq!(
+            core_update_component_name(CoreRole::PluginCore),
+            "pluginCore"
+        );
+        assert_eq!(
+            required_update_cores(&serde_json::json!({ "requiredActions": ["pluginCore"] })),
+            vec![("pluginCore", CoreRole::PluginCore)]
+        );
+        assert_eq!(required_update_cores(&serde_json::json!({})).len(), 3);
+        assert!(std::ptr::eq(
+            manual_restart_flag(CoreRole::PluginCore).unwrap(),
+            &PLUGIN_CORE_MANUAL_RESTART
+        ));
+        assert!(!std::ptr::eq(
+            manual_restart_flag(CoreRole::PluginCore).unwrap(),
+            manual_restart_flag(CoreRole::TerminalCore).unwrap()
+        ));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn absent_plugin_core_still_reports_separate_mode() {
+        let profile = tempfile::tempdir().expect("profile");
+        let status =
+            core_process_status(profile.path(), crate::core::CoreRole::PluginCore, true).await;
+        assert_eq!(status.mode, "separate");
+        assert!(!status.running);
+        assert!(status.pid.is_none());
+    }
+
+    #[test]
+    fn plugin_gui_setup_never_falls_back_and_exit_only_disconnects() {
+        let source = include_str!("lib.rs");
+        let setup = source
+            .split("fn desktop_plugin_service(")
+            .nth(1)
+            .unwrap()
+            .split("fn emit_plugin_connection(")
+            .next()
+            .unwrap();
+        assert!(setup.contains("PluginServiceHandle::default()"));
+        assert!(setup.contains("CoreRole::PluginCore"));
+        assert!(!setup.contains("in_process"));
+        let supervisor = source
+            .split("fn supervise_desktop_cores(")
+            .nth(1)
+            .unwrap()
+            .split("async fn supervise_one_core(")
+            .next()
+            .unwrap();
+        assert!(supervisor.contains("CoreRole::PluginCore,"));
+        assert!(supervisor.contains("&mut plugin_misses,\n                true,"));
+        let exit = source
+            .split("if matches!(event, RunEvent::Exit) {")
+            .nth(1)
+            .unwrap()
+            .split("if let RunEvent::ExitRequested")
+            .next()
+            .unwrap();
+        assert!(exit.contains("service.disconnect()"));
+        assert!(exit.contains("detach_owned_cores()"));
+        assert!(!exit.contains("plugin.shutdown"));
     }
 
     #[test]

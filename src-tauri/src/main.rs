@@ -13,6 +13,7 @@ fn main() {
         .find_map(|argument| match argument.as_str() {
             "--terminal-core" => Some(se_manager_lib::core::CoreRole::TerminalCore),
             "--acp-core" => Some(se_manager_lib::core::CoreRole::AcpCore),
+            "--plugin-core" => Some(se_manager_lib::core::CoreRole::PluginCore),
             _ => None,
         })
     {

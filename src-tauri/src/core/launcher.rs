@@ -62,7 +62,8 @@ const TERMINAL_CORE_EXECUTABLE: &str = if cfg!(windows) {
 
 /// What to run for `role`: the bundled `se-terminal-core` beside the app
 /// executable when it is there, else the app executable itself, which still
-/// serves `--terminal-core` / `--acp-core`.
+/// serves `--terminal-core`, `--acp-core`, and `--plugin-core`. Plugin Core
+/// intentionally uses the main binary until a dedicated executable is approved.
 fn core_executable(app_executable: &Path, role: CoreRole) -> PathBuf {
     if role == CoreRole::TerminalCore {
         let standalone = app_executable.with_file_name(TERMINAL_CORE_EXECUTABLE);
@@ -167,7 +168,11 @@ pub fn configure_update_policy(policy: Option<&serde_json::Value>) {
         return;
     };
     let Some(components) = policy.get("components") else {
-        for role in [CoreRole::AcpCore, CoreRole::TerminalCore] {
+        for role in [
+            CoreRole::AcpCore,
+            CoreRole::TerminalCore,
+            CoreRole::PluginCore,
+        ] {
             directives.insert(role, unsupported_directive(role, false));
         }
         return;
@@ -179,9 +184,22 @@ pub fn configure_update_policy(policy: Option<&serde_json::Value>) {
     for (component, role) in [
         ("acpCore", CoreRole::AcpCore),
         ("terminalCore", CoreRole::TerminalCore),
+        ("pluginCore", CoreRole::PluginCore),
     ] {
-        let Some(entry) = components.get(component) else {
-            directives.insert(role, unsupported_directive(role, legacy_metadata));
+        // Public updater metadata keeps the original component keys and puts
+        // Plugin Core beside `components`; persisted internal plans use the
+        // fifth component key. Contradictory copies must fail closed.
+        let internal_entry = components.get(component);
+        let extension_entry = (role == CoreRole::PluginCore)
+            .then(|| policy.get("pluginCore"))
+            .flatten();
+        if matches!((internal_entry, extension_entry), (Some(a), Some(b)) if a != b) {
+            directives.insert(role, unsupported_directive(role, false));
+            continue;
+        }
+        let allow_legacy_identity = legacy_metadata && role != CoreRole::PluginCore;
+        let Some(entry) = internal_entry.or(extension_entry) else {
+            directives.insert(role, unsupported_directive(role, allow_legacy_identity));
             continue;
         };
         let action =
@@ -190,14 +208,14 @@ pub fn configure_update_policy(policy: Option<&serde_json::Value>) {
             .get("buildId")
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.trim().is_empty())
+            .filter(|value| role != CoreRole::PluginCore || !value.starts_with("legacy:"))
             .map(str::to_owned);
-        let expected_build_id = if legacy_metadata {
+        let expected_build_id = if allow_legacy_identity {
             Some(component_build_id(role))
         } else {
             declared_build_id
         };
-        let unsupported = action == DeclaredCoreAction::Unsupported
-            || (!legacy_metadata && expected_build_id.is_none());
+        let unsupported = action == DeclaredCoreAction::Unsupported || expected_build_id.is_none();
         directives.insert(
             role,
             CoreUpdateDirective {
@@ -433,6 +451,17 @@ fn insert_owned_core(role: CoreRole, child: Child) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cores.insert(role, OwnedCore { pid, child });
+}
+
+/// Release GUI ownership of spawned Cores without stopping them. Dropping a
+/// `std::process::Child` does not terminate the process; its endpoint and profile
+/// lock remain available for the next GUI to adopt. This is synchronous so the
+/// exit callback can detach even when its async runtime is shutting down.
+pub(crate) fn detach_owned_cores() {
+    owned_cores()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
 }
 
 fn take_owned_core(role: CoreRole) -> Option<OwnedCore> {
@@ -844,6 +873,7 @@ pub async fn ensure_core(
     let role_arg = match role {
         CoreRole::TerminalCore => "--terminal-core",
         CoreRole::AcpCore => "--acp-core",
+        CoreRole::PluginCore => "--plugin-core",
         CoreRole::Gui => {
             return Err(CoreError::InvalidRequest(
                 "GUI is not a launchable core role".to_string(),
@@ -926,6 +956,7 @@ fn launch_in_host_app(
     let process = match role {
         CoreRole::TerminalCore => super::app_host::TERMINAL_CORE,
         CoreRole::AcpCore => super::app_host::ACP_CORE,
+        CoreRole::PluginCore => super::app_host::PLUGIN_CORE,
         CoreRole::Gui => return false,
     };
     let mut env: Vec<(&str, &Path)> = vec![("TERMUL_CORE_PROFILE_ROOT", &config.profile_root)];
@@ -1013,6 +1044,7 @@ mod tests {
         std::fs::write(&standalone, b"").unwrap();
         assert_eq!(core_executable(&app, CoreRole::TerminalCore), standalone);
         assert_eq!(core_executable(&app, CoreRole::AcpCore), app);
+        assert_eq!(core_executable(&app, CoreRole::PluginCore), app);
     }
 
     #[test]
@@ -1093,6 +1125,98 @@ mod tests {
         fn drop(&mut self) {
             configure_update_policy(None);
         }
+    }
+
+    #[test]
+    fn plugin_core_policy_accepts_public_extension_and_internal_component() {
+        let _lock = lock_update_policy();
+        let _clear = ClearUpdatePolicy;
+        let entry = serde_json::json!({ "action": "defer-if-active", "buildId": "plugin-next" });
+        for policy in [
+            serde_json::json!({ "metadataState": "declared", "components": {}, "pluginCore": entry.clone() }),
+            serde_json::json!({ "metadataState": "declared", "components": { "pluginCore": entry } }),
+        ] {
+            configure_update_policy(Some(&policy));
+            let directive = configured_update_directive(CoreRole::PluginCore).unwrap();
+            assert_eq!(directive.action, DeclaredCoreAction::DeferIfActive);
+            assert_eq!(directive.expected_build_id.as_deref(), Some("plugin-next"));
+            assert!(!directive.unsupported);
+            assert!(update_reconciliation_pending(CoreRole::PluginCore));
+        }
+    }
+
+    #[test]
+    fn plugin_core_policy_never_infers_a_legacy_identity() {
+        let _lock = lock_update_policy();
+        let _clear = ClearUpdatePolicy;
+        for policy in [
+            serde_json::json!({ "metadataState": "legacy", "components": {} }),
+            serde_json::json!({ "metadataState": "legacy", "components": {
+                "pluginCore": { "action": "restart" }
+            } }),
+            serde_json::json!({ "metadataState": "legacy", "components": {},
+                "pluginCore": { "action": "restart", "buildId": "legacy:plugin-core:test" }
+            }),
+            serde_json::json!({ "components": {
+                "pluginCore": { "action": "restart", "buildId": "internal" }
+            }, "pluginCore": { "action": "restart", "buildId": "extension" } }),
+        ] {
+            configure_update_policy(Some(&policy));
+            let directive = configured_update_directive(CoreRole::PluginCore).unwrap();
+            assert!(directive.unsupported);
+            assert_eq!(directive.expected_build_id, None);
+        }
+        let policy = serde_json::json!({ "metadataState": "legacy", "components": {},
+            "pluginCore": { "action": "restart", "buildId": "plugin-explicit" }
+        });
+        configure_update_policy(Some(&policy));
+        let directive = configured_update_directive(CoreRole::PluginCore).unwrap();
+        assert_eq!(
+            directive.expected_build_id.as_deref(),
+            Some("plugin-explicit")
+        );
+        assert!(!directive.unsupported);
+    }
+
+    #[test]
+    fn plugin_core_policy_defers_while_resources_are_active() {
+        let _lock = lock_update_policy();
+        let _clear = ClearUpdatePolicy;
+        let mut ack = compatible_ack();
+        ack.role = CoreRole::PluginCore;
+        ack.component_build_id = Some("plugin-current".to_string());
+        ack.active_resources = 1;
+        let policy = serde_json::json!({ "components": {
+            "pluginCore": { "action": "defer-if-active", "buildId": "plugin-next" }
+        } });
+        configure_update_policy(Some(&policy));
+        let directive = configured_update_directive(CoreRole::PluginCore).unwrap();
+        assert_eq!(
+            decide_live_core_reconciliation(
+                Some(directive.action),
+                core_identity_matches_expected(&ack, directive.expected_build_id.as_deref()),
+                ack.active_resources,
+            ),
+            LiveCoreReconcileDecision::Defer
+        );
+        ack.active_resources = 0;
+        assert_eq!(
+            decide_live_core_reconciliation(
+                Some(directive.action),
+                core_identity_matches_expected(&ack, directive.expected_build_id.as_deref()),
+                ack.active_resources,
+            ),
+            LiveCoreReconcileDecision::Replace
+        );
+        ack.component_build_id = Some("plugin-next".to_string());
+        assert_eq!(
+            decide_live_core_reconciliation(
+                Some(directive.action),
+                core_identity_matches_expected(&ack, directive.expected_build_id.as_deref()),
+                ack.active_resources,
+            ),
+            LiveCoreReconcileDecision::Adopt
+        );
     }
 
     #[test]

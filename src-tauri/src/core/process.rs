@@ -1,4 +1,5 @@
-//! Core process entry on the app executable: `--terminal-core` / `--acp-core`.
+//! Core process entry on the app executable: `--terminal-core`, `--acp-core`,
+//! and `--plugin-core`.
 //!
 //! The Terminal Core also ships as its own `se-terminal-core` executable,
 //! which the launcher prefers; the flag stays for a GUI that predates it.
@@ -13,10 +14,19 @@ pub fn run_core_process(role: CoreRole) -> i32 {
         CoreRole::TerminalCore => {
             se_terminal_core::process::run_terminal_core_process(crate::terminal_program())
         }
-        _ => se_terminal_core::process::run_core_process(
+        CoreRole::AcpCore => se_terminal_core::process::run_core_process(
             role,
             env!("CARGO_PKG_VERSION"),
             super::acp::run_acp_core,
         ),
+        CoreRole::PluginCore => se_terminal_core::process::run_core_process(
+            role,
+            env!("CARGO_PKG_VERSION"),
+            super::plugin::run_plugin_core,
+        ),
+        CoreRole::Gui => {
+            eprintln!("GUI role is not a Core process");
+            2
+        }
     }
 }
