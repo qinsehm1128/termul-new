@@ -2553,6 +2553,7 @@ fn bridge_plugin_events(app_handle: tauri::AppHandle, service: crate::core::Plug
         loop {
             match events.recv().await {
                 Ok(crate::core::plugin::PluginClientEvent::Changed(event)) => {
+                    // Includes HostUiChanged; consumers recover via the same snapshot/reconnect bridge.
                     let _ = app_handle.emit("plugins:changed", event);
                 }
                 Ok(crate::core::plugin::PluginClientEvent::ConnectionChanged(event)) => {
@@ -3774,6 +3775,11 @@ pub fn run() {
             plugin_commands::plugin_execute_command,
             plugin_commands::plugin_get_config,
             plugin_commands::plugin_set_config,
+            plugin_commands::plugin_publish_host_context,
+            plugin_commands::plugin_heartbeat_host_context,
+            plugin_commands::plugin_get_host_ui,
+            plugin_commands::plugin_dismiss_host_ui,
+            plugin_commands::plugin_execute_contribution,
             // Restart-required Conversation migration maintenance
             commands::conversation_migration_control,
             // Terminal commands

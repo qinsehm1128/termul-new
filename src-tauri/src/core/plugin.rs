@@ -26,10 +26,173 @@ fn unavailable(message: impl Into<String>) -> PluginError {
     business(PLUGIN_CORE_UNAVAILABLE, message)
 }
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, PluginError> {
-    serde_json::from_value(value).map_err(|e| business(PLUGIN_INVALID_REQUEST, e.to_string()))
+    serde_json::from_value(value).map_err(|_| invalid_request())
 }
 fn encode<T: Serialize>(value: T) -> Result<Value, PluginError> {
-    serde_json::to_value(value).map_err(|e| business(PLUGIN_INVALID_REQUEST, e.to_string()))
+    serde_json::to_value(value).map_err(|_| invalid_request())
+}
+
+fn invalid_request() -> PluginError {
+    business(PLUGIN_INVALID_REQUEST, "Invalid plugin request")
+}
+fn parse_host<T>(
+    value: Value,
+    parser: fn(&[u8]) -> Result<T, PluginError>,
+) -> Result<T, PluginError> {
+    let bytes = serde_json::to_vec(&value).map_err(|_| invalid_request())?;
+    parser(&bytes).map_err(|_| invalid_request())
+}
+
+// Preserve duplicate-key admission information before serde_json::Value can erase it.
+#[derive(Default)]
+struct CheckedJson {
+    value: Value,
+    duplicate: bool,
+}
+impl<'de> serde::Deserialize<'de> for CheckedJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = CheckedJson;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("JSON")
+            }
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
+                Ok(CheckedJson {
+                    value: v.into(),
+                    duplicate: false,
+                })
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                Ok(CheckedJson {
+                    value: v.into(),
+                    duplicate: false,
+                })
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(CheckedJson {
+                    value: v.into(),
+                    duplicate: false,
+                })
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+                Ok(CheckedJson {
+                    value: json!(v),
+                    duplicate: false,
+                })
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(CheckedJson {
+                    value: v.into(),
+                    duplicate: false,
+                })
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+                Ok(CheckedJson {
+                    value: v.into(),
+                    duplicate: false,
+                })
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CheckedJson {
+                    value: Value::Null,
+                    duplicate: false,
+                })
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut values = Vec::new();
+                let mut duplicate = false;
+                while let Some(child) = seq.next_element::<CheckedJson>()? {
+                    duplicate |= child.duplicate;
+                    values.push(child.value);
+                }
+                Ok(CheckedJson {
+                    value: Value::Array(values),
+                    duplicate,
+                })
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut values = serde_json::Map::new();
+                let mut duplicate = false;
+                while let Some((key, child)) = map.next_entry::<String, CheckedJson>()? {
+                    duplicate |= child.duplicate || values.contains_key(&key);
+                    values.insert(key, child.value);
+                }
+                Ok(CheckedJson {
+                    value: Value::Object(values),
+                    duplicate,
+                })
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+#[derive(serde::Deserialize)]
+struct PluginWireRequest {
+    id: u64,
+    method: String,
+    #[serde(default)]
+    params: CheckedJson,
+}
+
+// Keep the owner alive until all admitted requests have finished or been cancelled.
+// Drop also runs when the connection task is aborted during Core shutdown.
+struct ConnectionOwner {
+    host: Arc<PluginHost>,
+    id: String,
+}
+impl Drop for ConnectionOwner {
+    fn drop(&mut self) {
+        self.host.detach_host_context(&self.id);
+    }
+}
+struct AbortReader(tokio::task::JoinHandle<()>);
+impl Drop for AbortReader {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+macro_rules! host_rpc_methods {
+    () => {
+        pub async fn publish_host_context(
+            &self,
+            payload: HostContextPublishRequest,
+        ) -> Result<HostContextAck, PluginError> {
+            self.host_request(METHOD_HOST_CONTEXT_PUBLISH, payload)
+                .await
+        }
+        pub async fn heartbeat_host_context(
+            &self,
+            payload: HostContextHeartbeatRequest,
+        ) -> Result<HostContextAck, PluginError> {
+            self.host_request(METHOD_HOST_CONTEXT_HEARTBEAT, payload)
+                .await
+        }
+        pub async fn host_ui_snapshot(&self) -> Result<HostUiSnapshot, PluginError> {
+            self.host_request(METHOD_HOST_UI_GET, HostUiGetRequest {})
+                .await
+        }
+        pub async fn dismiss_host_ui(
+            &self,
+            payload: HostUiDismissRequest,
+        ) -> Result<HostUiDismissResult, PluginError> {
+            self.host_request(METHOD_HOST_UI_DISMISS, payload).await
+        }
+        pub async fn execute_contribution(
+            &self,
+            payload: ExecuteContributionRequest,
+        ) -> Result<CommandReply, PluginError> {
+            self.host_request(METHOD_CONTRIBUTION_EXECUTE, payload)
+                .await
+        }
+    };
 }
 
 pub async fn run_plugin_core(profile_root: PathBuf) -> Result<(), CoreError> {
@@ -130,11 +293,25 @@ async fn serve_plugin_core_with_listener(
 }
 
 async fn serve_connection(
-    mut stream: CoreServerStream,
+    stream: CoreServerStream,
     host: Arc<PluginHost>,
     boot_id: String,
     shutdown: watch::Sender<bool>,
 ) -> Result<(), CoreError> {
+    let events = host.subscribe();
+    serve_connection_with_events(stream, host, boot_id, shutdown, events).await
+}
+async fn serve_connection_with_events(
+    mut stream: CoreServerStream,
+    host: Arc<PluginHost>,
+    boot_id: String,
+    shutdown: watch::Sender<bool>,
+    mut events: broadcast::Receiver<PluginEvent>,
+) -> Result<(), CoreError> {
+    let owner = Arc::new(ConnectionOwner {
+        host: host.clone(),
+        id: uuid::Uuid::new_v4().to_string(),
+    });
     let hello: CoreHello =
         tokio::time::timeout(Duration::from_secs(5), read_json_frame(&mut stream))
             .await
@@ -149,16 +326,15 @@ async fn serve_connection(
     let writer = Arc::new(AsyncMutex::new(writer));
     // Framed reads are not cancellation safe: a dedicated task owns each complete read.
     let (incoming, mut received) = tokio::sync::mpsc::channel(32);
-    let read_task = tokio::spawn(async move {
+    let read_task = AbortReader(tokio::spawn(async move {
         loop {
-            let frame = read_json_frame::<_, CoreRequest>(&mut reader).await;
+            let frame = read_json_frame::<_, PluginWireRequest>(&mut reader).await;
             let failed = frame.is_err();
             if incoming.send(frame).await.is_err() || failed {
                 break;
             }
         }
-    });
-    let mut events = host.subscribe();
+    }));
     let mut requests = tokio::task::JoinSet::new();
     let outcome = loop {
         tokio::select! {
@@ -166,19 +342,23 @@ async fn serve_connection(
                 let request = match request { Some(Ok(r)) => r, Some(Err(e)) => break Err(e), None => break Ok(()) };
                 let host = host.clone(); let boot_id = boot_id.clone();
                 let writer = writer.clone(); let shutdown = shutdown.clone();
+                let owner = owner.clone();
                 requests.spawn(async move {
                     let is_shutdown = request.method == METHOD_SHUTDOWN || request.method == "shutdown";
-                    let result = dispatch(&host, &boot_id, &request.method, request.params).await;
+                    let result = if request.params.duplicate { Err(invalid_request()) } else {
+                        dispatch(&host, &boot_id, &owner.id, &request.method, request.params.value).await
+                    };
                     let stop = is_shutdown && result.is_ok();
                     let response = match result {
                         Ok(result) => CoreResponse { id: request.id, result: Some(result), error: None },
                         Err(error) => CoreResponse { id: request.id, result: None,
                             error: Some(CoreErrorPayload { code: error.code, message: error.message }) },
                     };
-                    let _ = write_json_frame(&mut *writer.lock().await, &response).await;
+                    let written = write_json_frame(&mut *writer.lock().await, &response).await;
                     if stop {
                         let _ = shutdown.send(true);
                     }
+                    written
                 });
             }
             event = events.recv() => {
@@ -187,24 +367,66 @@ async fn serve_connection(
                     Err(broadcast::error::RecvError::Lagged(_)) => break Err(CoreError::Io("plugin event stream lagged; reconnect for snapshot".into())),
                     Err(broadcast::error::RecvError::Closed) => break Ok(()),
                 };
-                let frame = CoreEvent { topic: TOPIC_PLUGIN_EVENT.into(),
-                    payload: encode(event).map_err(|e| CoreError::InvalidFrame(e.message))? };
-                if let Err(error) = write_json_frame(&mut *writer.lock().await, &frame).await { break Err(error); }
+                let payload = match encode(event) {
+                    Ok(payload) => payload,
+                    Err(_) => break Err(CoreError::InvalidFrame("invalid plugin event".into())),
+                };
+                // Never await a socket write in the supervisor: EOF/read failure
+                // must revoke the owner even when the peer stops reading.
+                if requests.len() >= 32 { break Err(CoreError::Io("plugin event writer overflow".into())); }
+                let frame = CoreEvent { topic: TOPIC_PLUGIN_EVENT.into(), payload };
+                let writer = writer.clone();
+                requests.spawn(async move { write_json_frame(&mut *writer.lock().await, &frame).await });
             }
-            _ = requests.join_next(), if !requests.is_empty() => {}
+            result = requests.join_next(), if !requests.is_empty() => {
+                match result {
+                    Some(Ok(Err(error))) => break Err(error),
+                    Some(Err(_)) => break Err(CoreError::Io("plugin request task failed".into())),
+                    _ => {}
+                }
+            }
         }
     };
-    read_task.abort();
+    drop(read_task);
     requests.abort_all();
+    while requests.join_next().await.is_some() {}
+    drop(owner);
+    if outcome.is_err() {
+        log::warn!(target: "se_manager::core", "operation=plugin_connection_closed reason=transport_failure");
+    }
     outcome
 }
 async fn dispatch(
     host: &PluginHost,
     boot_id: &str,
+    owner: &str,
     method: &str,
     params: Value,
 ) -> Result<Value, PluginError> {
     match method {
+        METHOD_HOST_CONTEXT_PUBLISH => encode(
+            host.publish_host_context(
+                owner,
+                parse_host(params, parse_host_context_publish_request)?,
+            )
+            .await?,
+        ),
+        METHOD_HOST_CONTEXT_HEARTBEAT => {
+            let request = parse_host(params, parse_host_context_heartbeat_request)?;
+            encode(host.heartbeat_host_context(owner, &request.source_id)?)
+        }
+        METHOD_HOST_UI_GET => {
+            let _ = parse_host(params, parse_host_ui_get_request)?;
+            encode(host.host_ui_snapshot().await?)
+        }
+        METHOD_HOST_UI_DISMISS => encode(
+            host.dismiss_host_ui(parse_host(params, parse_host_ui_dismiss_request)?)
+                .await?,
+        ),
+        METHOD_CONTRIBUTION_EXECUTE => encode(
+            host.execute_contribution(parse_host(params, parse_execute_contribution_request)?)
+                .await?,
+        ),
         METHOD_LIST => {
             let _: ListRequest = decode(params)?;
             encode(host.list().await?)
@@ -235,10 +457,7 @@ async fn dispatch(
             let _: ShutdownRequest = decode(if params.is_null() { json!({}) } else { params })?;
             Ok(Value::Null)
         }
-        _ => Err(business(
-            PLUGIN_INVALID_REQUEST,
-            format!("unknown plugin method: {method}"),
-        )),
+        _ => Err(invalid_request()),
     }
 }
 
@@ -289,6 +508,15 @@ pub struct PluginCoreClient {
     inner: Arc<ClientInner>,
 }
 impl PluginCoreClient {
+    host_rpc_methods!();
+    async fn host_request<T: DeserializeOwned, P: Serialize>(
+        &self,
+        method: &str,
+        payload: P,
+    ) -> Result<T, PluginError> {
+        decode(self.request(method, encode(payload)?).await?)
+    }
+
     pub async fn connect(endpoint: &CoreEndpoint) -> Result<Self, CoreError> {
         let (events, _) = broadcast::channel(256);
         let client = Self {
@@ -534,6 +762,18 @@ impl Default for PluginServiceHandle {
     }
 }
 impl PluginServiceHandle {
+    host_rpc_methods!();
+    async fn host_request<T: DeserializeOwned, P: Serialize>(
+        &self,
+        method: &str,
+        payload: P,
+    ) -> Result<T, PluginError> {
+        let client = self
+            .client()
+            .ok_or_else(|| unavailable("Plugin Core is unavailable"))?;
+        client.host_request(method, payload).await
+    }
+
     pub fn client(&self) -> Option<PluginCoreClient> {
         self.client.lock().unwrap().clone()
     }
@@ -629,6 +869,626 @@ mod tests {
         panic!("temp profile Plugin Core did not bind");
     }
 
+    fn context_request(
+        source_id: &str,
+        source_sequence: u64,
+        reset: bool,
+    ) -> HostContextPublishRequest {
+        HostContextPublishRequest {
+            source_id: source_id.into(),
+            source_sequence,
+            reset,
+            snapshot: HostContextState {
+                active_project: None,
+                project_ids: vec![],
+                active_terminal_id: None,
+                active_session_id: None,
+                terminals: vec![],
+                agent_sessions: vec![],
+                focus: HostFocus {
+                    text_input: false,
+                    terminal: false,
+                },
+                truncated: false,
+            },
+            events: vec![],
+        }
+    }
+    async fn publish_after_detach(client: &PluginCoreClient, source: &str) -> HostContextAck {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match client
+                    .publish_host_context(context_request(source, 1, true))
+                    .await
+                {
+                    Ok(ack) => break ack,
+                    Err(error) if error.code == PLUGIN_BUSY => {
+                        tokio::time::sleep(Duration::from_millis(10)).await
+                    }
+                    Err(error) => panic!("unexpected source admission error: {}", error.code),
+                }
+            }
+        })
+        .await
+        .expect("connection cleanup did not detach source")
+    }
+    async fn stop(client: &PluginCoreClient, task: tokio::task::JoinHandle<Result<(), CoreError>>) {
+        client.request(METHOD_SHUTDOWN, json!({})).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        client.disconnect().await;
+    }
+
+    #[tokio::test]
+    async fn host_context_source_is_connection_scoped() {
+        let profile = tempfile::tempdir().unwrap();
+        let (_, endpoint, task) = start(profile.path()).await;
+        let first = PluginCoreClient::connect(&endpoint).await.unwrap();
+        let second = PluginCoreClient::connect(&endpoint).await.unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        let initial = first
+            .publish_host_context(context_request(&source, 1, true))
+            .await
+            .unwrap();
+        assert_eq!(initial.source_sequence, 1);
+        assert_eq!(
+            second
+                .publish_host_context(context_request(&source, 2, false))
+                .await
+                .unwrap_err()
+                .code,
+            PLUGIN_BUSY
+        );
+        assert_eq!(
+            second
+                .heartbeat_host_context(HostContextHeartbeatRequest {
+                    source_id: source.clone()
+                })
+                .await
+                .unwrap_err()
+                .code,
+            PLUGIN_BUSY
+        );
+        assert_eq!(
+            second
+                .publish_host_context(context_request(&uuid::Uuid::new_v4().to_string(), 1, true))
+                .await
+                .unwrap_err()
+                .code,
+            PLUGIN_BUSY
+        );
+        first.disconnect().await;
+        // Reusing a sourceId on another connection still requires a fresh reset.
+        publish_after_detach(&second, &source).await;
+        let ack = second
+            .heartbeat_host_context(HostContextHeartbeatRequest { source_id: source })
+            .await
+            .unwrap();
+        assert_eq!(ack.source_sequence, 1);
+        stop(&second, task).await;
+    }
+
+    #[tokio::test]
+    async fn host_context_duplicate_sequence_is_not_redelivered() {
+        let profile = tempfile::tempdir().unwrap();
+        let (_, endpoint, task) = start(profile.path()).await;
+        let client = PluginCoreClient::connect(&endpoint).await.unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        client
+            .publish_host_context(context_request(&source, 1, true))
+            .await
+            .unwrap();
+        let next = context_request(&source, 2, false);
+        let ack = client.publish_host_context(next.clone()).await.unwrap();
+        assert_eq!(client.publish_host_context(next).await.unwrap(), ack);
+        assert_eq!(
+            client
+                .heartbeat_host_context(HostContextHeartbeatRequest { source_id: source })
+                .await
+                .unwrap(),
+            ack
+        );
+        stop(&client, task).await;
+    }
+
+    #[tokio::test]
+    async fn host_context_gap_requires_reset() {
+        let profile = tempfile::tempdir().unwrap();
+        let (_, endpoint, task) = start(profile.path()).await;
+        let client = PluginCoreClient::connect(&endpoint).await.unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        client
+            .publish_host_context(context_request(&source, 1, true))
+            .await
+            .unwrap();
+        assert!(client
+            .publish_host_context(context_request(&source, 3, false))
+            .await
+            .is_err());
+        assert!(client
+            .publish_host_context(context_request(&source, 2, false))
+            .await
+            .is_err());
+        assert_eq!(
+            client
+                .publish_host_context(context_request(&source, 4, true))
+                .await
+                .unwrap()
+                .source_sequence,
+            4
+        );
+        stop(&client, task).await;
+    }
+
+    #[tokio::test]
+    async fn host_context_heartbeat_expiry_requires_reset() {
+        let profile = tempfile::tempdir().unwrap();
+        let (_, endpoint, task) = start(profile.path()).await;
+        let client = PluginCoreClient::connect(&endpoint).await.unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        client
+            .publish_host_context(context_request(&source, 1, true))
+            .await
+            .unwrap();
+        // Lease uses wall time in PluginHost, not Tokio's pausable test clock.
+        tokio::time::sleep(Duration::from_secs(16)).await;
+        assert!(client
+            .heartbeat_host_context(HostContextHeartbeatRequest {
+                source_id: source.clone()
+            })
+            .await
+            .is_err());
+        assert!(client
+            .publish_host_context(context_request(&source, 2, false))
+            .await
+            .is_err());
+        assert_eq!(
+            client
+                .publish_host_context(context_request(&source, 3, true))
+                .await
+                .unwrap()
+                .source_sequence,
+            3
+        );
+        stop(&client, task).await;
+    }
+
+    #[tokio::test]
+    async fn malformed_host_rpc_diagnostics_are_static() {
+        let profile = tempfile::tempdir().unwrap();
+        let (_, endpoint, task) = start(profile.path()).await;
+        let client = PluginCoreClient::connect(&endpoint).await.unwrap();
+        for method in [
+            METHOD_HOST_CONTEXT_PUBLISH,
+            METHOD_HOST_CONTEXT_HEARTBEAT,
+            METHOD_HOST_UI_GET,
+            METHOD_HOST_UI_DISMISS,
+            METHOD_CONTRIBUTION_EXECUTE,
+            "private-unknown-method",
+        ] {
+            let error = client
+                .request(method, json!({"private-key":"private-value"}))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, PLUGIN_INVALID_REQUEST);
+            assert_eq!(error.message, "Invalid plugin request");
+        }
+        // GET and the two mutation methods are dispatched through the same transport.
+        assert!(client.host_ui_snapshot().await.is_ok());
+        let error = client
+            .dismiss_host_ui(HostUiDismissRequest {
+                plugin_id: "dev.test.plugin".into(),
+                generation: uuid::Uuid::new_v4().to_string(),
+                kind: HostUiKind::Notification,
+                id: "notice".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_ne!(error.code, PLUGIN_CORE_UNAVAILABLE);
+        stop(&client, task).await;
+    }
+
+    #[tokio::test]
+    async fn new_gui_rejects_missing_host_capability() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
+        prepare_runtime_dir(&endpoint).unwrap();
+        let mut listener = listen_core(&endpoint, CoreRole::PluginCore).await.unwrap();
+        let legacy = tokio::spawn(async move {
+            let mut stream = listener.accept().await.unwrap();
+            let hello: CoreHello = read_json_frame(&mut stream).await.unwrap();
+            let mut ack = validate_hello_with_runtime(&hello, CoreRole::PluginCore, 0).unwrap();
+            ack.capabilities
+                .retain(|capability| capability != HOST_CAPABILITIES_V1);
+            write_json_frame(&mut stream, &ack).await.unwrap();
+        });
+        let result = PluginCoreClient::connect(&endpoint).await;
+        assert!(
+            matches!(result, Err(CoreError::InvalidRequest(ref message)) if message == "incompatible Plugin Core")
+        );
+        legacy.await.unwrap();
+    }
+
+    // A fake Core isolates the forwarding contract from plugin-driven UI mutations.
+    async fn ui_event_peer(
+        endpoint: CoreEndpoint,
+        boot: String,
+        seq: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        prepare_runtime_dir(&endpoint).unwrap();
+        let mut listener = listen_core(&endpoint, CoreRole::PluginCore).await.unwrap();
+        tokio::spawn(async move {
+            let mut stream = listener.accept().await.unwrap();
+            let hello: CoreHello = read_json_frame(&mut stream).await.unwrap();
+            let ack = validate_hello_with_runtime(&hello, CoreRole::PluginCore, 0).unwrap();
+            write_json_frame(&mut stream, &ack).await.unwrap();
+            let request: CoreRequest = read_json_frame(&mut stream).await.unwrap();
+            write_json_frame(&mut stream, &CoreResponse { id: request.id, result: Some(json!({"schemaVersion": 1, "bootId": boot, "pid": 1, "ready": true, "safeMode": false, "activeResources": 0})), error: None }).await.unwrap();
+            // Wait for the test to attach its service bridge before sending the event.
+            let request: CoreRequest = read_json_frame(&mut stream).await.unwrap();
+            let event = PluginEvent {
+                schema_version: 1,
+                boot_id: boot,
+                seq,
+                kind: PluginEventType::HostUiChanged,
+                plugin_id: None,
+                generation: None,
+                view_id: None,
+                config_revision: None,
+            };
+            write_json_frame(
+                &mut stream,
+                &CoreEvent {
+                    topic: TOPIC_PLUGIN_EVENT.into(),
+                    payload: encode(event).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+            write_json_frame(
+                &mut stream,
+                &CoreResponse {
+                    id: request.id,
+                    result: Some(json!({})),
+                    error: None,
+                },
+            )
+            .await
+            .unwrap();
+            let _ = read_json_frame::<_, CoreRequest>(&mut stream).await;
+        })
+    }
+    #[tokio::test]
+    async fn host_ui_changed_survives_service_reconnect() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
+        let service = PluginServiceHandle::default();
+        let mut events = service.subscribe_events();
+        for seq in [1, 2] {
+            remove_stale_socket(&endpoint).unwrap();
+            let boot = uuid::Uuid::new_v4().to_string();
+            let peer = ui_event_peer(endpoint.clone(), boot.clone(), seq).await;
+            service.connect(&endpoint).await.unwrap();
+            service
+                .client()
+                .unwrap()
+                .request("test.emit", json!({}))
+                .await
+                .unwrap();
+            let event = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if let Ok(PluginClientEvent::Changed(event)) = events.recv().await {
+                        break event;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(event.kind, PluginEventType::HostUiChanged);
+            assert_eq!(event.boot_id, boot);
+            assert_eq!(event.seq, seq);
+            service.client().unwrap().disconnect().await;
+            tokio::time::timeout(Duration::from_secs(3), peer)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    async fn raw_connection(
+        host: Arc<PluginHost>,
+    ) -> (
+        tokio::net::UnixStream,
+        tokio::task::JoinHandle<Result<(), CoreError>>,
+    ) {
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let (shutdown, _) = watch::channel(false);
+        let task = tokio::spawn(serve_connection(
+            CoreServerStream::Unix(server),
+            host,
+            uuid::Uuid::new_v4().to_string(),
+            shutdown,
+        ));
+        write_json_frame(
+            &mut client,
+            &CoreHello {
+                role: CoreRole::PluginCore,
+                protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+                client_name: "p3-test".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let _: CoreHelloAck = read_json_frame(&mut client).await.unwrap();
+        (client, task)
+    }
+    #[cfg(unix)]
+    async fn raw_publish(stream: &mut tokio::net::UnixStream, source: &str) {
+        write_json_frame(
+            stream,
+            &CoreRequest {
+                id: 1,
+                method: METHOD_HOST_CONTEXT_PUBLISH.into(),
+                params: encode(context_request(source, 1, true)).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        let response: CoreResponse = read_json_frame(stream).await.unwrap();
+        assert!(response.error.is_none());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_context_event_lag_detaches_owner() {
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().to_path_buf(), HostOptions::default())
+            .await
+            .unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        let (mut stream, server) = tokio::net::UnixStream::pair().unwrap();
+        let (shutdown, _) = watch::channel(false);
+        let (events, receiver) = broadcast::channel(1);
+        let task = tokio::spawn(serve_connection_with_events(
+            CoreServerStream::Unix(server),
+            host.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            shutdown,
+            receiver,
+        ));
+        write_json_frame(
+            &mut stream,
+            &CoreHello {
+                role: CoreRole::PluginCore,
+                protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+                client_name: "p3-test".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let _: CoreHelloAck = read_json_frame(&mut stream).await.unwrap();
+        raw_publish(&mut stream, &source).await;
+        let event = PluginEvent {
+            schema_version: 1,
+            boot_id: uuid::Uuid::new_v4().to_string(),
+            seq: 1,
+            kind: PluginEventType::HostUiChanged,
+            plugin_id: None,
+            generation: None,
+            view_id: None,
+            config_revision: None,
+        };
+        // No await between sends: the single-thread runtime deterministically lags.
+        events.send(event.clone()).unwrap();
+        events.send(event).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, Err(CoreError::Io(ref message)) if message == "plugin event stream lagged; reconnect for snapshot")
+        );
+        host.publish_host_context("replacement", context_request(&source, 1, true))
+            .await
+            .unwrap();
+        host.shutdown().await.unwrap();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_context_cancelled_connection_detaches_owner() {
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().to_path_buf(), HostOptions::default())
+            .await
+            .unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        let (mut stream, task) = raw_connection(host.clone()).await;
+        raw_publish(&mut stream, &source).await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        host.publish_host_context("replacement", context_request(&source, 1, true))
+            .await
+            .unwrap();
+        host.shutdown().await.unwrap();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn duplicate_host_rpc_fields_are_rejected_before_value_conversion() {
+        use tokio::io::AsyncWriteExt;
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().to_path_buf(), HostOptions::default())
+            .await
+            .unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        let (mut stream, task) = raw_connection(host.clone()).await;
+        raw_publish(&mut stream, &source).await;
+        let bytes = format!(r#"{{"id":2,"method":"plugins.host.context.heartbeat","params":{{"sourceId":"{source}","sourceId":"{source}"}}}}"#).into_bytes();
+        stream
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .await
+            .unwrap();
+        stream.write_all(&bytes).await.unwrap();
+        let response: CoreResponse = read_json_frame(&mut stream).await.unwrap();
+        let error = response.error.unwrap();
+        assert_eq!(error.code, PLUGIN_INVALID_REQUEST);
+        assert_eq!(error.message, "Invalid plugin request");
+        drop(stream);
+        assert!(tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        host.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_context_backpressured_event_write_does_not_block_eof_cleanup() {
+        use std::os::fd::AsRawFd;
+        use tokio::io::AsyncWriteExt;
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().to_path_buf(), HostOptions::default())
+            .await
+            .unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        let (mut stream, server) = tokio::net::UnixStream::pair().unwrap();
+        let size: libc::c_int = 1024;
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    server.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_SNDBUF,
+                    (&size as *const libc::c_int).cast(),
+                    std::mem::size_of_val(&size) as libc::socklen_t,
+                )
+            },
+            0
+        );
+        let (shutdown, _) = watch::channel(false);
+        let (events, receiver) = broadcast::channel(8);
+        let task = tokio::spawn(serve_connection_with_events(
+            CoreServerStream::Unix(server),
+            host.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            shutdown,
+            receiver,
+        ));
+        write_json_frame(
+            &mut stream,
+            &CoreHello {
+                role: CoreRole::PluginCore,
+                protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+                client_name: "p3-test".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let _: CoreHelloAck = read_json_frame(&mut stream).await.unwrap();
+        raw_publish(&mut stream, &source).await;
+        events
+            .send(PluginEvent {
+                schema_version: 1,
+                boot_id: uuid::Uuid::new_v4().to_string(),
+                seq: 1,
+                kind: PluginEventType::HostUiChanged,
+                plugin_id: Some("x".repeat(1024 * 1024)),
+                generation: None,
+                view_id: None,
+                config_revision: None,
+            })
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Keep peer reads open but unread, while explicitly producing server EOF.
+        stream.shutdown().await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        host.publish_host_context("replacement", context_request(&source, 1, true))
+            .await
+            .unwrap();
+        host.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_context_read_failure_detaches_owner() {
+        use tokio::io::AsyncWriteExt;
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().to_path_buf(), HostOptions::default())
+            .await
+            .unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        let (mut stream, task) = raw_connection(host.clone()).await;
+        raw_publish(&mut stream, &source).await;
+        stream.write_all(&[0, 0, 0, 1, b'{']).await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        host.publish_host_context("replacement", context_request(&source, 1, true))
+            .await
+            .unwrap();
+        host.shutdown().await.unwrap();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_context_write_failure_detaches_owner() {
+        use std::os::fd::AsRawFd;
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().to_path_buf(), HostOptions::default())
+            .await
+            .unwrap();
+        let source = uuid::Uuid::new_v4().to_string();
+        let (mut stream, server) = tokio::net::UnixStream::pair().unwrap();
+        let server_fd = server.as_raw_fd();
+        let (shutdown, _) = watch::channel(false);
+        let task = tokio::spawn(serve_connection(
+            CoreServerStream::Unix(server),
+            host.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            shutdown,
+        ));
+        write_json_frame(
+            &mut stream,
+            &CoreHello {
+                role: CoreRole::PluginCore,
+                protocol_versions: vec![CURRENT_PROTOCOL_VERSION],
+                client_name: "p3-test".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let _: CoreHelloAck = read_json_frame(&mut stream).await.unwrap();
+        raw_publish(&mut stream, &source).await;
+        // The server still owns this fd and the client remains open: no EOF can
+        // win the race. Disable only the server's writes after source admission.
+        assert_eq!(unsafe { libc::shutdown(server_fd, libc::SHUT_WR) }, 0);
+        write_json_frame(
+            &mut stream,
+            &CoreRequest {
+                id: 2,
+                method: METHOD_LIST.into(),
+                params: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        host.publish_host_context("replacement", context_request(&source, 1, true))
+            .await
+            .unwrap();
+        host.shutdown().await.unwrap();
+    }
     #[tokio::test]
     async fn unknown_method_returns_business_error_and_server_stays_alive() {
         let profile = tempfile::tempdir().unwrap();
