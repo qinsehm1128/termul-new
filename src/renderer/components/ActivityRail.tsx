@@ -44,6 +44,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { getPluginViewIcon } from '@/features/plugins/view-icons'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { useNavigationLayout } from '@/hooks/use-navigation-layout'
 import { isMac } from '@/lib/platform'
@@ -53,6 +54,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { isTerminalRunning } from '@/lib/terminal-board'
 import { cn } from '@/lib/utils'
 import { useNavigationStore } from '@/stores/navigation-store'
+import { usePluginsStore } from '@/stores/plugins-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useSSHStore } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -216,6 +218,18 @@ export function ActivityRail({
   const { t } = useTranslation('shell')
   useNavigationLayout()
   const entries = useNavigationStore((state) => state.layout.entries)
+  const plugins = usePluginsStore((state) => state.plugins)
+  const pluginsConnected = usePluginsStore((state) => state.connected)
+  const pluginViews = pluginsConnected
+    ? plugins
+        .filter((plugin) => plugin.state === 'active' && plugin.desiredEnabled)
+        .sort((a, b) => a.manifest.name.localeCompare(b.manifest.name))
+        .flatMap((plugin) =>
+          plugin.manifest.contributes.views
+            .filter((view) => view.location === 'sidebar')
+            .map((view) => ({ plugin, view }))
+        )
+    : []
   const moveItemBy = useNavigationStore((state) => state.moveItemBy)
   const moveItemToIndex = useNavigationStore((state) => state.moveItemToIndex)
   const pinUtility = useNavigationStore((state) => state.pinUtility)
@@ -886,6 +900,51 @@ export function ActivityRail({
               aria-hidden="true"
             />
           </div>
+        ) : null}
+
+        {/* Plugin views are runtime contributions, never persisted or reorder targets. */}
+        {pluginViews.length > 0 ? (
+          <fieldset
+            aria-label="Plugin views"
+            data-activity-rail-section="plugins"
+            className="m-0 flex min-w-0 flex-col items-center border-0 p-0"
+          >
+            <div className="my-1.5 h-px w-5 bg-sidebar-border/80" aria-hidden="true" />
+            {pluginViews.map(({ plugin, view }) => {
+              const path = `/plugins/${encodeURIComponent(plugin.id)}/views/${encodeURIComponent(view.id)}`
+              const active = location.pathname === path
+              const Icon = getPluginViewIcon(view.icon)
+              const label = `${view.title} (${plugin.manifest.name})`
+              return (
+                <Tooltip key={`${plugin.id}/${view.id}`}>
+                  <TooltipTrigger asChild data-rail-tooltip={label}>
+                    <button
+                      type="button"
+                      className={railButtonClass}
+                      aria-label={view.title}
+                      aria-current={active ? 'page' : undefined}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        useSSHStore.getState().selectProfile(null)
+                        navigate(path)
+                      }}
+                    >
+                      <Icon
+                        size={18}
+                        className={cn(
+                          'transition-colors',
+                          active ? 'text-foreground' : 'text-muted-foreground'
+                        )}
+                      />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={9}>
+                    {label}
+                  </TooltipContent>
+                </Tooltip>
+              )
+            })}
+          </fieldset>
         ) : null}
 
         <div

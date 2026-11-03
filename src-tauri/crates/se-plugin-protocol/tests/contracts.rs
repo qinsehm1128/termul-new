@@ -143,6 +143,147 @@ fn manifest_ids_versions_and_contribution_limits() {
     assert!(!is_local_id("-a"));
 }
 #[test]
+fn view_locations_and_optional_icons_are_strict() {
+    let mut value = valid_value("manifest");
+    for (name, location) in [
+        ("panel", ViewLocation::Panel),
+        ("sidebar", ViewLocation::Sidebar),
+    ] {
+        value["contributes"]["views"] = json!([{"id":"counter","title":"Counter","location":name}]);
+        let parsed = parse_manifest(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let view = &parsed.contributes.views[0];
+        assert_eq!(view.location, location);
+        assert_eq!(view.icon, None);
+        assert_eq!(
+            serde_json::to_value(view).unwrap(),
+            value["contributes"]["views"][0]
+        );
+
+        for icon in [
+            json!(null),
+            json!(false),
+            json!(1),
+            json!([]),
+            json!({}),
+            json!(""),
+            json!("Calculator"),
+            json!("unknown"),
+            json!(" calculator"),
+        ] {
+            value["contributes"]["views"][0]["icon"] = icon.clone();
+            let error = parse_manifest(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+            assert_eq!(error.code, PLUGIN_INVALID_MANIFEST, "{name}: {icon}");
+        }
+    }
+    value["contributes"]["views"] =
+        json!([{"id":"counter","title":"Counter","location":"unknown"}]);
+    assert!(parse_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
+}
+
+#[test]
+fn view_icon_allowlist_matches_schema_and_roundtrips() {
+    let icons: Vec<String> = serde_json::from_str(include_str!(
+        "../../../../src/shared/plugin-fixtures/view-icons.json"
+    ))
+    .unwrap();
+    let schema: Value =
+        serde_json::from_str(include_str!("../schema/manifest.schema.json")).unwrap();
+    let views_schema = &schema["properties"]["contributes"]["properties"]["views"];
+    assert_eq!(
+        views_schema["items"]["properties"]["icon"]["enum"],
+        json!(icons)
+    );
+    assert_eq!(
+        views_schema["items"]["properties"]["icon"]["type"],
+        "string"
+    );
+    assert_eq!(
+        views_schema["items"]["properties"]["location"]["enum"],
+        json!(["panel", "sidebar"])
+    );
+    assert_eq!(views_schema["minContains"], 0);
+    assert_eq!(views_schema["maxContains"], 2);
+    assert_eq!(
+        views_schema["contains"]["properties"]["location"]["const"],
+        "sidebar"
+    );
+    assert_eq!(views_schema["maxItems"], 8);
+    assert!(!icons.is_empty());
+    let mut m = manifest();
+    for location in [ViewLocation::Panel, ViewLocation::Sidebar] {
+        for icon in &icons {
+            m.contributes.views = vec![ViewContribution {
+                id: "counter".into(),
+                title: "Counter".into(),
+                location,
+                icon: Some(icon.clone()),
+            }];
+            m.validate().unwrap();
+            assert_eq!(parse_manifest(&serde_json::to_vec(&m).unwrap()).unwrap(), m);
+        }
+    }
+    m.contributes.views[0].icon = Some("unknown".into());
+    assert_eq!(m.validate().unwrap_err().code, PLUGIN_INVALID_MANIFEST);
+}
+
+#[test]
+fn sidebar_view_limit_is_independent_of_total_view_limit() {
+    let mut m = manifest();
+    for sidebar_count in 0..=3 {
+        m.contributes.views = (0..8)
+            .map(|i| ViewContribution {
+                id: format!("view-{i}"),
+                title: "View".into(),
+                location: if i < sidebar_count {
+                    ViewLocation::Sidebar
+                } else {
+                    ViewLocation::Panel
+                },
+                icon: None,
+            })
+            .collect();
+        assert_eq!(m.validate().is_ok(), sidebar_count <= 2);
+        assert_eq!(
+            parse_manifest(&serde_json::to_vec(&m).unwrap()).is_ok(),
+            sidebar_count <= 2
+        );
+    }
+    m.contributes.views.clear();
+    assert!(m.validate().is_ok());
+    m.contributes.views = (0..9)
+        .map(|i| ViewContribution {
+            id: format!("view-{i}"),
+            title: "View".into(),
+            location: ViewLocation::Panel,
+            icon: None,
+        })
+        .collect();
+    assert!(m.validate().is_err());
+    m.contributes.views.truncate(2);
+    m.contributes.views[0].location = ViewLocation::Sidebar;
+    m.contributes.views[1].id = m.contributes.views[0].id.clone();
+    assert!(
+        m.validate().is_err(),
+        "view IDs stay unique across locations"
+    );
+}
+
+#[test]
+fn example_counter_manifests_contribute_sidebar_calculator() {
+    for bytes in [
+        include_bytes!("../../se-plugin-example/src/manifest.json").as_slice(),
+        include_bytes!("../../se-plugin-example/src/manifest-v2.json").as_slice(),
+    ] {
+        let m = parse_manifest(bytes).unwrap();
+        assert_eq!(m.contributes.views.len(), 1);
+        let view = &m.contributes.views[0];
+        assert_eq!(view.id, "example.counter");
+        assert_eq!(view.location, ViewLocation::Sidebar);
+        assert_eq!(view.icon.as_deref(), Some("calculator"));
+    }
+}
+
+#[test]
 fn config_defaults_are_complete_and_strict() {
     let schema = manifest().contributes.configuration;
     let values = complete_config_values(&schema, &ConfigValues::new()).unwrap();

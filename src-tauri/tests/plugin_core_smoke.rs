@@ -328,6 +328,11 @@ async fn plugin_core_isolation_and_recovery() {
     let installed: PluginInfo = rpc(&gui, METHOD_INSTALL, json!({"path": normal})).await;
     assert_eq!(installed.id, ID);
     assert_eq!(installed.state, PluginState::Disabled);
+    assert_eq!(installed.manifest.contributes.views.len(), 1);
+    let contribution = &installed.manifest.contributes.views[0];
+    assert_eq!(contribution.id, VIEW);
+    assert_eq!(contribution.location, ViewLocation::Sidebar);
+    assert_eq!(contribution.icon.as_deref(), Some("calculator"));
     let _: PluginInfo = rpc(&gui, METHOD_SET_ENABLED, json!({"id": ID, "enabled": true})).await;
     let old_info = active(&gui).await;
     let original_view = view(&gui).await;

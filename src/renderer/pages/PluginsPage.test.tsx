@@ -82,6 +82,40 @@ describe('PluginsPage', () => {
     )
   })
 
+  it('keeps sidebar view card links alongside panel view links', () => {
+    usePluginsStore.setState({
+      plugins: [
+        {
+          ...plugin,
+          manifest: {
+            ...plugin.manifest,
+            contributes: {
+              ...plugin.manifest.contributes,
+              views: [
+                ...plugin.manifest.contributes.views,
+                {
+                  id: 'sidebar.counter',
+                  title: 'Sidebar counter',
+                  location: 'sidebar',
+                  icon: 'calculator'
+                }
+              ]
+            }
+          }
+        }
+      ]
+    })
+    show()
+    expect(screen.getByRole('link', { name: 'Demo panel' })).toHaveAttribute(
+      'href',
+      `/plugins/${plugin.id}/views/main`
+    )
+    expect(screen.getByRole('link', { name: 'Sidebar counter' })).toHaveAttribute(
+      'href',
+      `/plugins/${plugin.id}/views/sidebar.counter`
+    )
+  })
+
   it('filters a single native library and requires trust confirmation before install', async () => {
     show()
     fireEvent.click(screen.getByRole('button', { name: 'manager.install' }))

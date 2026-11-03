@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { PluginInfo, PluginView } from '@shared/types/plugin.types'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
 import { resetNavigationStore, useNavigationStore } from '@/stores/navigation-store'
+import { usePluginsStore } from '@/stores/plugins-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import { useSSHStore } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -46,6 +48,32 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+function sidebarPlugin(overrides: Partial<PluginInfo> = {}): PluginInfo {
+  return {
+    id: 'example.plugin',
+    manifest: {
+      schemaVersion: 1,
+      id: 'example.plugin',
+      name: 'Example Plugin',
+      version: '1.0.0',
+      abi: { min: 1, max: 1 },
+      contributes: {
+        commands: [],
+        configuration: { title: 'Example Plugin', properties: {} },
+        views: [{ id: 'dashboard', title: 'Plugin dashboard', location: 'sidebar' }]
+      },
+      services: { provides: [], requires: [] }
+    },
+    state: 'active',
+    desiredEnabled: true,
+    generation: '1',
+    configRevision: 0,
+    sha256: 'test',
+    lastError: null,
+    ...overrides
+  }
+}
+
 describe('ActivityRail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -54,20 +82,147 @@ describe('ActivityRail', () => {
       mockUpdatePanelVisibility
     )
     resetNavigationStore()
+    usePluginsStore.setState({ plugins: [], connected: false })
     useSSHPanelStore.setState({ isVisible: true })
     useSSHStore.setState({ activeProfileId: null })
     useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
   })
 
-  function renderRail() {
+  function renderRail(path = '/') {
     return render(
       <TooltipProvider delayDuration={0}>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={[path]}>
           <ActivityRail />
         </MemoryRouter>
       </TooltipProvider>
     )
   }
+
+  describe('plugin sidebar views', () => {
+    it('renders a separate runtime group with accessible titles, plugin tooltips and fallback icons', async () => {
+      const plugin = sidebarPlugin()
+      plugin.manifest.contributes.views.push({
+        id: 'panel',
+        title: 'Panel only',
+        location: 'panel'
+      })
+      usePluginsStore.setState({ plugins: [plugin], connected: true })
+      const entriesBefore = useNavigationStore.getState().layout.entries
+      renderRail()
+
+      const group = screen.getByRole('group', { name: 'Plugin views' })
+      const button = within(group).getByRole('button', { name: 'Plugin dashboard' })
+      expect(screen.queryByRole('button', { name: 'Panel only' })).not.toBeInTheDocument()
+      expect(button.querySelector('svg')).toHaveClass('lucide-puzzle')
+      expect(group.querySelector('[data-rail-row]')).toBeNull()
+      expect(button).not.toHaveAttribute('data-rail-item-id')
+      fireEvent.pointerMove(button, { pointerType: 'mouse' })
+      fireEvent.pointerEnter(button, { pointerType: 'mouse' })
+      fireEvent.mouseOver(button)
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(
+        'Plugin dashboard (Example Plugin)'
+      )
+      expect(screen.getByRole('tooltip')).not.toHaveTextContent('reorder')
+      expect(useNavigationStore.getState().layout.entries).toEqual(entriesBefore)
+    })
+
+    it.each<Partial<PluginInfo>>([
+      { desiredEnabled: false },
+      { state: 'disabled' },
+      { state: 'installed' },
+      { state: 'quarantined' },
+      { state: 'failed' }
+    ])('hides ineligible plugins: %j', (overrides) => {
+      usePluginsStore.setState({ plugins: [sidebarPlugin(overrides)], connected: true })
+      renderRail()
+
+      expect(screen.queryByRole('button', { name: 'Plugin dashboard' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('group', { name: 'Plugin views' })).not.toBeInTheDocument()
+    })
+
+    it('removes the runtime group when the plugin is uninstalled', () => {
+      usePluginsStore.setState({ plugins: [sidebarPlugin()], connected: true })
+      renderRail()
+      expect(screen.getByRole('button', { name: 'Plugin dashboard' })).toBeVisible()
+
+      act(() => usePluginsStore.setState({ plugins: [] }))
+      expect(screen.queryByRole('group', { name: 'Plugin views' })).not.toBeInTheDocument()
+    })
+
+    it('hides stale active plugins when disconnected and reacts to disconnects', () => {
+      usePluginsStore.setState({ plugins: [sidebarPlugin()], connected: false })
+      renderRail()
+      expect(screen.queryByRole('button', { name: 'Plugin dashboard' })).not.toBeInTheDocument()
+
+      act(() => usePluginsStore.setState({ connected: true }))
+      expect(screen.getByRole('button', { name: 'Plugin dashboard' })).toBeVisible()
+      act(() => usePluginsStore.setState({ connected: false }))
+      expect(screen.queryByRole('group', { name: 'Plugin views' })).not.toBeInTheDocument()
+    })
+
+    it('navigates with encoded plugin and view IDs without changing navigation settings', () => {
+      const plugin = sidebarPlugin({ id: 'example/plugin ?' })
+      plugin.manifest.contributes.views[0].id = 'dashboard/with space?'
+      usePluginsStore.setState({ plugins: [plugin], connected: true })
+      useSSHStore.setState({ activeProfileId: 'ssh-profile' })
+      const layoutBefore = useNavigationStore.getState().layout
+      renderRail()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Plugin dashboard' }))
+
+      expect(mockNavigate).toHaveBeenCalledWith(
+        '/plugins/example%2Fplugin%20%3F/views/dashboard%2Fwith%20space%3F'
+      )
+      expect(useSSHStore.getState().activeProfileId).toBeNull()
+      expect(useNavigationStore.getState().layout).toEqual(layoutBefore)
+    })
+
+    it('styles the current plugin route like other active rail icons', () => {
+      const plugin = sidebarPlugin()
+      plugin.manifest.contributes.views.push({
+        id: 'other',
+        title: 'Other plugin view',
+        location: 'sidebar',
+        icon: 'terminal'
+      })
+      usePluginsStore.setState({ plugins: [plugin], connected: true })
+      renderRail('/plugins/example.plugin/views/dashboard')
+
+      const active = screen.getByRole('button', { name: 'Plugin dashboard' })
+      const inactive = screen.getByRole('button', { name: 'Other plugin view' })
+      expect(active).toHaveAttribute('aria-current', 'page')
+      expect(active.querySelector('svg')).toHaveClass('text-foreground')
+      expect(inactive).not.toHaveAttribute('aria-current')
+      expect(inactive.querySelector('svg')).toHaveClass('text-muted-foreground')
+      expect(inactive.querySelector('svg')).toHaveClass('lucide-terminal')
+    })
+
+    it('sorts plugins by name while preserving contributed view order and source order', () => {
+      const makePlugin = (id: string, name: string, views: PluginView[]): PluginInfo => {
+        const plugin = sidebarPlugin({ id })
+        plugin.manifest.name = name
+        plugin.manifest.contributes.views = views
+        return plugin
+      }
+      const plugins = [
+        makePlugin('z', 'Zebra', [{ id: 'z1', title: 'Zebra view', location: 'sidebar' }]),
+        makePlugin('a', 'Alpha', [
+          { id: 'a2', title: 'Alpha second ID first', location: 'sidebar' },
+          { id: 'a1', title: 'Alpha first ID second', location: 'sidebar' }
+        ])
+      ]
+      usePluginsStore.setState({ plugins, connected: true })
+      renderRail()
+
+      const group = screen.getByRole('group', { name: 'Plugin views' })
+      expect(
+        within(group)
+          .getAllByRole('button')
+          .map((button) => button.getAttribute('aria-label'))
+      ).toEqual(['Alpha second ID first', 'Alpha first ID second', 'Zebra view'])
+      expect(usePluginsStore.getState().plugins.map((plugin) => plugin.id)).toEqual(['z', 'a'])
+    })
+  })
 
   it('does not render sidebar or file-explorer toggles (moved to titlebar)', () => {
     renderRail()

@@ -17,7 +17,7 @@
         "tone": { "type": "string", "title": "Tone", "description": "Text emphasis", "default": "normal", "enum": ["normal", "muted"], "enumLabels": ["Normal", "Muted"] }
       }
     },
-    "views": [ { "id": "example.counter", "title": "Counter v2", "location": "panel" } ]
+    "views": [ { "id": "example.counter", "title": "Counter v2", "location": "sidebar", "icon": "calculator" } ]
   },
   "services": {
     "provides": [ { "name": "org.termul.example.counter", "version": 1 } ],

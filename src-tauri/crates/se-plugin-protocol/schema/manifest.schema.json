@@ -89,7 +89,17 @@
                 "maxLength": 128
               },
               "location": {
-                "const": "panel"
+                "enum": ["panel", "sidebar"]
+              },
+              "icon": {
+                "type": "string",
+                "enum": [
+                  "puzzle", "calculator", "chart-bar", "terminal", "database", "cloud",
+                  "git-branch", "bug", "book-open", "bell", "calendar", "clock",
+                  "folder", "globe", "key", "list-checks", "message-square", "package",
+                  "play", "rocket", "search", "settings", "shield", "wrench"
+                ],
+                "$comment": "Must match src/shared/plugin-fixtures/view-icons.json."
               }
             },
             "required": [
@@ -99,7 +109,16 @@
             ],
             "additionalProperties": false
           },
-          "maxItems": 8
+          "maxItems": 8,
+          "contains": {
+            "type": "object",
+            "properties": {
+              "location": { "const": "sidebar" }
+            },
+            "required": ["location"]
+          },
+          "minContains": 0,
+          "maxContains": 2
         }
       },
       "required": [

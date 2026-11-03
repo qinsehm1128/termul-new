@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import fixtures from '../plugin-fixtures/contracts.json'
+import viewIcons from '../plugin-fixtures/view-icons.json'
 import {
   parseActionEvent,
   parseActivationPayload,
@@ -107,6 +108,24 @@ describe('native plugin shared contract fixtures (also read by Rust)', () => {
       [parseSetConfigRequest, { id: 'org.termul.example', expectedRevision: 0, values: {} }]
     ] as const)
       expect(() => decode(value)).toThrow()
+  })
+  it('accepts every host icon and at most two sidebar views alongside panels', () => {
+    const manifest = parseManifest(fixtures.find((x) => x.kind === 'manifest' && x.valid)!.value)
+    for (const icon of viewIcons) {
+      const decoded = parseManifest({
+        ...manifest,
+        contributes: {
+          ...manifest.contributes,
+          views: [
+            { id: 'first', title: 'First', location: 'sidebar', icon },
+            { id: 'second', title: 'Second', location: 'sidebar' },
+            { id: 'panel', title: 'Panel', location: 'panel' }
+          ]
+        }
+      })
+      expect(decoded.contributes.views[0].icon).toBe(icon)
+      expect(decoded.contributes.views[1]).not.toHaveProperty('icon')
+    }
   })
   for (const fixture of fixtures)
     it(fixture.name, () => {

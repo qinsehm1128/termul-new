@@ -31,6 +31,7 @@ import {
   CommandShortcut
 } from '@/components/ui/command'
 import { pluginApi } from '@/features/plugins/plugin-api'
+import { getPluginViewIcon } from '@/features/plugins/view-icons'
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 import { recoverTerminals, reloadAndRecover } from '@/hooks/use-terminal-recovery'
@@ -307,6 +308,27 @@ export function CommandPalette({
                   void executePluginCommand(plugin.id, command.id)
                 }
               }))
+            )
+        : []),
+      ...(isTauriContext() && pluginsConnected
+        ? plugins
+            .filter((plugin) => plugin.state === 'active' && plugin.desiredEnabled)
+            .flatMap((plugin) =>
+              plugin.manifest.contributes.views.map((view) => {
+                const Icon = getPluginViewIcon(view.icon)
+                return {
+                  id: `plugin-view:${plugin.id}:${view.id}`,
+                  category: 'navigation' as const,
+                  icon: <Icon aria-hidden="true" size={16} />,
+                  label: `${plugin.manifest.name}: ${view.title}`,
+                  description: plugin.manifest.name,
+                  keywords: ['plugin', 'view', plugin.id, view.id, view.title],
+                  execute: () =>
+                    navigateToPath(
+                      `/plugins/${encodeURIComponent(plugin.id)}/views/${encodeURIComponent(view.id)}`
+                    )
+                }
+              })
             )
         : []),
       ...projects.map((project, index) => ({

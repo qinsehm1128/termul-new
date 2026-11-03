@@ -1,4 +1,5 @@
 /** Runtime-neutral native plugin v1 contracts; mirrored by se-plugin-protocol. */
+import viewIcons from '../plugin-fixtures/view-icons.json'
 import type { IpcResult } from './ipc.types'
 export const PLUGIN_SCHEMA_VERSION = 1 as const
 export const PLUGIN_JSON_MAX_BYTES = 256 * 1024
@@ -28,7 +29,8 @@ export interface PluginCommand {
 export interface PluginView {
   id: string
   title: string
-  location: 'panel'
+  location: 'panel' | 'sidebar'
+  icon?: string
 }
 export interface PluginService {
   name: string
@@ -485,10 +487,16 @@ export function parseManifest(v: unknown): Manifest {
   })
   uniq(commands.map((x) => x.id))
   const views = arr(c.views, 8).map((v) => {
-    const x = obj(v, ['id', 'title', 'location'])
-    return { id: local(x.id), title: str(x.title, 1, 128), location: one(x.location, ['panel']) }
+    const x = obj(v, ['id', 'title', 'location'], ['icon'])
+    return {
+      id: local(x.id),
+      title: str(x.title, 1, 128),
+      location: one(x.location, ['panel', 'sidebar']),
+      ...(own(x, 'icon') ? { icon: one(x.icon, viewIcons) } : {})
+    }
   })
   uniq(views.map((x) => x.id))
+  if (views.filter((view) => view.location === 'sidebar').length > 2) bad()
   const s = obj(o.services, ['provides', 'requires'])
   const services = (v: unknown): PluginService[] => {
     const r = arr(v, 32).map((v) => {

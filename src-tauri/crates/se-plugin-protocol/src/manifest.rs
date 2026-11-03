@@ -1,6 +1,13 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::LazyLock};
+
+static VIEW_ICONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../../src/shared/plugin-fixtures/view-icons.json"
+    ))
+    .expect("embedded view icon allowlist is valid JSON")
+});
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -44,11 +51,18 @@ pub struct ViewContribution {
     pub id: String,
     pub title: String,
     pub location: ViewLocation,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_option"
+    )]
+    pub icon: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ViewLocation {
     Panel,
+    Sidebar,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -96,6 +110,15 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), PluginError> {
             text(description, 0, 2048, code)?;
         }
     }
+    require(
+        c.views
+            .iter()
+            .filter(|view| view.location == ViewLocation::Sidebar)
+            .count()
+            <= 2,
+        code,
+        "too many sidebar views",
+    )?;
     let mut views = BTreeSet::new();
     for view in &c.views {
         require(
@@ -104,6 +127,13 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), PluginError> {
             "invalid or duplicate view id",
         )?;
         text(&view.title, 1, 128, code)?;
+        if let Some(icon) = &view.icon {
+            require(
+                VIEW_ICONS.contains(&icon.as_str()),
+                code,
+                "invalid view icon",
+            )?;
+        }
     }
     validate_configuration_schema(&c.configuration)
         .map_err(|_| PluginError::new(code, "invalid configuration schema"))?;

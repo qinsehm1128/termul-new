@@ -151,6 +151,72 @@ describe('CommandPalette', () => {
     expect(pluginApi.executeCommand).not.toHaveBeenCalled()
   })
 
+  it.each([
+    'panel',
+    'sidebar'
+  ] as const)('opens an active plugin %s view from its named entry', async (location) => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    const plugin = activePlugin({ id: 'com.example.palette /tools' })
+    plugin.manifest.contributes.views = [
+      { id: 'palette.view /counter', title: 'Counter View', location, icon: 'calculator' }
+    ]
+    usePluginsStore.setState({ plugins: [plugin], connected: true })
+    const navigate = vi.fn()
+    setRouterNavigate(navigate)
+    try {
+      const { props } = renderPalette()
+      fireEvent.click(screen.getByText('Palette Plugin: Counter View'))
+      await waitFor(() =>
+        expect(navigate).toHaveBeenCalledWith(
+          '/plugins/com.example.palette%20%2Ftools/views/palette.view%20%2Fcounter'
+        )
+      )
+      expect(props.onClose).toHaveBeenCalledOnce()
+      expect(pluginApi.executeCommand).not.toHaveBeenCalled()
+    } finally {
+      setRouterNavigate(null)
+    }
+  })
+
+  it.each([
+    'disabled',
+    'quarantined',
+    'uninstalled',
+    'not-enabled',
+    'disconnected',
+    'browser'
+  ])('hides plugin view entries when %s, including pinned and recent entries', (condition) => {
+    if (condition !== 'browser')
+      Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
+    const plugin = activePlugin()
+    plugin.manifest.contributes.views = [
+      { id: 'palette.view', title: 'Counter View', location: 'sidebar' }
+    ]
+    pinnedCommandIds = ['plugin-view:com.example.palette:palette.view']
+    recentCommandIds = ['plugin-view:com.example.palette:palette.view']
+    usePluginsStore.setState({ plugins: [plugin], connected: true })
+    renderPalette()
+    if (condition !== 'browser')
+      expect(screen.getAllByText('Palette Plugin: Counter View').length).toBeGreaterThan(0)
+    act(() =>
+      usePluginsStore.setState({
+        connected: condition !== 'disconnected',
+        plugins:
+          condition === 'uninstalled'
+            ? []
+            : [
+                {
+                  ...plugin,
+                  desiredEnabled: condition !== 'not-enabled',
+                  state:
+                    condition === 'disabled' || condition === 'quarantined' ? condition : 'active'
+                }
+              ]
+      })
+    )
+    expect(screen.queryByText('Palette Plugin: Counter View')).not.toBeInTheDocument()
+  })
+
   it('shows each active contribution and executes with the current store generation', async () => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} })
     usePluginsStore.setState({ plugins: [activePlugin()], connected: true })

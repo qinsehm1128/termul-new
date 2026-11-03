@@ -264,6 +264,11 @@ async fn example_cdylib_end_to_end() {
             .expect("dlopen normal example and install");
         assert_eq!(installed.id, ID);
         assert_eq!(installed.manifest.version, "0.1.0");
+        assert_eq!(installed.manifest.contributes.views.len(), 1);
+        let contribution = &installed.manifest.contributes.views[0];
+        assert_eq!(contribution.id, VIEW);
+        assert_eq!(contribution.location, ViewLocation::Sidebar);
+        assert_eq!(contribution.icon.as_deref(), Some("calculator"));
         assert_eq!(installed.state, PluginState::Disabled);
         assert!(!installed.desired_enabled);
         assert!(installed.generation.is_none());
@@ -414,6 +419,8 @@ async fn example_cdylib_end_to_end() {
             .await
             .expect("load 0.1.1 from a distinct generation path");
         assert_eq!(upgraded.manifest.version, "0.1.1");
+        assert_eq!(upgraded.manifest.contributes.views[0].location, ViewLocation::Sidebar);
+        assert_eq!(upgraded.manifest.contributes.views[0].icon.as_deref(), Some("calculator"));
         assert_eq!(upgraded.state, PluginState::Active);
         assert_ne!(upgraded.generation, Some(reopened.generation.clone()));
         let upgraded_view = view(&host).await;
