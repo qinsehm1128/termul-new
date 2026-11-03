@@ -87,6 +87,9 @@ se-terminal-core = { path = "crates/se-terminal-core" }
 se-mcp-bridge = { path = "crates/se-mcp-bridge" }
 # Agent sessions (Conversations): contracts, storage, migration, lifecycle.
 se-agent-session = { path = "crates/se-agent-session" }
+# Native plugins run in Plugin Core, never in the GUI runtime.
+se-plugin-host = { path = "crates/se-plugin-host" }
+se-plugin-protocol = { path = "crates/se-plugin-protocol" }
 # Recursive fs watching for `fs_watcher`. Pinned to the same major the fs plugin
 # already resolves, so this adds no new resolution to the lockfile.
 notify = "8"

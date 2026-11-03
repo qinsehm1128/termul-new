@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://termul.dev/plugin/v1/callbacks.schema.json",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ActivationPayload"
+    },
+    {
+      "$ref": "#/$defs/RenderRequest"
+    },
+    {
+      "$ref": "#/$defs/CommandRequest"
+    },
+    {
+      "$ref": "#/$defs/CommandReply"
+    },
+    {
+      "$ref": "#/$defs/ServiceRequest"
+    },
+    {
+      "$ref": "#/$defs/ServiceReply"
+    }
+  ],
+  "$comment": "Each callback input/output is capped at 262144 UTF-8 bytes. Activation pluginId must equal config.pluginId.",
+  "$defs": {
+    "ActivationPayload": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "pluginId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+        },
+        "generation": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "config": {
+          "allOf": [
+            {
+              "$ref": "config.schema.json"
+            },
+            {
+              "properties": {
+                "changedKeys": {
+                  "maxItems": 0
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "pluginId",
+        "generation",
+        "config"
+      ],
+      "additionalProperties": false
+    },
+    "RenderRequest": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "viewId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "viewId"
+      ],
+      "additionalProperties": false
+    },
+    "CommandRequest": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "commandId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "args": {}
+      },
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "CommandReply": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {},
+        "invalidateViews": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "maxItems": 8,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "result",
+        "invalidateViews"
+      ],
+      "additionalProperties": false
+    },
+    "ServiceRequest": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "service": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "method": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192
+        },
+        "input": {}
+      },
+      "required": [
+        "schemaVersion",
+        "service",
+        "version",
+        "method",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "ServiceReply": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {}
+      },
+      "required": [
+        "schemaVersion",
+        "result"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

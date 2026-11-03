@@ -828,6 +828,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cordis-core"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c66612b77752dc3f0bd78b0d080ffa50317b87586d4ff1673f349a2105fd195"
+dependencies = [
+ "futures",
+ "parking_lot",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2725,7 +2737,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e9ec52138abedcc58dc17a7c6c0c00a2bdb4f3427c7f63fa97fd0d859155caf"
 dependencies = [
  "gtk-sys",
- "libloading",
+ "libloading 0.7.4",
  "once_cell",
 ]
 
@@ -2752,6 +2764,16 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
+]
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -3163,7 +3185,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http",
@@ -4867,6 +4889,8 @@ dependencies = [
  "se-ghostty-observer",
  "se-ipc",
  "se-mcp-bridge",
+ "se-plugin-host",
+ "se-plugin-protocol",
  "se-pty",
  "se-quick-terminal",
  "se-terminal-core",
@@ -4920,6 +4944,48 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "se-plugin-abi"
+version = "0.1.0"
+
+[[package]]
+name = "se-plugin-example"
+version = "0.1.0"
+dependencies = [
+ "se-plugin-abi",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "se-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "cordis-core",
+ "fs2",
+ "libloading 0.8.9",
+ "log",
+ "se-foundation",
+ "se-plugin-abi",
+ "se-plugin-protocol",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "se-plugin-protocol"
+version = "0.1.0"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

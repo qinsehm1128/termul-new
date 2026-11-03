@@ -1,0 +1,2170 @@
+[
+  {
+    "kind": "manifest",
+    "valid": true,
+    "name": "manifest valid",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": true,
+    "name": "ui valid",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": true,
+    "name": "config valid",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 1,
+        "values": {
+          "greeting": "Hello",
+          "step": 1,
+          "showCount": true,
+          "tone": "normal"
+        },
+        "changedKeys": []
+      }
+    }
+  },
+  {
+    "kind": "action",
+    "valid": true,
+    "name": "action valid",
+    "value": {
+      "schemaVersion": 1,
+      "eventId": "77bac08a-bcf6-43c6-b0c2-cc971d2a980e",
+      "pluginId": "org.termul.example",
+      "generation": "d3c08c68-fd28-4685-98e1-e025ad8b4048",
+      "viewId": "example.counter",
+      "viewRevision": 1,
+      "nodeId": "increment",
+      "actionId": "increment",
+      "kind": "click",
+      "value": null
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "unknown field",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      },
+      "foo": 1
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "invalid plugin id",
+    "value": {
+      "schemaVersion": 1,
+      "id": "Example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "invalid semver",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "01.0.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "reversed abi",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 2,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "duplicate command",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          },
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "nested config",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": {},
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "mixed enum",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", false],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "bad default",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 101,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": ["Normal", "Muted"]
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "manifest",
+    "valid": false,
+    "name": "bad enum labels",
+    "value": {
+      "schemaVersion": 1,
+      "id": "org.termul.example",
+      "name": "Configured Counter",
+      "version": "0.1.0",
+      "abi": {
+        "min": 1,
+        "max": 1
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "example.reset",
+            "title": "Reset counter"
+          }
+        ],
+        "configuration": {
+          "title": "Counter settings",
+          "properties": {
+            "greeting": {
+              "type": "string",
+              "title": "Greeting",
+              "description": "Greeting text",
+              "default": "Hello",
+              "maxLength": 20
+            },
+            "step": {
+              "type": "number",
+              "title": "Step",
+              "description": "Increment",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "showCount": {
+              "type": "boolean",
+              "title": "Show count",
+              "description": "Visibility",
+              "default": true
+            },
+            "tone": {
+              "type": "string",
+              "title": "Tone",
+              "description": "Emphasis",
+              "default": "normal",
+              "enum": ["normal", "muted"],
+              "enumLabels": []
+            }
+          }
+        },
+        "views": [
+          {
+            "id": "example.counter",
+            "title": "Counter",
+            "location": "panel"
+          }
+        ]
+      },
+      "services": {
+        "provides": [
+          {
+            "name": "org.termul.example.counter",
+            "version": 1
+          }
+        ],
+        "requires": []
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": false,
+    "name": "unknown prop",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {
+          "className": "bad"
+        },
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": false,
+    "name": "unknown type",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "html",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": false,
+    "name": "duplicate node",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          },
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": false,
+    "name": "leaf children",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            },
+            "children": []
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": false,
+    "name": "long text",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": false,
+    "name": "input maxLength",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit",
+                  "maxLength": 4097
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": false,
+    "name": "select missing option",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "absent",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "item",
+                  "text": "One"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": false,
+    "name": "unknown key",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 1,
+        "values": {
+          "greeting": "Hello",
+          "step": 1,
+          "showCount": true,
+          "tone": "normal",
+          "unknown": 1
+        },
+        "changedKeys": []
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": false,
+    "name": "missing complete value",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 1,
+        "values": {
+          "step": 1,
+          "showCount": true,
+          "tone": "normal"
+        },
+        "changedKeys": []
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": false,
+    "name": "coerced boolean",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 1,
+        "values": {
+          "greeting": "Hello",
+          "step": 1,
+          "showCount": 1,
+          "tone": "normal"
+        },
+        "changedKeys": []
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": false,
+    "name": "number out of range",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 1,
+        "values": {
+          "greeting": "Hello",
+          "step": 0,
+          "showCount": true,
+          "tone": "normal"
+        },
+        "changedKeys": []
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": false,
+    "name": "enum outside values",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 1,
+        "values": {
+          "greeting": "Hello",
+          "step": 1,
+          "showCount": true,
+          "tone": "danger"
+        },
+        "changedKeys": []
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": false,
+    "name": "duplicate changed keys",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 1,
+        "values": {
+          "greeting": "Hello",
+          "step": 1,
+          "showCount": true,
+          "tone": "normal"
+        },
+        "changedKeys": ["step", "step"]
+      }
+    }
+  },
+  {
+    "kind": "config",
+    "valid": false,
+    "name": "unsafe revision",
+    "value": {
+      "schema": {
+        "title": "Counter settings",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "title": "Greeting",
+            "description": "Greeting text",
+            "default": "Hello",
+            "maxLength": 20
+          },
+          "step": {
+            "type": "number",
+            "title": "Step",
+            "description": "Increment",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "showCount": {
+            "type": "boolean",
+            "title": "Show count",
+            "description": "Visibility",
+            "default": true
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "description": "Emphasis",
+            "default": "normal",
+            "enum": ["normal", "muted"],
+            "enumLabels": ["Normal", "Muted"]
+          }
+        }
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "pluginId": "org.termul.example",
+        "revision": 9007199254740992,
+        "values": {
+          "greeting": "Hello",
+          "step": 1,
+          "showCount": true,
+          "tone": "normal"
+        },
+        "changedKeys": []
+      }
+    }
+  },
+  {
+    "kind": "action",
+    "valid": false,
+    "name": "non-uuid generation",
+    "value": {
+      "schemaVersion": 1,
+      "eventId": "77bac08a-bcf6-43c6-b0c2-cc971d2a980e",
+      "pluginId": "org.termul.example",
+      "generation": "bad",
+      "viewId": "example.counter",
+      "viewRevision": 1,
+      "nodeId": "increment",
+      "actionId": "increment",
+      "kind": "click",
+      "value": null
+    }
+  },
+  {
+    "kind": "action",
+    "valid": false,
+    "name": "unsafe view revision",
+    "value": {
+      "schemaVersion": 1,
+      "eventId": "77bac08a-bcf6-43c6-b0c2-cc971d2a980e",
+      "pluginId": "org.termul.example",
+      "generation": "d3c08c68-fd28-4685-98e1-e025ad8b4048",
+      "viewId": "example.counter",
+      "viewRevision": 9007199254740992,
+      "nodeId": "increment",
+      "actionId": "increment",
+      "kind": "click",
+      "value": null
+    }
+  },
+  {
+    "kind": "action",
+    "valid": false,
+    "name": "click has string",
+    "value": {
+      "schemaVersion": 1,
+      "eventId": "77bac08a-bcf6-43c6-b0c2-cc971d2a980e",
+      "pluginId": "org.termul.example",
+      "generation": "d3c08c68-fd28-4685-98e1-e025ad8b4048",
+      "viewId": "example.counter",
+      "viewRevision": 1,
+      "nodeId": "increment",
+      "actionId": "increment",
+      "kind": "click",
+      "value": "bad"
+    }
+  },
+  {
+    "kind": "action",
+    "valid": false,
+    "name": "unknown field",
+    "value": {
+      "schemaVersion": 1,
+      "eventId": "77bac08a-bcf6-43c6-b0c2-cc971d2a980e",
+      "pluginId": "org.termul.example",
+      "generation": "d3c08c68-fd28-4685-98e1-e025ad8b4048",
+      "viewId": "example.counter",
+      "viewRevision": 1,
+      "nodeId": "increment",
+      "actionId": "increment",
+      "kind": "click",
+      "value": null,
+      "bootId": "bad"
+    }
+  },
+  {
+    "kind": "action",
+    "valid": false,
+    "name": "wrong value type",
+    "value": {
+      "schemaVersion": 1,
+      "eventId": "77bac08a-bcf6-43c6-b0c2-cc971d2a980e",
+      "pluginId": "org.termul.example",
+      "generation": "d3c08c68-fd28-4685-98e1-e025ad8b4048",
+      "viewId": "example.counter",
+      "viewRevision": 1,
+      "nodeId": "increment",
+      "actionId": "increment",
+      "kind": "change",
+      "value": 1
+    }
+  },
+  {
+    "kind": "ui",
+    "valid": true,
+    "name": "list IDs are ordinary strings",
+    "value": {
+      "schemaVersion": 1,
+      "viewId": "example.counter",
+      "root": {
+        "id": "root",
+        "type": "column",
+        "props": {},
+        "children": [
+          {
+            "id": "text",
+            "type": "text",
+            "props": {
+              "text": "Hello <script> is plain text"
+            }
+          },
+          {
+            "id": "heading",
+            "type": "heading",
+            "props": {
+              "text": "Counter"
+            }
+          },
+          {
+            "id": "row",
+            "type": "row",
+            "props": {},
+            "children": [
+              {
+                "id": "increment",
+                "type": "button",
+                "props": {
+                  "label": "Increment",
+                  "actionId": "increment"
+                }
+              },
+              {
+                "id": "input",
+                "type": "input",
+                "props": {
+                  "label": "Greeting",
+                  "value": "Hello",
+                  "actionId": "edit"
+                }
+              },
+              {
+                "id": "toggle",
+                "type": "toggle",
+                "props": {
+                  "label": "Visible",
+                  "checked": true,
+                  "actionId": "toggle"
+                }
+              },
+              {
+                "id": "select",
+                "type": "select",
+                "props": {
+                  "label": "Tone",
+                  "value": "normal",
+                  "actionId": "tone",
+                  "options": [
+                    {
+                      "value": "normal",
+                      "label": "Normal"
+                    },
+                    {
+                      "value": "muted",
+                      "label": "Muted"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "id": "list",
+            "type": "list",
+            "props": {
+              "items": [
+                {
+                  "id": "record \u4e00",
+                  "text": "One"
+                },
+                {
+                  "id": "",
+                  "text": "Two"
+                }
+              ]
+            }
+          },
+          {
+            "id": "divider",
+            "type": "divider",
+            "props": {}
+          }
+        ]
+      }
+    }
+  }
+]

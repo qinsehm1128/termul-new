@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://termul.dev/plugin/v1/configuration.schema.json",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "properties": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "string"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "description": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 2048
+              },
+              "default": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 8192
+              },
+              "enum": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 8192
+                },
+                "maxItems": 64,
+                "uniqueItems": true,
+                "minItems": 1
+              },
+              "enumLabels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 8192
+                },
+                "maxItems": 64
+              },
+              "minLength": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 8192
+              },
+              "maxLength": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 8192
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "description",
+              "default"
+            ],
+            "additionalProperties": false,
+            "dependentRequired": {
+              "enumLabels": [
+                "enum"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "number"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "description": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 2048
+              },
+              "default": {
+                "type": "number"
+              },
+              "enum": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 64,
+                "uniqueItems": true,
+                "minItems": 1
+              },
+              "enumLabels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 8192
+                },
+                "maxItems": 64
+              },
+              "minimum": {
+                "type": "number"
+              },
+              "maximum": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "description",
+              "default"
+            ],
+            "additionalProperties": false,
+            "dependentRequired": {
+              "enumLabels": [
+                "enum"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "boolean"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "description": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 2048
+              },
+              "default": {
+                "type": "boolean"
+              },
+              "enum": {
+                "type": "array",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 64,
+                "uniqueItems": true,
+                "minItems": 1
+              },
+              "enumLabels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 8192
+                },
+                "maxItems": 64
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "description",
+              "default"
+            ],
+            "additionalProperties": false,
+            "dependentRequired": {
+              "enumLabels": [
+                "enum"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "title",
+    "properties"
+  ],
+  "additionalProperties": false,
+  "$comment": "Protocol validator additionally checks ordered bounds, enumLabels length, and default against its own bounds and enum."
+}
