@@ -50,6 +50,7 @@ import {
   getOrCreateProjectContinuityCorrelation,
   recordTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
+import { resyncRendererInputModes } from '@/lib/terminal-input-resync'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
 import { claimWebglSlot, dropWebglSlot, releaseWebglVisibility } from '@/lib/webgl-renderer-budget'
@@ -1705,7 +1706,8 @@ function ConnectedTerminalComponent({
           | 'restore-replay-attempted'
           | 'restore-replay-succeeded'
           | 'restore-replay-failed'
-          | 'restore-replay-skipped',
+          | 'restore-replay-skipped'
+          | 'input-modes-resynced',
         details?: Record<string, unknown>,
         terminalEventId?: string,
         ptyId?: string
@@ -2188,6 +2190,24 @@ function ConnectedTerminalComponent({
           // strand live output in the hold for the rest of the session.
           flushReplayHold()
         }
+        // The program may have taken the mouse long before this renderer
+        // existed (UI closed/reopened while the PTY kept running). Re-take its
+        // input routing from the host's tracked modes; local xterm only, the
+        // PTY receives nothing.
+        void resyncRendererInputModes(externalTerminalId).then((result) => {
+          if (result.status === 'applied' && result.rendererBefore !== result.rendererAfter) {
+            recordReplayEvent(
+              'input-modes-resynced',
+              {
+                source: 'external-terminal',
+                rendererBefore: result.rendererBefore,
+                rendererAfter: result.rendererAfter
+              },
+              storeTerminalId,
+              externalTerminalId
+            )
+          }
+        })
         // Write one-time info line if project env vars were applied
         // (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
         if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {

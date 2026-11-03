@@ -28,6 +28,7 @@ import type {
 } from '@shared/types/ipc.types'
 import type {
   ScreenObservationStatus,
+  TerminalInputModes,
   TerminalScreenReadResult
 } from '@shared/types/terminal-screen.types'
 import { Channel, type InvokeArgs, invoke } from '@tauri-apps/api/core'
@@ -85,6 +86,7 @@ const IPC_COMMANDS = {
   SPAWN: 'terminal_spawn',
   LIST: 'terminal_list',
   SCREEN_STATUS: 'terminal_screen_status',
+  INPUT_MODES: 'terminal_input_modes',
   SCREEN_READ: 'terminal_screen_read',
   RESUME: 'terminal_resume',
   ATTACH: 'terminal_attach',
@@ -640,6 +642,8 @@ export function createTauriTerminalApi(): TerminalApi {
      */
     screenStatus: (terminalId, claim) =>
       invokeIpc<ScreenObservationStatus>(IPC_COMMANDS.SCREEN_STATUS, { terminalId, claim }),
+    inputModes: (terminalId, claim) =>
+      invokeIpc<TerminalInputModes>(IPC_COMMANDS.INPUT_MODES, { terminalId, claim }),
     screenRead: (terminalId, claim, maxLines) =>
       invokeIpc<TerminalScreenReadResult>(IPC_COMMANDS.SCREEN_READ, {
         terminalId,

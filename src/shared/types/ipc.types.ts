@@ -22,6 +22,7 @@ import type {
 } from './session-workspace.types'
 import type {
   ScreenObservationStatus,
+  TerminalInputModes,
   TerminalScreenEngine,
   TerminalScreenReadResult
 } from './terminal-screen.types'
@@ -513,6 +514,8 @@ export interface TerminalApi {
   list?: () => Promise<IpcResult<TerminalStatus[]>>
   /** Read-only host observation. Desktop verifies claim; web verifies the bound terminal scope. */
   screenStatus?: (terminalId: string, claim: string) => Promise<IpcResult<ScreenObservationStatus>>
+  /** Claim-gated host-tracked input modes (mouse capture etc.). Desktop only. */
+  inputModes?: (terminalId: string, claim: string) => Promise<IpcResult<TerminalInputModes>>
   screenRead?: (
     terminalId: string,
     claim: string,

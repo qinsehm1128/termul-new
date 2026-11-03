@@ -6,6 +6,8 @@ export type TerminalContinuityEventName =
   | 'restore-replay-succeeded'
   | 'restore-replay-failed'
   | 'restore-replay-skipped'
+  // Renderer input routing re-taken from host-tracked modes after re-attach.
+  | 'input-modes-resynced'
   | 'restore-complete'
   | 'restore-failed'
   | 'renderer-recovery-attempted'

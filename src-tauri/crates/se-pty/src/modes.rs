@@ -28,6 +28,22 @@ const MOUSE_PROTOCOLS: &[u16] = &[1000, 1002, 1003];
 /// is not a mode switch.
 const MAX_CARRY: usize = 64;
 
+/// Snapshot of the modes that decide how mouse and keyboard input is routed.
+/// Carries mode numbers only, never terminal content.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputModes {
+    /// Active mouse protocol (1000, 1002 or 1003); `None` = no mouse reporting.
+    pub mouse_tracking: Option<u16>,
+    /// Active mouse encoding (1006 SGR, 1015 urxvt, 1005 UTF-8).
+    pub mouse_encoding: Option<u16>,
+    pub bracketed_paste: bool,
+    pub application_cursor: bool,
+    pub focus_events: bool,
+    pub application_keypad: bool,
+    pub alternate_screen: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ModeTracker {
     /// Explicitly set state of each tracked mode; absent means default.
@@ -84,6 +100,27 @@ impl ModeTracker {
             out.extend_from_slice(b"\x1b=");
         }
         out
+    }
+
+    /// Input-routing modes currently in force, for a renderer that must agree
+    /// with the program about who owns the mouse and keyboard encodings.
+    #[must_use]
+    pub fn input_modes(&self) -> InputModes {
+        let on = |mode: u16| {
+            self.modes
+                .iter()
+                .find(|(tracked, _)| *tracked == mode)
+                .map_or(default_state(mode), |(_, on)| *on)
+        };
+        InputModes {
+            mouse_tracking: MOUSE_PROTOCOLS.iter().copied().find(|&mode| on(mode)),
+            mouse_encoding: [1006, 1015, 1005].into_iter().find(|&mode| on(mode)),
+            bracketed_paste: on(2004),
+            application_cursor: on(1),
+            focus_events: on(1004),
+            application_keypad: self.application_keypad,
+            alternate_screen: on(1049) || on(1047) || on(47),
+        }
     }
 
     fn set(&mut self, mode: u16, on: bool) {
@@ -242,6 +279,35 @@ mod tests {
             preamble_after(&[b"\x1b[?1003h\x1b[?1000l\x1b[?1002h"]),
             "\x1b[?1002h"
         );
+    }
+
+    fn input_modes_after(chunks: &[&[u8]]) -> InputModes {
+        let mut tracker = ModeTracker::default();
+        for chunk in chunks {
+            tracker.feed(chunk);
+        }
+        tracker.input_modes()
+    }
+
+    #[test]
+    fn input_modes_report_crossterm_capture_and_follow_resets() {
+        let startup = b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h\x1b[?2004h\x1b[?1004h";
+        assert_eq!(
+            input_modes_after(&[startup]),
+            InputModes {
+                mouse_tracking: Some(1003),
+                mouse_encoding: Some(1006),
+                bracketed_paste: true,
+                application_cursor: false,
+                focus_events: true,
+                application_keypad: false,
+                alternate_screen: true,
+            }
+        );
+        // A cross-number reset clears the protocol, as xterm does.
+        let after_reset = input_modes_after(&[b"\x1b[?1002h", b"\x1b[?1000l"]);
+        assert_eq!(after_reset.mouse_tracking, None);
+        assert_eq!(input_modes_after(&[]), InputModes::default());
     }
 
     #[test]

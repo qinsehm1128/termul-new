@@ -1,5 +1,6 @@
 import type {
   ScreenObservationStatus,
+  TerminalInputModes,
   TerminalScreenReadResult
 } from '@shared/types/terminal-screen.types'
 import { legacyScreenObservation } from '@shared/types/terminal-screen.types'
@@ -175,6 +176,16 @@ export function readTerminalScreenStatus(
   return (
     terminalApi.screenStatus?.(terminalId, claim) ??
     Promise.resolve({ success: true, data: legacyScreenObservation() })
+  )
+}
+
+/** Claim-gated host input modes; `null` data when the runtime cannot report them. */
+export function readTerminalInputModes(
+  terminalId: string,
+  claim: string
+): Promise<IpcResult<TerminalInputModes | null>> {
+  return (
+    terminalApi.inputModes?.(terminalId, claim) ?? Promise.resolve({ success: true, data: null })
   )
 }
 

@@ -1189,6 +1189,27 @@ pub async fn terminal_screen_status(
 }
 
 #[tauri::command]
+pub async fn terminal_input_modes(
+    terminal_id: String,
+    claim: String,
+    terminal: State<'_, crate::core::TerminalServiceHandle>,
+) -> Result<IpcResult<se_pty::modes::InputModes>, String> {
+    if let Err(error) = require_host_admission() {
+        return Ok(error);
+    }
+    if let Some(client) = terminal.core_client() {
+        return Ok(ipc_from_core(
+            client.input_modes(&terminal_id, &claim).await,
+        ));
+    }
+    let pty = require_in_process_pty(terminal.inner())?;
+    Ok(match pty.input_modes(&terminal_id, &claim).await {
+        Ok(modes) => IpcResult::success(modes),
+        Err(_) => IpcResult::error("Unauthorized", "UNAUTHORIZED"),
+    })
+}
+
+#[tauri::command]
 pub async fn terminal_screen_read(
     terminal_id: String,
     claim: String,

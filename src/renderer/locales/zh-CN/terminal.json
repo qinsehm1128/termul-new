@@ -246,6 +246,25 @@
     "sequence": "已应用/已捕获序号",
     "refresh": "刷新宿主状态",
     "refreshing": "刷新中…",
+    "inputTakeover": {
+      "description": "鼠标/键盘接管：qin-code、Claude Code 等全屏程序接管鼠标时，拖选与双击由程序处理。界面重开后若点击、滚轮或拖选失灵，可重新同步。",
+      "resync": "重新同步鼠标键盘接管",
+      "resyncing": "同步中…",
+      "result": "已同步：鼠标现由 {{host}}（同步前：{{before}}）",
+      "mouse": {
+        "none": "终端（原生选中）",
+        "vt200": "程序接管（点击）",
+        "drag": "程序接管（点击+拖动）",
+        "any": "程序接管（全部移动）",
+        "x10": "程序接管（X10）"
+      },
+      "unavailable": {
+        "no-renderer": "当前没有可同步的终端视图。",
+        "no-claim": "该终端没有本窗口的访问凭证，无法读取宿主状态。",
+        "host-denied": "宿主拒绝或无法返回输入模式。",
+        "unsupported": "当前运行环境不支持读取宿主输入模式。"
+      }
+    },
     "unavailable": "宿主观察不可用，当前不使用屏幕证据。",
     "states": {
       "disabled": "未启用",

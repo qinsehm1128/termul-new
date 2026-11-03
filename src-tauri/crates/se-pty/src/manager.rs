@@ -1304,6 +1304,18 @@ pub struct TerminalInstance {
 }
 
 impl TerminalInstance {
+    /// Input-routing modes in force right now: the modes at the oldest retained
+    /// chunk, advanced through every retained chunk. Reads mode switches only.
+    #[must_use]
+    pub fn input_modes(&self) -> crate::modes::InputModes {
+        let log = self.output_log.read();
+        let mut tracker = self.output_log_modes.lock().clone();
+        for chunk in log.iter() {
+            tracker.feed(&chunk.data);
+        }
+        tracker.input_modes()
+    }
+
     pub fn screen_observation(&self) -> crate::screen::ScreenObservationStatus {
         self.screen_observer
             .as_ref()
@@ -3495,6 +3507,18 @@ impl PtyManager {
             .map_err(|e| e.to_string())?;
         let instance = self.get(terminal_id).ok_or("Terminal not found")?;
         Ok(instance.screen_observation())
+    }
+
+    /// Claim-gated read of the program's current input-routing modes.
+    pub async fn input_modes(
+        &self,
+        terminal_id: &str,
+        claim: &str,
+    ) -> Result<crate::modes::InputModes, String> {
+        self.verify_claim(terminal_id, claim)
+            .map_err(|e| e.to_string())?;
+        let instance = self.get(terminal_id).ok_or("Terminal not found")?;
+        Ok(instance.input_modes())
     }
 
     pub async fn screen_read(

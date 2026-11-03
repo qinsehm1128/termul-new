@@ -6,9 +6,10 @@ import { useTerminalStore } from '@/stores/terminal-store'
 import type { Terminal } from '@/types/project'
 import { TerminalScreenObservationStatus } from './TerminalScreenObservationStatus'
 
-const mocks = vi.hoisted(() => ({ status: vi.fn(), log: vi.fn() }))
+const mocks = vi.hoisted(() => ({ status: vi.fn(), log: vi.fn(), resync: vi.fn() }))
 vi.mock('@/lib/terminal-api', () => ({ readTerminalScreenStatus: mocks.status }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mocks.log }))
+vi.mock('@/lib/terminal-input-resync', () => ({ resyncRendererInputModes: mocks.resync }))
 const ready: ScreenObservationStatus = {
   terminalScreenEngine: 'ghostty-vt',
   state: 'ready',
@@ -33,6 +34,43 @@ describe('read-only host screen status surface', () => {
     expect(mocks.status).not.toHaveBeenCalled()
     expect(screen.getByText(/This host does not provide/)).toBeInTheDocument()
     expect(screen.getByText(/Observation: Unsupported/)).toBeInTheDocument()
+  })
+
+  it('resyncs input takeover only on click, for the PTY, and reports the new owner', async () => {
+    mocks.resync.mockResolvedValue({
+      status: 'applied',
+      rendererBefore: 'none',
+      rendererAfter: 'any',
+      host: {
+        mouseTracking: 1003,
+        mouseEncoding: 1006,
+        bracketedPaste: true,
+        applicationCursor: false,
+        focusEvents: true,
+        applicationKeypad: false,
+        alternateScreen: true
+      }
+    })
+    render(<TerminalScreenObservationStatus terminalId="tab" />)
+    expect(mocks.resync).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('Resync mouse/keyboard takeover'))
+    await waitFor(() =>
+      expect(screen.getByTestId('input-resync-result')).toHaveTextContent(
+        'Resynced: mouse is now owned by the program (all motion) (before: the terminal (native selection))'
+      )
+    )
+    expect(mocks.resync).toHaveBeenCalledExactlyOnceWith('pty')
+  })
+
+  it('explains why a resync was not possible', async () => {
+    mocks.resync.mockResolvedValue({ status: 'unavailable', reason: 'no-claim' })
+    render(<TerminalScreenObservationStatus terminalId="tab" />)
+    fireEvent.click(screen.getByText('Resync mouse/keyboard takeover'))
+    await waitFor(() =>
+      expect(screen.getByTestId('input-resync-result')).toHaveTextContent(
+        'This window holds no access credential for the terminal.'
+      )
+    )
   })
 
   it('refreshes only by explicit action using the actual PTY claim', async () => {

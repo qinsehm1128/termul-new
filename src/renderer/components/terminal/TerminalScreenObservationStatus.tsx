@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { logFrontendError } from '@/lib/log-api'
 import { readTerminalScreenStatus } from '@/lib/terminal-api'
+import { type InputModeResyncResult, resyncRendererInputModes } from '@/lib/terminal-input-resync'
 import { useScreenObservationStore } from '@/stores/screen-observation-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
@@ -19,12 +20,15 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
   const host = useScreenObservationStore((state) => (ptyId ? state.byPtyId[ptyId] : undefined))
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [resyncBusy, setResyncBusy] = useState(false)
+  const [resync, setResync] = useState<InputModeResyncResult | null>(null)
   const request = useRef(0)
   // biome-ignore lint/correctness/useExhaustiveDependencies: resource generation changes must invalidate in-flight replies, even without a new request.
   useEffect(() => {
     ++request.current
     setBusy(false)
     setFailed(false)
+    setResync(null)
     return () => {
       ++request.current
     }
@@ -75,6 +79,20 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
     }
   }
 
+  async function resyncInput() {
+    if (!ptyId || resyncBusy) return
+    const serial = request.current
+    setResyncBusy(true)
+    try {
+      const result = await resyncRendererInputModes(ptyId)
+      if (serial === request.current) setResync(result)
+    } catch {
+      if (serial === request.current) setResync({ status: 'unavailable', reason: 'host-denied' })
+    } finally {
+      if (serial === request.current) setResyncBusy(false)
+    }
+  }
+
   if (!ptyId) return null
   return (
     <details className="absolute bottom-1 right-2 z-30 max-w-xs rounded border border-border/60 bg-background/95 px-2 py-1 text-2xs text-muted-foreground shadow-sm">
@@ -115,6 +133,36 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
         >
           {busy ? t('screenObservation.refreshing') : t('screenObservation.refresh')}
         </button>
+        <div className="border-t border-border/60 pt-1.5">
+          <p>{t('screenObservation.inputTakeover.description')}</p>
+          {resync?.status === 'applied' && (
+            <p data-testid="input-resync-result">
+              {t('screenObservation.inputTakeover.result', {
+                host: t(`screenObservation.inputTakeover.mouse.${resync.rendererAfter}`, {
+                  defaultValue: resync.rendererAfter
+                }),
+                before: t(`screenObservation.inputTakeover.mouse.${resync.rendererBefore}`, {
+                  defaultValue: resync.rendererBefore
+                })
+              })}
+            </p>
+          )}
+          {resync?.status === 'unavailable' && (
+            <p data-testid="input-resync-result">
+              {t(`screenObservation.inputTakeover.unavailable.${resync.reason}`)}
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={resyncBusy}
+            onClick={() => void resyncInput()}
+            className="mt-1 rounded border border-border px-2 py-1 disabled:opacity-50"
+          >
+            {resyncBusy
+              ? t('screenObservation.inputTakeover.resyncing')
+              : t('screenObservation.inputTakeover.resync')}
+          </button>
+        </div>
       </div>
     </details>
   )

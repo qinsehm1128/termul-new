@@ -44,6 +44,22 @@ export interface TerminalScreenReadResult {
   truncated: boolean
 }
 
+/**
+ * Host-tracked input-routing modes of the program running in a PTY (mode
+ * numbers only, never terminal content). Mirrors `se_pty::modes::InputModes`.
+ */
+export interface TerminalInputModes {
+  /** 1000 / 1002 / 1003, or null when the program does not capture the mouse. */
+  mouseTracking: number | null
+  /** 1006 (SGR) / 1015 / 1005, or null. */
+  mouseEncoding: number | null
+  bracketedPaste: boolean
+  applicationCursor: boolean
+  focusEvents: boolean
+  applicationKeypad: boolean
+  alternateScreen: boolean
+}
+
 export function legacyScreenObservation(): ScreenObservationStatus {
   return {
     terminalScreenEngine: 'existing',

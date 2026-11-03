@@ -45,6 +45,7 @@ pub const METHOD_SPAWN: &str = "spawn";
 pub const METHOD_LIST: &str = "list";
 pub const METHOD_SCREEN_STATUS: &str = "terminal.screen-status";
 const METHOD_SCREEN_READ: &str = "terminal.screen-read";
+pub const METHOD_INPUT_MODES: &str = "terminal.input-modes";
 const METHOD_STATUS: &str = "status";
 pub const METHOD_ATTACH: &str = "attach";
 pub const METHOD_WATCH: &str = "watch";
@@ -727,6 +728,22 @@ async fn handle_method(
                 _ => return Err(invalid("screen authorization required")),
             };
             result.map_err(|_| invalid("screen reply encoding"))
+        }
+        METHOD_INPUT_MODES => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                terminal_id: String,
+                claim: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|_| invalid("invalid input modes request"))?;
+            serde_json::to_value(
+                pty.input_modes(&params.terminal_id, &params.claim)
+                    .await
+                    .map_err(|_| invalid("input modes access denied"))?,
+            )
+            .map_err(|_| invalid("input modes encoding"))
         }
         METHOD_STATUS => {
             let params: TerminalIdParams = serde_json::from_value(request.params.clone())
@@ -1719,6 +1736,20 @@ impl TerminalCoreClient {
             .await?;
         serde_json::from_value(value).map_err(|_| invalid("screen status encoding"))
     }
+    pub async fn input_modes(
+        &self,
+        terminal_id: &str,
+        claim: &str,
+    ) -> Result<se_pty::modes::InputModes, CoreError> {
+        let value = self
+            .rpc(
+                METHOD_INPUT_MODES,
+                json!({ "terminalId":terminal_id, "claim":claim }),
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|_| invalid("input modes encoding"))
+    }
+
     pub async fn screen_read(
         &self,
         terminal_id: &str,

@@ -246,6 +246,25 @@
     "sequence": "Applied/captured sequence",
     "refresh": "Refresh host status",
     "refreshing": "Refreshing…",
+    "inputTakeover": {
+      "description": "Mouse/keyboard takeover: when a full-screen program such as qin-code or Claude Code captures the mouse, it handles drag and double-click selection. If clicks, wheel or selection stop working after reopening, resync.",
+      "resync": "Resync mouse/keyboard takeover",
+      "resyncing": "Resyncing…",
+      "result": "Resynced: mouse is now owned by {{host}} (before: {{before}})",
+      "mouse": {
+        "none": "the terminal (native selection)",
+        "vt200": "the program (clicks)",
+        "drag": "the program (clicks + drag)",
+        "any": "the program (all motion)",
+        "x10": "the program (X10)"
+      },
+      "unavailable": {
+        "no-renderer": "No terminal view to resync.",
+        "no-claim": "This window holds no access credential for the terminal.",
+        "host-denied": "The host denied or could not report input modes.",
+        "unsupported": "This runtime cannot read host input modes."
+      }
+    },
     "unavailable": "Host observation is unavailable. No screen evidence is being used.",
     "states": {
       "disabled": "Disabled",
