@@ -289,6 +289,8 @@ impl PluginHost {
             ));
         }
         let artifact_path = loader::package(&self.root, &artifact, &manifest)?;
+        let mut registry = state.registry.clone();
+        let config_revision = registry.allocate_config_revision()?;
         let entry = RegistryEntry {
             id: manifest.id.clone(),
             manifest,
@@ -296,11 +298,10 @@ impl PluginHost {
             artifact_path,
             sha256: artifact.sha256,
             desired_enabled: false,
-            config_revision: 1,
+            config_revision,
             config_overrides: ConfigValues::new(),
             quarantine: None,
         };
-        let mut registry = state.registry.clone();
         registry.plugins.push(entry.clone());
         self.store.write(&registry)?;
         state.registry = registry;
@@ -407,13 +408,18 @@ impl PluginHost {
             ));
         }
         config::migration(&old, &manifest)?;
+        let mut registry = state.registry.clone();
         let mut candidate = old.clone();
+        if manifest.contributes.configuration != old.manifest.contributes.configuration {
+            candidate.config_revision = registry.allocate_config_revision()?;
+        }
         candidate.artifact_path = loader::package(&self.root, &artifact, &manifest)?;
         candidate.source_path = artifact.source;
         candidate.sha256 = artifact.sha256;
         candidate.manifest = manifest;
         candidate.quarantine = None;
-        state.registry.plugins[index] = candidate;
+        registry.plugins[index] = candidate;
+        state.registry = registry;
         self.order(&state.registry).inspect_err(|_| {
             state.registry = old_registry.clone();
         })?;
@@ -481,6 +487,7 @@ impl PluginHost {
         let index = index(&state, &request.id)?;
         self.stop_dependents(&mut state, &request.id).await;
         let mut registry = state.registry.clone();
+        registry.retain_config_revisions();
         registry.plugins.remove(index);
         if let Err(e) = self.store.write(&registry) {
             if let Err(rebuild) = crate::validation::CONTROL_DEADLINE
@@ -802,6 +809,7 @@ impl PluginHost {
         let result = result.and_then(|()| {
             let mut registry = old_registry.clone();
             registry.plugins[index] = candidate.clone();
+            registry.retain_config_revisions();
             self.store.write(&registry)?;
             state.registry = registry;
             Ok(())
@@ -957,7 +965,8 @@ impl PluginHost {
                 .quarantine
                 .as_ref()
                 .map(|q| PluginError::new(q.code.clone(), q.message.clone()))
-                .or_else(|| state.errors.get(&entry.id).cloned()),
+                .or_else(|| state.errors.get(&entry.id).cloned())
+                .map(crate::registry::normalize_diagnostic),
         }
     }
     fn emit(
@@ -1312,36 +1321,92 @@ fn now() -> u64 {
         .as_millis() as u64
 }
 fn gc(root: &Path, registry: &Registry, boot: &str) {
-    if let Ok(entries) = std::fs::read_dir(root.join("loaded")) {
-        for entry in entries.flatten() {
-            if entry.file_name() != boot
-                && entry
-                    .file_type()
-                    .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
-            {
-                let _ = std::fs::remove_dir_all(entry.path());
+    // Do not traverse symlinks at any level. Recheck canonical containment before
+    // deletion as well, rather than trusting only the final entry's file type.
+    fn real_directory(path: &Path) -> Option<PathBuf> {
+        let metadata = std::fs::symlink_metadata(path).ok()?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return None;
+        }
+        std::fs::canonicalize(path).ok()
+    }
+    fn contained_directory(path: &Path, parent: &Path) -> Option<PathBuf> {
+        let canonical = real_directory(path)?;
+        (canonical != parent && canonical.starts_with(parent)).then_some(canonical)
+    }
+    let Some(canonical_root) = real_directory(root) else {
+        return;
+    };
+    if let Some(loaded) = contained_directory(&canonical_root.join("loaded"), &canonical_root) {
+        if let Ok(entries) = std::fs::read_dir(&loaded) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                if name != boot && Uuid::parse_str(name).is_ok() {
+                    if let Some(path) = contained_directory(&entry.path(), &loaded) {
+                        let _ = std::fs::remove_dir_all(path);
+                    }
+                }
             }
         }
     }
-    // Packages are immutable; only remove complete, unreferenced hash directories.
-    if let Ok(ids) = std::fs::read_dir(root.join("packages")) {
-        for id in ids.flatten() {
-            if let Ok(versions) = std::fs::read_dir(id.path()) {
-                for version in versions.flatten() {
-                    if let Ok(hashes) = std::fs::read_dir(version.path()) {
-                        for hash in hashes.flatten() {
-                            if hash
-                                .file_type()
-                                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
-                                && !registry
-                                    .plugins
-                                    .iter()
-                                    .any(|entry| entry.artifact_path.starts_with(hash.path()))
-                            {
-                                let _ = std::fs::remove_dir_all(hash.path());
-                            }
-                        }
-                    }
+    // Only recognized, unreferenced package directories belong to the host.
+    let Some(packages) = contained_directory(&canonical_root.join("packages"), &canonical_root)
+    else {
+        return;
+    };
+    let Ok(ids) = std::fs::read_dir(&packages) else {
+        return;
+    };
+    for id in ids.flatten() {
+        if !id.file_name().to_str().is_some_and(is_plugin_id) {
+            continue;
+        }
+        let Some(id_path) = contained_directory(&id.path(), &packages) else {
+            continue;
+        };
+        let Ok(versions) = std::fs::read_dir(&id_path) else {
+            continue;
+        };
+        for version in versions.flatten() {
+            if version
+                .file_name()
+                .to_str()
+                .is_none_or(|name| semver::Version::parse(name).is_err())
+            {
+                continue;
+            }
+            let Some(version_path) = contained_directory(&version.path(), &id_path) else {
+                continue;
+            };
+            let Ok(hashes) = std::fs::read_dir(&version_path) else {
+                continue;
+            };
+            for hash in hashes.flatten() {
+                if !hash.file_name().to_str().is_some_and(|name| {
+                    name.len() == 64
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                }) {
+                    continue;
+                }
+                let Some(path) = contained_directory(&hash.path(), &packages) else {
+                    continue;
+                };
+                let relative = path
+                    .strip_prefix(&canonical_root)
+                    .expect("contained package");
+                let original = root.join(relative);
+                if !registry.plugins.iter().any(|entry| {
+                    entry.artifact_path.starts_with(&original)
+                        || entry.artifact_path.starts_with(&path)
+                        || std::fs::canonicalize(&entry.artifact_path)
+                            .is_ok_and(|artifact| artifact.starts_with(&path))
+                }) {
+                    let _ = std::fs::remove_dir_all(path);
                 }
             }
         }
@@ -1491,6 +1556,266 @@ mod tests {
         })
         .await
     }
+    #[tokio::test]
+    async fn published_registry_changes_adopt_config_install_and_uninstall() {
+        use se_foundation::durable_fs::CrashPoint;
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        host.store.interrupt_next_write(CrashPoint::AfterReplace);
+        install_fixture(&host, root.path(), manifest("test.published", &[], &[])).await;
+        assert_eq!(host.store.read().unwrap().plugins.len(), 1);
+        let before = host
+            .get_config(GetConfigRequest {
+                id: "test.published".into(),
+            })
+            .await
+            .unwrap();
+        host.store.interrupt_next_write(CrashPoint::AfterReplace);
+        let saved = host
+            .set_config(SetConfigRequest {
+                id: "test.published".into(),
+                expected_revision: before.revision,
+                values: ConfigValues::from([("enabled".into(), ConfigValue::Boolean(true))]),
+            })
+            .await
+            .unwrap();
+        assert!(saved.revision > before.revision);
+        assert_eq!(
+            host.get_config(GetConfigRequest {
+                id: "test.published".into()
+            })
+            .await
+            .unwrap()
+            .revision,
+            saved.revision
+        );
+        assert_eq!(
+            host.store.read().unwrap().plugins[0].config_revision,
+            saved.revision
+        );
+        host.store.interrupt_next_write(CrashPoint::AfterReplace);
+        host.uninstall(UninstallRequest {
+            id: "test.published".into(),
+        })
+        .await
+        .unwrap();
+        assert!(host.list().await.unwrap().plugins.is_empty());
+        assert!(host.store.read().unwrap().plugins.is_empty());
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unpublished_config_write_keeps_old_revision_and_values() {
+        use se_foundation::durable_fs::CrashPoint;
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(&host, root.path(), manifest("test.unpublished", &[], &[])).await;
+        let before = host
+            .get_config(GetConfigRequest {
+                id: "test.unpublished".into(),
+            })
+            .await
+            .unwrap();
+        host.store.interrupt_next_write(CrashPoint::BeforeTempSync);
+        assert_eq!(
+            host.set_config(SetConfigRequest {
+                id: "test.unpublished".into(),
+                expected_revision: before.revision,
+                values: ConfigValues::from([("enabled".into(), ConfigValue::Boolean(true))]),
+            })
+            .await
+            .unwrap_err()
+            .code,
+            PLUGIN_IO
+        );
+        assert_eq!(
+            host.get_config(GetConfigRequest {
+                id: "test.unpublished".into()
+            })
+            .await
+            .unwrap(),
+            before
+        );
+        assert_eq!(
+            host.store.read().unwrap().plugins[0].config_revision,
+            before.revision
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn upgrade_manifest_fences_preupgrade_config_form() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(&host, root.path(), manifest("test.upgrade", &[], &[])).await;
+        let before = host
+            .get_config(GetConfigRequest {
+                id: "test.upgrade".into(),
+            })
+            .await
+            .unwrap();
+        let mut updated = manifest("test.upgrade", &[], &[]);
+        updated.version = "2.0.0".into();
+        updated
+            .contributes
+            .configuration
+            .properties
+            .get_mut("enabled")
+            .unwrap()
+            .default = ConfigValue::Boolean(true);
+        let path = root.path().join("upgrade.dylib");
+        loader::register_fixture(&path, updated, fixture_api());
+        host.reload(ReloadRequest {
+            id: "test.upgrade".into(),
+            path: Some(path.to_string_lossy().into_owned()),
+        })
+        .await
+        .unwrap();
+        let after = host
+            .get_config(GetConfigRequest {
+                id: "test.upgrade".into(),
+            })
+            .await
+            .unwrap();
+        assert!(after.revision > before.revision);
+        assert_eq!(
+            after.values.get("enabled"),
+            Some(&ConfigValue::Boolean(true))
+        );
+        assert_eq!(
+            host.store.read().unwrap().plugins[0].config_revision,
+            after.revision
+        );
+        assert_eq!(
+            host.set_config(SetConfigRequest {
+                id: "test.upgrade".into(),
+                expected_revision: before.revision,
+                values: before.values
+            })
+            .await
+            .unwrap_err()
+            .code,
+            PLUGIN_CONFIG_CONFLICT
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reinstall_after_restart_does_not_reuse_retired_config_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(&host, root.path(), manifest("test.reinstall", &[], &[])).await;
+        let old = host
+            .get_config(GetConfigRequest {
+                id: "test.reinstall".into(),
+            })
+            .await
+            .unwrap();
+        let old = host
+            .set_config(SetConfigRequest {
+                id: "test.reinstall".into(),
+                expected_revision: old.revision,
+                values: ConfigValues::from([("enabled".into(), ConfigValue::Boolean(true))]),
+            })
+            .await
+            .unwrap();
+        host.uninstall(UninstallRequest {
+            id: "test.reinstall".into(),
+        })
+        .await
+        .unwrap();
+        host.shutdown().await.unwrap();
+        drop(host);
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(&host, root.path(), manifest("test.reinstall", &[], &[])).await;
+        let new = host
+            .get_config(GetConfigRequest {
+                id: "test.reinstall".into(),
+            })
+            .await
+            .unwrap();
+        assert!(new.revision > old.revision);
+        assert_eq!(
+            host.set_config(SetConfigRequest {
+                id: "test.reinstall".into(),
+                expected_revision: old.revision,
+                values: old.values
+            })
+            .await
+            .unwrap_err()
+            .code,
+            PLUGIN_CONFIG_CONFLICT
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_schema_reload_keeps_configuration_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(&host, root.path(), manifest("test.same-schema", &[], &[])).await;
+        let before = host
+            .get_config(GetConfigRequest {
+                id: "test.same-schema".into(),
+            })
+            .await
+            .unwrap();
+        let mut changed = manifest("test.same-schema", &[], &[]);
+        changed.version = "2.0.0".into();
+        changed.contributes.commands.clear();
+        let path = root.path().join("same_schema.dylib");
+        loader::register_fixture(&path, changed, fixture_api());
+        host.reload(ReloadRequest {
+            id: "test.same-schema".into(),
+            path: Some(path.to_string_lossy().into_owned()),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            host.get_config(GetConfigRequest {
+                id: "test.same-schema".into()
+            })
+            .await
+            .unwrap(),
+            before
+        );
+        assert_eq!(
+            host.store.read().unwrap().plugins[0].config_revision,
+            before.revision
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn last_error_is_normalized_for_renderer_snapshots() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(&host, root.path(), manifest("test.diagnostic", &[], &[])).await;
+        host.state.lock().await.errors.insert(
+            "test.diagnostic".into(),
+            PluginError::new("bad", "😀".repeat(9000)),
+        );
+        let snapshot = host.list().await.unwrap();
+        let diagnostic = snapshot.plugins[0].last_error.as_ref().unwrap();
+        assert_eq!(diagnostic.code, PLUGIN_CALLBACK_ERROR);
+        assert_eq!(diagnostic.message.encode_utf16().count(), 8192);
+        host.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn dependency_arrival_and_withdrawal_release_every_lease() {
         let root = tempfile::tempdir().unwrap();
@@ -1933,6 +2258,100 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(800)).await;
         assert_eq!(host.diagnostics().callbacks_in_flight, 0);
         host.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gc_skips_symlinked_package_levels_and_cleanup_roots() {
+        use std::os::unix::fs::symlink;
+        let hash = "a".repeat(64);
+        for level in ["packages", "id", "version", "hash", "loaded", "boot"] {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let victim = match level {
+                "packages" => outside.path().join("test.gc/1.0.0").join(&hash),
+                "id" => outside.path().join("1.0.0").join(&hash),
+                "version" => outside.path().join(&hash),
+                "loaded" => outside.path().join(Uuid::new_v4().to_string()),
+                _ => outside.path().join("preserve"),
+            };
+            std::fs::create_dir_all(&victim).unwrap();
+            std::fs::write(victim.join("sentinel"), b"outside").unwrap();
+            let link = match level {
+                "packages" => root.path().join("packages"),
+                "id" => root.path().join("packages/test.gc"),
+                "version" => root.path().join("packages/test.gc/1.0.0"),
+                "hash" => root.path().join("packages/test.gc/1.0.0").join(&hash),
+                "loaded" => root.path().join("loaded"),
+                _ => root.path().join("loaded").join(Uuid::new_v4().to_string()),
+            };
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            symlink(outside.path(), &link).unwrap();
+            gc(
+                root.path(),
+                &Registry::default(),
+                &Uuid::new_v4().to_string(),
+            );
+            assert_eq!(
+                std::fs::read(victim.join("sentinel")).unwrap(),
+                b"outside",
+                "{level}"
+            );
+            assert!(std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
+    }
+
+    #[test]
+    fn gc_removes_only_recognized_unreferenced_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let hash = "a".repeat(64);
+        let valid = root.path().join("packages/test.gc/1.0.0").join(&hash);
+        let preserved = [
+            root.path().join("packages/INVALID/1.0.0").join(&hash),
+            root.path().join("packages/test.gc/not-semver").join(&hash),
+            root.path().join("packages/test.gc/1.0.0/invalid-hash"),
+            root.path()
+                .join("packages/test.gc/1.0.0")
+                .join("B".repeat(64)),
+            root.path().join("loaded/not-a-boot-id"),
+        ];
+        let boot = Uuid::new_v4().to_string();
+        let current = root.path().join("loaded").join(&boot);
+        let stale = root.path().join("loaded").join(Uuid::new_v4().to_string());
+        let referenced = root
+            .path()
+            .join("packages/test.gc/1.0.0")
+            .join("c".repeat(64));
+        let mut registry = Registry::default();
+        registry.plugins.push(RegistryEntry {
+            id: "test.gc".to_owned(),
+            manifest: manifest("test.gc", &[], &[]),
+            source_path: root.path().join("source"),
+            artifact_path: referenced.join("plugin.fixture"),
+            sha256: "c".repeat(64),
+            desired_enabled: false,
+            config_revision: 1,
+            config_overrides: BTreeMap::new(),
+            quarantine: None,
+        });
+        for path in preserved
+            .iter()
+            .chain([&valid, &current, &stale, &referenced])
+        {
+            std::fs::create_dir_all(path).unwrap();
+            std::fs::write(path.join("sentinel"), b"owned").unwrap();
+        }
+        gc(root.path(), &registry, &boot);
+        assert!(!valid.exists());
+        assert!(!stale.exists());
+        assert!(referenced.join("sentinel").is_file());
+        assert!(current.join("sentinel").is_file());
+        for path in preserved {
+            assert!(path.join("sentinel").is_file(), "{}", path.display());
+        }
     }
 
     #[test]

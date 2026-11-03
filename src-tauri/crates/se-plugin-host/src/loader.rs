@@ -89,9 +89,53 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), PluginError> {
         options.mode(0o600);
     }
     let mut file = options.open(path).map_err(io)?;
-    file.write_all(bytes).map_err(io)?;
-    file.sync_all().map_err(io)?;
-    Ok(())
+    let result = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result.map_err(io)
+}
+
+/// `None` means absent; never follow a package symlink, even a dangling one.
+fn package_matches(path: &Path, bytes: &[u8]) -> Result<Option<bool>, PluginError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(fs::read(path).map_err(io)? == bytes)),
+        Ok(_) => Err(error(PLUGIN_IO, "immutable package is not a regular file")),
+        Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(failure) => Err(io(failure)),
+    }
+}
+
+fn publish_package(path: &Path, bytes: &[u8]) -> Result<(), PluginError> {
+    // Multiple host instances may share a package root. Serialize validation and
+    // repair so a second publisher never renames over an already repaired file.
+    static PUBLICATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _publication = PUBLICATION
+        .lock()
+        .map_err(|_| error(PLUGIN_IO, "package publication lock poisoned"))?;
+    let temporary = path.with_file_name(format!(".plugin-{}.tmp", Uuid::new_v4()));
+    write_new(&temporary, bytes)?;
+    let result = (|| loop {
+        match package_matches(path, bytes)? {
+            Some(true) => return Ok(()),
+            // A previous interrupted write may have left a partial final file.
+            // Replace only mismatching regular files, with fully synced bytes.
+            Some(false) => return fs::rename(&temporary, path).map_err(io),
+            // A hard link publishes the synced inode atomically and, unlike
+            // rename, cannot clobber a complete file published in the meantime.
+            None => match fs::hard_link(&temporary, path) {
+                Ok(()) => return Ok(()),
+                // Another publisher won: validate it rather than overwrite it.
+                Err(failure) if failure.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(failure) => return Err(io(failure)),
+            },
+        }
+    })();
+    // After rename this name is already gone; after linking (or any failure)
+    // remove our private temporary, never another publisher's file.
+    let _ = fs::remove_file(&temporary);
+    result
 }
 
 pub(crate) fn package(
@@ -111,12 +155,8 @@ pub(crate) fn package(
     if format!("{:x}", Sha256::digest(&bytes)) != artifact.sha256 {
         return Err(error(PLUGIN_IO, "staged plugin hash changed"));
     }
-    if path.exists() {
-        if fs::read(&path).map_err(io)? != bytes {
-            return Err(error(PLUGIN_IO, "immutable package was modified"));
-        }
-    } else {
-        write_new(&path, &bytes)?;
+    if package_matches(&path, &bytes)? != Some(true) {
+        publish_package(&path, &bytes)?;
     }
     Ok(path)
 }
@@ -188,6 +228,147 @@ pub(crate) fn register_fixture(source: &Path, manifest: Manifest, api: SePluginA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn package_fixture(root: &Path) -> (Artifact, Manifest, PathBuf) {
+        let source = root.join(format!("source.{}", extension()));
+        fs::write(&source, b"complete native plugin bytes").unwrap();
+        let artifact = stage(root, "boot", &source).unwrap();
+        let manifest = Manifest {
+            schema_version: 1,
+            id: "test.loader".to_owned(),
+            name: "Loader".to_owned(),
+            version: "1.0.0".to_owned(),
+            abi: AbiRange { min: 1, max: 1 },
+            contributes: Contributions {
+                commands: vec![],
+                views: vec![],
+                configuration: ConfigurationSchema {
+                    title: "Settings".to_owned(),
+                    properties: Default::default(),
+                },
+            },
+            services: Services {
+                provides: vec![],
+                requires: vec![],
+            },
+        };
+        let directory = root
+            .join("packages")
+            .join(&manifest.id)
+            .join(&manifest.version)
+            .join(&artifact.sha256);
+        private_dir(&directory).unwrap();
+        let path = directory.join(format!("plugin.{}", extension()));
+        (artifact, manifest, path)
+    }
+
+    fn assert_only_package(path: &Path) {
+        let entries: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(entries, vec![path.to_path_buf()]);
+    }
+
+    #[test]
+    fn partial_final_package_is_repaired_atomically_and_retry_succeeds() {
+        let root = tempfile::tempdir().unwrap();
+        let (artifact, manifest, path) = package_fixture(root.path());
+        fs::write(&path, b"partial").unwrap();
+        // An existing reader keeps the old inode, proving repair is replacement,
+        // not truncation and rewriting of the final pathname.
+        let mut old_file = fs::File::open(&path).unwrap();
+        assert_eq!(package(root.path(), &artifact, &manifest).unwrap(), path);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            fs::read(&artifact.loaded).unwrap()
+        );
+        let mut old_bytes = Vec::new();
+        old_file.read_to_end(&mut old_bytes).unwrap();
+        assert_eq!(old_bytes, b"partial");
+        assert_eq!(package(root.path(), &artifact, &manifest).unwrap(), path);
+        assert_only_package(&path);
+    }
+
+    #[test]
+    fn package_publication_is_private_and_reuses_complete_files() {
+        let root = tempfile::tempdir().unwrap();
+        let (artifact, manifest, path) = package_fixture(root.path());
+        package(root.path(), &artifact, &manifest).unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            fs::read(&artifact.loaded).unwrap()
+        );
+        let before = fs::metadata(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(before.permissions().mode() & 0o777, 0o600);
+        }
+        package(root.path(), &artifact, &manifest).unwrap();
+        // Exercise the publisher's no-overwrite check as well as package's fast path.
+        publish_package(&path, &fs::read(&artifact.loaded).unwrap()).unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(before.ino(), after.ino());
+        }
+        assert_only_package(&path);
+    }
+
+    #[test]
+    fn failed_publication_removes_temporary_and_refuses_nonregular_final() {
+        let root = tempfile::tempdir().unwrap();
+        let (artifact, manifest, path) = package_fixture(root.path());
+        fs::create_dir(&path).unwrap();
+        assert_eq!(
+            package(root.path(), &artifact, &manifest).unwrap_err().code,
+            PLUGIN_IO
+        );
+        // Call the publication helper directly to force failure after temp sync.
+        assert_eq!(
+            publish_package(&path, b"complete").unwrap_err().code,
+            PLUGIN_IO
+        );
+        assert!(path.is_dir());
+        assert_only_package(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_refuses_existing_and_dangling_symlinks() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let (artifact, manifest, path) = package_fixture(root.path());
+        let missing = root.path().join("missing");
+        for target in [&artifact.loaded, &missing] {
+            symlink(target, &path).unwrap();
+            assert_eq!(
+                package(root.path(), &artifact, &manifest).unwrap_err().code,
+                PLUGIN_IO
+            );
+            assert_eq!(
+                publish_package(&path, b"complete").unwrap_err().code,
+                PLUGIN_IO
+            );
+            assert_eq!(fs::read_link(&path).unwrap(), *target);
+            assert_only_package(&path);
+            fs::remove_file(&path).unwrap();
+        }
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn write_new_collision_preserves_the_existing_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("existing.tmp");
+        fs::write(&path, b"another writer").unwrap();
+        assert!(write_new(&path, b"replacement").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"another writer");
+    }
+
     #[test]
     fn rejects_relative_and_non_library_paths() {
         let root = tempfile::tempdir().unwrap();

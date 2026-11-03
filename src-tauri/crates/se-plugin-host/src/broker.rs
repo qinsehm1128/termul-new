@@ -331,6 +331,33 @@ impl PluginBroker {
     }
 }
 
+fn unavailable() -> PluginError {
+    PluginError::new(PLUGIN_SERVICE_UNAVAILABLE, "plugin service is unavailable")
+}
+
+fn extend_chain(
+    caller: &str,
+    provider: &str,
+    mut chain: Vec<String>,
+) -> Result<Vec<String>, PluginError> {
+    if chain.is_empty() {
+        chain.push(caller.to_owned());
+    }
+    let unique: BTreeSet<_> = chain.iter().collect();
+    if chain.last().map(String::as_str) != Some(caller)
+        || unique.len() != chain.len()
+        || chain.iter().any(|id| id == provider)
+        || chain.len() >= MAX_CHAIN_DEPTH
+    {
+        return Err(PluginError::new(
+            PLUGIN_REENTRANT,
+            "reentrant, invalid, or excessively deep service call chain",
+        ));
+    }
+    chain.push(provider.to_owned());
+    Ok(chain)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,31 +567,4 @@ mod tests {
             PLUGIN_REENTRANT
         );
     }
-}
-
-fn unavailable() -> PluginError {
-    PluginError::new(PLUGIN_SERVICE_UNAVAILABLE, "plugin service is unavailable")
-}
-
-fn extend_chain(
-    caller: &str,
-    provider: &str,
-    mut chain: Vec<String>,
-) -> Result<Vec<String>, PluginError> {
-    if chain.is_empty() {
-        chain.push(caller.to_owned());
-    }
-    let unique: BTreeSet<_> = chain.iter().collect();
-    if chain.last().map(String::as_str) != Some(caller)
-        || unique.len() != chain.len()
-        || chain.iter().any(|id| id == provider)
-        || chain.len() >= MAX_CHAIN_DEPTH
-    {
-        return Err(PluginError::new(
-            PLUGIN_REENTRANT,
-            "reentrant, invalid, or excessively deep service call chain",
-        ));
-    }
-    chain.push(provider.to_owned());
-    Ok(chain)
 }

@@ -21,6 +21,10 @@ type Result<T> = std::result::Result<T, PluginError>;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Registry {
     pub(crate) schema_version: u32,
+    // Retained after uninstall so old configuration forms cannot match a reinstallation.
+    // Default supports registries written before revision allocation was profile-wide.
+    #[serde(default)]
+    pub(crate) config_revision_high_water: u64,
     pub(crate) plugins: Vec<RegistryEntry>,
 }
 
@@ -28,8 +32,36 @@ impl Default for Registry {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            config_revision_high_water: 0,
             plugins: Vec::new(),
         }
+    }
+}
+
+impl Registry {
+    pub(crate) fn allocate_config_revision(&mut self) -> Result<u64> {
+        let last = self
+            .plugins
+            .iter()
+            .map(|entry| entry.config_revision)
+            .max()
+            .unwrap_or(0)
+            .max(self.config_revision_high_water);
+        if last >= se_plugin_protocol::MAX_SAFE_INTEGER {
+            return Err(io_error("configuration revision exhausted"));
+        }
+        self.config_revision_high_water = last + 1;
+        Ok(last + 1)
+    }
+
+    pub(crate) fn retain_config_revisions(&mut self) {
+        self.config_revision_high_water = self
+            .plugins
+            .iter()
+            .map(|entry| entry.config_revision)
+            .max()
+            .unwrap_or(0)
+            .max(self.config_revision_high_water);
     }
 }
 
@@ -69,6 +101,25 @@ pub(crate) struct Store {
     pub(crate) root: PathBuf,
     _lock: File,
     fs: DurableFileSystem,
+    #[cfg(test)]
+    fault: Arc<TestCrashInjector>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestCrashInjector(Mutex<Option<se_foundation::durable_fs::CrashPoint>>);
+
+#[cfg(test)]
+impl se_foundation::durable_fs::CrashInjector for TestCrashInjector {
+    fn should_interrupt(&self, point: se_foundation::durable_fs::CrashPoint) -> bool {
+        let mut armed = self.0.lock().unwrap();
+        if *armed == Some(point) {
+            *armed = None;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Store {
@@ -104,20 +155,40 @@ impl Store {
                 .map_err(io_error)?;
         }
         lock.sync_all().map_err(io_error)?;
+        #[cfg(test)]
+        let fault = Arc::new(TestCrashInjector::default());
+        #[cfg(test)]
+        let fs = DurableFileSystem::with_crash_injector(fault.clone());
         Ok(Self {
             root,
             _lock: lock,
             fs,
+            #[cfg(test)]
+            fault,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interrupt_next_write(&self, point: se_foundation::durable_fs::CrashPoint) {
+        *self.fault.0.lock().unwrap() = Some(point);
     }
 
     pub(crate) fn read(&self) -> Result<Registry> {
         let Some(bytes) = read_optional(&self.root.join("registry.json"))? else {
             return Ok(Registry::default());
         };
-        let registry: Registry = serde_json::from_slice(&bytes)
+        let mut registry: Registry = serde_json::from_slice(&bytes)
             .map_err(|_| corrupt("registry JSON is malformed or has an unsupported shape"))?;
+        for entry in &mut registry.plugins {
+            if let Some(quarantine) = &mut entry.quarantine {
+                let diagnostic =
+                    normalize_diagnostic(PluginError::new(&quarantine.code, &quarantine.message));
+                quarantine.code = diagnostic.code;
+                quarantine.message = diagnostic.message;
+            }
+        }
         self.validate(&registry)?;
+        registry.retain_config_revisions();
         Ok(registry)
     }
 
@@ -125,12 +196,17 @@ impl Store {
         self.validate(registry)?;
         // Never replace an existing corrupt registry, even if a caller supplies an empty one.
         self.read()?;
-        persist(&self.fs, &self.root.join("registry.json"), registry)
+        let mut registry = registry.clone();
+        registry.retain_config_revisions();
+        persist(&self.fs, &self.root.join("registry.json"), &registry)
     }
 
     fn validate(&self, registry: &Registry) -> Result<()> {
         if registry.schema_version != SCHEMA_VERSION {
             return Err(corrupt("unsupported registry schemaVersion"));
+        }
+        if registry.config_revision_high_water > se_plugin_protocol::MAX_SAFE_INTEGER {
+            return Err(corrupt("configuration revision high-water mark is invalid"));
         }
         let mut ids = BTreeSet::new();
         for entry in &registry.plugins {
@@ -432,6 +508,70 @@ fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+pub(crate) fn normalize_diagnostic(mut error: PluginError) -> PluginError {
+    const MAX: usize = 8192;
+    let suffix = error.code.strip_prefix("PLUGIN_").unwrap_or("");
+    if error.code.len() > MAX
+        || suffix.is_empty()
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+    {
+        error.code = se_plugin_protocol::PLUGIN_CALLBACK_ERROR.into();
+    }
+    // JS string limits count UTF-16 code units; never split a Rust char or surrogate pair.
+    let mut units = 0;
+    let keep = error.message.char_indices().find_map(|(index, ch)| {
+        units += ch.len_utf16();
+        (units > MAX).then_some(index)
+    });
+    if let Some(keep) = keep {
+        error.message.truncate(keep);
+    }
+    if error.message.is_empty() {
+        error.message = "plugin diagnostic unavailable".into();
+    }
+    error
+}
+
+fn persist(fs: &DurableFileSystem, path: &Path, value: &impl Serialize) -> Result<()> {
+    let bytes =
+        serde_json::to_vec(value).map_err(|_| io_error("plugin metadata serialization failed"))?;
+    finish_persist(path, fs.replace_bytes(path, &bytes))
+}
+
+// Publication is the commit point for live state, including journal tokens. Returning an
+// error after publication would tell callers to roll back even though disk has new bytes.
+// Keep the new state and surface uncertain crash durability as a structured log warning.
+fn finish_persist(
+    path: &Path,
+    result: se_foundation::durable_fs::Result<se_foundation::durable_fs::DurableWriteOutcome>,
+) -> Result<()> {
+    use se_foundation::durable_fs::{CrashPoint, NamespaceState};
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            match error.durable_outcome() {
+                Some(outcome) if outcome.namespace_state == NamespaceState::NewComplete => {
+                    log::warn!("code={PLUGIN_IO} durability=uncertain published=true path={} error={error}", path.display());
+                    return Ok(());
+                }
+                _ => return Err(io_error(error)),
+            }
+        }
+    };
+    if outcome.namespace_state != NamespaceState::NewComplete {
+        return Err(io_error("plugin metadata write was not published"));
+    }
+    if outcome.crash_point != CrashPoint::AfterNamespaceSync {
+        log::warn!(
+            "code={PLUGIN_IO} durability=uncertain published=true path={}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,6 +601,138 @@ mod tests {
                 "command".into(),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn published_namespace_sync_error_is_committed_but_prepublication_error_is_not() {
+        use se_foundation::durable_fs::{CrashPoint, DurableFsError, NamespaceState};
+        let temp = Scratch::new();
+        let store = Store::open(temp.0.clone()).unwrap();
+        let path = store.root.join("registry.json");
+        store.write(&Registry::default()).unwrap();
+        let fault = Arc::new(TestCrashInjector::default());
+        let fs = DurableFileSystem::with_crash_injector(fault.clone());
+        for point in [CrashPoint::AfterTempSync, CrashPoint::AfterReplace] {
+            *fault.0.lock().unwrap() = Some(point);
+            let bytes = br#"{"schemaVersion":1,"configRevisionHighWater":42,"plugins":[]}"#;
+            let outcome = fs.replace_bytes(&path, bytes).unwrap();
+            // Use the real injector's namespace outcome, wrapped exactly as durable_fs
+            // wraps an actual parent-directory fsync error after replacement.
+            let result = finish_persist(
+                &path,
+                Err(DurableFsError::Io {
+                    operation: "replace_bytes",
+                    step: "namespace_sync",
+                    path: path.clone(),
+                    source: io::Error::other("injected sync failure"),
+                    outcome: Some(outcome),
+                }),
+            );
+            if outcome.namespace_state == NamespaceState::NewComplete {
+                result.unwrap();
+                assert_eq!(store.read().unwrap().config_revision_high_water, 42);
+            } else {
+                assert_eq!(result.unwrap_err().code, PLUGIN_IO);
+                assert_eq!(store.read().unwrap().config_revision_high_water, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn journal_adopts_published_begin_end_and_clean_exit() {
+        use se_foundation::durable_fs::CrashPoint;
+        let temp = Scratch::new();
+        let (journal, _) = Journal::open_at(temp.0.clone(), boot(), 100).unwrap();
+        let mut journal = Arc::try_unwrap(journal).ok().unwrap();
+        let fault = Arc::new(TestCrashInjector::default());
+        journal.fs = DurableFileSystem::with_crash_injector(fault.clone());
+        *fault.0.lock().unwrap() = Some(CrashPoint::AfterReplace);
+        let token = call(&journal, Some("test.plugin"));
+        assert_eq!(journal.state().unwrap().calls.len(), 1);
+        let disk: RuntimeRecord =
+            serde_json::from_slice(&fs::read(&journal.path).unwrap()).unwrap();
+        assert_eq!(disk.in_flight.len(), 1);
+        *fault.0.lock().unwrap() = Some(CrashPoint::AfterReplace);
+        journal.end(&token).unwrap();
+        assert!(journal.state().unwrap().calls.is_empty());
+        let disk: RuntimeRecord =
+            serde_json::from_slice(&fs::read(&journal.path).unwrap()).unwrap();
+        assert!(disk.in_flight.is_empty());
+        *fault.0.lock().unwrap() = Some(CrashPoint::AfterReplace);
+        journal.clean_exit().unwrap();
+        assert!(journal.state().unwrap().record.clean_exit);
+        let disk: RuntimeRecord =
+            serde_json::from_slice(&fs::read(&journal.path).unwrap()).unwrap();
+        assert!(disk.clean_exit);
+    }
+
+    #[test]
+    fn legacy_registry_revisions_seed_persistent_high_water_and_exhaust_safely() {
+        let temp = Scratch::new();
+        let store = Store::open(temp.0.clone()).unwrap();
+        let mut entry = valid_entry(&store);
+        entry.config_revision = 99;
+        let bytes = serde_json::json!({"schemaVersion": 1, "plugins": [entry]});
+        fs::write(
+            store.root.join("registry.json"),
+            serde_json::to_vec(&bytes).unwrap(),
+        )
+        .unwrap();
+        let mut registry = store.read().unwrap();
+        assert_eq!(registry.allocate_config_revision().unwrap(), 100);
+        registry.plugins.clear();
+        store.write(&registry).unwrap();
+        let mut registry = store.read().unwrap();
+        assert_eq!(registry.allocate_config_revision().unwrap(), 101);
+        registry.config_revision_high_water = se_plugin_protocol::MAX_SAFE_INTEGER;
+        assert_eq!(
+            registry.allocate_config_revision().unwrap_err().code,
+            PLUGIN_IO
+        );
+    }
+
+    #[test]
+    fn malformed_quarantine_diagnostics_are_normalized_on_read() {
+        let temp = Scratch::new();
+        let store = Store::open(temp.0.clone()).unwrap();
+        let mut entry = valid_entry(&store);
+        entry.quarantine = Some(Quarantine {
+            code: "bad-code".into(),
+            message: "😀".repeat(9000),
+            at: 1,
+        });
+        let bytes = serde_json::json!({"schemaVersion": 1, "plugins": [entry]});
+        fs::write(
+            store.root.join("registry.json"),
+            serde_json::to_vec(&bytes).unwrap(),
+        )
+        .unwrap();
+        let registry = store.read().unwrap();
+        let q = registry.plugins[0].quarantine.as_ref().unwrap();
+        assert_eq!(q.code, se_plugin_protocol::PLUGIN_CALLBACK_ERROR);
+        assert_eq!(q.message.encode_utf16().count(), 8192);
+        assert_eq!(q.message.chars().count(), 4096);
+        // Reading repairs the in-memory diagnostic, not the original evidence on disk.
+        assert_eq!(
+            fs::read(store.root.join("registry.json")).unwrap(),
+            serde_json::to_vec(&bytes).unwrap()
+        );
+    }
+
+    #[test]
+    fn diagnostic_normalization_keeps_valid_errors_and_bounds_bad_codes() {
+        let valid = PluginError::new(PLUGIN_IO, "disk unavailable");
+        assert_eq!(normalize_diagnostic(valid.clone()), valid);
+        for code in [
+            "PLUGIN_".to_owned(),
+            "PLUGIN_bad".into(),
+            format!("PLUGIN_{}", "A".repeat(8192)),
+        ] {
+            assert_eq!(
+                normalize_diagnostic(PluginError::new(code, "reason")).code,
+                se_plugin_protocol::PLUGIN_CALLBACK_ERROR
+            );
+        }
     }
 
     #[test]
@@ -647,18 +919,4 @@ mod tests {
         assert!(store.write(&Registry::default()).is_err());
         assert_eq!(fs::read(outside).unwrap(), b"untouched");
     }
-}
-
-fn persist(fs: &DurableFileSystem, path: &Path, value: &impl Serialize) -> Result<()> {
-    let bytes =
-        serde_json::to_vec(value).map_err(|_| io_error("plugin metadata serialization failed"))?;
-    let outcome = fs.replace_bytes(path, &bytes).map_err(io_error)?;
-    if outcome.namespace_state != se_foundation::durable_fs::NamespaceState::NewComplete
-        || outcome.crash_point != se_foundation::durable_fs::CrashPoint::AfterNamespaceSync
-    {
-        return Err(io_error(
-            "plugin metadata write did not reach a durable commit",
-        ));
-    }
-    Ok(())
 }
