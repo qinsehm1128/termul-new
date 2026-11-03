@@ -134,19 +134,19 @@ export default function PluginsPage(): React.JSX.Element {
                     <Button
                       variant="outline"
                       disabled={unavailable}
-                      onClick={() =>
-                        void setEnabled(
-                          plugin.id,
-                          !plugin.desiredEnabled || plugin.state === 'quarantined'
-                        )
-                      }
+                      onClick={() => void setEnabled(plugin.id, !plugin.desiredEnabled)}
                     >
-                      {t(
-                        plugin.desiredEnabled && plugin.state !== 'quarantined'
-                          ? 'manager.disable'
-                          : 'manager.enable'
-                      )}
+                      {t(plugin.desiredEnabled ? 'manager.disable' : 'manager.enable')}
                     </Button>
+                    {(plugin.state === 'quarantined' || plugin.state === 'failed') && (
+                      <Button
+                        variant="outline"
+                        disabled={unavailable}
+                        onClick={() => void setEnabled(plugin.id, true)}
+                      >
+                        {t('manager.retry')}
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       disabled={unavailable || plugin.state === 'quarantined'}

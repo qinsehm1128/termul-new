@@ -85,6 +85,54 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
     }
   }
 
+  let registration: Promise<boolean> | null = null
+  let listenersReady = false
+
+  function registerListeners(): Promise<boolean> {
+    let active = true
+    let ready = false
+    const offChanged = pluginApi.onChanged((event) => {
+      // The snapshot after registration includes changes emitted during setup.
+      if (active && ready) changed(event)
+    })
+    const offConnection = pluginApi.onConnectionChanged((event) => {
+      if (!active) return
+      disconnected = event.state === 'disconnected'
+      ++epoch
+      set({ connected: false, bootId: event.bootId, seq: 0 })
+      if (ready) void get().load()
+    })
+    const stop = () => {
+      if (!active) return
+      active = false
+      listenersReady = false
+      offChanged()
+      offConnection()
+    }
+    release = stop
+    // Calling listen is not registration: Tauri installs each listener asynchronously.
+    return Promise.all([offChanged.ready, offConnection.ready])
+      .then(() => {
+        if (!active) return false
+        ready = true
+        listenersReady = true
+        return true
+      })
+      .catch(() => {
+        if (!active) return false
+        stop()
+        registration = null
+        ++epoch
+        set({
+          connected: false,
+          loading: false,
+          error: { code: 'PLUGIN_IO', message: 'Plugin subscription failed' }
+        })
+        reportFailure('subscribe')
+        return false
+      })
+  }
+
   return {
     plugins: [],
     connected: false,
@@ -95,6 +143,12 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
     seq: 0,
     load: async () => {
       if (!isTauriContext()) return
+      if (consumers > 0 && !listenersReady) {
+        registration ??= registerListeners()
+        const currentRegistration = registration
+        if (!(await currentRegistration) || consumers === 0 || registration !== currentRegistration)
+          return
+      }
       const request = ++epoch
       set({ loading: true })
       try {
@@ -133,18 +187,6 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
       consumers += 1
       if (consumers === 1) {
         disconnected = false
-        const offChanged = pluginApi.onChanged(changed)
-        const offConnection = pluginApi.onConnectionChanged((event) => {
-          disconnected = event.state === 'disconnected'
-          ++epoch
-          set({ connected: false, bootId: event.bootId, seq: 0 })
-          void get().load()
-        })
-        release = () => {
-          offChanged()
-          offConnection()
-        }
-        // Register both listeners before requesting the initial snapshot.
         void get().load()
       }
       let disposed = false
@@ -155,6 +197,7 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
         if (consumers === 0) {
           release?.()
           release = null
+          registration = null
           ++epoch
           set({ connected: false, loading: false })
         }

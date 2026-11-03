@@ -50,8 +50,11 @@ describe('native plugin API', () => {
     results.forEach((x) => {
       expect(x).toMatchObject({ success: false, code: 'PLUGIN_NOT_SUPPORTED' })
     })
-    api.onChanged(vi.fn())()
-    api.onConnectionChanged(vi.fn())()
+    const stopChanged = api.onChanged(vi.fn())
+    const stopConnection = api.onConnectionChanged(vi.fn())
+    await Promise.all([stopChanged.ready, stopConnection.ready])
+    stopChanged()
+    stopConnection()
     expect(transport).not.toHaveBeenCalled()
     expect(invoke).not.toHaveBeenCalled()
     expect(event).not.toHaveBeenCalled()

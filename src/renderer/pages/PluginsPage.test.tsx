@@ -132,11 +132,14 @@ describe('PluginsPage', () => {
     expect(zh.manager.uninstallWarning).toContain('配置')
   })
 
-  it('disables active plugins and explicitly re-enables quarantined plugins', () => {
-    const first = show()
+  it('disables active plugins without offering retry', () => {
+    show()
     fireEvent.click(screen.getByRole('button', { name: 'manager.disable' }))
-    expect(actions.setEnabled).toHaveBeenCalledWith(plugin.id, false)
-    first.unmount()
+    expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, false)
+    expect(screen.queryByRole('button', { name: 'manager.retry' })).not.toBeInTheDocument()
+  })
+
+  it('offers separate Disable and Retry actions for quarantined enabled plugins', () => {
     usePluginsStore.setState({
       plugins: [
         {
@@ -150,10 +153,55 @@ describe('PluginsPage', () => {
     expect(screen.getByText('state.quarantined')).toBeInTheDocument()
     expect(screen.getByText('manager.quarantineWarning')).toBeInTheDocument()
     expect(screen.getByText(/Previous process crashed/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'manager.enable' }))
+    expect(screen.queryByRole('button', { name: 'manager.enable' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'manager.retry' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'manager.disable' }))
+    expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, false)
+    fireEvent.click(screen.getByRole('button', { name: 'manager.retry' }))
+    expect(actions.setEnabled).toHaveBeenCalledTimes(2)
     expect(actions.setEnabled).toHaveBeenLastCalledWith(plugin.id, true)
     expect(screen.getByRole('button', { name: 'manager.reload' })).toBeDisabled()
     expect(screen.queryByRole('link', { name: 'Demo panel' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    'quarantined',
+    'failed'
+  ] as const)('uses only desiredEnabled for the %s toggle and explicitly retries with true', (state) => {
+    usePluginsStore.setState({ plugins: [{ ...plugin, state, desiredEnabled: false }] })
+    show()
+    expect(screen.queryByRole('button', { name: 'manager.disable' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'manager.enable' }))
+    expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, true)
+    fireEvent.click(screen.getByRole('button', { name: 'manager.retry' }))
+    expect(actions.setEnabled).toHaveBeenCalledTimes(2)
+    expect(actions.setEnabled).toHaveBeenLastCalledWith(plugin.id, true)
+  })
+
+  it('can disable or explicitly retry a failed enabled plugin', () => {
+    usePluginsStore.setState({ plugins: [{ ...plugin, state: 'failed' }] })
+    show()
+    fireEvent.click(screen.getByRole('button', { name: 'manager.disable' }))
+    expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, false)
+    fireEvent.click(screen.getByRole('button', { name: 'manager.retry' }))
+    expect(actions.setEnabled).toHaveBeenCalledTimes(2)
+    expect(actions.setEnabled).toHaveBeenLastCalledWith(plugin.id, true)
+  })
+
+  it.each([
+    { busy: 'setEnabled', loading: false, connected: true },
+    { busy: null, loading: true, connected: true },
+    { busy: null, loading: false, connected: false }
+  ])('disables explicit retry while unavailable: %j', (availability) => {
+    usePluginsStore.setState({
+      ...availability,
+      plugins: [{ ...plugin, state: 'quarantined' }]
+    })
+    show()
+    const retry = screen.getByRole('button', { name: 'manager.retry' })
+    expect(retry).toBeDisabled()
+    fireEvent.click(retry)
+    expect(actions.setEnabled).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -211,6 +259,8 @@ describe('PluginsPage', () => {
         typeof child === 'object' ? keys(child, `${prefix}${key}.`) : `${prefix}${key}`
       )
     expect(keys(en).sort()).toEqual(keys(zh).sort())
+    expect(en.manager.retry).toBe('Retry')
+    expect(zh.manager.retry).toBe('重试')
     for (const state of [
       'installed',
       'disabled',

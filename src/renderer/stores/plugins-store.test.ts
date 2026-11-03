@@ -41,8 +41,7 @@ const snapshot = (seq = 0, bootId = 'boot-1', plugins = [plugin]) => ({
   data: { schemaVersion: 1 as const, seq, bootId, plugins }
 })
 const flush = async () => {
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let step = 0; step < 6; step += 1) await Promise.resolve()
 }
 let dispose: (() => void) | undefined
 let changed: (event: PluginEvent) => void
@@ -65,11 +64,11 @@ beforeEach(() => {
   vi.mocked(pluginApi.list).mockResolvedValue(snapshot())
   vi.mocked(pluginApi.onChanged).mockImplementation((callback) => {
     changed = callback
-    return offChanged
+    return Object.assign(offChanged, { ready: Promise.resolve() })
   })
   vi.mocked(pluginApi.onConnectionChanged).mockImplementation((callback) => {
     connection = callback
-    return offConnection
+    return Object.assign(offConnection, { ready: Promise.resolve() })
   })
 })
 afterEach(() => {
@@ -130,6 +129,7 @@ describe('plugins store', () => {
       })
     )
     dispose = usePluginsStore.getState().subscribe()
+    await flush()
     vi.mocked(pluginApi.list).mockResolvedValue(snapshot(2, 'boot-2', []))
     changed({ schemaVersion: 1, bootId: 'boot-2', seq: 2, type: 'registry_changed' })
     await flush()

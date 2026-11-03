@@ -1,6 +1,8 @@
 import type { IpcDataDecoder, IpcResult } from '@shared/types/ipc.types'
 import {
   type PluginApi,
+  type PluginConnectionChanged,
+  type PluginEvent,
   parseCommandReply,
   parseConfigSnapshot,
   parsePluginConnectionChanged,
@@ -10,10 +12,15 @@ import {
   parseUninstallResult,
   parseViewSnapshot
 } from '@shared/types/plugin.types'
-import { onHostEvent } from '@/lib/host-events'
+import { type HostEventSubscription, onHostEvent } from '@/lib/host-events'
 import { invokeDecodedIpcResult } from '@/lib/invoke-decoded-ipc-result'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+
+export interface TauriPluginApi extends PluginApi {
+  onChanged(handler: (event: PluginEvent) => void): HostEventSubscription
+  onConnectionChanged(handler: (event: PluginConnectionChanged) => void): HostEventSubscription
+}
 
 export interface PluginApiDependencies {
   isDesktop?: () => boolean
@@ -22,7 +29,10 @@ export interface PluginApiDependencies {
     decoder: IpcDataDecoder<T>,
     args?: { payload: unknown }
   ) => Promise<IpcResult<T>>
-  onEvent?: (event: string, handler: (payload: unknown) => void) => () => void
+  onEvent?: (
+    event: string,
+    handler: (payload: unknown) => void
+  ) => (() => void) & { ready?: Promise<void> }
 }
 const notSupported = (): IpcResult<never> => ({
   success: false,
@@ -31,7 +41,7 @@ const notSupported = (): IpcResult<never> => ({
 })
 
 /** No web fallback: neither invoke nor HTTP nor event transport is touched in a browser. */
-export function createTauriPluginApi(deps: PluginApiDependencies = {}): PluginApi {
+export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPluginApi {
   const desktop = deps.isDesktop ?? isTauriContext
   const invoke = deps.invokeDecoded ?? invokeDecodedIpcResult
   const on = deps.onEvent ?? onHostEvent
@@ -54,9 +64,9 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): PluginAp
     name: string,
     decoder: IpcDataDecoder<T>,
     handler: (event: T) => void
-  ): (() => void) => {
-    if (!desktop()) return () => {}
-    return on(name, (payload) => {
+  ): HostEventSubscription => {
+    if (!desktop()) return Object.assign(() => undefined, { ready: Promise.resolve() })
+    const stop = on(name, (payload) => {
       let event: T
       try {
         event = decoder(payload)
@@ -70,6 +80,7 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): PluginAp
       }
       handler(event)
     })
+    return Object.assign(() => stop(), { ready: stop.ready ?? Promise.resolve() })
   }
   return {
     list: () => call('plugin_list', parsePluginSnapshot),
@@ -87,4 +98,4 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): PluginAp
       listen('plugins:connection_changed', parsePluginConnectionChanged, handler)
   }
 }
-export const pluginApi: PluginApi = createTauriPluginApi()
+export const pluginApi = createTauriPluginApi()

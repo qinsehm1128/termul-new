@@ -66,11 +66,11 @@ beforeEach(() => {
   })
   vi.mocked(pluginApi.onChanged).mockImplementation((handler) => {
     changed = handler
-    return unsubscribe
+    return Object.assign(unsubscribe, { ready: Promise.resolve() })
   })
   vi.mocked(pluginApi.onConnectionChanged).mockImplementation((handler) => {
     connection = handler
-    return disconnect
+    return Object.assign(disconnect, { ready: Promise.resolve() })
   })
 })
 afterEach(() => {
