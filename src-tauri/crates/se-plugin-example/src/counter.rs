@@ -7,6 +7,45 @@ use serde_json::{json, Value};
 
 const VIEW: &str = "example.counter";
 
+#[cfg(feature = "test-hooks")]
+struct LateHost {
+    host: Host,
+    result_file: std::path::PathBuf,
+}
+
+#[cfg(feature = "test-hooks")]
+impl Drop for LateHost {
+    fn drop(&mut self) {
+        // A complete protocol ServiceRequest: malformed JSON must not mask an
+        // invalid host-context lifetime with SEP_INVALID_JSON.
+        let request = br#"{"schemaVersion":1,"service":"org.termul.example.counter","version":1,"method":"get","input":null}"#;
+        let mut output = [0; 1024];
+        let status = match self.host.broker_call(request, &mut output) {
+            Ok(_) => se_plugin_abi::SEP_OK,
+            Err(status) => status,
+        };
+        // TLS destruction must not panic, even if the test removed its directory.
+        let _ = std::fs::write(&self.result_file, status.to_string());
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+thread_local! {
+    static LATE_HOST: std::cell::RefCell<Option<LateHost>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(feature = "test-hooks")]
+fn escape_host(host: Host, result_file: &str) {
+    LATE_HOST.with(|slot| {
+        *slot.borrow_mut() = Some(LateHost {
+            host,
+            result_file: result_file.into(),
+        });
+    });
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Config {
@@ -29,7 +68,7 @@ impl Config {
 }
 
 pub struct CounterPlugin {
-    host: Host,
+    host: Option<Host>,
     count: f64,
     config: Config,
 }
@@ -107,6 +146,7 @@ impl PluginV1 for CounterPlugin {
                     ("example.panic", "Test panic"),
                     ("example.timeout", "Test timeout"),
                     ("example.abort", "Test process abort"),
+                    ("example.escape-host", "Test escaped host lifetime"),
                 ] {
                     commands.push(json!({"id":id,"title":title}));
                 }
@@ -128,7 +168,7 @@ impl PluginV1 for CounterPlugin {
         let config = Config::parse(activation["config"]["values"].clone())?;
         host.log(SEP_LOG_INFO, "Configured Counter activated")?;
         Ok(Self {
-            host,
+            host: Some(host),
             count: 0.0,
             config,
         })
@@ -180,6 +220,14 @@ impl PluginV1 for CounterPlugin {
             Some("example.timeout") => std::thread::sleep(std::time::Duration::from_secs(3)),
             #[cfg(feature = "test-hooks")]
             Some("example.abort") => std::process::abort(),
+            #[cfg(feature = "test-hooks")]
+            Some("example.escape-host") => {
+                let result_file = request["args"]["resultFile"]
+                    .as_str()
+                    .ok_or(SEP_INVALID_ARGUMENT)?;
+                let host = self.host.take().ok_or(SEP_UNAVAILABLE)?;
+                escape_host(host, result_file);
+            }
             _ => return Err(SEP_UNAVAILABLE),
         }
         write(
@@ -190,8 +238,10 @@ impl PluginV1 for CounterPlugin {
 
     fn on_config_changed(&mut self, bytes: &[u8]) -> Result<(), SeStatus> {
         self.config = Config::parse(parse(bytes)?["values"].clone())?;
-        self.host
-            .log(SEP_LOG_INFO, "Configured Counter configuration applied")
+        if let Some(host) = &self.host {
+            host.log(SEP_LOG_INFO, "Configured Counter configuration applied")?;
+        }
+        Ok(())
     }
 
     fn on_service_call(
@@ -213,6 +263,9 @@ impl PluginV1 for CounterPlugin {
     }
 
     fn destroy(self) -> Result<(), SeStatus> {
-        self.host.log(SEP_LOG_INFO, "Configured Counter destroyed")
+        if let Some(host) = self.host {
+            host.log(SEP_LOG_INFO, "Configured Counter destroyed")?;
+        }
+        Ok(())
     }
 }

@@ -598,6 +598,56 @@ async fn real_cdylib_panic_is_contained_and_host_remains_manageable() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_cdylib_escaped_host_is_rejected_after_teardown() {
+    // Safe SDK code can move its owned Host into worker-thread TLS. The TLS
+    // destructor then calls the host after destroy and worker exit; the host
+    // must answer SEP_UNAVAILABLE from a still-valid (retired) context.
+    let _native_guard = NATIVE_TEST_LOCK.lock().await;
+    let artifacts = artifacts();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let profile = tempfile::tempdir().unwrap();
+        let result_file = profile.path().join("late-host-status");
+        let host = PluginHost::open(profile.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        host.install(InstallRequest {
+            path: path_string(&artifacts.fault),
+        })
+        .await
+        .unwrap();
+        let active = enable(&host, true).await;
+        let mut request = command(active.generation.as_deref().unwrap(), "example.escape-host");
+        request.args = serde_json::json!({ "resultFile": path_string(&result_file) });
+        host.execute_command(request).await.unwrap();
+        enable(&host, false).await;
+        let mut status = None;
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&result_file) {
+                status = Some(text);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            status.as_deref(),
+            Some(se_plugin_abi::SEP_UNAVAILABLE.to_string().as_str()),
+            "late callback from TLS destructor must be rejected as unavailable"
+        );
+        let listed = host.list().await.expect("host must stay healthy");
+        assert_eq!(listed.plugins.len(), 1);
+        let again = enable(&host, true).await;
+        assert!(
+            again.generation.is_some(),
+            "plugin must re-activate after escape"
+        );
+        enable(&host, false).await;
+        close(host).await;
+    })
+    .await
+    .expect("escaped-host acceptance must remain bounded");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_cdylib_timeout_requests_restart_without_waiting_for_callback() {
     let _native_guard = NATIVE_TEST_LOCK.lock().await;
     let artifacts = artifacts();

@@ -165,17 +165,26 @@ impl AbiWorker {
                         return;
                     }
                 };
-                let mut context = Box::new(HostContext {
+                // Host is owned safe SDK data and can escape into thread-local
+                // storage, even when create fails. Keep its callback context for
+                // the process lifetime, just like loaded native libraries. One
+                // small context per worker is an intentional bounded-per-worker
+                // leak; Weak avoids retaining the broker's registrations/resources.
+                let context: &'static HostContext = Box::leak(Box::new(HostContext {
                     id: manifest.id.clone(),
                     generation: generation.clone(),
-                    broker,
-                    deadline: Instant::now(),
-                    chain: Vec::new(),
-                });
+                    broker: Arc::downgrade(&broker),
+                    retired: AtomicBool::new(false),
+                    poisoned: poisoned.clone(),
+                    call: std::sync::Mutex::new(HostCallContext {
+                        deadline: Instant::now(),
+                        chain: Vec::new(),
+                    }),
+                }));
                 let host = Box::new(SeHostApiV1 {
                     abi_version: SEP_ABI_VERSION,
                     struct_size: std::mem::size_of::<SeHostApiV1>() as u32,
-                    host_context: (&mut *context as *mut HostContext).cast(),
+                    host_context: (context as *const HostContext).cast_mut().cast(),
                     log: Some(host_log),
                     broker_call: Some(host_broker),
                 });
@@ -196,6 +205,7 @@ impl AbiWorker {
                     }),
                 };
                 if ready_tx.send(Ok(manifest)).is_err() {
+                    state.context.retire();
                     std::mem::forget(state);
                     return;
                 }
@@ -221,8 +231,7 @@ impl AbiWorker {
                     {
                         continue;
                     }
-                    state.context.deadline = request.deadline;
-                    state.context.chain = request.chain;
+                    state.context.set_call(request.deadline, request.chain);
                     let result = state.invoke(request.kind, &request.input);
                     if poisoned.load(Ordering::Acquire) {
                         std::mem::forget(request.input);
@@ -237,6 +246,9 @@ impl AbiWorker {
                         }
                     }
                 }
+                // Also cover forgotten/poisoned states: nothing may ever free
+                // this callback context, and exiting workers reject all late calls.
+                state.context.retire();
                 if !state.instance.is_null() && !poisoned.load(Ordering::Acquire) {
                     let (done, wait) = mpsc::sync_channel(1);
                     let flag = poisoned.clone();
@@ -411,12 +423,42 @@ impl AbiWorker {
     }
 }
 
+/// Callback context handed to the plugin through `SeHostApiV1::host_context`.
+///
+/// Safe SDK code owns its `Host` and can move it into thread-local storage,
+/// whose destructor runs after the worker loop has ended (or after a failed
+/// `create`). The context is therefore leaked for the process lifetime and
+/// only tombstoned via `retired`; it is never freed.
 struct HostContext {
     id: String,
     generation: String,
-    broker: Arc<PluginBroker>,
+    broker: std::sync::Weak<PluginBroker>,
+    retired: AtomicBool,
+    poisoned: Arc<AtomicBool>,
+    /// Per-call routing data. Written by the worker loop between calls and read
+    /// by `host_broker` on the same thread; the mutex keeps that sound even if a
+    /// non-conforming native caller invokes the callback from another thread.
+    call: std::sync::Mutex<HostCallContext>,
+}
+
+struct HostCallContext {
     deadline: Instant,
     chain: Vec<String>,
+}
+
+impl HostContext {
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+    }
+
+    fn set_call(&self, deadline: Instant, chain: Vec<String>) {
+        let mut call = self
+            .call
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        call.deadline = deadline;
+        call.chain = chain;
+    }
 }
 
 unsafe extern "C" fn host_log(_context: *mut c_void, _level: u32, message: SeSlice) -> SeStatus {
@@ -439,20 +481,29 @@ unsafe extern "C" fn host_broker(
         {
             return SEP_INVALID_ARGUMENT;
         }
+        // SAFETY: every context exposed to a plugin is leaked for the process
+        // lifetime (see `HostContext`), so this reference never dangles.
         let context = unsafe { &*context.cast::<HostContext>() };
+        if context.retired.load(Ordering::Acquire) || context.poisoned.load(Ordering::Acquire) {
+            return SEP_UNAVAILABLE;
+        }
+        let Some(broker) = context.broker.upgrade() else {
+            return SEP_UNAVAILABLE;
+        };
         let request = match parse_service_request(unsafe {
             std::slice::from_raw_parts(input.ptr, input.len)
         }) {
             Ok(value) => value,
             Err(_) => return SEP_INVALID_JSON,
         };
-        let bytes = match context.broker.call(
-            &context.id,
-            &context.generation,
-            request,
-            context.deadline,
-            context.chain.clone(),
-        ) {
+        let (deadline, chain) = {
+            let call = context
+                .call
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (call.deadline, call.chain.clone())
+        };
+        let bytes = match broker.call(&context.id, &context.generation, request, deadline, chain) {
             Ok(bytes) => bytes,
             Err(e) => {
                 return match e.code.as_str() {
@@ -485,7 +536,7 @@ unsafe extern "C" fn host_broker(
 struct WorkerState {
     api: SePluginApiV1,
     instance: *mut c_void,
-    context: Box<HostContext>,
+    context: &'static HostContext,
     host: Box<SeHostApiV1>,
     metrics: Arc<Metrics>,
     journal: Arc<Journal>,
