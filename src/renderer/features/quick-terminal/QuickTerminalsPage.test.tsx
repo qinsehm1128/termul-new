@@ -328,6 +328,58 @@ describe('QuickTerminalsPage', () => {
     expect(useEditorStore.getState().openFiles.has(file)).toBe(false)
   })
 
+  it('uses a neutral active surface and accent underline around the label and close button', async () => {
+    const file = `${record.cwd}/notes.md`
+    useEditorStore.setState({
+      openFiles: new Map([[file, { filePath: file, isDirty: false } as never]])
+    })
+    renderAt(`/quick-terminals/${id}`)
+    await screen.findByTestId('connected-terminal')
+
+    const terminalTab = screen.getByRole('tab', { name: 'Terminal 1' })
+    const terminalSurface = terminalTab.parentElement!
+    const expectActiveSurface = (tab: HTMLElement, closeName: string): void => {
+      const surface = tab.parentElement!
+      expect(tab).toHaveAttribute('aria-selected', 'true')
+      expect(surface).toHaveClass('bg-muted', 'text-foreground', 'border-b-2', 'border-b-primary')
+      expect(surface).not.toHaveClass('bg-accent', 'bg-primary', 'text-primary')
+      expect(tab).toHaveClass('text-inherit')
+      expect(tab).not.toHaveClass('bg-accent', 'bg-primary', 'text-muted-foreground')
+      expect(within(surface).getByRole('button', { name: closeName })).toBeVisible()
+    }
+    const expectInactiveSurface = (tab: HTMLElement): void => {
+      expect(tab).toHaveAttribute('aria-selected', 'false')
+      expect(tab.parentElement).toHaveClass(
+        'border-b-transparent',
+        'text-muted-foreground',
+        'hover:bg-muted/50',
+        'hover:text-foreground'
+      )
+      expect(tab.parentElement).not.toHaveClass('bg-muted', 'border-b-primary')
+    }
+
+    expectActiveSurface(terminalTab, 'Close terminal tab')
+    expect(terminalTab.querySelector('svg')).not.toHaveAttribute(
+      'class',
+      expect.stringContaining('text-primary')
+    )
+
+    act(() => showOpenedFile(file))
+    const fileTab = await screen.findByRole('tab', { name: 'notes.md' })
+    expectActiveSurface(fileTab, 'Close preview')
+    expectInactiveSurface(terminalTab)
+
+    fireEvent.click(terminalTab)
+    await waitFor(() => expectActiveSurface(terminalTab, 'Close terminal tab'))
+    expectInactiveSurface(fileTab)
+    expect(terminalTab.parentElement).toBe(terminalSurface)
+
+    fireEvent.click(within(fileTab.parentElement!).getByRole('button', { name: 'Close preview' }))
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'notes.md' })).toBeNull())
+    expectActiveSurface(terminalTab, 'Close terminal tab')
+    expect(api.closeTerminal).not.toHaveBeenCalled()
+  })
+
   it('opens a project quick terminal in its active worktree', async () => {
     api.create.mockResolvedValue({ success: false, error: 'nope', code: 'X' })
     renderAt('/quick-terminals')

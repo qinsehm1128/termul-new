@@ -218,7 +218,7 @@ export function QuickTerminalWorkspace({
           {layout?.tabs.map((tab, index) => (
             <div
               key={tab.id}
-              className="flex shrink-0 items-center border-r"
+              className={`flex h-9 shrink-0 items-center border-r border-b-2 transition-colors ${tab.id === layout.activeTabId ? 'border-b-primary bg-muted text-foreground' : 'border-b-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`}
               data-active={tab.id === layout.activeTabId}
             >
               <button
@@ -226,7 +226,7 @@ export function QuickTerminalWorkspace({
                 role="tab"
                 aria-selected={tab.id === layout.activeTabId}
                 onClick={() => activate(tab)}
-                className={`flex h-9 max-w-56 items-center gap-2 px-3 text-xs ${tab.id === layout.activeTabId ? 'bg-accent text-foreground' : 'text-muted-foreground'}`}
+                className="flex h-full max-w-56 items-center gap-2 px-3 text-xs text-inherit"
                 title={tab.type === 'editor' ? tab.filePath : undefined}
               >
                 {tab.type === 'terminal' ? (
