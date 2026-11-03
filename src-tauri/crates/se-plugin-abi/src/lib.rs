@@ -147,7 +147,7 @@ impl core::fmt::Display for AbiValidationError {
 impl std::error::Error for AbiValidationError {}
 
 pub(crate) fn check_pointer<T>(ptr: *const T) -> Result<(), SeStatus> {
-    if ptr.is_null() || (ptr as usize) % align_of::<T>() != 0 {
+    if ptr.is_null() || !(ptr as usize).is_multiple_of(align_of::<T>()) {
         Err(SE_INVALID_ARGUMENT)
     } else {
         Ok(())
@@ -167,7 +167,7 @@ pub unsafe fn validate_abi_header(
     if ptr.is_null() {
         return Err(AbiValidationError::NullPointer);
     }
-    if (ptr as usize) % align_of::<SeAbiHeader>() != 0 {
+    if !(ptr as usize).is_multiple_of(align_of::<SeAbiHeader>()) {
         return Err(AbiValidationError::MisalignedPointer);
     }
     let header = unsafe { ptr.read() };
@@ -190,7 +190,7 @@ unsafe fn validate_table_header<T>(ptr: *const T) -> Result<(), AbiValidationErr
     if ptr.is_null() {
         return Err(AbiValidationError::NullPointer);
     }
-    if (ptr as usize) % align_of::<T>() != 0 {
+    if !(ptr as usize).is_multiple_of(align_of::<T>()) {
         return Err(AbiValidationError::MisalignedPointer);
     }
     unsafe {
