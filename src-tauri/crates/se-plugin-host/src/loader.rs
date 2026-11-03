@@ -134,10 +134,10 @@ pub(crate) fn load(
     }
     let library = ManuallyDrop::new(unsafe { Library::new(&artifact.loaded) }.map_err(io)?);
     metrics.loaded_libraries.fetch_add(1, Ordering::Relaxed);
-    let entry = unsafe { library.get::<SeEntryFn>(SE_ENTRY_SYMBOL) }
+    let entry = unsafe { library.get::<SeEntryFn>(SEP_ENTRY_SYMBOL) }
         .map_err(|_| error(PLUGIN_ABI_UNSUPPORTED, "missing se_plugin_entry_v1"))?;
     let mut api = std::ptr::null();
-    status(unsafe { entry(SE_ABI_VERSION, SE_ABI_VERSION, &mut api) })?;
+    status(unsafe { entry(SEP_ABI_VERSION, SEP_ABI_VERSION, &mut api) })?;
     let api = *unsafe { validate_plugin_api(api) }.map_err(|failure| {
         error(
             match failure {

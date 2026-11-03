@@ -19,7 +19,7 @@ const VIEW: &str = "example.counter";
 
 // Each test owns a Tokio runtime, but macOS native loading is process-global.
 // Serialize real dlopen/panic/timeout scenarios without changing runner flags.
-static NATIVE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static NATIVE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct Artifacts {
     normal: PathBuf,
@@ -248,9 +248,7 @@ async fn close(host: Arc<PluginHost>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn example_cdylib_end_to_end() {
-    let _native_guard = NATIVE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _native_guard = NATIVE_TEST_LOCK.lock().await;
     let artifacts = artifacts();
     tokio::time::timeout(Duration::from_secs(60), async {
         let profile = tempfile::tempdir().expect("isolated plugin profile");
@@ -549,9 +547,7 @@ async fn example_cdylib_end_to_end() {
 // is intentionally NEVER invoked here; it belongs to the process-level runner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_cdylib_panic_is_contained_and_host_remains_manageable() {
-    let _native_guard = NATIVE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _native_guard = NATIVE_TEST_LOCK.lock().await;
     let artifacts = artifacts();
     tokio::time::timeout(Duration::from_secs(20), async {
         let profile = tempfile::tempdir().unwrap();
@@ -603,9 +599,7 @@ async fn real_cdylib_panic_is_contained_and_host_remains_manageable() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_cdylib_timeout_requests_restart_without_waiting_for_callback() {
-    let _native_guard = NATIVE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _native_guard = NATIVE_TEST_LOCK.lock().await;
     let artifacts = artifacts();
     tokio::time::timeout(Duration::from_secs(20), async {
         let profile = tempfile::tempdir().unwrap();

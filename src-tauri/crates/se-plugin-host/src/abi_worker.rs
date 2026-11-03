@@ -173,7 +173,7 @@ impl AbiWorker {
                     chain: Vec::new(),
                 });
                 let host = Box::new(SeHostApiV1 {
-                    abi_version: SE_ABI_VERSION,
+                    abi_version: SEP_ABI_VERSION,
                     struct_size: std::mem::size_of::<SeHostApiV1>() as u32,
                     host_context: (&mut *context as *mut HostContext).cast(),
                     log: Some(host_log),
@@ -421,10 +421,10 @@ struct HostContext {
 
 unsafe extern "C" fn host_log(_context: *mut c_void, _level: u32, message: SeSlice) -> SeStatus {
     if message.len > 8192 || (message.len != 0 && message.ptr.is_null()) {
-        return SE_INVALID_ARGUMENT;
+        return SEP_INVALID_ARGUMENT;
     }
     // Do not emit plugin-supplied contents: they can contain configuration secrets.
-    SE_OK
+    SEP_OK
 }
 unsafe extern "C" fn host_broker(
     context: *mut c_void,
@@ -437,14 +437,14 @@ unsafe extern "C" fn host_broker(
             || input.len > MAX_JSON_BYTES
             || output.is_null()
         {
-            return SE_INVALID_ARGUMENT;
+            return SEP_INVALID_ARGUMENT;
         }
         let context = unsafe { &*context.cast::<HostContext>() };
         let request = match parse_service_request(unsafe {
             std::slice::from_raw_parts(input.ptr, input.len)
         }) {
             Ok(value) => value,
-            Err(_) => return SE_INVALID_JSON,
+            Err(_) => return SEP_INVALID_JSON,
         };
         let bytes = match context.broker.call(
             &context.id,
@@ -456,11 +456,11 @@ unsafe extern "C" fn host_broker(
             Ok(bytes) => bytes,
             Err(e) => {
                 return match e.code.as_str() {
-                    PLUGIN_TIMEOUT => SE_DEADLINE_EXCEEDED,
-                    PLUGIN_STALE_GENERATION => SE_STALE_GENERATION,
-                    PLUGIN_SERVICE_CYCLE | PLUGIN_REENTRANT => SE_REENTRANT,
-                    PLUGIN_BUSY => SE_BUSY,
-                    _ => SE_UNAVAILABLE,
+                    PLUGIN_TIMEOUT => SEP_DEADLINE_EXCEEDED,
+                    PLUGIN_STALE_GENERATION => SEP_STALE_GENERATION,
+                    PLUGIN_SERVICE_CYCLE | PLUGIN_REENTRANT => SEP_REENTRANT,
+                    PLUGIN_BUSY => SEP_BUSY,
+                    _ => SEP_UNAVAILABLE,
                 }
             }
         };
@@ -469,7 +469,7 @@ unsafe extern "C" fn host_broker(
             Err(e) => return e,
         };
         match writer.write(&bytes) {
-            Ok(()) => SE_OK,
+            Ok(()) => SEP_OK,
             Err(e) => e,
         }
     }));
@@ -477,7 +477,7 @@ unsafe extern "C" fn host_broker(
         Ok(status) => status,
         Err(payload) => {
             std::mem::forget(payload);
-            SE_INTERNAL
+            SEP_INTERNAL
         }
     }
 }

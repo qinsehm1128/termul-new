@@ -36,13 +36,13 @@ impl Host {
     }
 
     pub fn log(&self, level: u32, message: &str) -> Result<(), SeStatus> {
-        if !(SE_LOG_ERROR..=SE_LOG_DEBUG).contains(&level) {
-            return Err(SE_INVALID_ARGUMENT);
+        if !(SEP_LOG_ERROR..=SEP_LOG_DEBUG).contains(&level) {
+            return Err(SEP_INVALID_ARGUMENT);
         }
         // from_raw establishes callback/context validity. No borrowed input is
         // retained by a conforming host callback.
         let status = unsafe {
-            (self.api.log.ok_or(SE_UNAVAILABLE)?)(
+            (self.api.log.ok_or(SEP_UNAVAILABLE)?)(
                 self.api.host_context,
                 level,
                 SeSlice::from_bytes(message.as_bytes()),
@@ -54,14 +54,14 @@ impl Host {
     /// Call once, never resize/retry: the request may have side effects.
     /// JSON shape validation belongs to the host/protocol, not this std-only SDK.
     pub fn broker_call(&self, request: &[u8], output: &mut [u8]) -> Result<usize, SeStatus> {
-        std::str::from_utf8(request).map_err(|_| SE_INVALID_JSON)?;
+        std::str::from_utf8(request).map_err(|_| SEP_INVALID_JSON)?;
         let mut raw = SeOutput {
             ptr: output.as_mut_ptr(),
             capacity: output.len(),
             len: 0,
         };
         let status = unsafe {
-            (self.api.broker_call.ok_or(SE_UNAVAILABLE)?)(
+            (self.api.broker_call.ok_or(SEP_UNAVAILABLE)?)(
                 self.api.host_context,
                 SeSlice::from_bytes(request),
                 &mut raw,
@@ -70,7 +70,7 @@ impl Host {
         status_result(status)?;
         if raw.len > output.len() || raw.ptr != output.as_mut_ptr() || raw.capacity != output.len()
         {
-            return Err(SE_INTERNAL);
+            return Err(SEP_INTERNAL);
         }
         Ok(raw.len)
     }
@@ -95,7 +95,7 @@ impl<'a> OutputWriter<'a> {
         let output = unsafe { &mut *output };
         output.len = 0;
         if output.capacity > isize::MAX as usize || (output.ptr.is_null() && output.capacity != 0) {
-            return Err(SE_INVALID_ARGUMENT);
+            return Err(SEP_INVALID_ARGUMENT);
         }
         Ok(Self {
             output,
@@ -116,7 +116,7 @@ impl<'a> OutputWriter<'a> {
     pub fn write(&mut self, bytes: &[u8]) -> Result<(), SeStatus> {
         self.output.len = bytes.len();
         if bytes.len() > self.output.capacity {
-            return Err(SE_BUFFER_TOO_SMALL);
+            return Err(SEP_BUFFER_TOO_SMALL);
         }
         if !bytes.is_empty() {
             // The constructor guarantees valid exclusive storage. memmove also
@@ -133,23 +133,23 @@ pub trait PluginV1: Sized + 'static {
     fn manifest() -> &'static [u8];
     fn create(host: Host, activation_json: &[u8]) -> Result<Self, SeStatus>;
     fn render_view(&mut self, _json: &[u8], _out: &mut OutputWriter<'_>) -> Result<(), SeStatus> {
-        Err(SE_UNAVAILABLE)
+        Err(SEP_UNAVAILABLE)
     }
     fn on_action(&mut self, _json: &[u8], _out: &mut OutputWriter<'_>) -> Result<(), SeStatus> {
-        Err(SE_UNAVAILABLE)
+        Err(SEP_UNAVAILABLE)
     }
     fn on_command(&mut self, _json: &[u8], _out: &mut OutputWriter<'_>) -> Result<(), SeStatus> {
-        Err(SE_UNAVAILABLE)
+        Err(SEP_UNAVAILABLE)
     }
     fn on_config_changed(&mut self, _json: &[u8]) -> Result<(), SeStatus> {
-        Err(SE_UNAVAILABLE)
+        Err(SEP_UNAVAILABLE)
     }
     fn on_service_call(
         &mut self,
         _json: &[u8],
         _out: &mut OutputWriter<'_>,
     ) -> Result<(), SeStatus> {
-        Err(SE_UNAVAILABLE)
+        Err(SEP_UNAVAILABLE)
     }
     fn destroy(self) -> Result<(), SeStatus> {
         Ok(())
@@ -157,7 +157,7 @@ pub trait PluginV1: Sized + 'static {
 }
 
 pub(crate) fn status_result(status: SeStatus) -> Result<(), SeStatus> {
-    if status == SE_OK {
+    if status == SEP_OK {
         Ok(())
     } else {
         Err(status)
@@ -169,13 +169,13 @@ pub(crate) fn status_result(status: SeStatus) -> Result<(), SeStatus> {
 /// storage must not alias any mutable instance/output accessed during the call.
 pub(crate) unsafe fn input_bytes<'a>(input: SeSlice) -> Result<&'a [u8], SeStatus> {
     if input.len > isize::MAX as usize || (input.ptr.is_null() && input.len != 0) {
-        return Err(SE_INVALID_ARGUMENT);
+        return Err(SEP_INVALID_ARGUMENT);
     }
     let bytes = if input.len == 0 {
         &[]
     } else {
         unsafe { std::slice::from_raw_parts(input.ptr, input.len) }
     };
-    std::str::from_utf8(bytes).map_err(|_| SE_INVALID_JSON)?;
+    std::str::from_utf8(bytes).map_err(|_| SEP_INVALID_JSON)?;
     Ok(bytes)
 }

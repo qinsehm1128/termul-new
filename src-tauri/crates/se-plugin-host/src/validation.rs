@@ -46,15 +46,15 @@ pub(crate) fn encode(value: &impl Serialize) -> Result<Vec<u8>, PluginError> {
 pub(crate) fn status(status: se_plugin_abi::SeStatus) -> Result<(), PluginError> {
     use se_plugin_abi::*;
     let code = match status {
-        SE_OK => return Ok(()),
-        SE_PANIC => PLUGIN_PANIC,
-        SE_BUSY => PLUGIN_BUSY,
-        SE_DEADLINE_EXCEEDED => PLUGIN_TIMEOUT,
-        SE_STALE_GENERATION => PLUGIN_STALE_GENERATION,
-        SE_REENTRANT => PLUGIN_SERVICE_CYCLE,
-        SE_ABI_UNSUPPORTED => PLUGIN_ABI_UNSUPPORTED,
-        SE_NOT_FOUND => PLUGIN_NOT_FOUND,
-        SE_UNAVAILABLE => PLUGIN_NOT_SUPPORTED,
+        SEP_OK => return Ok(()),
+        SEP_PANIC => PLUGIN_PANIC,
+        SEP_BUSY => PLUGIN_BUSY,
+        SEP_DEADLINE_EXCEEDED => PLUGIN_TIMEOUT,
+        SEP_STALE_GENERATION => PLUGIN_STALE_GENERATION,
+        SEP_REENTRANT => PLUGIN_SERVICE_CYCLE,
+        SEP_ABI_UNSUPPORTED => PLUGIN_ABI_UNSUPPORTED,
+        SEP_NOT_FOUND => PLUGIN_NOT_FOUND,
+        SEP_UNAVAILABLE => PLUGIN_NOT_SUPPORTED,
         _ => PLUGIN_CALLBACK_ERROR,
     };
     Err(PluginError::new(
@@ -74,7 +74,7 @@ mod tests {
     fn unknown_status_is_not_success() {
         assert_eq!(status(999).unwrap_err().code, PLUGIN_CALLBACK_ERROR);
         assert_eq!(
-            status(se_plugin_abi::SE_PANIC).unwrap_err().code,
+            status(se_plugin_abi::SEP_PANIC).unwrap_err().code,
             PLUGIN_PANIC
         );
     }

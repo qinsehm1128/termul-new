@@ -28,7 +28,7 @@ impl PluginV1 for TestPlugin {
         let plugin = Self;
         maybe_panic("create");
         if activation == b"fail" {
-            return Err(SE_INTERNAL);
+            return Err(SEP_INTERNAL);
         }
         Ok(plugin)
     }
@@ -65,7 +65,7 @@ extern "C" {
     fn invoke_entry(min: u32, max: u32, api: *mut *const SePluginApiV1) -> SeStatus;
 }
 unsafe extern "C" fn log(_: *mut c_void, _: u32, _: SeSlice) -> SeStatus {
-    SE_OK
+    SEP_OK
 }
 unsafe extern "C" fn broker(_: *mut c_void, _: SeSlice, out: *mut SeOutput) -> SeStatus {
     export::boundary(|| {
@@ -84,14 +84,14 @@ fn host_api() -> SeHostApiV1 {
 }
 fn api() -> &'static SePluginApiV1 {
     let mut ptr = null();
-    assert_eq!(unsafe { invoke_entry(1, 1, &mut ptr) }, SE_OK);
+    assert_eq!(unsafe { invoke_entry(1, 1, &mut ptr) }, SEP_OK);
     unsafe { validate_plugin_api(ptr) }.unwrap()
 }
 fn instance(api: &SePluginApiV1) -> *mut c_void {
     let mut instance = null_mut();
     assert_eq!(
         unsafe { api.create.unwrap()(&host_api(), SeSlice::from_bytes(b"{}"), &mut instance) },
-        SE_OK
+        SEP_OK
     );
     assert!(!instance.is_null());
     instance
@@ -108,19 +108,19 @@ fn output(bytes: &mut [u8]) -> SeOutput {
 fn exact_layout_and_status_codes() {
     assert_eq!(
         [
-            SE_OK,
-            SE_INVALID_ARGUMENT,
-            SE_ABI_UNSUPPORTED,
-            SE_BUFFER_TOO_SMALL,
-            SE_INVALID_JSON,
-            SE_NOT_FOUND,
-            SE_UNAVAILABLE,
-            SE_BUSY,
-            SE_PANIC,
-            SE_INTERNAL,
-            SE_DEADLINE_EXCEEDED,
-            SE_STALE_GENERATION,
-            SE_REENTRANT
+            SEP_OK,
+            SEP_INVALID_ARGUMENT,
+            SEP_ABI_UNSUPPORTED,
+            SEP_BUFFER_TOO_SMALL,
+            SEP_INVALID_JSON,
+            SEP_NOT_FOUND,
+            SEP_UNAVAILABLE,
+            SEP_BUSY,
+            SEP_PANIC,
+            SEP_INTERNAL,
+            SEP_DEADLINE_EXCEEDED,
+            SEP_STALE_GENERATION,
+            SEP_REENTRANT
         ],
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     );
@@ -168,7 +168,7 @@ fn exact_layout_and_status_codes() {
     assert_eq!(size_of::<SePluginApiV1>(), 8 + 8 * p);
     assert_eq!(align_of::<SePluginApiV1>(), align_of::<usize>());
     assert_eq!(
-        [SE_LOG_ERROR, SE_LOG_WARN, SE_LOG_INFO, SE_LOG_DEBUG],
+        [SEP_LOG_ERROR, SEP_LOG_WARN, SEP_LOG_INFO, SEP_LOG_DEBUG],
         [1, 2, 3, 4]
     );
 }
@@ -179,26 +179,26 @@ fn entry_negotiates_and_clears_errors() {
     for (min, max) in [(2, 2), (0, 0), (3, 1)] {
         assert_eq!(
             unsafe { invoke_entry(min, max, &mut ptr) },
-            SE_ABI_UNSUPPORTED
+            SEP_ABI_UNSUPPORTED
         );
         assert!(ptr.is_null());
     }
-    assert_eq!(unsafe { invoke_entry(0, 2, &mut ptr) }, SE_OK);
+    assert_eq!(unsafe { invoke_entry(0, 2, &mut ptr) }, SEP_OK);
     assert!(!ptr.is_null());
     assert_eq!(
         unsafe { invoke_entry(1, 1, null_mut()) },
-        SE_INVALID_ARGUMENT
+        SEP_INVALID_ARGUMENT
     );
     // The entry contains no plugin-defined code; its panic fence is also used
     // by each trampoline, tested with an injected Rust panic here.
-    assert_eq!(export::boundary(|| panic!("entry-boundary")), SE_PANIC);
+    assert_eq!(export::boundary(|| panic!("entry-boundary")), SEP_PANIC);
 }
 
 #[test]
 fn rejects_headers_before_forming_full_references() {
     #[repr(C, align(16))]
     struct HeaderOnly(SeAbiHeader);
-    for (version, len, expected) in [(2, 8, SE_ABI_UNSUPPORTED), (1, 8, SE_ABI_UNSUPPORTED)] {
+    for (version, len, expected) in [(2, 8, SEP_ABI_UNSUPPORTED), (1, 8, SEP_ABI_UNSUPPORTED)] {
         let header = HeaderOnly(SeAbiHeader {
             abi_version: version,
             struct_size: len,
@@ -279,13 +279,13 @@ fn all_plugin_panics_are_contained_and_destroy_consumes_once() {
     let mut bytes = [0; 32];
     let mut out = output(&mut bytes);
     PANIC_AT.with(|at| at.set("manifest"));
-    assert_eq!(unsafe { api.manifest.unwrap()(&mut out) }, SE_PANIC);
+    assert_eq!(unsafe { api.manifest.unwrap()(&mut out) }, SEP_PANIC);
     PANIC_AT.with(|at| at.set("create"));
     let before = DROPS.with(Cell::get);
     let mut ptr = std::ptr::dangling_mut();
     assert_eq!(
         unsafe { api.create.unwrap()(&host_api(), SeSlice::from_bytes(b"{}"), &mut ptr) },
-        SE_PANIC
+        SEP_PANIC
     );
     assert!(ptr.is_null());
     assert_eq!(DROPS.with(Cell::get), before + 1);
@@ -300,17 +300,17 @@ fn all_plugin_panics_are_contained_and_destroy_consumes_once() {
         PANIC_AT.with(|at| at.set(name));
         assert_eq!(
             unsafe { callback(ptr, SeSlice::from_bytes(b"{}"), &mut out) },
-            SE_PANIC
+            SEP_PANIC
         );
     }
     PANIC_AT.with(|at| at.set("on_config_changed"));
     assert_eq!(
         unsafe { api.on_config_changed.unwrap()(ptr, SeSlice::from_bytes(b"{}")) },
-        SE_PANIC
+        SEP_PANIC
     );
     PANIC_AT.with(|at| at.set("destroy"));
     let before = DROPS.with(Cell::get);
-    assert_eq!(unsafe { api.destroy.unwrap()(ptr) }, SE_PANIC);
+    assert_eq!(unsafe { api.destroy.unwrap()(ptr) }, SEP_PANIC);
     assert_eq!(DROPS.with(Cell::get), before + 1);
     PANIC_AT.with(|at| at.set(""));
 }
@@ -336,11 +336,11 @@ fn destructor_panic_is_inside_destroy_boundary() {
         unsafe {
             export::create::<PanicOnDrop>(&host_api(), SeSlice::from_bytes(b"{}"), &mut instance)
         },
-        SE_OK
+        SEP_OK
     );
     assert_eq!(
         unsafe { export::destroy::<PanicOnDrop>(instance) },
-        SE_PANIC
+        SEP_PANIC
     );
 }
 
@@ -368,7 +368,7 @@ fn invalid_host_tables_fail_create_and_clear_instance() {
         let mut instance = std::ptr::dangling_mut();
         assert_ne!(
             unsafe { api.create.unwrap()(&host, SeSlice::from_bytes(b"{}"), &mut instance) },
-            SE_OK
+            SEP_OK
         );
         assert!(instance.is_null());
     }
@@ -384,7 +384,7 @@ fn panic_payload_drop_cannot_unwind_again() {
     }
     assert_eq!(
         export::boundary(|| std::panic::panic_any(BadDrop)),
-        SE_PANIC
+        SEP_PANIC
     );
 }
 
@@ -400,11 +400,11 @@ fn null_outputs_instances_and_bad_inputs_never_enter_plugin() {
     };
     assert_eq!(
         unsafe { api.manifest.unwrap()(null_mut()) },
-        SE_INVALID_ARGUMENT
+        SEP_INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { api.create.unwrap()(&host_api(), empty, null_mut()) },
-        SE_INVALID_ARGUMENT
+        SEP_INVALID_ARGUMENT
     );
     for callback in [
         api.render_view.unwrap(),
@@ -414,11 +414,11 @@ fn null_outputs_instances_and_bad_inputs_never_enter_plugin() {
     ] {
         assert_eq!(
             unsafe { callback(ptr, empty, null_mut()) },
-            SE_INVALID_ARGUMENT
+            SEP_INVALID_ARGUMENT
         );
         assert_eq!(
             unsafe { callback(null_mut(), empty, &mut out) },
-            SE_INVALID_ARGUMENT
+            SEP_INVALID_ARGUMENT
         );
         assert_eq!(out.len, 0);
         assert_eq!(
@@ -432,24 +432,24 @@ fn null_outputs_instances_and_bad_inputs_never_enter_plugin() {
                     &mut out,
                 )
             },
-            SE_INVALID_ARGUMENT
+            SEP_INVALID_ARGUMENT
         );
         assert_eq!(
             unsafe { callback(ptr, SeSlice::from_bytes(&[0xff]), &mut out) },
-            SE_INVALID_JSON
+            SEP_INVALID_JSON
         );
     }
     assert_eq!(
         unsafe { api.on_config_changed.unwrap()(null_mut(), empty) },
-        SE_INVALID_ARGUMENT
+        SEP_INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { api.on_config_changed.unwrap()(ptr, SeSlice::from_bytes(&[0xff])) },
-        SE_INVALID_JSON
+        SEP_INVALID_JSON
     );
     assert_eq!(
         unsafe { api.destroy.unwrap()(null_mut()) },
-        SE_INVALID_ARGUMENT
+        SEP_INVALID_ARGUMENT
     );
     let mut bad_out = SeOutput {
         ptr: null_mut(),
@@ -458,20 +458,20 @@ fn null_outputs_instances_and_bad_inputs_never_enter_plugin() {
     };
     assert_eq!(
         unsafe { api.manifest.unwrap()(&mut bad_out) },
-        SE_INVALID_ARGUMENT
+        SEP_INVALID_ARGUMENT
     );
-    assert_eq!(unsafe { api.destroy.unwrap()(ptr) }, SE_OK);
+    assert_eq!(unsafe { api.destroy.unwrap()(ptr) }, SEP_OK);
     let mut ptr = std::ptr::dangling_mut();
     assert_eq!(
         unsafe { api.create.unwrap()(null(), empty, &mut ptr) },
-        SE_INVALID_ARGUMENT
+        SEP_INVALID_ARGUMENT
     );
     assert!(ptr.is_null());
     let mut ptr = std::ptr::dangling_mut();
     let before = DROPS.with(Cell::get);
     assert_eq!(
         unsafe { api.create.unwrap()(&host_api(), SeSlice::from_bytes(b"fail"), &mut ptr) },
-        SE_INTERNAL
+        SEP_INTERNAL
     );
     assert!(ptr.is_null());
     assert_eq!(DROPS.with(Cell::get), before + 1);
@@ -487,21 +487,21 @@ fn buffer_too_small_does_not_retry_or_overwrite_and_host_calls_once() {
     let original = (out.ptr, out.capacity);
     assert_eq!(
         unsafe { api.on_action.unwrap()(ptr, SeSlice::from_bytes(b"{}"), &mut out) },
-        SE_BUFFER_TOO_SMALL
+        SEP_BUFFER_TOO_SMALL
     );
     assert_eq!(out.len, 5);
     assert_eq!((out.ptr, out.capacity), original);
     assert_eq!(bytes, [0xab; 4]);
     assert_eq!(EFFECTS.with(Cell::get), 1);
-    assert_eq!(unsafe { api.destroy.unwrap()(ptr) }, SE_OK);
+    assert_eq!(unsafe { api.destroy.unwrap()(ptr) }, SEP_OK);
     let host = unsafe { Host::from_raw(&host_api()) }.unwrap();
-    assert_eq!(host.broker_call(b"{}", &mut []), Err(SE_BUFFER_TOO_SMALL));
+    assert_eq!(host.broker_call(b"{}", &mut []), Err(SEP_BUFFER_TOO_SMALL));
     assert_eq!(EFFECTS.with(Cell::get), 2);
     assert_eq!(host.broker_call(b"{}", &mut [0; 5]), Ok(5));
     assert_eq!(EFFECTS.with(Cell::get), 3);
-    assert_eq!(host.log(SE_LOG_INFO, "hello"), Ok(()));
-    assert_eq!(host.log(0, "no"), Err(SE_INVALID_ARGUMENT));
-    assert_eq!(host.broker_call(&[0xff], &mut []), Err(SE_INVALID_JSON));
+    assert_eq!(host.log(SEP_LOG_INFO, "hello"), Ok(()));
+    assert_eq!(host.log(0, "no"), Err(SEP_INVALID_ARGUMENT));
+    assert_eq!(host.broker_call(&[0xff], &mut []), Err(SEP_INVALID_JSON));
     assert_eq!(EFFECTS.with(Cell::get), 3);
 }
 
@@ -571,7 +571,7 @@ fn output_zero_capacity_and_exact_capacity() {
     };
     let mut writer = unsafe { OutputWriter::from_raw(&mut raw) }.unwrap();
     assert_eq!(writer.write(b""), Ok(()));
-    assert_eq!(writer.write(b"x"), Err(SE_BUFFER_TOO_SMALL));
+    assert_eq!(writer.write(b"x"), Err(SEP_BUFFER_TOO_SMALL));
     assert_eq!(raw.len, 1);
     let mut bytes = [0; 2];
     let mut raw = output(&mut bytes);
@@ -597,7 +597,7 @@ fn unimplemented_callbacks_are_callable_unavailable_defaults() {
     let mut ptr = null_mut();
     assert_eq!(
         unsafe { export::create::<Defaults>(&host_api(), SeSlice::from_bytes(b"{}"), &mut ptr) },
-        SE_OK
+        SEP_OK
     );
     for callback in [
         export::render_view::<Defaults> as SeJsonCallbackFn,
@@ -607,12 +607,12 @@ fn unimplemented_callbacks_are_callable_unavailable_defaults() {
     ] {
         assert_eq!(
             unsafe { callback(ptr, SeSlice::from_bytes(b"{}"), &mut raw) },
-            SE_UNAVAILABLE
+            SEP_UNAVAILABLE
         );
     }
     assert_eq!(
         unsafe { export::on_config_changed::<Defaults>(ptr, SeSlice::from_bytes(b"{}")) },
-        SE_UNAVAILABLE
+        SEP_UNAVAILABLE
     );
-    assert_eq!(unsafe { export::destroy::<Defaults>(ptr) }, SE_OK);
+    assert_eq!(unsafe { export::destroy::<Defaults>(ptr) }, SEP_OK);
 }

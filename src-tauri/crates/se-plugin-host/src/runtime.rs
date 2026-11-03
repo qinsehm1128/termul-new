@@ -1380,7 +1380,7 @@ mod tests {
             activation: &[u8],
         ) -> Result<Self, se_plugin_abi::SeStatus> {
             let value: serde_json::Value =
-                serde_json::from_slice(activation).map_err(|_| se_plugin_abi::SE_INVALID_JSON)?;
+                serde_json::from_slice(activation).map_err(|_| se_plugin_abi::SEP_INVALID_JSON)?;
             if value["pluginId"]
                 .as_str()
                 .unwrap()
@@ -1456,7 +1456,7 @@ mod tests {
     fn fixture_api() -> se_plugin_abi::SePluginApiV1 {
         use se_plugin_abi::{export as e, *};
         SePluginApiV1 {
-            abi_version: SE_ABI_VERSION,
+            abi_version: SEP_ABI_VERSION,
             struct_size: std::mem::size_of::<SePluginApiV1>() as u32,
             manifest: Some(e::manifest::<Fixture>),
             create: Some(e::create::<Fixture>),

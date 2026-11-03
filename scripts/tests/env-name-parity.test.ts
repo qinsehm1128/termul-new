@@ -195,6 +195,8 @@ const POST_FREEZE_ENV_SUFFIXES = [
   'CANARY_BUILD',
   'CANARY_BUILD__',
   'SKILLS_TEST_ROOT',
+  // Test-only: real example plugin artifacts built by scripts/test-plugins.sh.
+  'PLUGIN_TEST_ARTIFACTS',
   // Test-only: re-executes the signal-witness test as the signalled Core.
   'SIGNAL_WITNESS_CHILD'
 ]

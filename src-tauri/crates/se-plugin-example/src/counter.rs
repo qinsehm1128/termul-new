@@ -1,6 +1,6 @@
 use se_plugin_abi::{
-    Host, OutputWriter, PluginV1, SeStatus, SE_INTERNAL, SE_INVALID_ARGUMENT, SE_INVALID_JSON,
-    SE_LOG_INFO, SE_UNAVAILABLE,
+    Host, OutputWriter, PluginV1, SeStatus, SEP_INTERNAL, SEP_INVALID_ARGUMENT, SEP_INVALID_JSON,
+    SEP_LOG_INFO, SEP_UNAVAILABLE,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -18,11 +18,11 @@ struct Config {
 
 impl Config {
     fn parse(value: Value) -> Result<Self, SeStatus> {
-        let config: Self = serde_json::from_value(value).map_err(|_| SE_INVALID_JSON)?;
+        let config: Self = serde_json::from_value(value).map_err(|_| SEP_INVALID_JSON)?;
         if !(1.0..=100.0).contains(&config.step)
             || !matches!(config.tone.as_str(), "normal" | "muted")
         {
-            return Err(SE_INVALID_ARGUMENT);
+            return Err(SEP_INVALID_ARGUMENT);
         }
         Ok(config)
     }
@@ -35,11 +35,11 @@ pub struct CounterPlugin {
 }
 
 fn parse(bytes: &[u8]) -> Result<Value, SeStatus> {
-    serde_json::from_slice(bytes).map_err(|_| SE_INVALID_JSON)
+    serde_json::from_slice(bytes).map_err(|_| SEP_INVALID_JSON)
 }
 
 fn write(out: &mut OutputWriter<'_>, value: Value) -> Result<(), SeStatus> {
-    let bytes = serde_json::to_vec(&value).map_err(|_| SE_INTERNAL)?;
+    let bytes = serde_json::to_vec(&value).map_err(|_| SEP_INTERNAL)?;
     out.write(&bytes)
 }
 
@@ -126,7 +126,7 @@ impl PluginV1 for CounterPlugin {
     fn create(host: Host, activation_json: &[u8]) -> Result<Self, SeStatus> {
         let activation = parse(activation_json)?;
         let config = Config::parse(activation["config"]["values"].clone())?;
-        host.log(SE_LOG_INFO, "Configured Counter activated")?;
+        host.log(SEP_LOG_INFO, "Configured Counter activated")?;
         Ok(Self {
             host,
             count: 0.0,
@@ -136,7 +136,7 @@ impl PluginV1 for CounterPlugin {
 
     fn render_view(&mut self, bytes: &[u8], out: &mut OutputWriter<'_>) -> Result<(), SeStatus> {
         if parse(bytes)?["viewId"] != VIEW {
-            return Err(SE_UNAVAILABLE);
+            return Err(SEP_UNAVAILABLE);
         }
         write(out, self.tree())
     }
@@ -144,7 +144,7 @@ impl PluginV1 for CounterPlugin {
     fn on_action(&mut self, bytes: &[u8], out: &mut OutputWriter<'_>) -> Result<(), SeStatus> {
         let event = parse(bytes)?;
         if event["viewId"] != VIEW {
-            return Err(SE_UNAVAILABLE);
+            return Err(SEP_UNAVAILABLE);
         }
         match event["actionId"].as_str() {
             Some("increment") => self.count += self.config.step,
@@ -152,20 +152,20 @@ impl PluginV1 for CounterPlugin {
             Some("greeting") => {
                 self.config.greeting = event["value"]
                     .as_str()
-                    .ok_or(SE_INVALID_ARGUMENT)?
+                    .ok_or(SEP_INVALID_ARGUMENT)?
                     .to_owned()
             }
             Some("showCount") => {
-                self.config.show_count = event["value"].as_bool().ok_or(SE_INVALID_ARGUMENT)?
+                self.config.show_count = event["value"].as_bool().ok_or(SEP_INVALID_ARGUMENT)?
             }
             Some("tone") => {
-                let tone = event["value"].as_str().ok_or(SE_INVALID_ARGUMENT)?;
+                let tone = event["value"].as_str().ok_or(SEP_INVALID_ARGUMENT)?;
                 if !matches!(tone, "normal" | "muted") {
-                    return Err(SE_INVALID_ARGUMENT);
+                    return Err(SEP_INVALID_ARGUMENT);
                 }
                 self.config.tone = tone.to_owned();
             }
-            _ => return Err(SE_UNAVAILABLE),
+            _ => return Err(SEP_UNAVAILABLE),
         }
         write(out, self.tree())
     }
@@ -180,7 +180,7 @@ impl PluginV1 for CounterPlugin {
             Some("example.timeout") => std::thread::sleep(std::time::Duration::from_secs(3)),
             #[cfg(feature = "test-hooks")]
             Some("example.abort") => std::process::abort(),
-            _ => return Err(SE_UNAVAILABLE),
+            _ => return Err(SEP_UNAVAILABLE),
         }
         write(
             out,
@@ -191,7 +191,7 @@ impl PluginV1 for CounterPlugin {
     fn on_config_changed(&mut self, bytes: &[u8]) -> Result<(), SeStatus> {
         self.config = Config::parse(parse(bytes)?["values"].clone())?;
         self.host
-            .log(SE_LOG_INFO, "Configured Counter configuration applied")
+            .log(SEP_LOG_INFO, "Configured Counter configuration applied")
     }
 
     fn on_service_call(
@@ -204,7 +204,7 @@ impl PluginV1 for CounterPlugin {
             || request["version"] != 1
             || request["method"] != "get"
         {
-            return Err(SE_UNAVAILABLE);
+            return Err(SEP_UNAVAILABLE);
         }
         write(
             out,
@@ -213,6 +213,6 @@ impl PluginV1 for CounterPlugin {
     }
 
     fn destroy(self) -> Result<(), SeStatus> {
-        self.host.log(SE_LOG_INFO, "Configured Counter destroyed")
+        self.host.log(SEP_LOG_INFO, "Configured Counter destroyed")
     }
 }

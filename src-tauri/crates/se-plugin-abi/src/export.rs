@@ -11,12 +11,12 @@ use core::ffi::c_void;
 #[doc(hidden)]
 pub fn boundary(call: impl FnOnce() -> Result<(), SeStatus>) -> SeStatus {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
-        Ok(Ok(())) => SE_OK,
-        Ok(Err(SE_OK)) => SE_INTERNAL,
+        Ok(Ok(())) => SEP_OK,
+        Ok(Err(SEP_OK)) => SEP_INTERNAL,
         Ok(Err(status)) => status,
         Err(payload) => {
             std::mem::forget(payload);
-            SE_PANIC
+            SEP_PANIC
         }
     }
 }
@@ -27,7 +27,7 @@ pub unsafe extern "C" fn manifest<P: PluginV1>(output: *mut SeOutput) -> SeStatu
     boundary(|| {
         let mut out = unsafe { OutputWriter::from_raw(output)? };
         let bytes = P::manifest();
-        std::str::from_utf8(bytes).map_err(|_| SE_INVALID_JSON)?;
+        std::str::from_utf8(bytes).map_err(|_| SEP_INVALID_JSON)?;
         out.write(bytes)
     })
 }
@@ -70,7 +70,7 @@ unsafe fn json_callback<P: PluginV1>(
     let input = unsafe { input_bytes(input)? };
     call(unsafe { &mut *instance.cast::<P>() }, input, &mut out)?;
     if out.len() > out.capacity() {
-        return Err(SE_BUFFER_TOO_SMALL);
+        return Err(SEP_BUFFER_TOO_SMALL);
     }
     Ok(())
 }
@@ -133,8 +133,8 @@ pub unsafe fn entry(
     unsafe {
         *out_api = std::ptr::null();
     }
-    if min > SE_ABI_VERSION || max < SE_ABI_VERSION || min > max {
-        return Err(SE_ABI_UNSUPPORTED);
+    if min > SEP_ABI_VERSION || max < SEP_ABI_VERSION || min > max {
+        return Err(SEP_ABI_UNSUPPORTED);
     }
     unsafe {
         *out_api = api;
@@ -156,7 +156,7 @@ macro_rules! export_plugin {
 
         const _: () = {
             static API: $crate::SePluginApiV1 = $crate::SePluginApiV1 {
-                abi_version: $crate::SE_ABI_VERSION,
+                abi_version: $crate::SEP_ABI_VERSION,
                 struct_size: ::core::mem::size_of::<$crate::SePluginApiV1>() as u32,
                 manifest: Some($crate::export::manifest::<$plugin>),
                 create: Some($crate::export::create::<$plugin>),

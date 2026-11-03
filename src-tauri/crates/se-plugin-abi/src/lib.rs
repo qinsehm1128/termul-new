@@ -14,25 +14,25 @@ mod sdk;
 pub use sdk::{Host, OutputWriter, PluginV1};
 
 pub type SeStatus = i32;
-pub const SE_ABI_VERSION: u32 = 1;
-pub const SE_ENTRY_SYMBOL: &[u8] = b"se_plugin_entry_v1\0";
-pub const SE_OK: SeStatus = 0;
-pub const SE_INVALID_ARGUMENT: SeStatus = 1;
-pub const SE_ABI_UNSUPPORTED: SeStatus = 2;
-pub const SE_BUFFER_TOO_SMALL: SeStatus = 3;
-pub const SE_INVALID_JSON: SeStatus = 4;
-pub const SE_NOT_FOUND: SeStatus = 5;
-pub const SE_UNAVAILABLE: SeStatus = 6;
-pub const SE_BUSY: SeStatus = 7;
-pub const SE_PANIC: SeStatus = 8;
-pub const SE_INTERNAL: SeStatus = 9;
-pub const SE_DEADLINE_EXCEEDED: SeStatus = 10;
-pub const SE_STALE_GENERATION: SeStatus = 11;
-pub const SE_REENTRANT: SeStatus = 12;
-pub const SE_LOG_ERROR: u32 = 1;
-pub const SE_LOG_WARN: u32 = 2;
-pub const SE_LOG_INFO: u32 = 3;
-pub const SE_LOG_DEBUG: u32 = 4;
+pub const SEP_ABI_VERSION: u32 = 1;
+pub const SEP_ENTRY_SYMBOL: &[u8] = b"se_plugin_entry_v1\0";
+pub const SEP_OK: SeStatus = 0;
+pub const SEP_INVALID_ARGUMENT: SeStatus = 1;
+pub const SEP_ABI_UNSUPPORTED: SeStatus = 2;
+pub const SEP_BUFFER_TOO_SMALL: SeStatus = 3;
+pub const SEP_INVALID_JSON: SeStatus = 4;
+pub const SEP_NOT_FOUND: SeStatus = 5;
+pub const SEP_UNAVAILABLE: SeStatus = 6;
+pub const SEP_BUSY: SeStatus = 7;
+pub const SEP_PANIC: SeStatus = 8;
+pub const SEP_INTERNAL: SeStatus = 9;
+pub const SEP_DEADLINE_EXCEEDED: SeStatus = 10;
+pub const SEP_STALE_GENERATION: SeStatus = 11;
+pub const SEP_REENTRANT: SeStatus = 12;
+pub const SEP_LOG_ERROR: u32 = 1;
+pub const SEP_LOG_WARN: u32 = 2;
+pub const SEP_LOG_INFO: u32 = 3;
+pub const SEP_LOG_DEBUG: u32 = 4;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,8 +133,8 @@ pub enum AbiValidationError {
 impl AbiValidationError {
     pub fn status(self) -> SeStatus {
         match self {
-            Self::UnsupportedVersion { .. } | Self::StructTooSmall { .. } => SE_ABI_UNSUPPORTED,
-            _ => SE_INVALID_ARGUMENT,
+            Self::UnsupportedVersion { .. } | Self::StructTooSmall { .. } => SEP_ABI_UNSUPPORTED,
+            _ => SEP_INVALID_ARGUMENT,
         }
     }
 }
@@ -148,7 +148,7 @@ impl std::error::Error for AbiValidationError {}
 
 pub(crate) fn check_pointer<T>(ptr: *const T) -> Result<(), SeStatus> {
     if ptr.is_null() || !(ptr as usize).is_multiple_of(align_of::<T>()) {
-        Err(SE_INVALID_ARGUMENT)
+        Err(SEP_INVALID_ARGUMENT)
     } else {
         Ok(())
     }
@@ -171,7 +171,7 @@ pub unsafe fn validate_abi_header(
         return Err(AbiValidationError::MisalignedPointer);
     }
     let header = unsafe { ptr.read() };
-    if header.abi_version != SE_ABI_VERSION {
+    if header.abi_version != SEP_ABI_VERSION {
         return Err(AbiValidationError::UnsupportedVersion {
             actual: header.abi_version,
         });

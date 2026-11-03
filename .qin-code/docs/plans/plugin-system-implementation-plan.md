@@ -235,11 +235,11 @@ pub unsafe extern "C" fn se_plugin_entry_v1(
 
 | 数值 | 常量 | 含义 |
 |---|---|---|
-| 0 | `SE_OK` | 成功 |
-| 1 / 2 / 3 | `SE_INVALID_ARGUMENT` / `SE_ABI_UNSUPPORTED` / `SE_BUFFER_TOO_SMALL` | 指针/参数错误、ABI 不支持、输出容量不足 |
-| 4 / 5 / 6 | `SE_INVALID_JSON` / `SE_NOT_FOUND` / `SE_UNAVAILABLE` | JSON 错误、资源不存在、能力/服务不可用 |
-| 7 / 8 / 9 | `SE_BUSY` / `SE_PANIC` / `SE_INTERNAL` | 队列满、已捕获 panic、插件内部错误 |
-| 10 / 11 / 12 | `SE_DEADLINE_EXCEEDED` / `SE_STALE_GENERATION` / `SE_REENTRANT` | Broker 截止时间、旧代请求、递归调用拒绝 |
+| 0 | `SEP_OK` | 成功 |
+| 1 / 2 / 3 | `SEP_INVALID_ARGUMENT` / `SEP_ABI_UNSUPPORTED` / `SEP_BUFFER_TOO_SMALL` | 指针/参数错误、ABI 不支持、输出容量不足 |
+| 4 / 5 / 6 | `SEP_INVALID_JSON` / `SEP_NOT_FOUND` / `SEP_UNAVAILABLE` | JSON 错误、资源不存在、能力/服务不可用 |
+| 7 / 8 / 9 | `SEP_BUSY` / `SEP_PANIC` / `SEP_INTERNAL` | 队列满、已捕获 panic、插件内部错误 |
+| 10 / 11 / 12 | `SEP_DEADLINE_EXCEEDED` / `SEP_STALE_GENERATION` / `SEP_REENTRANT` | Broker 截止时间、旧代请求、递归调用拒绝 |
 
 非 0 状态的输出不解释成成功 JSON；未知状态映射 `PLUGIN_CALLBACK_ERROR`，保留数值作诊断。日志级别固定 `1=error,2=warn,3=info,4=debug`。
 
@@ -397,7 +397,7 @@ button 对应 click/null；input/select 对应 change/string；toggle 对应 cha
 
 等待超时只表示调用者不再等待，**不表示线程停止**。worker 持有输入、输出、HostApi、host_context、实例和 Library 的所有权；未返回前不可 free/destroy/dlclose。超时后撤回该代可见资源、持久 quarantine，通知 Core 重启；Core 尽可能发出错误/事件，100 ms 后结束进程，禁止 join 卡死线程。重新启动时不自动激活隔离插件。
 
-SDK 捕获的 panic 返回 SE_PANIC：撤回并隔离该实例，按 once guard 尝试一次有 deadline 的 destroy；正常情况 Plugin Core 本身继续服务。abort/段错误无法由 catch_unwind 拦截，只能由进程隔离恢复。宿主导出的 HostApi 函数也必须在自身 extern-C 边界捕获宿主 Rust panic。
+SDK 捕获的 panic 返回 SEP_PANIC：撤回并隔离该实例，按 once guard 尝试一次有 deadline 的 destroy；正常情况 Plugin Core 本身继续服务。abort/段错误无法由 catch_unwind 拦截，只能由进程隔离恢复。宿主导出的 HostApi 函数也必须在自身 extern-C 边界捕获宿主 Rust panic。
 
 控制操作整体预算 20 秒，回滚另有最多 20 秒预算；排队期间超时尚未进入插件时只返回错误，不误判插件卡死。GUI RPC deadline 为 60 秒；连接断开或超时不自动重放 mutation，重新 list/get 查询实际状态。
 
