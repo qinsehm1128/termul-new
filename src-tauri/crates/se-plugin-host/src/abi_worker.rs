@@ -509,13 +509,10 @@ impl WorkerState {
         self.metrics
             .callbacks_in_flight
             .fetch_sub(1, Ordering::Relaxed);
-        if let Err(error) = self.journal.end(&token) {
-            // A completed create must not lose its cleanup obligation on a disk error.
-            if matches!(kind, CallKind::Create) && !self.instance.is_null() {
-                let _ = self.foreign(CallKind::Destroy, &[]);
-            }
-            return Err(error);
-        }
+        // The worker still owns the instance. Adapter cleanup or supervised
+        // channel-disconnect cleanup consumes the obligation, never this
+        // already-completed callback's unobserved error path.
+        self.journal.end(&token)?;
         result
     }
     fn foreign(&mut self, kind: CallKind, input: &[u8]) -> Result<Vec<u8>, PluginError> {

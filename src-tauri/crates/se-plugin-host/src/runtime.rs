@@ -1427,6 +1427,9 @@ mod tests {
             out.write(br#"{"schemaVersion":1,"result":{"ok":true}}"#)
         }
         fn destroy(self) -> Result<(), se_plugin_abi::SeStatus> {
+            if self.mode.contains("slowdestroy") {
+                std::thread::sleep(Duration::from_millis(700));
+            }
             destroyed().lock().unwrap().push(self.mode);
             Ok(())
         }
@@ -1831,6 +1834,104 @@ mod tests {
         assert_eq!(host.diagnostics().broker_registrations, 2);
         assert_eq!(std::fs::read(&registry).unwrap(), b"corrupt");
         std::fs::write(&registry, original).unwrap();
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_shutdown_completes_owned_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(
+            &host,
+            root.path(),
+            manifest("test.slowdestroy-shutdown", &[], &[]),
+        )
+        .await;
+        enabled(&host, "test.slowdestroy-shutdown", true)
+            .await
+            .unwrap();
+        let clone = host.clone();
+        let task = tokio::spawn(async move { clone.shutdown().await });
+        while host.diagnostics().callbacks_in_flight == 0 {
+            tokio::task::yield_now().await;
+        }
+        task.abort();
+        tokio::time::sleep(Duration::from_millis(850)).await;
+        assert_eq!(host.diagnostics().destroy_attempts, 1);
+        assert_eq!(host.diagnostics().active_instances, 0);
+        assert_eq!(host.diagnostics().broker_registrations, 0);
+        assert!(!host.is_ready());
+        assert_eq!(host.list().await.unwrap_err().code, PLUGIN_DISABLED);
+    }
+    #[tokio::test]
+    async fn cordis_teardown_uses_explicit_worker_deadline_without_task_local() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(root.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        install_fixture(
+            &host,
+            root.path(),
+            manifest("test.explicit-deadline", &[], &[]),
+        )
+        .await;
+        enabled(&host, "test.explicit-deadline", true)
+            .await
+            .unwrap();
+        let worker = host.state.lock().await.active["test.explicit-deadline"]
+            .worker
+            .clone();
+        worker.set_teardown_deadline(std::time::Instant::now() - Duration::from_millis(1));
+        // A fresh detached task has no CONTROL_DEADLINE, like cordis cleanup.
+        let clone = worker.clone();
+        let result = tokio::spawn(async move { clone.call(CallKind::Destroy, Vec::new()).await })
+            .await
+            .unwrap();
+        assert_eq!(result.unwrap_err().code, PLUGIN_BUSY);
+        assert_eq!(host.diagnostics().destroy_attempts, 0);
+        assert!(host.restart_requested().borrow().is_none());
+        host.shutdown().await.unwrap();
+        assert_eq!(host.diagnostics().destroy_attempts, 1);
+    }
+    #[tokio::test]
+    async fn disconnected_worker_destroy_is_supervised_and_requests_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(
+            root.path().into(),
+            HostOptions {
+                callback_timeout: Duration::from_millis(300),
+                ..HostOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        install_fixture(
+            &host,
+            root.path(),
+            manifest("test.slowdestroy-fallback", &[], &[]),
+        )
+        .await;
+        let source = host.state.lock().await.registry.plugins[0]
+            .source_path
+            .clone();
+        let (_, worker, _) = host
+            .candidate(&source, "test.slowdestroy-fallback")
+            .await
+            .unwrap();
+        worker.call(CallKind::Create,serde_json::to_vec(&serde_json::json!({"pluginId":"test.slowdestroy-fallback","config":{"revision":1}})).unwrap()).await.unwrap();
+        let mut restart = host.restart_requested();
+        drop(worker);
+        tokio::time::timeout(Duration::from_millis(600), restart.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restart.borrow().as_ref().unwrap().code, PLUGIN_TIMEOUT);
+        assert_eq!(host.diagnostics().destroy_attempts, 1);
+        assert_eq!(host.diagnostics().callbacks_in_flight, 1);
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(host.diagnostics().callbacks_in_flight, 0);
         host.shutdown().await.unwrap();
     }
 
