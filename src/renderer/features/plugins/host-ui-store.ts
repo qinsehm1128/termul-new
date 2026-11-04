@@ -32,6 +32,7 @@ export function createPluginHostUiStore(
   let epoch = 0
   let consumers = 0
   let release: (() => void) | undefined
+  let unsupported = false
   let ready = false
   let bootId: string | null = null
   const retiredBoots = new Set<string>()
@@ -54,11 +55,19 @@ export function createPluginHostUiStore(
         set({ contextRevision: revision, ...(context ? { context, contextPending: false } : {}) })
     },
     async load() {
-      if (!isDesktop() || !ready || !get().connected) return
+      if (!isDesktop() || unsupported || !ready || !get().connected) return
       const requestEpoch = epoch
       try {
         const result = await api.getHostUi()
-        if (requestEpoch !== epoch || !get().connected || !result.success) return
+        if (requestEpoch !== epoch || !get().connected) return
+        if (!result.success) {
+          if (result.code === 'PLUGIN_NOT_SUPPORTED') {
+            unsupported = true
+            set({ snapshot: null })
+          }
+          return
+        }
+        if (unsupported) return
         if (bootId && result.data.bootId !== bootId) return
         const previous = get().snapshot
         if (previous?.bootId === result.data.bootId && previous.revision >= result.data.revision)
@@ -79,6 +88,7 @@ export function createPluginHostUiStore(
           const changedBoot = !!bootId && bootId !== event.bootId
           if (!selectBoot(event.bootId)) return
           if (changedBoot) {
+            unsupported = false
             ++epoch
             set({ snapshot: null, contextRevision: 0, context: null, contextPending: true })
           }
@@ -95,6 +105,7 @@ export function createPluginHostUiStore(
             return
           }
           ++epoch
+          unsupported = false
           set({
             snapshot: null,
             contextRevision: 0,
@@ -140,6 +151,7 @@ export function createPluginHostUiStore(
         release?.()
         release = undefined
         bootId = null
+        unsupported = false
         sawConnection = false
         set({
           snapshot: null,

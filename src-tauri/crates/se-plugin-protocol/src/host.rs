@@ -260,6 +260,7 @@ dto!(ContributionTarget {
 dto!(ExecuteContributionRequest {
     plugin_id: String, generation: String, kind: ContributionKind, contribution_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_option")] action_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_option")] record_revision: Option<u64>,
     context_revision: u64, target: ContributionTarget
 });
 
@@ -634,6 +635,18 @@ pub fn validate_execute_contribution_request(
     check(is_plugin_id(&v.plugin_id) && is_uuid(&v.generation))?;
     local(&v.contribution_id)?;
     safe(v.context_revision)?;
+    if matches!(
+        v.kind,
+        ContributionKind::Notification | ContributionKind::Progress
+    ) {
+        safe(
+            v.record_revision.ok_or_else(|| {
+                PluginError::new(PLUGIN_INVALID_REQUEST, "missing record revision")
+            })?,
+        )?;
+    } else {
+        check(v.record_revision.is_none())?;
+    }
     check(if v.kind == ContributionKind::Notification {
         v.action_index.is_some_and(|i| i < 2)
     } else {

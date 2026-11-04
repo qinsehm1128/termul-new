@@ -12,7 +12,11 @@ import { StatusBar } from './StatusBar'
 // Mock the terminal store
 vi.mock('@/features/plugins/PluginStatusItems', () => ({
   PluginStatusItems: ({ projectId }: { projectId?: string }) => (
-    <div data-testid="plugin-status-items" data-project-id={projectId} />
+    <div data-testid="plugin-status-items" data-project-id={projectId}>
+      {Array.from({ length: 100 }, (_, index) => (
+        <span key={index}>{`Very long plugin status ${index}`}</span>
+      ))}
+    </div>
   )
 }))
 
@@ -159,6 +163,19 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 describe('StatusBar', () => {
+  it('bounds aggregate plugin width independently of built-in controls with many items', () => {
+    renderWithProviders(<StatusBar project={mockProject} />)
+    const pluginRegion = screen.getByTestId('plugin-status-items')
+    expect(pluginRegion.children).toHaveLength(100)
+    expect(pluginRegion.parentElement).toHaveClass('min-w-0', 'max-w-[30vw]', 'overflow-hidden')
+    const recoveryButton = screen.getByRole('button', { name: 'Restore UI and terminals' })
+    expect(recoveryButton).toBeVisible()
+    expect(recoveryButton.parentElement).toHaveClass('shrink-0')
+    expect(pluginRegion.parentElement).not.toContainElement(recoveryButton)
+    expect(screen.getByLabelText('Switch git branch')).toBeVisible()
+    expect(screen.getByText('~/project')).toBeVisible()
+  })
+
   it('mounts plugin status items with the current project scope', () => {
     const mounted = renderWithProviders(<StatusBar project={mockProject} />)
     expect(screen.getByTestId('plugin-status-items')).toHaveAttribute(

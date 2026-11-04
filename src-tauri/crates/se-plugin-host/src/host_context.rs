@@ -297,7 +297,7 @@ impl HostContext {
         let now = self.clock(now);
         self.expire(now);
         if let Some(source) = &self.source {
-            if source.owner != owner || source.id != request.source_id {
+            if source.owner != owner || (source.id != request.source_id && !request.reset) {
                 return Err(error(
                     PLUGIN_BUSY,
                     "context source is bound to another owner or source",
@@ -620,6 +620,41 @@ mod tests {
         host.snapshot("demo", GEN, HostScope::Window, 0).unwrap();
         host
     }
+    #[test]
+    fn same_owner_can_reset_to_new_source_without_waiting_for_expiry() {
+        let mut host = host(128);
+        host.publish(
+            "window",
+            request(2, false, "a", vec![created("a", "old")]),
+            1,
+        )
+        .unwrap();
+        let mut replacement = request(1, true, "b", vec![]);
+        replacement.source_id = GEN.into();
+        let mut without_reset = replacement.clone();
+        without_reset.reset = false;
+        assert_eq!(
+            host.publish("window", without_reset, 2).unwrap_err().code,
+            PLUGIN_BUSY
+        );
+        assert_eq!(
+            host.publish("other-window", replacement.clone(), 2)
+                .unwrap_err()
+                .code,
+            PLUGIN_BUSY
+        );
+        host.publish("window", replacement, 2).unwrap();
+        assert_eq!(host.source.as_ref().unwrap().id, GEN);
+        assert_eq!(host.source.as_ref().unwrap().sequence, 1);
+        assert!(host.leases["demo"].queue.is_empty());
+        let marker = host.pop("demo", GEN, 2).unwrap();
+        assert_eq!(marker.source_id, GEN);
+        assert!(marker.resync_required);
+        let snapshot = host.snapshot("demo", GEN, HostScope::Window, 2).unwrap();
+        assert_eq!(project(&snapshot.context), Some("b"));
+        assert_eq!(snapshot.sequences["created"], marker.sequence);
+    }
+
     #[test]
     fn event_overflow_requires_snapshot_watermark() {
         let mut host = host(2);

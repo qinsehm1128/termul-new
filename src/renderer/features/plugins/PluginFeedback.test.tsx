@@ -127,6 +127,39 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('PluginFeedback', () => {
+  it.each([
+    'notification',
+    'progress'
+  ] as const)('fences a stale %s click with the displayed revision', async (kind) => {
+    const original =
+      kind === 'notification' ? notification({ revision: 7 }) : progress({ revision: 7 })
+    state.host.snapshot =
+      kind === 'notification'
+        ? snapshot([original as HostNotificationRecord])
+        : snapshot([], [original as HostProgressRecord])
+    render(<PluginFeedback />)
+    renderCard()
+    // Send the displayed revision even if Core has an unseen replacement.
+    const button = screen.getByRole('button', {
+      name: kind === 'notification' ? 'Open build' : 'feedback.cancel'
+    })
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(state.host.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ kind, recordRevision: 7 })
+      )
+    )
+    await waitFor(() => expect(button).not.toBeDisabled())
+    state.host.execute.mockClear()
+    // Once the replacement is known locally, cached handlers also fail closed.
+    state.host.snapshot =
+      kind === 'notification'
+        ? snapshot([notification({ revision: 8 })])
+        : snapshot([], [progress({ revision: 8 })])
+    fireEvent.click(button)
+    expect(state.host.execute).not.toHaveBeenCalled()
+  })
+
   it('uses stable collision-safe IDs and updates progress without adding a second identity', () => {
     const record = progress()
     state.host.snapshot = snapshot([], [record])
@@ -158,6 +191,7 @@ describe('PluginFeedback', () => {
         pluginId: 'org.test',
         generation: 'g1',
         kind: 'notification',
+        recordRevision: 1,
         contributionId: 'notice',
         actionIndex: 0,
         contextRevision: 17,
@@ -225,6 +259,7 @@ describe('PluginFeedback', () => {
       pluginId: 'org.test',
       generation: 'g1',
       kind: 'progress',
+      recordRevision: 1,
       contributionId: 'build',
       contextRevision: 17,
       target: { projectId: 'project-1' }

@@ -372,6 +372,7 @@ async fn smoke_pilot(gui: &PluginCoreClient, generation: &str) -> (String, HostC
             kind: ContributionKind::Menu,
             contribution_id: "activity-terminal-context".into(),
             action_index: None,
+            record_revision: None,
             context_revision: ack.context_revision,
             target: ContributionTarget {
                 project_id: Some("p1".into()),
@@ -683,6 +684,7 @@ async fn plugin_core_isolation_and_recovery() {
             kind: ContributionKind::Keybinding,
             contribution_id: "activity-summary".into(),
             action_index: None,
+            record_revision: None,
             context_revision: 1,
             target: ContributionTarget {
                 project_id: None,

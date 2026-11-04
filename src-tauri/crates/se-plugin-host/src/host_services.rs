@@ -664,6 +664,7 @@ mod tests {
         req.kind = ContributionKind::Notification;
         req.contribution_id = "notice".into();
         req.action_index = Some(0);
+        req.record_revision = Some(host.ui_snapshot().unwrap().notifications[0].revision);
         req.context_revision = 1;
         req.target = ContributionTarget {
             project_id: None,

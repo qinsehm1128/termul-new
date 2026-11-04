@@ -163,6 +163,36 @@ describe('host context projection privacy boundary', () => {
 })
 
 describe('host context publisher', () => {
+  it.each([
+    'publish',
+    'heartbeat'
+  ])('stops quietly after unsupported %s until reconnect', async (unsupportedAt) => {
+    vi.useFakeTimers()
+    const notSupported = { success: false, code: 'PLUGIN_NOT_SUPPORTED' }
+    const api = {
+      publishHostContext: vi
+        .fn()
+        .mockResolvedValue(
+          unsupportedAt === 'publish'
+            ? notSupported
+            : { success: true, data: { sourceSequence: 1, contextRevision: 1 } }
+        ),
+      heartbeatHostContext: vi.fn().mockResolvedValue(notSupported)
+    }
+    const publisher = createHostContextPublisher({ api, sourceId, initial: empty() })
+    publisher.reconnect()
+    await vi.advanceTimersByTimeAsync(2500)
+    publisher.capture({ ...empty(), activeProject: { id: 'next', name: 'Next', path: '/next' } })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(api.publishHostContext).toHaveBeenCalledTimes(1)
+    expect(api.heartbeatHostContext).toHaveBeenCalledTimes(unsupportedAt === 'publish' ? 0 : 1)
+    publisher.reconnect()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.publishHostContext).toHaveBeenCalledTimes(2)
+    publisher.dispose()
+    vi.useRealTimers()
+  })
+
   it('captures synchronous transitions but throttles flushes and allows only one publication in flight', async () => {
     vi.useFakeTimers()
     let resolve!: (value: typeof ack) => void

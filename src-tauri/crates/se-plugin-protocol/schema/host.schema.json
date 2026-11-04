@@ -2724,6 +2724,11 @@
             },
             "target": {
               "$ref": "#/$defs/ContributionTarget"
+            },
+            "recordRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           "required": [
@@ -2733,7 +2738,8 @@
             "contributionId",
             "actionIndex",
             "contextRevision",
-            "target"
+            "target",
+            "recordRevision"
           ]
         },
         {
@@ -2754,8 +2760,7 @@
               "enum": [
                 "menu",
                 "keybinding",
-                "status",
-                "progress"
+                "status"
               ]
             },
             "contributionId": {
@@ -2780,6 +2785,53 @@
             "contributionId",
             "contextRevision",
             "target"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pluginId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "generation": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "kind": {
+              "const": "progress"
+            },
+            "contributionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+            },
+            "contextRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "target": {
+              "$ref": "#/$defs/ContributionTarget"
+            },
+            "recordRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "pluginId",
+            "generation",
+            "kind",
+            "contributionId",
+            "contextRevision",
+            "target",
+            "recordRevision"
           ]
         }
       ]

@@ -18072,7 +18072,8 @@
       "target": {
         "projectId": "p1",
         "terminalId": "t1"
-      }
+      },
+      "recordRevision": 1
     }
   },
   {
@@ -18089,7 +18090,8 @@
         "projectId": "p1",
         "terminalId": "t1"
       },
-      "actionIndex": 1
+      "actionIndex": 1,
+      "recordRevision": 1
     }
   },
   {
@@ -20074,6 +20076,265 @@
         100000000000000000000, 100000000000000000000
       ],
       "expectedRevision": 0
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "notification requires displayed record revision",
+    "valid": true,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "notification",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 7,
+      "actionIndex": 0
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "notification missing record revision",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "notification",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "actionIndex": 0
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "notification invalid record revision null",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "notification",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": null,
+      "actionIndex": 0
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "notification invalid record revision -1",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "notification",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": -1,
+      "actionIndex": 0
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "notification invalid record revision 1.5",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "notification",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 1.5,
+      "actionIndex": 0
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "notification invalid record revision 9007199254740992",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "notification",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 9007199254740992,
+      "actionIndex": 0
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "progress requires displayed record revision",
+    "valid": true,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "progress",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 7
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "progress missing record revision",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "progress",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      }
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "progress invalid record revision null",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "progress",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": null
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "progress invalid record revision -1",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "progress",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": -1
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "progress invalid record revision 1.5",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "progress",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 1.5
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "progress invalid record revision 9007199254740992",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "progress",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 9007199254740992
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "menu forbids record revision",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "menu",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 1
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "keybinding forbids record revision",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "keybinding",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 1
+    }
+  },
+  {
+    "kind": "executeContribution",
+    "name": "status forbids record revision",
+    "valid": false,
+    "value": {
+      "pluginId": "org.termul.example",
+      "generation": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": "status",
+      "contributionId": "summary",
+      "contextRevision": 0,
+      "target": {
+        "projectId": "p1",
+        "terminalId": "t1"
+      },
+      "recordRevision": 1
     }
   }
 ]

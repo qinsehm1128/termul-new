@@ -407,7 +407,8 @@ describe('strict ABI-v1 host contracts', () => {
       host.parseExecuteContributionRequest({
         ...execute,
         kind: 'notification',
-        actionIndex: 1
+        actionIndex: 1,
+        recordRevision: 7
       }).actionIndex
     ).toBe(1)
     expect(() =>

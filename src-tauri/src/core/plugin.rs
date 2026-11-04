@@ -474,6 +474,7 @@ struct ClientState {
     reader: Option<tokio::task::JoinHandle<()>>,
     pending: HashMap<u64, Pending>,
     boot_id: Option<String>,
+    host_capabilities: bool,
 }
 struct ClientInner {
     state: Mutex<ClientState>,
@@ -528,6 +529,7 @@ impl PluginCoreClient {
                     reader: None,
                     pending: HashMap::new(),
                     boot_id: None,
+                    host_capabilities: false,
                 }),
                 reconnect: AsyncMutex::new(()),
                 events,
@@ -580,6 +582,7 @@ impl PluginCoreClient {
             || ack.protocol_version != CURRENT_PROTOCOL_VERSION
             || !PLUGIN_CAPABILITIES
                 .iter()
+                .filter(|&&cap| cap != HOST_CAPABILITIES_V1)
                 .all(|cap| ack.capabilities.iter().any(|c| c == cap))
         {
             return Err(CoreError::InvalidRequest("incompatible Plugin Core".into()));
@@ -625,6 +628,11 @@ impl PluginCoreClient {
         state.epoch += 1;
         let epoch = state.epoch;
         state.boot_id = Some(health.boot_id.clone());
+        state.host_capabilities = ack
+            .capabilities
+            .iter()
+            .any(|cap| cap == HOST_CAPABILITIES_V1);
+        log::debug!(target: "se_manager::core", "operation=plugin_connected host_capabilities={}", state.host_capabilities);
         state.writer = Some(Arc::new(AsyncMutex::new(writer)));
         let weak = Arc::downgrade(&self.inner);
         state.reader = Some(tokio::spawn(async move {
@@ -686,6 +694,24 @@ impl PluginCoreClient {
                 .writer
                 .clone()
                 .ok_or_else(|| unavailable("Plugin Core is disconnected"))?;
+            // Negotiate and admit under the same lock as the writer/epoch so a
+            // reconnect cannot apply another connection's optional capabilities.
+            if !state.host_capabilities
+                && matches!(
+                    method,
+                    METHOD_HOST_CONTEXT_PUBLISH
+                        | METHOD_HOST_CONTEXT_HEARTBEAT
+                        | METHOD_HOST_UI_GET
+                        | METHOD_HOST_UI_DISMISS
+                        | METHOD_CONTRIBUTION_EXECUTE
+                )
+            {
+                log::debug!(target: "se_manager::core", "operation=plugin_host_rpc rejected=not_supported");
+                return Err(business(
+                    PLUGIN_NOT_SUPPORTED,
+                    "Plugin Core does not support host capabilities",
+                ));
+            }
             let id = state.next_id;
             state.next_id += 1;
             let epoch = state.epoch;
@@ -730,6 +756,7 @@ impl PluginCoreClient {
 }
 fn disconnect_state(state: &mut ClientState, events: &broadcast::Sender<PluginClientEvent>) {
     let was_connected = state.writer.take().is_some();
+    state.host_capabilities = false;
     state.epoch += 1;
     for (_, sender) in state.pending.drain() {
         let _ = sender.send(Err(unavailable("Plugin Core disconnected")));
@@ -1091,25 +1118,196 @@ mod tests {
         stop(&client, task).await;
     }
 
-    #[tokio::test]
-    async fn new_gui_rejects_missing_host_capability() {
-        let profile = tempfile::tempdir().unwrap();
-        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
-        prepare_runtime_dir(&endpoint).unwrap();
-        let mut listener = listen_core(&endpoint, CoreRole::PluginCore).await.unwrap();
-        let legacy = tokio::spawn(async move {
+    // Record every post-handshake RPC so unsupported calls cannot silently reach
+    // an older Core, even if it would happen to return NOT_SUPPORTED itself.
+    async fn legacy_peer(endpoint: &CoreEndpoint) -> tokio::task::JoinHandle<Vec<String>> {
+        prepare_runtime_dir(endpoint).unwrap();
+        let mut listener = listen_core(endpoint, CoreRole::PluginCore).await.unwrap();
+        tokio::spawn(async move {
             let mut stream = listener.accept().await.unwrap();
             let hello: CoreHello = read_json_frame(&mut stream).await.unwrap();
             let mut ack = validate_hello_with_runtime(&hello, CoreRole::PluginCore, 0).unwrap();
             ack.capabilities
                 .retain(|capability| capability != HOST_CAPABILITIES_V1);
             write_json_frame(&mut stream, &ack).await.unwrap();
-        });
-        let result = PluginCoreClient::connect(&endpoint).await;
-        assert!(
-            matches!(result, Err(CoreError::InvalidRequest(ref message)) if message == "incompatible Plugin Core")
+            let boot_id = uuid::Uuid::new_v4().to_string();
+            let mut methods = vec![];
+            while let Ok(request) = read_json_frame::<_, CoreRequest>(&mut stream).await {
+                methods.push(request.method.clone());
+                let (result, error) = match request.method.as_str() {
+                    METHOD_HEALTH => (
+                        Some(json!({
+                            "schemaVersion": 1, "bootId": boot_id, "pid": 1,
+                            "ready": true, "safeMode": false, "activeResources": 0,
+                        })),
+                        None,
+                    ),
+                    METHOD_LIST => (
+                        Some(json!({
+                            "schemaVersion": 1, "bootId": boot_id, "seq": 0, "plugins": [],
+                        })),
+                        None,
+                    ),
+                    _ => (
+                        None,
+                        Some(CoreErrorPayload {
+                            code: PLUGIN_NOT_SUPPORTED.into(),
+                            message: "Unexpected RPC reached legacy Core".into(),
+                        }),
+                    ),
+                };
+                write_json_frame(
+                    &mut stream,
+                    &CoreResponse {
+                        id: request.id,
+                        result,
+                        error,
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            methods
+        })
+    }
+
+    #[tokio::test]
+    async fn new_gui_accepts_missing_host_capability_and_never_sends_host_rpcs() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
+        let peer = legacy_peer(&endpoint).await;
+        let service = PluginServiceHandle::default();
+        service.connect(&endpoint).await.unwrap();
+        assert!(service.is_connected());
+        let client = service.client().unwrap();
+        assert!(!client.inner.state.lock().unwrap().host_capabilities);
+        let snapshot: PluginSnapshot =
+            decode(client.request(METHOD_LIST, json!({})).await.unwrap()).unwrap();
+        assert!(snapshot.plugins.is_empty());
+        assert_eq!(Some(snapshot.boot_id), client.boot_id());
+        let next_id = client.inner.state.lock().unwrap().next_id;
+        let source = uuid::Uuid::new_v4().to_string();
+        let errors = [
+            service
+                .publish_host_context(context_request(&source, 1, true))
+                .await
+                .unwrap_err(),
+            service
+                .heartbeat_host_context(HostContextHeartbeatRequest { source_id: source })
+                .await
+                .unwrap_err(),
+            service.host_ui_snapshot().await.unwrap_err(),
+            service
+                .dismiss_host_ui(HostUiDismissRequest {
+                    plugin_id: "dev.test.plugin".into(),
+                    generation: uuid::Uuid::new_v4().to_string(),
+                    kind: HostUiKind::Notification,
+                    id: "notice".into(),
+                })
+                .await
+                .unwrap_err(),
+            service
+                .execute_contribution(ExecuteContributionRequest {
+                    plugin_id: "dev.test.plugin".into(),
+                    generation: uuid::Uuid::new_v4().to_string(),
+                    kind: ContributionKind::Menu,
+                    contribution_id: "menu".into(),
+                    action_index: None,
+                    record_revision: None,
+                    context_revision: 1,
+                    target: ContributionTarget {
+                        project_id: None,
+                        terminal_id: None,
+                        session_id: None,
+                    },
+                })
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error.code, PLUGIN_NOT_SUPPORTED);
+        }
+        {
+            let state = client.inner.state.lock().unwrap();
+            assert_eq!(state.next_id, next_id);
+            assert!(state.pending.is_empty());
+        }
+        // A second successful lifecycle round trip also flushes any prior writes.
+        let _: PluginSnapshot =
+            decode(client.request(METHOD_LIST, json!({})).await.unwrap()).unwrap();
+        client.disconnect().await;
+        let methods = tokio::time::timeout(Duration::from_secs(3), peer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(methods, vec![METHOD_HEALTH, METHOD_LIST, METHOD_LIST]);
+    }
+
+    #[tokio::test]
+    async fn new_gui_still_requires_every_legacy_capability() {
+        for missing in [
+            "plugins.lifecycle.v1",
+            "plugins.ui.v1",
+            "plugins.configuration.v1",
+            "plugins.broker.v1",
+        ] {
+            let profile = tempfile::tempdir().unwrap();
+            let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
+            prepare_runtime_dir(&endpoint).unwrap();
+            let mut listener = listen_core(&endpoint, CoreRole::PluginCore).await.unwrap();
+            let peer = tokio::spawn(async move {
+                let mut stream = listener.accept().await.unwrap();
+                let hello: CoreHello = read_json_frame(&mut stream).await.unwrap();
+                let mut ack = validate_hello_with_runtime(&hello, CoreRole::PluginCore, 0).unwrap();
+                ack.capabilities.retain(|cap| cap != missing);
+                write_json_frame(&mut stream, &ack).await.unwrap();
+                assert!(read_json_frame::<_, CoreRequest>(&mut stream)
+                    .await
+                    .is_err());
+            });
+            let result = PluginCoreClient::connect(&endpoint).await;
+            assert!(
+                matches!(result, Err(CoreError::InvalidRequest(ref message))
+                if message == "incompatible Plugin Core"),
+                "missing {missing} must be rejected"
+            );
+            tokio::time::timeout(Duration::from_secs(3), peer)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn host_capability_support_is_renegotiated_per_connection() {
+        let current_profile = tempfile::tempdir().unwrap();
+        let (_, current_endpoint, task) = start(current_profile.path()).await;
+        let client = PluginCoreClient::connect(&current_endpoint).await.unwrap();
+        assert!(client.host_ui_snapshot().await.is_ok());
+        client.disconnect().await;
+        assert!(!client.inner.state.lock().unwrap().host_capabilities);
+
+        let legacy_profile = tempfile::tempdir().unwrap();
+        let legacy_endpoint =
+            CoreEndpoint::for_profile(legacy_profile.path(), CoreRole::PluginCore);
+        let peer = legacy_peer(&legacy_endpoint).await;
+        client.reconnect(&legacy_endpoint).await.unwrap();
+        assert_eq!(
+            client.host_ui_snapshot().await.unwrap_err().code,
+            PLUGIN_NOT_SUPPORTED
         );
-        legacy.await.unwrap();
+        client.disconnect().await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), peer)
+                .await
+                .unwrap()
+                .unwrap(),
+            vec![METHOD_HEALTH]
+        );
+
+        client.reconnect(&current_endpoint).await.unwrap();
+        assert!(client.host_ui_snapshot().await.is_ok());
+        stop(&client, task).await;
     }
 
     // A fake Core isolates the forwarding contract from plugin-driven UI mutations.

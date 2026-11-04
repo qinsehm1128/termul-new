@@ -185,6 +185,7 @@ export function createHostContextPublisher(options: {
   let events: HostSourceEvent[] = []
   let reset = true
   let dirty = true
+  let unsupported = false
   let connected = false
   let disposed = false
   let inFlight = false
@@ -193,7 +194,7 @@ export function createHostContextPublisher(options: {
   let lastPublish = -Infinity
   let timer: ReturnType<typeof setTimeout> | undefined
   const schedule = () => {
-    if (disposed || !connected || inFlight || timer || !dirty) return
+    if (disposed || unsupported || !connected || inFlight || timer || !dirty) return
     timer = setTimeout(
       () => {
         timer = undefined
@@ -209,7 +210,14 @@ export function createHostContextPublisher(options: {
   ) => {
     if (disposed || requestEpoch !== epoch) return
     if (result.success) options.onAck?.(result.data, published)
-    else {
+    else if (result.code === 'PLUGIN_NOT_SUPPORTED') {
+      unsupported = true
+      events = []
+      dirty = false
+      if (timer) clearTimeout(timer)
+      timer = undefined
+      options.onUnavailable?.()
+    } else {
       options.onUnavailable?.()
       reset = true
       events = []
@@ -217,7 +225,7 @@ export function createHostContextPublisher(options: {
     }
   }
   const flush = async () => {
-    if (disposed || !connected || inFlight || !dirty) return
+    if (disposed || unsupported || !connected || inFlight || !dirty) return
     const request: HostContextPublishRequest = {
       sourceId: options.sourceId,
       sourceSequence: ++sequence,
@@ -251,7 +259,7 @@ export function createHostContextPublisher(options: {
     }
   }
   const heartbeat = setInterval(() => {
-    if (disposed || !connected || inFlight) return
+    if (disposed || unsupported || !connected || inFlight) return
     const requestEpoch = epoch
     void options.api
       .heartbeatHostContext({ sourceId: options.sourceId })
@@ -291,6 +299,7 @@ export function createHostContextPublisher(options: {
     reconnect() {
       ++epoch
       connected = true
+      unsupported = false
       reset = true
       events = []
       dirty = true

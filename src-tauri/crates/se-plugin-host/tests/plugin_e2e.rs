@@ -918,6 +918,7 @@ async fn activity_pilot_native_context_storage_ui_and_generation_lifecycle() {
                 kind: ContributionKind::Menu,
                 contribution_id: id.into(),
                 action_index: None,
+                record_revision: None,
                 context_revision: ack.context_revision,
                 target: serde_json::from_value(target).unwrap(),
             })
@@ -1076,6 +1077,7 @@ async fn activity_pilot_native_context_storage_ui_and_generation_lifecycle() {
             kind: ContributionKind::Menu,
             contribution_id: "activity-terminal-context".into(),
             action_index: None,
+            record_revision: None,
             context_revision: ack.context_revision,
             target: ContributionTarget {
                 project_id: Some("p1".into()),

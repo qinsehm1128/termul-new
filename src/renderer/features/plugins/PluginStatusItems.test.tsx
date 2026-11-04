@@ -91,6 +91,14 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('PluginStatusItems', () => {
+  it('clips and truncates each item inside a shrinkable aggregate region', () => {
+    render(<PluginStatusItems />)
+    const button = screen.getByRole('button', { name: 'Alpha (org.alpha): Build — Ready' })
+    expect(button).toHaveClass('min-w-0', 'overflow-hidden', 'shrink')
+    expect(button.parentElement).toHaveClass('min-w-0', 'max-w-full', 'overflow-hidden', 'shrink')
+    expect(screen.getByText('Ready')).toHaveClass('truncate')
+  })
+
   it('sorts by order, pluginId and id independent of arrival order', () => {
     setItems([
       status({ id: 'b', text: 'third' }),

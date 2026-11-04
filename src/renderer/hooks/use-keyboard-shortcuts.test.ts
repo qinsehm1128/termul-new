@@ -26,8 +26,19 @@ vi.mock('@/features/plugins/plugin-api', () => ({
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
   loadFiles: vi.fn(),
-  isTauri: vi.fn(() => true)
+  isTauri: vi.fn(() => true),
+  mac: false
 }))
+
+vi.mock('@/lib/platform', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
+  return {
+    ...actual,
+    get isMac() {
+      return mocks.mac
+    }
+  }
+})
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
@@ -85,7 +96,36 @@ const plugin: PluginInfo = {
 const id = 'plugin:org.test.keys:run-key'
 
 describe('plugin keyboard contributions', () => {
+  it.each([
+    { mac: false, key: 'ctrl+escape' },
+    { mac: true, key: 'ctrl+escape' },
+    { mac: true, key: 'cmd+escape' }
+  ])('dispatches manifest $key on mac=$mac', ({ mac, key }) => {
+    mocks.mac = mac
+    const current = structuredClone(plugin)
+    current.manifest.contributes.keybindings = [
+      { id: 'run-key', commandId: 'run', key: 'ctrl+escape', mac: key }
+    ]
+    usePluginsStore.setState({ plugins: [current] })
+    const hook = renderHook(() => usePluginKeyboardShortcuts())
+    expect(useKeyboardShortcutsStore.getState().shortcuts[id].defaultKey).toBe(
+      isMac ? key.replace('escape', 'esc') : 'ctrl+esc'
+    )
+    const event = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      code: 'Escape',
+      cancelable: true,
+      ...(isMac ? { metaKey: true } : { ctrlKey: true })
+    })
+    expect(handlePluginShortcut(event)).toBe(true)
+    expect(pluginApi.executeContribution).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'keybinding', contributionId: 'run-key' })
+    )
+    hook.unmount()
+  })
+
   beforeEach(() => {
+    mocks.mac = false
     vi.clearAllMocks()
     window.history.replaceState(null, '', '#/')
     useKeyboardShortcutsStore.setState({

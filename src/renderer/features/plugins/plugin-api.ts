@@ -57,7 +57,7 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPlu
   ): Promise<IpcResult<T>> => {
     if (!desktop()) return notSupported()
     const result = await invoke(command, decoder, payload === undefined ? undefined : { payload })
-    if (!result.success)
+    if (!result.success && result.code !== 'PLUGIN_NOT_SUPPORTED')
       void logFrontendError({
         level: 'warn',
         source: 'plugin-api',

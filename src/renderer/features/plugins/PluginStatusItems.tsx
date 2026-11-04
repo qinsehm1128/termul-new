@@ -111,13 +111,13 @@ export function PluginStatusItems({ projectId }: PluginStatusItemsProps): React.
   }
 
   return (
-    <fieldset className="flex min-w-0 items-center gap-1 border-0 p-0">
+    <fieldset className="flex min-w-0 max-w-full shrink items-center gap-1 overflow-hidden border-0 p-0">
       <legend className="sr-only">{t('status.items')}</legend>
       {items.map((item) => {
         const Icon = getPluginViewIcon(item.icon)
         const label = `${item.pluginName} (${item.pluginId}): ${item.label} — ${item.text}`
         const className = cn(
-          'flex h-5 min-w-0 items-center gap-1 rounded-sm px-1.5',
+          'flex h-5 min-w-0 shrink items-center gap-1 overflow-hidden rounded-sm px-1.5',
           item.tone && Object.hasOwn(toneClasses, item.tone)
             ? toneClasses[item.tone]
             : toneClasses.default

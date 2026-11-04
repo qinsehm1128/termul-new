@@ -67,6 +67,26 @@ const settle = async () => {
 }
 
 describe('host UI revision cache', () => {
+  it('stops unsupported UI fetches across events and repeated connected messages until reconnect', async () => {
+    const f = fixture()
+    f.api.getHostUi.mockResolvedValue({ success: false, code: 'PLUGIN_NOT_SUPPORTED' })
+    const dispose = f.store.getState().subscribe()
+    await settle()
+    for (let seq = 2; seq < 20; seq++) {
+      f.changed({ seq })
+      f.connection('connected')
+      await f.store.getState().load()
+    }
+    await settle()
+    expect(f.api.getHostUi).toHaveBeenCalledTimes(1)
+    expect(f.store.getState().snapshot).toBeNull()
+    f.connection('disconnected')
+    f.connection('connected')
+    await settle()
+    expect(f.api.getHostUi).toHaveBeenCalledTimes(2)
+    dispose()
+  })
+
   it('fetches only after listener readiness and reloads host_ui_changed without regressing revisions', async () => {
     let ready!: () => void
     const f = fixture({

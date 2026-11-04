@@ -545,6 +545,7 @@ impl FeedbackHost {
                         n.plugin_id == manifest.id
                             && n.generation == generation
                             && n.id == request.contribution_id
+                            && Some(n.revision) == request.record_revision
                     })
                     .ok_or_else(action_error)?;
                 let action = record
@@ -565,6 +566,7 @@ impl FeedbackHost {
                         p.plugin_id == manifest.id
                             && p.generation == generation
                             && p.id == request.contribution_id
+                            && Some(p.revision) == request.record_revision
                             && p.state == ProgressState::Running
                     })
                     .ok_or_else(action_error)?;
@@ -719,6 +721,11 @@ mod tests {
                 session_id: None,
             },
             action_index: (kind == ContributionKind::Notification).then_some(0),
+            record_revision: matches!(
+                kind,
+                ContributionKind::Notification | ContributionKind::Progress
+            )
+            .then_some(1),
         }
     }
 
@@ -863,7 +870,15 @@ mod tests {
             0,
         )
         .unwrap();
-        let request = action(ContributionKind::Notification, "note");
+        let mut request = action(ContributionKind::Notification, "note");
+        request.record_revision = Some(
+            host.ui
+                .notifications
+                .iter()
+                .find(|n| n.id == "note")
+                .unwrap()
+                .revision,
+        );
         assert_eq!(
             host.resolve_action(&m, GEN, &request, None, 1)
                 .unwrap()
@@ -1165,7 +1180,15 @@ mod tests {
         )
         .unwrap();
         assert!(host.snapshot(0).notifications.is_empty());
-        let request = action(ContributionKind::Notification, "note");
+        let mut request = action(ContributionKind::Notification, "note");
+        request.record_revision = Some(
+            host.ui
+                .notifications
+                .iter()
+                .find(|n| n.id == "note")
+                .unwrap()
+                .revision,
+        );
         assert!(host.resolve_action(&m, GEN, &request, None, 0).is_err());
         host.activate(&m.id, GEN).unwrap();
         assert_eq!(host.snapshot(0).notifications.len(), 1);
@@ -1188,6 +1211,50 @@ mod tests {
         );
         assert!(host.activate(&m.id, GEN).is_err());
         assert!(host.resolve_action(&m, GEN, &request, None, 0).is_err());
+    }
+
+    #[test]
+    fn stale_feedback_revisions_cannot_execute_replacement_actions() {
+        for kind in [ContributionKind::Notification, ContributionKind::Progress] {
+            let mut host = FeedbackHost::new(BOOT.into());
+            let m = manifest("sample.feedback");
+            host.begin(&m.id, GEN).unwrap();
+            host.activate(&m.id, GEN).unwrap();
+            let (method, mut value) = if kind == ContributionKind::Notification {
+                ("notification.upsert", notification("record"))
+            } else {
+                ("progress.upsert", progress("record", "running"))
+            };
+            host.apply(&m, GEN, None, "se.host.feedback", method, &value, 0)
+                .unwrap();
+            let mut request = action(kind, "record");
+            request.record_revision = Some(host.ui.revision);
+            assert!(host.resolve_action(&m, GEN, &request, None, 0).is_ok());
+            // A new action can occupy exactly the same plugin/generation/id.
+            if kind == ContributionKind::Notification {
+                value["actions"][0]["args"] = json!({"replacement":true});
+            } else {
+                value["title"] = json!("replacement progress");
+            }
+            host.apply(&m, GEN, None, "se.host.feedback", method, &value, 1)
+                .unwrap();
+            assert_eq!(
+                host.resolve_action(&m, GEN, &request, None, 1)
+                    .unwrap_err()
+                    .code,
+                PLUGIN_INVALID_ACTION
+            );
+            request.record_revision = Some(host.ui.revision);
+            let resolved = host.resolve_action(&m, GEN, &request, None, 1).unwrap();
+            assert_eq!(
+                resolved.args,
+                if kind == ContributionKind::Notification {
+                    json!({"replacement":true})
+                } else {
+                    Value::Null
+                }
+            );
+        }
     }
 
     #[test]
@@ -1221,7 +1288,15 @@ mod tests {
             0,
         )
         .unwrap();
-        let request = action(ContributionKind::Progress, "job");
+        let mut request = action(ContributionKind::Progress, "job");
+        request.record_revision = Some(
+            host.ui
+                .progress
+                .iter()
+                .find(|p| p.id == "job")
+                .unwrap()
+                .revision,
+        );
         assert_eq!(
             host.resolve_action(&m, GEN, &request, None, 0)
                 .unwrap()

@@ -276,6 +276,7 @@ describe('Activity Pilot public renderer integration', () => {
     await waitFor(() => expect(pluginApi.executeContribution).toHaveBeenCalledTimes(2))
     assertAction({
       kind: 'notification',
+      recordRevision: 2,
       contributionId: 'activity-turn-ended',
       contextRevision: 2,
       target: activeTarget,

@@ -125,10 +125,14 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
         )}
       </div>
 
-      <div className="flex-1" />
+      <div className="flex min-w-0 flex-1 justify-end overflow-hidden">
+        <div className="min-w-0 max-w-[30vw] overflow-hidden">
+          <PluginStatusItems projectId={project?.id} />
+        </div>
+      </div>
 
-      {/* Right side */}
-      <div className="flex items-center gap-1">
+      {/* Built-in controls never shrink to make room for plugin status items. */}
+      <div className="flex shrink-0 items-center gap-1">
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -220,7 +224,6 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
           </Tooltip>
         )}
 
-        <PluginStatusItems projectId={project?.id} />
         <StatusItem icon={<Bell size={14} />} />
         <ContextBarSettingsPopover />
       </div>

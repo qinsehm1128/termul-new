@@ -1,6 +1,7 @@
 import type { ActionEvent } from '@shared/types/plugin.types'
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { logFrontendError } from '@/lib/log-api'
 import { createTauriPluginApi } from './plugin-api'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => false }))
@@ -21,6 +22,16 @@ const action: ActionEvent = {
 }
 beforeEach(() => vi.clearAllMocks())
 describe('native plugin API', () => {
+  it('treats unsupported host capability as a quiet optional feature', async () => {
+    const api = createTauriPluginApi({
+      isDesktop: () => true,
+      invokeDecoded: vi.fn().mockResolvedValue({ success: false, code: 'PLUGIN_NOT_SUPPORTED' })
+    })
+    await api.getHostUi()
+    await api.heartbeatHostContext({ sourceId: bootId })
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
   it('browser fallback never invokes commands, HTTP, or event transport', async () => {
     const transport = vi.fn(),
       event = vi.fn(),

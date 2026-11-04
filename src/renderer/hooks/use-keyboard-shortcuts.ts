@@ -142,7 +142,11 @@ export function usePluginKeyboardShortcuts(): void {
               plugin.manifest.contributes.commands?.find(
                 (command) => command.id === binding.commandId
               )?.title ?? binding.commandId,
-            defaultKey: isMac ? (binding.mac ?? binding.key) : binding.key,
+            // Normalize only plugin manifest keys; built-in shortcut semantics stay unchanged.
+            defaultKey: (isMac ? (binding.mac ?? binding.key) : binding.key)
+              .split('+')
+              .map((part) => (part === 'escape' ? 'esc' : part))
+              .join('+'),
             when: binding.when
           }))
         )

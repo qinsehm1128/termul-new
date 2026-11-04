@@ -84,6 +84,7 @@ function FeedbackCard({ feedback }: { feedback: Feedback }): React.JSX.Element {
       pluginId: record.pluginId,
       generation: record.generation,
       kind: feedback.kind,
+      recordRevision: record.revision,
       contributionId: record.id,
       contextRevision,
       target: {

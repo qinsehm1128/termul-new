@@ -298,15 +298,20 @@ export interface HostUiDismissRequest {
 export interface HostUiDismissResult {
   dismissed: true
 }
-export interface ExecuteContributionRequest {
+type ExecuteContributionBase = {
   pluginId: string
   generation: string
-  kind: 'menu' | 'keybinding' | 'status' | 'notification' | 'progress'
   contributionId: string
   actionIndex?: number
   contextRevision: number
   target: { projectId?: string; terminalId?: string; sessionId?: string }
 }
+
+export type ExecuteContributionRequest = ExecuteContributionBase &
+  (
+    | { kind: 'notification' | 'progress'; recordRevision: number }
+    | { kind: 'menu' | 'keybinding' | 'status'; recordRevision?: never }
+  )
 
 const own = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
 function bad(): never {
@@ -871,15 +876,17 @@ export function parseExecuteContributionRequest(v: unknown): ExecuteContribution
   const o = object(
       v,
       ['pluginId', 'generation', 'kind', 'contributionId', 'contextRevision', 'target'],
-      ['actionIndex']
+      ['actionIndex', 'recordRevision']
     ),
     kind = choice(o.kind, ['menu', 'keybinding', 'status', 'notification', 'progress']),
     target = object(o.target, [], ['projectId', 'terminalId', 'sessionId'])
   if (kind === 'notification' ? !own(o, 'actionIndex') : own(o, 'actionIndex')) bad()
+  const feedback = kind === 'notification' || kind === 'progress'
+  if (feedback ? !own(o, 'recordRevision') : own(o, 'recordRevision')) bad()
   return {
     pluginId: pluginId(o.pluginId),
     generation: uuid(o.generation),
-    kind,
+    ...(feedback ? { kind, recordRevision: integer(o.recordRevision) } : { kind }),
     contributionId: local(o.contributionId),
     ...(kind === 'notification' ? { actionIndex: integer(o.actionIndex, 0, 1) } : {}),
     contextRevision: integer(o.contextRevision),
