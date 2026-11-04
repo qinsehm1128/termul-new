@@ -665,7 +665,9 @@ mod tests {
         fs::write(&invalid_extension, b"not zip").unwrap();
         assert!(is_archive(&invalid_extension).unwrap());
         assert!(loader::stage(&root, "boot", &invalid_extension).is_err());
-        let bare = base.path().join("bare.bin");
+        let bare = base
+            .path()
+            .join(format!("bare.{}", loader::extension()));
         fs::write(&bare, b"native").unwrap();
         assert!(!is_archive(&bare).unwrap());
         assert!(loader::stage(&root, "boot", &bare)

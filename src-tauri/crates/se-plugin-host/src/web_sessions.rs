@@ -399,6 +399,18 @@ impl WebSessions {
         }
         Ok(())
     }
+    pub fn post_context(
+        &mut self,
+        session_id: &str,
+        mut delivery: HostEventDeliveryInput,
+    ) -> Result<()> {
+        delivery.sequence = self.get(session_id)?.sequence.saturating_add(1);
+        self.post_one(
+            session_id,
+            WebEventType::ContextEvent,
+            serde_json::to_value(delivery).map_err(io)?,
+        )
+    }
     pub fn post_one(&mut self, session_id: &str, kind: WebEventType, payload: Value) -> Result<()> {
         self.expire();
         let size = serde_json::to_vec(&payload).map_err(io)?.len();

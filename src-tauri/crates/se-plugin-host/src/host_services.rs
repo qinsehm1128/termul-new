@@ -403,11 +403,11 @@ impl HostServices {
     ) -> Result<Value> {
         self.web_manifest(id, generation, "se.host.context")?;
         validate_host_context_snapshot_request(&request)?;
-        let mut state = self.state.lock().map_err(|_| busy())?;
+        let state = self.state.lock().map_err(|_| busy())?;
         encode(
             &state
                 .context
-                .snapshot(id, generation, request.scope, now_ms())?,
+                .peek_snapshot(id, generation, request.scope, now_ms())?,
         )
     }
     pub(crate) fn web_theme(&self, id: &str, generation: &str, _owner: &str) -> Result<Value> {
@@ -508,21 +508,17 @@ impl HostServices {
         request: HostContextPublishRequest,
     ) -> Result<HostContextAck> {
         let mut state = self.state.lock().map_err(|_| busy())?;
-        let result = state.context.publish(owner, request, now_ms());
-        if result.is_ok() {
-            let identities = self.web.lock().map_err(|_| busy())?.identities();
-            for (session, id, generation, session_owner, allow) in identities {
-                if session_owner == owner && allow.contains(&WebAllow::ContextRead) {
-                    if let Ok(snapshot) =
-                        state
-                            .context
-                            .snapshot(&id, &generation, HostScope::Window, now_ms())
-                    {
-                        let _ = self.web.lock().map_err(|_| busy())?.post_one(
-                            &session,
-                            WebEventType::ContextEvent,
-                            encode(&snapshot)?,
-                        );
+        let revision = state.context.revision();
+        let result = state.context.publish(owner, &request, now_ms());
+        // Duplicate source publications must not create duplicate web deliveries.
+        if result.is_ok() && state.context.revision() != revision {
+            let mut web = self.web.lock().map_err(|_| busy())?;
+            for (session, id, generation, _owner, allow) in web.identities() {
+                if allow.contains(&WebAllow::ContextEvents) {
+                    for delivery in state.context.web_events(&id, &generation, &request) {
+                        // WebSessions enforces its existing count/byte limits and assigns
+                        // a web-only sequence. Native queues and acknowledgements are untouched.
+                        let _ = web.post_context(&session, delivery);
                     }
                 }
             }
@@ -919,6 +915,123 @@ mod tests {
             input,
         }
     }
+    #[test]
+    fn web_publication_matches_subscriptions_without_consuming_native_delivery() {
+        let root = tempfile::tempdir().unwrap();
+        let host = HostServices::new(root.path().into(), GENERATION.into());
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["contributes"]["eventSubscriptions"] = json!([
+            {"id":"created","topic":"terminal.created","scope":"activeProject"},
+            {"id":"closed","topic":"terminal.closed","scope":"window"}
+        ]);
+        value["contributes"]["views"] = json!([
+            {"id":"panel","title":"Panel","location":"panel","kind":"web","entry":"index.html","allow":["context.read","context.events"]},
+            {"id":"read-only","title":"Reader","location":"panel","kind":"web","entry":"index.html","allow":["context.read"]},
+            {"id":"events-only","title":"Events","location":"panel","kind":"web","entry":"index.html","allow":["context.events"]}
+        ]);
+        let manifest: Manifest = serde_json::from_value(value).unwrap();
+        host.begin(&manifest, GENERATION).unwrap();
+        host.activate(&manifest.id, GENERATION).unwrap();
+        publish(&host);
+        let snapshot = host
+            .call(
+                &manifest.id,
+                GENERATION,
+                &request("se.host.context", "snapshot", json!({"scope":"window"})),
+            )
+            .unwrap();
+        let descriptor = PackageDescriptor {
+            schema_version: 1,
+            native: BTreeMap::new(),
+            ui: "ui".into(),
+            files: vec![PackageFile {
+                path: "ui/index.html".into(),
+                size: 0,
+                sha256: "a".repeat(64),
+            }],
+        };
+        let mut sessions = Vec::new();
+        for view in ["panel", "read-only", "events-only"] {
+            sessions.push(
+                host.web
+                    .lock()
+                    .unwrap()
+                    .open(
+                        GENERATION,
+                        "owner",
+                        &manifest,
+                        GENERATION,
+                        (root.path().into(), descriptor.clone()),
+                        &"a".repeat(64),
+                        view,
+                    )
+                    .unwrap(),
+            );
+        }
+        let publication: HostContextPublishRequest = serde_json::from_value(json!({
+            "sourceId":snapshot["sourceId"],"sourceSequence":2,"reset":false,"snapshot":snapshot["context"],
+            "events":[
+                {"topic":"terminal.created","projectId":"p1","data":{"terminal":{"id":"t3","projectId":"p1","ptyId":null}}},
+                {"topic":"terminal.created","projectId":"p2","data":{"terminal":{"id":"other","projectId":"p2","ptyId":null}}}
+            ]
+        })).unwrap();
+        host.publish("owner", publication.clone()).unwrap();
+        // Browser polling must not repeat native delivery or consume native queued events.
+        host.web_context_snapshot(
+            &manifest.id,
+            GENERATION,
+            "owner",
+            HostContextSnapshotRequest {
+                scope: HostScope::Window,
+            },
+        )
+        .unwrap();
+        host.publish("owner", publication).unwrap();
+        for (index, opened) in sessions.iter().enumerate() {
+            let events = host
+                .web
+                .lock()
+                .unwrap()
+                .read(&WebReadRequest {
+                    session_id: opened.session_id.clone(),
+                    after_sequence: 0,
+                })
+                .unwrap()
+                .events;
+            if index == 1 {
+                assert!(
+                    events.is_empty(),
+                    "context.read alone does not authorize events"
+                );
+                continue;
+            }
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].event_type, WebEventType::ContextEvent);
+            let payload = &events[0].payload;
+            assert_eq!(payload["subscriptionId"], "created");
+            assert_eq!(payload["topic"], "terminal.created");
+            assert_eq!(payload["data"]["terminal"]["id"], "t3");
+            assert_eq!(payload["projectId"], "p1");
+            assert_eq!(payload["generation"], GENERATION);
+            assert_eq!(payload["sourceId"], snapshot["sourceId"]);
+            assert_eq!(payload["contextRevision"], 2);
+            assert_eq!(payload["sequence"], events[0].sequence);
+            assert_eq!(payload["resyncRequired"], false);
+        }
+        let native = host.next_delivery(&manifest.id, GENERATION).unwrap();
+        assert_eq!(native["service"], "se.host.events");
+        assert_eq!(native["method"], "deliver");
+        assert_eq!(native["input"]["subscriptionId"], "created");
+        assert_eq!(native["input"]["data"]["terminal"]["id"], "t3");
+        assert_eq!(
+            native["input"]["sequence"].as_u64().unwrap(),
+            snapshot["sequences"]["created"].as_u64().unwrap() + 1
+        );
+        host.delivery_done(&manifest.id, GENERATION, native, false);
+        assert!(host.next_delivery(&manifest.id, GENERATION).is_none());
+        host.revoke(&manifest.id, GENERATION);
+    }
+
     #[tokio::test]
     async fn closed_detached_and_cancelled_web_storage_waits_release_eight_slots() {
         use std::future::Future;

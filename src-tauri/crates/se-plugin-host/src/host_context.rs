@@ -59,6 +59,15 @@ fn next(value: u64) -> Result<u64> {
 fn project(context: &HostContextState) -> Option<&str> {
     context.active_project.as_ref().map(|p| p.id.as_str())
 }
+fn matches_subscription(
+    declaration: &EventSubscriptionContribution,
+    event: &HostSourceEvent,
+    context: &HostContextState,
+) -> bool {
+    declaration.topic == event.topic
+        && (declaration.scope == HostScope::Window
+            || (event.project_id.is_some() && event.project_id.as_deref() == project(context)))
+}
 fn scoped(mut context: HostContextState, scope: HostScope) -> HostContextState {
     if scope == HostScope::ActiveProject {
         let id = project(&context).map(str::to_owned);
@@ -221,6 +230,39 @@ impl HostContext {
                 .clone(),
         ))
     }
+    /// Web reads must never consume the native queue, watermarks or resync markers.
+    pub fn peek_snapshot(
+        &self,
+        plugin: &str,
+        generation: &str,
+        scope: HostScope,
+        now: u64,
+    ) -> Result<HostContextSnapshot> {
+        let lease = self
+            .leases
+            .get(plugin)
+            .filter(|l| l.generation == generation)
+            .ok_or_else(stale)?;
+        let source = self
+            .source
+            .as_ref()
+            .filter(|source| {
+                !source.needs_reset
+                    && now.max(self.last_now).saturating_sub(source.last_seen) < self.source_ttl_ms
+            })
+            .ok_or_else(unavailable)?;
+        Ok(HostContextSnapshot {
+            source_id: source.id.clone(),
+            context_revision: self.revision,
+            scope,
+            context: scoped(source.context.clone(), scope),
+            sequences: lease
+                .subscriptions
+                .iter()
+                .map(|s| (s.declaration.id.clone(), s.sequence))
+                .collect(),
+        })
+    }
     pub fn snapshot(
         &mut self,
         plugin: &str,
@@ -229,34 +271,53 @@ impl HostContext {
         now: u64,
     ) -> Result<HostContextSnapshot> {
         self.expire(now);
-        let lease = self
-            .leases
-            .get_mut(plugin)
-            .filter(|l| l.generation == generation)
-            .ok_or_else(stale)?;
-        let source = self
-            .source
-            .as_ref()
-            .filter(|source| !source.needs_reset)
-            .ok_or_else(unavailable)?;
-        let sequences = lease
-            .subscriptions
-            .iter()
-            .map(|s| (s.declaration.id.clone(), s.sequence))
-            .collect();
+        let snapshot = self.peek_snapshot(plugin, generation, scope, now)?;
+        let lease = self.leases.get_mut(plugin).expect("validated lease");
         for s in &mut lease.subscriptions {
             s.acknowledged = s.sequence;
             s.resync_at = None;
             s.marker_pending = false;
         }
         lease.queue.clear();
-        Ok(HostContextSnapshot {
-            source_id: source.id.clone(),
-            context_revision: self.revision,
-            scope,
-            context: scoped(source.context.clone(), scope),
-            sequences,
-        })
+        Ok(snapshot)
+    }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    /// Independent web copies use declaration matching, not native pending/ack state.
+    /// Their sequence is assigned by the destination web session before enqueueing.
+    pub(crate) fn web_events(
+        &self,
+        plugin: &str,
+        generation: &str,
+        request: &HostContextPublishRequest,
+    ) -> Vec<HostEventDeliveryInput> {
+        let Some(lease) = self
+            .leases
+            .get(plugin)
+            .filter(|l| l.active && l.generation == generation)
+        else {
+            return Vec::new();
+        };
+        let mut deliveries = Vec::new();
+        for event in &request.events {
+            for sub in &lease.subscriptions {
+                if matches_subscription(&sub.declaration, event, &request.snapshot) {
+                    deliveries.push(HostEventDeliveryInput {
+                        generation: generation.into(),
+                        subscription_id: sub.declaration.id.clone(),
+                        source_id: request.source_id.clone(),
+                        sequence: self.revision,
+                        context_revision: self.revision,
+                        topic: event.topic,
+                        project_id: event.project_id.clone(),
+                        resync_required: false,
+                        data: Some(event.data.clone()),
+                    });
+                }
+            }
+        }
+        deliveries
     }
     pub fn heartbeat(&mut self, owner: &str, source_id: &str, now: u64) -> Result<HostContextAck> {
         let now = self.clock(now);
@@ -378,11 +439,7 @@ impl HostContext {
             for event in &request.events {
                 for index in 0..lease.subscriptions.len() {
                     let sub = &lease.subscriptions[index];
-                    if sub.declaration.topic == event.topic
-                        && (sub.declaration.scope == HostScope::Window
-                            || (event.project_id.is_some()
-                                && event.project_id.as_deref() == project(&request.snapshot)))
-                    {
+                    if matches_subscription(&sub.declaration, event, &request.snapshot) {
                         enqueue(
                             lease,
                             index,
@@ -620,6 +677,59 @@ mod tests {
         host.snapshot("demo", GEN, HostScope::Window, 0).unwrap();
         host
     }
+    #[test]
+    fn web_snapshot_and_event_copy_leave_native_queue_ack_and_resync_untouched() {
+        fn native_state(host: &HostContext) -> serde_json::Value {
+            let lease = &host.leases["demo"];
+            serde_json::json!({
+                "queue": lease.queue,
+                "subscriptions": lease.subscriptions.iter().map(|s| (
+                    s.sequence, s.acknowledged, s.resync_at, s.marker_pending
+                )).collect::<Vec<_>>()
+            })
+        }
+        let mut host = host(2);
+        for (sequence, count) in [(2, 1), (3, 3)] {
+            let request = request(
+                sequence,
+                false,
+                "a",
+                (0..count).map(|_| created("a", "t")).collect(),
+            );
+            host.publish("window", &request, sequence).unwrap();
+            let before = native_state(&host);
+            let snapshot = host
+                .peek_snapshot("demo", GEN, HostScope::ActiveProject, sequence)
+                .unwrap();
+            assert_eq!(
+                snapshot.sequences["created"],
+                host.leases["demo"].subscriptions[0].sequence
+            );
+            assert_eq!(host.web_events("demo", GEN, &request).len(), count);
+            assert_eq!(native_state(&host), before);
+            if sequence == 2 {
+                assert_eq!(host.leases["demo"].queue.len(), 1);
+            } else {
+                assert!(host.leases["demo"].subscriptions[0].resync_at.is_some());
+                assert!(host.leases["demo"].subscriptions[0].marker_pending);
+            }
+        }
+        let before = native_state(&host);
+        assert_eq!(
+            host.peek_snapshot("demo", GEN, HostScope::Window, 10_003)
+                .unwrap_err()
+                .code,
+            PLUGIN_SERVICE_UNAVAILABLE
+        );
+        assert_eq!(native_state(&host), before);
+        // Only a native snapshot acknowledges and clears the overflow marker.
+        host.snapshot("demo", GEN, HostScope::Window, 3).unwrap();
+        let sub = &host.leases["demo"].subscriptions[0];
+        assert_eq!(sub.acknowledged, sub.sequence);
+        assert!(sub.resync_at.is_none());
+        assert!(!sub.marker_pending);
+    }
+
     #[test]
     fn same_owner_can_reset_to_new_source_without_waiting_for_expiry() {
         let mut host = host(128);

@@ -133,6 +133,14 @@ impl PluginHost {
         }
         let root = profile_root.join("plugins");
         let store = Store::open(root.clone())?;
+        crate::managed_process::reap_orphans(&profile_root)
+            .await
+            .map_err(|e| {
+                error(
+                    PLUGIN_IO,
+                    &format!("managed process startup reap failed: {e}"),
+                )
+            })?;
         let root = store.root.clone();
         let mut registry = store.read()?;
         let boot_id = Uuid::new_v4().to_string();
