@@ -284,13 +284,20 @@ impl HostContext {
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
+    pub(crate) fn project_switched(&self, snapshot: &HostContextState) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|s| project(&s.context) != project(snapshot))
+    }
     /// Independent web copies use declaration matching, not native pending/ack state.
+    /// `switched` is captured before the accepted publication replaces the snapshot.
     /// Their sequence is assigned by the destination web session before enqueueing.
     pub(crate) fn web_events(
         &self,
         plugin: &str,
         generation: &str,
         request: &HostContextPublishRequest,
+        switched: bool,
     ) -> Vec<HostEventDeliveryInput> {
         let Some(lease) = self
             .leases
@@ -300,6 +307,21 @@ impl HostContext {
             return Vec::new();
         };
         let mut deliveries = Vec::new();
+        for sub in &lease.subscriptions {
+            if request.reset || (switched && sub.declaration.scope == HostScope::ActiveProject) {
+                deliveries.push(HostEventDeliveryInput {
+                    generation: generation.into(),
+                    subscription_id: sub.declaration.id.clone(),
+                    source_id: request.source_id.clone(),
+                    sequence: self.revision,
+                    context_revision: self.revision,
+                    topic: sub.declaration.topic,
+                    project_id: project(&request.snapshot).map(str::to_owned),
+                    resync_required: true,
+                    data: None,
+                });
+            }
+        }
         for event in &request.events {
             for sub in &lease.subscriptions {
                 if matches_subscription(&sub.declaration, event, &request.snapshot) {
@@ -404,10 +426,7 @@ impl HostContext {
                 }
             }
         }
-        let switched = self
-            .source
-            .as_ref()
-            .is_some_and(|s| project(&s.context) != project(&request.snapshot));
+        let switched = self.project_switched(&request.snapshot);
         for lease in self.leases.values_mut().filter(|l| l.active) {
             if request.reset {
                 lease.queue.clear();
@@ -705,7 +724,7 @@ mod tests {
                 snapshot.sequences["created"],
                 host.leases["demo"].subscriptions[0].sequence
             );
-            assert_eq!(host.web_events("demo", GEN, &request).len(), count);
+            assert_eq!(host.web_events("demo", GEN, &request, false).len(), count);
             assert_eq!(native_state(&host), before);
             if sequence == 2 {
                 assert_eq!(host.leases["demo"].queue.len(), 1);

@@ -509,13 +509,17 @@ impl HostServices {
     ) -> Result<HostContextAck> {
         let mut state = self.state.lock().map_err(|_| busy())?;
         let revision = state.context.revision();
+        let switched = state.context.project_switched(&request.snapshot);
         let result = state.context.publish(owner, &request, now_ms());
         // Duplicate source publications must not create duplicate web deliveries.
         if result.is_ok() && state.context.revision() != revision {
             let mut web = self.web.lock().map_err(|_| busy())?;
             for (session, id, generation, _owner, allow) in web.identities() {
                 if allow.contains(&WebAllow::ContextEvents) {
-                    for delivery in state.context.web_events(&id, &generation, &request) {
+                    for delivery in state
+                        .context
+                        .web_events(&id, &generation, &request, switched)
+                    {
                         // WebSessions enforces its existing count/byte limits and assigns
                         // a web-only sequence. Native queues and acknowledgements are untouched.
                         let _ = web.post_context(&session, delivery);
@@ -1029,6 +1033,177 @@ mod tests {
         );
         host.delivery_done(&manifest.id, GENERATION, native, false);
         assert!(host.next_delivery(&manifest.id, GENERATION).is_none());
+        host.revoke(&manifest.id, GENERATION);
+    }
+
+    #[test]
+    fn web_reset_with_empty_events_resyncs_without_acknowledging_native_lease() {
+        assert_web_resync_preserves_native_lease(true);
+    }
+
+    #[test]
+    fn web_project_switch_resyncs_only_active_project_subscriptions() {
+        assert_web_resync_preserves_native_lease(false);
+    }
+
+    fn assert_web_resync_preserves_native_lease(reset: bool) {
+        let root = tempfile::tempdir().unwrap();
+        let host = HostServices::new(root.path().into(), GENERATION.into());
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["contributes"]["eventSubscriptions"] = json!([
+            {"id":"created","topic":"terminal.created","scope":"activeProject"},
+            {"id":"window","topic":"terminal.created","scope":"window"}
+        ]);
+        value["contributes"]["views"] = json!([
+            {"id":"panel","title":"Panel","location":"panel","kind":"web","entry":"index.html","allow":["context.read","context.events"]},
+            {"id":"read-only","title":"Reader","location":"panel","kind":"web","entry":"index.html","allow":["context.read"]},
+            {"id":"events-only","title":"Events","location":"panel","kind":"web","entry":"index.html","allow":["context.events"]}
+        ]);
+        let manifest: Manifest = serde_json::from_value(value).unwrap();
+        host.begin(&manifest, GENERATION).unwrap();
+        host.activate(&manifest.id, GENERATION).unwrap();
+        publish(&host);
+        // Establish native acknowledgement watermarks for project A once.
+        let snapshot = host
+            .call(
+                &manifest.id,
+                GENERATION,
+                &request("se.host.context", "snapshot", json!({"scope":"window"})),
+            )
+            .unwrap();
+        let descriptor = PackageDescriptor {
+            schema_version: 1,
+            native: BTreeMap::new(),
+            ui: "ui".into(),
+            files: vec![PackageFile {
+                path: "ui/index.html".into(),
+                size: 0,
+                sha256: "a".repeat(64),
+            }],
+        };
+        let sessions: Vec<_> = ["panel", "read-only", "events-only"]
+            .into_iter()
+            .map(|view| {
+                host.web
+                    .lock()
+                    .unwrap()
+                    .open(
+                        GENERATION,
+                        "owner",
+                        &manifest,
+                        GENERATION,
+                        (root.path().into(), descriptor.clone()),
+                        &"a".repeat(64),
+                        view,
+                    )
+                    .unwrap()
+            })
+            .collect();
+        // Queue ordinary native/web events, leaving the native queue unread.
+        let mut publication: HostContextPublishRequest = serde_json::from_value(json!({
+            "sourceId":snapshot["sourceId"],"sourceSequence":2,"reset":false,"snapshot":snapshot["context"],
+            "events":[{"topic":"terminal.created","projectId":"p1","data":{"terminal":{"id":"t3","projectId":"p1","ptyId":null}}}]
+        })).unwrap();
+        host.publish("owner", publication.clone()).unwrap();
+        publication.source_sequence = 3;
+        publication.reset = reset;
+        publication.snapshot.active_project = Some(
+            serde_json::from_value(json!({
+                "id":"p2","name":"Project B","path":"/project-b"
+            }))
+            .unwrap(),
+        );
+        publication.snapshot.active_terminal_id = Some("t2".into());
+        publication.events.clear();
+        host.publish("owner", publication.clone()).unwrap();
+        // Duplicate accepted publications and rejected owners cannot fan out.
+        host.publish("owner", publication.clone()).unwrap();
+        publication.source_sequence = 4;
+        assert!(host.publish("wrong-owner", publication).is_err());
+        let native_counts = host.context_counts();
+        for (index, opened) in sessions.iter().enumerate() {
+            let events = host
+                .web
+                .lock()
+                .unwrap()
+                .read(&WebReadRequest {
+                    session_id: opened.session_id.clone(),
+                    after_sequence: 0,
+                })
+                .unwrap()
+                .events;
+            if index == 1 {
+                assert!(
+                    events.is_empty(),
+                    "ContextRead alone cannot receive resyncs"
+                );
+                continue;
+            }
+            assert_eq!(events.len(), if reset { 4 } else { 3 });
+            assert!(events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence));
+            let resyncs = &events[2..];
+            assert_eq!(resyncs[0].payload["subscriptionId"], "created");
+            if reset {
+                assert_eq!(resyncs[1].payload["subscriptionId"], "window");
+            }
+            for event in resyncs {
+                assert_eq!(event.event_type, WebEventType::ContextEvent);
+                assert_eq!(event.payload["resyncRequired"], true);
+                assert_eq!(event.payload["generation"], GENERATION);
+                assert_eq!(event.payload["sourceId"], snapshot["sourceId"]);
+                assert_eq!(event.payload["contextRevision"], 3);
+                assert_eq!(event.payload["projectId"], "p2");
+                assert_eq!(event.payload["topic"], "terminal.created");
+                assert_eq!(event.payload["sequence"], event.sequence);
+                assert!(event.payload["data"].is_null());
+            }
+            host.web_context_snapshot(
+                &manifest.id,
+                GENERATION,
+                "owner",
+                HostContextSnapshotRequest {
+                    scope: HostScope::Window,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            host.context_counts(),
+            native_counts,
+            "web reads must not drain native queues"
+        );
+        // Native still receives its own marker(s), with independent subscription
+        // sequences and no acknowledgement performed by web fanout or web reads.
+        let mut native = Vec::new();
+        while let Some(delivery) = host.next_delivery(&manifest.id, GENERATION) {
+            native.push(delivery["input"].clone());
+            host.delivery_done(&manifest.id, GENERATION, delivery, false);
+        }
+        assert_eq!(native.len(), 2);
+        let active = native
+            .iter()
+            .find(|event| event["subscriptionId"] == "created")
+            .unwrap();
+        assert_eq!(active["resyncRequired"], true);
+        assert_eq!(active["contextRevision"], 3);
+        assert_eq!(
+            active["sequence"],
+            snapshot["sequences"]["created"].as_u64().unwrap() + 2
+        );
+        let window = native
+            .iter()
+            .find(|event| event["subscriptionId"] == "window")
+            .unwrap();
+        assert_eq!(window["resyncRequired"], reset);
+        assert_eq!(
+            window["sequence"],
+            snapshot["sequences"]["window"].as_u64().unwrap() + if reset { 2 } else { 1 }
+        );
+        if !reset {
+            assert_eq!(window["data"]["terminal"]["id"], "t3");
+        }
         host.revoke(&manifest.id, GENERATION);
     }
 

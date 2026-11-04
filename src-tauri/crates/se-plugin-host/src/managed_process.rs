@@ -216,7 +216,9 @@ fn process_identity(pid: u32) -> std::io::Result<ProcessIdentity> {
             .ok_or_else(|| std::io::Error::other("invalid /proc stat"))
     }
     let before = start(pid)?;
-    let executable = std::fs::read_link(format!("/proc/{pid}/exe"))?;
+    // Executable is diagnostic only: wrappers may exec, and /proc/PID/exe
+    // can disappear for zombies even while the birth identity remains readable.
+    let executable = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default();
     if start(pid)? != before {
         return Err(std::io::Error::other(
             "process changed while reading identity",
@@ -257,11 +259,12 @@ fn process_identity(pid: u32) -> std::io::Result<ProcessIdentity> {
     // SAFETY: path is writable for the specified buffer size.
     let count =
         unsafe { libc::proc_pidpath(pid as i32, path.as_mut_ptr().cast(), path.len() as u32) };
-    if count <= 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let end = path.iter().position(|&b| b == 0).unwrap_or(count as usize);
-    let executable = PathBuf::from(std::ffi::OsStr::from_bytes(&path[..end]));
+    let executable = if count > 0 {
+        let end = path.iter().position(|&b| b == 0).unwrap_or(count as usize);
+        PathBuf::from(std::ffi::OsStr::from_bytes(&path[..end]))
+    } else {
+        PathBuf::new()
+    };
     if start(pid)? != before {
         return Err(std::io::Error::other(
             "process changed while reading identity",
@@ -295,7 +298,10 @@ fn in_group(_pid: u32, _pgid: u32) -> bool {
 }
 
 fn identity_matches(pid: u32, pgid: u32, identity: &ProcessIdentity) -> bool {
-    in_group(pid, pgid) && process_identity(pid).is_ok_and(|current| current == *identity)
+    // exec changes the executable, not ownership. Only kernel birth identity
+    // (and current PGID membership) protects against signalling a reused PID.
+    in_group(pid, pgid)
+        && process_identity(pid).is_ok_and(|current| current.start_time == identity.start_time)
 }
 
 // Snapshot surviving group members before TERM. If the leader exits during grace,
@@ -343,6 +349,11 @@ pub(crate) async fn reap_orphans(profile: &Path) -> std::io::Result<()> {
     for entry in entries {
         // We only create isolated groups led by the child. Never trust a corrupt
         // ledger to direct a signal at Core, its caller, or another process group.
+        // If the leader was already gone at startup, this leader-only ledger has
+        // no recorded birth identity for a surviving member. A matching PGID by
+        // itself cannot prove ownership (it may have been recycled), so leave
+        // that group alone. Once verified here, sampled members below safely
+        // anchor escalation even if the leader exits during the TERM grace.
         if entry.pid != entry.pgid || !identity_matches(entry.pid, entry.pgid, &entry.identity) {
             log::info!("managed process reap skipped (absent/identity mismatch): plugin={} process={} pid={} pgid={}", entry.plugin_id, entry.process_id, entry.pid, entry.pgid);
             continue;
@@ -1190,11 +1201,14 @@ mod tests {
         let path = ledger_path(&directory.0);
         let entry = read_ledger(&path).unwrap().remove(0);
         assert!(identity_matches(entry.pid, entry.pgid, &entry.identity));
-        // Independently verify BOTH parts of identity, not just an impossible PID.
-        for wrong_executable in [false, true] {
+        // A diagnostic executable mismatch is allowed; birth or PGID mismatch is not.
+        let mut exec_changed = entry.identity.clone();
+        exec_changed.executable = PathBuf::from("/definitely/not/the/executable");
+        assert!(identity_matches(entry.pid, entry.pgid, &exec_changed));
+        for wrong_group in [false, true] {
             let mut stale = entry.clone();
-            if wrong_executable {
-                stale.identity.executable = PathBuf::from("/definitely/not/the/executable");
+            if wrong_group {
+                stale.pgid += 1;
             } else {
                 stale.identity.start_time.push_str("-reused-pid");
             }
@@ -1237,6 +1251,95 @@ mod tests {
         assert!(read_ledger(&path).unwrap().is_empty());
         host.shutdown().await.unwrap();
         assert!(read_ledger(&path).unwrap().is_empty());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn fresh_host_reaps_exec_wrapper_after_core_death() {
+        let directory = Directory::new();
+        let lifecycle = Arc::new(Lifecycle {
+            state: Mutex::new(LifecycleState::default()),
+            ledger: ledger_path(&directory.0),
+        });
+        // Gate exec on a file so the production ledger necessarily records the
+        // wrapper's executable first, without relying on scheduler timing.
+        let mut process =
+            script("while [ ! -e exec-ready ]; do /bin/sleep 0.01; done; exec /bin/sleep 60");
+        process.cwd = Some("profileData".into());
+        let data = directory.0.join("plugins/data/test.plugin");
+        let (mut child, guard) = spawn_process(&process, None, &data, &lifecycle)
+            .await
+            .unwrap();
+        let path = ledger_path(&directory.0);
+        let entry = read_ledger(&path).unwrap().remove(0);
+        std::fs::write(data.join("exec-ready"), b"").unwrap();
+        wait_for(|| {
+            process_identity(entry.pid).is_ok_and(|identity| {
+                identity
+                    .executable
+                    .file_name()
+                    .is_some_and(|name| name == "sleep")
+            })
+        })
+        .await;
+        let current = process_identity(entry.pid).unwrap();
+        assert_ne!(current.executable, entry.identity.executable);
+        assert_eq!(current.start_time, entry.identity.start_time);
+        assert!(identity_matches(entry.pid, entry.pgid, &entry.identity));
+        // Lose the old Core's in-memory cleanup, retaining only its disk ledger.
+        std::mem::forget(guard);
+        drop(lifecycle);
+        let host = crate::PluginHost::open(directory.0.clone(), crate::HostOptions::default())
+            .await
+            .unwrap();
+        let exit = timeout(Duration::from_secs(3), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!exit.success());
+        assert!(!running(entry.pid));
+        assert!(read_ledger(&path).unwrap().is_empty());
+        host.shutdown().await.unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn startup_reap_leaves_unproven_leaderless_group_alone() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let directory = Directory::new();
+        let lifecycle = Arc::new(Lifecycle {
+            state: Mutex::new(LifecycleState::default()),
+            ledger: ledger_path(&directory.0),
+        });
+        let (mut child, guard) = spawn_process(
+            &script("/bin/sleep 60 & echo $!; wait"),
+            None,
+            &directory.0.join("data"),
+            &lifecycle,
+        )
+        .await
+        .unwrap();
+        let path = ledger_path(&directory.0);
+        let entry = read_ledger(&path).unwrap().remove(0);
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let descendant: u32 = timeout(Duration::from_secs(3), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .parse()
+            .unwrap();
+        wait_for(|| in_group(descendant, entry.pgid)).await;
+        child.start_kill().unwrap();
+        child.wait().await.unwrap();
+        assert!(!identity_matches(entry.pid, entry.pgid, &entry.identity));
+        reap_orphans(&directory.0).await.unwrap();
+        // The disk record knows only the now-absent leader's birth identity.
+        // Sampling a new member now would not establish historical ownership.
+        assert!(running(descendant));
+        assert!(read_ledger(&path).unwrap().is_empty());
+        drop(guard);
+        wait_for(|| !running(descendant)).await;
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

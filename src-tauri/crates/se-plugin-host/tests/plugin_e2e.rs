@@ -944,7 +944,18 @@ async fn activity_pilot_native_context_storage_ui_and_generation_lifecycle() {
     )
     .await;
     wait_activity(&host, "activity-state", "Agent active").await;
-    let running = host.host_ui_snapshot().await.unwrap();
+    // The status item is published independently of the view, so wait for it.
+    let running = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let snapshot = host.host_ui_snapshot().await.unwrap();
+            if snapshot.status_items.iter().any(|s| s.text == "Agent active") {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("status item never became Agent active");
     validate_host_ui_snapshot(&running).unwrap();
     assert!(running
         .status_items
