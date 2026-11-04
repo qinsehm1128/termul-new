@@ -66,14 +66,17 @@ struct Generation {
     queue: VecDeque<Job>,
 }
 struct Admission {
+    destination: Option<String>,
     request: StorageRequest,
     ticket: StorageTicket,
     deadline: Instant,
     timed_out: bool,
     worker_done: bool,
     delivery_finished: bool,
+    abandoned: bool,
 }
 struct Recent {
+    destination: Option<String>,
     request: StorageRequest,
     ticket: StorageTicket,
     input: StorageCompletionInput,
@@ -201,6 +204,15 @@ impl Storage {
         generation: &str,
         request: StorageRequest,
     ) -> Result<StorageTicket> {
+        self.accept_destination(plugin, generation, request, None)
+    }
+    pub(crate) fn accept_destination(
+        &self,
+        plugin: &str,
+        generation: &str,
+        request: StorageRequest,
+        destination: Option<&str>,
+    ) -> Result<StorageTicket> {
         request.validate()?;
         let mut state = self.inner.state.lock().unwrap();
         let live = state
@@ -210,8 +222,15 @@ impl Storage {
             .ok_or_else(stale)?;
         let request_id = request.identity().0.to_owned();
         if let Some(prior) = live.pending.get(&request_id) {
-            return if prior.request == request {
-                Ok(prior.ticket.clone())
+            return if prior.request == request && prior.destination.as_deref() == destination {
+                if prior.abandoned {
+                    Err(error(
+                        PLUGIN_BUSY,
+                        "abandoned storage worker is still running",
+                    ))
+                } else {
+                    Ok(prior.ticket.clone())
+                }
             } else {
                 Err(error(
                     PLUGIN_INVALID_REQUEST,
@@ -223,7 +242,8 @@ impl Storage {
             .recent
             .iter()
             .find(|v| v.ticket.request_id == request_id);
-        if previous.is_some_and(|v| v.request != request) {
+        if previous.is_some_and(|v| v.request != request || v.destination.as_deref() != destination)
+        {
             return Err(error(
                 PLUGIN_INVALID_REQUEST,
                 "storage requestId payload changed",
@@ -256,12 +276,14 @@ impl Storage {
         live.pending.insert(
             ticket.request_id.clone(),
             Admission {
+                destination: destination.map(str::to_owned),
                 request: request.clone(),
                 ticket: ticket.clone(),
                 deadline,
                 timed_out: false,
                 worker_done: cached.is_some(),
                 delivery_finished: false,
+                abandoned: false,
             },
         );
         let lease = live.lease.clone();
@@ -299,12 +321,46 @@ impl Storage {
             .map(|live| live.pending.len())
             .sum()
     }
+    /// Discards a web wait without turning it into a native completion. Work that may
+    /// still mutate the filesystem retains its admission and permit until `run` ends.
+    pub(crate) fn abandon_destination(&self, plugin: &str, generation: &str, destination: &str) {
+        let mut state = self.inner.state.lock().unwrap();
+        let Some(live) = state
+            .generations
+            .get_mut(plugin)
+            .filter(|v| v.id == generation)
+        else {
+            return;
+        };
+        let mut tickets = BTreeSet::new();
+        for prior in live.pending.values_mut() {
+            if prior.destination.as_deref() == Some(destination) {
+                prior.abandoned = true;
+                tickets.insert(prior.ticket.ticket_id.clone());
+            }
+        }
+        live.pending
+            .retain(|_, prior| !(prior.abandoned && prior.worker_done));
+        state
+            .ready
+            .retain(|v| !tickets.contains(&v.completion.input.ticket_id));
+        state.inflight.retain(|ticket, _| !tickets.contains(ticket));
+    }
+
     /// Reserves a completion for this generation without releasing its admission slot.
     /// The host must acknowledge successful callback delivery or return it for retry.
     pub(crate) fn pop_completion_for(
         &self,
         plugin: &str,
         generation: &str,
+    ) -> Option<StorageCompletion> {
+        self.pop_completion_destination(plugin, generation, None)
+    }
+    pub(crate) fn pop_completion_destination(
+        &self,
+        plugin: &str,
+        generation: &str,
+        destination: Option<&str>,
     ) -> Option<StorageCompletion> {
         let mut state = self.inner.state.lock().unwrap();
         let live = state.generations.get(plugin).filter(|v| {
@@ -313,10 +369,13 @@ impl Storage {
                 && !v.lease.withdrawn.load(Ordering::Acquire)
         })?;
         let lease = live.lease.clone();
-        let index = state
-            .ready
-            .iter()
-            .position(|v| Arc::ptr_eq(&v.lease, &lease));
+        let index = state.ready.iter().position(|v| {
+            Arc::ptr_eq(&v.lease, &lease)
+                && live
+                    .pending
+                    .get(&v.completion.input.request_id)
+                    .is_some_and(|a| !a.abandoned && a.destination.as_deref() == destination)
+        });
         let ready = if let Some(index) = index {
             let mut ready = state.ready.remove(index).unwrap();
             let live = state.generations.get_mut(plugin).unwrap();
@@ -330,10 +389,13 @@ impl Storage {
             ready
         } else {
             let live = state.generations.get_mut(plugin).unwrap();
-            let prior = live
-                .pending
-                .values_mut()
-                .find(|v| !v.timed_out && !v.worker_done && Instant::now() >= v.deadline)?;
+            let prior = live.pending.values_mut().find(|v| {
+                !v.abandoned
+                    && v.destination.as_deref() == destination
+                    && !v.timed_out
+                    && !v.worker_done
+                    && Instant::now() >= v.deadline
+            })?;
             prior.timed_out = true;
             Ready {
                 completion: StorageCompletion {
@@ -398,6 +460,7 @@ impl Storage {
         if let Some(mut prior) = live.pending.remove(&request_id) {
             remember(
                 live,
+                prior.destination.clone(),
                 prior.request.clone(),
                 prior.ticket.clone(),
                 ready.completion.input,
@@ -445,6 +508,7 @@ impl Drop for Storage {
 
 fn remember(
     live: &mut Generation,
+    destination: Option<String>,
     request: StorageRequest,
     ticket: StorageTicket,
     input: StorageCompletionInput,
@@ -452,6 +516,7 @@ fn remember(
     live.recent
         .retain(|v| v.ticket.request_id != ticket.request_id);
     live.recent.push_back(Recent {
+        destination,
         request,
         ticket,
         input,
@@ -557,6 +622,13 @@ fn run(inner: Arc<Inner>, job: Job) {
         if live
             .pending
             .get(&job.ticket.request_id)
+            .is_some_and(|v| v.abandoned)
+        {
+            live.pending.remove(&job.ticket.request_id);
+            drop(job._permit);
+        } else if live
+            .pending
+            .get(&job.ticket.request_id)
             .is_some_and(|v| v.timed_out)
         {
             let prior = live.pending.get_mut(&job.ticket.request_id).unwrap();
@@ -573,6 +645,9 @@ fn run(inner: Arc<Inner>, job: Job) {
                 ready._permit = Some(job._permit);
             }
         } else {
+            if let Some(prior) = live.pending.get_mut(&job.ticket.request_id) {
+                prior.worker_done = true;
+            }
             let result = match result {
                 Ok(value) => HostResult::Ok(HostSuccess { ok: true, value }),
                 Err(error) => HostResult::Err(HostFailure { ok: false, error }),
@@ -887,6 +962,169 @@ mod tests {
             _ => panic!("not mutation"),
         }
     }
+    // Keep the generation unpublished and drive its owned jobs directly: no wall-clock
+    // races, and no completion RPC is needed to clean up an abandoned worker.
+    fn run_queued(storage: &Storage) {
+        loop {
+            let job = storage
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .generations
+                .get_mut(PLUGIN)
+                .unwrap()
+                .queue
+                .pop_front();
+            let Some(job) = job else { break };
+            run(storage.inner.clone(), job);
+        }
+    }
+
+    #[test]
+    fn abandoned_web_workers_release_all_eight_slots_without_completion_rpc() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().into());
+        let generation = Uuid::new_v4().to_string();
+        storage.register(PLUGIN, &generation).unwrap();
+        // More than the global quota in total proves permits do not accumulate.
+        for batch in 0..10 {
+            storage
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .generations
+                .get_mut(PLUGIN)
+                .unwrap()
+                .tokens = 20.0;
+            for slot in 0..8 {
+                let request = if slot == 0 {
+                    set("mutation", None, batch, serde_json::json!(batch))
+                } else {
+                    get(&format!("batch-{batch}-slot-{slot}"), None)
+                };
+                storage
+                    .accept_destination(PLUGIN, &generation, request, Some("web:abandoned"))
+                    .unwrap();
+            }
+            // Remove one job from the queue to model worker ownership before abandonment.
+            let worker = storage
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .generations
+                .get_mut(PLUGIN)
+                .unwrap()
+                .queue
+                .pop_front()
+                .unwrap();
+            storage.abandon_destination(PLUGIN, &generation, "web:abandoned");
+            assert_eq!(storage.pending_count(), 8);
+            assert_eq!(
+                storage
+                    .accept(PLUGIN, &generation, get("overflow", None))
+                    .unwrap_err()
+                    .code,
+                PLUGIN_BUSY
+            );
+            assert!(storage.pop_completion_for(PLUGIN, &generation).is_none());
+            assert!(storage
+                .pop_completion_destination(PLUGIN, &generation, Some("web:abandoned"))
+                .is_none());
+            run(storage.inner.clone(), worker);
+            run_queued(&storage);
+            assert_eq!(storage.pending_count(), 0);
+            let state = storage.inner.state.lock().unwrap();
+            assert!(state.ready.is_empty());
+            assert!(state.inflight.is_empty());
+        }
+        // Native completion delivery remains unchanged after abandoned web work.
+        storage
+            .accept(PLUGIN, &generation, get("mutation", None))
+            .unwrap();
+        run_queued(&storage);
+        storage.activate(PLUGIN, &generation).unwrap();
+        let completion = storage.pop_completion_for(PLUGIN, &generation).unwrap();
+        assert!(
+            matches!(&completion.input.result, HostResult::Ok(HostSuccess {
+            value: StorageCompletionValue::Get(StorageGetValue::Found(StorageFoundValue {
+                revision: 10, value, ..
+            })), ..
+        }) if *value == serde_json::json!(9))
+        );
+        storage.finish_completion(PLUGIN, &generation, &completion.input.ticket_id);
+        assert_eq!(storage.pending_count(), 0);
+    }
+
+    #[test]
+    fn abandoned_web_destinations_discard_ready_inflight_cached_and_timeout_results() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        for phase in ["ready", "inflight", "cached", "timeout"] {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = Storage::new(dir.path().into());
+            let generation = Uuid::new_v4().to_string();
+            storage.register(PLUGIN, &generation).unwrap();
+            let request = get("key", None);
+            storage
+                .accept_destination(PLUGIN, &generation, request.clone(), Some("web:request"))
+                .unwrap();
+            if phase == "timeout" {
+                storage
+                    .inner
+                    .state
+                    .lock()
+                    .unwrap()
+                    .generations
+                    .get_mut(PLUGIN)
+                    .unwrap()
+                    .pending
+                    .values_mut()
+                    .next()
+                    .unwrap()
+                    .deadline = Instant::now();
+            } else {
+                run_queued(&storage);
+            }
+            if phase != "ready" {
+                // Enable delivery without scheduling the deliberately parked timeout job.
+                storage
+                    .inner
+                    .state
+                    .lock()
+                    .unwrap()
+                    .generations
+                    .get(PLUGIN)
+                    .unwrap()
+                    .lease
+                    .active
+                    .store(true, Ordering::Release);
+                let completion = storage
+                    .pop_completion_destination(PLUGIN, &generation, Some("web:request"))
+                    .unwrap();
+                if phase == "cached" {
+                    storage.finish_completion(PLUGIN, &generation, &completion.input.ticket_id);
+                    storage
+                        .accept_destination(PLUGIN, &generation, request, Some("web:request"))
+                        .unwrap();
+                }
+            }
+            storage.abandon_destination(PLUGIN, &generation, "web:request");
+            if phase == "timeout" {
+                // A synthetic timeout must not free an unfinished filesystem worker.
+                assert_eq!(storage.pending_count(), 1);
+                run_queued(&storage);
+            }
+            assert_eq!(storage.pending_count(), 0, "{phase}");
+            assert!(storage.pop_completion_for(PLUGIN, &generation).is_none());
+            let state = storage.inner.state.lock().unwrap();
+            assert!(state.ready.is_empty(), "{phase}");
+            assert!(state.inflight.is_empty(), "{phase}");
+        }
+    }
+
     #[test]
     fn storage_project_ids_are_opaque_and_tombstones_validate() {
         let _serial = TEST_LOCK.lock().unwrap();
@@ -1401,5 +1639,44 @@ mod tests {
             PLUGIN_STALE_GENERATION
         );
         assert!(!root.exists());
+    }
+}
+
+#[cfg(test)]
+mod web_destination_tests {
+    use super::*;
+    #[tokio::test]
+    async fn web_storage_completions_never_reach_native() {
+        let profile = std::env::temp_dir().join(format!("web-storage-{}", Uuid::new_v4()));
+        let storage = Storage::new(profile.clone());
+        let plugin = "org.test.web";
+        let generation = Uuid::new_v4().to_string();
+        storage.register(plugin, &generation).unwrap();
+        storage.activate(plugin, &generation).unwrap();
+        let request=parse_storage_set_request(&serde_json::to_vec(&serde_json::json!({"requestId":Uuid::new_v4().to_string(),"scope":"profile","key":"state","value":{"n":1},"expectedRevision":0})).unwrap()).unwrap();
+        storage
+            .accept_destination(
+                plugin,
+                &generation,
+                StorageRequest::Set(request),
+                Some("web-session:request"),
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(storage.pop_completion_for(plugin, &generation).is_none());
+            if let Some(completion) =
+                storage.pop_completion_destination(plugin, &generation, Some("web-session:request"))
+            {
+                assert!(matches!(completion.input.result, HostResult::Ok(_)));
+                storage.finish_completion(plugin, &generation, &completion.input.ticket_id);
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(storage.pop_completion_for(plugin, &generation).is_none());
+        storage.revoke(plugin, &generation);
+        let _ = std::fs::remove_dir_all(profile);
     }
 }

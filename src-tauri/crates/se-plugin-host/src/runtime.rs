@@ -8,6 +8,7 @@ use crate::{
 };
 use cordis_core::{Context, FiberHandle, Plugin, PreparedPlugin};
 use se_plugin_protocol::*;
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
@@ -20,6 +21,29 @@ use std::{
 use tokio::sync::{broadcast, watch, Mutex};
 use uuid::Uuid;
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebInvokeParams {
+    #[serde(rename = "command", alias = "commandId")]
+    command_id: String,
+    #[serde(default)]
+    args: Value,
+}
+/// Release web in-flight admission on normal return, timeout, or caller cancellation.
+struct WebRequestGuard {
+    services: Arc<crate::host_services::HostServices>,
+    session: String,
+    request: String,
+}
+impl Drop for WebRequestGuard {
+    fn drop(&mut self) {
+        self.services
+            .web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .complete(&self.session, &self.request);
+    }
+}
 #[derive(Debug, Clone)]
 pub struct HostOptions {
     pub callback_timeout: Duration,
@@ -184,6 +208,19 @@ impl PluginHost {
                 let Some(host) = weak_delivery.upgrade() else {
                     break;
                 };
+                if host.host_services.processes.take_changed() {
+                    let mut state = host.state.lock().await;
+                    let ids: Vec<_> = state.active.keys().cloned().collect();
+                    for id in ids {
+                        host.emit(
+                            &mut state,
+                            PluginEventType::HostUiChanged,
+                            Some(&id),
+                            None,
+                            None,
+                        );
+                    }
+                }
                 if host.host_services.take_ui_changed() {
                     let mut state = host.state.lock().await;
                     host.emit(&mut state, PluginEventType::HostUiChanged, None, None, None);
@@ -378,6 +415,10 @@ impl PluginHost {
         let mut registry = state.registry.clone();
         let config_revision = registry.allocate_config_revision()?;
         let entry = RegistryEntry {
+            package: artifact
+                .archive
+                .as_ref()
+                .map(|archive| archive.metadata(&self.root)),
             id: manifest.id.clone(),
             manifest,
             source_path: artifact.source,
@@ -500,6 +541,10 @@ impl PluginHost {
             candidate.config_revision = registry.allocate_config_revision()?;
         }
         candidate.artifact_path = loader::package(&self.root, &artifact, &manifest)?;
+        candidate.package = artifact
+            .archive
+            .as_ref()
+            .map(|archive| archive.metadata(&self.root));
         candidate.source_path = artifact.source;
         candidate.sha256 = artifact.sha256;
         candidate.manifest = manifest;
@@ -602,6 +647,309 @@ impl PluginHost {
             removed: true,
         })
     }
+    /// Install either a verified .seplugin archive or a legacy native library.
+    pub async fn install_from_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<PluginInfo, PluginError> {
+        self.install(InstallRequest {
+            path: path.as_ref().to_string_lossy().into_owned(),
+        })
+        .await
+    }
+    pub async fn web_open(
+        &self,
+        owner: &str,
+        request: WebOpenRequest,
+    ) -> Result<WebOpenReply, PluginError> {
+        validate_web_open_request(&request)?;
+        let state = self.control_lock().await?;
+        self.ensure_open(&state)?;
+        let active = live(&state, &request.id)?;
+        if active.generation != request.generation {
+            return Err(error(PLUGIN_STALE_GENERATION, "stale web open generation"));
+        }
+        let entry = &state.registry.plugins[index(&state, &request.id)?];
+        let native = entry.artifact_path.clone();
+        let manifest = entry.manifest.clone();
+        let generation = active.generation.clone();
+        let digest = entry
+            .package
+            .as_ref()
+            .map(|p| p.digest.clone())
+            .unwrap_or_else(|| entry.sha256.clone());
+        drop(state);
+        let package = tokio::task::spawn_blocking(move || {
+            let root = crate::archive::package_root(&native)
+                .ok_or_else(|| error(PLUGIN_INVALID_PACKAGE, "web view requires archive"))?;
+            let descriptor =
+                parse_package_descriptor(&std::fs::read(root.join("package.json")).map_err(io)?)?;
+            Ok::<_, PluginError>((root, descriptor))
+        })
+        .await
+        .map_err(io)??;
+        if !self.host_services.is_live(&manifest.id, &generation) {
+            return Err(error(PLUGIN_STALE_GENERATION, "web generation revoked"));
+        }
+        self.host_services
+            .with_web(&manifest.id, &generation, |web| {
+                web.open(
+                    &self.boot_id,
+                    owner,
+                    &manifest,
+                    &generation,
+                    package,
+                    &digest,
+                    &request.view_id,
+                )
+            })
+    }
+    fn web_session(
+        &self,
+        owner: &str,
+        session_id: &str,
+    ) -> Result<crate::web_sessions::Session, PluginError> {
+        let session = self
+            .host_services
+            .web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(session_id)?;
+        if session.owner != owner
+            || !self
+                .host_services
+                .is_live(&session.reply.plugin_id, &session.reply.generation)
+        {
+            return Err(error(PLUGIN_UI_SESSION_EXPIRED, "web session is not live"));
+        }
+        Ok(session)
+    }
+    pub async fn web_close(
+        &self,
+        owner: &str,
+        request: WebCloseRequest,
+    ) -> Result<(), PluginError> {
+        validate_web_close_request(&request)?;
+        self.web_session(owner, &request.session_id)?;
+        self.host_services
+            .web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .close(&request.session_id);
+        Ok(())
+    }
+    pub async fn web_asset(
+        &self,
+        owner: &str,
+        request: WebAssetRequest,
+    ) -> Result<WebAssetReply, PluginError> {
+        let session = self.web_session(owner, &request.session_id)?;
+        let session_id = request.session_id.clone();
+        let reply = tokio::task::spawn_blocking(move || {
+            crate::web_sessions::WebSessions::asset(&session, &request)
+        })
+        .await
+        .map_err(io)??;
+        self.web_session(owner, &session_id)?;
+        Ok(reply)
+    }
+    pub async fn web_read(
+        &self,
+        owner: &str,
+        request: WebReadRequest,
+    ) -> Result<WebReadReply, PluginError> {
+        self.web_session(owner, &request.session_id)?;
+        self.host_services
+            .web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .read(&request)
+    }
+    pub async fn web_request(
+        &self,
+        owner: &str,
+        request: WebRequest,
+    ) -> Result<WebRequestReply, PluginError> {
+        self.web_session(owner, &request.session_id)?;
+        let session = self
+            .host_services
+            .web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .admit(&request)?;
+        let admission = WebRequestGuard {
+            services: self.host_services.clone(),
+            session: request.session_id.clone(),
+            request: request.request_id.clone(),
+        };
+        let result = tokio::time::timeout(
+            Duration::from_millis(WEB_REQUEST_TIMEOUT_MS),
+            self.web_request_inner(&session, &request),
+        )
+        .await
+        .unwrap_or_else(|_| Err(error(PLUGIN_TIMEOUT, "web request timed out")));
+        drop(admission);
+        self.web_session(owner, &request.session_id)?;
+        let value = result?;
+        if serde_json::to_vec(&value).map_err(io)?.len() > MAX_WEB_PAYLOAD_BYTES {
+            return Err(error(PLUGIN_INVALID_REQUEST, "web reply too large"));
+        }
+        Ok(value)
+    }
+    async fn web_request_inner(
+        &self,
+        session: &crate::web_sessions::Session,
+        request: &WebRequest,
+    ) -> Result<Value, PluginError> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct WebViewDispatchParams {
+            action: String,
+            #[serde(default)]
+            payload: Value,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct WebConfigSetParams {
+            expected_revision: u64,
+            values: std::collections::BTreeMap<String, ConfigValue>,
+        }
+        let plugin = &session.reply.plugin_id;
+        let generation = &session.reply.generation;
+        let parse_error = || error(PLUGIN_INVALID_REQUEST, "invalid web method params");
+        match request.method.as_str() {
+            "invoke" => {
+                let args: WebInvokeParams =
+                    serde_json::from_value(request.params.clone()).map_err(|_| parse_error())?;
+                Ok(self
+                    .execute_command(ExecuteCommandRequest {
+                        id: plugin.clone(),
+                        generation: generation.clone(),
+                        command_id: args.command_id,
+                        args: args.args,
+                    })
+                    .await?
+                    .result)
+            }
+            "view.dispatch" => {
+                let args: WebViewDispatchParams =
+                    serde_json::from_value(request.params.clone()).map_err(|_| parse_error())?;
+                let state = self.control_lock().await?;
+                let active = live(&state, plugin)?;
+                if &active.generation != generation {
+                    return Err(error(PLUGIN_STALE_GENERATION, "stale web generation"));
+                }
+                let input = json!({"schemaVersion":1,"service":"se.host.ui","version":1,"method":"event","input":{"viewId":session.reply.view_id,"sessionId":session.reply.session_id,"action":args.action,"payload":args.payload}});
+                let bytes = active
+                    .worker
+                    .call(CallKind::Service, encode(&input)?)
+                    .await?;
+                let reply = parse_service_reply(&bytes)?;
+                Ok(reply.result)
+            }
+            "config.get" => {
+                let state = self.control_lock().await?;
+                let active = live(&state, plugin)?;
+                if &active.generation != generation {
+                    return Err(error(PLUGIN_STALE_GENERATION, "stale web generation"));
+                }
+                serde_json::to_value(config::snapshot(
+                    &state.registry.plugins[index(&state, plugin)?],
+                )?)
+                .map_err(io)
+            }
+            "config.set" => {
+                let args: WebConfigSetParams =
+                    serde_json::from_value(request.params.clone()).map_err(|_| parse_error())?;
+                serde_json::to_value(
+                    self.set_config_fenced(
+                        SetConfigRequest {
+                            id: plugin.clone(),
+                            expected_revision: args.expected_revision,
+                            values: args.values,
+                        },
+                        Some(generation),
+                    )
+                    .await?,
+                )
+                .map_err(io)
+            }
+            "context.snapshot" => {
+                let args: HostContextSnapshotRequest =
+                    serde_json::from_value(request.params.clone()).map_err(|_| parse_error())?;
+                self.host_services
+                    .web_context_snapshot(plugin, generation, &session.owner, args)
+            }
+            "theme.get" => self
+                .host_services
+                .web_theme(plugin, generation, &session.owner),
+            method if method.starts_with("storage.") => {
+                let method = method.trim_start_matches("storage.");
+                self.host_services
+                    .web_storage(
+                        plugin,
+                        generation,
+                        &session.reply.session_id,
+                        &request.request_id,
+                        method,
+                        &request.params,
+                    )
+                    .await
+            }
+            method if method.starts_with("feedback.") => self.host_services.web_feedback(
+                plugin,
+                generation,
+                &session.owner,
+                method.trim_start_matches("feedback."),
+                &request.params,
+            ),
+            _ => Err(error(PLUGIN_NOT_SUPPORTED, "unknown web bridge method")),
+        }
+    }
+    pub async fn web_publish_theme(
+        &self,
+        owner: &str,
+        theme: ThemeSnapshot,
+    ) -> Result<(), PluginError> {
+        self.host_services
+            .web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .publish_theme(owner, theme)
+    }
+    pub async fn process_list(
+        &self,
+        plugin_id: &str,
+    ) -> Result<std::collections::BTreeMap<String, HostProcessStatus>, PluginError> {
+        let state = self.control_lock().await?;
+        let generation = &live(&state, plugin_id)?.generation;
+        self.host_services.processes.list(plugin_id, generation)
+    }
+    pub async fn process_logs(
+        &self,
+        plugin_id: &str,
+        id: &str,
+        tail: u32,
+    ) -> Result<HostProcessLogsReply, PluginError> {
+        let state = self.control_lock().await?;
+        let generation = &live(&state, plugin_id)?.generation;
+        self.host_services
+            .processes
+            .logs(plugin_id, generation, id, tail)
+    }
+    pub async fn process_control(
+        &self,
+        plugin_id: &str,
+        id: &str,
+        action: &str,
+    ) -> Result<HostProcessStatus, PluginError> {
+        let state = self.control_lock().await?;
+        let generation = &live(&state, plugin_id)?.generation;
+        self.host_services
+            .processes
+            .control(plugin_id, generation, id, action)
+    }
+
     pub async fn get_view(&self, request: GetViewRequest) -> Result<ViewSnapshot, PluginError> {
         validate_get_view_request(&request)?;
         let state = self.control_lock().await?;
@@ -837,8 +1185,23 @@ impl PluginHost {
         &self,
         request: SetConfigRequest,
     ) -> Result<ConfigSnapshot, PluginError> {
+        self.set_config_fenced(request, None).await
+    }
+    async fn set_config_fenced(
+        &self,
+        request: SetConfigRequest,
+        generation: Option<&str>,
+    ) -> Result<ConfigSnapshot, PluginError> {
         let mut state = self.control_lock().await?;
         self.ensure_open(&state)?;
+        if let Some(generation) = generation {
+            if live(&state, &request.id)?.generation != generation {
+                return Err(error(
+                    PLUGIN_STALE_GENERATION,
+                    "stale web config generation",
+                ));
+            }
+        }
         let index = index(&state, &request.id)?;
         let old_registry = state.registry.clone();
         let old = state.registry.plugins[index].clone();
@@ -870,6 +1233,9 @@ impl PluginHost {
                     )
                     .await?;
                 for view in &candidate.manifest.contributes.views {
+                    if view.kind == Some(ViewKind::Web) {
+                        continue;
+                    }
                     let request = RenderRequest {
                         schema_version: SCHEMA_VERSION,
                         view_id: view.id.clone(),
@@ -1059,6 +1425,7 @@ impl PluginHost {
         let ids = state.active.keys().cloned().collect();
         self.stop_set(&mut state, &ids).await;
         state.closed = true;
+        self.host_services.processes.shutdown().await;
         if self.metrics.callbacks_in_flight.load(Ordering::Acquire) == 0
             && self.restart.borrow().is_none()
         {
@@ -1175,10 +1542,30 @@ impl PluginHost {
             self.restart.clone(),
         )
         .await?;
+        if artifact
+            .archive
+            .as_ref()
+            .is_some_and(|a| a.manifest != manifest)
+        {
+            drop(worker);
+            return Err(error(
+                PLUGIN_INVALID_PACKAGE,
+                "ABI manifest differs from archive manifest",
+            ));
+        }
         Ok((artifact, worker, manifest))
     }
     async fn activate(&self, state: &mut State, entry: &RegistryEntry) -> Result<(), PluginError> {
-        let artifact = loader::stage(&self.root, &self.boot_id, &entry.artifact_path)?;
+        let artifact = if let Some(package) = &entry.package {
+            crate::archive::stage_published(
+                &self.root,
+                &self.boot_id,
+                &entry.artifact_path,
+                package,
+            )?
+        } else {
+            loader::stage(&self.root, &self.boot_id, &entry.artifact_path)?
+        };
         if artifact.sha256 != entry.sha256 {
             return Err(error(
                 PLUGIN_STORE_CORRUPT,
@@ -1229,6 +1616,12 @@ impl PluginHost {
                 }));
             }
         };
+        self.host_services.processes.activate(
+            &entry.id,
+            &generation,
+            crate::archive::package_root(&entry.artifact_path),
+            &entry.manifest.contributes.processes,
+        )?;
         state.active.insert(
             entry.id.clone(),
             Active {
@@ -1589,7 +1982,11 @@ fn gc(root: &Path, registry: &Registry, boot: &str) {
                     .expect("contained package");
                 let original = root.join(relative);
                 if !registry.plugins.iter().any(|entry| {
-                    entry.artifact_path.starts_with(&original)
+                    entry
+                        .package
+                        .as_ref()
+                        .is_some_and(|p| p.root == original || p.root == path)
+                        || entry.artifact_path.starts_with(&original)
                         || entry.artifact_path.starts_with(&path)
                         || std::fs::canonicalize(&entry.artifact_path)
                             .is_ok_and(|artifact| artifact.starts_with(&path))
@@ -1810,6 +2207,80 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         serde_json::from_value(serde_json::json!({"schemaVersion":1,"id":id,"name":id,"version":"1.0.0","abi":{"min":1,"max":1},"services":{"provides":services(provides),"requires":services(requires)},"contributes":{"views":[{"id":"main","title":"Main","location":"panel"}],"commands":[{"id":"echo","title":"Echo"}],"configuration":{"title":"Settings","properties":{"enabled":{"type":"boolean","title":"Enabled","description":"","default":false}}}}})).unwrap()
+    }
+    #[test]
+    fn web_invoke_accepts_w4_command_wire_key() {
+        let params: WebInvokeParams =
+            serde_json::from_value(json!({"command":"run","args":{"n":7}})).unwrap();
+        assert_eq!(params.command_id, "run");
+        assert_eq!(params.args, json!({"n":7}));
+        let legacy: WebInvokeParams = serde_json::from_value(json!({"commandId":"run"})).unwrap();
+        assert_eq!(legacy.command_id, "run");
+        assert!(legacy.args.is_null());
+        assert!(serde_json::from_value::<WebInvokeParams>(
+            json!({"command":"run","pluginId":"org.other"})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<WebInvokeParams>(
+            json!({"command":"run","commandId":"other"})
+        )
+        .is_err());
+    }
+    #[test]
+    fn cancelled_web_requests_release_session_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let services = Arc::new(crate::host_services::HostServices::new(
+            root.path().into(),
+            Uuid::new_v4().to_string(),
+        ));
+        let mut manifest = manifest("org.test.web", &[], &[]);
+        manifest.contributes.views.push(serde_json::from_value(json!({"id":"panel","title":"Panel","location":"panel","kind":"web","entry":"index.html","allow":[]})).unwrap());
+        let opened = services
+            .web
+            .lock()
+            .unwrap()
+            .open(
+                &Uuid::new_v4().to_string(),
+                "owner",
+                &manifest,
+                &Uuid::new_v4().to_string(),
+                (
+                    root.path().into(),
+                    PackageDescriptor {
+                        schema_version: 1,
+                        native: BTreeMap::new(),
+                        ui: "ui".into(),
+                        files: vec![PackageFile {
+                            path: "ui/index.html".into(),
+                            size: 0,
+                            sha256: "a".repeat(64),
+                        }],
+                    },
+                ),
+                &"a".repeat(64),
+                "panel",
+            )
+            .unwrap();
+        for _ in 0..MAX_WEB_PENDING_REQUESTS + 1 {
+            let request_id = Uuid::new_v4().to_string();
+            services
+                .web
+                .lock()
+                .unwrap()
+                .admit(&WebRequest {
+                    session_id: opened.session_id.clone(),
+                    request_id: request_id.clone(),
+                    method: "theme.get".into(),
+                    params: json!({}),
+                })
+                .unwrap();
+            let guard = WebRequestGuard {
+                services: services.clone(),
+                session: opened.session_id.clone(),
+                request: request_id,
+            };
+            drop(guard);
+        }
     }
     fn fixture_api() -> se_plugin_abi::SePluginApiV1 {
         use se_plugin_abi::{export as e, *};
@@ -2620,6 +3091,7 @@ mod tests {
             .join("c".repeat(64));
         let mut registry = Registry::default();
         registry.plugins.push(RegistryEntry {
+            package: None,
             id: "test.gc".to_owned(),
             manifest: manifest("test.gc", &[], &[]),
             source_path: root.path().join("source"),

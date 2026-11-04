@@ -43,6 +43,25 @@ impl cordis_core::Service for PluginBroker {
 }
 
 impl PluginBroker {
+    pub(crate) fn request_wake(
+        &self,
+        id: &str,
+        generation: &str,
+        request: &ServiceRequest,
+    ) -> Result<serde_json::Value, PluginError> {
+        if request.service != "se.host.wake" || request.version != 1 || request.method != "request"
+        {
+            return Err(PluginError::new(
+                PLUGIN_SERVICE_UNAVAILABLE,
+                "callback context required",
+            ));
+        }
+        self.host
+            .get()
+            .ok_or_else(|| PluginError::new(PLUGIN_SERVICE_UNAVAILABLE, "host unavailable"))?
+            .request_wake(id, generation, &request.input)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

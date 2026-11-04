@@ -6,6 +6,7 @@ use crate::{
 };
 use se_plugin_protocol::*;
 use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
 type Result<T> = std::result::Result<T, PluginError>;
 struct Lease {
@@ -15,6 +16,13 @@ struct Lease {
     inflight: bool,
     tokens: f64,
     last_refill: u64,
+    wake_pending: bool,
+    wake_count: u64,
+    wake_reasons: Vec<String>,
+    wake_tokens: f64,
+    wake_refill: u64,
+    wake_due: u64,
+    last_wake: Option<u64>,
 }
 struct ServicesState {
     leases: BTreeMap<String, Lease>,
@@ -27,9 +35,26 @@ struct ServicesState {
     source_live: bool,
     last_ui_emit: u64,
 }
+/// A web caller owns delivery only while its future is alive. Dropping this
+/// guard also covers errors, session closure/detach, and completion timeouts.
+struct WebStorageWait<'a> {
+    storage: &'a Storage,
+    plugin: &'a str,
+    generation: &'a str,
+    destination: &'a str,
+}
+impl Drop for WebStorageWait<'_> {
+    fn drop(&mut self) {
+        self.storage
+            .abandon_destination(self.plugin, self.generation, self.destination);
+    }
+}
+
 pub(crate) struct HostServices {
     state: Mutex<ServicesState>,
     storage: Storage,
+    pub(crate) web: Mutex<crate::web_sessions::WebSessions>,
+    pub(crate) processes: crate::managed_process::ProcessManager,
 }
 fn err(code: &str, message: &str) -> PluginError {
     PluginError::new(code, message)
@@ -61,8 +86,89 @@ impl HostServices {
                 source_live: false,
                 last_ui_emit: 0,
             }),
+            processes: crate::managed_process::ProcessManager::new(profile.clone()),
             storage: Storage::new(profile),
+            web: Mutex::new(crate::web_sessions::WebSessions::default()),
         }
+    }
+    fn wake_locked(
+        state: &mut ServicesState,
+        id: &str,
+        generation: &str,
+        input: &Value,
+    ) -> Result<Value> {
+        let bytes =
+            serde_json::to_vec(input).map_err(|_| err(PLUGIN_INVALID_REQUEST, "invalid wake"))?;
+        let request = parse_host_wake_request(&bytes)?;
+        let lease = state
+            .leases
+            .get_mut(id)
+            .filter(|l| l.generation == generation && l.published)
+            .ok_or_else(|| err(PLUGIN_STALE_GENERATION, "wake generation is not live"))?;
+        if !lease
+            .manifest
+            .services
+            .requires
+            .iter()
+            .any(|r| r.name == "se.host.wake" && r.version == 1)
+        {
+            return Err(err(PLUGIN_NOT_SUPPORTED, "wake not declared"));
+        }
+        let now = now_ms();
+        lease.wake_tokens = (lease.wake_tokens
+            + (now.saturating_sub(lease.wake_refill)) as f64 * WAKE_RATE_PER_SECOND as f64
+                / 1000.0)
+            .min(WAKE_BURST as f64);
+        lease.wake_refill = now;
+        if lease.wake_tokens < 1.0 {
+            return Err(busy());
+        }
+        lease.wake_tokens -= 1.0;
+        let coalesced = lease.wake_pending;
+        if !coalesced {
+            lease.wake_due = now + WAKE_COALESCE_MS;
+        }
+        lease.wake_pending = true;
+        lease.wake_count = lease
+            .wake_count
+            .saturating_add(1)
+            .min(9_007_199_254_740_991);
+        if let Some(reason) = request.reason {
+            if lease.wake_reasons.len() < MAX_WAKE_REASONS && !lease.wake_reasons.contains(&reason)
+            {
+                lease.wake_reasons.push(reason);
+            }
+        }
+        lease.last_wake = Some(now);
+        Ok(json!({"accepted":true,"coalesced":coalesced}))
+    }
+    pub(crate) fn request_wake(&self, id: &str, generation: &str, input: &Value) -> Result<Value> {
+        let mut state = self.state.try_lock().map_err(|_| busy())?;
+        Self::wake_locked(&mut state, id, generation, input)
+    }
+    pub(crate) fn with_web<T>(
+        &self,
+        id: &str,
+        generation: &str,
+        f: impl FnOnce(&mut crate::web_sessions::WebSessions) -> Result<T>,
+    ) -> Result<T> {
+        let state = self.state.lock().map_err(|_| busy())?;
+        if !state
+            .leases
+            .get(id)
+            .is_some_and(|l| l.generation == generation && l.published)
+        {
+            return Err(err(PLUGIN_STALE_GENERATION, "web generation revoked"));
+        }
+        f(&mut *self.web.lock().map_err(|_| busy())?)
+    }
+    pub(crate) fn is_live(&self, id: &str, generation: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .leases
+            .get(id)
+            .is_some_and(|l| l.generation == generation && l.published)
     }
     pub(crate) fn begin(&self, manifest: &Manifest, generation: &str) -> Result<()> {
         let mut state = self.state.lock().map_err(|_| busy())?;
@@ -88,6 +194,13 @@ impl HostServices {
                 inflight: false,
                 tokens: 20.0,
                 last_refill: now_ms(),
+                wake_pending: false,
+                wake_count: 0,
+                wake_reasons: Vec::new(),
+                wake_tokens: WAKE_BURST as f64,
+                wake_refill: now_ms(),
+                wake_due: 0,
+                last_wake: None,
             },
         );
         Ok(())
@@ -117,6 +230,11 @@ impl HostServices {
     pub(crate) fn revoke(&self, id: &str, generation: &str) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.storage.revoke(id, generation);
+        self.processes.revoke(id, generation);
+        self.web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .revoke(id, generation);
         if state
             .leases
             .get(id)
@@ -169,6 +287,51 @@ impl HostServices {
         let input = serde_json::to_vec(&request.input)
             .map_err(|_| err(PLUGIN_INVALID_REQUEST, "invalid host input"))?;
         match (request.service.as_str(), request.method.as_str()) {
+            ("se.host.process", method) => {
+                let bytes = input.as_slice();
+                match method {
+                    "logs" => {
+                        let request = parse_host_process_logs_request(bytes)?;
+                        encode(
+                            &self
+                                .processes
+                                .logs(id, generation, &request.id, request.tail)?,
+                        )
+                    }
+                    "status" | "start" | "stop" | "restart" => {
+                        let request = parse_host_process_request(bytes)?;
+                        encode(
+                            &self
+                                .processes
+                                .control(id, generation, &request.id, method)?,
+                        )
+                    }
+                    _ => Err(err(PLUGIN_NOT_SUPPORTED, "unknown process method")),
+                }
+            }
+            ("se.host.wake", "request") => {
+                Self::wake_locked(&mut state, id, generation, &request.input)
+            }
+            ("se.host.ui", "postMessage") => {
+                let post = parse_host_ui_post_message_request(&input)?;
+                if !manifest
+                    .contributes
+                    .views
+                    .iter()
+                    .any(|v| v.id == post.view_id && v.kind == Some(ViewKind::Web))
+                {
+                    return Err(err(PLUGIN_INVALID_REQUEST, "unknown web view"));
+                }
+                let delivered = self.web.lock().map_err(|_| busy())?.post(
+                    id,
+                    generation,
+                    &post.view_id,
+                    WebEventType::Message,
+                    post.payload,
+                )?;
+                encode(&HostUiPostMessageReply { delivered })
+            }
+
             ("se.host.context", "snapshot") => {
                 let req = parse_host_context_snapshot_request(&input)?;
                 encode(
@@ -213,6 +376,132 @@ impl HostServices {
             _ => Err(err(PLUGIN_INVALID_REQUEST, "host method is not callable")),
         }
     }
+    fn web_manifest(&self, id: &str, generation: &str, service: &str) -> Result<Manifest> {
+        let state = self.state.lock().map_err(|_| busy())?;
+        let manifest = state
+            .leases
+            .get(id)
+            .filter(|l| l.published && l.generation == generation)
+            .map(|l| l.manifest.clone())
+            .ok_or_else(|| err(PLUGIN_STALE_GENERATION, "web generation is not live"))?;
+        if !manifest
+            .services
+            .requires
+            .iter()
+            .any(|r| r.name == service && r.version == 1)
+        {
+            return Err(err(PLUGIN_NOT_SUPPORTED, "web host service not declared"));
+        }
+        Ok(manifest)
+    }
+    pub(crate) fn web_context_snapshot(
+        &self,
+        id: &str,
+        generation: &str,
+        _owner: &str,
+        request: HostContextSnapshotRequest,
+    ) -> Result<Value> {
+        self.web_manifest(id, generation, "se.host.context")?;
+        validate_host_context_snapshot_request(&request)?;
+        let mut state = self.state.lock().map_err(|_| busy())?;
+        encode(
+            &state
+                .context
+                .snapshot(id, generation, request.scope, now_ms())?,
+        )
+    }
+    pub(crate) fn web_theme(&self, id: &str, generation: &str, _owner: &str) -> Result<Value> {
+        if !self.is_live(id, generation) {
+            return Err(err(PLUGIN_STALE_GENERATION, "stale web generation"));
+        }
+        encode(&self.web.lock().map_err(|_| busy())?.theme(_owner))
+    }
+    pub(crate) fn web_feedback(
+        &self,
+        id: &str,
+        generation: &str,
+        _owner: &str,
+        method: &str,
+        input: &Value,
+    ) -> Result<Value> {
+        let manifest = self.web_manifest(id, generation, "se.host.feedback")?;
+        let mut state = self.state.lock().map_err(|_| busy())?;
+        let active = state
+            .context
+            .current(now_ms())
+            .ok()
+            .and_then(|(_, c)| c.active_project.map(|p| p.id));
+        state.feedback.apply(
+            &manifest,
+            generation,
+            active.as_deref(),
+            "se.host.feedback",
+            method,
+            input,
+            now_ms(),
+        )
+    }
+    pub(crate) async fn web_storage(
+        &self,
+        id: &str,
+        generation: &str,
+        session: &str,
+        request_id: &str,
+        method: &str,
+        input: &Value,
+    ) -> Result<Value> {
+        self.web_manifest(id, generation, "se.host.storage")?;
+        let bytes = serde_json::to_vec(input)
+            .map_err(|_| err(PLUGIN_INVALID_REQUEST, "invalid storage params"))?;
+        let request = match method {
+            "get" => StorageRequest::Get(parse_storage_get_request(&bytes)?),
+            "set" => StorageRequest::Set(parse_storage_set_request(&bytes)?),
+            "delete" => StorageRequest::Delete(parse_storage_delete_request(&bytes)?),
+            _ => return Err(err(PLUGIN_NOT_SUPPORTED, "unknown web storage method")),
+        };
+        if let Some(project) = input.get("projectId").and_then(Value::as_str) {
+            let mut state = self.state.lock().map_err(|_| busy())?;
+            let (_, context) = state.context.current(now_ms())?;
+            if !context.project_ids.iter().any(|p| p == project) {
+                return Err(err(
+                    PLUGIN_INVALID_REQUEST,
+                    "storage project is not published",
+                ));
+            }
+        }
+        let destination = format!("{session}:{request_id}");
+        self.storage
+            .accept_destination(id, generation, request, Some(&destination))?;
+        let _wait = WebStorageWait {
+            storage: &self.storage,
+            plugin: id,
+            generation,
+            destination: &destination,
+        };
+        let deadline = Instant::now() + Duration::from_secs(11);
+        loop {
+            if !self.is_live(id, generation) {
+                return Err(err(PLUGIN_STALE_GENERATION, "storage generation revoked"));
+            }
+            self.web.lock().map_err(|_| busy())?.get(session)?;
+            if let Some(completion) =
+                self.storage
+                    .pop_completion_destination(id, generation, Some(&destination))
+            {
+                let result = match &completion.input.result {
+                    HostResult::Ok(success) => encode(&success.value),
+                    HostResult::Err(error) => Err(error.error.clone()),
+                };
+                self.storage
+                    .finish_completion(id, generation, &completion.input.ticket_id);
+                return result;
+            }
+            if Instant::now() >= deadline {
+                return Err(err(PLUGIN_TIMEOUT, "web storage completion timeout"));
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
     pub(crate) fn publish(
         &self,
         owner: &str,
@@ -220,6 +509,24 @@ impl HostServices {
     ) -> Result<HostContextAck> {
         let mut state = self.state.lock().map_err(|_| busy())?;
         let result = state.context.publish(owner, request, now_ms());
+        if result.is_ok() {
+            let identities = self.web.lock().map_err(|_| busy())?.identities();
+            for (session, id, generation, session_owner, allow) in identities {
+                if session_owner == owner && allow.contains(&WebAllow::ContextRead) {
+                    if let Ok(snapshot) =
+                        state
+                            .context
+                            .snapshot(&id, &generation, HostScope::Window, now_ms())
+                    {
+                        let _ = self.web.lock().map_err(|_| busy())?.post_one(
+                            &session,
+                            WebEventType::ContextEvent,
+                            encode(&snapshot)?,
+                        );
+                    }
+                }
+            }
+        }
         let _ = Self::snapshot_locked(&mut state);
         result
     }
@@ -230,6 +537,10 @@ impl HostServices {
         result
     }
     pub(crate) fn detach(&self, owner: &str) {
+        self.web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .detach(owner);
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.context.detach(owner) {
             state.feedback.clear();
@@ -469,7 +780,12 @@ impl HostServices {
         if lease.tokens < 1.0 {
             return None;
         }
-        let delivery = if let Some(completion) = self.storage.pop_completion_for(id, generation) {
+        let delivery = if lease.wake_pending && now_ms() >= lease.wake_due {
+            lease.wake_pending = false;
+            let count = std::mem::take(&mut lease.wake_count);
+            let reasons = std::mem::take(&mut lease.wake_reasons);
+            json!({"schemaVersion":1,"service":"se.host.wake","version":1,"method":"wake","input":{"generation":generation,"count":count,"reasons":reasons}})
+        } else if let Some(completion) = self.storage.pop_completion_for(id, generation) {
             json!({"schemaVersion":1,"service":"se.host.storage","version":1,"method":"completed","input":completion.input})
         } else {
             let event = state.context.pop(id, generation, now)?;
@@ -506,6 +822,20 @@ impl HostServices {
                         .finish_completion(id, generation, &input.ticket_id);
                 }
             }
+        } else if retry && delivery["service"] == "se.host.wake" {
+            lease.wake_pending = true;
+            lease.wake_count = lease
+                .wake_count
+                .saturating_add(delivery["input"]["count"].as_u64().unwrap_or(1));
+            if let Some(reasons) = delivery["input"]["reasons"].as_array() {
+                for reason in reasons.iter().filter_map(Value::as_str) {
+                    if lease.wake_reasons.len() < MAX_WAKE_REASONS
+                        && !lease.wake_reasons.iter().any(|r| r == reason)
+                    {
+                        lease.wake_reasons.push(reason.into());
+                    }
+                }
+            }
         } else if retry {
             if let Ok(event) =
                 serde_json::from_value::<HostEventDeliveryInput>(delivery["input"].clone())
@@ -516,6 +846,14 @@ impl HostServices {
     }
     pub(crate) fn take_ui_changed(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if self
+            .web
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take_changed()
+        {
+            return true;
+        }
         let now = now_ms();
         let snapshot = Self::snapshot_locked(&mut state);
         if snapshot.revision == state.last_ui_revision
@@ -581,6 +919,117 @@ mod tests {
             input,
         }
     }
+    #[tokio::test]
+    async fn closed_detached_and_cancelled_web_storage_waits_release_eight_slots() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        for termination in ["close", "detach", "cancel"] {
+            let root = tempfile::tempdir().unwrap();
+            let host = HostServices::new(root.path().into(), GENERATION.into());
+            let generation = uuid::Uuid::new_v4().to_string();
+            let mut value = serde_json::to_value(manifest()).unwrap();
+            value["contributes"]["views"] = json!([{
+                "id":"panel", "title":"Panel", "location":"panel", "kind":"web",
+                "entry":"index.html", "allow":["storage.read"]
+            }]);
+            let manifest: Manifest = serde_json::from_value(value).unwrap();
+            host.begin(&manifest, &generation).unwrap();
+            // Publish only the host lease, parking storage until all waits are abandoned.
+            // Admission-before-cancellation is deterministic, with no timing race.
+            host.state
+                .lock()
+                .unwrap()
+                .leases
+                .get_mut(&manifest.id)
+                .unwrap()
+                .published = true;
+            let descriptor = PackageDescriptor {
+                schema_version: 1,
+                native: BTreeMap::new(),
+                ui: "ui".into(),
+                files: vec![PackageFile {
+                    path: "ui/index.html".into(),
+                    size: 0,
+                    sha256: "a".repeat(64),
+                }],
+            };
+            let opened = host
+                .web
+                .lock()
+                .unwrap()
+                .open(
+                    GENERATION,
+                    "owner",
+                    &manifest,
+                    &generation,
+                    (root.path().into(), descriptor),
+                    &"a".repeat(64),
+                    "panel",
+                )
+                .unwrap();
+            let requests:Vec<_>=(0..8).map(|slot|(format!("web-wait-{slot}"),json!({"requestId":format!("storage-wait-{slot}"),"scope":"profile","key":"key"}))).collect();
+            let mut waits = Vec::new();
+            for (request_id, input) in &requests {
+                let mut wait = Box::pin(host.web_storage(
+                    &manifest.id,
+                    &generation,
+                    &opened.session_id,
+                    request_id,
+                    "get",
+                    input,
+                ));
+                let mut context = Context::from_waker(Waker::noop());
+                assert!(wait.as_mut().poll(&mut context).is_pending());
+                waits.push(wait);
+            }
+            assert_eq!(host.storage_count(), 8);
+            if termination == "cancel" {
+                drop(waits);
+            } else {
+                if termination == "close" {
+                    assert!(host.web.lock().unwrap().close(&opened.session_id));
+                } else {
+                    host.detach("owner");
+                }
+                for wait in waits {
+                    assert!(wait.await.is_err(), "{termination}");
+                }
+            }
+            assert_eq!(host.storage_count(), 8);
+            host.storage.activate(&manifest.id, &generation).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while host.storage_count() != 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "abandoned workers retained quota: {termination}"
+                );
+                tokio::task::yield_now().await;
+            }
+            // Worker cleanup required no completion RPC; none may spill to native.
+            assert!(host
+                .storage
+                .pop_completion_for(&manifest.id, &generation)
+                .is_none());
+            for slot in 0..8 {
+                host.storage
+                    .accept(
+                        &manifest.id,
+                        &generation,
+                        StorageRequest::Get(StorageGetRequest {
+                            request_id: format!("native-after-{slot}"),
+                            scope: StorageScope::Profile,
+                            key: "key".into(),
+                            project_id: None,
+                        }),
+                    )
+                    .unwrap();
+            }
+            assert_eq!(host.storage_count(), 8);
+            host.revoke(&manifest.id, &generation);
+        }
+    }
+
     #[test]
     fn withdraw_revokes_pending_host_resources() {
         let profile = tempfile::tempdir().unwrap();

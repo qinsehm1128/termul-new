@@ -12,24 +12,15 @@ use std::{
 };
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Artifact {
     pub source: PathBuf,
     pub loaded: PathBuf,
     pub sha256: String,
+    pub archive: Option<Arc<crate::archive::Archive>>,
 }
 
-pub(crate) fn private_dir(path: &Path) -> Result<(), PluginError> {
-    fs::create_dir_all(path).map_err(io)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(io)?;
-    }
-    Ok(())
-}
-
-fn extension() -> &'static str {
+pub(crate) fn extension() -> &'static str {
     if cfg!(target_os = "windows") {
         "dll"
     } else if cfg!(target_os = "macos") {
@@ -46,6 +37,17 @@ pub(crate) fn stage(root: &Path, boot: &str, source: &Path) -> Result<Artifact, 
             "plugin path must be absolute",
         ));
     }
+    if crate::archive::is_archive(source)? {
+        return crate::archive::stage(root, boot, source);
+    }
+    stage_library(root, boot, source)
+}
+
+pub(crate) fn stage_library(
+    root: &Path,
+    boot: &str,
+    source: &Path,
+) -> Result<Artifact, PluginError> {
     let source = source.canonicalize().map_err(io)?;
     let mut file = fs::File::open(&source).map_err(io)?;
     let metadata = file.metadata().map_err(io)?;
@@ -69,13 +71,14 @@ pub(crate) fn stage(root: &Path, boot: &str, source: &Path) -> Result<Artifact, 
     }
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let directory = root.join("loaded").join(boot);
-    private_dir(&directory)?;
+    crate::archive::private_directory(root, &directory)?;
     let loaded = directory.join(format!("{}-{}.{}", sha256, Uuid::new_v4(), extension()));
     write_new(&loaded, &bytes)?;
     Ok(Artifact {
         source,
         loaded,
         sha256,
+        archive: None,
     })
 }
 
@@ -143,13 +146,16 @@ pub(crate) fn package(
     artifact: &Artifact,
     manifest: &Manifest,
 ) -> Result<PathBuf, PluginError> {
-    validate_manifest(manifest)?;
+    validate_candidate(artifact, manifest)?;
+    if let Some(archive) = &artifact.archive {
+        return archive.publish(root);
+    }
     let directory = root
         .join("packages")
         .join(&manifest.id)
         .join(&manifest.version)
         .join(&artifact.sha256);
-    private_dir(&directory)?;
+    crate::archive::private_directory(root, &directory)?;
     let path = directory.join(format!("plugin.{}", extension()));
     let bytes = fs::read(&artifact.loaded).map_err(io)?;
     if format!("{:x}", Sha256::digest(&bytes)) != artifact.sha256 {
@@ -161,6 +167,31 @@ pub(crate) fn package(
     Ok(path)
 }
 
+pub(crate) fn validate_candidate(
+    artifact: &Artifact,
+    manifest: &Manifest,
+) -> Result<(), PluginError> {
+    validate_manifest(manifest)?;
+    match &artifact.archive {
+        Some(archive) if &archive.manifest != manifest => Err(error(
+            PLUGIN_INVALID_MANIFEST,
+            "archive manifest differs from native ABI manifest",
+        )),
+        None if manifest
+            .contributes
+            .views
+            .iter()
+            .any(|view| view.kind == Some(ViewKind::Web)) =>
+        {
+            Err(error(
+                PLUGIN_INVALID_PACKAGE,
+                "web views require an asset-bearing .seplugin package",
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Runs exclusively on an ABI worker. The mapping is intentionally never unloaded,
 /// including symbol/manifest failures: native code may have retained global state.
 pub(crate) fn load(
@@ -170,6 +201,7 @@ pub(crate) fn load(
     #[cfg(test)]
     if let Some(pair) = fixtures().lock().unwrap().get(&artifact.sha256).cloned() {
         metrics.loaded_libraries.fetch_add(1, Ordering::Relaxed);
+        validate_candidate(artifact, &pair.1)?;
         return Ok(pair);
     }
     let library = ManuallyDrop::new(unsafe { Library::new(&artifact.loaded) }.map_err(io)?);
@@ -204,7 +236,9 @@ pub(crate) fn load(
         ));
     }
     bytes.truncate(output.len);
-    Ok((api, parse_manifest(&bytes)?))
+    let manifest = parse_manifest(&bytes)?;
+    validate_candidate(artifact, &manifest)?;
+    Ok((api, manifest))
 }
 
 #[cfg(test)]
@@ -223,6 +257,21 @@ pub(crate) fn register_fixture(source: &Path, manifest: Manifest, api: SePluginA
         .lock()
         .unwrap()
         .insert(format!("{:x}", Sha256::digest(bytes)), (api, manifest));
+}
+
+pub(crate) fn hash(path: &Path) -> Result<String, PluginError> {
+    use std::io::Read;
+    let mut file = fs::File::open(path).map_err(io)?;
+    let mut hash = Sha256::new();
+    let mut bytes = [0; 65536];
+    loop {
+        let n = file.read(&mut bytes).map_err(io)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&bytes[..n]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 #[cfg(test)]
@@ -262,7 +311,8 @@ mod tests {
             .join(&manifest.id)
             .join(&manifest.version)
             .join(&artifact.sha256);
-        private_dir(&directory).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        crate::registry::owner_only_directory(&directory).unwrap();
         let path = directory.join(format!("plugin.{}", extension()));
         (artifact, manifest, path)
     }

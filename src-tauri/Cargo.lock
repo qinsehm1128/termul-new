@@ -4963,8 +4963,10 @@ dependencies = [
 name = "se-plugin-host"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "cordis-core",
  "fs2",
+ "libc",
  "libloading 0.8.9",
  "log",
  "se-foundation",
@@ -4977,6 +4979,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "zip 2.4.2",
 ]
 
 [[package]]

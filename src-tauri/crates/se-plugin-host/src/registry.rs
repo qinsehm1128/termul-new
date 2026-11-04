@@ -72,12 +72,26 @@ pub(crate) struct RegistryEntry {
     pub(crate) manifest: Manifest,
     pub(crate) source_path: PathBuf,
     pub(crate) artifact_path: PathBuf,
+    /// Hash of the selected native library, never the enclosing archive.
     pub(crate) sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) package: Option<PackageMetadata>,
     pub(crate) desired_enabled: bool,
     pub(crate) config_revision: u64,
     pub(crate) config_overrides: ConfigValues,
     #[serde(deserialize_with = "required_option")]
     pub(crate) quarantine: Option<Quarantine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PackageMetadata {
+    pub(crate) digest: String,
+    /// Canonical published `<plugins>/packages/<id>/<version>/<digest>` directory.
+    pub(crate) root: PathBuf,
+    pub(crate) target: String,
+    /// Normalized package-relative `native/<target>/<library>` path.
+    pub(crate) native_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +237,33 @@ impl Store {
                 || !valid_hash(&entry.sha256)
             {
                 return Err(corrupt("registry contains invalid paths or SHA-256"));
+            }
+            if let Some(package) = &entry.package {
+                let expected_root = self
+                    .root
+                    .join("packages")
+                    .join(&entry.id)
+                    .join(&entry.manifest.version)
+                    .join(&package.digest);
+                if !valid_hash(&package.digest)
+                    || !absolute_normal_path(&package.root)
+                    || package.root != expected_root
+                    || !se_plugin_protocol::is_package_path(&package.native_path)
+                    || !package
+                        .native_path
+                        .starts_with(&format!("native/{}/", package.target))
+                    || !(1..=128).contains(&package.target.len())
+                    || package.target.split('-').count() < 3
+                    || !package
+                        .target
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+                    || entry.artifact_path != package.root.join(&package.native_path)
+                {
+                    return Err(corrupt(
+                        "registry package identity or native path is invalid",
+                    ));
+                }
             }
             crate::config::snapshot(entry)
                 .map_err(|_| corrupt("registry configuration is invalid"))?;
@@ -466,7 +507,7 @@ fn now() -> Result<u64> {
 fn corrupt(message: &str) -> PluginError {
     PluginError::new(PLUGIN_STORE_CORRUPT, message)
 }
-fn io_error(error: impl std::fmt::Display) -> PluginError {
+pub(crate) fn io_error(error: impl std::fmt::Display) -> PluginError {
     PluginError::new(PLUGIN_IO, error.to_string())
 }
 
@@ -489,6 +530,24 @@ pub(crate) fn owner_only_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn sync_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(path)
+        .map_err(io_error)?
+        .sync_all()
+        .map_err(io_error)?;
+    let _ = path;
+    Ok(())
+}
+pub(crate) fn owner_only_file(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
+    }
+    let _ = path;
+    Ok(())
+}
 pub(crate) fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
     reject_non_regular(path)?;
     let file = match File::open(path) {
@@ -767,6 +826,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn package_metadata_binds_digest_root_target_and_native_path() {
+        let temp = Scratch::new();
+        let store = Store::open(temp.0.clone()).unwrap();
+        let mut entry = valid_entry(&store);
+        let target = crate::archive::target().to_owned();
+        let digest = "b".repeat(64);
+        let root = store
+            .root
+            .join("packages")
+            .join(&entry.id)
+            .join(&entry.manifest.version)
+            .join(&digest);
+        let native_path = format!("native/{target}/plugin.{}", crate::loader::extension());
+        entry.artifact_path = root.join(&native_path);
+        entry.package = Some(PackageMetadata {
+            digest,
+            root,
+            target,
+            native_path,
+        });
+        let mut registry = Registry::default();
+        registry.plugins.push(entry);
+        store.validate(&registry).unwrap();
+        let roundtrip: Registry =
+            serde_json::from_slice(&serde_json::to_vec(&registry).unwrap()).unwrap();
+        assert_eq!(roundtrip.plugins[0].package, registry.plugins[0].package);
+        assert_ne!(
+            registry.plugins[0].sha256,
+            registry.plugins[0].package.as_ref().unwrap().digest
+        );
+        let mut wrong_digest = registry.clone();
+        wrong_digest.plugins[0].package.as_mut().unwrap().digest = "c".repeat(64);
+        assert!(store.validate(&wrong_digest).is_err());
+        let mut escaped = registry.clone();
+        escaped.plugins[0].package.as_mut().unwrap().native_path = "../outside".into();
+        assert!(store.validate(&escaped).is_err());
+        let mut wrong_native = registry.clone();
+        wrong_native.plugins[0].artifact_path = store.root.join("packages/elsewhere/plugin.dylib");
+        assert!(store.validate(&wrong_native).is_err());
+        let mut wrong_target = registry;
+        wrong_target.plugins[0].package.as_mut().unwrap().target = "other-vendor-target".into();
+        assert!(store.validate(&wrong_target).is_err());
+    }
+
     fn valid_entry(store: &Store) -> RegistryEntry {
         RegistryEntry {
             id: "test.plugin".into(),
@@ -778,7 +882,7 @@ mod tests {
             })).unwrap(),
             source_path: store.root.join("original.dylib"),
             artifact_path: store.root.join("packages/test.plugin/generation/artifact.dylib"),
-            sha256: "a".repeat(64), desired_enabled: true,
+            sha256: "a".repeat(64), package: None, desired_enabled: true,
             config_revision: 1, config_overrides: ConfigValues::new(), quarantine: None,
         }
     }

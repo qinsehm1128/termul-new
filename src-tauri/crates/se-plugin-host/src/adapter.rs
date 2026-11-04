@@ -107,6 +107,9 @@ async fn activate(ctx: Context, input: &AdapterInput) -> Result<(), PluginError>
     .map_err(|_| error(PLUGIN_CALLBACK_ERROR, "cannot register host lease cleanup"))?;
     // No broker registrations or externally visible contributions before validation.
     for view in &input.manifest.contributes.views {
+        if view.kind == Some(ViewKind::Web) {
+            continue;
+        }
         let request = RenderRequest {
             schema_version: SCHEMA_VERSION,
             view_id: view.id.clone(),

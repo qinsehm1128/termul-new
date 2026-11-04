@@ -178,6 +178,7 @@ impl AbiWorker {
                     retired: AtomicBool::new(false),
                     poisoned: poisoned.clone(),
                     call: std::sync::Mutex::new(HostCallContext {
+                        thread: None,
                         deadline: Instant::now(),
                         chain: Vec::new(),
                     }),
@@ -245,6 +246,12 @@ impl AbiWorker {
                     }
                     state.context.set_call(request.deadline, request.chain);
                     let result = state.invoke(request.kind, &request.input);
+                    state
+                        .context
+                        .call
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .thread = None;
                     let result = entered_result(request.kind, result);
                     if poisoned.load(Ordering::Acquire) {
                         std::mem::forget(request.input);
@@ -475,6 +482,7 @@ struct HostContext {
 }
 
 struct HostCallContext {
+    thread: Option<std::thread::ThreadId>,
     deadline: Instant,
     chain: Vec<String>,
 }
@@ -489,6 +497,7 @@ impl HostContext {
             .call
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        call.thread = Some(std::thread::current().id());
         call.deadline = deadline;
         call.chain = chain;
     }
@@ -529,14 +538,30 @@ unsafe extern "C" fn host_broker(
             Ok(value) => value,
             Err(_) => return SEP_INVALID_JSON,
         };
-        let (deadline, chain) = {
+        let (deadline, chain, active) = {
             let call = context
                 .call
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            (call.deadline, call.chain.clone())
+            (
+                call.deadline,
+                call.chain.clone(),
+                call.thread == Some(std::thread::current().id()) && Instant::now() < call.deadline,
+            )
         };
-        let bytes = match broker.call(&context.id, &context.generation, request, deadline, chain) {
+        let result = if active {
+            broker.call(&context.id, &context.generation, request, deadline, chain)
+        } else {
+            broker
+                .request_wake(&context.id, &context.generation, &request)
+                .and_then(|data| {
+                    serde_json::to_vec(
+                        &serde_json::json!({"schemaVersion":1,"result":{"ok":true,"value":data}}),
+                    )
+                    .map_err(crate::validation::io)
+                })
+        };
+        let bytes = match result {
             Ok(bytes) => bytes,
             Err(e) => {
                 return match e.code.as_str() {
@@ -697,5 +722,103 @@ mod delivery_tests {
             .code,
             PLUGIN_TIMEOUT
         );
+    }
+}
+
+#[cfg(test)]
+mod wake_tests {
+    use super::*;
+    use crate::host_services::HostServices;
+    use serde_json::json;
+    use serde_json::Value;
+    use std::time::Duration;
+    use uuid::Uuid;
+    fn fixture() -> (
+        Arc<PluginBroker>,
+        Arc<HostServices>,
+        Box<HostContext>,
+        std::path::PathBuf,
+    ) {
+        let profile = std::env::temp_dir().join(format!("wake-test-{}", Uuid::new_v4()));
+        let services = Arc::new(HostServices::new(
+            profile.clone(),
+            Uuid::new_v4().to_string(),
+        ));
+        let broker = Arc::new(PluginBroker::new());
+        broker.attach_host(services.clone());
+        let manifest:Manifest=serde_json::from_value(json!({"schemaVersion":1,"id":"org.test.wake","name":"Wake","version":"1.0.0","abi":{"min":1,"max":1},"contributes":{"commands":[],"configuration":{"title":"Settings","properties":{}},"views":[]},"services":{"requires":[{"name":"se.host.wake","version":1}],"provides":[]}})).unwrap();
+        let generation = Uuid::new_v4().to_string();
+        services.begin(&manifest, &generation).unwrap();
+        services.activate(&manifest.id, &generation).unwrap();
+        let context = Box::new(HostContext {
+            id: manifest.id,
+            generation,
+            broker: Arc::downgrade(&broker),
+            retired: AtomicBool::new(false),
+            poisoned: Arc::new(AtomicBool::new(false)),
+            call: std::sync::Mutex::new(HostCallContext {
+                thread: None,
+                deadline: Instant::now() - Duration::from_secs(1),
+                chain: vec![],
+            }),
+        });
+        (broker, services, context, profile)
+    }
+    fn request(context: &mut HostContext, service: &str) -> SeStatus {
+        let request=serde_json::to_vec(&json!({"schemaVersion":1,"service":service,"version":1,"method":"request","input":{"reason":"io"}})).unwrap();
+        let mut buffer = vec![0u8; 4096];
+        let mut output = SeOutput {
+            ptr: buffer.as_mut_ptr(),
+            len: 0,
+            capacity: buffer.len(),
+        };
+        let status = unsafe {
+            host_broker(
+                context as *mut HostContext as *mut c_void,
+                SeSlice {
+                    ptr: request.as_ptr(),
+                    len: request.len(),
+                },
+                &mut output,
+            )
+        };
+        if status == SEP_OK {
+            let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) };
+            let reply: Value = serde_json::from_slice(bytes).unwrap();
+            assert_eq!(reply["result"]["value"]["accepted"], true);
+        }
+        status
+    }
+    #[test]
+    fn wake_outside_callback_is_coalesced_and_delivered() {
+        let (_broker, services, mut context, profile) = fixture();
+        assert_eq!(request(&mut context, "se.host.wake"), SEP_OK);
+        assert_eq!(request(&mut context, "se.host.wake"), SEP_OK);
+        assert_eq!(request(&mut context, "org.test.other"), SEP_UNAVAILABLE);
+        std::thread::sleep(Duration::from_millis(WAKE_COALESCE_MS + 5));
+        let delivery = services
+            .next_delivery(&context.id, &context.generation)
+            .unwrap();
+        assert_eq!(delivery["service"], "se.host.wake");
+        assert_eq!(delivery["method"], "wake");
+        assert_eq!(delivery["input"]["count"], 2);
+        assert!(services
+            .next_delivery(&context.id, &context.generation)
+            .is_none());
+        services.delivery_done(&context.id, &context.generation, delivery, false);
+        assert!(services
+            .next_delivery(&context.id, &context.generation)
+            .is_none());
+        let _ = std::fs::remove_dir_all(profile);
+    }
+    #[test]
+    fn wake_after_disable_is_rejected() {
+        let (_broker, services, mut context, profile) = fixture();
+        services.revoke(&context.id, &context.generation);
+        assert_ne!(request(&mut context, "se.host.wake"), SEP_OK);
+        assert!(services
+            .next_delivery(&context.id, &context.generation)
+            .is_none());
+        let _ = std::fs::remove_dir_all(profile);
     }
 }

@@ -121,6 +121,7 @@ mod tests {
             source_path: "/source/plugin.dylib".into(),
             artifact_path: "/packages/plugin.dylib".into(),
             sha256: "a".repeat(64),
+            package: None,
             desired_enabled: false,
             config_revision: 1,
             config_overrides: ConfigValues::new(),
