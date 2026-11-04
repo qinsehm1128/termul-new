@@ -61,7 +61,7 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPlu
       void logFrontendError({
         level: 'warn',
         source: 'plugin-api',
-        message: `${command}: request failed`
+        message: `${command}: request failed code=${result.code ?? 'unknown'}`
       })
     return result
   }
@@ -102,7 +102,7 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPlu
       call('plugin_publish_host_context', parseHostContextAck, request),
     heartbeatHostContext: (request) =>
       call('plugin_heartbeat_host_context', parseHostContextAck, request),
-    getHostUi: () => call('plugin_get_host_ui', parseHostUiSnapshot),
+    getHostUi: () => call('plugin_get_host_ui', parseHostUiSnapshot, {}),
     dismissHostUi: (request) => call('plugin_dismiss_host_ui', parseHostUiDismissResult, request),
     executeContribution: (request) =>
       call('plugin_execute_contribution', parseCommandReply, request),

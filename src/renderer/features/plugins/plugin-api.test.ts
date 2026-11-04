@@ -110,7 +110,8 @@ describe('native plugin API', () => {
       error: 'missing'
     })
     expect(await api.getHostUi()).toMatchObject({ success: false, code: 'PLUGIN_NOT_FOUND' })
-    expect(invoke).toHaveBeenLastCalledWith('plugin_get_host_ui', undefined)
+    // The Tauri command requires a payload argument; omitting it fails every call.
+    expect(invoke).toHaveBeenLastCalledWith('plugin_get_host_ui', { payload: {} })
     const requests = [
       ['plugin_install', { path: '/tmp/native' }, () => api.install({ path: '/tmp/native' })],
       [
