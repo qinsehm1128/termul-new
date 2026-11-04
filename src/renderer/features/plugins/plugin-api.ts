@@ -66,7 +66,9 @@ function parseWebSession(value: unknown): PluginWebSession {
   )
     throw new TypeError('Invalid session origin')
   const session = parseWebOpenReply(reply)
-  const expectedPath = `/${[session.pluginId, session.generation, session.sessionId, ...session.entry.split('/')].map(encodeURIComponent).join('/')}`
+  // Manifest entries are relative to ui/; the scheme serves them at their package path.
+  const entry = session.entry.startsWith('ui/') ? session.entry : `ui/${session.entry}`
+  const expectedPath = `/${[session.pluginId, session.generation, session.sessionId, ...entry.split('/')].map(encodeURIComponent).join('/')}`
   if (parsed.pathname !== expectedPath) throw new TypeError('Invalid session path')
   return { ...session, url }
 }
