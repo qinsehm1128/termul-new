@@ -10,6 +10,12 @@ import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import { StatusBar } from './StatusBar'
 
 // Mock the terminal store
+vi.mock('@/features/plugins/PluginStatusItems', () => ({
+  PluginStatusItems: ({ projectId }: { projectId?: string }) => (
+    <div data-testid="plugin-status-items" data-project-id={projectId} />
+  )
+}))
+
 const recovery = vi.hoisted(() => ({ recover: vi.fn(), recovering: false }))
 vi.mock('@/hooks/use-terminal-recovery', () => ({ useTerminalRecovery: () => recovery }))
 
@@ -153,6 +159,20 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 describe('StatusBar', () => {
+  it('mounts plugin status items with the current project scope', () => {
+    const mounted = renderWithProviders(<StatusBar project={mockProject} />)
+    expect(screen.getByTestId('plugin-status-items')).toHaveAttribute(
+      'data-project-id',
+      'test-project'
+    )
+    mounted.rerender(
+      <TooltipProvider>
+        <StatusBar />
+      </TooltipProvider>
+    )
+    expect(screen.getByTestId('plugin-status-items')).not.toHaveAttribute('data-project-id')
+  })
+
   describe('theme chrome', () => {
     it('uses theme status-bar tokens instead of a fixed project accent', () => {
       const { container } = renderWithProviders(<StatusBar project={mockProject} />)

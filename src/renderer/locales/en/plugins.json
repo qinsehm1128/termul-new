@@ -50,6 +50,20 @@
     "retry": "Retry",
     "unavailable": "This plugin panel is unavailable."
   },
+  "feedback": {
+    "attribution": "Plugin: {{name}}",
+    "dismiss": "Dismiss {{title}}",
+    "cancel": "Cancel",
+    "progress": {
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "status": {
+    "items": "Plugin status items"
+  },
   "errors": {
     "generic": "The plugin operation failed. Please try again."
   }

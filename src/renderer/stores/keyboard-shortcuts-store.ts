@@ -1,3 +1,4 @@
+import type { HostWhen } from '@shared/types/plugin-host.types'
 import { create } from 'zustand'
 import {
   BUILTIN_KEYBINDING_SCHEMES,
@@ -11,7 +12,30 @@ import { isMac } from '@/lib/platform'
 import type { KeyboardShortcut, KeyboardShortcutsConfig, ShortcutScope } from '@/types/settings'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 
+export interface PluginShortcutRegistration {
+  pluginId: string
+  pluginName: string
+  bindingId: string
+  generation: string
+  label: string
+  defaultKey: string
+  when?: HostWhen
+}
+
+export const pluginShortcutId = (pluginId: string, bindingId: string): string =>
+  `plugin:${pluginId}:${bindingId}`
+
 interface KeyboardShortcutsState {
+  pluginShortcuts: Record<string, PluginShortcutRegistration>
+  /** Kept separately from active registrations, including disabled/uninstalled plugins. */
+  pluginOverrides: Record<string, string>
+  pluginConflicts: Record<string, ShortcutConflict[]>
+  registerPluginShortcuts: (
+    pluginId: string,
+    generation: string,
+    bindings: PluginShortcutRegistration[]
+  ) => void
+  unregisterPluginShortcuts: (pluginId: string, generation: string) => void
   shortcuts: KeyboardShortcutsConfig
   isLoaded: boolean
   schemeId: string
@@ -40,8 +64,82 @@ function customKeysOf(shortcuts: KeyboardShortcutsConfig): Record<string, string
   return Object.fromEntries(Object.entries(shortcuts).map(([id, entry]) => [id, entry.customKey]))
 }
 
+function resolvePluginShortcuts(
+  shortcuts: KeyboardShortcutsConfig,
+  plugins: Record<string, PluginShortcutRegistration> = {},
+  overrides: Record<string, string> = {}
+): Pick<KeyboardShortcutsState, 'shortcuts' | 'pluginConflicts'> {
+  const resolved = Object.fromEntries(
+    Object.entries(shortcuts).filter(([id]) => !id.startsWith('plugin:'))
+  )
+  const pluginConflicts: Record<string, ShortcutConflict[]> = {}
+  // Built-ins/reserved win, then plugin custom keys, then defaults; stable within each tier.
+  const ids = Object.keys(plugins).sort((left, right) => {
+    const tier = Number(overrides[left] === undefined) - Number(overrides[right] === undefined)
+    const a = plugins[left]
+    const b = plugins[right]
+    const compare = (first: string, second: string) =>
+      first < second ? -1 : first > second ? 1 : 0
+    return tier || compare(a.pluginId, b.pluginId) || compare(a.bindingId, b.bindingId)
+  })
+  for (const id of ids) {
+    const binding = plugins[id]
+    const entry: KeyboardShortcut = {
+      id,
+      label: binding.label,
+      description: binding.pluginName,
+      defaultKey: binding.defaultKey,
+      customKey: overrides[id]
+    }
+    const key = entry.customKey ?? entry.defaultKey
+    const conflicts: ShortcutConflict[] = []
+    const reservedId = findReservedShortcut(key)
+    if (reservedId) conflicts.push({ kind: 'reserved', reservedId })
+    const other = findConflictingShortcut(resolved, key, id)
+    if (other) conflicts.push({ kind: 'duplicate', otherId: other.id })
+    if (conflicts.length) {
+      pluginConflicts[id] = conflicts
+      entry.customKey = ''
+    }
+    resolved[id] = entry
+  }
+  return { shortcuts: resolved, pluginConflicts }
+}
+
 export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>((set) => ({
   shortcuts: cloneDefaults(),
+  pluginShortcuts: {},
+  pluginOverrides: {},
+  pluginConflicts: {},
+  registerPluginShortcuts: (pluginId, generation, bindings) =>
+    set((state) => {
+      const pluginShortcuts = Object.fromEntries(
+        Object.entries(state.pluginShortcuts ?? {}).filter(
+          ([, binding]) => binding.pluginId !== pluginId
+        )
+      )
+      for (const binding of bindings) {
+        if (binding.pluginId === pluginId && binding.generation === generation) {
+          pluginShortcuts[pluginShortcutId(pluginId, binding.bindingId)] = binding
+        }
+      }
+      return {
+        pluginShortcuts,
+        ...resolvePluginShortcuts(state.shortcuts, pluginShortcuts, state.pluginOverrides)
+      }
+    }),
+  unregisterPluginShortcuts: (pluginId, generation) =>
+    set((state) => {
+      const pluginShortcuts = Object.fromEntries(
+        Object.entries(state.pluginShortcuts ?? {}).filter(
+          ([, binding]) => binding.pluginId !== pluginId || binding.generation !== generation
+        )
+      )
+      return {
+        pluginShortcuts,
+        ...resolvePluginShortcuts(state.shortcuts, pluginShortcuts, state.pluginOverrides)
+      }
+    }),
   isLoaded: false,
   schemeId: DEFAULT_SCHEME_ID,
   schemes: [...BUILTIN_KEYBINDING_SCHEMES],
@@ -57,28 +155,48 @@ export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>((set) =>
         : DEFAULT_SCHEME_ID
       return {
         schemeId,
-        shortcuts: buildSchemeShortcuts(
-          resolveSchemeBindings(schemeId, state.schemes),
-          customKeysOf(state.shortcuts)
+        ...resolvePluginShortcuts(
+          buildSchemeShortcuts(
+            resolveSchemeBindings(schemeId, state.schemes),
+            customKeysOf(state.shortcuts)
+          ),
+          state.pluginShortcuts,
+          state.pluginOverrides
         )
       }
     }),
 
-  setShortcuts: (shortcuts) => set({ shortcuts, isLoaded: true }),
+  setShortcuts: (shortcuts) =>
+    set((state) => {
+      const pluginOverrides = Object.fromEntries(
+        Object.entries(shortcuts)
+          .filter(([id, entry]) => id.startsWith('plugin:') && entry.customKey !== undefined)
+          .map(([id, entry]) => [id, entry.customKey as string])
+      )
+      return {
+        isLoaded: true,
+        pluginOverrides,
+        ...resolvePluginShortcuts(shortcuts, state.pluginShortcuts, pluginOverrides)
+      }
+    }),
 
   updateShortcut: (id, customKey) =>
     set((state) => {
       const shortcut = state.shortcuts[id]
       if (!shortcut) return state
-
+      const value = shortcutsEqual(customKey, shortcut.defaultKey) ? undefined : customKey
+      const pluginOverrides = { ...state.pluginOverrides }
+      if (id.startsWith('plugin:')) {
+        if (value === undefined) delete pluginOverrides[id]
+        else pluginOverrides[id] = value
+      }
       return {
-        shortcuts: {
-          ...state.shortcuts,
-          [id]: {
-            ...shortcut,
-            customKey: shortcutsEqual(customKey, shortcut.defaultKey) ? undefined : customKey
-          }
-        }
+        pluginOverrides,
+        ...resolvePluginShortcuts(
+          { ...state.shortcuts, [id]: { ...shortcut, customKey: value } },
+          state.pluginShortcuts,
+          pluginOverrides
+        )
       }
     }),
 
@@ -86,21 +204,26 @@ export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>((set) =>
     set((state) => {
       const shortcut = state.shortcuts[id]
       if (!shortcut) return state
-
+      const pluginOverrides = { ...state.pluginOverrides }
+      delete pluginOverrides[id]
       return {
-        shortcuts: {
-          ...state.shortcuts,
-          [id]: {
-            ...shortcut,
-            customKey: undefined
-          }
-        }
+        pluginOverrides,
+        ...resolvePluginShortcuts(
+          { ...state.shortcuts, [id]: { ...shortcut, customKey: undefined } },
+          state.pluginShortcuts,
+          pluginOverrides
+        )
       }
     }),
 
   resetAllShortcuts: () =>
     set((state) => ({
-      shortcuts: buildSchemeShortcuts(resolveSchemeBindings(state.schemeId, state.schemes), {})
+      pluginOverrides: {},
+      ...resolvePluginShortcuts(
+        buildSchemeShortcuts(resolveSchemeBindings(state.schemeId, state.schemes), {}),
+        state.pluginShortcuts,
+        {}
+      )
     }))
 }))
 

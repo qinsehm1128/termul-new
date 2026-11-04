@@ -9,6 +9,12 @@ const { subscribe, dispose } = vi.hoisted(() => ({
   dispose: vi.fn()
 }))
 
+vi.mock('@/features/plugins/use-plugin-host-context', () => ({ usePluginHostContext: vi.fn() }))
+vi.mock('@/features/plugins/host-ui-store', () => ({
+  usePluginHostUiStore: { getState: () => ({ subscribe: () => () => {} }) }
+}))
+vi.mock('@/features/plugins/PluginFeedback', () => ({ PluginFeedback: () => null }))
+
 vi.mock('@/stores/plugins-store', () => ({
   usePluginsStore: { getState: () => ({ subscribe }) }
 }))

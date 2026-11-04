@@ -63,6 +63,7 @@ import {
   useEditorPersistence
 } from '@/hooks/use-editor-persistence'
 import { useFileWatcher } from '@/hooks/use-file-watcher'
+import { handlePluginShortcut, usePluginKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePersistedPanelSize } from '@/hooks/use-persisted-panel-size'
@@ -278,6 +279,7 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
 }
 
 export default function WorkspaceLayout(): React.JSX.Element {
+  usePluginKeyboardShortcuts()
   const { t } = useTranslation('workspace')
   const location = useLocation()
   const navigate = useNavigate()
@@ -1996,6 +1998,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         }
         return
       }
+      handlePluginShortcut(e)
     }
 
     window.addEventListener('keydown', handleKeyDown)

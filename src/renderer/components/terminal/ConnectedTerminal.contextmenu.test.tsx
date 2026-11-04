@@ -50,6 +50,30 @@ vi.mock('@/components/ui/context-menu', async () => {
   }
 })
 
+vi.mock('@/features/plugins/PluginMenuItems', async () => {
+  const React = await import('react')
+  return {
+    PluginMenuItems: ({
+      location,
+      target,
+      terminalFocused
+    }: {
+      location: string
+      target: object
+      terminalFocused: boolean
+    }) =>
+      React.createElement(
+        'div',
+        {
+          'data-testid': 'plugin-terminal-target',
+          'data-location': location,
+          'data-focused': String(terminalFocused)
+        },
+        JSON.stringify(target)
+      )
+  }
+})
+
 // --- Stable dep mocks (re-evaluated after vi.resetModules()) ---
 
 // One shared Terminal stub with ConnectedTerminal.test.tsx. The factory is
@@ -189,7 +213,8 @@ vi.mock('@/stores/app-settings-store', () => ({
 vi.mock('@/stores/terminal-store', async () => {
   const { vi: v } = await import('vitest')
   const state = {
-    terminals: [] as Array<{ id: string; healthStatus?: string }>,
+    terminals: [{ id: 'term-1', ptyId: 'pty-1', projectId: 'p1' }],
+    cleanupRecoveries: {},
     healthStatus: 'running',
     restartTerminal: v.fn(),
     restartTerminalResource: v.fn(async () => true),
@@ -276,4 +301,24 @@ describe('ConnectedTerminal context menu shortcuts (F4)', () => {
     expect(screen.getByText('Ctrl+V')).toBeInTheDocument()
     expect(screen.getByText('Ctrl+A')).toBeInTheDocument()
   })
+})
+
+it('forwards the rendered terminal identity to terminal.context contributions', async () => {
+  vi.resetModules()
+  const React = await import('react')
+  const { render, screen: sc, cleanup } = await import('@testing-library/react')
+  cleanupFn = cleanup
+  const { ConnectedTerminal } = await import('./ConnectedTerminal')
+  const result = render(
+    React.createElement(ConnectedTerminal, {
+      terminalId: 'pty-1',
+      storeTerminalId: 'term-1',
+      autoSpawn: false
+    })
+  )
+  const target = sc.getByTestId('plugin-terminal-target')
+  expect(target.dataset.location).toBe('terminal.context')
+  expect(target.dataset.focused).toBe('undefined')
+  expect(JSON.parse(target.textContent ?? '{}')).toEqual({ terminalId: 'term-1', projectId: 'p1' })
+  result.unmount()
 })

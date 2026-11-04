@@ -246,6 +246,14 @@ vi.mock('@/components/ui/context-menu', async () => {
   }
 })
 
+vi.mock('@/features/plugins/PluginMenuItems', () => ({
+  PluginMenuItems: ({ location, target }: { location: string; target: object }) => (
+    <div data-testid="plugin-project-target" data-location={location}>
+      {JSON.stringify(target)}
+    </div>
+  )
+}))
+
 // Setup mock data
 beforeEach(() => {
   useConversationStore.getState().reset()
@@ -1689,4 +1697,12 @@ describe('ProjectSidebar worktree menu', () => {
 
     expect(await screen.findByText('New Worktree')).toBeInTheDocument()
   })
+})
+
+it('attaches plugin actions to the clicked project, never the active project', () => {
+  renderWithRouter()
+  fireEvent.contextMenu(screen.getByText('Project Two'))
+  const target = screen.getByTestId('plugin-project-target')
+  expect(target.dataset.location).toBe('project.context')
+  expect(JSON.parse(target.textContent ?? '{}')).toEqual({ projectId: '2' })
 })

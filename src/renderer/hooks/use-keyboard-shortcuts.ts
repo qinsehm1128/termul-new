@@ -1,4 +1,8 @@
+import type { ExecuteContributionRequest, HostWhen } from '@shared/types/plugin-host.types'
 import { useCallback, useEffect } from 'react'
+import { useAcpStore } from '@/features/agent-session/stores/acp-store'
+import { usePluginHostUiStore } from '@/features/plugins/host-ui-store'
+import { pluginApi } from '@/features/plugins/plugin-api'
 import { persistenceApi } from '@/lib/api'
 import {
   type KeybindingScheme,
@@ -6,8 +10,13 @@ import {
   parseUserScheme,
   type SchemeIssue
 } from '@/lib/keybinding-schemes'
+import { isMac } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { usePluginsStore } from '@/stores/plugins-store'
+import { useProjectStore } from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
 import {
   DEFAULT_KEYBOARD_SHORTCUTS,
@@ -27,6 +36,23 @@ function mergeWithDefaults(loaded: Partial<KeyboardShortcutsConfig>): KeyboardSh
     }
   }
 
+  for (const [id, shortcut] of Object.entries(loaded)) {
+    if (id.startsWith('plugin:') && shortcut && typeof shortcut.customKey === 'string') {
+      result[id] = { id, label: '', description: '', defaultKey: '', customKey: shortcut.customKey }
+    }
+  }
+  return result
+}
+
+/** Persist intended overrides, not runtime conflict suppression, including inactive plugins. */
+function shortcutsForPersistence(): KeyboardShortcutsConfig {
+  const { shortcuts, pluginOverrides } = useKeyboardShortcutsStore.getState()
+  const result = Object.fromEntries(
+    Object.entries(shortcuts).filter(([id]) => !id.startsWith('plugin:'))
+  )
+  for (const [id, customKey] of Object.entries(pluginOverrides ?? {})) {
+    result[id] = { id, label: '', description: '', defaultKey: '', customKey }
+  }
   return result
 }
 
@@ -92,6 +118,175 @@ export function useApplyKeybindingScheme(): (schemeId: string) => Promise<void> 
   )
 }
 
+/** Register runnable contributions; dormant overrides remain in the shortcut store. */
+export function usePluginKeyboardShortcuts(): void {
+  const plugins = usePluginsStore((state) => state.plugins)
+  const connected = usePluginsStore((state) => state.connected)
+  useEffect(() => {
+    if (typeof useKeyboardShortcutsStore.getState !== 'function') return
+    const store = useKeyboardShortcutsStore.getState()
+    const active = new Map<string, string>()
+    if (isTauriContext() && connected) {
+      for (const plugin of plugins) {
+        if (!plugin.desiredEnabled || plugin.state !== 'active' || !plugin.generation) continue
+        active.set(plugin.id, plugin.generation)
+        store.registerPluginShortcuts(
+          plugin.id,
+          plugin.generation,
+          (plugin.manifest.contributes.keybindings ?? []).map((binding) => ({
+            pluginId: plugin.id,
+            pluginName: plugin.manifest.name,
+            generation: plugin.generation as string,
+            bindingId: binding.id,
+            label:
+              plugin.manifest.contributes.commands?.find(
+                (command) => command.id === binding.commandId
+              )?.title ?? binding.commandId,
+            defaultKey: isMac ? (binding.mac ?? binding.key) : binding.key,
+            when: binding.when
+          }))
+        )
+      }
+    }
+    for (const binding of Object.values(
+      useKeyboardShortcutsStore.getState().pluginShortcuts ?? {}
+    )) {
+      if (!active.has(binding.pluginId))
+        store.unregisterPluginShortcuts(binding.pluginId, binding.generation)
+    }
+    return () => {
+      for (const [pluginId, generation] of active) {
+        useKeyboardShortcutsStore.getState().unregisterPluginShortcuts(pluginId, generation)
+      }
+    }
+  }, [plugins, connected])
+}
+
+function pluginWhenMatches(
+  when: HostWhen | undefined,
+  target: ExecuteContributionRequest['target']
+): boolean {
+  if (!when) return true
+  const context: Required<HostWhen> = {
+    'project.exists': Boolean(target.projectId),
+    'terminal.exists': Boolean(target.terminalId),
+    'agentSession.exists': Boolean(target.sessionId),
+    'terminal.focused': false,
+    'textInput.focused': false
+  }
+  return Object.entries(when).every(([key, value]) => context[key as keyof HostWhen] === value)
+}
+
+/** Called only after all built-in handlers have declined the event. */
+export function handlePluginShortcut(event: KeyboardEvent): boolean {
+  if (
+    typeof useKeyboardShortcutsStore.getState !== 'function' ||
+    !isTauriContext() ||
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.repeat
+  )
+    return false
+  const host = usePluginHostUiStore.getState()
+  if (!host.connected || host.contextPending || !host.contextRevision || !host.context) return false
+  const blocked = (node: EventTarget | null) =>
+    node instanceof Element &&
+    Boolean(
+      node.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .xterm, [data-terminal-id], .monaco-editor, .cm-editor, .CodeMirror'
+      )
+    )
+  if (blocked(event.target) || blocked(document.activeElement)) return false
+  const lifecycle = usePluginsStore.getState()
+  if (!lifecycle.connected) return false
+  const tab = useWorkspaceStore.getState().getActiveTab()
+  const projectId = useProjectStore.getState().activeProjectId
+  const target: ExecuteContributionRequest['target'] = {}
+  if (projectId) target.projectId = projectId
+  if (tab?.type === 'terminal') {
+    const terminal = useTerminalStore
+      .getState()
+      .terminals.find((item) => item.id === tab.terminalId)
+    if (terminal) {
+      target.terminalId = terminal.id
+      if (terminal.projectId) target.projectId = terminal.projectId
+    }
+  } else if (tab?.type === 'agent-chat') {
+    const session =
+      tab.sessionId ??
+      Object.values(useAcpStore.getState().sessions).find(
+        (item) => item.conversationId === tab.conversationId
+      )?.id
+    if (session) target.sessionId = session
+  }
+  const displayedPath = new URL(window.location.hash.slice(1) || '/', window.location.origin)
+    .pathname
+  if (
+    displayedPath !== '/' &&
+    displayedPath !== '/terminal' &&
+    !/^\/c\/[^/]+\/?$/.test(displayedPath)
+  ) {
+    delete target.projectId
+    delete target.terminalId
+    delete target.sessionId
+    if (host.context.activeProject) target.projectId = host.context.activeProject.id
+    if (host.context.activeTerminalId) target.terminalId = host.context.activeTerminalId
+    if (host.context.activeSessionId) target.sessionId = host.context.activeSessionId
+  }
+  // Raw stores can contain entities omitted from the bounded acknowledged snapshot.
+  // Such targets are unavailable, not safe to dispatch under this context revision.
+  if (target.projectId && !host.context.projectIds.includes(target.projectId)) return false
+  if (
+    target.terminalId &&
+    !host.context.terminals.some(
+      (terminal) =>
+        terminal.id === target.terminalId &&
+        (!target.projectId || terminal.projectId === target.projectId)
+    )
+  )
+    return false
+  if (
+    target.sessionId &&
+    !host.context.agentSessions.some(
+      (session) =>
+        session.id === target.sessionId &&
+        (!target.projectId || session.projectId === target.projectId)
+    )
+  )
+    return false
+  const store = useKeyboardShortcutsStore.getState()
+  const contextRevision = host.contextRevision
+  if (!contextRevision) return false
+  const pluginShortcuts = store.pluginShortcuts ?? {}
+  for (const id of Object.keys(pluginShortcuts).sort()) {
+    const binding = pluginShortcuts[id]
+    const plugin = lifecycle.plugins.find((item) => item.id === binding.pluginId)
+    if (
+      !plugin?.desiredEnabled ||
+      plugin.state !== 'active' ||
+      plugin.generation !== binding.generation
+    )
+      continue
+    const shortcut = store.shortcuts[id]
+    if (!shortcut || !matchesShortcut(event, shortcut.customKey ?? shortcut.defaultKey)) continue
+    if (!pluginWhenMatches(binding.when, target)) continue
+    event.preventDefault()
+    event.stopPropagation()
+    void pluginApi
+      .executeContribution({
+        pluginId: binding.pluginId,
+        generation: binding.generation,
+        kind: 'keybinding',
+        contributionId: binding.bindingId,
+        contextRevision,
+        target
+      })
+      .catch((error: unknown) => console.error('Plugin shortcut failed:', error))
+    return true
+  }
+  return false
+}
+
 export function useUpdateShortcut(): (id: string, customKey: string) => Promise<void> {
   const updateShortcut = useKeyboardShortcutsStore((state) => state.updateShortcut)
 
@@ -99,7 +294,7 @@ export function useUpdateShortcut(): (id: string, customKey: string) => Promise<
     async (id: string, customKey: string) => {
       updateShortcut(id, customKey)
       // Zustand updates are synchronous, so getState() returns updated state
-      const updatedShortcuts = useKeyboardShortcutsStore.getState().shortcuts
+      const updatedShortcuts = shortcutsForPersistence()
       await persistenceApi.writeDebounced(KEYBOARD_SHORTCUTS_KEY, updatedShortcuts)
     },
     [updateShortcut]
@@ -112,7 +307,7 @@ export function useResetShortcut(): (id: string) => Promise<void> {
   return useCallback(
     async (id: string) => {
       resetShortcut(id)
-      const updatedShortcuts = useKeyboardShortcutsStore.getState().shortcuts
+      const updatedShortcuts = shortcutsForPersistence()
       await persistenceApi.writeDebounced(KEYBOARD_SHORTCUTS_KEY, updatedShortcuts)
     },
     [resetShortcut]
@@ -124,7 +319,7 @@ export function useResetAllShortcuts(): () => Promise<void> {
 
   return useCallback(async () => {
     resetAllShortcuts()
-    const updatedShortcuts = useKeyboardShortcutsStore.getState().shortcuts
+    const updatedShortcuts = shortcutsForPersistence()
     await persistenceApi.write(KEYBOARD_SHORTCUTS_KEY, updatedShortcuts)
   }, [resetAllShortcuts])
 }

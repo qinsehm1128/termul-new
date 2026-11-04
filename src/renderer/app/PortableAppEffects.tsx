@@ -1,6 +1,9 @@
 import { useEffect } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { useUpdateToast } from '@/components/UpdateAvailableToast'
+import { usePluginHostUiStore } from '@/features/plugins/host-ui-store'
+import { PluginFeedback } from '@/features/plugins/PluginFeedback'
+import { usePluginHostContext } from '@/features/plugins/use-plugin-host-context'
 import { useAcpAgents } from '@/hooks/use-acp-agents'
 import { useAcpHistory } from '@/hooks/use-acp-history'
 import { useAcpListeners } from '@/hooks/use-acp-listeners'
@@ -105,21 +108,25 @@ export function PortableAppEffects(): React.JSX.Element | null {
   // Bubble-phase suppression preserves the Radix global context-menu trigger
   // while covering portaled overlays on both browser and native webview roots.
   usePreventNativeContextMenu()
+  usePluginHostContext()
 
   useEffect(() => {
     return usePluginsStore.getState().subscribe()
   }, [])
 
+  useEffect(() => usePluginHostUiStore.getState().subscribe(), [])
+
   useEffect(() => {
     void initNotificationPermissions()
   }, [])
 
-  if (!activeGroupId) return null
   return (
     <>
-      {groupTerminalProjectIds.map((projectId) => (
-        <ProjectTerminalRestoreEffect key={projectId} projectId={projectId} />
-      ))}
+      <PluginFeedback />
+      {activeGroupId &&
+        groupTerminalProjectIds.map((projectId) => (
+          <ProjectTerminalRestoreEffect key={projectId} projectId={projectId} />
+        ))}
     </>
   )
 }

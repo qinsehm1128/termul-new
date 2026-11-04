@@ -143,6 +143,15 @@ describe('plugins store', () => {
     })
   })
 
+  it('does not disconnect or reload plugins on in-sequence host UI changes', async () => {
+    dispose = usePluginsStore.getState().subscribe()
+    await flush()
+    changed({ schemaVersion: 1, bootId: 'boot-1', seq: 1, type: 'host_ui_changed' })
+    await flush()
+    expect(usePluginsStore.getState().connected).toBe(true)
+    expect(pluginApi.list).toHaveBeenCalledTimes(1)
+  })
+
   it('removes stale executable commands immediately during lifecycle reconciliation', async () => {
     dispose = usePluginsStore.getState().subscribe()
     await flush()

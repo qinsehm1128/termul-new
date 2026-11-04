@@ -487,7 +487,12 @@ export default function AppPreferences(): React.JSX.Element {
 
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
-  const shortcutConflicts = useMemo(() => detectShortcutConflicts(shortcuts), [shortcuts])
+  const pluginShortcuts = useKeyboardShortcutsStore((state) => state.pluginShortcuts) ?? {}
+  const pluginConflicts = useKeyboardShortcutsStore((state) => state.pluginConflicts) ?? {}
+  const shortcutConflicts = useMemo(
+    () => ({ ...detectShortcutConflicts(shortcuts), ...pluginConflicts }),
+    [shortcuts, pluginConflicts]
+  )
   const updateShortcut = useUpdateShortcut()
   const resetShortcut = useResetShortcut()
   const resetAllShortcuts = useResetAllShortcuts()
@@ -1874,7 +1879,15 @@ export default function AppPreferences(): React.JSX.Element {
                 {Object.values(shortcuts).map((shortcut) => (
                   <ShortcutRecorder
                     key={shortcut.id}
-                    shortcut={shortcut}
+                    shortcut={
+                      pluginShortcuts[shortcut.id]
+                        ? {
+                            ...shortcut,
+                            label: `${shortcut.label} — ${pluginShortcuts[shortcut.id].pluginName}`,
+                            description: `${pluginShortcuts[shortcut.id].pluginId} · ${pluginShortcuts[shortcut.id].bindingId}`
+                          }
+                        : shortcut
+                    }
                     allShortcuts={shortcuts}
                     onUpdate={updateShortcut}
                     onReset={resetShortcut}

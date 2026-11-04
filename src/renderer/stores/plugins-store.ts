@@ -78,7 +78,7 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
     const gap = event.seq !== current.seq + 1
     if (!changedBoot && event.seq <= current.seq) return
     set({ bootId: event.bootId, seq: event.seq })
-    if (changedBoot || gap || event.type !== 'view_changed') {
+    if (changedBoot || gap || (event.type !== 'view_changed' && event.type !== 'host_ui_changed')) {
       // Until list reconciles lifecycle notifications, old commands are not executable.
       if (changedBoot || gap || event.type !== 'config_changed') set({ connected: false })
       void get().load()

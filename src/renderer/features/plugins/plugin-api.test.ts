@@ -45,7 +45,39 @@ describe('native plugin API', () => {
         args: null
       }),
       api.getConfig({ id: action.pluginId }),
-      api.setConfig({ id: action.pluginId, expectedRevision: 1, values: {} })
+      api.setConfig({ id: action.pluginId, expectedRevision: 1, values: {} }),
+      api.publishHostContext({
+        sourceId: bootId,
+        sourceSequence: 1,
+        reset: true,
+        snapshot: {
+          activeProject: null,
+          projectIds: [],
+          activeTerminalId: null,
+          activeSessionId: null,
+          terminals: [],
+          agentSessions: [],
+          focus: { textInput: false, terminal: false },
+          truncated: false
+        },
+        events: []
+      }),
+      api.heartbeatHostContext({ sourceId: bootId }),
+      api.getHostUi(),
+      api.dismissHostUi({
+        pluginId: action.pluginId,
+        generation: bootId,
+        kind: 'notification',
+        id: 'note'
+      }),
+      api.executeContribution({
+        pluginId: action.pluginId,
+        generation: bootId,
+        kind: 'status',
+        contributionId: 'status',
+        contextRevision: 1,
+        target: {}
+      })
     ])
     results.forEach((x) => {
       expect(x).toMatchObject({ success: false, code: 'PLUGIN_NOT_SUPPORTED' })
@@ -77,6 +109,8 @@ describe('native plugin API', () => {
       code: 'PLUGIN_NOT_FOUND',
       error: 'missing'
     })
+    expect(await api.getHostUi()).toMatchObject({ success: false, code: 'PLUGIN_NOT_FOUND' })
+    expect(invoke).toHaveBeenLastCalledWith('plugin_get_host_ui', undefined)
     const requests = [
       ['plugin_install', { path: '/tmp/native' }, () => api.install({ path: '/tmp/native' })],
       [
@@ -108,6 +142,78 @@ describe('native plugin API', () => {
         'plugin_set_config',
         { id: action.pluginId, expectedRevision: 1, values: {} },
         () => api.setConfig({ id: action.pluginId, expectedRevision: 1, values: {} })
+      ],
+      [
+        'plugin_publish_host_context',
+        {
+          sourceId: bootId,
+          sourceSequence: 1,
+          reset: true,
+          snapshot: {
+            activeProject: null,
+            projectIds: [],
+            activeTerminalId: null,
+            activeSessionId: null,
+            terminals: [],
+            agentSessions: [],
+            focus: { textInput: false, terminal: false },
+            truncated: false
+          },
+          events: []
+        },
+        () =>
+          api.publishHostContext({
+            sourceId: bootId,
+            sourceSequence: 1,
+            reset: true,
+            snapshot: {
+              activeProject: null,
+              projectIds: [],
+              activeTerminalId: null,
+              activeSessionId: null,
+              terminals: [],
+              agentSessions: [],
+              focus: { textInput: false, terminal: false },
+              truncated: false
+            },
+            events: []
+          })
+      ],
+      [
+        'plugin_heartbeat_host_context',
+        { sourceId: bootId },
+        () => api.heartbeatHostContext({ sourceId: bootId })
+      ],
+      [
+        'plugin_dismiss_host_ui',
+        { pluginId: action.pluginId, generation: bootId, kind: 'notification', id: 'note' },
+        () =>
+          api.dismissHostUi({
+            pluginId: action.pluginId,
+            generation: bootId,
+            kind: 'notification',
+            id: 'note'
+          })
+      ],
+      [
+        'plugin_execute_contribution',
+        {
+          pluginId: action.pluginId,
+          generation: bootId,
+          kind: 'status',
+          contributionId: 'status',
+          contextRevision: 1,
+          target: {}
+        },
+        () =>
+          api.executeContribution({
+            pluginId: action.pluginId,
+            generation: bootId,
+            kind: 'status',
+            contributionId: 'status',
+            contextRevision: 1,
+            target: {}
+          })
       ]
     ] as const
     for (const [command, payload, call] of requests) {

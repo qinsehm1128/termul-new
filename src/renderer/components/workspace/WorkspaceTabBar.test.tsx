@@ -28,6 +28,27 @@ const mockEditorStoreState = {
   closeFileIfIdle: mockCloseFileIfIdle
 }
 
+vi.mock('@/features/agent-session/stores/acp-store', () => ({
+  useAcpStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      sessions: {},
+      runtimeToInternal: {},
+      agents: {},
+      sessionIndex: [],
+      projectSessionIndex: {},
+      launchingSessionIds: {}
+    }),
+  useAgentIdentity: () => ({ name: null })
+}))
+
+vi.mock('@/features/plugins/PluginMenuItems', () => ({
+  PluginMenuItems: ({ location, target }: { location: string; target: object }) => (
+    <div data-testid="plugin-menu-target" data-location={location}>
+      {JSON.stringify(target)}
+    </div>
+  )
+}))
+
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: Object.assign(
     vi.fn((selector: (state: typeof mockWorkspaceStoreState) => unknown) =>
@@ -1096,5 +1117,50 @@ describe('WorkspaceTabBar', () => {
       await waitFor(() => expect(screen.queryByText('Close')).toBeTruthy())
       expect(screen.queryByText('Kill Process')).toBeNull()
     })
+  })
+})
+
+describe('plugin menu target wiring', () => {
+  it('passes each terminal tab target rather than the active terminal', async () => {
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={[
+          { id: 'tab-1', type: 'terminal', terminalId: 'term-1' },
+          { id: 'tab-2', type: 'terminal', terminalId: 'term-2' }
+        ]}
+        activeTabId="tab-1"
+      />
+    )
+    await flushShellEffect()
+    fireEvent.contextMenu(screen.getByText('Terminal 1'))
+    fireEvent.contextMenu(screen.getByText('Terminal 2'))
+    expect(
+      screen
+        .getAllByTestId('plugin-menu-target')
+        .map((item) => [item.dataset.location, JSON.parse(item.textContent ?? '{}')])
+    ).toEqual([
+      ['terminal.tab', { terminalId: 'term-1' }],
+      ['terminal.tab', { terminalId: 'term-2' }]
+    ])
+  })
+
+  it('uses the clicked agent session context even when another tab is active', async () => {
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={[
+          { id: 'tab-1', type: 'terminal', terminalId: 'term-1' },
+          { id: 'session-tab', type: 'agent-chat', sessionId: 'clicked-session' }
+        ]}
+        activeTabId="tab-1"
+      />
+    )
+    await flushShellEffect()
+    fireEvent.contextMenu(screen.getByText('Agent Chat'))
+    const session = screen
+      .getAllByTestId('plugin-menu-target')
+      .find((item) => item.dataset.location === 'agentSession.context')
+    expect(JSON.parse(session?.textContent ?? '{}')).toEqual({ sessionId: 'clicked-session' })
   })
 })

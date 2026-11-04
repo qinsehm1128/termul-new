@@ -53,6 +53,7 @@ import {
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useProjectsWithActiveAgentChat } from '@/features/agent-session/stores/acp-store'
+import { PluginMenuItems } from '@/features/plugins/PluginMenuItems'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
@@ -838,6 +839,7 @@ export function ProjectSidebar({
           <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete([project.id])}>
             <Trash2 className="mr-2 h-4 w-4" /> {t('delete')}
           </ContextMenuItem>
+          <PluginMenuItems location="project.context" target={{ projectId: project.id }} />
         </ContextMenuContent>
       )
     },

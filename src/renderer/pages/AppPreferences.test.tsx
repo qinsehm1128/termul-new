@@ -12,6 +12,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { DEFAULT_APP_SETTINGS, type TerminalUrlOpenMode } from '@/types/settings'
 import AppPreferences from './AppPreferences'
 
@@ -129,12 +130,10 @@ vi.mock('@/stores/updater-store', () => ({
   useUpdaterActions: () => updaterActions
 }))
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
-  useKeyboardShortcutsStore: vi.fn((selector: (s: { shortcuts: unknown[] }) => unknown) =>
-    selector({ shortcuts: [] })
-  ),
-  detectShortcutConflicts: () => ({})
-}))
+vi.mock('@/stores/keyboard-shortcuts-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/stores/keyboard-shortcuts-store')>()
+  return actual
+})
 
 vi.mock('@/components/KeybindingSchemePicker', () => ({ KeybindingSchemePicker: () => null }))
 
@@ -216,6 +215,28 @@ describe('AppPreferences settings controls', () => {
     updaterFixture.isDownloading = false
     updaterFixture.downloadProgress = 0
     useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+  })
+
+  it('shows plugin shortcut attribution and conflicts for unbound defaults', () => {
+    const store = useKeyboardShortcutsStore.getState()
+    store.registerPluginShortcuts('org.test.keys', 'g1', [
+      {
+        pluginId: 'org.test.keys',
+        pluginName: 'Test keys',
+        generation: 'g1',
+        bindingId: 'run',
+        label: 'Run plugin command',
+        defaultKey: 'ctrl+shift+b'
+      }
+    ])
+    renderPage()
+    expect(screen.getByText('Run plugin command — Test keys')).toBeInTheDocument()
+    expect(screen.getByText('org.test.keys · run')).toBeInTheDocument()
+    expect(
+      useKeyboardShortcutsStore.getState().shortcuts['plugin:org.test.keys:run'].customKey
+    ).toBe('')
+    expect(screen.getAllByText(/conflict|already used/i).length).toBeGreaterThan(0)
+    store.unregisterPluginShortcuts('org.test.keys', 'g1')
   })
 
   afterEach(() => {

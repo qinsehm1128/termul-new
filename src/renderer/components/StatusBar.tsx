@@ -16,6 +16,7 @@ import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopove
 import { GitBranchPicker } from '@/components/GitBranchPicker'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { PluginStatusItems } from '@/features/plugins/PluginStatusItems'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
 import { useTerminalRecovery } from '@/hooks/use-terminal-recovery'
 import { getColorClasses } from '@/lib/colors'
@@ -219,6 +220,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
           </Tooltip>
         )}
 
+        <PluginStatusItems projectId={project?.id} />
         <StatusItem icon={<Bell size={14} />} />
         <ContextBarSettingsPopover />
       </div>

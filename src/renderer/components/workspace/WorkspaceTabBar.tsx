@@ -20,6 +20,7 @@ import { AgentBadge } from '@/features/agent-session/chat/AgentBadge'
 import { AgentConnectionLamp } from '@/features/agent-session/chat/AgentConnectionLamp'
 import { isAgentConnected } from '@/features/agent-session/chat/is-agent-connected'
 import { useAcpStore, useAgentIdentity } from '@/features/agent-session/stores/acp-store'
+import { PluginMenuItems } from '@/features/plugins/PluginMenuItems'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
@@ -179,6 +180,15 @@ function TerminalTabInline({
   return (
     <TabContextMenu
       kind="terminal"
+      extraItems={
+        <PluginMenuItems
+          location="terminal.tab"
+          target={{
+            terminalId: terminal.id,
+            ...(terminal.projectId ? { projectId: terminal.projectId } : {})
+          }}
+        />
+      }
       onClose={onClose}
       onKill={onKill}
       onRename={handleRenameFromMenu}
@@ -585,9 +595,24 @@ function AgentChatTabInline({
   const connected = isLaunchingSession || isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
   const tabLabel = session?.title ?? indexTitle ?? agentName ?? t('tabs.agentChat')
+  const pluginSessionId = session?.id ?? tab.sessionId
 
   return (
-    <TabContextMenu kind="agent-chat" onClose={onClose}>
+    <TabContextMenu
+      kind="agent-chat"
+      onClose={onClose}
+      extraItems={
+        pluginSessionId ? (
+          <PluginMenuItems
+            location="agentSession.context"
+            target={{
+              sessionId: pluginSessionId,
+              ...(session?.projectId ? { projectId: session.projectId } : {})
+            }}
+          />
+        ) : undefined
+      }
+    >
       <div
         draggable
         onDragStart={onDragStart}

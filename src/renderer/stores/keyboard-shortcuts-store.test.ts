@@ -23,7 +23,106 @@ describe('keyboard-shortcuts-store', () => {
     }
     useKeyboardShortcutsStore.setState({
       shortcuts: defaults,
-      isLoaded: false
+      isLoaded: false,
+      pluginShortcuts: {},
+      pluginOverrides: {},
+      pluginConflicts: {}
+    })
+  })
+
+  describe('plugin contributions', () => {
+    const binding = (pluginId: string, defaultKey = 'ctrl+alt+shift+y') => ({
+      pluginId,
+      pluginName: 'Example',
+      bindingId: 'run',
+      generation: 'g1',
+      label: 'Run',
+      defaultKey
+    })
+    it('keeps overrides through unregister, generation reload and scheme changes', () => {
+      const store = useKeyboardShortcutsStore.getState()
+      store.registerPluginShortcuts('example', 'g1', [binding('example')])
+      store.updateShortcut('plugin:example:run', 'ctrl+alt+shift+u')
+      store.unregisterPluginShortcuts('example', 'g1')
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:example:run']).toBeUndefined()
+      store.applyScheme('iterm2')
+      store.registerPluginShortcuts('example', 'g2', [{ ...binding('example'), generation: 'g2' }])
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:example:run'].customKey).toBe(
+        'ctrl+alt+shift+u'
+      )
+      expect(
+        useKeyboardShortcutsStore.getState().pluginShortcuts['plugin:example:run'].generation
+      ).toBe('g2')
+    })
+    it('unbinds builtin and reserved conflicts and resolves plugin ties independently of registration order', () => {
+      const store = useKeyboardShortcutsStore.getState()
+      store.registerPluginShortcuts('z', 'g1', [binding('z')])
+      store.registerPluginShortcuts('a', 'g1', [binding('a')])
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:z:run'].customKey).toBe('')
+      expect(useKeyboardShortcutsStore.getState().pluginConflicts['plugin:z:run']).toEqual([
+        { kind: 'duplicate', otherId: 'plugin:a:run' }
+      ])
+      store.unregisterPluginShortcuts('a', 'g1')
+      expect(
+        useKeyboardShortcutsStore.getState().shortcuts['plugin:z:run'].customKey
+      ).toBeUndefined()
+      store.registerPluginShortcuts('builtin', 'g1', [binding('builtin', 'ctrl+shift+b')])
+      expect(
+        useKeyboardShortcutsStore.getState().pluginConflicts['plugin:builtin:run']
+      ).toContainEqual({ kind: 'duplicate', otherId: 'sidebarToggle' })
+      store.registerPluginShortcuts('reserved', 'g1', [binding('reserved', 'ctrl+1')])
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:reserved:run'].customKey).toBe(
+        ''
+      )
+      expect(
+        useKeyboardShortcutsStore.getState().pluginConflicts['plugin:reserved:run'][0].kind
+      ).toBe('reserved')
+    })
+    it('retains newer generations when stale cleanup arrives', () => {
+      const store = useKeyboardShortcutsStore.getState()
+      store.registerPluginShortcuts('example', 'g1', [binding('example')])
+      store.registerPluginShortcuts('example', 'g2', [{ ...binding('example'), generation: 'g2' }])
+      store.unregisterPluginShortcuts('example', 'g1')
+      expect(
+        useKeyboardShortcutsStore.getState().pluginShortcuts['plugin:example:run'].generation
+      ).toBe('g2')
+    })
+    it('prioritizes plugin custom keys over plugin defaults independent of ids', () => {
+      const store = useKeyboardShortcutsStore.getState()
+      store.registerPluginShortcuts('a', 'g1', [binding('a')])
+      store.registerPluginShortcuts('z', 'g1', [binding('z', 'ctrl+alt+shift+u')])
+      store.updateShortcut('plugin:z:run', 'ctrl+alt+shift+y')
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:z:run'].customKey).toBe(
+        'ctrl+alt+shift+y'
+      )
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:a:run'].customKey).toBe('')
+      expect(useKeyboardShortcutsStore.getState().pluginConflicts['plugin:a:run']).toContainEqual({
+        kind: 'duplicate',
+        otherId: 'plugin:z:run'
+      })
+    })
+    it('uses ctrl-to-cmd collision semantics on macOS', () => {
+      const store = useKeyboardShortcutsStore.getState()
+      const key = isMacPlatform ? 'cmd+shift+b' : 'ctrl+shift+b'
+      store.registerPluginShortcuts('example', 'g1', [binding('example', key)])
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:example:run'].customKey).toBe(
+        ''
+      )
+    })
+    it('suppresses conflicting overrides without losing the intended override', () => {
+      const store = useKeyboardShortcutsStore.getState()
+      store.registerPluginShortcuts('example', 'g1', [binding('example')])
+      store.updateShortcut('plugin:example:run', 'ctrl+shift+b')
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:example:run'].customKey).toBe(
+        ''
+      )
+      expect(useKeyboardShortcutsStore.getState().pluginOverrides['plugin:example:run']).toBe(
+        'ctrl+shift+b'
+      )
+      store.updateShortcut('sidebarToggle', 'ctrl+alt+shift+o')
+      expect(useKeyboardShortcutsStore.getState().shortcuts['plugin:example:run'].customKey).toBe(
+        'ctrl+shift+b'
+      )
     })
   })
 

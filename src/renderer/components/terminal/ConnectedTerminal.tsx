@@ -32,6 +32,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
+import { PluginMenuItems } from '@/features/plugins/PluginMenuItems'
 import { useCompanionTerminalGeometry } from '@/hooks/use-companion-terminal-geometry'
 import { useCompanionTerminalTextScale } from '@/hooks/use-companion-terminal-text-scale'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -586,6 +587,7 @@ function ConnectedTerminalComponent({
   // 2. STORE HOOKS (Must be at the top)
   const {
     healthStatus,
+    pluginTerminal,
     cleanupRecovery,
     recordTerminalCleanupFailure,
     retryTerminalCleanup,
@@ -596,6 +598,7 @@ function ConnectedTerminalComponent({
       const recoveryId = cleanupRecoveryId ?? term?.ptyId ?? externalTerminalId ?? targetId
       return {
         healthStatus: term?.healthStatus || 'running',
+        pluginTerminal: term,
         cleanupRecovery: recoveryId ? state.cleanupRecoveries[recoveryId] : undefined,
         recordTerminalCleanupFailure: state.recordTerminalCleanupFailure,
         retryTerminalCleanup: state.retryTerminalCleanup,
@@ -2880,6 +2883,15 @@ function ConnectedTerminalComponent({
         >
           <RefreshCcw size={14} className="mr-2" /> {t('contextMenu.restart')}
         </ContextMenuItem>
+        {pluginTerminal && (
+          <PluginMenuItems
+            location="terminal.context"
+            target={{
+              terminalId: pluginTerminal.id,
+              ...(pluginTerminal.projectId ? { projectId: pluginTerminal.projectId } : {})
+            }}
+          />
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )

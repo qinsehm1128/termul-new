@@ -50,6 +50,20 @@
     "retry": "重试",
     "unavailable": "此插件面板暂不可用。"
   },
+  "feedback": {
+    "attribution": "插件：{{name}}",
+    "dismiss": "关闭 {{title}}",
+    "cancel": "取消",
+    "progress": {
+      "running": "运行中",
+      "completed": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    }
+  },
+  "status": {
+    "items": "插件状态项"
+  },
   "errors": {
     "generic": "插件操作失败，请重试。"
   }

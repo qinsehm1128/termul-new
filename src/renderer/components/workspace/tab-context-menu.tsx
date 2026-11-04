@@ -61,6 +61,7 @@ export interface TabBulkCloseHandlers {
 }
 
 interface TabContextMenuProps extends TabBulkCloseHandlers {
+  extraItems?: React.ReactNode
   kind: TabContextMenuKind
   /** Primary close action (every kind). */
   onClose: () => void
@@ -78,6 +79,7 @@ interface TabContextMenuProps extends TabBulkCloseHandlers {
 
 export function TabContextMenu({
   kind,
+  extraItems,
   onClose,
   onRename,
   onKill,
@@ -174,6 +176,7 @@ export function TabContextMenu({
             <X className="mr-2 h-4 w-4" /> {t('tabs.close')}
           </ContextMenuItem>
         )}
+        {extraItems}
       </ContextMenuContent>
     </ContextMenu>
   )

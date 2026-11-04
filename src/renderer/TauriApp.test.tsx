@@ -199,6 +199,8 @@ vi.mock('./hooks/use-app-settings', () => ({
 
 vi.mock('./hooks/use-keyboard-shortcuts', () => ({
   useKeyboardShortcutsLoader: () => undefined,
+  usePluginKeyboardShortcuts: () => undefined,
+  handlePluginShortcut: () => false,
   useUpdateShortcut: () => vi.fn(),
   useResetShortcut: () => vi.fn()
 }))
