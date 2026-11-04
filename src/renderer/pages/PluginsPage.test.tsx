@@ -1,5 +1,5 @@
 import type { PluginInfo } from '@shared/types/plugin.types'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { tauriDialogApi } from '@/lib/tauri-dialog-api'
@@ -46,6 +46,12 @@ const plugin: PluginInfo = {
     }
   }
 }
+const openTab = (tab: string) =>
+  fireEvent.mouseDown(screen.getByRole('tab', { name: `manager.tabs.${tab}` }), {
+    button: 0,
+    ctrlKey: false
+  })
+
 const show = () =>
   render(
     <MemoryRouter>
@@ -73,9 +79,11 @@ describe('PluginsPage', () => {
   it('shows state, version, settings and dedicated panel links', () => {
     show()
     expect(screen.getByRole('heading', { name: 'Demo plugin' })).toBeInTheDocument()
-    expect(screen.getByText('state.active')).toBeInTheDocument()
+    expect(screen.getAllByText('state.active')).toHaveLength(2)
     expect(screen.getByText('manager.version 2.0.0')).toBeInTheDocument()
+    openTab('settings')
     expect(screen.getByText(`Settings: ${plugin.id}`)).toBeInTheDocument()
+    openTab('contributions')
     expect(screen.getByRole('link', { name: 'Demo panel' })).toHaveAttribute(
       'href',
       `/plugins/${plugin.id}/views/main`
@@ -106,6 +114,7 @@ describe('PluginsPage', () => {
       ]
     })
     show()
+    openTab('contributions')
     expect(screen.getByRole('link', { name: 'Demo panel' })).toHaveAttribute(
       'href',
       `/plugins/${plugin.id}/views/main`
@@ -123,7 +132,9 @@ describe('PluginsPage', () => {
     expect(tauriDialogApi.selectFile).toHaveBeenCalledWith({
       filters: [{ name: 'manager.fileType', extensions: ['dylib', 'so', 'dll'] }]
     })
-    expect(screen.getByText('manager.trustWarning')).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('alertdialog')).getByText('manager.trustWarning')
+    ).toBeInTheDocument()
     expect(actions.install).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'manager.confirm' }))
     expect(actions.install).toHaveBeenCalledWith('/tmp/plugin.dylib')
@@ -168,7 +179,7 @@ describe('PluginsPage', () => {
 
   it('disables active plugins without offering retry', () => {
     show()
-    fireEvent.click(screen.getByRole('button', { name: 'manager.disable' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'manager.disable Demo plugin' }))
     expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, false)
     expect(screen.queryByRole('button', { name: 'manager.retry' })).not.toBeInTheDocument()
   })
@@ -184,12 +195,14 @@ describe('PluginsPage', () => {
       ]
     })
     show()
-    expect(screen.getByText('state.quarantined')).toBeInTheDocument()
+    expect(screen.getAllByText('state.quarantined')).toHaveLength(2)
     expect(screen.getByText('manager.quarantineWarning')).toBeInTheDocument()
     expect(screen.getByText(/Previous process crashed/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'manager.enable' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('switch', { name: 'manager.enable Demo plugin' })
+    ).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'manager.retry' })).toBeEnabled()
-    fireEvent.click(screen.getByRole('button', { name: 'manager.disable' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'manager.disable Demo plugin' }))
     expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, false)
     fireEvent.click(screen.getByRole('button', { name: 'manager.retry' }))
     expect(actions.setEnabled).toHaveBeenCalledTimes(2)
@@ -204,8 +217,10 @@ describe('PluginsPage', () => {
   ] as const)('uses only desiredEnabled for the %s toggle and explicitly retries with true', (state) => {
     usePluginsStore.setState({ plugins: [{ ...plugin, state, desiredEnabled: false }] })
     show()
-    expect(screen.queryByRole('button', { name: 'manager.disable' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'manager.enable' }))
+    expect(
+      screen.queryByRole('switch', { name: 'manager.disable Demo plugin' })
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('switch', { name: 'manager.enable Demo plugin' }))
     expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, true)
     fireEvent.click(screen.getByRole('button', { name: 'manager.retry' }))
     expect(actions.setEnabled).toHaveBeenCalledTimes(2)
@@ -215,7 +230,7 @@ describe('PluginsPage', () => {
   it('can disable or explicitly retry a failed enabled plugin', () => {
     usePluginsStore.setState({ plugins: [{ ...plugin, state: 'failed' }] })
     show()
-    fireEvent.click(screen.getByRole('button', { name: 'manager.disable' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'manager.disable Demo plugin' }))
     expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(plugin.id, false)
     fireEvent.click(screen.getByRole('button', { name: 'manager.retry' }))
     expect(actions.setEnabled).toHaveBeenCalledTimes(2)
@@ -245,7 +260,8 @@ describe('PluginsPage', () => {
   ] as const)('disables lifecycle buttons while %s', (state) => {
     usePluginsStore.setState({ plugins: [{ ...plugin, state }] })
     show()
-    for (const key of ['disable', 'reload', 'upgrade', 'uninstall'])
+    expect(screen.getByRole('switch')).toBeDisabled()
+    for (const key of ['reload', 'upgrade', 'uninstall'])
       expect(screen.getByRole('button', { name: `manager.${key}` })).toBeDisabled()
   })
 
@@ -257,7 +273,7 @@ describe('PluginsPage', () => {
     })
     show()
     expect(screen.getByRole('button', { name: 'manager.install' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'manager.disable' })).toBeDisabled()
+    expect(screen.getByRole('switch', { name: 'manager.disable Demo plugin' })).toBeDisabled()
     expect(screen.getByText('state.disconnected')).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('errors.generic (PLUGIN_IO)')
     expect(screen.queryByText('internal')).not.toBeInTheDocument()
@@ -285,6 +301,101 @@ describe('PluginsPage', () => {
     for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()
     fetch.mockRestore()
+  })
+
+  it('selects another plugin and reconciles selection after removal', () => {
+    const other = {
+      ...plugin,
+      id: 'org.termul.other',
+      manifest: { ...plugin.manifest, name: 'Other plugin' }
+    }
+    usePluginsStore.setState({ plugins: [plugin, other] })
+    const { rerender } = show()
+    expect(screen.getByRole('button', { name: 'Demo plugin' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Other plugin' }))
+    expect(screen.getByRole('heading', { name: 'Other plugin' })).toBeInTheDocument()
+    act(() => usePluginsStore.setState({ plugins: [plugin] }))
+    rerender(
+      <MemoryRouter>
+        <PluginsPage />
+      </MemoryRouter>
+    )
+    expect(screen.getByRole('heading', { name: 'Demo plugin' })).toBeInTheDocument()
+  })
+
+  it('filters by name, id and status with no-results recovery', () => {
+    const disabledPlugin = {
+      ...plugin,
+      id: 'org.termul.other',
+      state: 'disabled' as const,
+      desiredEnabled: false,
+      manifest: { ...plugin.manifest, name: 'Other plugin' }
+    }
+    const failedPlugin = {
+      ...plugin,
+      id: 'org.termul.failed',
+      state: 'failed' as const,
+      manifest: { ...plugin.manifest, name: 'Failed plugin' }
+    }
+    usePluginsStore.setState({ plugins: [plugin, disabledPlugin, failedPlugin] })
+    show()
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'OTHER' } })
+    expect(screen.getByRole('heading', { name: 'Other plugin' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Demo plugin' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'org.termul.demo' } })
+    expect(screen.getByRole('heading', { name: 'Demo plugin' })).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'disabled' } })
+    expect(screen.getByText('manager.noResults')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'manager.clearFilters' }))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'disabled' } })
+    expect(screen.getByRole('heading', { name: 'Other plugin' })).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'error' } })
+    expect(screen.getByRole('heading', { name: 'Failed plugin' })).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'running' } })
+    expect(screen.getByRole('heading', { name: 'Demo plugin' })).toBeInTheDocument()
+  })
+
+  it('switches detail tabs and gates settings when disconnected', () => {
+    usePluginsStore.setState({ connected: false })
+    show()
+    expect(screen.getByRole('tab', { name: 'manager.tabs.overview' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    openTab('settings')
+    expect(screen.getByText('manager.settingsUnavailable')).toBeInTheDocument()
+    expect(screen.queryByText(`Settings: ${plugin.id}`)).not.toBeInTheDocument()
+    openTab('services')
+    expect(screen.getByRole('tab', { name: 'manager.tabs.services' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    openTab('overview')
+    expect(screen.getByText(plugin.sha256)).toBeInTheDocument()
+  })
+
+  it('retries the disconnected Plugin Core without enabling lifecycle actions', () => {
+    usePluginsStore.setState({ connected: false })
+    show()
+    expect(screen.getByRole('status')).toHaveTextContent('state.disconnected')
+    expect(screen.getByRole('switch')).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'manager.reconnect' }))
+    expect(actions.load).toHaveBeenCalledExactlyOnceWith()
+  })
+
+  it('shows an install-first empty state with the same trust confirmation', async () => {
+    usePluginsStore.setState({ plugins: [] })
+    show()
+    expect(screen.getByText('manager.emptyDescription')).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'manager.installFirst' }))
+    await screen.findByRole('alertdialog')
+    expect(actions.install).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'manager.confirm' }))
+    expect(actions.install).toHaveBeenCalledExactlyOnceWith('/tmp/plugin.dylib')
   })
 
   it('contains identical complete namespace keys in both locales', () => {

@@ -20,7 +20,35 @@
     "views": "插件面板",
     "lastError": "最近错误",
     "version": "版本",
-    "refresh": "刷新列表"
+    "refresh": "刷新列表",
+    "search": "按名称或 ID 搜索插件…",
+    "statusFilter": "按状态筛选",
+    "filters": {
+      "all": "全部插件",
+      "running": "运行中",
+      "disabled": "已停用",
+      "error": "需要处理"
+    },
+    "installed": "已安装插件",
+    "details": "插件详情",
+    "detailTabs": "插件详情分类",
+    "tabs": {
+      "overview": "概览",
+      "settings": "设置",
+      "contributions": "扩展能力",
+      "services": "服务"
+    },
+    "identifier": "插件 ID",
+    "abi": "ABI 范围",
+    "packagePath": "插件路径",
+    "notExposed": "插件核心未提供",
+    "noDescription": "此原生插件未提供描述。您可以在下方查看扩展能力、设置及服务依赖。",
+    "settingsUnavailable": "请启用此插件并连接插件核心后编辑设置。",
+    "reconnect": "重试连接",
+    "emptyDescription": "原生插件可为 Se 扩展面板、命令和服务。选择可信来源的 .dylib、.so 或 .dll 动态库即可开始安装。",
+    "installFirst": "安装第一个插件",
+    "noResults": "没有符合搜索内容和状态筛选条件的插件。",
+    "clearFilters": "清除筛选"
   },
   "state": {
     "installed": "已安装",
@@ -66,5 +94,37 @@
   },
   "errors": {
     "generic": "插件操作失败，请重试。"
+  },
+  "inspector": {
+    "views": "视图",
+    "commands": "命令",
+    "menus": "菜单",
+    "keybindings": "快捷键",
+    "statusItems": "状态项",
+    "eventSubscriptions": "事件订阅",
+    "emptyViews": "未声明视图。",
+    "emptyCommands": "未声明命令。",
+    "emptyMenus": "未声明菜单。",
+    "emptyKeybindings": "未声明快捷键。",
+    "emptyStatusItems": "未声明状态项。",
+    "emptyEventSubscriptions": "未声明事件订阅。",
+    "id": "ID",
+    "commandId": "命令 ID",
+    "location": "位置",
+    "scope": "范围",
+    "topic": "主题",
+    "defaultKey": "默认按键",
+    "customKey": "自定义按键",
+    "unbound": "未绑定",
+    "conflictDuplicate": "与 {{id}} 冲突；此快捷键未生效。",
+    "conflictReserved": "系统保留快捷键（{{id}}）；此快捷键未生效。",
+    "viewUnavailable": "连接并激活此插件后可打开视图。",
+    "provides": "提供的服务",
+    "requires": "依赖的服务",
+    "emptyProvides": "未提供服务。",
+    "emptyRequires": "无依赖服务。",
+    "available": "可用",
+    "unavailable": "不可用",
+    "secretsUnavailable": "宿主服务 se.host.secrets 不可用。"
   }
 }
