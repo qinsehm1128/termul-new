@@ -3,24 +3,183 @@
   "id": "org.termul.example",
   "name": "Configured Counter",
   "version": "0.1.1",
-  "abi": { "min": 1, "max": 1 },
+  "abi": {
+    "min": 1,
+    "max": 1
+  },
   "contributes": {
     "commands": [
-      { "id": "example.reset", "title": "Reset counter", "description": "Reset the counter to zero" }
+      {
+        "id": "example.reset",
+        "title": "Reset counter",
+        "description": "Reset the counter to zero"
+      },
+      {
+        "id": "example.activity-summary",
+        "title": "Activity summary"
+      },
+      {
+        "id": "example.activity-toggle",
+        "title": "Toggle activity"
+      }
     ],
     "configuration": {
       "title": "Counter settings",
       "properties": {
-        "greeting": { "type": "string", "title": "Greeting", "description": "Greeting shown in the panel", "default": "Hello" },
-        "step": { "type": "number", "title": "Step", "description": "Increment per click", "default": 1, "minimum": 1, "maximum": 100 },
-        "showCount": { "type": "boolean", "title": "Show count", "description": "Show the current count", "default": true },
-        "tone": { "type": "string", "title": "Tone", "description": "Text emphasis", "default": "normal", "enum": ["normal", "muted"], "enumLabels": ["Normal", "Muted"] }
+        "greeting": {
+          "type": "string",
+          "title": "Greeting",
+          "description": "Greeting shown in the panel",
+          "default": "Hello"
+        },
+        "step": {
+          "type": "number",
+          "title": "Step",
+          "description": "Increment per click",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 100
+        },
+        "showCount": {
+          "type": "boolean",
+          "title": "Show count",
+          "description": "Show the current count",
+          "default": true
+        },
+        "tone": {
+          "type": "string",
+          "title": "Tone",
+          "description": "Text emphasis",
+          "default": "normal",
+          "enum": [
+            "normal",
+            "muted"
+          ],
+          "enumLabels": [
+            "Normal",
+            "Muted"
+          ]
+        }
       }
     },
-    "views": [ { "id": "example.counter", "title": "Counter v2", "location": "sidebar", "icon": "calculator" } ]
+    "views": [
+      {
+        "id": "example.counter",
+        "title": "Counter v2",
+        "location": "sidebar",
+        "icon": "calculator"
+      }
+    ],
+    "eventSubscriptions": [
+      {
+        "id": "project",
+        "topic": "project.activeChanged",
+        "scope": "window"
+      },
+      {
+        "id": "terminal-created",
+        "topic": "terminal.created",
+        "scope": "activeProject"
+      },
+      {
+        "id": "terminal-closed",
+        "topic": "terminal.closed",
+        "scope": "activeProject"
+      },
+      {
+        "id": "terminal-active",
+        "topic": "terminal.activeChanged",
+        "scope": "activeProject"
+      },
+      {
+        "id": "activity",
+        "topic": "agent.session.stateChanged",
+        "scope": "activeProject"
+      }
+    ],
+    "statusItems": [
+      {
+        "id": "activity",
+        "label": "Activity summary",
+        "location": "statusBar",
+        "scope": "activeProject",
+        "commandId": "example.activity-summary",
+        "order": 0
+      }
+    ],
+    "menus": [
+      {
+        "id": "activity-terminal-tab",
+        "location": "terminal.tab",
+        "commandId": "example.activity-summary",
+        "when": {
+          "terminal.exists": true
+        }
+      },
+      {
+        "id": "activity-terminal-context",
+        "location": "terminal.context",
+        "commandId": "example.activity-summary",
+        "when": {
+          "terminal.exists": true
+        }
+      },
+      {
+        "id": "activity-project-context",
+        "location": "project.context",
+        "commandId": "example.activity-summary",
+        "when": {
+          "project.exists": true
+        }
+      },
+      {
+        "id": "activity-agent-session",
+        "location": "agentSession.context",
+        "commandId": "example.activity-summary",
+        "when": {
+          "agentSession.exists": true
+        }
+      }
+    ],
+    "keybindings": [
+      {
+        "id": "activity-summary",
+        "commandId": "example.activity-summary",
+        "key": "",
+        "when": {
+          "project.exists": true
+        }
+      }
+    ]
   },
   "services": {
-    "provides": [ { "name": "org.termul.example.counter", "version": 1 } ],
-    "requires": []
+    "provides": [
+      {
+        "name": "org.termul.example.counter",
+        "version": 1
+      }
+    ],
+    "requires": [
+      {
+        "name": "se.host.context",
+        "version": 1
+      },
+      {
+        "name": "se.host.events",
+        "version": 1
+      },
+      {
+        "name": "se.host.storage",
+        "version": 1
+      },
+      {
+        "name": "se.host.feedback",
+        "version": 1
+      },
+      {
+        "name": "se.host.status",
+        "version": 1
+      }
+    ]
   }
 }

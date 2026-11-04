@@ -273,6 +273,159 @@ fn process_identity(pid: u32) -> String {
     identity
 }
 
+fn pilot_context() -> HostContextState {
+    serde_json::from_value(json!({"activeProject":{"id":"p1","name":"Pilot","path":"/synthetic/pilot"},"projectIds":["p1"],"activeTerminalId":null,"activeSessionId":"s1","terminals":[],"agentSessions":[{"id":"s1","projectId":"p1","status":"active","activeTurn":false,"openTurnId":null,"replaying":false}],"focus":{"textInput":false,"terminal":false},"truncated":false})).unwrap()
+}
+
+async fn publish_pilot(
+    gui: &PluginCoreClient,
+    source: &str,
+    sequence: u64,
+    reset: bool,
+    context: &HostContextState,
+    events: Vec<HostSourceEvent>,
+) -> HostContextAck {
+    gui.publish_host_context(HostContextPublishRequest {
+        source_id: source.into(),
+        source_sequence: sequence,
+        reset,
+        snapshot: context.clone(),
+        events,
+    })
+    .await
+    .unwrap()
+}
+
+async fn wait_pilot(gui: &PluginCoreClient, node: &str, expected: &str) {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            if text(&view(gui).await, node) == expected {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("pilot {node} did not become {expected}"));
+}
+
+async fn smoke_pilot(gui: &PluginCoreClient, generation: &str) -> (String, HostContextState) {
+    let source = uuid::Uuid::new_v4().to_string();
+    let mut context = pilot_context();
+    let ack = publish_pilot(gui, &source, 1, true, &context, vec![]).await;
+    assert_eq!(
+        gui.heartbeat_host_context(HostContextHeartbeatRequest {
+            source_id: source.clone()
+        })
+        .await
+        .unwrap(),
+        ack
+    );
+    wait_pilot(gui, "activity-state", "Agent idle").await;
+    let terminal = TerminalContext {
+        id: "pilot-terminal".into(),
+        pty_id: None,
+        project_id: Some("p1".into()),
+    };
+    context.terminals.push(terminal.clone());
+    context.active_terminal_id = Some(terminal.id.clone());
+    publish_pilot(gui,&source,2,false,&context,vec![serde_json::from_value(json!({"topic":"terminal.created","projectId":"p1","data":{"terminal":terminal}})).unwrap(),serde_json::from_value(json!({"topic":"terminal.activeChanged","projectId":"p1","data":{"terminalId":terminal.id,"projectId":"p1"}})).unwrap()]).await;
+    wait_pilot(gui, "activity-terminal-count", "1").await;
+    context.agent_sessions[0].active_turn = true;
+    context.agent_sessions[0].open_turn_id = Some("smoke-turn".into());
+    publish_pilot(gui,&source,3,false,&context,vec![serde_json::from_value(json!({"topic":"agent.session.stateChanged","projectId":"p1","data":{"session":context.agent_sessions[0],"removed":false}})).unwrap()]).await;
+    wait_pilot(gui, "activity-state", "Agent active").await;
+    let running = gui.host_ui_snapshot().await.unwrap();
+    validate_host_ui_snapshot(&running).unwrap();
+    assert!(running
+        .status_items
+        .iter()
+        .any(|s| s.text == "Agent active"));
+    let progress = running
+        .progress
+        .iter()
+        .find(|p| p.id == "activity-turn")
+        .unwrap()
+        .clone();
+    assert_eq!(progress.state, ProgressState::Running);
+    context.agent_sessions[0].active_turn = false;
+    context.agent_sessions[0].open_turn_id = None;
+    let ack=publish_pilot(gui,&source,4,false,&context,vec![serde_json::from_value(json!({"topic":"agent.session.stateChanged","projectId":"p1","data":{"session":context.agent_sessions[0],"removed":false}})).unwrap()]).await;
+    wait_pilot(gui, "activity-state", "Agent idle").await;
+    wait_pilot(gui, "activity-observed-turns", "1").await;
+    let ui = gui.host_ui_snapshot().await.unwrap();
+    assert_eq!(ui.boot_id, gui.boot_id().unwrap());
+    assert_eq!(
+        ui.notifications
+            .iter()
+            .filter(|n| n.title == "Agent turn ended")
+            .count(),
+        1
+    );
+    let completed = ui.progress.iter().find(|p| p.id == progress.id).unwrap();
+    assert_eq!(completed.state, ProgressState::Completed);
+    assert_eq!(completed.created_at, progress.created_at);
+    let reply = gui
+        .execute_contribution(ExecuteContributionRequest {
+            plugin_id: ID.into(),
+            generation: generation.into(),
+            kind: ContributionKind::Menu,
+            contribution_id: "activity-terminal-context".into(),
+            action_index: None,
+            context_revision: ack.context_revision,
+            target: ContributionTarget {
+                project_id: Some("p1".into()),
+                terminal_id: Some(terminal.id.clone()),
+                session_id: None,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.invalidate_views, [VIEW]);
+    let notice = ui
+        .notifications
+        .iter()
+        .find(|n| n.title == "Agent turn ended")
+        .unwrap();
+    let dismissed = gui
+        .dismiss_host_ui(HostUiDismissRequest {
+            plugin_id: ID.into(),
+            generation: generation.into(),
+            kind: HostUiKind::Notification,
+            id: notice.id.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(dismissed.dismissed);
+    context.terminals.clear();
+    context.active_terminal_id = None;
+    publish_pilot(
+        gui,
+        &source,
+        5,
+        false,
+        &context,
+        vec![serde_json::from_value(
+            json!({"topic":"terminal.closed","projectId":"p1","data":{"terminal":terminal}}),
+        )
+        .unwrap()],
+    )
+    .await;
+    wait_pilot(gui, "activity-terminal-count", "0").await;
+    publish_pilot(gui, &source, 6, true, &context, vec![]).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !gui.host_ui_snapshot()
+            .await
+            .unwrap()
+            .notifications
+            .iter()
+            .any(|n| n.title == "Agent turn ended"),
+        "reset cannot replay dismissed turn notification"
+    );
+    (source, context)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plugin_core_isolation_and_recovery() {
     // Fail before spawning anything if the runner has not built both real libraries.
@@ -363,6 +516,8 @@ async fn plugin_core_isolation_and_recovery() {
     let old_view = view(&gui).await;
     assert_eq!(text(&old_view, "heading"), "Hola");
     let old_action = increment(&old_view);
+    let (_pilot_source, pilot_context) =
+        smoke_pilot(&gui, old_info.generation.as_deref().unwrap()).await;
 
     // A deliberate restart must be clean: an unattributed external kill would
     // correctly quarantine all enabled plugins instead of auto-reactivating them.
@@ -408,6 +563,18 @@ async fn plugin_core_isolation_and_recovery() {
         "2",
         "persisted step applied by real cdylib"
     );
+
+    let new_source = uuid::Uuid::new_v4().to_string();
+    publish_pilot(&gui, &new_source, 1, true, &pilot_context, vec![]).await;
+    wait_pilot(&gui, "activity-observed-turns", "1").await;
+    wait_pilot(&gui, "activity-state", "Agent idle").await;
+    assert!(!gui
+        .host_ui_snapshot()
+        .await
+        .unwrap()
+        .notifications
+        .iter()
+        .any(|n| n.title == "Agent turn ended"));
 
     // Run all three roles on this same temporary profile. Guard each successful
     // spawn before attempting the next, unlike a guard constructed after both.
@@ -477,6 +644,59 @@ async fn plugin_core_isolation_and_recovery() {
         .any(|command| command.id == "example.abort"));
     let fault_config: ConfigSnapshot = rpc(&gui, METHOD_GET_CONFIG, json!({"id": ID})).await;
     assert_eq!(fault_config, saved);
+
+    wait_pilot(&gui, "activity-state", "Agent idle").await;
+    let timeout_generation = fault_info.generation.as_deref().unwrap();
+    let _:CommandReply=rpc(&gui,METHOD_COMMAND,json!({"id":ID,"generation":timeout_generation,"commandId":"example.activity-delivery-fault","args":{"mode":"timeout"}})).await;
+    let mut changed = pilot_context.clone();
+    changed.agent_sessions[0].active_turn = true;
+    publish_pilot(&gui,&new_source,2,false,&changed,vec![serde_json::from_value(json!({"topic":"agent.session.stateChanged","projectId":"p1","data":{"session":changed.agent_sessions[0],"removed":false}})).unwrap()]).await;
+    // Host-origin delivery times out without a GUI command awaiting native code.
+    // Core must exit itself; other processes and the same PTY stay alive.
+    assert_eq!(reaper.stopped(restarted.pid).await, libc::CLD_EXITED);
+    assert_eq!(process_identity(terminal_process.pid), terminal_identity);
+    assert_eq!(process_identity(acp_process.pid), acp_identity);
+    assert_eq!(acp.health().await.unwrap()["status"], "ready");
+    terminal
+        .write(&pty.info.id, "printf 'PLUGIN_DELIVERY_%s\\n' SURVIVES\n")
+        .await
+        .unwrap();
+    output_contains(&mut session.output, "PLUGIN_DELIVERY_SURVIVES").await;
+    let timeout_recovered = ensure_core(CoreRole::PluginCore, &config).await.unwrap();
+    reaper.launcher_reaped(restarted.pid);
+    reaper.own(timeout_recovered.pid);
+    reconnect_plugin(&gui, &endpoint).await;
+    let timeout_health = health(&gui).await;
+    assert_ne!(timeout_health.boot_id, second_health.boot_id);
+    let snapshot: PluginSnapshot = rpc(&gui, METHOD_LIST, json!({})).await;
+    assert_eq!(snapshot.plugins[0].state, PluginState::Quarantined);
+    assert!(gui
+        .host_ui_snapshot()
+        .await
+        .unwrap()
+        .notifications
+        .is_empty());
+    let stale = gui
+        .execute_contribution(ExecuteContributionRequest {
+            plugin_id: ID.into(),
+            generation: timeout_generation.into(),
+            kind: ContributionKind::Keybinding,
+            contribution_id: "activity-summary".into(),
+            action_index: None,
+            context_revision: 1,
+            target: ContributionTarget {
+                project_id: None,
+                terminal_id: None,
+                session_id: None,
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code, PLUGIN_STALE_GENERATION);
+    let _: PluginInfo = rpc(&gui, METHOD_SET_ENABLED, json!({"id":ID,"enabled":false})).await;
+    let fault_info: PluginInfo =
+        rpc(&gui, METHOD_SET_ENABLED, json!({"id":ID,"enabled":true})).await;
+    let restarted = timeout_recovered;
     let error = gui
         .request(
             METHOD_COMMAND,

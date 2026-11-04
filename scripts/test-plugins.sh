@@ -25,7 +25,11 @@ cp "$target_dir/debug/$library" "$SE_PLUGIN_TEST_ARTIFACTS/upgrade/$library"
 
 command cargo test --manifest-path src-tauri/Cargo.toml --target-dir /Users/qs/project/me/termul/src-tauri/target -p se-plugin-host --test plugin_e2e --locked -- --nocapture
 
-# P3/P7b owns the process-layer test; run it as soon as that file lands.
+# Real Plugin Core context/feedback/contribution RPCs and process isolation.
 if [[ -f src-tauri/tests/plugin_core_smoke.rs ]]; then
   command cargo test --manifest-path src-tauri/Cargo.toml --target-dir /Users/qs/project/me/termul/src-tauri/target -p se-manager --test plugin_core_smoke --locked -- --nocapture
 fi
+
+# P5: public renderer stores/components consume the same host UI contracts;
+# retain the keyboard-persistence checks alongside the unbound pilot shortcut.
+bunx vitest run src/renderer/features/plugins/activity-pilot.integration.test.tsx src/renderer/stores/keyboard-shortcuts-store.test.ts

@@ -71,6 +71,7 @@ pub struct CounterPlugin {
     host: Option<Host>,
     count: f64,
     config: Config,
+    activity: crate::activity::Activity,
 }
 
 fn parse(bytes: &[u8]) -> Result<Value, SeStatus> {
@@ -123,6 +124,12 @@ impl CounterPlugin {
                 {"id":"reset","text":"Reset is also available as a command","description":"example.reset"}
             ]}}),
         ]);
+        children.extend([
+            json!({"type":"heading","id":"activity-heading","props":{"text":"Activity","level":3}}),
+            json!({"type":"text","id":"activity-state","props":{"text":self.activity.state()}}),
+            json!({"type":"text","id":"activity-terminal-count","props":{"text":self.activity.terminal_count().to_string()}}),
+            json!({"type":"text","id":"activity-observed-turns","props":{"text":self.activity.observed().to_string()}}),
+        ]);
         json!({"schemaVersion":1,"viewId":VIEW,"root":{"type":"column","id":"counter","props":{"gap":"md"},"children":children}})
     }
 }
@@ -147,6 +154,11 @@ impl PluginV1 for CounterPlugin {
                     ("example.timeout", "Test timeout"),
                     ("example.abort", "Test process abort"),
                     ("example.escape-host", "Test escaped host lifetime"),
+                    ("example.activity-inspect", "Inspect activity state"),
+                    (
+                        "example.activity-delivery-fault",
+                        "Test activity delivery fault",
+                    ),
                 ] {
                     commands.push(json!({"id":id,"title":title}));
                 }
@@ -171,6 +183,7 @@ impl PluginV1 for CounterPlugin {
             host: Some(host),
             count: 0.0,
             config,
+            activity: crate::activity::Activity::default(),
         })
     }
 
@@ -212,6 +225,20 @@ impl PluginV1 for CounterPlugin {
 
     fn on_command(&mut self, bytes: &[u8], out: &mut OutputWriter<'_>) -> Result<(), SeStatus> {
         let request = parse(bytes)?;
+        if let Some(command) = request["commandId"]
+            .as_str()
+            .filter(|id| id.starts_with("example.activity-"))
+        {
+            let result = self.activity.command(
+                self.host.as_ref().ok_or(SEP_UNAVAILABLE)?,
+                command,
+                &request["args"],
+            )?;
+            return write(
+                out,
+                json!({"schemaVersion":1,"result":result,"invalidateViews":[VIEW]}),
+            );
+        }
         match request["commandId"].as_str() {
             Some("example.reset") => self.count = 0.0,
             #[cfg(feature = "test-hooks")]
@@ -250,6 +277,26 @@ impl PluginV1 for CounterPlugin {
         out: &mut OutputWriter<'_>,
     ) -> Result<(), SeStatus> {
         let request = parse(bytes)?;
+        if request["service"] == "se.host.events" && request["method"] == "deliver" {
+            self.activity.deliver(
+                self.host.as_ref().ok_or(SEP_UNAVAILABLE)?,
+                &request["input"],
+            );
+            return write(
+                out,
+                json!({"schemaVersion":1,"result":{"invalidateViews":[VIEW]}}),
+            );
+        }
+        if request["service"] == "se.host.storage" && request["method"] == "completed" {
+            self.activity.completed(
+                self.host.as_ref().ok_or(SEP_UNAVAILABLE)?,
+                &request["input"],
+            );
+            return write(
+                out,
+                json!({"schemaVersion":1,"result":{"invalidateViews":[VIEW]}}),
+            );
+        }
         if request["service"] != "org.termul.example.counter"
             || request["version"] != 1
             || request["method"] != "get"

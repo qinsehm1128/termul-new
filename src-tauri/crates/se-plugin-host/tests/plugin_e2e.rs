@@ -273,7 +273,7 @@ async fn example_cdylib_end_to_end() {
         assert!(!installed.desired_enabled);
         assert!(installed.generation.is_none());
         assert_eq!(host.list().await.unwrap().plugins, vec![installed.clone()]);
-        assert_eq!(installed.manifest.contributes.commands.len(), 1);
+        assert_eq!(installed.manifest.contributes.commands.len(), 3);
         assert_eq!(
             installed.manifest.contributes.commands[0].id,
             "example.reset"
@@ -287,7 +287,7 @@ async fn example_cdylib_end_to_end() {
         assert_eq!(diagnostics.active_instances, 1);
         assert_eq!(diagnostics.broker_registrations, 1);
         assert_eq!(diagnostics.view_count, 1);
-        assert_eq!(diagnostics.command_count, 1);
+        assert_eq!(diagnostics.command_count, 3);
         assert!(
             diagnostics.loaded_libraries >= 2,
             "install and activation must dlopen real copies"
@@ -729,4 +729,588 @@ async fn real_cdylib_timeout_requests_restart_without_waiting_for_callback() {
     })
     .await
     .expect("timeout acceptance must remain bounded");
+}
+
+fn activity_context() -> HostContextState {
+    serde_json::from_value(serde_json::json!({
+        "activeProject":{"id":"p1","name":"Pilot project","path":"/synthetic/pilot"},
+        "projectIds":["p1"],"activeTerminalId":null,"activeSessionId":"s1",
+        "terminals":[],"agentSessions":[{"id":"s1","projectId":"p1","status":"active","activeTurn":false,"openTurnId":null,"replaying":false}],
+        "focus":{"textInput":false,"terminal":false},"truncated":false
+    })).unwrap()
+}
+
+async fn publish_activity(
+    host: &PluginHost,
+    source: &str,
+    sequence: u64,
+    reset: bool,
+    context: &HostContextState,
+    events: Vec<HostSourceEvent>,
+) -> HostContextAck {
+    host.publish_host_context(
+        "trusted-test-main",
+        HostContextPublishRequest {
+            source_id: source.into(),
+            source_sequence: sequence,
+            reset,
+            snapshot: context.clone(),
+            events,
+        },
+    )
+    .await
+    .expect("publish trusted synthetic context")
+}
+
+fn source_event(topic: &str, data: Value) -> HostSourceEvent {
+    serde_json::from_value(serde_json::json!({"topic":topic,"projectId":"p1","data":data})).unwrap()
+}
+
+fn node_text(snapshot: &ViewSnapshot, id: &str) -> String {
+    match snapshot.tree.root.find(id) {
+        Some(UiNode::Text { props, .. }) => props.text.clone(),
+        other => panic!("missing semantic activity text {id}: {other:?}"),
+    }
+}
+
+async fn activity_inspect(host: &PluginHost, generation: &str) -> Value {
+    host.execute_command(command(generation, "example.activity-inspect"))
+        .await
+        .unwrap()
+        .result
+}
+
+async fn wait_activity(host: &PluginHost, id: &str, expected: &str) -> ViewSnapshot {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let snapshot = view(host).await;
+            if node_text(&snapshot, id) == expected {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("activity node {id} never became {expected}"))
+}
+
+async fn wait_tickets(host: &PluginHost, generation: &str) -> Value {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let state = activity_inspect(host, generation).await;
+            if state["pendingTicketIds"].as_array().unwrap().is_empty()
+                && state["state"] != "Loading activity"
+            {
+                return state;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("all accepted storage tickets must complete")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn activity_pilot_native_context_storage_ui_and_generation_lifecycle() {
+    let _native_guard = NATIVE_TEST_LOCK.lock().await;
+    let artifacts = artifacts();
+    let profile = tempfile::tempdir().unwrap();
+    let host = PluginHost::open(profile.path().into(), HostOptions::default())
+        .await
+        .unwrap();
+    host.install(InstallRequest {
+        path: path_string(&artifacts.fault),
+    })
+    .await
+    .unwrap();
+    let first = enable(&host, true).await;
+    let generation = first.generation.as_deref().unwrap();
+    assert_eq!(
+        node_text(&view(&host).await, "activity-state"),
+        "Loading activity"
+    );
+    assert_eq!(first.manifest.services.requires.len(), 5);
+    assert_eq!(first.manifest.contributes.event_subscriptions.len(), 5);
+    assert_eq!(first.manifest.contributes.menus.len(), 4);
+    assert_eq!(first.manifest.contributes.keybindings[0].key, "");
+    let source = Uuid::new_v4().to_string();
+    let mut context = activity_context();
+    let ack = publish_activity(&host, &source, 1, true, &context, vec![]).await;
+    wait_activity(&host, "activity-state", "Agent idle").await;
+    let initialized = wait_tickets(&host, generation).await;
+    assert_eq!(initialized["sourceId"], source);
+    assert_eq!(initialized["observedTurns"], 0);
+    assert!(initialized["sequences"]["activity"].is_number());
+    assert_eq!(
+        host.heartbeat_host_context("trusted-test-main", &source)
+            .unwrap(),
+        ack
+    );
+
+    let terminal = TerminalContext {
+        id: "t1".into(),
+        pty_id: Some("pty1".into()),
+        project_id: Some("p1".into()),
+    };
+    context.terminals.push(terminal.clone());
+    publish_activity(
+        &host,
+        &source,
+        2,
+        false,
+        &context,
+        vec![source_event(
+            "terminal.created",
+            serde_json::json!({"terminal":terminal}),
+        )],
+    )
+    .await;
+    wait_activity(&host, "activity-terminal-count", "1").await;
+    context.active_terminal_id = Some("t1".into());
+    let ack = publish_activity(
+        &host,
+        &source,
+        3,
+        false,
+        &context,
+        vec![source_event(
+            "terminal.activeChanged",
+            serde_json::json!({"terminalId":"t1","projectId":"p1"}),
+        )],
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while activity_inspect(&host, generation).await["activeTerminalId"] != "t1" {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Every location resolves the command from the manifest, not caller text,
+    // and native on_command observes the actual clicked (not active) target.
+    for (id, target, source_name) in [
+        (
+            "activity-terminal-tab",
+            serde_json::json!({"projectId":"p1","terminalId":"t1"}),
+            "terminal.tab",
+        ),
+        (
+            "activity-terminal-context",
+            serde_json::json!({"projectId":"p1","terminalId":"t1"}),
+            "terminal.context",
+        ),
+        (
+            "activity-project-context",
+            serde_json::json!({"projectId":"p1"}),
+            "project.context",
+        ),
+        (
+            "activity-agent-session",
+            serde_json::json!({"projectId":"p1","sessionId":"s1"}),
+            "agentSession.context",
+        ),
+    ] {
+        let reply = host
+            .execute_contribution(ExecuteContributionRequest {
+                plugin_id: ID.into(),
+                generation: generation.into(),
+                kind: ContributionKind::Menu,
+                contribution_id: id.into(),
+                action_index: None,
+                context_revision: ack.context_revision,
+                target: serde_json::from_value(target).unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(reply.result["observedTarget"]["source"], source_name);
+        assert_eq!(reply.result["observedTarget"]["context"]["projectId"], "p1");
+        if source_name.starts_with("terminal") {
+            assert_eq!(
+                reply.result["observedTarget"]["context"]["terminalId"],
+                "t1"
+            );
+        }
+    }
+    // Let the deliberately bounded feedback bucket refill before turn effects.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    context.agent_sessions[0].active_turn = true;
+    context.agent_sessions[0].open_turn_id = Some("turn-1".into());
+    publish_activity(
+        &host,
+        &source,
+        4,
+        false,
+        &context,
+        vec![source_event(
+            "agent.session.stateChanged",
+            serde_json::json!({"session":context.agent_sessions[0],"removed":false}),
+        )],
+    )
+    .await;
+    wait_activity(&host, "activity-state", "Agent active").await;
+    let running = host.host_ui_snapshot().await.unwrap();
+    validate_host_ui_snapshot(&running).unwrap();
+    assert!(running
+        .status_items
+        .iter()
+        .any(|s| s.text == "Agent active"));
+    let progress = running
+        .progress
+        .iter()
+        .find(|p| p.id == "activity-turn")
+        .unwrap()
+        .clone();
+    assert_eq!(progress.state, ProgressState::Running);
+    context.agent_sessions[0].active_turn = false;
+    context.agent_sessions[0].open_turn_id = None;
+    publish_activity(
+        &host,
+        &source,
+        5,
+        false,
+        &context,
+        vec![source_event(
+            "agent.session.stateChanged",
+            serde_json::json!({"session":context.agent_sessions[0],"removed":false}),
+        )],
+    )
+    .await;
+    wait_activity(&host, "activity-state", "Agent idle").await;
+    wait_activity(&host, "activity-observed-turns", "1").await;
+    let stored = wait_tickets(&host, generation).await;
+    assert_eq!(stored["projectRevision"], 1);
+    let ended = host.host_ui_snapshot().await.unwrap();
+    assert_eq!(
+        ended
+            .notifications
+            .iter()
+            .filter(|n| n.title == "Agent turn ended")
+            .count(),
+        1
+    );
+    let ended_notice = ended
+        .notifications
+        .iter()
+        .find(|n| n.title == "Agent turn ended")
+        .unwrap()
+        .clone();
+    assert!(ended.status_items.iter().any(|s| s.text == "Agent idle"));
+    let completed = ended.progress.iter().find(|p| p.id == progress.id).unwrap();
+    assert_eq!(completed.state, ProgressState::Completed);
+    assert_eq!(
+        completed.created_at, progress.created_at,
+        "progress updates in place"
+    );
+    assert!(completed.revision > progress.revision);
+    let data: Value = serde_json::from_slice(
+        &fs::read(profile.path().join("plugins/data/org.termul.example.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(data.to_string().contains("observedTurns"));
+
+    // A stale CAS travels through a real storage completion. Re-read revision
+    // then recompute 1 + the one unsaved observation; never overwrite with 1.
+    let mut conflict = command(generation, "example.activity-inspect");
+    conflict.args = serde_json::json!({"forceConflict":true});
+    host.execute_command(conflict).await.unwrap();
+    let recovered_cas = wait_tickets(&host, generation).await;
+    assert_eq!(recovered_cas["observedTurns"], 2);
+    assert_eq!(recovered_cas["projectRevision"], 2);
+
+    // Reset/replay replaces the baseline: no retrospective turn end and no
+    // revision bump to the already-present notification.
+    context.agent_sessions[0].active_turn = true;
+    context.agent_sessions[0].replaying = true;
+    publish_activity(&host, &source, 6, true, &context, vec![]).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    context.agent_sessions[0].active_turn = false;
+    publish_activity(
+        &host,
+        &source,
+        7,
+        false,
+        &context,
+        vec![source_event(
+            "agent.session.stateChanged",
+            serde_json::json!({"session":context.agent_sessions[0],"removed":false}),
+        )],
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        activity_inspect(&host, generation).await["observedTurns"],
+        2
+    );
+    assert_eq!(
+        host.host_ui_snapshot()
+            .await
+            .unwrap()
+            .notifications
+            .iter()
+            .find(|n| n.id == ended_notice.id)
+            .unwrap()
+            .revision,
+        ended_notice.revision
+    );
+
+    context.terminals.clear();
+    context.active_terminal_id = None;
+    publish_activity(
+        &host,
+        &source,
+        8,
+        false,
+        &context,
+        vec![source_event(
+            "terminal.closed",
+            serde_json::json!({"terminal":terminal}),
+        )],
+    )
+    .await;
+    wait_activity(&host, "activity-terminal-count", "0").await;
+    let invalid = host
+        .execute_contribution(ExecuteContributionRequest {
+            plugin_id: ID.into(),
+            generation: generation.into(),
+            kind: ContributionKind::Menu,
+            contribution_id: "activity-terminal-context".into(),
+            action_index: None,
+            context_revision: ack.context_revision,
+            target: ContributionTarget {
+                project_id: Some("p1".into()),
+                terminal_id: Some("t1".into()),
+                session_id: None,
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code, PLUGIN_INVALID_ACTION);
+
+    // Revocation removes transient handles, while durable preference and count
+    // survive a fresh instance. No old generation's action is admitted.
+    host.execute_command(command(generation, "example.activity-toggle"))
+        .await
+        .unwrap();
+    let disabled_pref = wait_tickets(&host, generation).await;
+    assert_eq!(disabled_pref["enabled"], false);
+    let stale_action = button_action(&view(&host).await, "increment");
+    enable(&host, false).await;
+    assert!(host
+        .host_ui_snapshot()
+        .await
+        .unwrap()
+        .status_items
+        .is_empty());
+    let second = enable(&host, true).await;
+    assert_ne!(second.generation, first.generation);
+    wait_activity(&host, "activity-state", "Activity disabled").await;
+    let state = wait_tickets(&host, second.generation.as_deref().unwrap()).await;
+    assert_eq!(state["observedTurns"], 2);
+    assert_eq!(
+        host.dispatch_action(stale_action).await.unwrap_err().code,
+        PLUGIN_STALE_GENERATION
+    );
+    host.execute_command(command(
+        second.generation.as_deref().unwrap(),
+        "example.activity-toggle",
+    ))
+    .await
+    .unwrap();
+    wait_tickets(&host, second.generation.as_deref().unwrap()).await;
+    let upgraded = host
+        .reload(ReloadRequest {
+            id: ID.into(),
+            path: Some(path_string(&artifacts.upgrade)),
+        })
+        .await
+        .unwrap();
+    assert!(!upgraded
+        .manifest
+        .contributes
+        .commands
+        .iter()
+        .any(|c| c.id.contains("inspect") || c.id.contains("fault")));
+    assert_eq!(
+        host.execute_command(command(
+            second.generation.as_deref().unwrap(),
+            "example.activity-toggle"
+        ))
+        .await
+        .unwrap_err()
+        .code,
+        PLUGIN_STALE_GENERATION
+    );
+    wait_activity(&host, "activity-observed-turns", "2").await;
+    wait_activity(&host, "activity-state", "Agent idle").await;
+    host.detach_host_context("trusted-test-main");
+    let lost = host.host_ui_snapshot().await.unwrap();
+    assert!(
+        lost.notifications.is_empty() && lost.progress.is_empty() && lost.status_items.is_empty()
+    );
+    let restored_source = Uuid::new_v4().to_string();
+    publish_activity(&host, &restored_source, 1, true, &context, vec![]).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host
+            .host_ui_snapshot()
+            .await
+            .unwrap()
+            .status_items
+            .is_empty()
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        host.host_ui_snapshot()
+            .await
+            .unwrap()
+            .notifications
+            .is_empty(),
+        "source restoration must not replay old effects"
+    );
+    close(host).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn activity_pilot_queue_overflow_recovers_from_latest_snapshot_without_notifications() {
+    let _native_guard = NATIVE_TEST_LOCK.lock().await;
+    let profile = tempfile::tempdir().unwrap();
+    let host = PluginHost::open(profile.path().into(), HostOptions::default())
+        .await
+        .unwrap();
+    host.install(InstallRequest {
+        path: path_string(&artifacts().fault),
+    })
+    .await
+    .unwrap();
+    let active = enable(&host, true).await;
+    let generation = active.generation.as_deref().unwrap();
+    let source = Uuid::new_v4().to_string();
+    let mut context = activity_context();
+    publish_activity(&host, &source, 1, true, &context, vec![]).await;
+    wait_tickets(&host, generation).await;
+    // Three batches exceed the 128-event queue and the 20/s delivery bucket.
+    // Final context is authoritative even when individual deltas are discarded.
+    for sequence in 2..=4 {
+        let mut events = vec![];
+        for index in 0..128 {
+            let terminal = TerminalContext {
+                id: format!("overflow-{sequence}-{index}"),
+                pty_id: None,
+                project_id: Some("p1".into()),
+            };
+            if sequence == 4 && index == 127 {
+                context.terminals = vec![terminal.clone()];
+            }
+            events.push(source_event(
+                if index % 2 == 0 {
+                    "terminal.created"
+                } else {
+                    "terminal.closed"
+                },
+                serde_json::json!({"terminal":terminal}),
+            ));
+        }
+        publish_activity(&host, &source, sequence, false, &context, events).await;
+    }
+    let latest_revision = host
+        .heartbeat_host_context("trusted-test-main", &source)
+        .unwrap()
+        .context_revision;
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let state = activity_inspect(&host, generation).await;
+            if state["contextRevision"] == latest_revision && state["terminalCount"] == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("reserved resync marker must recover latest bounded snapshot");
+    assert_eq!(
+        activity_inspect(&host, generation).await["observedTurns"],
+        0
+    );
+    assert!(host
+        .host_ui_snapshot()
+        .await
+        .unwrap()
+        .notifications
+        .is_empty());
+    close(host).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn activity_host_delivery_panic_and_timeout_are_quarantined() {
+    let _native_guard = NATIVE_TEST_LOCK.lock().await;
+    for (mode, code) in [("panic", PLUGIN_PANIC), ("timeout", PLUGIN_TIMEOUT)] {
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().into(), HostOptions::default())
+            .await
+            .unwrap();
+        host.install(InstallRequest {
+            path: path_string(&artifacts().fault),
+        })
+        .await
+        .unwrap();
+        let active = enable(&host, true).await;
+        let generation = active.generation.as_deref().unwrap();
+        let mut fault = command(generation, "example.activity-delivery-fault");
+        fault.args = serde_json::json!({"mode":mode});
+        host.execute_command(fault).await.unwrap();
+        let mut restart = host.restart_requested();
+        publish_activity(
+            &host,
+            &Uuid::new_v4().to_string(),
+            1,
+            true,
+            &activity_context(),
+            vec![],
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let info = host.list().await.unwrap().plugins.remove(0);
+                if info.last_error.as_ref().is_some_and(|e| e.code == code) {
+                    assert!(matches!(
+                        info.state,
+                        PluginState::Quarantined | PluginState::Failed
+                    ));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(host.diagnostics().active_instances, 0);
+        assert!(host
+            .host_ui_snapshot()
+            .await
+            .unwrap()
+            .status_items
+            .is_empty());
+        if mode == "timeout" {
+            if restart.borrow().is_none() {
+                tokio::time::timeout(Duration::from_secs(1), restart.changed())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            assert_eq!(restart.borrow().as_ref().unwrap().code, PLUGIN_TIMEOUT);
+            assert_eq!(restart.borrow().as_ref().unwrap().generation, generation);
+            tokio::time::timeout(Duration::from_secs(6), async {
+                while host.diagnostics().callbacks_in_flight != 0 {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        close(host).await;
+    }
 }
