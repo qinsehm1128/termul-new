@@ -61,7 +61,7 @@ export default function PluginsPage(): React.JSX.Element {
     setPickerFailed(false)
     try {
       const selected = await tauriDialogApi.selectFile({
-        filters: [{ name: t('manager.fileType'), extensions: ['dylib', 'so', 'dll'] }]
+        filters: [{ name: t('manager.fileType'), extensions: ['seplugin', 'dylib', 'so', 'dll'] }]
       })
       if (!selected.success) throw new Error('Plugin file selection failed')
       const path = selected.data

@@ -13,16 +13,108 @@ import {
   parseViewSnapshot
 } from '@shared/types/plugin.types'
 import {
+  type HostProcessLogsReply,
+  type HostProcessStatus,
   parseHostContextAck,
+  parseHostProcessLogsReply,
+  parseHostProcessStatus,
   parseHostUiDismissResult,
   parseHostUiSnapshot
 } from '@shared/types/plugin-host.types'
+import {
+  parseWebCloseReply,
+  parseWebOpenReply,
+  parseWebReadReply,
+  parseWebRequestReply,
+  type WebCloseReply,
+  type WebOpenReply,
+  type WebOpenRequest,
+  type WebReadReply,
+  type WebRequest,
+  type WebRequestReply
+} from '@shared/types/plugin-web.types'
 import { type HostEventSubscription, onHostEvent } from '@/lib/host-events'
 import { invokeDecodedIpcResult } from '@/lib/invoke-decoded-ipc-result'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 
+// URL is a GUI transport capability; the Plugin Core WebOpenReply deliberately has no URL.
+export type PluginWebSession = WebOpenReply & { url: string }
+export interface PluginProcessOwner {
+  id: string
+  generation: string
+}
+export interface PluginProcessList {
+  processes: { id: string; status: HostProcessStatus }[]
+}
+
+function parseWebSession(value: unknown): PluginWebSession {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new TypeError('Invalid session')
+  const { url, ...reply } = value as Record<string, unknown>
+  if (typeof url !== 'string' || url.length > 8192) throw new TypeError('Invalid session URL')
+  const parsed = new URL(url)
+  if (
+    !(
+      (parsed.protocol === 'se-plugin:' && parsed.hostname === 'localhost') ||
+      (parsed.protocol === 'http:' && parsed.hostname === 'se-plugin.localhost')
+    ) ||
+    parsed.port ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search
+  )
+    throw new TypeError('Invalid session origin')
+  const session = parseWebOpenReply(reply)
+  const expectedPath = `/${[session.pluginId, session.generation, session.sessionId, ...session.entry.split('/')].map(encodeURIComponent).join('/')}`
+  if (parsed.pathname !== expectedPath) throw new TypeError('Invalid session path')
+  return { ...session, url }
+}
+function parseProcessList(value: unknown): PluginProcessList {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new TypeError('Invalid process list')
+  const record = value as Record<string, unknown>
+  if (
+    Object.keys(record).some((key) => key !== 'processes') ||
+    !Array.isArray(record.processes) ||
+    record.processes.length > 64
+  )
+    throw new TypeError('Invalid process list')
+  const ids = new Set<string>()
+  return {
+    processes: record.processes.map((item: unknown) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item))
+        throw new TypeError('Invalid process')
+      const entry = item as Record<string, unknown>
+      if (
+        Object.keys(entry).some((key) => key !== 'id' && key !== 'status') ||
+        typeof entry.id !== 'string' ||
+        !entry.id ||
+        entry.id.length > 256 ||
+        ids.has(entry.id)
+      )
+        throw new TypeError('Invalid process')
+      ids.add(entry.id)
+      return { id: entry.id, status: parseHostProcessStatus(entry.status) }
+    })
+  }
+}
+
 export interface TauriPluginApi extends PluginApi {
+  openWebSession(request: WebOpenRequest): Promise<IpcResult<PluginWebSession>>
+  requestWeb(request: WebRequest): Promise<IpcResult<WebRequestReply>>
+  readWebSession(request: {
+    sessionId: string
+    afterSequence: number
+  }): Promise<IpcResult<WebReadReply>>
+  closeWebSession(request: { sessionId: string }): Promise<IpcResult<WebCloseReply>>
+  listProcesses(request: PluginProcessOwner): Promise<IpcResult<PluginProcessList>>
+  getProcessLogs(
+    request: PluginProcessOwner & { processId: string; tail: number }
+  ): Promise<IpcResult<HostProcessLogsReply>>
+  controlProcess(
+    request: PluginProcessOwner & { processId: string; action: 'start' | 'stop' | 'restart' }
+  ): Promise<IpcResult<HostProcessStatus>>
   onChanged(handler: (event: PluginEvent) => void): HostEventSubscription
   onConnectionChanged(handler: (event: PluginConnectionChanged) => void): HostEventSubscription
 }
@@ -88,6 +180,13 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPlu
     return Object.assign(() => stop(), { ready: stop.ready ?? Promise.resolve() })
   }
   return {
+    openWebSession: (request) => call('plugin_web_open', parseWebSession, request),
+    requestWeb: (request) => call('plugin_web_request', parseWebRequestReply, request),
+    readWebSession: (request) => call('plugin_web_read', parseWebReadReply, request),
+    closeWebSession: (request) => call('plugin_web_close', parseWebCloseReply, request),
+    listProcesses: (request) => call('plugin_process_list', parseProcessList, request),
+    getProcessLogs: (request) => call('plugin_process_logs', parseHostProcessLogsReply, request),
+    controlProcess: (request) => call('plugin_process_control', parseHostProcessStatus, request),
     list: () => call('plugin_list', parsePluginSnapshot),
     install: (request) => call('plugin_install', parsePluginInfo, request),
     setEnabled: (request) => call('plugin_set_enabled', parsePluginInfo, request),

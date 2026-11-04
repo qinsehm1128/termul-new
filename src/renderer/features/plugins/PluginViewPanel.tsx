@@ -7,9 +7,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { logFrontendError } from '@/lib/log-api'
+import { usePluginsStore } from '@/stores/plugins-store'
 import { pluginApi } from './plugin-api'
 import { UiTreeRenderer } from './UiTreeRenderer'
 import { isInputAction, type UiAction } from './ui-tree-rendering'
+import { PluginWebView } from './web/PluginWebView'
 
 export interface PluginViewPanelProps {
   pluginId: string
@@ -27,6 +29,21 @@ const initialState: PanelState = { snapshot: null, loading: true, offline: false
 
 /** Each identity gets its own queue; route changes never reuse a previous panel's operations. */
 export function PluginViewPanel(props: PluginViewPanelProps): React.JSX.Element {
+  const info = usePluginsStore((state) => state.plugins.find((item) => item.id === props.pluginId))
+  const connected = usePluginsStore((state) => state.connected)
+  const view = info?.manifest.contributes.views.find((item) => item.id === props.viewId)
+  if (view?.kind === 'web') {
+    return (
+      <PluginWebView
+        key={`${props.pluginId}/${props.viewId}`}
+        {...props}
+        title={view.title}
+        generation={info?.generation ?? null}
+        available={connected && info?.state === 'active' && info.desiredEnabled}
+        crashed={info?.state === 'failed' || info?.state === 'quarantined'}
+      />
+    )
+  }
   return <PanelSession key={`${props.pluginId}/${props.viewId}`} {...props} />
 }
 

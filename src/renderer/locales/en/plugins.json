@@ -14,7 +14,7 @@
     "unsupported": "Native plugins are available only in the desktop application. They cannot be managed from a browser or phone.",
     "subtitle": "Manage trusted native plugins, their settings and panels.",
     "empty": "No plugins installed.",
-    "fileType": "Native plugin library",
+    "fileType": "Plugin package or native library",
     "uninstallWarning": "Uninstall this plugin? Its saved configuration will also be deleted.",
     "quarantineWarning": "This plugin is quarantined after an abnormal start. Choose Retry to try again.",
     "views": "Plugin panels",
@@ -36,7 +36,8 @@
       "overview": "Overview",
       "settings": "Settings",
       "contributions": "Contributions",
-      "services": "Services"
+      "services": "Services",
+      "processes": "Processes"
     },
     "identifier": "Plugin ID",
     "abi": "ABI range",
@@ -45,7 +46,7 @@
     "noDescription": "This native plugin does not provide a description. Explore its contributions, settings and service dependencies below.",
     "settingsUnavailable": "Enable this plugin and connect to Plugin Core to edit its settings.",
     "reconnect": "Retry connection",
-    "emptyDescription": "Native plugins extend Se with panels, commands and services. Install a trusted .dylib, .so or .dll library to get started.",
+    "emptyDescription": "Plugins extend Se with panels, commands and services. Install a trusted .seplugin package or .dylib, .so or .dll library to get started.",
     "installFirst": "Install your first plugin",
     "noResults": "No plugins match your search and status filter.",
     "clearFilters": "Clear filters"
@@ -126,5 +127,41 @@
     "available": "Available",
     "unavailable": "Unavailable",
     "secretsUnavailable": "Host service se.host.secrets is unavailable."
+  },
+  "web": {
+    "loading": "Loading plugin UI…",
+    "error": "The plugin UI could not be loaded.",
+    "crashed": "The plugin UI has crashed.",
+    "revoked": "Access to this plugin UI has been revoked.",
+    "reload": "Reload UI",
+    "trust": "Native code is fully trusted; web UI is isolated",
+    "unsupported": "Web plugin UI is only supported in the desktop application.",
+    "handshakeTimeout": "The plugin UI did not connect in time.",
+    "navigation": "Navigation outside the plugin UI was blocked."
+  },
+  "processes": {
+    "title": "Plugin processes",
+    "refreshHint": "Process state and recent logs refresh every two seconds while this tab is open.",
+    "empty": "No processes declared.",
+    "unavailable": "Activate this plugin and connect to Plugin Core to inspect and control its processes.",
+    "error": "Process data or controls are unavailable. Retrying on the next refresh.",
+    "state": "State",
+    "pid": "PID",
+    "restarts": "Restarts",
+    "start": "Start",
+    "stop": "Stop",
+    "restart": "Restart",
+    "logs": "Recent logs",
+    "emptyLogs": "No recent logs.",
+    "truncated": "Showing the latest log tail; older output was omitted.",
+    "states": {
+      "unknown": "Unknown",
+      "stopped": "Stopped",
+      "starting": "Starting",
+      "running": "Running",
+      "backoff": "Waiting to restart",
+      "exited": "Exited",
+      "crashed": "Crashed"
+    }
   }
 }

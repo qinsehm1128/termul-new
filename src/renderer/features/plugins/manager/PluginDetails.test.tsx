@@ -1,11 +1,19 @@
 import type { ConfigSnapshot, PluginInfo } from '@shared/types/plugin.types'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
 import { pluginApi } from '../plugin-api'
 import { PluginDetails } from './PluginDetails'
 
-vi.mock('../plugin-api', () => ({ pluginApi: { getConfig: vi.fn(), setConfig: vi.fn() } }))
+vi.mock('../plugin-api', () => ({
+  pluginApi: {
+    getConfig: vi.fn(),
+    setConfig: vi.fn(),
+    listProcesses: vi.fn(),
+    getProcessLogs: vi.fn(),
+    controlProcess: vi.fn()
+  }
+}))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 
@@ -85,4 +93,67 @@ it('loads settings lazily and preserves unsaved edits across detail tabs', async
   expect(screen.getByRole('textbox', { name: 'Greeting' })).toHaveValue('Unsaved change')
   expect(pluginApi.getConfig).toHaveBeenCalledTimes(1)
   expect(pluginApi.setConfig).not.toHaveBeenCalled()
+})
+
+it('polls processes only while the Processes tab is open', async () => {
+  cleanup()
+  vi.useFakeTimers()
+  vi.mocked(pluginApi.listProcesses).mockResolvedValue({ success: true, data: { processes: [] } })
+  vi.mocked(pluginApi.getProcessLogs).mockResolvedValue({
+    success: true,
+    data: { lines: [], truncated: false }
+  })
+  const processPlugin: PluginInfo = {
+    ...plugin,
+    manifest: {
+      ...plugin.manifest,
+      contributes: {
+        ...plugin.manifest.contributes,
+        processes: [
+          { id: 'worker', command: 'worker', args: [], env: {}, restart: 'never', autostart: false }
+        ]
+      }
+    }
+  }
+  try {
+    render(
+      <MemoryRouter>
+        <PluginDetails
+          plugin={processPlugin}
+          plugins={[processPlugin]}
+          connected
+          disabled={false}
+          onRetry={vi.fn()}
+          onReload={vi.fn()}
+          onUpgrade={vi.fn()}
+          onUninstall={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+    expect(pluginApi.listProcesses).not.toHaveBeenCalled()
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'manager.tabs.processes' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(pluginApi.listProcesses).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(pluginApi.listProcesses).toHaveBeenCalledTimes(2)
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'manager.tabs.overview' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    expect(pluginApi.listProcesses).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText('processes.refreshHint')).not.toBeInTheDocument()
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
 })

@@ -8,6 +8,7 @@ import { PluginSettingsForm } from '@/features/plugins/PluginSettingsForm'
 import { getPluginViewIcon } from '@/features/plugins/view-icons'
 import { PluginContributions } from './PluginContributions'
 import { lifecyclePending, PluginStatus } from './PluginList'
+import { PluginProcesses } from './PluginProcesses'
 import { PluginServices } from './PluginServices'
 
 interface PluginDetailsProps {
@@ -70,11 +71,13 @@ export function PluginDetails({
         className="p-5"
       >
         <TabsList aria-label={t('manager.detailTabs')} className="h-auto flex-wrap justify-start">
-          {(['overview', 'settings', 'contributions', 'services'] as const).map((tab) => (
-            <TabsTrigger key={tab} value={tab}>
-              {t(`manager.tabs.${tab}`)}
-            </TabsTrigger>
-          ))}
+          {(['overview', 'settings', 'contributions', 'services', 'processes'] as const).map(
+            (tab) => (
+              <TabsTrigger key={tab} value={tab}>
+                {t(`manager.tabs.${tab}`)}
+              </TabsTrigger>
+            )
+          )}
         </TabsList>
         <TabsContent value="overview" className="space-y-5 pt-3">
           <p className="text-sm leading-relaxed text-muted-foreground">
@@ -154,6 +157,13 @@ export function PluginDetails({
         </TabsContent>
         <TabsContent value="services" className="pt-3">
           <PluginServices plugin={plugin} plugins={plugins} connected={connected} />
+        </TabsContent>
+        <TabsContent value="processes" className="mt-6">
+          <PluginProcesses
+            plugin={plugin}
+            connected={connected}
+            disabled={disabled || lifecyclePending(plugin)}
+          />
         </TabsContent>
       </Tabs>
       <div className="mx-5 mb-5 flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">

@@ -130,7 +130,7 @@ describe('PluginsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'manager.install' }))
     await screen.findByRole('alertdialog')
     expect(tauriDialogApi.selectFile).toHaveBeenCalledWith({
-      filters: [{ name: 'manager.fileType', extensions: ['dylib', 'so', 'dll'] }]
+      filters: [{ name: 'manager.fileType', extensions: ['seplugin', 'dylib', 'so', 'dll'] }]
     })
     expect(
       within(screen.getByRole('alertdialog')).getByText('manager.trustWarning')

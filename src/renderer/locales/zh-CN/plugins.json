@@ -14,7 +14,7 @@
     "unsupported": "原生插件仅适用于桌面应用，无法通过浏览器或手机管理。",
     "subtitle": "管理可信的原生插件及其设置和面板。",
     "empty": "尚未安装插件。",
-    "fileType": "原生插件动态库",
+    "fileType": "插件包或原生动态库",
     "uninstallWarning": "确定卸载此插件吗？该插件保存的配置也将一并删除。",
     "quarantineWarning": "此插件因异常启动已被隔离。如需再次尝试，请选择“重试”。",
     "views": "插件面板",
@@ -36,7 +36,8 @@
       "overview": "概览",
       "settings": "设置",
       "contributions": "扩展能力",
-      "services": "服务"
+      "services": "服务",
+      "processes": "进程"
     },
     "identifier": "插件 ID",
     "abi": "ABI 范围",
@@ -45,7 +46,7 @@
     "noDescription": "此原生插件未提供描述。您可以在下方查看扩展能力、设置及服务依赖。",
     "settingsUnavailable": "请启用此插件并连接插件核心后编辑设置。",
     "reconnect": "重试连接",
-    "emptyDescription": "原生插件可为 Se 扩展面板、命令和服务。选择可信来源的 .dylib、.so 或 .dll 动态库即可开始安装。",
+    "emptyDescription": "插件可为 Se 扩展面板、命令和服务。安装可信的 .seplugin 插件包或 .dylib、.so、.dll 动态库以开始使用。",
     "installFirst": "安装第一个插件",
     "noResults": "没有符合搜索内容和状态筛选条件的插件。",
     "clearFilters": "清除筛选"
@@ -126,5 +127,41 @@
     "available": "可用",
     "unavailable": "不可用",
     "secretsUnavailable": "宿主服务 se.host.secrets 不可用。"
+  },
+  "web": {
+    "loading": "正在加载插件界面…",
+    "error": "无法加载插件界面。",
+    "crashed": "插件界面已崩溃。",
+    "revoked": "此插件界面的访问权限已撤销。",
+    "reload": "重新加载界面",
+    "trust": "原生代码拥有完全信任；网页界面处于隔离环境",
+    "unsupported": "网页插件界面仅在桌面应用中受支持。",
+    "handshakeTimeout": "插件界面连接超时。",
+    "navigation": "已阻止导航到插件界面之外。"
+  },
+  "processes": {
+    "title": "插件进程",
+    "refreshHint": "此选项卡打开时，每两秒自动刷新进程状态和近期日志。",
+    "empty": "未声明进程。",
+    "unavailable": "请启用此插件并连接插件核心，以查看和控制其进程。",
+    "error": "进程数据或控制暂不可用，将在下次刷新时重试。",
+    "state": "状态",
+    "pid": "进程 ID",
+    "restarts": "重启次数",
+    "start": "启动",
+    "stop": "停止",
+    "restart": "重启",
+    "logs": "近期日志",
+    "emptyLogs": "暂无近期日志。",
+    "truncated": "仅显示最新日志尾部，较早输出已省略。",
+    "states": {
+      "unknown": "未知",
+      "stopped": "已停止",
+      "starting": "正在启动",
+      "running": "运行中",
+      "backoff": "等待重启",
+      "exited": "已退出",
+      "crashed": "已崩溃"
+    }
   }
 }
