@@ -25,7 +25,10 @@ impl Drop for LateHost {
             Err(status) => status,
         };
         // TLS destruction must not panic, even if the test removed its directory.
-        let _ = std::fs::write(&self.result_file, status.to_string());
+        let pending = self.result_file.with_extension("pending");
+        if std::fs::write(&pending, status.to_string()).is_ok() {
+            let _ = std::fs::rename(pending, &self.result_file);
+        }
     }
 }
 
@@ -72,6 +75,8 @@ pub struct CounterPlugin {
     count: f64,
     config: Config,
     activity: crate::activity::Activity,
+    studio: crate::studio::Studio,
+    recent: Vec<Value>,
 }
 
 fn parse(bytes: &[u8]) -> Result<Value, SeStatus> {
@@ -84,6 +89,23 @@ fn write(out: &mut OutputWriter<'_>, value: Value) -> Result<(), SeStatus> {
 }
 
 impl CounterPlugin {
+    fn record_activity(&mut self, label: &str) {
+        let value = self.count.max(0.0)
+            + self.activity.terminal_count() as f64
+            + self.activity.observed() as f64;
+        self.recent.push(json!({"label":label,"value":value}));
+        if self.recent.len() > 12 {
+            self.recent.remove(0);
+        }
+    }
+    fn studio_snapshot(&self) -> Value {
+        json!({"count":self.count,"terminalCount":self.activity.terminal_count(),"agentTurnCount":self.activity.observed(),"activity":self.recent,"service":self.studio.service(),"wakeCount":self.studio.wakes})
+    }
+    fn push_studio(&self) {
+        if let Some(host) = self.host.as_ref() {
+            self.studio.post(host, self.studio_snapshot());
+        }
+    }
     fn tree(&self) -> Value {
         // Heading has no tone property in UI v1. The adjacent greeting text
         // carries the configured tone, rather than emitting an invalid heading.
@@ -184,6 +206,8 @@ impl PluginV1 for CounterPlugin {
             count: 0.0,
             config,
             activity: crate::activity::Activity::default(),
+            studio: crate::studio::Studio::new(),
+            recent: Vec::new(),
         })
     }
 
@@ -225,6 +249,96 @@ impl PluginV1 for CounterPlugin {
 
     fn on_command(&mut self, bytes: &[u8], out: &mut OutputWriter<'_>) -> Result<(), SeStatus> {
         let request = parse(bytes)?;
+        match request["commandId"].as_str() {
+            Some("increment") => self.count += self.config.step,
+            Some("reset") => self.count = 0.0,
+            Some("summary") => {}
+            Some("service-ping") => self.studio.ping(),
+            _ => return self.existing_command(request, out),
+        }
+        if let Some(host) = &self.host {
+            self.activity.initialize_web(host);
+        }
+        if matches!(request["commandId"].as_str(), Some("increment" | "reset")) {
+            self.record_activity(request["commandId"].as_str().unwrap_or("counter"));
+        }
+        self.push_studio();
+        write(
+            out,
+            json!({"schemaVersion":1,"result":self.studio_snapshot(),"invalidateViews":[VIEW]}),
+        )
+    }
+
+    fn on_config_changed(&mut self, bytes: &[u8]) -> Result<(), SeStatus> {
+        self.config = Config::parse(parse(bytes)?["values"].clone())?;
+        if let Some(host) = &self.host {
+            host.log(SEP_LOG_INFO, "Configured Counter configuration applied")?;
+        }
+        Ok(())
+    }
+
+    fn on_service_call(
+        &mut self,
+        bytes: &[u8],
+        out: &mut OutputWriter<'_>,
+    ) -> Result<(), SeStatus> {
+        let request = parse(bytes)?;
+        if request["service"] == "se.host.wake" && request["method"] == "wake" {
+            self.studio.wake(self.host.as_ref().ok_or(SEP_UNAVAILABLE)?);
+            self.push_studio();
+            return write(
+                out,
+                json!({"schemaVersion":1,"result":{"invalidateViews":["activity-studio"]}}),
+            );
+        }
+        if request["service"] == "se.host.events" && request["method"] == "deliver" {
+            self.activity.deliver(
+                self.host.as_ref().ok_or(SEP_UNAVAILABLE)?,
+                &request["input"],
+            );
+            self.record_activity(request["input"]["topic"].as_str().unwrap_or("context"));
+            self.push_studio();
+            return write(
+                out,
+                json!({"schemaVersion":1,"result":{"invalidateViews":[VIEW]}}),
+            );
+        }
+        if request["service"] == "se.host.storage" && request["method"] == "completed" {
+            self.activity.completed(
+                self.host.as_ref().ok_or(SEP_UNAVAILABLE)?,
+                &request["input"],
+            );
+            return write(
+                out,
+                json!({"schemaVersion":1,"result":{"invalidateViews":[VIEW]}}),
+            );
+        }
+        if request["service"] != "org.termul.example.counter"
+            || request["version"] != 1
+            || request["method"] != "get"
+        {
+            return Err(SEP_UNAVAILABLE);
+        }
+        write(
+            out,
+            json!({"schemaVersion":1,"result":{"count":self.count}}),
+        )
+    }
+
+    fn destroy(self) -> Result<(), SeStatus> {
+        if let Some(host) = self.host {
+            host.log(SEP_LOG_INFO, "Configured Counter destroyed")?;
+        }
+        Ok(())
+    }
+}
+
+impl CounterPlugin {
+    fn existing_command(
+        &mut self,
+        request: Value,
+        out: &mut OutputWriter<'_>,
+    ) -> Result<(), SeStatus> {
         if let Some(command) = request["commandId"]
             .as_str()
             .filter(|id| id.starts_with("example.activity-"))
@@ -261,58 +375,5 @@ impl PluginV1 for CounterPlugin {
             out,
             json!({"schemaVersion":1,"result":{"count":self.count},"invalidateViews":[VIEW]}),
         )
-    }
-
-    fn on_config_changed(&mut self, bytes: &[u8]) -> Result<(), SeStatus> {
-        self.config = Config::parse(parse(bytes)?["values"].clone())?;
-        if let Some(host) = &self.host {
-            host.log(SEP_LOG_INFO, "Configured Counter configuration applied")?;
-        }
-        Ok(())
-    }
-
-    fn on_service_call(
-        &mut self,
-        bytes: &[u8],
-        out: &mut OutputWriter<'_>,
-    ) -> Result<(), SeStatus> {
-        let request = parse(bytes)?;
-        if request["service"] == "se.host.events" && request["method"] == "deliver" {
-            self.activity.deliver(
-                self.host.as_ref().ok_or(SEP_UNAVAILABLE)?,
-                &request["input"],
-            );
-            return write(
-                out,
-                json!({"schemaVersion":1,"result":{"invalidateViews":[VIEW]}}),
-            );
-        }
-        if request["service"] == "se.host.storage" && request["method"] == "completed" {
-            self.activity.completed(
-                self.host.as_ref().ok_or(SEP_UNAVAILABLE)?,
-                &request["input"],
-            );
-            return write(
-                out,
-                json!({"schemaVersion":1,"result":{"invalidateViews":[VIEW]}}),
-            );
-        }
-        if request["service"] != "org.termul.example.counter"
-            || request["version"] != 1
-            || request["method"] != "get"
-        {
-            return Err(SEP_UNAVAILABLE);
-        }
-        write(
-            out,
-            json!({"schemaVersion":1,"result":{"count":self.count}}),
-        )
-    }
-
-    fn destroy(self) -> Result<(), SeStatus> {
-        if let Some(host) = self.host {
-            host.log(SEP_LOG_INFO, "Configured Counter destroyed")?;
-        }
-        Ok(())
     }
 }

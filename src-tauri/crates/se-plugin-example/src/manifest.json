@@ -21,6 +21,22 @@
       {
         "id": "example.activity-toggle",
         "title": "Toggle activity"
+      },
+      {
+        "id": "increment",
+        "title": "Studio: increment"
+      },
+      {
+        "id": "reset",
+        "title": "Studio: reset"
+      },
+      {
+        "id": "summary",
+        "title": "Studio: summary"
+      },
+      {
+        "id": "service-ping",
+        "title": "Studio: ping service"
       }
     ],
     "configuration": {
@@ -68,6 +84,23 @@
         "title": "Counter",
         "location": "sidebar",
         "icon": "calculator"
+      },
+      {
+        "id": "activity-studio",
+        "title": "Activity Studio",
+        "kind": "web",
+        "entry": "index.html",
+        "location": "sidebar",
+        "icon": "chart-bar",
+        "allow": [
+          "commands",
+          "context.read",
+          "context.events",
+          "storage.read",
+          "storage.write",
+          "feedback",
+          "config.read"
+        ]
       }
     ],
     "eventSubscriptions": [
@@ -105,6 +138,14 @@
         "scope": "activeProject",
         "commandId": "example.activity-summary",
         "order": 0
+      },
+      {
+        "id": "studio-service",
+        "label": "Activity Studio service",
+        "location": "statusBar",
+        "scope": "window",
+        "commandId": "service-ping",
+        "order": 20
       }
     ],
     "menus": [
@@ -150,6 +191,18 @@
           "project.exists": true
         }
       }
+    ],
+    "processes": [
+      {
+        "id": "activity-service",
+        "command": "native/se-plugin-example-service",
+        "args": [
+          "--port",
+          "0"
+        ],
+        "autostart": true,
+        "restart": "never"
+      }
     ]
   },
   "services": {
@@ -178,6 +231,18 @@
       },
       {
         "name": "se.host.status",
+        "version": 1
+      },
+      {
+        "name": "se.host.ui",
+        "version": 1
+      },
+      {
+        "name": "se.host.wake",
+        "version": 1
+      },
+      {
+        "name": "se.host.process",
         "version": 1
       }
     ]

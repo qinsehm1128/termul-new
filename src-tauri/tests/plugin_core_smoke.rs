@@ -130,11 +130,7 @@ impl Drop for PidReaper {
 fn artifact(variant: &str) -> PathBuf {
     let root = std::env::var_os("SE_PLUGIN_TEST_ARTIFACTS")
         .expect("SE_PLUGIN_TEST_ARTIFACTS is required; run bash scripts/test-plugins.sh");
-    let name = format!(
-        "{}se_plugin_example{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    );
+    let name = "activity-studio.seplugin";
     let path = PathBuf::from(root).join(variant).join(name);
     assert!(
         path.is_file(),
@@ -482,7 +478,7 @@ async fn plugin_core_isolation_and_recovery() {
     let installed: PluginInfo = rpc(&gui, METHOD_INSTALL, json!({"path": normal})).await;
     assert_eq!(installed.id, ID);
     assert_eq!(installed.state, PluginState::Disabled);
-    assert_eq!(installed.manifest.contributes.views.len(), 1);
+    assert_eq!(installed.manifest.contributes.views.len(), 2);
     let contribution = &installed.manifest.contributes.views[0];
     assert_eq!(contribution.id, VIEW);
     assert_eq!(contribution.location, ViewLocation::Sidebar);

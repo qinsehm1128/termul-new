@@ -23,6 +23,8 @@ cp "$target_dir/debug/$library" "$SE_PLUGIN_TEST_ARTIFACTS/fault/$library"
 command cargo build --manifest-path src-tauri/Cargo.toml --target-dir /Users/qs/project/me/termul/src-tauri/target -p se-plugin-example --lib --locked --features upgrade-fixture
 cp "$target_dir/debug/$library" "$SE_PLUGIN_TEST_ARTIFACTS/upgrade/$library"
 
+bash scripts/test-plugin-web-ui.sh
+
 command cargo test --manifest-path src-tauri/Cargo.toml --target-dir /Users/qs/project/me/termul/src-tauri/target -p se-plugin-host --test plugin_e2e --locked -- --nocapture
 
 # Real Plugin Core context/feedback/contribution RPCs and process isolation.
@@ -32,4 +34,4 @@ fi
 
 # P5: public renderer stores/components consume the same host UI contracts;
 # retain the keyboard-persistence checks alongside the unbound pilot shortcut.
-bunx vitest run src/renderer/features/plugins/activity-pilot.integration.test.tsx src/renderer/stores/keyboard-shortcuts-store.test.ts
+bunx vitest run src/renderer/features/plugins/activity-pilot.integration.test.tsx src/renderer/stores/keyboard-shortcuts-store.test.ts src/renderer/features/plugins/web/example-ui.test.ts

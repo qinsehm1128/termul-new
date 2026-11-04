@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Activity Studio</title>
+    <link rel="stylesheet" href="./app.css">
+    <!-- Reserved host-owned classic shim; repeat execution is guarded by window.se. -->
+    <script src="../__se__/se-plugin-ui.js"></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <main class="studio" aria-labelledby="page-title">
+      <header class="masthead">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>•</span></span><div><p class="eyebrow">TERMUL / PLUGIN LAB</p><h1 id="page-title">Activity Studio</h1></div></div>
+        <span id="bridge-status" class="badge" role="status">Connecting to host…</span>
+      </header>
+      <section class="intro" aria-label="Overview">
+        <div><p class="eyebrow accent">YOUR WORKSPACE, IN MOTION</p><h2>A little context.<br>A clearer picture.</h2><p class="muted">Native signals, a quiet timeline, and a place to collect your next thought.</p></div>
+        <div class="session-chip"><span class="pulse" aria-hidden="true"></span><span id="project-label">Waiting for workspace</span></div>
+      </section>
+      <p id="global-status" class="status-line" role="status" aria-live="polite">Opening a secure bridge to your workspace.</p>
+      <section class="metrics" aria-label="Workspace metrics">
+        <article class="card metric"><div class="metric-heading"><h3>Counter</h3><span aria-hidden="true">↗</span></div><p id="count" class="metric-value">—</p><p>Native state · persistent</p></article>
+        <article class="card metric"><div class="metric-heading"><h3>Terminals</h3><span aria-hidden="true">&gt;_</span></div><p id="terminals" class="metric-value">—</p><p>Current workspace</p></article>
+        <article class="card metric"><div class="metric-heading"><h3>Agent turns</h3><span aria-hidden="true">✳</span></div><p id="agent-turns" class="metric-value">—</p><p>Native activity snapshot</p></article>
+        <article class="card metric"><div class="metric-heading"><h3>Wake count</h3><span aria-hidden="true">⌁</span></div><p id="wake-count" class="metric-value">—</p><p>Native instance wakes</p></article>
+      </section>
+      <div class="workspace-grid">
+        <section class="card chart-card" aria-labelledby="activity-title">
+          <div class="section-heading"><div><p class="eyebrow">THE RHYTHM OF WORK</p><h3 id="activity-title">Workspace activity</h3></div><span class="legend"><i aria-hidden="true"></i>Native activity</span></div>
+          <svg id="activity-chart" viewBox="0 0 600 180" role="img" aria-labelledby="chart-title chart-description"><title id="chart-title">Workspace activity chart</title><desc id="chart-description">Waiting for native activity data.</desc><g id="chart-grid" aria-hidden="true"></g><g id="chart-series" aria-hidden="true"></g></svg>
+          <p id="chart-caption" class="muted chart-caption">No activity yet. Your workspace signals will appear here.</p>
+          <div class="action-bar"><button id="increment" class="button primary" disabled>+ Increment</button><button id="summary" class="button" disabled>Refresh summary</button><button id="reset" class="button quiet" disabled>Reset counter</button><button id="notify" class="button quiet" disabled>Send notification</button></div>
+          <p id="native-status" class="small muted" role="status">Commands run in the native plugin, not this page.</p>
+        </section>
+        <section class="card notes-card" aria-labelledby="notes-title">
+          <div class="section-heading"><div><p class="eyebrow">LEAVE A THREAD</p><h3 id="notes-title">Workspace notes</h3></div><span id="note-revision" class="micro-label">Not loaded</span></div>
+          <label class="sr-only" for="notes">Plugin notes</label><textarea id="notes" maxlength="12000" placeholder="What are you working toward?" disabled></textarea>
+          <div class="notes-footer"><span id="note-status" class="small muted" role="status">Loading persisted notes…</span><button id="save-note" class="button small-button" disabled>Save note</button></div>
+          <div id="note-conflict" class="conflict" hidden><p>Another view saved newer notes. Your draft is still here.</p><button id="reload-note" class="button small-button">Load latest (replace draft)</button></div>
+          <p class="footnote">Plugin-scoped storage · revision-checked saves</p>
+        </section>
+        <section class="card timeline-card" aria-labelledby="timeline-title">
+          <div class="section-heading"><div><p class="eyebrow">LIVE CONTEXT</p><h3 id="timeline-title">Workspace timeline</h3></div><span id="context-status" class="micro-label">Not subscribed</span></div>
+          <ol id="timeline" class="timeline"><li class="empty">Context events will appear after the bridge connects.</li></ol>
+        </section>
+        <section class="card service-card" aria-labelledby="service-title">
+          <div class="section-heading"><div><p class="eyebrow">LOCAL COMPANION</p><h3 id="service-title">Service health</h3></div><span id="service-status" class="badge">Unknown</span></div>
+          <dl class="details"><div><dt>Loopback port</dt><dd id="service-port">—</dd></div><div><dt>Process / uptime</dt><dd id="service-process">—</dd></div><div><dt>Native ping</dt><dd id="native-ping-result">Not checked</dd></div><div><dt>Browser / CORS</dt><dd id="direct-ping-result">Not checked</dd></div></dl>
+          <div class="action-bar"><button id="service-ping" class="button" disabled>Native ping</button><button id="direct-ping" class="button quiet" disabled>Direct fetch /ping</button></div>
+          <p class="footnote">Native ping is asynchronous. Direct fetch tests this frame’s loopback access and the service’s CORS response separately.</p>
+        </section>
+      </div>
+      <section class="card boundary-card" aria-labelledby="boundary-title">
+        <div class="section-heading"><div><p class="eyebrow">TRUST, BUT INSPECT</p><h3 id="boundary-title">Sandbox observations</h3></div><button id="check-sandbox" class="button small-button">Run checks</button></div>
+        <ul id="sandbox-results" class="sandbox-results" aria-live="polite"></ul>
+        <p class="footnote">Observations from this frame only, not proof of desktop isolation. Parent-document reads are attempted safely and never retained.</p>
+      </section>
+      <footer><span>ACTIVITY STUDIO <span class="muted">/ Example plugin</span></span><span id="theme-label">Host theme · waiting</span></footer>
+    </main>
+  </body>
+</html>

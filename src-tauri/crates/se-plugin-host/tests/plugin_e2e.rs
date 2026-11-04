@@ -31,13 +31,7 @@ fn artifacts() -> Artifacts {
     let root = PathBuf::from(std::env::var_os("SE_PLUGIN_TEST_ARTIFACTS").expect(
         "SE_PLUGIN_TEST_ARTIFACTS must point to prebuilt normal/fault/upgrade libraries; run bash scripts/test-plugins.sh",
     ));
-    let filename = if cfg!(target_os = "windows") {
-        "se_plugin_example.dll"
-    } else if cfg!(target_os = "macos") {
-        "libse_plugin_example.dylib"
-    } else {
-        "libse_plugin_example.so"
-    };
+    let filename = "activity-studio.seplugin";
     let library = |variant: &str| {
         let path = root.join(variant).join(filename);
         let metadata = fs::metadata(&path).unwrap_or_else(|error| {
@@ -264,7 +258,7 @@ async fn example_cdylib_end_to_end() {
             .expect("dlopen normal example and install");
         assert_eq!(installed.id, ID);
         assert_eq!(installed.manifest.version, "0.1.0");
-        assert_eq!(installed.manifest.contributes.views.len(), 1);
+        assert_eq!(installed.manifest.contributes.views.len(), 2);
         let contribution = &installed.manifest.contributes.views[0];
         assert_eq!(contribution.id, VIEW);
         assert_eq!(contribution.location, ViewLocation::Sidebar);
@@ -273,7 +267,7 @@ async fn example_cdylib_end_to_end() {
         assert!(!installed.desired_enabled);
         assert!(installed.generation.is_none());
         assert_eq!(host.list().await.unwrap().plugins, vec![installed.clone()]);
-        assert_eq!(installed.manifest.contributes.commands.len(), 3);
+        assert_eq!(installed.manifest.contributes.commands.len(), 7);
         assert_eq!(
             installed.manifest.contributes.commands[0].id,
             "example.reset"
@@ -287,7 +281,7 @@ async fn example_cdylib_end_to_end() {
         assert_eq!(diagnostics.active_instances, 1);
         assert_eq!(diagnostics.broker_registrations, 1);
         assert_eq!(diagnostics.view_count, 1);
-        assert_eq!(diagnostics.command_count, 3);
+        assert_eq!(diagnostics.command_count, 7);
         assert!(
             diagnostics.loaded_libraries >= 2,
             "install and activation must dlopen real copies"
@@ -829,7 +823,7 @@ async fn activity_pilot_native_context_storage_ui_and_generation_lifecycle() {
         node_text(&view(&host).await, "activity-state"),
         "Loading activity"
     );
-    assert_eq!(first.manifest.services.requires.len(), 5);
+    assert_eq!(first.manifest.services.requires.len(), 8);
     assert_eq!(first.manifest.contributes.event_subscriptions.len(), 5);
     assert_eq!(first.manifest.contributes.menus.len(), 4);
     assert_eq!(first.manifest.contributes.keybindings[0].key, "");

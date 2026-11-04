@@ -253,6 +253,13 @@ impl Activity {
             );
         }
     }
+    pub(crate) fn initialize_web(&mut self, host: &Host) {
+        if self.source.is_empty() {
+            self.snapshot(host);
+        } else {
+            self.initialize(host);
+        }
+    }
     fn initialize(&mut self, host: &Host) {
         if !self.profile_loaded {
             self.storage(host, "profile-get", 0);
@@ -1030,7 +1037,7 @@ mod tests {
             );
             assert_eq!(
                 manifest["services"]["requires"].as_array().unwrap().len(),
-                5
+                8
             );
             assert_eq!(
                 manifest["contributes"]["menus"].as_array().unwrap().len(),
