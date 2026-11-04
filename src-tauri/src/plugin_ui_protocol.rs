@@ -36,7 +36,7 @@ impl PluginUiSessions {
             plugin_id: reply.plugin_id.clone(),
             generation: reply.generation.clone(),
             session_id: reply.session_id.clone(),
-            entry: reply.entry.clone(),
+            entry: package_entry(&reply.entry),
         });
         Ok(())
     }
@@ -68,6 +68,16 @@ fn unavailable() -> PluginError {
     )
 }
 
+/// Manifest web entries are relative to the package `ui/` directory; scheme URLs and Core
+/// asset requests use full package paths so `../__se__/se-plugin-ui.js` resolves to the shim.
+fn package_entry(entry: &str) -> String {
+    if entry.starts_with("ui/") {
+        entry.to_owned()
+    } else {
+        format!("ui/{entry}")
+    }
+}
+
 /// W4 consumes this URL rather than constructing a platform-specific scheme URL.
 pub fn session_url(reply: &WebOpenReply) -> String {
     let origin = if cfg!(target_os = "windows") {
@@ -81,7 +91,7 @@ pub fn session_url(reply: &WebOpenReply) -> String {
         .extend([&reply.plugin_id, &reply.generation, &reply.session_id]);
     url.path_segments_mut()
         .expect("static hierarchical origin")
-        .extend(reply.entry.split('/'));
+        .extend(package_entry(&reply.entry).split('/'));
     url.into()
 }
 
@@ -419,5 +429,34 @@ mod tests {
             url,
             format!("{origin}/{PLUGIN}/{GENERATION}/{SESSION}/ui/dist/index.html")
         );
+    }
+
+    /// Manifests declare `entry` relative to `ui/` (e.g. `index.html`). The session URL and
+    /// the served entry must use the package path, and the page's `../__se__/` shim must resolve.
+    #[tokio::test]
+    async fn plugin_protocol_manifest_relative_entry() {
+        let mut relative = reply();
+        relative.entry = "index.html".into();
+        let sessions = PluginUiSessions::default();
+        sessions.insert(&relative).unwrap();
+        let url = session_url(&relative);
+        assert!(url.ends_with(&format!("/{SESSION}/ui/index.html")), "{url}");
+        let shim_url = url::Url::parse(&url)
+            .unwrap()
+            .join("../__se__/se-plugin-ui.js")
+            .unwrap();
+        assert!(shim_url
+            .as_str()
+            .ends_with(&format!("/{SESSION}/{SHIM_PATH}")));
+        let get = respond_with(request("GET", "ui/index.html"), &sessions, asset).await;
+        assert_eq!(get.status(), StatusCode::OK);
+        assert!(String::from_utf8_lossy(get.body()).contains(SHIM_PATH));
+        let shim = respond_with(request("GET", SHIM_PATH), &sessions, |req| async move {
+            assert_eq!(req.path, "ui/index.html");
+            asset(req).await
+        })
+        .await;
+        assert_eq!(shim.status(), StatusCode::OK);
+        assert_eq!(shim.body(), SHIM.as_bytes());
     }
 }
