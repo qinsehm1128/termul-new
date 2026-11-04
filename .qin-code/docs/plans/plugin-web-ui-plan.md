@@ -4,7 +4,7 @@ kind: plan
 id: plugin-web-ui
 title: 插件自带网页界面：编译后 dist + 原生后端，沙箱 iframe 与桥接
 date: 2026-11-04
-status: draft
+status: accepted
 source: user:2026-11-04T09:32 "不做ts/js插件...只能安装编译后的 dist...但是界面可以随意设置"; agent://webui-planner
 lang: zh-CN
 scope: project
@@ -16,22 +16,25 @@ scope: project
 
 1. **安装包 `.seplugin`**：ZIP，内含 `manifest.json`、`package.json`（文件清单与 SHA-256）、`native/<target-triple>/<lib>`、`ui/`。流式解包时校验大小、条目数与压缩方式，拒绝路径穿越、符号链接、大小写冲突路径；包内 manifest 必须与原生库 ABI 导出的 manifest 完全一致。先完整发布到 `<profile>/plugins/packages/<id>/<version>/<archiveSha256>/`，再写注册表。SHA-256 只保证完整性，不代表发布者身份。
 2. **manifest**：视图新增 `kind: "web"`、`entry`（`ui/` 下的相对 `.html`）与 `allow` 白名单（commands、view.dispatch、config.read/write、context.read/events、storage.read/write、feedback）。宿主侧能力仍需声明对应的 `se.host.*` 服务；新增保留服务 `se.host.ui@1`，供原生后端向页面推送数据。
-3. **加载**：专用 `se-plugin` 协议，URL 带会话与代次，资产由 Plugin Core 读取并校验哈希，`no-store`，严格 CSP，默认不允许访问远程或本地网络。
+3. **加载**：专用 `se-plugin` 协议，URL 带会话与代次，资产由 Plugin Core 读取并校验哈希，`no-store`。**CSP 宽松**（用户决定 2026-11-04 09:52）：允许内联脚本/样式与 eval，`connect-src`/`img-src`/`font-src`/`media-src`/`frame-src` 允许任意 `http(s):`、`ws(s):`、`data:`、`blob:`，包括 `localhost`；不再要求在 manifest 声明网络访问。跨源请求是否成功仍取决于目标服务的 CORS（页面是不透明源，`Origin: null`）。
 4. **隔离**：`<iframe sandbox="allow-scripts">`，永不加 `allow-same-origin`，因此页面无法使用 Tauri IPC、读写主界面 DOM 或访问其他插件。文档被二次加载（导航）时撤销会话，并显示错误页。
 5. **桥接**：宿主提供版本化的 `se-plugin-ui.js`，页面经 postMessage（nonce 握手、来源校验、限速、限大小、请求超时）调用 `se.invoke`、`se.view.dispatch`、`se.config`、`se.context`、`se.storage`、`se.feedback`。所有调用以插件身份记账，并在禁用、升级或断开时按代次失效。原生后端通过 `se.host.ui.postMessage` 推送数据。
 6. **主题**：以数据形式下发宿主设计令牌与明暗模式，主题切换不会重置页面状态。页面外由宿主保留标题栏、信任标识和重新加载按钮。
 7. **Core 能力协商**：新增可选能力 `plugins.web-ui.v1`。旧版 Core 仅对网页视图返回 `PLUGIN_NOT_SUPPORTED`。
+8. **后台唤醒**（用户决定一并实现）：新增保留服务 `se.host.wake@1`。原生插件的任意线程可在回调之外调用 `request`（非阻塞入队、合并、限速），宿主随后经 `on_service_call` 投递 `se.host.wake.wake`，插件在这次回调内刷新视图、发通知、写存储、向网页推送。禁用、升级或隔离后失效。
+9. **受管后台进程**（用户决定一并实现，不限制后端调用）：manifest `contributes.processes`，每项包括 `id`、`command`（包内相对路径，或绝对路径 / PATH 中的命令）、`args`、`env`、`cwd`、`autostart`、`restart: never|on-failure|always`。Plugin Core 在插件激活时按进程组启动，崩溃按策略退避重启；禁用、卸载、升级或 Core 退出时整组结束。stdout/stderr 进入有界日志环形缓冲。新增保留服务 `se.host.process@1`（status/start/stop/restart/logs），管理页显示状态与日志。插件内部可以访问任何本地或远程服务，主程序不做限制。
 
 ## 非目标
 
 - 不提供 Node/JS 后端、开发服务器例外，也不支持远程 URL 视图。
 - 不做独立原生 webview 窗口。
 - 不声称沙箱能约束原生代码：原生插件仍是完全受信任代码。
-- CSP 不是操作系统级的网络出口边界。页面访问本地服务应经由原生后端实现，或留待后续的显式声明能力。
+- 不限制插件原生代码与受管后台进程的网络、文件、进程访问：这属于插件内部行为。
+- iframe 沙箱只阻止页面使用主程序的 Tauri IPC 和主界面 DOM，不作为网络边界。
 
 ## 任务
 
-依赖顺序：W1 → (W2 ∥ W4) → W3 → W5。每个文件只有一个负责包，同一时间只运行一个 cargo 进程。
+依赖顺序：W1 → (W2 ∥ W4) → W3 → W5。W1 同时冻结后台唤醒与受管进程的契约；W2 在网页包之后实现两项后台能力，W4 在管理页展示进程。每个文件只有一个负责包，同一时间只运行一个 cargo 进程。
 
 | 包 | 内容 | 主要文件 |
 |---|---|---|
