@@ -30,3 +30,14 @@ Se is a Tauri 2 desktop application with a React/TypeScript renderer and Rust ru
 - Preserve live PTY sessions across project switches; do not kill or recreate them as navigation cleanup.
 
 <!-- /bmad:context -->
+
+## Plugin capability sync
+
+Everything Se Manager can do is open to plugins, except credentials and secret values. If you add, change, rename or remove any of the following, follow `.agents/skills/plugin-capability-sync/SKILL.md` and update `.qin-code/docs/specs/plugin-capability-catalog-spec.md` in the same commit:
+
+- a Tauri command;
+- a web route;
+- an emitted event;
+- renderer-owned project, settings, theme, shortcut or layout state.
+
+Before committing, run `python3 .agents/skills/plugin-capability-sync/scripts/check_catalog.py`; it must report `unclassified: 0`.

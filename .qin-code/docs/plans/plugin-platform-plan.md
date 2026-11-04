@@ -289,6 +289,7 @@ when/enablement 使用共享有界 parser，不用 eval。首版语法为布尔�
 - **Changes：** 用带依赖的 host provider dispatch 替代构造 Tauri State；新增 Tauri `capabilities_list/call` 和对应的 authenticated web API；项目与设置的变更只经现有权威路径，禁止旁写持久化文件。
 - **Dependencies / parallelism：** C2、M1 → C3a 框架 → C3b ∥ C3c。H1 只依赖 C3a 框架和 C3b。
 - **Acceptance criteria：** `capability_adapter_catalog_is_complete` 会比对 `generate_handler!` 与清单，每条命令恰好一个分类；每个 op 至少有一条成功测试和一条越权测试；用哨兵值验证 OPEN-REDACTED 不泄露密钥；per-call 操作未确认时没有副作用；GUI 消失后 memory 和插件工具可用，依赖界面的 op 返回 unavailable。
+- **持续同步：** `.agents/skills/plugin-capability-sync/` 由 AGENTS.md 引用，规定以后新增或修改命令、事件、前端状态时，必须在同一提交里更新能力清单。C3 落地后，`check_catalog.py` 的覆盖检查改由 Rust 测试 `capability_adapter_catalog_is_complete` 进 CI 强制执行；同时把 skill 第 5 步更新为当时的真实文件路径。
 - **Verification：** `CT -p se-manager --lib capability`；`CT -p se-manager --features standalone-server --lib capability`；`VT src/renderer/lib/capability-provider`。风险是工作量大、桌面与 standalone 的项目来源不同，以及前端 provider 的时序。
 
 #### C4 — 安装授权、管理页与审计 UI（2–3 日）

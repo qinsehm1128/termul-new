@@ -27,17 +27,20 @@ scope: project
 
 ### 统计
 
-| 部分 | 范围 | 条目 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
-|---|---|---|---|---|---|---|
-| A | Agent/会话/对话/记忆/Skills/定时任务/AI 渠道/MCP/远程访问/插件 | 156 命令 | 143 | 6 | 1 | 6 |
-| B | 终端/快捷终端/Git/worktree/搜索/文件/工作区/SSH/SFTP/隧道 | 116 命令 | 108 | 2 | 2 | 4 |
-| C | 浏览器/数据迁移/安全存储/日志/系统 + 前端独有能力 | 56 命令 + 29 前端 op | 70 | 3 | 5 | 7 |
-| **合计** | | **357** | **321** | **11** | **8** | **17** |
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-04 用脚本比对）：后端共 324 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
-上表按条目计数；A 中 5 个超时设置命令合并为一个 op，B 中有 5 处近似命令合并。不开放的 8 项为：
-- A：`ai_channel_set_key`；
-- B：`terminal_rotate_claim`、`ssh_create_askpass`；
-- C：`secure_storage_get/set/delete`、`webview_storage_handoff_capture/pending`。
+| 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
+|---|---|---|---|---|---|
+| 后端 Tauri 命令 | 324 | 288 | 11 | 8 | 17 |
+| 前端独有能力（无 Rust 命令） | 38 | 38 | 0 | 0 | 0 |
+| **合计** | **362** | **326** | **11** | **8** | **17** |
+
+各部分的范围：
+- A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
+- B：终端、快捷终端、Git、worktree、搜索、文件、工作区、SSH/SFTP、隧道；
+- C：浏览器、数据迁移、安全存储、日志、系统，以及前端独有能力。
+
+各部分内部的计数表沿用 explorer 的原始统计，与本表不一致时以本表为准。
 
 ### 事件订阅
 
@@ -660,7 +663,7 @@ Legend — class: **R** read, **W** write, **D** destructive, **SEC** secret-bea
 | webview_storage_handoff.pending | src-tauri/src/webview_storage_handoff.rs:398 | R/SEC | app-data handoff file | n/a | SECRET-EXCLUDED | rust-main | Returns those entries verbatim. |
 | webview_storage_handoff.mark_consumed | src-tauri/src/webview_storage_handoff.rs:410 | W | handoff file | none | INTERNAL | rust-main | Bookkeeping only; covered by handoff.pending. |
 | brand_migration.detect_legacy_brand_data | src-tauri/src/migration_detect.rs:612 | R | legacy roots on disk | none | OPEN | rust-main | Path/metadata scan only; returns signal kinds. |
-| brand_migration.run | src-tauri/src/migration_run.rs:731 | W/D | app-data tree | per-call | OPEN | rust-main | Bulk copy; per-root status, journal-mediated, legacy roots kept (FORBID-05). |
+| brand_migration.run | run_brand_migration `src-tauri/src/migration_run.rs:731` | W/D | app-data tree | per-call | OPEN | rust-main | Bulk copy; per-root status, journal-mediated, legacy roots kept (FORBID-05). |
 | brand_migration.last_run | src-tauri/src/migration_run.rs:766 | R | journal file | none | OPEN | rust-main | Never errors; unreadable journal = None. |
 
 ##### 1.5 Core runtime
@@ -669,35 +672,37 @@ Legend — class: **R** read, **W** write, **D** destructive, **SEC** secret-bea
 |---|---|---|---|---|---|---|---|
 | core.runtime_status | src-tauri/src/lib.rs:1873 | R | all cores + terminal/agent inventory | none | OPEN | rust-main | Returns pids, start times, build ids, active terminal list and agent ids — topology disclosure, not a secret. |
 | core.component_identities | src-tauri/src/lib.rs:1730 | R | cores | none | OPEN | rust-main | Probes each endpoint's hello ack. |
-| core.restart | src-tauri/src/lib.rs:1926 | W/D | one core role | per-call | OPEN | rust-main | Terminates every resource owned by that core (terminals, agents). |
+| core.restart | restart_core `src-tauri/src/lib.rs:1926` | W/D | one core role | per-call | OPEN | rust-main | Terminates every resource owned by that core (terminals, agents). |
+| core.component_identities | component_runtime_identities `src-tauri/src/lib.rs:1730` | R | all cores | none | OPEN | rust-main | 由根节点补录（2026-11-04 覆盖检查发现漏项）。返回 GUI、acp/terminal/plugin core 的 build id 和运行身份，不含密钥。 |
+| updater.fetchChannelManifest | updater_fetch_channel_manifest `src-tauri/src/updater_api.rs:128` | R | global | none | OPEN | rust-main | 由根节点补录。in `channel`（stable/insider/nightly）；从服务端拉取更新清单 JSON，需要联网。 |
 
 ##### 1.6 Menus, keybindings, i18n, quit behaviour
 
 | op id | source | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
-| app_menu.suspend | src-tauri/src/lib.rs:537 | W | native menu (global) | none | OPEN | rust-main | Removes the app menu; a plugin could hide it. |
-| app_menu.restore | src-tauri/src/lib.rs:557 | W | native menu (global) | none | OPEN | rust-main | Rebuilds it. |
-| ui.set_native_language | src-tauri/src/lib.rs:576 | W | global UI chrome + tray | none | OPEN | rust-main | Serialized against concurrent calls (lib.rs:226). |
-| keybindings.load_schemes | src-tauri/src/keybinding_schemes.rs:92 | R/W | scheme dir | none | OPEN | rust-main | `ensure_dir` makes the directory; otherwise a disk read. |
-| quit.set_end_core_sessions | src-tauri/src/lib.rs:1624 | W | global preference | none | OPEN | rust-main | Stores an atomic; only meaningful on the next quit. |
+| app_menu.suspend | suspend_app_menu `src-tauri/src/lib.rs:537` | W | native menu (global) | none | OPEN | rust-main | Removes the app menu; a plugin could hide it. |
+| app_menu.restore | restore_app_menu `src-tauri/src/lib.rs:557` | W | native menu (global) | none | OPEN | rust-main | Rebuilds it. |
+| ui.set_native_language | set_native_ui_language `src-tauri/src/lib.rs:576` | W | global UI chrome + tray | none | OPEN | rust-main | Serialized against concurrent calls (lib.rs:226). |
+| keybindings.load_schemes | keybinding_schemes_load `src-tauri/src/keybinding_schemes.rs:92` | R/W | scheme dir | none | OPEN | rust-main | `ensure_dir` makes the directory; otherwise a disk read. |
+| quit.set_end_core_sessions | set_quit_ends_core_sessions `src-tauri/src/lib.rs:1624` | W | global preference | none | OPEN | rust-main | Stores an atomic; only meaningful on the next quit. |
 
 ##### 1.7 Logs and diagnostics
 
 | op id | source | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
-| logs.set_retention_days | src-tauri/src/lib.rs:660 | W/D | log dir | per-call | OPEN | rust-main | Deletes archives older than `days` (logging.rs:154). |
-| logs.reveal_dir | src-tauri/src/lib.rs:678 | W | OS file manager | none | OPEN | rust-main | Opens Finder/Explorer at the log dir. |
-| logs.export_file | src-tauri/src/lib.rs:683 | R | log file → user path | none | OPEN-REDACTED | rust-main | Save dialog; raw log content. |
-| logs.copy_contents | src-tauri/src/lib.rs:688 | R | log file → clipboard | none | OPEN-REDACTED | rust-main | Raw content to the system clipboard. |
-| logs.export_default | src-tauri/src/lib.rs:693 | R | log file → default dir | none | OPEN-REDACTED | rust-main | Raw content to a fixed path. |
-| logs.frontend_error | src-tauri/src/commands.rs:7221 | W | log sink | none | OPEN | rust-main | Renderer-supplied message; a plugin can write arbitrary text into the log. |
+| logs.set_retention_days | set_log_retention_days `src-tauri/src/lib.rs:660` | W/D | log dir | per-call | OPEN | rust-main | Deletes archives older than `days` (logging.rs:154). |
+| logs.reveal_dir | reveal_log_dir_command `src-tauri/src/lib.rs:678` | W | OS file manager | none | OPEN | rust-main | Opens Finder/Explorer at the log dir. |
+| logs.export_file | export_log_file_command `src-tauri/src/lib.rs:683` | R | log file → user path | none | OPEN-REDACTED | rust-main | Save dialog; raw log content. |
+| logs.copy_contents | copy_log_contents_command `src-tauri/src/lib.rs:688` | R | log file → clipboard | none | OPEN-REDACTED | rust-main | Raw content to the system clipboard. |
+| logs.export_default | export_log_to_default_command `src-tauri/src/lib.rs:693` | R | log file → default dir | none | OPEN-REDACTED | rust-main | Raw content to a fixed path. |
+| logs.frontend_error | log_frontend_error `src-tauri/src/commands.rs:7221` | W | log sink | none | OPEN | rust-main | Renderer-supplied message; a plugin can write arbitrary text into the log. |
 
 ##### 1.8 macOS privacy
 
 | op id | source | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
-| macos.permissions_report | src-tauri/src/lib.rs:703 | R | TCC state | none | OPEN | rust-main | May trigger OS prompts for the ids passed in `active`; spawns `codesign`. |
-| macos.open_privacy_pane | src-tauri/src/lib.rs:723 | W | System Settings | none | OPEN | rust-main | Takes a probe id, not a URL — the URL map lives in `macos_permissions`. |
+| macos.permissions_report | macos_permissions_report_command `src-tauri/src/lib.rs:703` | R | TCC state | none | OPEN | rust-main | May trigger OS prompts for the ids passed in `active`; spawns `codesign`. |
+| macos.open_privacy_pane | macos_open_privacy_pane_command `src-tauri/src/lib.rs:723` | W | System Settings | none | OPEN | rust-main | Takes a probe id, not a URL — the URL map lives in `macos_permissions`. |
 
 ##### 1.9 Shell / environment
 
@@ -711,7 +716,7 @@ Legend — class: **R** read, **W** write, **D** destructive, **SEC** secret-bea
 
 | op id | source | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
-| agent_registry.fetch | src-tauri/src/lib.rs:3830 | R | agent registry | none | OPEN | rust-main | May belong to A/B's "named ones"; included for completeness (registered at lib.rs:3830). |
+| ~~agent_registry.fetch~~ | src-tauri/src/lib.rs:3830 | — | — | — | (重复) | — | 与清单 A 的 `se.agents.fetchRegistry` 是同一个命令，以 A 为准，本行不计数。 |
 
 #### 2. Part 2 — Renderer-owned capabilities (no Rust command)
 
