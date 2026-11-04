@@ -24,6 +24,13 @@ pub const METHOD_HOST_UI_DISMISS: &str = "plugins.host.ui.dismiss";
 pub const METHOD_CONTRIBUTION_EXECUTE: &str = "plugins.contribution.execute";
 /// Advertised and required once Plugin Core serves the host RPCs above (P3).
 pub const HOST_CAPABILITIES_V1: &str = "plugins.host-capabilities.v1";
+/// Optional until a host implements the web RPC methods.
+pub const WEB_UI_CAPABILITIES_V1: &str = crate::WEB_UI_CAPABILITY;
+pub const METHOD_WEB_OPEN: &str = crate::WEB_OPEN_METHOD;
+pub const METHOD_WEB_REQUEST: &str = crate::WEB_REQUEST_METHOD;
+pub const METHOD_WEB_READ: &str = crate::WEB_READ_METHOD;
+pub const METHOD_WEB_CLOSE: &str = crate::WEB_CLOSE_METHOD;
+pub const METHOD_WEB_ASSET: &str = crate::WEB_ASSET_METHOD;
 pub const PLUGIN_CAPABILITIES: [&str; 5] = [
     HOST_CAPABILITIES_V1,
     "plugins.lifecycle.v1",

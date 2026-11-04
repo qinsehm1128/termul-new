@@ -250,6 +250,7 @@ mod tests {
                 menus: vec![],
                 keybindings: vec![],
                 status_items: vec![],
+                processes: vec![],
             },
             services: Services {
                 provides: vec![],

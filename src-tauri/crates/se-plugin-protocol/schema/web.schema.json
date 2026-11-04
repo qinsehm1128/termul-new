@@ -1,0 +1,832 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://termul.dev/plugin/v1/web.schema.json",
+  "$comment": "Named DTOs at #/$defs/Type; ordinary JSON cap 256KiB, asset reply 6MiB. Read event sequences must increase and not exceed cursor. Canonical base64 must decode to size. Authentication, authorization and lifecycle fencing are runtime responsibilities. CSP is relaxed; no network manifest declaration.",
+  "$defs": {
+    "WebOpenRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+        },
+        "viewId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        }
+      },
+      "required": [
+        "id",
+        "viewId",
+        "generation"
+      ]
+    },
+    "WebOpenReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bootId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "pluginId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+        },
+        "viewId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "packageDigest": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "entry": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?!.*(?:^|/)(?:\\.\\.?|__[Ss][Ee]__)(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$))(?!.*\\.(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+          "allOf": [
+            {
+              "pattern": "\\.html$"
+            }
+          ]
+        },
+        "allow": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "commands",
+              "view.dispatch",
+              "config.read",
+              "config.write",
+              "context.read",
+              "context.events",
+              "storage.read",
+              "storage.write",
+              "feedback"
+            ]
+          },
+          "maxItems": 9,
+          "uniqueItems": true
+        },
+        "shimVersion": {
+          "const": 1
+        }
+      },
+      "required": [
+        "bootId",
+        "pluginId",
+        "viewId",
+        "generation",
+        "sessionId",
+        "nonce",
+        "packageDigest",
+        "entry",
+        "allow",
+        "shimVersion"
+      ]
+    },
+    "WebRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "method": {
+          "enum": [
+            "invoke",
+            "view.dispatch",
+            "config.get",
+            "config.set",
+            "context.snapshot",
+            "storage.get",
+            "storage.set",
+            "storage.delete",
+            "feedback.notification.upsert",
+            "feedback.notification.close",
+            "feedback.progress.upsert",
+            "theme.get"
+          ]
+        },
+        "params": {}
+      },
+      "required": [
+        "sessionId",
+        "requestId",
+        "method",
+        "params"
+      ]
+    },
+    "WebRequestReply": {},
+    "WebReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "afterSequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "sessionId",
+        "afterSequence"
+      ]
+    },
+    "WebReadReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "resyncRequired": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sequence": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "type": {
+                "enum": [
+                  "message",
+                  "invalidate",
+                  "configChanged",
+                  "contextEvent",
+                  "themeChanged",
+                  "resyncRequired"
+                ]
+              },
+              "payload": {}
+            },
+            "required": [
+              "sequence",
+              "type",
+              "payload"
+            ]
+          },
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "sequence",
+        "resyncRequired",
+        "events"
+      ]
+    },
+    "WebCloseRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "WebCloseReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "closed": {
+          "const": true
+        }
+      },
+      "required": [
+        "closed"
+      ]
+    },
+    "WebAssetRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?!.*(?:^|/)(?:\\.\\.?|__[Ss][Ee]__)(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$))(?!.*\\.(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+          "allOf": [
+            {
+              "pattern": "^ui/"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sessionId",
+        "path"
+      ]
+    },
+    "WebAssetReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mime": {
+          "enum": [
+            "text/html",
+            "text/javascript",
+            "application/javascript",
+            "text/css",
+            "application/json",
+            "image/svg+xml",
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp",
+            "image/avif",
+            "image/x-icon",
+            "font/woff",
+            "font/woff2",
+            "font/ttf",
+            "font/otf",
+            "application/wasm",
+            "text/plain",
+            "application/octet-stream"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        },
+        "dataBase64": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 5592408,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        }
+      },
+      "required": [
+        "mime",
+        "sha256",
+        "size",
+        "dataBase64"
+      ]
+    },
+    "ThemeSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "appearance": {
+          "enum": [
+            "light",
+            "dark"
+          ]
+        },
+        "variables": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "--background",
+              "--foreground",
+              "--card",
+              "--card-foreground",
+              "--popover",
+              "--popover-foreground",
+              "--primary",
+              "--primary-foreground",
+              "--secondary",
+              "--secondary-foreground",
+              "--muted",
+              "--muted-foreground",
+              "--accent",
+              "--accent-foreground",
+              "--destructive",
+              "--destructive-foreground",
+              "--border",
+              "--input",
+              "--ring",
+              "--radius"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "fontFamily": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "fontSize": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "revision",
+        "appearance",
+        "variables",
+        "fontFamily",
+        "fontSize"
+      ]
+    },
+    "HostUiPostMessageRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "viewId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "payload": {}
+      },
+      "required": [
+        "viewId",
+        "payload"
+      ]
+    },
+    "HostUiPostMessageReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delivered": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        }
+      },
+      "required": [
+        "delivered"
+      ]
+    },
+    "WebBridgeEnvelope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "const": "se-plugin-ui"
+            },
+            "version": {
+              "const": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "type": {
+              "const": "request"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "method": {
+              "enum": [
+                "invoke",
+                "view.dispatch",
+                "config.get",
+                "config.set",
+                "context.snapshot",
+                "storage.get",
+                "storage.set",
+                "storage.delete",
+                "feedback.notification.upsert",
+                "feedback.notification.close",
+                "feedback.progress.upsert",
+                "theme.get"
+              ]
+            },
+            "params": {}
+          },
+          "required": [
+            "channel",
+            "version",
+            "sessionId",
+            "nonce",
+            "type",
+            "requestId",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "const": "se-plugin-ui"
+            },
+            "version": {
+              "const": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "type": {
+              "const": "response"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {}
+          },
+          "required": [
+            "channel",
+            "version",
+            "sessionId",
+            "nonce",
+            "type",
+            "requestId",
+            "ok",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "const": "se-plugin-ui"
+            },
+            "version": {
+              "const": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "type": {
+              "const": "response"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "required": [
+            "channel",
+            "version",
+            "sessionId",
+            "nonce",
+            "type",
+            "requestId",
+            "ok",
+            "error"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "const": "se-plugin-ui"
+            },
+            "version": {
+              "const": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "type": {
+              "const": "event"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "event": {
+              "enum": [
+                "message",
+                "invalidate",
+                "configChanged",
+                "contextEvent",
+                "themeChanged",
+                "resyncRequired"
+              ]
+            },
+            "payload": {}
+          },
+          "required": [
+            "channel",
+            "version",
+            "sessionId",
+            "nonce",
+            "type",
+            "sequence",
+            "event",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "const": "se-plugin-ui"
+            },
+            "version": {
+              "const": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "type": {
+              "const": "ready"
+            }
+          },
+          "required": [
+            "channel",
+            "version",
+            "sessionId",
+            "nonce",
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "const": "se-plugin-ui"
+            },
+            "version": {
+              "const": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "type": {
+              "const": "welcome"
+            },
+            "pluginId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+            },
+            "viewId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "generation": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+            },
+            "theme": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "appearance": {
+                  "enum": [
+                    "light",
+                    "dark"
+                  ]
+                },
+                "variables": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "propertyNames": {
+                    "enum": [
+                      "--background",
+                      "--foreground",
+                      "--card",
+                      "--card-foreground",
+                      "--popover",
+                      "--popover-foreground",
+                      "--primary",
+                      "--primary-foreground",
+                      "--secondary",
+                      "--secondary-foreground",
+                      "--muted",
+                      "--muted-foreground",
+                      "--accent",
+                      "--accent-foreground",
+                      "--destructive",
+                      "--destructive-foreground",
+                      "--border",
+                      "--input",
+                      "--ring",
+                      "--radius"
+                    ]
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "fontFamily": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "fontSize": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "revision",
+                "appearance",
+                "variables",
+                "fontFamily",
+                "fontSize"
+              ]
+            }
+          },
+          "required": [
+            "channel",
+            "version",
+            "sessionId",
+            "nonce",
+            "type",
+            "pluginId",
+            "viewId",
+            "generation",
+            "theme"
+          ]
+        }
+      ]
+    }
+  }
+}

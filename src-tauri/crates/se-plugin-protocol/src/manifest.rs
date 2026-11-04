@@ -45,6 +45,8 @@ pub struct Contributions {
     pub keybindings: Vec<KeybindingContribution>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub status_items: Vec<StatusItemContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processes: Vec<ProcessContribution>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,7 +209,9 @@ pub fn known_host_service(name: &str, version: u32) -> Option<HostServiceAvailab
     }
     match name {
         "se.host.context" | "se.host.events" | "se.host.storage" | "se.host.feedback"
-        | "se.host.status" => Some(HostServiceAvailability::Available),
+        | "se.host.status" | "se.host.ui" | "se.host.wake" | "se.host.process" => {
+            Some(HostServiceAvailability::Available)
+        }
         "se.host.secrets" => Some(HostServiceAvailability::Unavailable),
         _ => None,
     }
@@ -293,6 +297,24 @@ pub struct CommandContribution {
 #[serde(deny_unknown_fields)]
 pub struct ViewContribution {
     pub id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_option"
+    )]
+    pub kind: Option<ViewKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_option"
+    )]
+    pub entry: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_option"
+    )]
+    pub allow: Option<Vec<WebAllow>>,
     pub title: String,
     pub location: ViewLocation,
     #[serde(
@@ -495,6 +517,63 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), PluginError> {
         code,
         "host service provider names are reserved",
     )?;
+    let mut web_entries = BTreeSet::new();
+    for view in &c.views {
+        if view.kind.unwrap_or_default() == ViewKind::Web {
+            let entry = view.entry.as_deref().unwrap_or("");
+            require(
+                is_web_entry(entry) && web_entries.insert(entry.to_ascii_lowercase()),
+                code,
+                "invalid or duplicate web entry",
+            )?;
+            let mut allow = BTreeSet::new();
+            for permission in view.allow.as_deref().unwrap_or(&[]) {
+                require(allow.insert(*permission), code, "duplicate web permission")?;
+                if let Some(service) = permission.required_service() {
+                    require(
+                        manifest
+                            .services
+                            .requires
+                            .iter()
+                            .any(|r| r.name == service && r.version == 1),
+                        code,
+                        "missing web host service",
+                    )?;
+                }
+            }
+        } else {
+            require(
+                view.entry.is_none() && view.allow.is_none(),
+                code,
+                "tree view cannot declare web fields",
+            )?;
+        }
+    }
+    require(
+        c.processes.len() <= MAX_MANAGED_PROCESSES,
+        code,
+        "too many processes",
+    )?;
+    let mut process_ids = BTreeSet::new();
+    if !c.processes.is_empty() {
+        require(
+            manifest
+                .services
+                .requires
+                .iter()
+                .any(|r| r.name == HOST_PROCESS_SERVICE && r.version == 1),
+            code,
+            "missing process host service",
+        )?;
+    }
+    for process in &c.processes {
+        require(
+            process_ids.insert(&process.id),
+            code,
+            "duplicate process id",
+        )?;
+        validate_process_contribution(process)?;
+    }
     validate_configuration_schema(&c.configuration)
         .map_err(|_| PluginError::new(code, "invalid configuration schema"))?;
     for services in [&manifest.services.provides, &manifest.services.requires] {
@@ -518,7 +597,7 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), PluginError> {
 }
 /// Decode and validate untrusted bytes, including UTF-8 and the 256 KiB cap.
 pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, PluginError> {
-    let value = json(bytes, PLUGIN_INVALID_MANIFEST)?;
+    let value = crate::host::strict_contract_json(bytes, PLUGIN_INVALID_MANIFEST, MAX_JSON_BYTES)?;
     validate_manifest(&value)?;
     Ok(value)
 }

@@ -23,8 +23,28 @@ import {
   validateConfigValues
 } from './plugin.types'
 import * as host from './plugin-host.types'
+import * as web from './plugin-web.types'
 
 const decoders: Record<string, (value: unknown) => unknown> = {
+  packageDescriptor: web.parsePackageDescriptor,
+  webOpenRequest: web.parseWebOpenRequest,
+  webOpenReply: web.parseWebOpenReply,
+  webRequest: web.parseWebRequest,
+  webReadRequest: web.parseWebReadRequest,
+  webReadReply: web.parseWebReadReply,
+  webCloseRequest: web.parseWebCloseRequest,
+  webCloseReply: web.parseWebCloseReply,
+  webAssetRequest: web.parseWebAssetRequest,
+  webAssetReply: web.parseWebAssetReply,
+  webBridgeEnvelope: (value) => web.parseWebBridgeEnvelope(JSON.stringify(value)),
+  hostUiPostMessageRequest: host.parseHostUiPostMessageRequest,
+  hostUiPostMessageReply: host.parseHostUiPostMessageReply,
+  hostWakeRequest: host.parseHostWakeRequest,
+  hostWakeDelivery: host.parseHostWakeDelivery,
+  hostProcessRequest: host.parseHostProcessRequest,
+  hostProcessStatus: host.parseHostProcessStatus,
+  hostProcessLogsRequest: host.parseHostProcessLogsRequest,
+  hostProcessLogsReply: host.parseHostProcessLogsReply,
   contextSnapshotRequest: host.parseContextSnapshotRequest,
   hostUiGet: host.parseHostUiGetRequest,
   hostAccepted: host.parseHostAcceptedResult,

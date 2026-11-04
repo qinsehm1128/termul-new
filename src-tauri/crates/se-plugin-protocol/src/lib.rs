@@ -1,13 +1,19 @@
 //! Strict, runtime-neutral contracts for the native plugin protocol v1.
 //! JSON entry points enforce byte limits before deserializing; validators also
 //! check programmatically constructed DTOs. No plugin code is executed here.
+pub mod background;
 pub mod config;
 pub mod error;
 pub mod host;
 pub mod manifest;
+pub mod package;
 pub mod request_validation;
 pub mod rpc;
 pub mod ui;
+pub mod web;
+pub use background::*;
+pub use package::*;
+pub use web::*;
 
 pub use config::*;
 pub use error::*;

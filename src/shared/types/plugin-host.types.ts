@@ -10,7 +10,10 @@ export const HOST_SERVICE_NAMES = [
   'se.host.events',
   'se.host.storage',
   'se.host.feedback',
-  'se.host.status'
+  'se.host.status',
+  'se.host.ui',
+  'se.host.wake',
+  'se.host.process'
 ] as const
 export const KNOWN_HOST_SERVICE_NAMES = [...HOST_SERVICE_NAMES, 'se.host.secrets'] as const
 export type HostServiceName = (typeof HOST_SERVICE_NAMES)[number]
@@ -269,6 +272,14 @@ export type HostServiceRequest = { schemaVersion: 1; version: 1 } & (
     }
   | { service: 'se.host.status'; method: 'set'; input: StatusSetRequest }
   | { service: 'se.host.status'; method: 'clear'; input: StatusClearRequest }
+  | { service: 'se.host.ui'; method: 'postMessage'; input: HostUiPostMessageRequest }
+  | { service: 'se.host.wake'; method: 'request'; input: HostWakeRequest }
+  | {
+      service: 'se.host.process'
+      method: 'status' | 'start' | 'stop' | 'restart'
+      input: HostProcessRequest
+    }
+  | { service: 'se.host.process'; method: 'logs'; input: HostProcessLogsRequest }
 )
 export type HostServiceReplyValue = unknown
 export interface HostServiceReply {
@@ -278,6 +289,7 @@ export interface HostServiceReply {
 export type HostDeliveryRequest = { schemaVersion: 1; version: 1 } & (
   | { service: 'se.host.events'; method: 'deliver'; input: HostEventDeliveryInput }
   | { service: 'se.host.storage'; method: 'completed'; input: StorageCompletionInput }
+  | { service: 'se.host.wake'; method: 'wake'; input: HostWakeDelivery }
 )
 export type HostRequest = HostServiceRequest
 export type HostReply = HostServiceReply
@@ -1008,7 +1020,14 @@ export function parseHostServiceRequest(v: unknown): HostServiceRequest {
     'se.host.feedback:notification.close': parseNotificationCloseRequest,
     'se.host.feedback:progress.upsert': parseProgressUpsertRequest,
     'se.host.status:set': parseStatusSetRequest,
-    'se.host.status:clear': parseStatusClearRequest
+    'se.host.status:clear': parseStatusClearRequest,
+    'se.host.ui:postMessage': parseHostUiPostMessageRequest,
+    'se.host.wake:request': parseHostWakeRequest,
+    'se.host.process:status': parseHostProcessRequest,
+    'se.host.process:start': parseHostProcessRequest,
+    'se.host.process:stop': parseHostProcessRequest,
+    'se.host.process:restart': parseHostProcessRequest,
+    'se.host.process:logs': parseHostProcessLogsRequest
   }
   const parse = parsers[service + ':' + method]
   if (!parse) bad()
@@ -1049,6 +1068,14 @@ export function parseHostDeliveryRequest(v: unknown): HostDeliveryRequest {
       method: o.method,
       input: parseHostEventDelivery(o.input)
     }
+  if (o.service === 'se.host.wake' && o.method === 'wake')
+    return {
+      schemaVersion: 1,
+      version: 1,
+      service: o.service,
+      method: o.method,
+      input: parseHostWakeDelivery(o.input)
+    }
   if (o.service === 'se.host.storage' && o.method === 'completed')
     return {
       schemaVersion: 1,
@@ -1071,6 +1098,180 @@ export interface NotificationCloseResult {
 }
 export interface StatusClearResult {
   cleared: true
+}
+export const PLUGIN_HOST_WAKE_LIMITS = {
+  coalesceMs: 50,
+  operationsPerSecond: 20,
+  burst: 40,
+  reasons: 8
+} as const
+export const PLUGIN_HOST_PROCESS_LIMITS = {
+  processes: 4,
+  args: 64,
+  env: 64,
+  logEntries: 500,
+  logText: 4096
+} as const
+export interface PluginManagedProcess {
+  id: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+  cwd?: string
+  autostart: boolean
+  restart: 'never' | 'on-failure' | 'always'
+}
+export interface HostWakeRequest {
+  reason?: string
+}
+export interface HostWakeDelivery {
+  generation: string
+  count: number
+  reasons: string[]
+}
+export interface HostUiPostMessageRequest {
+  viewId: string
+  payload: unknown
+}
+export interface HostUiPostMessageReply {
+  delivered: number
+}
+export interface HostProcessRequest {
+  id: string
+}
+function noNul(v: unknown, min = 0, max = 4096): string {
+  const value = text(v, min, max)
+  if (value.includes('\u0000')) bad()
+  return value
+}
+function absolutePath(s: string): boolean {
+  return (
+    s.startsWith('/') ||
+    (s.length > 2 && s.charCodeAt(0) === 92 && s.charCodeAt(1) === 92) ||
+    /^[A-Za-z]:[/\\\\]/.test(s)
+  )
+}
+function relativeCommand(s: string): boolean {
+  return (
+    s.length <= 512 &&
+    s
+      .split('/')
+      .every(
+        (p) =>
+          /^[A-Za-z0-9._-]+$/.test(p) &&
+          p !== '.' &&
+          p !== '..' &&
+          !p.endsWith('.') &&
+          p.toLowerCase() !== '__se__' &&
+          !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p)
+      )
+  )
+}
+export function parsePluginManagedProcess(v: unknown): PluginManagedProcess {
+  bounded(v)
+  const o = object(v, ['id', 'command'], ['args', 'env', 'cwd', 'autostart', 'restart'])
+  const command = noNul(o.command, 1)
+  if (!absolutePath(command) && !relativeCommand(command)) bad()
+  const args = own(o, 'args')
+    ? array(o.args, PLUGIN_HOST_PROCESS_LIMITS.args).map((v) => noNul(v))
+    : []
+  const rawEnv = own(o, 'env') ? record(o.env) : {}
+  if (Object.keys(rawEnv).length > PLUGIN_HOST_PROCESS_LIMITS.env) bad()
+  const env = Object.fromEntries(
+    Object.entries(rawEnv).map(([key, value]) => {
+      if (key.length > 128 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) bad()
+      return [key, noNul(value)]
+    })
+  )
+  const cwd = own(o, 'cwd') ? noNul(o.cwd, 1) : undefined
+  if (cwd !== undefined && cwd !== 'package' && cwd !== 'profileData' && !absolutePath(cwd)) bad()
+  return {
+    id: local(o.id),
+    command,
+    args,
+    env,
+    ...(cwd !== undefined ? { cwd } : {}),
+    autostart: own(o, 'autostart') ? boolean(o.autostart) : true,
+    restart: own(o, 'restart') ? choice(o.restart, ['never', 'on-failure', 'always']) : 'on-failure'
+  }
+}
+export function parseHostWakeRequest(v: unknown): HostWakeRequest {
+  bounded(v)
+  const o = object(v, [], ['reason'])
+  return own(o, 'reason') ? { reason: text(o.reason, 0, 64) } : {}
+}
+export function parseHostWakeDelivery(v: unknown): HostWakeDelivery {
+  bounded(v)
+  const o = object(v, ['generation', 'count', 'reasons'])
+  const reasons = array(o.reasons, PLUGIN_HOST_WAKE_LIMITS.reasons).map((v) => text(v, 0, 64))
+  unique(reasons)
+  return { generation: uuid(o.generation), count: integer(o.count, 1), reasons }
+}
+export function parseHostUiPostMessageRequest(v: unknown): HostUiPostMessageRequest {
+  bounded(v)
+  const o = object(v, ['viewId', 'payload'])
+  bounded(o.payload)
+  return { viewId: local(o.viewId), payload: o.payload }
+}
+export function parseHostUiPostMessageReply(v: unknown): HostUiPostMessageReply {
+  bounded(v)
+  const o = object(v, ['delivered'])
+  return { delivered: integer(o.delivered, 0, 16) }
+}
+export function parseHostProcessRequest(v: unknown): HostProcessRequest {
+  bounded(v)
+  const o = object(v, ['id'])
+  return { id: local(o.id) }
+}
+export type HostProcessState = 'stopped' | 'starting' | 'running' | 'exited' | 'crashed' | 'backoff'
+export interface HostProcessStatus {
+  state: HostProcessState
+  pid?: number
+  exitCode?: number
+  startedAt?: number
+  restarts: number
+}
+export interface HostProcessLogsRequest {
+  id: string
+  tail: number
+}
+export interface HostProcessLogLine {
+  stream: 'stdout' | 'stderr'
+  at: number
+  text: string
+}
+export interface HostProcessLogsReply {
+  lines: HostProcessLogLine[]
+  truncated: boolean
+}
+export function parseHostProcessStatus(v: unknown): HostProcessStatus {
+  bounded(v)
+  const o = object(v, ['state', 'restarts'], ['pid', 'exitCode', 'startedAt'])
+  return {
+    state: choice(o.state, ['stopped', 'starting', 'running', 'exited', 'crashed', 'backoff']),
+    restarts: integer(o.restarts),
+    ...(own(o, 'pid') ? { pid: integer(o.pid, 1) } : {}),
+    ...(own(o, 'exitCode') ? { exitCode: integer(o.exitCode, -2147483648, 2147483647) } : {}),
+    ...(own(o, 'startedAt') ? { startedAt: integer(o.startedAt) } : {})
+  }
+}
+export function parseHostProcessLogsRequest(v: unknown): HostProcessLogsRequest {
+  bounded(v)
+  const o = object(v, ['id', 'tail'])
+  return { id: local(o.id), tail: integer(o.tail, 0, 500) }
+}
+export function parseHostProcessLogsReply(v: unknown): HostProcessLogsReply {
+  bounded(v)
+  const o = object(v, ['lines', 'truncated'])
+  const lines = array(o.lines, 500).map((v) => {
+    const line = object(v, ['stream', 'at', 'text'])
+    return {
+      stream: choice(line.stream, ['stdout', 'stderr']),
+      at: integer(line.at),
+      text: text(line.text, 0, 4096)
+    }
+  })
+  return { lines, truncated: boolean(o.truncated) }
 }
 export const parseContextSnapshotRequest = parseHostContextSnapshotRequest
 export function parseHostUiGetRequest(v: unknown): HostUiGetRequest {

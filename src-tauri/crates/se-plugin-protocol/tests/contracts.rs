@@ -69,6 +69,25 @@ fn shared_rust_typescript_fixtures() {
     for f in fixtures {
         let bytes = serde_json::to_vec(&f.value).unwrap();
         let valid = match f.kind.as_str() {
+            "packageDescriptor" => parse_package_descriptor(&bytes).is_ok(),
+            "webOpenRequest" => parse_web_open_request(&bytes).is_ok(),
+            "webOpenReply" => parse_web_open_reply(&bytes).is_ok(),
+            "webRequest" => parse_web_request(&bytes).is_ok(),
+            "webReadRequest" => parse_web_read_request(&bytes).is_ok(),
+            "webReadReply" => parse_web_read_reply(&bytes).is_ok(),
+            "webCloseRequest" => parse_web_close_request(&bytes).is_ok(),
+            "webCloseReply" => parse_web_close_reply(&bytes).is_ok(),
+            "webAssetRequest" => parse_web_asset_request(&bytes).is_ok(),
+            "webAssetReply" => parse_web_asset_reply(&bytes).is_ok(),
+            "webBridgeEnvelope" => parse_web_bridge_envelope(&bytes).is_ok(),
+            "hostUiPostMessageRequest" => parse_host_ui_post_message_request(&bytes).is_ok(),
+            "hostUiPostMessageReply" => parse_host_ui_post_message_reply(&bytes).is_ok(),
+            "hostWakeRequest" => parse_host_wake_request(&bytes).is_ok(),
+            "hostWakeDelivery" => parse_host_wake_delivery(&bytes).is_ok(),
+            "hostProcessRequest" => parse_host_process_request(&bytes).is_ok(),
+            "hostProcessStatus" => parse_host_process_status(&bytes).is_ok(),
+            "hostProcessLogsRequest" => parse_host_process_logs_request(&bytes).is_ok(),
+            "hostProcessLogsReply" => parse_host_process_logs_reply(&bytes).is_ok(),
             "manifest" => parse_manifest(&bytes).is_ok(),
             "ui" => parse_ui_tree(&bytes).is_ok(),
             "action" => parse_action_event(&bytes).is_ok(),
@@ -246,6 +265,9 @@ fn view_icon_allowlist_matches_schema_and_roundtrips() {
     for location in [ViewLocation::Panel, ViewLocation::Sidebar] {
         for icon in &icons {
             m.contributes.views = vec![ViewContribution {
+                kind: None,
+                entry: None,
+                allow: None,
                 id: "counter".into(),
                 title: "Counter".into(),
                 location,
@@ -265,6 +287,9 @@ fn sidebar_view_limit_is_independent_of_total_view_limit() {
     for sidebar_count in 0..=3 {
         m.contributes.views = (0..8)
             .map(|i| ViewContribution {
+                kind: None,
+                entry: None,
+                allow: None,
                 id: format!("view-{i}"),
                 title: "View".into(),
                 location: if i < sidebar_count {
@@ -285,6 +310,9 @@ fn sidebar_view_limit_is_independent_of_total_view_limit() {
     assert!(m.validate().is_ok());
     m.contributes.views = (0..9)
         .map(|i| ViewContribution {
+            kind: None,
+            entry: None,
+            allow: None,
             id: format!("view-{i}"),
             title: "View".into(),
             location: ViewLocation::Panel,

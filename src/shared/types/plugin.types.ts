@@ -12,15 +12,19 @@ import {
   isReservedHostService,
   type PluginEventSubscription,
   type PluginKeybinding,
+  type PluginManagedProcess,
   type PluginMenu,
   type PluginStatusItem,
   parsePluginEventSubscription,
   parsePluginKeybinding,
+  parsePluginManagedProcess,
   parsePluginMenu,
   parsePluginStatusItem
 } from './plugin-host.types'
+import { parseWebEntry, parseWebViewAllow, type WebViewAllow } from './plugin-web.types'
 
 export * from './plugin-host.types'
+export * from './plugin-web.types'
 export const PLUGIN_SCHEMA_VERSION = 1 as const
 export const PLUGIN_JSON_MAX_BYTES = 256 * 1024
 export type ConfigValue = string | number | boolean
@@ -46,12 +50,17 @@ export interface PluginCommand {
   title: string
   description?: string
 }
-export interface PluginView {
+interface PluginViewBase {
   id: string
   title: string
   location: 'panel' | 'sidebar'
   icon?: string
 }
+export type PluginView = PluginViewBase &
+  (
+    | { kind?: 'uiTree'; entry?: never; allow?: never }
+    | { kind: 'web'; entry: string; allow: WebViewAllow[] }
+  )
 export interface PluginService {
   name: string
   version: number
@@ -70,6 +79,7 @@ export interface Manifest {
     menus?: PluginMenu[]
     keybindings?: PluginKeybinding[]
     statusItems?: PluginStatusItem[]
+    processes?: PluginManagedProcess[]
   }
   services: { provides: PluginService[]; requires: PluginService[] }
 }
@@ -515,7 +525,7 @@ export function parseManifest(v: unknown): Manifest {
   const c = obj(
     o.contributes,
     ['commands', 'configuration', 'views'],
-    ['eventSubscriptions', 'menus', 'keybindings', 'statusItems']
+    ['eventSubscriptions', 'menus', 'keybindings', 'statusItems', 'processes']
   )
   const commands = arr(c.commands, 64).map((v) => {
     const x = obj(v, ['id', 'title'], ['description'])
@@ -527,15 +537,24 @@ export function parseManifest(v: unknown): Manifest {
   })
   uniq(commands.map((x) => x.id))
   const views = arr(c.views, 8).map((v) => {
-    const x = obj(v, ['id', 'title', 'location'], ['icon'])
+    const x = obj(v, ['id', 'title', 'location'], ['icon', 'kind', 'entry', 'allow'])
+    const kind = own(x, 'kind') ? one(x.kind, ['uiTree', 'web']) : 'uiTree'
+    if (kind === 'uiTree' && (own(x, 'entry') || own(x, 'allow'))) bad()
+    if (kind === 'web' && (!own(x, 'entry') || !own(x, 'allow'))) bad()
     return {
       id: local(x.id),
       title: str(x.title, 1, 128),
       location: one(x.location, ['panel', 'sidebar']),
+      ...(kind === 'web'
+        ? { kind, entry: parseWebEntry(x.entry), allow: parseWebViewAllow(x.allow) }
+        : own(x, 'kind')
+          ? { kind }
+          : {}),
       ...(own(x, 'icon') ? { icon: one(x.icon, viewIcons) } : {})
-    }
+    } as PluginView
   })
   uniq(views.map((x) => x.id))
+  uniq(views.flatMap((view) => (view.kind === 'web' ? [view.entry.toLowerCase()] : [])))
   if (views.filter((view) => view.location === 'sidebar').length > 2) bad()
   const s = obj(o.services, ['provides', 'requires'])
   const services = (v: unknown): PluginService[] => {
@@ -568,6 +587,26 @@ export function parseManifest(v: unknown): Manifest {
   if (eventSubscriptions.length && (!hasHost('se.host.context') || !hasHost('se.host.events')))
     bad()
   if (statusItems.length && !hasHost('se.host.status')) bad()
+  const processes = own(c, 'processes') ? arr(c.processes, 4).map(parsePluginManagedProcess) : []
+  uniq(processes.map((x) => x.id))
+  if (processes.length && !hasHost('se.host.process')) bad()
+  for (const view of views) {
+    if (view.kind !== 'web') continue
+    for (const permission of view.allow ?? []) {
+      const service = permission.startsWith('storage.')
+        ? 'se.host.storage'
+        : permission === 'context.events'
+          ? 'se.host.events'
+          : permission === 'context.read'
+            ? 'se.host.context'
+            : permission === 'feedback'
+              ? 'se.host.feedback'
+              : permission === 'view.dispatch'
+                ? 'se.host.ui'
+                : undefined
+      if (service && !hasHost(service)) bad()
+    }
+  }
   return {
     schemaVersion: sv(o.schemaVersion),
     id: pid(o.id),
@@ -581,7 +620,8 @@ export function parseManifest(v: unknown): Manifest {
       eventSubscriptions,
       menus,
       keybindings,
-      statusItems
+      statusItems,
+      processes
     },
     services: { provides, requires }
   }

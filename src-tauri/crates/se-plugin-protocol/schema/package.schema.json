@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://termul.dev/plugin/v1/package.schema.json",
+  "$comment": "Archive limits: compressed 128MiB, expanded 256MiB; entries 2048; native 64MiB/file; ui 4MiB/file; descriptor and manifest 256KiB. Hash coverage/native target references/casefold uniqueness and aggregate sizes additionally enforced by parsers and install-time archive verification.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "native": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+){2,}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "pattern": "^(?!.*(?:^|/)(?:\\.\\.?|__se__)(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$))(?!.*\\.(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+        "allOf": [
+          {
+            "pattern": "^native/"
+          }
+        ]
+      }
+    },
+    "ui": {
+      "const": "ui"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?!.*(?:^|/)(?:\\.\\.?|__[Ss][Ee]__)(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$))(?!.*\\.(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 67108864
+          },
+          "sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "sha256"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "path": {
+                  "const": "manifest.json"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "size": {
+                  "maximum": 262144
+                }
+              }
+            },
+            "else": {
+              "if": {
+                "properties": {
+                  "path": {
+                    "pattern": "^native/"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "size": {
+                    "maximum": 67108864
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "path": {
+                    "pattern": "^ui/"
+                  },
+                  "size": {
+                    "maximum": 4194304
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "maxItems": 2048,
+      "minItems": 1,
+      "contains": {
+        "properties": {
+          "path": {
+            "const": "manifest.json"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "native",
+    "ui",
+    "files"
+  ]
+}

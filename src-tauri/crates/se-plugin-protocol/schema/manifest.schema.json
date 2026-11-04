@@ -123,6 +123,42 @@
                   "wrench"
                 ],
                 "$comment": "Must match src/shared/plugin-fixtures/view-icons.json."
+              },
+              "kind": {
+                "enum": [
+                  "uiTree",
+                  "web"
+                ],
+                "default": "uiTree"
+              },
+              "entry": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(?!.*(?:^|/)(?:\\.\\.?|__[Ss][Ee]__)(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$))(?!.*\\.(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+                "allOf": [
+                  {
+                    "pattern": "\\.html$"
+                  }
+                ]
+              },
+              "allow": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "commands",
+                    "view.dispatch",
+                    "config.read",
+                    "config.write",
+                    "context.read",
+                    "context.events",
+                    "storage.read",
+                    "storage.write",
+                    "feedback"
+                  ]
+                },
+                "maxItems": 9,
+                "uniqueItems": true
               }
             },
             "required": [
@@ -130,7 +166,42 @@
               "title",
               "location"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "web"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "entry"
+                  ]
+                },
+                "else": {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "entry"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "allow"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
           },
           "maxItems": 8,
           "contains": {
@@ -316,6 +387,94 @@
           },
           "maxItems": 2,
           "default": []
+        },
+        "processes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^[^\\u0000]+$",
+                "anyOf": [
+                  {
+                    "pattern": "^/"
+                  },
+                  {
+                    "pattern": "^[A-Za-z]:[/\\\\]"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?!.*(?:^|/)(?:\\.\\.?|__[Ss][Ee]__)(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$))(?!.*\\.(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+                  },
+                  {
+                    "pattern": "^\\\\\\\\."
+                  }
+                ]
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000]*$"
+                },
+                "maxItems": 64
+              },
+              "env": {
+                "type": "object",
+                "maxProperties": 64,
+                "propertyNames": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000]*$"
+                }
+              },
+              "cwd": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^(?:package|profileData|/[^\\u0000]*|[A-Za-z]:[/\\\\][^\\u0000]*|\\\\\\\\[^\\u0000]+)$"
+              },
+              "autostart": {
+                "type": "boolean",
+                "default": true
+              },
+              "restart": {
+                "enum": [
+                  "never",
+                  "on-failure",
+                  "always"
+                ],
+                "default": "on-failure"
+              }
+            },
+            "required": [
+              "id",
+              "command"
+            ],
+            "$comment": "Command is a literal executable (absolute native path, normalized package-relative path, or bare PATH command), never shell text. Portable path validation is also enforced by parsers."
+          },
+          "maxItems": 4
         }
       },
       "required": [
@@ -397,7 +556,7 @@
     "services"
   ],
   "additionalProperties": false,
-  "$comment": "Input is at most 262144 UTF-8 bytes. Runtime additionally validates semver, abi.min <= abi.max, unique same-kind contribution IDs, and same-manifest command references. Empty optional contribution arrays are omitted when serialized. All se.host.* providers are reserved; unknown host requirements remain valid but unresolved.",
+  "$comment": "Input is at most 262144 UTF-8 bytes. Runtime additionally validates semver, abi.min <= abi.max, unique same-kind contribution IDs, and same-manifest command references. Empty optional contribution arrays are omitted when serialized. All se.host.* providers are reserved; unknown host requirements remain valid but unresolved. Web entries are case-insensitively unique. Web allow host-service prerequisites and processes se.host.process@1 are enforced by parsers.",
   "$defs": {
     "localId": {
       "type": "string",
@@ -553,6 +712,418 @@
             }
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "processes": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "processes"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "contains": {
+                  "properties": {
+                    "name": {
+                      "const": "se.host.process"
+                    },
+                    "version": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requires"
+            ]
+          }
+        },
+        "required": [
+          "services"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "views": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "web"
+                    },
+                    "allow": {
+                      "contains": {
+                        "const": "view.dispatch"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "allow"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "views"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "contains": {
+                  "properties": {
+                    "name": {
+                      "const": "se.host.ui"
+                    },
+                    "version": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requires"
+            ]
+          }
+        },
+        "required": [
+          "services"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "views": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "web"
+                    },
+                    "allow": {
+                      "contains": {
+                        "const": "context.read"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "allow"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "views"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "contains": {
+                  "properties": {
+                    "name": {
+                      "const": "se.host.context"
+                    },
+                    "version": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requires"
+            ]
+          }
+        },
+        "required": [
+          "services"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "views": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "web"
+                    },
+                    "allow": {
+                      "contains": {
+                        "const": "context.events"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "allow"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "views"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "contains": {
+                  "properties": {
+                    "name": {
+                      "const": "se.host.events"
+                    },
+                    "version": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requires"
+            ]
+          }
+        },
+        "required": [
+          "services"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "views": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "web"
+                    },
+                    "allow": {
+                      "contains": {
+                        "const": "storage.read"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "allow"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "views"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "contains": {
+                  "properties": {
+                    "name": {
+                      "const": "se.host.storage"
+                    },
+                    "version": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requires"
+            ]
+          }
+        },
+        "required": [
+          "services"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "views": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "web"
+                    },
+                    "allow": {
+                      "contains": {
+                        "const": "storage.write"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "allow"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "views"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "contains": {
+                  "properties": {
+                    "name": {
+                      "const": "se.host.storage"
+                    },
+                    "version": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requires"
+            ]
+          }
+        },
+        "required": [
+          "services"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contributes": {
+            "properties": {
+              "views": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "web"
+                    },
+                    "allow": {
+                      "contains": {
+                        "const": "feedback"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "allow"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "views"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "services": {
+            "properties": {
+              "requires": {
+                "contains": {
+                  "properties": {
+                    "name": {
+                      "const": "se.host.feedback"
+                    },
+                    "version": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requires"
+            ]
+          }
+        },
+        "required": [
+          "services"
+        ]
       }
     }
   ]

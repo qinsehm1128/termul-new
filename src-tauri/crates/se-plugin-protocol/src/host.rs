@@ -686,6 +686,18 @@ pub fn validate_host_request(v: &HostRequest) -> Result<(), PluginError> {
         ("se.host.status", "set") => {
             parse_status_set_request(&bytes)?;
         }
+        ("se.host.ui", "postMessage") => {
+            parse_host_ui_post_message_request(&bytes)?;
+        }
+        ("se.host.wake", "request") => {
+            parse_host_wake_request(&bytes)?;
+        }
+        ("se.host.process", "status" | "start" | "stop" | "restart") => {
+            parse_host_process_request(&bytes)?;
+        }
+        ("se.host.process", "logs") => {
+            parse_host_process_logs_request(&bytes)?;
+        }
         ("se.host.status", "clear") => {
             parse_status_clear_request(&bytes)?;
         }
@@ -720,6 +732,9 @@ pub fn validate_host_delivery_request(v: &HostDeliveryRequest) -> Result<(), Plu
     match (v.service.as_str(), v.method.as_str()) {
         ("se.host.events", "deliver") => {
             parse_host_event_delivery_input(&bytes)?;
+        }
+        ("se.host.wake", "wake") => {
+            parse_host_wake_delivery(&bytes)?;
         }
         ("se.host.storage", "completed") => {
             parse_storage_completion_input(&bytes)?;
@@ -872,10 +887,18 @@ impl<'de> Deserialize<'de> for StrictHostJson {
         d.deserialize_any(Visitor)
     }
 }
+pub(crate) fn strict_contract_json<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    code: &str,
+    limit: usize,
+) -> Result<T, PluginError> {
+    require(bytes.len() <= limit, code, "JSON exceeds contract limit")?;
+    let StrictHostJson(value) = serde_json::from_slice(bytes)
+        .map_err(|_| PluginError::new(code, "invalid contract JSON"))?;
+    serde_json::from_value(value).map_err(|_| PluginError::new(code, "invalid contract JSON"))
+}
 fn host_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, PluginError> {
-    let StrictHostJson(value) = json(bytes, PLUGIN_INVALID_REQUEST)?;
-    serde_json::from_value(value)
-        .map_err(|_| PluginError::new(PLUGIN_INVALID_REQUEST, "invalid host contract"))
+    strict_contract_json(bytes, PLUGIN_INVALID_REQUEST, MAX_JSON_BYTES)
 }
 
 macro_rules! parser {
