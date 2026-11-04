@@ -72,7 +72,14 @@
     "pinnedBottom": "{{item}} 已返回底部全局工具组",
     "alreadyFirst": "{{item}} 已经是第一个",
     "alreadyLast": "{{item}} 已经是最后一个",
-    "reorderUnchanged": "{{item}} 顺序未改变"
+    "reorderUnchanged": "{{item}} 顺序未改变",
+    "plugins": "插件",
+    "openPlugins": "打开插件",
+    "pluginViews": "插件视图",
+    "toolsActions": "工具",
+    "collapseGroup": "折叠分组",
+    "expandGroup": "展开分组",
+    "collapsedGroup": "{{group}} — 已隐藏 {{count}} 项"
   },
   "contextBar": {
     "settings": "上下文栏设置",

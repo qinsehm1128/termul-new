@@ -1,5 +1,6 @@
 import {
   isUserDividerId,
+  RAIL_PLUGIN_VIEWS_DIVIDER_ID,
   RAIL_UTILITY_ITEM_IDS,
   type RailDividerId,
   type RailItemId,
@@ -10,6 +11,8 @@ import {
 import {
   BrainCircuit,
   CalendarClock,
+  ChevronDown,
+  ChevronRight,
   FolderKanban,
   GitBranch,
   History,
@@ -17,6 +20,7 @@ import {
   Network,
   Palette,
   Plug,
+  Puzzle,
   SlidersHorizontal,
   Sparkles,
   SquareTerminal,
@@ -75,6 +79,7 @@ const ITEM_LABEL_KEY: Record<RailItemId, string> = {
   skills: 'activityRail.skills',
   aiChannels: 'activityRail.aiChannels',
   mcp: 'activityRail.mcp',
+  plugins: 'activityRail.plugins',
   scheduledTasks: 'activityRail.scheduledTasks',
   shortcuts: 'titleBar.keyboardShortcuts',
   preferences: 'activityRail.preferences',
@@ -133,7 +138,7 @@ interface RailSectionModel {
   key: string
   sectionId: 'projects' | 'conversations' | 'tools'
   label: string
-  dividerBefore: { id: RailDividerId; entryIndex: number } | null
+  dividerBefore: { id: RailDividerId; entryIndex: number; collapsed: boolean } | null
   items: Array<{ id: RailItemId; entryIndex: number }>
 }
 
@@ -156,6 +161,8 @@ function neighborLabel(
   translate: (key: string) => string
 ): string {
   if (feedback.neighborKind === 'divider') {
+    if (feedback.neighborId === RAIL_PLUGIN_VIEWS_DIVIDER_ID)
+      return translate('activityRail.plugins')
     if (feedback.neighborId === 'workspace-contexts') {
       return translate('activityRail.dividerWorkspace')
     }
@@ -235,6 +242,7 @@ export function ActivityRail({
   const pinUtility = useNavigationStore((state) => state.pinUtility)
   const insertDivider = useNavigationStore((state) => state.insertDivider)
   const removeDivider = useNavigationStore((state) => state.removeDivider)
+  const toggleDivider = useNavigationStore((state) => state.toggleDivider)
   const isSSHPanelVisible = useSSHPanelVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
   const navigate = useNavigate()
@@ -620,6 +628,28 @@ export function ActivityRail({
             </RailTooltip>
           )
         }
+      case 'plugins':
+        return {
+          disabled: false,
+          element: (
+            <RailTooltip label={t('activityRail.plugins')}>
+              <button
+                type="button"
+                onClick={activate(() => navigate('/plugins'))}
+                className={railButtonClass}
+                aria-label={t('activityRail.openPlugins')}
+                aria-current={location.pathname === '/plugins' ? 'page' : undefined}
+              >
+                <Puzzle
+                  size={18}
+                  className={
+                    location.pathname === '/plugins' ? 'text-foreground' : 'text-muted-foreground'
+                  }
+                />
+              </button>
+            </RailTooltip>
+          )
+        }
       case 'quickTerminals': {
         const active = location.pathname.startsWith('/quick-terminals')
         return {
@@ -755,7 +785,11 @@ export function ActivityRail({
     </ContextMenu>
   )
 
-  const renderSortable = (id: RailItemId, entryIndex: number | null): ReactElement => {
+  const renderSortable = (
+    id: RailItemId,
+    entryIndex: number | null,
+    showAfterIndicator = false
+  ): ReactElement => {
     const button = renderButton(id)
     const showIndicator =
       entryIndex !== null && drop !== null && !drop.pin && drop.beforeEntryIndex === entryIndex
@@ -784,6 +818,13 @@ export function ActivityRail({
             aria-hidden="true"
           />
         ) : null}
+        {showAfterIndicator ? (
+          <div
+            data-rail-drop-indicator="after"
+            className="pointer-events-none absolute bottom-0 left-1/2 z-10 h-0.5 w-8 -translate-x-1/2 rounded-full bg-primary"
+            aria-hidden="true"
+          />
+        ) : null}
         {button.element}
       </div>
     )
@@ -803,44 +844,145 @@ export function ActivityRail({
     )
   }
 
-  const renderDivider = (id: RailDividerId, entryIndex: number): ReactElement => {
-    const row = renderDividerRow(id, entryIndex)
-    if (!isUserDividerId(id)) return row
+  const dividerLabel = (id: RailDividerId): string => {
+    if (id === 'workspace-contexts') return t('activityRail.dividerWorkspace')
+    if (id === RAIL_PLUGIN_VIEWS_DIVIDER_ID) return t('activityRail.plugins')
+    return isUserDividerId(id) ? t('activityRail.dividerCustom') : t('activityRail.dividerTools')
+  }
+
+  const renderDivider = (
+    id: RailDividerId,
+    entryIndex: number,
+    collapsed: boolean,
+    hiddenCount: number
+  ): ReactElement => {
+    const label = dividerLabel(id)
+    const tooltip = collapsed
+      ? t('activityRail.collapsedGroup', { group: label, count: hiddenCount })
+      : label
+    const Chevron = collapsed ? ChevronRight : ChevronDown
+    const row = (
+      <div key={id} className="relative flex w-full justify-center">
+        {drop && !drop.pin && drop.beforeEntryIndex === entryIndex ? (
+          <div
+            data-rail-drop-indicator="before"
+            data-rail-drop-before={id}
+            className="pointer-events-none absolute left-1/2 top-0 z-10 h-0.5 w-6 -translate-x-1/2 rounded-full bg-primary"
+            aria-hidden="true"
+          />
+        ) : null}
+        {entryIndex >= 0 &&
+        collapsed &&
+        drop &&
+        !drop.pin &&
+        drop.beforeEntryIndex === entryIndex + 1 ? (
+          <div
+            data-rail-drop-indicator="after"
+            className="pointer-events-none absolute bottom-0 left-1/2 z-10 h-0.5 w-6 -translate-x-1/2 rounded-full bg-primary"
+            aria-hidden="true"
+          />
+        ) : null}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="flex h-6 w-full items-center justify-center gap-0.5 rounded-sm text-muted-foreground/70 hover:bg-foreground/[0.045] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              data-activity-rail-divider={id}
+              data-rail-row={entryIndex >= 0 ? 'true' : undefined}
+              data-rail-entry={id}
+              data-rail-kind="divider"
+              data-rail-index={entryIndex >= 0 ? entryIndex : undefined}
+              aria-label={label}
+              aria-expanded={!collapsed}
+              onClick={() => toggleDivider(id)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  if (!event.repeat) toggleDivider(id)
+                }
+              }}
+            >
+              <Chevron size={12} aria-hidden="true" />
+              {collapsed ? (
+                <span className="text-[9px] leading-none" aria-hidden="true">
+                  {hiddenCount}
+                </span>
+              ) : (
+                <span className="h-px w-3 bg-sidebar-border/80" aria-hidden="true" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={9}>
+            {tooltip}
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    )
     return withRailMenu(
       id,
       row,
-      <ContextMenuItem onSelect={() => removeDivider(id)}>
-        {t('activityRail.removeDivider')}
-      </ContextMenuItem>
+      <>
+        <ContextMenuItem onSelect={() => toggleDivider(id)}>
+          {collapsed ? t('activityRail.expandGroup') : t('activityRail.collapseGroup')}
+        </ContextMenuItem>
+        {isUserDividerId(id) ? (
+          <ContextMenuItem onSelect={() => removeDivider(id)}>
+            {t('activityRail.removeDivider')}
+          </ContextMenuItem>
+        ) : null}
+      </>
     )
   }
 
-  const renderDividerRow = (id: RailDividerId, entryIndex: number): ReactElement => (
-    <div key={id} className="relative flex w-full justify-center">
-      {drop && !drop.pin && drop.beforeEntryIndex === entryIndex ? (
-        <div
-          data-rail-drop-indicator="before"
-          data-rail-drop-before={id}
-          className="pointer-events-none absolute left-1/2 top-0 z-10 h-0.5 w-6 -translate-x-1/2 rounded-full bg-primary"
-          aria-hidden="true"
-        />
-      ) : null}
-      <div
-        className="my-1.5 h-px w-5 bg-sidebar-border/80"
-        data-activity-rail-divider={id}
-        data-rail-row="true"
-        data-rail-entry={id}
-        data-rail-kind="divider"
-        data-rail-index={entryIndex}
-        aria-hidden="true"
-      />
-    </div>
-  )
-
+  // Collapsing never conceals the current route or an open rail-controlled panel.
+  const isItemActive = (id: RailItemId): boolean => {
+    switch (id) {
+      case 'projects':
+        return location.pathname === '/'
+      case 'conversations':
+        return isConversationsActive
+      case 'terminals':
+        return isTerminalsActive
+      case 'quickTerminals':
+        return location.pathname.startsWith('/quick-terminals')
+      case 'skills':
+        return location.pathname === '/skills'
+      case 'aiChannels':
+        return location.pathname === '/ai-channels'
+      case 'mcp':
+        return location.pathname === '/mcp'
+      case 'plugins':
+        return location.pathname === '/plugins'
+      case 'scheduledTasks':
+        return location.pathname === '/scheduled-tasks'
+      case 'preferences':
+        return location.pathname === '/preferences'
+      case 'ssh':
+        return isSSHPanelVisible
+      case 'shortcuts':
+        return Boolean(isShortcutsOpen)
+      case 'themes':
+        return isThemePickerOpen
+      default:
+        return false
+    }
+  }
   const sections = buildSections(
     entries,
     t('activityRail.projectActions'),
-    t('activityRail.conversationActions')
+    t('activityRail.conversationActions'),
+    t('activityRail.toolsActions')
+  )
+  const pluginDivider = entries.find(
+    (entry) => entry.kind === 'divider' && entry.id === RAIL_PLUGIN_VIEWS_DIVIDER_ID
+  )
+  const pluginsCollapsed = pluginDivider?.kind === 'divider' && Boolean(pluginDivider.collapsed)
+  const pluginDividerIndex = entries.findIndex((entry) => entry.id === RAIL_PLUGIN_VIEWS_DIVIDER_ID)
+  const sortableEndIndex = pluginDividerIndex < 0 ? entries.length : pluginDividerIndex
+  const pluginPath = (pluginId: string, viewId: string): string =>
+    `/plugins/${encodeURIComponent(pluginId)}/views/${encodeURIComponent(viewId)}`
+  const visiblePluginViews = pluginViews.filter(
+    ({ plugin, view }) => !pluginsCollapsed || location.pathname === pluginPath(plugin.id, view.id)
   )
   const pinnedUtilities = RAIL_UTILITY_ITEM_IDS.filter(
     (id) => !entries.some((entry) => entry.kind === 'item' && entry.id === id)
@@ -871,27 +1013,47 @@ export function ActivityRail({
 
         <div className="my-1 h-px w-4 bg-border/70" aria-hidden="true" />
 
-        {sections.map((section) => (
-          <div key={section.key} className="flex w-full flex-col items-center">
-            {section.dividerBefore
-              ? renderDivider(section.dividerBefore.id, section.dividerBefore.entryIndex)
-              : null}
-            {section.items.length > 0 ? (
-              <fieldset
-                aria-label={section.label}
-                data-activity-rail-section={section.sectionId}
-                className={cn(
-                  'm-0 flex min-w-0 flex-col items-center border-0 p-0',
-                  section.sectionId === 'projects' && 'gap-0.5'
-                )}
-              >
-                {section.items.map((item) => renderSortable(item.id, item.entryIndex))}
-              </fieldset>
-            ) : null}
-          </div>
-        ))}
+        {sections.map((section) => {
+          const collapsed = Boolean(section.dividerBefore?.collapsed)
+          const visibleItems = section.items.filter((item) => !collapsed || isItemActive(item.id))
+          return (
+            <div key={section.key} className="flex w-full flex-col items-center">
+              {section.dividerBefore
+                ? renderDivider(
+                    section.dividerBefore.id,
+                    section.dividerBefore.entryIndex,
+                    collapsed,
+                    section.items.length - visibleItems.length
+                  )
+                : null}
+              {visibleItems.length > 0 ? (
+                <fieldset
+                  aria-label={section.label}
+                  data-activity-rail-section={section.sectionId}
+                  className={cn(
+                    'm-0 flex min-w-0 flex-col items-center border-0 p-0',
+                    section.sectionId === 'projects' && 'gap-0.5'
+                  )}
+                >
+                  {visibleItems.map((item) =>
+                    renderSortable(
+                      item.id,
+                      item.entryIndex,
+                      collapsed &&
+                        drop !== null &&
+                        !drop.pin &&
+                        drop.beforeEntryIndex === item.entryIndex + 1 &&
+                        section.items.some((next) => next.entryIndex === drop.beforeEntryIndex) &&
+                        !visibleItems.some((next) => next.entryIndex === drop.beforeEntryIndex)
+                    )
+                  )}
+                </fieldset>
+              ) : null}
+            </div>
+          )
+        })}
 
-        {drop && !drop.pin && drop.beforeEntryIndex === entries.length ? (
+        {drop && !drop.pin && drop.beforeEntryIndex === sortableEndIndex ? (
           <div className="relative h-0 w-full">
             <div
               data-rail-drop-indicator="before"
@@ -904,47 +1066,54 @@ export function ActivityRail({
 
         {/* Plugin views are runtime contributions, never persisted or reorder targets. */}
         {pluginViews.length > 0 ? (
-          <fieldset
-            aria-label="Plugin views"
-            data-activity-rail-section="plugins"
-            className="m-0 flex min-w-0 flex-col items-center border-0 p-0"
-          >
-            <div className="my-1.5 h-px w-5 bg-sidebar-border/80" aria-hidden="true" />
-            {pluginViews.map(({ plugin, view }) => {
-              const path = `/plugins/${encodeURIComponent(plugin.id)}/views/${encodeURIComponent(view.id)}`
-              const active = location.pathname === path
-              const Icon = getPluginViewIcon(view.icon)
-              const label = `${view.title} (${plugin.manifest.name})`
-              return (
-                <Tooltip key={`${plugin.id}/${view.id}`}>
-                  <TooltipTrigger asChild data-rail-tooltip={label}>
-                    <button
-                      type="button"
-                      className={railButtonClass}
-                      aria-label={view.title}
-                      aria-current={active ? 'page' : undefined}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        useSSHStore.getState().selectProfile(null)
-                        navigate(path)
-                      }}
-                    >
-                      <Icon
-                        size={18}
-                        className={cn(
-                          'transition-colors',
-                          active ? 'text-foreground' : 'text-muted-foreground'
-                        )}
-                      />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right" sideOffset={9}>
-                    {label}
-                  </TooltipContent>
-                </Tooltip>
-              )
-            })}
-          </fieldset>
+          <div className="flex w-full flex-col items-center">
+            {renderDivider(
+              RAIL_PLUGIN_VIEWS_DIVIDER_ID,
+              -1,
+              pluginsCollapsed,
+              pluginViews.length - visiblePluginViews.length
+            )}
+            <fieldset
+              aria-label={t('activityRail.pluginViews')}
+              data-activity-rail-section="plugins"
+              className="m-0 flex min-w-0 flex-col items-center border-0 p-0"
+            >
+              {visiblePluginViews.map(({ plugin, view }) => {
+                const path = pluginPath(plugin.id, view.id)
+                const active = location.pathname === path
+                const Icon = getPluginViewIcon(view.icon)
+                const label = `${view.title} (${plugin.manifest.name})`
+                return (
+                  <Tooltip key={`${plugin.id}/${view.id}`}>
+                    <TooltipTrigger asChild data-rail-tooltip={label}>
+                      <button
+                        type="button"
+                        className={railButtonClass}
+                        aria-label={view.title}
+                        aria-current={active ? 'page' : undefined}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          useSSHStore.getState().selectProfile(null)
+                          navigate(path)
+                        }}
+                      >
+                        <Icon
+                          size={18}
+                          className={cn(
+                            'transition-colors',
+                            active ? 'text-foreground' : 'text-muted-foreground'
+                          )}
+                        />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" sideOffset={9}>
+                      {label}
+                    </TooltipContent>
+                  </Tooltip>
+                )
+              })}
+            </fieldset>
+          </div>
         ) : null}
 
         <div
@@ -971,7 +1140,8 @@ export function ActivityRail({
 function buildSections(
   entries: readonly RailLayoutEntry[],
   projectLabel: string,
-  conversationLabel: string
+  conversationLabel: string,
+  toolsLabel: string
 ): RailSectionModel[] {
   const sections: RailSectionModel[] = []
   let section: RailSectionModel = {
@@ -983,6 +1153,7 @@ function buildSections(
   }
   entries.forEach((entry, entryIndex) => {
     if (entry.kind === 'divider') {
+      if (entry.id === RAIL_PLUGIN_VIEWS_DIVIDER_ID) return
       sections.push(section)
       // A user divider only splits the rail visually; its items stay in the
       // group the preceding built-in divider opened.
@@ -998,8 +1169,8 @@ function buildSections(
           ? section.label
           : entry.id === 'workspace-contexts'
             ? conversationLabel
-            : 'Tools',
-        dividerBefore: { id: entry.id, entryIndex },
+            : toolsLabel,
+        dividerBefore: { id: entry.id, entryIndex, collapsed: Boolean(entry.collapsed) },
         items: []
       }
       return

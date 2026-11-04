@@ -72,7 +72,14 @@
     "pinnedBottom": "{{item}} returned to the bottom utility group",
     "alreadyFirst": "{{item}} is already first",
     "alreadyLast": "{{item}} is already last",
-    "reorderUnchanged": "{{item}} order did not change"
+    "reorderUnchanged": "{{item}} order did not change",
+    "plugins": "Plugins",
+    "openPlugins": "Open Plugins",
+    "pluginViews": "Plugin views",
+    "toolsActions": "Tools",
+    "collapseGroup": "Collapse Group",
+    "expandGroup": "Expand Group",
+    "collapsedGroup": "{{group}} — {{count}} hidden items"
   },
   "contextBar": {
     "settings": "Context bar settings",

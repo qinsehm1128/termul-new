@@ -224,6 +224,199 @@ describe('ActivityRail', () => {
     })
   })
 
+  describe('collapsible divider groups', () => {
+    it('opens the permanent Plugins manager from the tools group and marks it active', () => {
+      renderRail('/plugins')
+      const tools = screen.getByRole('group', { name: 'Tools' })
+      const plugins = within(tools).getByRole('button', { name: 'Open Plugins' })
+      expect(plugins).toHaveAttribute('aria-current', 'page')
+      expect(plugins.querySelector('svg')).toHaveClass('lucide-puzzle')
+      fireEvent.click(plugins)
+      expect(mockNavigate).toHaveBeenCalledWith('/plugins')
+      const items = useNavigationStore.getState().layout.entries
+      expect(items.findIndex((entry) => entry.id === 'plugins')).toBe(
+        items.findIndex((entry) => entry.id === 'mcp') + 1
+      )
+    })
+
+    it('collapses a built-in group with a full-width accessible button and restores via keyboard', () => {
+      renderRail()
+      const divider = screen.getByRole('button', { name: 'tools group' })
+      expect(divider).toHaveAttribute('aria-expanded', 'true')
+      fireEvent.click(divider)
+      expect(divider).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByRole('button', { name: 'Open MCP' })).not.toBeInTheDocument()
+      expect(useNavigationStore.getState().layout.entries).toContainEqual({
+        kind: 'divider',
+        id: 'tools',
+        collapsed: true
+      })
+      act(() => divider.focus())
+      fireEvent.keyDown(divider, { key: 'Enter' })
+      expect(screen.getByRole('button', { name: 'Open MCP' })).toBeVisible()
+      fireEvent.keyDown(divider, { key: ' ' })
+      expect(screen.queryByRole('button', { name: 'Open MCP' })).not.toBeInTheDocument()
+    })
+
+    it('keeps the current route visible while hiding inactive items in its collapsed group', () => {
+      renderRail('/plugins')
+      fireEvent.click(screen.getByRole('button', { name: 'tools group' }))
+      expect(screen.getByRole('button', { name: 'Open Plugins' })).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Open MCP' })).not.toBeInTheDocument()
+    })
+
+    it('toggles a custom group and exposes expand/collapse in its context menu', async () => {
+      act(() => useNavigationStore.getState().insertDivider(1))
+      renderRail()
+      const divider = screen.getByRole('button', { name: 'separator' })
+      fireEvent.contextMenu(divider)
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Collapse Group' }))
+      expect(
+        screen.queryByRole('button', { name: 'Open the terminal board' })
+      ).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Open the conversations area' })).toBeVisible()
+      fireEvent.contextMenu(divider)
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Expand Group' }))
+      expect(screen.getByRole('button', { name: 'Open the terminal board' })).toBeVisible()
+    })
+
+    it('persists plugin header collapse and retains an active contributed view', () => {
+      const plugin = sidebarPlugin()
+      plugin.manifest.contributes.views.push({
+        id: 'other',
+        title: 'Other view',
+        location: 'sidebar'
+      })
+      usePluginsStore.setState({ plugins: [plugin], connected: true })
+      const { unmount } = renderRail('/plugins/example.plugin/views/dashboard')
+      fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+      expect(screen.getByRole('button', { name: 'Plugin dashboard' })).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Other view' })).not.toBeInTheDocument()
+      unmount()
+      renderRail()
+      expect(screen.getByRole('button', { name: 'Plugins' })).toHaveAttribute(
+        'aria-expanded',
+        'false'
+      )
+      expect(screen.queryByRole('button', { name: 'Plugin dashboard' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+      expect(screen.getByRole('button', { name: 'Other view' })).toBeVisible()
+    })
+
+    it('shows the group name and hidden count in the collapsed header tooltip', async () => {
+      renderRail()
+      const divider = screen.getByRole('button', { name: 'tools group' })
+      fireEvent.click(divider)
+      const entries = useNavigationStore.getState().layout.entries
+      const toolsIndex = entries.findIndex((entry) => entry.id === 'tools')
+      const pluginIndex = entries.findIndex((entry) => entry.id === 'plugin-views')
+      const hiddenCount = entries
+        .slice(toolsIndex + 1, pluginIndex)
+        .filter((entry) => entry.kind === 'item').length
+      fireEvent.pointerMove(divider, { pointerType: 'mouse' })
+      fireEvent.pointerEnter(divider, { pointerType: 'mouse' })
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(
+        `tools group — ${hiddenCount} hidden items`
+      )
+    })
+
+    it('drops a dragged item into a collapsed group and expands it without navigating', () => {
+      vi.stubGlobal('PointerEvent', MouseEvent)
+      try {
+        renderRail()
+        fireEvent.click(screen.getByRole('button', { name: 'workspace group' }))
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-rail-row="true"]'))
+        rows.forEach((row, index) => {
+          vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+            x: 0,
+            y: index * 36,
+            top: index * 36,
+            bottom: (index + 1) * 36,
+            left: 0,
+            right: 44,
+            width: 44,
+            height: 36,
+            toJSON: () => ({})
+          })
+        })
+        const workspaceIndex = rows.findIndex(
+          (row) => row.dataset.railEntry === 'workspace-contexts'
+        )
+        const skillsIndex = rows.findIndex((row) => row.dataset.railEntry === 'skills')
+        const skills = screen.getByRole('button', { name: 'Open skills' })
+        fireEvent.pointerDown(skills, { button: 0, clientX: 20, clientY: skillsIndex * 36 + 18 })
+        fireEvent.pointerMove(document, { clientX: 20, clientY: workspaceIndex * 36 + 30 })
+        expect(document.querySelector('[data-rail-drop-indicator]')).not.toBeNull()
+        fireEvent.pointerUp(document, { clientX: 20, clientY: workspaceIndex * 36 + 30 })
+        fireEvent.click(screen.getByRole('button', { name: 'Open skills' }))
+        expect(mockNavigate).not.toHaveBeenCalled()
+        expect(screen.getByRole('button', { name: 'workspace group' })).toHaveAttribute(
+          'aria-expanded',
+          'true'
+        )
+        const entries = useNavigationStore.getState().layout.entries
+        expect(entries.findIndex((entry) => entry.id === 'skills')).toBeLessThan(
+          entries.findIndex((entry) => entry.id === 'tools')
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('shows insertion feedback below an active item retained in a collapsed group', () => {
+      vi.stubGlobal('PointerEvent', MouseEvent)
+      try {
+        renderRail('/mcp')
+        fireEvent.click(screen.getByRole('button', { name: 'tools group' }))
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-rail-row="true"]'))
+        rows.forEach((row, index) => {
+          vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+            x: 0,
+            y: index * 36,
+            top: index * 36,
+            bottom: (index + 1) * 36,
+            left: 0,
+            right: 44,
+            width: 44,
+            height: 36,
+            toJSON: () => ({})
+          })
+        })
+        const mcpIndex = rows.findIndex((row) => row.dataset.railEntry === 'mcp')
+        fireEvent.pointerDown(screen.getByRole('button', { name: 'Open projects' }), {
+          button: 0,
+          clientX: 20,
+          clientY: 18
+        })
+        fireEvent.pointerMove(document, { clientX: 20, clientY: mcpIndex * 36 + 30 })
+        expect(rows[mcpIndex].querySelector('[data-rail-drop-indicator="after"]')).not.toBeNull()
+        fireEvent.pointerUp(document, { clientX: 20, clientY: mcpIndex * 36 + 30 })
+        expect(screen.getByRole('button', { name: 'tools group' })).toHaveAttribute(
+          'aria-expanded',
+          'true'
+        )
+        const entries = useNavigationStore.getState().layout.entries
+        expect(entries.findIndex((entry) => entry.id === 'projects')).toBe(
+          entries.findIndex((entry) => entry.id === 'mcp') + 1
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('keeps Alt+Arrow movement across a collapsed group available', () => {
+      renderRail()
+      fireEvent.click(screen.getByRole('button', { name: 'workspace group' }))
+      const tools = screen.getByRole('button', { name: 'Open skills' })
+      fireEvent.keyDown(tools, { key: 'ArrowUp', altKey: true })
+      expect(screen.getByRole('button', { name: 'Open skills' })).toBeVisible()
+      expect(screen.getByRole('button', { name: 'workspace group' })).toHaveAttribute(
+        'aria-expanded',
+        'true'
+      )
+    })
+  })
+
   it('does not render sidebar or file-explorer toggles (moved to titlebar)', () => {
     renderRail()
 

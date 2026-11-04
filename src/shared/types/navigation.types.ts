@@ -34,12 +34,19 @@ export const RAIL_SORTABLE_ITEM_IDS = [
   'skills',
   'aiChannels',
   'mcp',
+  'plugins',
   'scheduledTasks'
 ] as const
 
 export const RAIL_UTILITY_ITEM_IDS = ['shortcuts', 'preferences', 'themes'] as const
 
-export const RAIL_DIVIDER_IDS = ['workspace-contexts', 'tools'] as const
+/** Render-only sidebar group; persisted last and never owns sortable entries. */
+export const RAIL_PLUGIN_VIEWS_DIVIDER_ID = 'plugin-views' as const
+export const RAIL_DIVIDER_IDS = [
+  'workspace-contexts',
+  'tools',
+  RAIL_PLUGIN_VIEWS_DIVIDER_ID
+] as const
 
 export const RAIL_ITEM_IDS = [...RAIL_SORTABLE_ITEM_IDS, ...RAIL_UTILITY_ITEM_IDS] as const
 
@@ -53,7 +60,7 @@ export type RailItemMobility = 'sortable' | 'utility'
 
 export type RailLayoutEntry =
   | { kind: 'item'; id: RailItemId }
-  | { kind: 'divider'; id: RailDividerId }
+  | { kind: 'divider'; id: RailDividerId; collapsed?: true }
 
 export interface RailLayoutConfig {
   schemaVersion: typeof RAIL_LAYOUT_SCHEMA_VERSION
@@ -81,7 +88,9 @@ const DEFAULT_ENTRIES: readonly RailLayoutEntry[] = [
   { kind: 'item', id: 'skills' },
   { kind: 'item', id: 'aiChannels' },
   { kind: 'item', id: 'mcp' },
-  { kind: 'item', id: 'scheduledTasks' }
+  { kind: 'item', id: 'plugins' },
+  { kind: 'item', id: 'scheduledTasks' },
+  { kind: 'divider', id: RAIL_PLUGIN_VIEWS_DIVIDER_ID }
 ]
 
 export function defaultRailLayout(): RailLayoutConfig {
@@ -121,12 +130,23 @@ export function normalizeRailLayout(value: unknown): RailLayoutConfig {
     entries.push(parsed)
   }
 
+  // The plugin-view header owns render-only sidebar entries, never sortable items.
+  const pluginViewsIndex = entries.findIndex(
+    (entry) => entry.kind === 'divider' && entry.id === RAIL_PLUGIN_VIEWS_DIVIDER_ID
+  )
+  const pluginViews =
+    pluginViewsIndex >= 0
+      ? entries.splice(pluginViewsIndex, 1)[0]
+      : { kind: 'divider' as const, id: RAIL_PLUGIN_VIEWS_DIVIDER_ID }
+
   for (const expected of DEFAULT_ENTRIES) {
+    if (expected.kind === 'divider' && expected.id === RAIL_PLUGIN_VIEWS_DIVIDER_ID) continue
     const key = entryKey(expected)
     if (seen.has(key)) continue
     insertAfterNearestPredecessor(entries, expected)
     seen.add(key)
   }
+  entries.push(pluginViews)
 
   return { schemaVersion: RAIL_LAYOUT_SCHEMA_VERSION, revision, entries }
 }
@@ -201,7 +221,7 @@ export function insertRailDivider(
 ): RailLayoutEntry[] {
   const next = entries.map(cloneEntry)
   if (next.length >= RAIL_ENTRIES_MAX) return next
-  const index = Math.min(next.length, Math.max(0, Math.trunc(beforeEntryIndex)))
+  const index = Math.min(sortableEndIndex(next), Math.max(0, Math.trunc(beforeEntryIndex)))
   next.splice(index, 0, { kind: 'divider', id: nextUserDividerId(entries) })
   return next
 }
@@ -226,7 +246,10 @@ export function sameRailEntries(
 ): boolean {
   if (left.length !== right.length) return false
   return left.every(
-    (entry, index) => entry.kind === right[index]?.kind && entry.id === right[index]?.id
+    (entry, index) =>
+      entry.kind === right[index]?.kind &&
+      entry.id === right[index]?.id &&
+      (entry.kind !== 'divider' || entry.collapsed === (right[index] as typeof entry).collapsed)
   )
 }
 
@@ -251,24 +274,15 @@ function moveBy(
     if (!isUtilityItemId(id) || delta > 0) {
       return unchanged(entries, id, delta > 0 ? 'last' : 'same')
     }
-    const next = entries.map(cloneEntry)
-    next.push({ kind: 'item', id })
-    return {
-      changed: true,
-      entries: next,
-      feedback: describeMove(entries, next, id)
-    }
+    return moveToRestIndex(entries, id, sortableEndIndex(entries))
   }
   const target = index + delta
   if (target < 0) return unchanged(entries, id, 'first')
-  if (target >= entries.length) {
+  if (target >= sortableEndIndex(entries)) {
     if (isUtilityItemId(id)) return pinUtility(entries, id)
     return unchanged(entries, id, 'last')
   }
-  const next = entries.map(cloneEntry)
-  const [item] = next.splice(index, 1)
-  next.splice(target, 0, item)
-  return { changed: true, entries: next, feedback: describeMove(entries, next, id) }
+  return moveToRestIndex(entries, id, target)
 }
 
 function moveToRestIndex(
@@ -282,10 +296,13 @@ function moveToRestIndex(
     current < 0
       ? entries.map(cloneEntry)
       : entries.filter((_, entryIndex) => entryIndex !== current)
-  const clamped = Math.min(rest.length, Math.max(0, index))
+  const clamped = Math.min(sortableEndIndex(rest), Math.max(0, index))
   if (current >= 0 && clamped === current) return unchanged(entries, id, 'same')
+  const previousOwner = owningDivider(entries, current)?.id
   const next = rest.map(cloneEntry)
   next.splice(clamped, 0, { kind: 'item', id })
+  const owner = owningDivider(next, clamped)
+  if (owner && owner.id !== previousOwner) delete owner.collapsed
   if (sameRailEntries(entries, next)) return unchanged(entries, id, 'same')
   return { changed: true, entries: next, feedback: describeMove(entries, next, id) }
 }
@@ -334,17 +351,40 @@ function itemIndex(entries: readonly RailLayoutEntry[], id: RailItemId): number 
   return entries.findIndex((entry) => entry.kind === 'item' && entry.id === id)
 }
 
+function sortableEndIndex(entries: readonly RailLayoutEntry[]): number {
+  const index = entries.findIndex(
+    (entry) => entry.kind === 'divider' && entry.id === RAIL_PLUGIN_VIEWS_DIVIDER_ID
+  )
+  return index < 0 ? entries.length : index
+}
+
+function owningDivider(
+  entries: readonly RailLayoutEntry[],
+  itemIndex: number
+): Extract<RailLayoutEntry, { kind: 'divider' }> | undefined {
+  for (let index = itemIndex - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (entry.kind === 'divider') return entry
+  }
+  return undefined
+}
+
 function parseEntry(value: unknown): RailLayoutEntry | null {
   if (!isRecord(value)) return null
   for (const key of Object.keys(value)) {
     if (isForbiddenCredentialKey(key)) contractFail(FORBIDDEN)
-    if (key !== 'kind' && key !== 'id') contractFail(INVALID)
+    if (key !== 'kind' && key !== 'id' && !(value.kind === 'divider' && key === 'collapsed')) {
+      contractFail(INVALID)
+    }
   }
+  if ('collapsed' in value && typeof value.collapsed !== 'boolean') contractFail(INVALID)
   if (value.kind === 'item' && typeof value.id === 'string' && isRailItemId(value.id)) {
     return { kind: 'item', id: value.id }
   }
   if (value.kind === 'divider' && typeof value.id === 'string' && isDividerId(value.id)) {
-    return { kind: 'divider', id: value.id }
+    return value.collapsed === true
+      ? { kind: 'divider', id: value.id, collapsed: true }
+      : { kind: 'divider', id: value.id }
   }
   return null
 }
@@ -380,7 +420,11 @@ function entryKey(entry: RailLayoutEntry): string {
 }
 
 function cloneEntry(entry: RailLayoutEntry): RailLayoutEntry {
-  return entry.kind === 'item' ? { kind: 'item', id: entry.id } : { kind: 'divider', id: entry.id }
+  return entry.kind === 'item'
+    ? { kind: 'item', id: entry.id }
+    : entry.collapsed
+      ? { kind: 'divider', id: entry.id, collapsed: true }
+      : { kind: 'divider', id: entry.id }
 }
 
 function isRailItemId(value: string): value is RailItemId {

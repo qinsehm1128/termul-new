@@ -28,6 +28,7 @@ interface NavigationState {
   pinUtility: (id: RailItemId) => RailReorderFeedback
   insertDivider: (beforeEntryIndex: number) => void
   removeDivider: (id: RailDividerId) => void
+  toggleDivider: (id: RailDividerId) => void
 }
 
 const railRevisionFence = createRailRevisionFence()
@@ -86,6 +87,16 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
   removeDivider: (id) => {
     commitEntries(removeRailDivider(get().layout.entries, id), set, get)
+  },
+
+  toggleDivider: (id) => {
+    const entries = get().layout.entries.map((entry) => {
+      if (entry.kind !== 'divider' || entry.id !== id) return entry
+      return entry.collapsed
+        ? { kind: 'divider' as const, id: entry.id }
+        : { kind: 'divider' as const, id: entry.id, collapsed: true as const }
+    })
+    commitEntries(entries, set, get)
   }
 }))
 
