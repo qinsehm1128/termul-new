@@ -336,11 +336,17 @@ fn example_counter_manifests_contribute_sidebar_calculator() {
         include_bytes!("../../se-plugin-example/src/manifest-v2.json").as_slice(),
     ] {
         let m = parse_manifest(bytes).unwrap();
-        assert_eq!(m.contributes.views.len(), 1);
+        assert_eq!(m.contributes.views.len(), 2);
         let view = &m.contributes.views[0];
         assert_eq!(view.id, "example.counter");
         assert_eq!(view.location, ViewLocation::Sidebar);
         assert_eq!(view.icon.as_deref(), Some("calculator"));
+        let web = &m.contributes.views[1];
+        assert_eq!(web.id, "activity-studio");
+        assert_eq!(web.location, ViewLocation::Sidebar);
+        assert_eq!(web.kind, Some(ViewKind::Web));
+        assert_eq!(web.entry.as_deref(), Some("index.html"));
+        assert_eq!(web.icon.as_deref(), Some("chart-bar"));
     }
 }
 
