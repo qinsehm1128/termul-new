@@ -41,7 +41,7 @@ scope: project
 
 ### 能力清单与初始开放集合
 
-R=read，W=mutate，S=sensitive；S 优先于读写属性，另存 destructive 标记。下表是**本方案的保守分类和明确开放集合**，不是声称现有每个命令体都已完成安全审计。未列入开放集合的 invoke 命令不自动导出。每个 operation 的具体 DTO 在 C1 按现有类型固化，C3 复用服务实现，不向调用者暴露任意 invoke。
+R=read，W=mutate，S=sensitive；S 优先于读写属性，另存 destructive 标记。**2026-11-04 用户决定：除凭据和密钥外全部开放。** 逐条清单以 `.qin-code/docs/specs/plugin-capability-catalog-spec.md` 为准：357 个条目中开放 321 个，去掉密钥后开放 11 个，因密钥不开放 8 个，另有 17 个属于内部通信、由上层 op 覆盖。下表只保留按领域的概览，与清单冲突时以清单为准；凡标为「不导出」的项目，均按清单改为开放或去密钥后开放。每个 operation 的具体 DTO 在 C1 按现有类型固化，C3 复用服务实现，不向调用者暴露任意 invoke。
 
 | 域 / file:line | R / W / S 分类 | 本期注册的宿主 operation（统一 `se.` 前缀） |
 |---|---|---|
@@ -98,7 +98,7 @@ R=read，W=mutate，S=sensitive；S 优先于读写属性，另存 destructive �
 ### Scope
 
 1. 不实现 VSIX/Node/JS 后端，不允许主窗口 DOM/CSS/React 注入；不改变 native/process 完全受信任这一事实。授权只约束**宿主提供的入口**，不声称限制原生代码自行访问系统或网络。
-2. 不提供 secrets、OAuth token、SSH 私钥或安全设置绕过；不做自动抓取 invoke_handler 后全部导出。已有外部 upstream 的凭据解析不受影响，但不能借能力 API 读取这些值。
+2. 只排除凭据和密钥本身，包括 secrets、OAuth token、SSH 私钥/密码、askpass、终端 claim 凭据、安全存储和 webview 存储交接；具体以能力清单中的 8 个 SECRET-EXCLUDED 为准。安全相关设置和权限审批（如 respondPermission、setPermissionPolicy）也开放，但必须逐次确认。不做「自动抓取 invoke_handler 后直接导出」，每个命令都要经清单分类，并有 CI 覆盖比对。已有外部 upstream 的凭据解析不受影响，但不能借能力 API 读取这些值。
 3. 不替换中央 PaneRenderer/终端 pane tree，不实现浮动窗口、任意嵌套 docking、布局云同步、完整 VS Code API/主题文件二进制兼容；walkthroughs 本期明确延后。
 4. 不把 standalone/browser 变成 native 插件宿主：共享 Rust 能力适用时同步开放；原生插件安装/授权、iframe 及其 UI contribution 保持 desktop-only，非桌面明确返回 unsupported。共享工作台布局在两 renderer root 可用，手机保留 MobileChatShell。
 5. 本交付是规划；父会话负责保存本文和批准后调度。实施也不得擅自运行用户桌面实例、修改 git 或把 qin-code 仓库安装脚本套用于 termul。
@@ -149,7 +149,7 @@ timeout/cancel 在执行前保证无副作用；执行后只尽力取消，不�
 
 授权是 `manifest requirement ∩ 用户 grant ∩ provider live ∩ scope ∩ 调用面 policy`；deny 永远优先。首次安装没有自动写入 grant；升级增加权限或扩大 schema/class/scope 时先暂停激活，展示 diff；撤销立即阻止新调用。grants 绑定 pluginId、包 hash、operation version 与批准 scope；原生程序自行访问系统不在此安全边界内。
 
-R/W 可按安装时的明确选择持久批准；S 需要本地管理 UI 针对调用摘要逐次批准，令牌绑定 operation、input digest、scope、caller、有效期 30 秒且单次消费。headless/remote 没有本地审批者即 `CAPABILITY_CONFIRMATION_REQUIRED`，不自动放行。secrets、安全绕过等排除项即使用户给了 grant 也不存在可调用 operation。
+R/W 可按安装时的明确选择持久批准；S 需要本地管理 UI 针对调用摘要逐次批准，令牌绑定 operation、input digest、scope、caller、有效期 30 秒且单次消费。headless/remote 没有本地审批者即 `CAPABILITY_CONFIRMATION_REQUIRED`，不自动放行。8 个 SECRET-EXCLUDED 操作即使用户给了 grant，也不存在可调用的 operation。
 
 MCP 新宿主能力默认不公开，按 operation 在 MCP 管理页显式开启；已有六工具和普通 upstream 保持原 enablement/policy。外部 agent 不能继承“宿主 UI 全权限”：ACP 注入 session/project-bound credential，se-mcp 使用用户为该 client 配置的 grants；旧共享 bearer 只保持既有工具权限，对新增宿主/插件工具默认拒绝。跨插件调用保留原始 caller 和中间链，只可缩小、不可扩大授权。
 
@@ -232,7 +232,7 @@ when/enablement 使用共享有界 parser，不用 eval。首版语法为布尔�
 
 ### Execution Plan：单一依赖路线与独占文件
 
-批准后默认使用 `general-executor`，不存在时回退 `general`。下列 13 包是可独立验收的交付包；每包内部按 30–60 分钟测试/实现切片执行，不另建 workflow task 文件。估算为人日（8 小时），含测试、不含人工排队；总计约 32–46 人日（含 H1 增补：C3 +1–2、M2 +1）。所有新增路径均标“新”。同一文件始终只有下述一个 owner；其他包只读或提交接口需求，禁止平行修改接线文件。cargo 构建串行。
+批准后默认使用 `general-executor`，不存在时回退 `general`。下列 15 包（C3 拆为 C3a/b/c）是可独立验收的交付包；每包内部按 30–60 分钟测试/实现切片执行，不另建 workflow task 文件。估算为人日（8 小时），含测试、不含人工排队；总计约 44–61 人日，含 H1 增补和 2026-11-04「除凭据外全部开放」的扩容。C3 从 4–6 日扩为 C3a/b/c 合计 15–21 日，C4 权限页 +1 日；交付包由 13 个变为 15 个。所有新增路径均标“新”。同一文件始终只有下述一个 owner；其他包只读或提交接口需求，禁止平行修改接线文件。cargo 构建串行。
 
 验证缩写：`CT` 展开为 `cargo test --manifest-path src-tauri/Cargo.toml --target-dir /Users/qs/project/me/termul/src-tauri/target`；`VT` 展开为 `bunx vitest run`。命令从仓库根执行。tests 的新名称是本计划要求新增的验收，不是已通过证据。每包 Read first 都包括其全部修改文件，以及下列指定模式文件。
 
@@ -263,14 +263,33 @@ when/enablement 使用共享有界 parser，不用 eval。首版语法为布尔�
 - **Acceptance criteria：** `capability_completion_waits_for_callback_return`、`cross_plugin_cycle_rejected`、`stdio_stdout_has_one_reader`、`disable_withdraws_before_process_stop`、`upgrade_rejects_old_completion`、`old_core_still_connects` 通过。
 - **Verification：** `CT -p se-plugin-host --lib`；`CT -p se-manager --lib plugin`；`CT -p se-terminal-core --lib ipc::tests`；风险是 native 重入和 stdio 双消费。
 
-#### C3 — 宿主能力适配与跨运行模式路由（4–6 日）
-- **ID / Outcome：** C3；能力清单的全部本期开放项连接真实服务，含 scoped ACP credentials 和 headless unavailable 行为。
-- **Files / symbols：** 新 `src-tauri/src/capability_host/**`；`src-tauri/src/{lib.rs,commands.rs,server_main.rs,remote/host.rs,web/mod.rs,web/router.rs,acp/mcp_router.rs,acp/manager.rs}`；新 `web/capabilities_api.rs`。
-- **Read first：** invoke_handler；TerminalServiceHandle/AcpCoreClient；quick_terminal_commands.rs:31–56；memory_index/commands.rs:22–43；web ProjectRegistry 与 projects_api；各域既有 service API。
-- **Changes：** 用带依赖的 host provider dispatch 替代构造 Tauri State；接入全部列出的 operation、分页/路径 fence/去秘密 DTO；新增 Tauri `capabilities_list/call` 和对应 authenticated web API；GUI provider attach/heartbeat/take；ACP session 发放 project-bound grants；standalone 使用同一 adapter，无 GUI 项明确 unsupported。
-- **Dependencies / parallelism：** C2、M1；可与 L2–L4 并行。项目与设置变更只经其现有权威路径，禁止旁写持久化文件。
-- **Acceptance criteria：** `capability_adapter_catalog_is_complete` 比对清单；每个 operation 至少一条成功与越权测试；PTY 输入、SSH、SFTP、tasks S 操作缺批准无副作用；GUI 消失后 memory/plugin tools 可用、UI operation 不可用。
-- **Verification：** `CT -p se-manager --lib capability`；`CT -p se-manager --features standalone-server --lib capability`；风险是桌面/standalone 项目来源不同。
+#### C3 — 宿主能力适配（按能力清单全量开放，拆为 C3a/C3b/C3c，合计 15–21 日）
+- **ID / Outcome：** C3a、C3b、C3c；能力清单中全部 OPEN 和 OPEN-REDACTED 条目都接入真实服务，包括 scoped ACP credentials 和 headless 下返回 unavailable 的行为。三包共享 `src-tauri/src/capability_host/` 的 dispatch 框架，该框架由 C3a 先交付；其后按领域划分独占文件。
+- **C3a（5–7 日）：终端、快捷终端、Git、worktree、搜索、文件、工作区、SSH/SFTP、隧道，对应清单 B，共 116 条命令。** 先补安全前置：
+  - `terminal_watch`、`terminal_write` 增加 claim 校验；
+  - `git_*` 把 cwd 规范化并核对项目范围；
+  - SFTP 及其他接受任意本地路径的操作，限定在授权根目录内；
+  - 为 SFTP 上传和下载补取消入口。
+  
+  独占新文件 `capability_host/{dispatch,terminal,git,worktree,search,fs,ssh}.rs`，修改 `lib.rs`、`commands.rs` 中这些领域的部分，以及 `web/router.rs`。
+- **C3b（6–8 日）：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件管理，对应清单 A，共 156 条命令。** 主要内容：
+  - 实现 MCP 配置、连接信息、远程凭据的去密钥 DTO；
+  - 注册 `memory_index_cancel_cmd`；
+  - 按 Design G 实现只读的历史读取和 conversation job；
+  - `respondPermission` 等操作逐次确认。
+  
+  独占新文件 `capability_host/{agents,sessions,conversation,conversation_jobs,memory,skills,scheduled,ai,mcp,remote,plugins}.rs`，修改 `acp/mcp_router.rs`、`acp/manager.rs`、`memory_index/{service,store}.rs`、`server_main.rs`。
+- **C3c（4–6 日）：浏览器、数据迁移、日志、系统，以及前端独有能力，对应清单 C，共 85 条。** 主要内容：
+  - 实现 GUI renderer provider（attach/heartbeat/take/complete），承接项目增删改与分组、设置、主题、快捷键、布局和工作区标签；
+  - 实现 6 类前端事件，事件只带 revision；
+  - 浏览器标签操作。
+  
+  独占新文件 `capability_host/{browser,system}.rs`、`src/renderer/lib/capability-provider/**`，修改 `remote/host.rs`、`web/mod.rs`、新 `web/capabilities_api.rs`。
+- **Read first：** `plugin-capability-catalog-spec.md` 的对应部分；invoke_handler；TerminalServiceHandle/AcpCoreClient；`memory_index/commands.rs`；web ProjectRegistry 与 projects_api；前端 project-store、app-settings-store、theme、keyboard-shortcuts、navigation-store。
+- **Changes：** 用带依赖的 host provider dispatch 替代构造 Tauri State；新增 Tauri `capabilities_list/call` 和对应的 authenticated web API；项目与设置的变更只经现有权威路径，禁止旁写持久化文件。
+- **Dependencies / parallelism：** C2、M1 → C3a 框架 → C3b ∥ C3c。H1 只依赖 C3a 框架和 C3b。
+- **Acceptance criteria：** `capability_adapter_catalog_is_complete` 会比对 `generate_handler!` 与清单，每条命令恰好一个分类；每个 op 至少有一条成功测试和一条越权测试；用哨兵值验证 OPEN-REDACTED 不泄露密钥；per-call 操作未确认时没有副作用；GUI 消失后 memory 和插件工具可用，依赖界面的 op 返回 unavailable。
+- **Verification：** `CT -p se-manager --lib capability`；`CT -p se-manager --features standalone-server --lib capability`；`VT src/renderer/lib/capability-provider`。风险是工作量大、桌面与 standalone 的项目来源不同，以及前端 provider 的时序。
 
 #### C4 — 安装授权、管理页与审计 UI（2–3 日）
 - **ID / Outcome：** C4；安装前可见权限、升级 diff、可撤权、可查脱敏审计，拒绝状态有明确原因。
@@ -353,7 +372,7 @@ when/enablement 使用共享有界 parser，不用 eval。首版语法为布尔�
 - **Acceptance criteria：** [UI-observable] 项目/SSH 分居两侧、插件工具可开关、插件主题与标题动作可见；重载布局相同；恢复不终止 PTY；browser 工作台可用但 native 插件入口零副作用；手机仍显示原 shell 和恢复入口。
 - **Verification：** `VT src/renderer/__tests__/plugin-platform.integration.test.tsx src/renderer/__tests__/renderer-root-parity.test.tsx src/renderer/lib/__tests__/parity-checklist.test.ts`；`bun run typecheck`；风险是 giant WorkspaceLayout 接线造成重挂载。
 
-执行 DAG：`C1 → {C2 ∥ M1 ∥ L1}`；`{C2,M1} → C3 → {C4 ∥ M2}`；`{C2,M1} → M3`；`L1 → L2 → {L3 ∥ L4}`；`{L2,C4} → L6`；`{L3,L4,L6,M2,M3} → L5`。L5 是最后交付包，L6 提前完成以避免最终接线后再跨 owner 改文件。
+执行 DAG：`C1 → {C2 ∥ M1 ∥ L1}`；`{C2,M1} → C3a → {C3b ∥ C3c}`；`{C3a,C3b} → C4 → M2`；`{C2,M1} → M3`；`L1 → L2 → {L3 ∥ L4}`；`{L2,C4} → L6`；`{L3,L4,L6,M2,M3} → L5`。L5 是最后交付包，L6 提前完成以避免最终接线后再跨 owner 改文件。
 
 ### Design G：历史读取、整理任务与插件同源操作
 
@@ -431,7 +450,7 @@ MCP 另展示：
 | M2 | 示例从抽象 summarize/search 增加此强制 native workflow；独占范围追加新 `src/renderer/features/plugins/history-organizer.integration.test.tsx`，复用原 `src-tauri/tests/plugin_platform.rs` 和 `scripts/test-plugin-platform.sh`。**M2 首次让该场景的菜单/能力/MCP 全链路通过，不等待 L6 新菜单模型，因为 project.context 既有入口已可用。**执行顺序微调为 C4→M2，确保真实授权流程已交付；M2 可使用 v1菜单→v2归一化适配，不依赖未交付 L6。 |
 | L5 | 最终工作台回归重跑同一场景，确认迁移后的项目右键菜单仍是插件贡献、目标不漂移、进度/取消可达；既有 parity-checklist 的“无隐式 build”断言保持，若重命名文案只改说明，不删除限制。 |
 
-M2 的新的真实依赖为 **C3、C4、M1、C2**；其中后三项大多由原依赖传递满足。原 DAG 的 `C3→{C4∥M2}` 改为 `C3→C4→M2`；其他边不变。C3 估算增加1–2人日，M2增加1人日，总估算从30–43调整为32–46人日；仍是13包，不新增跨 owner 写入。
+M2 的新的真实依赖为 **C3、C4、M1、C2**；其中后三项大多由原依赖传递满足。原 DAG 的 `C3→{C4∥M2}` 改为 `C3→C4→M2`；其他边不变。C3 估算增加1–2人日，M2增加1人日，总估算从30–43调整为32–46人日；仍是13包，不新增跨 owner 写入。（2026-11-04 起已被「除凭据外全部开放」取代：现为 15 包、44–61 人日，见上文 C3a/b/c。）
 
 ## 验收
 
