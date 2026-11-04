@@ -1834,6 +1834,36 @@ impl PluginHost {
         view_id: &str,
     ) -> Result<(), PluginError> {
         let active = live(state, id)?;
+        // Web views have no declarative snapshot: tell their open pages to refresh instead.
+        let is_web = state
+            .registry
+            .plugins
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| {
+                entry
+                    .manifest
+                    .contributes
+                    .views
+                    .iter()
+                    .find(|view| view.id == view_id)
+            })
+            .is_some_and(|view| view.kind == Some(se_plugin_protocol::ViewKind::Web));
+        if is_web {
+            let generation = active.generation.clone();
+            self.host_services
+                .web
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .post(
+                    id,
+                    &generation,
+                    view_id,
+                    se_plugin_protocol::WebEventType::Invalidate,
+                    serde_json::json!({"code": "PLUGIN_UI_INVALIDATED"}),
+                )?;
+            return Ok(());
+        }
         let old = active
             .leases
             .snapshots

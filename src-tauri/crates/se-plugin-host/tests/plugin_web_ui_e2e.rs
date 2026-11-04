@@ -287,6 +287,22 @@ async fn archive_web_bridge_wake_managed_service_upgrade_and_revocation() {
                 && e.payload["service"]["ok"] == true),
         "wake callback must post actual TCP result to UI: {events:?}"
     );
+    // The wake reply invalidates the web view: it must reach the page, not a declarative render.
+    assert!(
+        events
+            .events
+            .iter()
+            .any(|e| e.event_type == WebEventType::Invalidate
+                && e.payload["code"] == "PLUGIN_UI_INVALIDATED"),
+        "web view invalidation must be delivered to the page: {events:?}"
+    );
+    let listed = host.list().await.unwrap();
+    let entry = listed.plugins.iter().find(|p| p.id == ID).unwrap();
+    assert!(
+        entry.last_error.is_none(),
+        "invalidating a web view must not record an error: {:?}",
+        entry.last_error
+    );
     assert!(
         events
             .events
