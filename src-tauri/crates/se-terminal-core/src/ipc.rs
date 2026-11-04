@@ -35,6 +35,7 @@ pub fn component_capabilities(role: CoreRole) -> Vec<String> {
             "plugins.configuration.v1".to_string(),
             "plugins.broker.v1".to_string(),
             "plugins.host-capabilities.v1".to_string(),
+            "plugins.web-ui.v1".to_string(),
         ],
     }
 }
@@ -103,6 +104,7 @@ mod tests {
                 "plugins.configuration.v1",
                 "plugins.broker.v1",
                 "plugins.host-capabilities.v1",
+                "plugins.web-ui.v1",
             ]
         );
         assert!(!ack

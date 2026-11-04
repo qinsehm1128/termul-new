@@ -11,6 +11,7 @@ mod browser_tab_manager;
 mod cli_session;
 mod commands;
 mod plugin_commands;
+mod plugin_ui_protocol;
 pub use se_agent_session as conversation;
 pub mod core;
 /// The injectable seam every OS-keychain read/write goes through. Public
@@ -2945,7 +2946,17 @@ pub fn run() {
     logging::install_panic_hook();
     logging::install_desktop_tracing_bridge();
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .manage(Arc::new(plugin_ui_protocol::PluginUiSessions::default()))
+        .register_asynchronous_uri_scheme_protocol("se-plugin", |context, request, responder| {
+            let app = context.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let service = app.state::<core::PluginServiceHandle>();
+                let sessions = app.state::<Arc<plugin_ui_protocol::PluginUiSessions>>();
+                let response = plugin_ui_protocol::respond(request, &sessions, &service).await;
+                responder.respond(response);
+            });
+        });
 
     // Native menu bar:
     // - macOS: top OS menu (expected, native UX)
@@ -3765,6 +3776,13 @@ pub fn run() {
             component_runtime_identities,
             core_runtime_status,
             restart_core,
+            plugin_commands::plugin_web_open,
+            plugin_commands::plugin_web_close,
+            plugin_commands::plugin_web_read,
+            plugin_commands::plugin_web_request,
+            plugin_commands::plugin_process_list,
+            plugin_commands::plugin_process_logs,
+            plugin_commands::plugin_process_control,
             plugin_commands::plugin_list,
             plugin_commands::plugin_install,
             plugin_commands::plugin_set_enabled,

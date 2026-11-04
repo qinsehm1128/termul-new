@@ -1,5 +1,9 @@
 //! GUI-only RPC adapters. This module never constructs a PluginHost or loads a library.
 use crate::commands::IpcResult;
+use crate::core::plugin::{
+    parse_process_control_request, parse_process_list_request, parse_process_logs_request,
+    ProcessListReply,
+};
 use crate::core::PluginServiceHandle;
 use se_plugin_protocol::*;
 use serde::{de::DeserializeOwned, Serialize};
@@ -213,6 +217,118 @@ host_command!(
     parse_execute_contribution_request,
     execute_contribution,
     CommandReply
+);
+
+/// GUI addition to the frozen Core reply: W4 uses `url` on every platform.
+#[derive(Serialize)]
+pub struct PluginWebOpenReply {
+    #[serde(flatten)]
+    session: WebOpenReply,
+    url: String,
+}
+
+#[tauri::command(async)]
+pub fn plugin_web_open(
+    window: tauri::WebviewWindow,
+    service: tauri::State<'_, PluginServiceHandle>,
+    sessions: tauri::State<'_, std::sync::Arc<crate::plugin_ui_protocol::PluginUiSessions>>,
+    payload: serde_json::Value,
+) -> impl std::future::Future<Output = IpcResult<PluginWebOpenReply>> + Send + 'static {
+    let service = service.inner().clone();
+    let sessions = sessions.inner().clone();
+    let label = window.label().to_owned();
+    async move {
+        host_result(
+            async {
+                require_main_window(&label)?;
+                let session = service
+                    .web_open(host_payload(payload, parse_web_open_request)?)
+                    .await?;
+                sessions.insert(&session)?;
+                let url = crate::plugin_ui_protocol::session_url(&session);
+                Ok(PluginWebOpenReply { session, url })
+            }
+            .await,
+        )
+    }
+}
+
+#[tauri::command(async)]
+pub fn plugin_web_close(
+    window: tauri::WebviewWindow,
+    service: tauri::State<'_, PluginServiceHandle>,
+    sessions: tauri::State<'_, std::sync::Arc<crate::plugin_ui_protocol::PluginUiSessions>>,
+    payload: serde_json::Value,
+) -> impl std::future::Future<Output = IpcResult<WebCloseReply>> + Send + 'static {
+    let service = service.inner().clone();
+    let sessions = sessions.inner().clone();
+    let label = window.label().to_owned();
+    async move {
+        host_result(
+            async {
+                require_main_window(&label)?;
+                let request = host_payload(payload, parse_web_close_request)?;
+                sessions.remove(&request.session_id);
+                service.web_close(request).await
+            }
+            .await,
+        )
+    }
+}
+
+// Only the trusted main renderer can use these adapters; plugin frames have no Tauri IPC.
+macro_rules! web_command {
+    ($name:ident, $parser:path, $operation:ident, $reply:ty) => {
+        #[tauri::command(async)]
+        pub fn $name(
+            window: tauri::WebviewWindow,
+            service: tauri::State<'_, PluginServiceHandle>,
+            payload: serde_json::Value,
+        ) -> impl std::future::Future<Output = IpcResult<$reply>> + Send + 'static {
+            let service = service.inner().clone();
+            let label = window.label().to_owned();
+            async move {
+                host_result(
+                    async {
+                        require_main_window(&label)?;
+                        service.$operation(host_payload(payload, $parser)?).await
+                    }
+                    .await,
+                )
+            }
+        }
+    };
+}
+web_command!(
+    plugin_web_read,
+    parse_web_read_request,
+    web_read,
+    WebReadReply
+);
+web_command!(
+    plugin_web_request,
+    parse_web_request,
+    web_request,
+    serde_json::Value
+);
+
+web_command!(
+    plugin_process_list,
+    parse_process_list_request,
+    process_list,
+    ProcessListReply
+);
+web_command!(
+    plugin_process_logs,
+    parse_process_logs_request,
+    process_logs,
+    HostProcessLogsReply
+);
+web_command!(
+    plugin_process_control,
+    parse_process_control_request,
+    process_control,
+    HostProcessStatus
 );
 
 #[cfg(test)]

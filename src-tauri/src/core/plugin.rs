@@ -35,6 +35,25 @@ fn encode<T: Serialize>(value: T) -> Result<Value, PluginError> {
 fn invalid_request() -> PluginError {
     business(PLUGIN_INVALID_REQUEST, "Invalid plugin request")
 }
+async fn require_process_generation(
+    host: &PluginHost,
+    id: &str,
+    generation: &str,
+) -> Result<(), PluginError> {
+    let snapshot = host.list().await?;
+    let plugin = snapshot
+        .plugins
+        .iter()
+        .find(|plugin| plugin.id == id)
+        .ok_or_else(|| PluginError::new(PLUGIN_NOT_FOUND, "plugin not found"))?;
+    if plugin.generation.as_deref() != Some(generation) {
+        return Err(PluginError::new(
+            PLUGIN_STALE_GENERATION,
+            "stale plugin generation",
+        ));
+    }
+    Ok(())
+}
 fn parse_host<T>(
     value: Value,
     parser: fn(&[u8]) -> Result<T, PluginError>,
@@ -159,8 +178,148 @@ impl Drop for AbortReader {
     }
 }
 
+// GUI/Core envelopes are distinct from the plugin-internal HostProcess* requests.
+pub const METHOD_PROCESS_LIST: &str = "plugins.process.list";
+pub const METHOD_PROCESS_LOGS: &str = "plugins.process.logs";
+pub const METHOD_PROCESS_CONTROL: &str = "plugins.process.control";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessListRequest {
+    #[serde(rename = "id")]
+    pub plugin_id: String,
+    pub generation: String,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessListReply {
+    pub processes: Vec<ProcessListEntry>,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessListEntry {
+    pub id: String,
+    pub status: HostProcessStatus,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessLogsRequest {
+    #[serde(rename = "id")]
+    pub plugin_id: String,
+    pub generation: String,
+    #[serde(rename = "processId")]
+    pub id: String,
+    pub tail: u32,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessControlRequest {
+    #[serde(rename = "id")]
+    pub plugin_id: String,
+    pub generation: String,
+    #[serde(rename = "processId")]
+    pub id: String,
+    pub action: ProcessControlAction,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProcessControlAction {
+    Start,
+    Stop,
+    Restart,
+}
+impl ProcessControlAction {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+}
+fn parse_process<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, PluginError> {
+    if bytes.len() > MAX_JSON_BYTES {
+        return Err(business(
+            PLUGIN_INVALID_REQUEST,
+            "process request exceeds byte limit",
+        ));
+    }
+    serde_json::from_slice(bytes)
+        .map_err(|_| business(PLUGIN_INVALID_REQUEST, "invalid process request"))
+}
+fn validate_process_target(
+    plugin: &str,
+    generation: &str,
+    id: Option<&str>,
+) -> Result<(), PluginError> {
+    if !is_uuid(generation) || !is_plugin_id(plugin) || id.is_some_and(|id| !is_local_id(id)) {
+        return Err(business(PLUGIN_INVALID_REQUEST, "invalid process target"));
+    }
+    Ok(())
+}
+pub(crate) fn parse_process_list_request(bytes: &[u8]) -> Result<ProcessListRequest, PluginError> {
+    let request: ProcessListRequest = parse_process(bytes)?;
+    validate_process_target(&request.plugin_id, &request.generation, None)?;
+    Ok(request)
+}
+pub(crate) fn parse_process_logs_request(bytes: &[u8]) -> Result<ProcessLogsRequest, PluginError> {
+    let request: ProcessLogsRequest = parse_process(bytes)?;
+    validate_process_target(&request.plugin_id, &request.generation, Some(&request.id))?;
+    validate_host_process_logs_request(&HostProcessLogsRequest {
+        id: request.id.clone(),
+        tail: request.tail,
+    })?;
+    Ok(request)
+}
+pub(crate) fn parse_process_control_request(
+    bytes: &[u8],
+) -> Result<ProcessControlRequest, PluginError> {
+    let request: ProcessControlRequest = parse_process(bytes)?;
+    validate_process_target(&request.plugin_id, &request.generation, Some(&request.id))?;
+    Ok(request)
+}
+
 macro_rules! host_rpc_methods {
     () => {
+        pub async fn process_list(
+            &self,
+            payload: ProcessListRequest,
+        ) -> Result<ProcessListReply, PluginError> {
+            self.host_request(METHOD_PROCESS_LIST, payload).await
+        }
+        pub async fn process_logs(
+            &self,
+            payload: ProcessLogsRequest,
+        ) -> Result<HostProcessLogsReply, PluginError> {
+            self.host_request(METHOD_PROCESS_LOGS, payload).await
+        }
+        pub async fn process_control(
+            &self,
+            payload: ProcessControlRequest,
+        ) -> Result<HostProcessStatus, PluginError> {
+            self.host_request(METHOD_PROCESS_CONTROL, payload).await
+        }
+        pub async fn web_open(&self, payload: WebOpenRequest) -> Result<WebOpenReply, PluginError> {
+            self.host_request(WEB_OPEN_METHOD, payload).await
+        }
+        pub async fn web_close(
+            &self,
+            payload: WebCloseRequest,
+        ) -> Result<WebCloseReply, PluginError> {
+            self.host_request(WEB_CLOSE_METHOD, payload).await
+        }
+        pub async fn web_read(&self, payload: WebReadRequest) -> Result<WebReadReply, PluginError> {
+            self.host_request(WEB_READ_METHOD, payload).await
+        }
+        pub async fn web_request(&self, payload: WebRequest) -> Result<Value, PluginError> {
+            self.host_request(WEB_REQUEST_METHOD, payload).await
+        }
+        pub async fn web_asset(
+            &self,
+            payload: WebAssetRequest,
+        ) -> Result<WebAssetReply, PluginError> {
+            self.host_request(WEB_ASSET_METHOD, payload).await
+        }
         pub async fn publish_host_context(
             &self,
             payload: HostContextPublishRequest,
@@ -404,6 +563,54 @@ async fn dispatch(
     params: Value,
 ) -> Result<Value, PluginError> {
     match method {
+        METHOD_PROCESS_LIST => {
+            let request = parse_host(params, parse_process_list_request)?;
+            require_process_generation(host, &request.plugin_id, &request.generation).await?;
+            let processes = host
+                .process_list(&request.plugin_id)
+                .await?
+                .into_iter()
+                .map(|(id, status)| ProcessListEntry { id, status })
+                .collect();
+            encode(ProcessListReply { processes })
+        }
+        METHOD_PROCESS_LOGS => {
+            let request = parse_host(params, parse_process_logs_request)?;
+            require_process_generation(host, &request.plugin_id, &request.generation).await?;
+            encode(
+                host.process_logs(&request.plugin_id, &request.id, request.tail)
+                    .await?,
+            )
+        }
+        METHOD_PROCESS_CONTROL => {
+            let request = parse_host(params, parse_process_control_request)?;
+            require_process_generation(host, &request.plugin_id, &request.generation).await?;
+            encode(
+                host.process_control(&request.plugin_id, &request.id, request.action.as_str())
+                    .await?,
+            )
+        }
+        WEB_OPEN_METHOD => encode(
+            host.web_open(owner, parse_host(params, parse_web_open_request)?)
+                .await?,
+        ),
+        WEB_CLOSE_METHOD => {
+            host.web_close(owner, parse_host(params, parse_web_close_request)?)
+                .await?;
+            encode(WebCloseReply { closed: true })
+        }
+        WEB_READ_METHOD => encode(
+            host.web_read(owner, parse_host(params, parse_web_read_request)?)
+                .await?,
+        ),
+        WEB_REQUEST_METHOD => {
+            host.web_request(owner, parse_host(params, parse_web_request)?)
+                .await
+        }
+        WEB_ASSET_METHOD => encode(
+            host.web_asset(owner, parse_host(params, parse_web_asset_request)?)
+                .await?,
+        ),
         METHOD_HOST_CONTEXT_PUBLISH => encode(
             host.publish_host_context(
                 owner,
@@ -475,6 +682,7 @@ struct ClientState {
     pending: HashMap<u64, Pending>,
     boot_id: Option<String>,
     host_capabilities: bool,
+    web_ui_capabilities: bool,
 }
 struct ClientInner {
     state: Mutex<ClientState>,
@@ -530,6 +738,7 @@ impl PluginCoreClient {
                     pending: HashMap::new(),
                     boot_id: None,
                     host_capabilities: false,
+                    web_ui_capabilities: false,
                 }),
                 reconnect: AsyncMutex::new(()),
                 events,
@@ -582,7 +791,7 @@ impl PluginCoreClient {
             || ack.protocol_version != CURRENT_PROTOCOL_VERSION
             || !PLUGIN_CAPABILITIES
                 .iter()
-                .filter(|&&cap| cap != HOST_CAPABILITIES_V1)
+                .filter(|&&cap| cap != HOST_CAPABILITIES_V1 && cap != WEB_UI_CAPABILITY)
                 .all(|cap| ack.capabilities.iter().any(|c| c == cap))
         {
             return Err(CoreError::InvalidRequest("incompatible Plugin Core".into()));
@@ -632,6 +841,7 @@ impl PluginCoreClient {
             .capabilities
             .iter()
             .any(|cap| cap == HOST_CAPABILITIES_V1);
+        state.web_ui_capabilities = ack.capabilities.iter().any(|cap| cap == WEB_UI_CAPABILITY);
         log::debug!(target: "se_manager::core", "operation=plugin_connected host_capabilities={}", state.host_capabilities);
         state.writer = Some(Arc::new(AsyncMutex::new(writer)));
         let weak = Arc::downgrade(&self.inner);
@@ -712,6 +922,12 @@ impl PluginCoreClient {
                     "Plugin Core does not support host capabilities",
                 ));
             }
+            if !state.web_ui_capabilities && is_web_ui_method(method) {
+                return Err(business(
+                    PLUGIN_NOT_SUPPORTED,
+                    "Plugin Core does not support web UI capabilities",
+                ));
+            }
             let id = state.next_id;
             state.next_id += 1;
             let epoch = state.epoch;
@@ -754,9 +970,23 @@ impl PluginCoreClient {
         result
     }
 }
+fn is_web_ui_method(method: &str) -> bool {
+    matches!(
+        method,
+        WEB_OPEN_METHOD
+            | WEB_CLOSE_METHOD
+            | WEB_READ_METHOD
+            | WEB_REQUEST_METHOD
+            | WEB_ASSET_METHOD
+            | METHOD_PROCESS_LIST
+            | METHOD_PROCESS_LOGS
+            | METHOD_PROCESS_CONTROL
+    )
+}
 fn disconnect_state(state: &mut ClientState, events: &broadcast::Sender<PluginClientEvent>) {
     let was_connected = state.writer.take().is_some();
     state.host_capabilities = false;
+    state.web_ui_capabilities = false;
     state.epoch += 1;
     for (_, sender) in state.pending.drain() {
         let _ = sender.send(Err(unavailable("Plugin Core disconnected")));
@@ -874,6 +1104,208 @@ impl PluginServiceHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_byte_parsers_reject_forged_fields_duplicates_and_invalid_bounds() {
+        const GENERATION: &str = "11111111-1111-4111-8111-111111111111";
+        for bytes in [
+            format!(r#"{{"id":"fixture.plugin","generation":"{GENERATION}","owner":"forged"}}"#),
+            format!(r#"{{"id":"fixture.plugin","id":"other.plugin","generation":"{GENERATION}"}}"#),
+            format!(r#"{{"id":"../outside","generation":"{GENERATION}"}}"#),
+            format!(r#"{{"id":"fixture.plugin","generation":"{GENERATION}"}} trailing"#),
+            r#"{"id":"fixture.plugin","generation":"invalid"}"#.into(),
+        ] {
+            assert_eq!(
+                parse_process_list_request(bytes.as_bytes())
+                    .unwrap_err()
+                    .code,
+                PLUGIN_INVALID_REQUEST
+            );
+        }
+        for (id, tail) in [("server", 1001), ("../server", 1)] {
+            let bytes = format!(
+                r#"{{"id":"fixture.plugin","generation":"{GENERATION}","processId":"{id}","tail":{tail}}}"#
+            );
+            assert_eq!(
+                parse_process_logs_request(bytes.as_bytes())
+                    .unwrap_err()
+                    .code,
+                PLUGIN_INVALID_REQUEST
+            );
+        }
+        let invalid = format!(
+            r#"{{"id":"fixture.plugin","generation":"{GENERATION}","processId":"server","action":"secret-invalid-action"}}"#
+        );
+        assert_eq!(
+            parse_process_control_request(invalid.as_bytes())
+                .unwrap_err()
+                .message,
+            "invalid process request"
+        );
+        let logs = format!(
+            r#"{{"id":"fixture.plugin","generation":"{GENERATION}","processId":"server","tail":500}}"#
+        );
+        assert!(parse_process_logs_request(logs.as_bytes()).is_ok());
+        let control = format!(
+            r#"{{"id":"fixture.plugin","generation":"{GENERATION}","processId":"server","action":"restart"}}"#
+        );
+        assert!(parse_process_control_request(control.as_bytes()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn process_commands_round_trip_against_fake_core() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::PluginCore);
+        prepare_runtime_dir(&endpoint).unwrap();
+        let mut listener = listen_core(&endpoint, CoreRole::PluginCore).await.unwrap();
+        let peer = tokio::spawn(async move {
+            let mut stream = listener.accept().await.unwrap();
+            let hello: CoreHello = read_json_frame(&mut stream).await.unwrap();
+            let ack = validate_hello_with_runtime(&hello, CoreRole::PluginCore, 0).unwrap();
+            assert!(ack.capabilities.iter().any(|c| c == WEB_UI_CAPABILITY));
+            write_json_frame(&mut stream, &ack).await.unwrap();
+            let boot_id = uuid::Uuid::new_v4().to_string();
+            let status = json!({"state":"running", "pid":42, "restarts":0});
+            let mut methods = Vec::new();
+            while let Ok(request) = read_json_frame::<_, CoreRequest>(&mut stream).await {
+                let result = match request.method.as_str() {
+                    METHOD_HEALTH => json!({
+                        "schemaVersion":1, "bootId":boot_id, "pid":1,
+                        "ready":true, "safeMode":false, "activeResources":0,
+                    }),
+                    METHOD_PROCESS_LIST => {
+                        assert_eq!(
+                            request.params,
+                            json!({"id":"org.example.plugin","generation":"11111111-1111-4111-8111-111111111111"})
+                        );
+                        methods.push(request.method.clone());
+                        json!({"processes":[{"id":"server", "status":status}]})
+                    }
+                    METHOD_PROCESS_LOGS => {
+                        assert_eq!(
+                            request.params,
+                            json!({"id":"org.example.plugin","generation":"11111111-1111-4111-8111-111111111111", "processId":"server", "tail":10})
+                        );
+                        methods.push(request.method.clone());
+                        json!({"lines":[{"stream":"stdout", "at":1, "text":"ready"}], "truncated":false})
+                    }
+                    METHOD_PROCESS_CONTROL => {
+                        assert_eq!(
+                            request.params,
+                            json!({"id":"org.example.plugin","generation":"11111111-1111-4111-8111-111111111111", "processId":"server", "action":"restart"})
+                        );
+                        methods.push(request.method.clone());
+                        status.clone()
+                    }
+                    _ => panic!("unexpected request"),
+                };
+                write_json_frame(
+                    &mut stream,
+                    &CoreResponse {
+                        id: request.id,
+                        result: Some(result),
+                        error: None,
+                    },
+                )
+                .await
+                .unwrap();
+                if methods.len() == 3 {
+                    return methods;
+                }
+            }
+            methods
+        });
+        let service = PluginServiceHandle::default();
+        service.connect(&endpoint).await.unwrap();
+        let list = service
+            .process_list(ProcessListRequest {
+                plugin_id: "org.example.plugin".into(),
+                generation: "11111111-1111-4111-8111-111111111111".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(list.processes[0].id, "server");
+        assert_eq!(list.processes[0].status.state, HostProcessState::Running);
+        let logs = service
+            .process_logs(ProcessLogsRequest {
+                plugin_id: "org.example.plugin".into(),
+                generation: "11111111-1111-4111-8111-111111111111".into(),
+                id: "server".into(),
+                tail: 10,
+            })
+            .await
+            .unwrap();
+        assert_eq!(logs.lines[0].text, "ready");
+        let status = service
+            .process_control(ProcessControlRequest {
+                plugin_id: "org.example.plugin".into(),
+                generation: "11111111-1111-4111-8111-111111111111".into(),
+                id: "server".into(),
+                action: ProcessControlAction::Restart,
+            })
+            .await
+            .unwrap();
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(
+            peer.await.unwrap(),
+            vec![
+                METHOD_PROCESS_LIST,
+                METHOD_PROCESS_LOGS,
+                METHOD_PROCESS_CONTROL
+            ]
+        );
+        service.disconnect().await;
+    }
+
+    #[tokio::test]
+    async fn web_rpc_rejects_caller_supplied_owner_before_host_dispatch() {
+        let profile = tempfile::tempdir().unwrap();
+        let host = PluginHost::open(profile.path().to_path_buf(), HostOptions::default())
+            .await
+            .unwrap();
+        for method in [
+            WEB_OPEN_METHOD,
+            WEB_CLOSE_METHOD,
+            WEB_READ_METHOD,
+            WEB_REQUEST_METHOD,
+            WEB_ASSET_METHOD,
+        ] {
+            let error = dispatch(&host, "boot", "connection-owner", method,
+                json!({"owner":"attacker", "sessionId":"web_stale", "id":"fixture.plugin", "generation":1, "route":"index.html", "path":"index.html", "requestId":"r1", "method":"host.context.read"})
+            ).await.unwrap_err();
+            assert_eq!(error.code, PLUGIN_INVALID_REQUEST);
+            assert!(!error.message.contains("attacker"));
+        }
+    }
+
+    #[tokio::test]
+    async fn web_ui_capability_is_connection_scoped_and_revoked_on_disconnect() {
+        let profile = tempfile::tempdir().unwrap();
+        let (_, endpoint, task) = start(profile.path()).await;
+        let client = PluginCoreClient::connect(&endpoint).await.unwrap();
+        assert!(client.inner.state.lock().unwrap().web_ui_capabilities);
+        client.disconnect().await;
+        assert!(!client.inner.state.lock().unwrap().web_ui_capabilities);
+        assert_eq!(
+            client
+                .request(WEB_READ_METHOD, json!({}))
+                .await
+                .unwrap_err()
+                .code,
+            PLUGIN_CORE_UNAVAILABLE
+        );
+        client.reconnect(&endpoint).await.unwrap();
+        assert!(client.inner.state.lock().unwrap().web_ui_capabilities);
+        assert_eq!(
+            client
+                .request(WEB_READ_METHOD, json!({}))
+                .await
+                .unwrap_err()
+                .code,
+            PLUGIN_INVALID_REQUEST
+        );
+        stop(&client, task).await;
+    }
 
     async fn start(
         profile: &std::path::Path,
@@ -1127,8 +1559,9 @@ mod tests {
             let mut stream = listener.accept().await.unwrap();
             let hello: CoreHello = read_json_frame(&mut stream).await.unwrap();
             let mut ack = validate_hello_with_runtime(&hello, CoreRole::PluginCore, 0).unwrap();
-            ack.capabilities
-                .retain(|capability| capability != HOST_CAPABILITIES_V1);
+            ack.capabilities.retain(|capability| {
+                capability != HOST_CAPABILITIES_V1 && capability != WEB_UI_CAPABILITY
+            });
             write_json_frame(&mut stream, &ack).await.unwrap();
             let boot_id = uuid::Uuid::new_v4().to_string();
             let mut methods = vec![];
@@ -1186,6 +1619,21 @@ mod tests {
         assert!(snapshot.plugins.is_empty());
         assert_eq!(Some(snapshot.boot_id), client.boot_id());
         let next_id = client.inner.state.lock().unwrap().next_id;
+        for method in [
+            WEB_OPEN_METHOD,
+            WEB_CLOSE_METHOD,
+            WEB_READ_METHOD,
+            WEB_REQUEST_METHOD,
+            WEB_ASSET_METHOD,
+            METHOD_PROCESS_LIST,
+            METHOD_PROCESS_LOGS,
+            METHOD_PROCESS_CONTROL,
+        ] {
+            let error = client.request(method, json!({})).await.unwrap_err();
+            assert_eq!(error.code, PLUGIN_NOT_SUPPORTED);
+        }
+        assert!(!client.inner.state.lock().unwrap().web_ui_capabilities);
+        assert_eq!(client.inner.state.lock().unwrap().next_id, next_id);
         let source = uuid::Uuid::new_v4().to_string();
         let errors = [
             service
