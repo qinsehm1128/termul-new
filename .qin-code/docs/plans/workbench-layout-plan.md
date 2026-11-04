@@ -4,7 +4,7 @@ kind: plan
 id: workbench-layout-plan
 title: 开放 Se Manager 工作台的左右停靠、排序、隐藏与拖放布局
 date: 2026-11-04
-status: draft
+status: superseded
 source: user-request-2026-11-04-workbench-layout
 lang: zh-CN
 scope: project
