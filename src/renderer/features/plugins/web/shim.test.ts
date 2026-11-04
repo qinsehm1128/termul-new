@@ -113,7 +113,7 @@ describe('classic se-plugin-ui shim in jsdom with fake parent', () => {
       viewId: 'web',
       generation: webSession.generation,
       theme,
-      nonce: 'f'.repeat(32)
+      nonce: 'f'.repeat(64)
     })
     await Promise.resolve()
     expect(postMessage).toHaveBeenCalledTimes(1)

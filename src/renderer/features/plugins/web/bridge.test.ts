@@ -74,7 +74,7 @@ describe('plugin opaque iframe bridge', () => {
     }
     message(request)
     message({ type: 'ready' }, window)
-    message({ type: 'ready', nonce: 'f'.repeat(32) })
+    message({ type: 'ready', nonce: 'f'.repeat(64) })
     message({ type: 'ready' }, iframe.contentWindow, 'https://attacker.example')
     message({ type: 'ready', extra: true })
     window.dispatchEvent(
@@ -89,7 +89,7 @@ describe('plugin opaque iframe bridge', () => {
     expect(requestWeb).not.toHaveBeenCalled()
     expect(post).not.toHaveBeenCalled()
     message({ type: 'ready' })
-    message({ ...request, nonce: 'f'.repeat(32) })
+    message({ ...request, nonce: 'f'.repeat(64) })
     message(request, window)
     await Promise.resolve()
     expect(onReady).toHaveBeenCalledOnce()
