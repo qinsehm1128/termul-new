@@ -54,16 +54,49 @@ function splitTextNode(node: MarkdownNode): MarkdownNode[] {
   return result
 }
 
+/** Explicit Markdown destinations may contain spaces that prose token detection cannot capture. */
+function relativeFilePathFromHref(href: string): string | null {
+  let path: string
+  try {
+    path = decodeURIComponent(href)
+  } catch {
+    return null
+  }
+
+  // Keep browser destinations out of the file resolver, including encoded schemes
+  // and protocol-relative URLs. Fragments and queries retain their URL semantics.
+  if (
+    !path ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(path) ||
+    /^[\\/]/.test(path) ||
+    /[?#]/.test(path) ||
+    Array.from(path).some(
+      (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127
+    )
+  ) {
+    return null
+  }
+
+  const withoutPosition = path.replace(/:\d+(?::\d+)?$/, '')
+  if (withoutPosition.includes(':')) return null
+  return /[\\/]/.test(withoutPosition) || /\.[\w-]+$/.test(withoutPosition) ? path : null
+}
+
 function transformNode(node: MarkdownNode): MarkdownNode[] {
   if (node.type === 'text') return splitTextNode(node)
-  if (node.type === 'code' || node.type === 'link') return [node]
+  if (node.type === 'link') {
+    const path = node.url ? relativeFilePathFromHref(node.url) : null
+    if (path) node.url = filePathHref(path)
+    return [node]
+  }
+  if (node.type === 'code') return [node]
 
   if (!node.children) return [node]
   node.children = node.children.flatMap(transformNode)
   return [node]
 }
 
-/** Streamdown remark plugin that turns prose path tokens into marker links. */
+/** Streamdown remark plugin that routes prose paths and explicit relative links to the editor. */
 export function remarkFilePathLinks(): (tree: MarkdownNode) => void {
   return (tree) => {
     if (tree.children) tree.children = tree.children.flatMap(transformNode)

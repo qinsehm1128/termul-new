@@ -13,14 +13,26 @@ const mocks = vi.hoisted(() => ({
   openFile: vi.fn(),
   updateCursorPosition: vi.fn(),
   addEditorTab: vi.fn(),
-  toastError: vi.fn()
+  toastError: vi.fn(),
+  searchStart: vi.fn(),
+  searchCancel: vi.fn(),
+  onBatch: vi.fn(),
+  onDone: vi.fn(),
+  logError: vi.fn(),
+  getHomeDirectory: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
+  systemApi: { getHomeDirectory: mocks.getHomeDirectory },
   filesystemApi: {
-    getFileInfo: mocks.getFileInfo
+    getFileInfo: mocks.getFileInfo,
+    searchFileNamesStreamStart: mocks.searchStart,
+    searchFileNamesStreamCancel: mocks.searchCancel,
+    onSearchFileNamesBatch: mocks.onBatch,
+    onSearchFileNamesDone: mocks.onDone
   }
 }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mocks.logError }))
 vi.mock('@/stores/editor-store', () => ({
   useEditorStore: {
     getState: () => ({
@@ -43,6 +55,32 @@ vi.mock('sonner', () => ({
 }))
 
 describe('file-path-links parsing', () => {
+  it('does not treat apostrophes in contractions as path quote boundaries', () => {
+    expect(
+      buildTerminalPathLinks("can't open ./src/App.tsx because it's missing", 1, vi.fn()).map(
+        ({ text }) => text
+      )
+    ).toEqual(['./src/App.tsx'])
+  })
+  it('keeps quoted space paths and suffixes contiguous', () => {
+    const text = 'open "scripts/my task.ts":12:3 and `docs/my guide.md:4`'
+    expect(buildTerminalPathLinks(text, 1, vi.fn()).map((link) => link.text)).toEqual([
+      '"scripts/my task.ts":12:3',
+      'docs/my guide.md:4'
+    ])
+    expect(extractPathCandidate('"scripts/my task.ts":12:3')).toBe('scripts/my task.ts')
+    expect(extractPathCandidate('`docs/my guide.md:4`')).toBe('docs/my guide.md')
+  })
+
+  it('rejects URL fragments, non-hierarchical schemes, and standalone fragments', () => {
+    expect(
+      buildTerminalPathLinks(
+        'https://example.com/#scripts/x.ts mailto:a/b.ts #docs/x.md "https://x/y/z.ts"',
+        1,
+        vi.fn()
+      )
+    ).toEqual([])
+  })
   it('trims wrapped paths', () => {
     expect(trimWrappedPath('`src/foo.ts`')).toBe('src/foo.ts')
     expect(trimWrappedPath('"src/foo.ts"')).toBe('src/foo.ts')
@@ -113,6 +151,206 @@ describe('file-path-links resolution', () => {
     mocks.updateCursorPosition.mockReset()
     mocks.addEditorTab.mockReset()
     mocks.toastError.mockReset()
+    mocks.getHomeDirectory.mockReset().mockResolvedValue({ success: true, data: '/Users/tester' })
+    mocks.onBatch.mockReset().mockReturnValue(vi.fn())
+    mocks.onDone.mockReset().mockReturnValue(vi.fn())
+    mocks.searchCancel.mockReset().mockResolvedValue({ success: true })
+    mocks.searchStart.mockReset().mockImplementation(async (searchId: string) => {
+      const done = mocks.onDone.mock.calls.at(-1)?.[0]
+      done?.({ searchId, truncated: false, totalFiles: 0 })
+      return { success: true }
+    })
+  })
+
+  function mockSearch(paths: string[], truncated = false): void {
+    mocks.searchStart.mockImplementation(async (searchId: string) => {
+      const batch = mocks.onBatch.mock.calls.at(-1)?.[0]
+      const done = mocks.onDone.mock.calls.at(-1)?.[0]
+      batch({
+        searchId,
+        files: paths.map((path) => ({ path, relativePath: path, name: path.split('/').at(-1) }))
+      })
+      done({ searchId, truncated, totalFiles: paths.length })
+      return { success: true }
+    })
+    mocks.getFileInfo.mockImplementation(async (path: string) =>
+      paths.includes(path)
+        ? { success: true, data: { type: 'file' } }
+        : { success: false, error: 'missing' }
+    )
+  }
+
+  it('finds the unique exact suffix nested below the workspace root after direct misses', async () => {
+    const path = '/repo/apps/backend/scripts/normalize-experience.ts'
+    mockSearch([path, '/repo/apps/backend/scripts/not-normalize-experience.ts'])
+    await expect(
+      resolveFilePathCandidate('scripts/normalize-experience.ts:12:3', {
+        cwd: '/repo/packages/client',
+        workspaceCwd: '/repo',
+        projectRoot: '/repo'
+      })
+    ).resolves.toEqual({ ok: true, path })
+    expect(mocks.searchStart).toHaveBeenCalledTimes(1)
+    expect(mocks.searchStart).toHaveBeenCalledWith(
+      expect.any(String),
+      '/repo',
+      '/repo',
+      'normalize-experience.ts',
+      false
+    )
+  })
+
+  it('keeps conversation workspace cwd as an exact root before searching', async () => {
+    mocks.getFileInfo.mockImplementation(async (path: string) =>
+      path === '/worktree/scripts/x.ts'
+        ? { success: true, data: { type: 'file' } }
+        : { success: false }
+    )
+    await expect(
+      resolveFilePathCandidate('scripts/x.ts', {
+        cwd: '/repo/packages/backend',
+        workspaceCwd: '/worktree',
+        projectRoot: '/repo'
+      })
+    ).resolves.toEqual({ ok: true, path: '/worktree/scripts/x.ts' })
+    expect(mocks.searchStart).not.toHaveBeenCalled()
+  })
+
+  it('rejects multiple exact suffixes instead of opening an arbitrary first match', async () => {
+    mockSearch(['/repo/apps/a/docs/x.md', '/repo/apps/b/docs/x.md'])
+    await expect(openFilePathFromTerminal('docs/x.md', { cwd: '/repo' })).resolves.toMatchObject({
+      ok: false,
+      reason: 'ambiguous'
+    })
+    expect(mocks.openFile).not.toHaveBeenCalled()
+    expect(mocks.searchCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires suffix uniqueness across all disjoint allowed roots', async () => {
+    mockSearch(['/worktree/apps/scripts/x.ts', '/repo/apps/scripts/x.ts'])
+    await expect(
+      resolveFilePathCandidate('scripts/x.ts', {
+        cwd: '/worktree',
+        projectRoot: '/repo'
+      })
+    ).resolves.toEqual({ ok: false, reason: 'ambiguous' })
+    expect(mocks.searchStart).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not treat a filename substring as an exact path suffix', async () => {
+    mockSearch(['/repo/apps/not-scripts/x.ts', '/repo/apps/scripts/other-x.ts'])
+    await expect(resolveFilePathCandidate('scripts/x.ts', { cwd: '/repo' })).resolves.toEqual({
+      ok: false,
+      reason: 'not-found'
+    })
+  })
+
+  it('rejects suffix hits outside the allowed root and canonical traversal', async () => {
+    mockSearch(['/outside/scripts/x.ts', '/repo/../outside/scripts/x.ts'])
+    await expect(resolveFilePathCandidate('scripts/x.ts', { cwd: '/repo' })).resolves.toEqual({
+      ok: false,
+      reason: 'not-found'
+    })
+    expect(mocks.getFileInfo).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    '/custom/account',
+    '/custom'
+  ])('does not search actual platform home or its ancestor: %s', async (cwd) => {
+    mocks.getHomeDirectory.mockResolvedValue({ success: true, data: '/custom/account' })
+    mocks.getFileInfo.mockResolvedValue({ success: false })
+    await resolveFilePathCandidate('scripts/x.ts', { cwd })
+    expect(mocks.searchStart).not.toHaveBeenCalled()
+  })
+
+  it('does not search when the actual home boundary lookup fails', async () => {
+    mocks.getHomeDirectory.mockResolvedValue({ success: false })
+    mocks.getFileInfo.mockResolvedValue({ success: false })
+    await resolveFilePathCandidate('scripts/x.ts', { cwd: '/repo' })
+    expect(mocks.searchStart).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '/Users/qs',
+    '/home/qs',
+    '/root',
+    '/var/root',
+    '/private/var/root',
+    'C:/Users/qs',
+    '/',
+    'C:/'
+  ])('does not search home or filesystem root %s', async (cwd) => {
+    mocks.getFileInfo.mockResolvedValue({ success: false })
+    await resolveFilePathCandidate('scripts/x.ts', { cwd })
+    expect(mocks.searchStart).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '/repo/scripts/x.ts',
+    '../scripts/x.ts',
+    'apps/../scripts/x.ts'
+  ])('does not reinterpret explicit absolute/parent paths as suffixes: %s', async (candidate) => {
+    mocks.getFileInfo.mockResolvedValue({ success: false })
+    await resolveFilePathCandidate(candidate, { cwd: '/repo/apps', projectRoot: '/repo' })
+    expect(mocks.searchStart).not.toHaveBeenCalled()
+  })
+
+  it('fails closed on truncated results even with one matching hit', async () => {
+    mockSearch(['/repo/apps/scripts/x.ts'], true)
+    await expect(resolveFilePathCandidate('scripts/x.ts', { cwd: '/repo' })).resolves.toEqual({
+      ok: false,
+      reason: 'not-found'
+    })
+  })
+
+  it('cancels oversized result sets and detaches stream listeners', async () => {
+    mockSearch(Array.from({ length: 257 }, (_, index) => `/repo/app${index}/scripts/x.ts`))
+    await expect(resolveFilePathCandidate('scripts/x.ts', { cwd: '/repo' })).resolves.toEqual({
+      ok: false,
+      reason: 'not-found'
+    })
+    expect(mocks.searchCancel).toHaveBeenCalledTimes(1)
+    expect(mocks.onBatch.mock.results[0].value).toHaveBeenCalledTimes(1)
+    expect(mocks.onDone.mock.results[0].value).toHaveBeenCalledTimes(1)
+  })
+
+  it('times out incomplete searches, cancels, and never logs file text', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.getFileInfo.mockResolvedValue({ success: false })
+      mocks.searchStart.mockResolvedValue({ success: true })
+      mocks.logError.mockClear()
+      const pending = resolveFilePathCandidate('scripts/private-file.ts', { cwd: '/repo' })
+      await vi.advanceTimersByTimeAsync(2501)
+      await expect(pending).resolves.toEqual({ ok: false, reason: 'not-found' })
+      expect(mocks.searchCancel).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain('private-file')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('opens quoted space paths found by suffix and retains outside-quote cursor location', async () => {
+    mockSearch(['/repo/apps/backend/scripts/my task.ts'])
+    await expect(
+      openFilePathFromTerminal('"scripts/my task.ts":12:3', { cwd: '/repo' })
+    ).resolves.toEqual({ ok: true })
+    expect(mocks.updateCursorPosition).toHaveBeenCalledWith(
+      '/repo/apps/backend/scripts/my task.ts',
+      12,
+      3
+    )
+  })
+
+  it('contains thrown stat failures and logs no raw backend text', async () => {
+    mocks.getFileInfo.mockRejectedValue(new Error('private file contents'))
+    mocks.logError.mockClear()
+    await expect(resolveFilePathCandidate('scripts/x.ts', { cwd: '/repo' })).resolves.toEqual({
+      ok: false,
+      reason: 'not-found'
+    })
+    expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain('private file contents')
   })
 
   it('resolves relative paths against terminal cwd', async () => {

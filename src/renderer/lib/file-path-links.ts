@@ -1,18 +1,20 @@
 import { runtimeT } from '@/i18n/runtime'
-import { filesystemApi } from '@/lib/api'
+import { filesystemApi, systemApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 /** Resolves relative terminal paths against the terminal cwd and active project root. */
 export interface FilePathResolutionContext {
   cwd?: string
+  workspaceCwd?: string
   projectRoot?: string
 }
 
 /** The result of resolving a terminal path candidate to an openable file. */
 export type FilePathResolutionResult =
   | { ok: true; path: string }
-  | { ok: false; reason: 'missing-context' | 'not-found' | 'not-file' }
+  | { ok: false; reason: 'missing-context' | 'not-found' | 'not-file' | 'ambiguous' }
 
 type OpenFilePathFailureReason =
   | Extract<FilePathResolutionResult, { ok: false }>['reason']
@@ -42,7 +44,7 @@ export interface TerminalPathLink {
 const FILE_PATH_LINK_REGEX =
   /(?:\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|\/)?(?:[^\s\\/:*?"<>|`]+[\\/])+[^\s\\/:*?"<>|`]+(?:\.[A-Za-z0-9_-]+)?(?::\d+(?::\d+)?)?/g
 
-const URI_SCHEME_REGEX = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
+const URI_SCHEME_REGEX = /^(?![A-Za-z]:[\\/])[a-zA-Z][a-zA-Z0-9+.-]*:/
 
 const WRAPPER_PAIRS: Array<[string, string]> = [
   ['`', '`'],
@@ -57,7 +59,7 @@ function normalizePathSeparators(value: string): string {
 }
 
 function looksLikeFilePath(text: string): boolean {
-  if (URI_SCHEME_REGEX.test(text)) {
+  if (URI_SCHEME_REGEX.test(text) || text.startsWith('#')) {
     return false
   }
 
@@ -100,8 +102,26 @@ export function findFilePathMatches(line: string): FilePathMatch[] {
   }
 
   const matches: FilePathMatch[] = []
+  const quotedRanges: Array<[number, number]> = []
+  for (const match of line.matchAll(/(?<![\p{L}\p{N}_])(["'`])([^\r\n]*?)\1(?::\d+(?::\d+)?)?/gu)) {
+    const start = match.index ?? 0
+    quotedRanges.push([start, start + match[0].length])
+    if (looksLikeFilePath(match[2]) && !isUrlAdjacentPathMatch(line, start, match[0])) {
+      // Outside-quote suffixes need the wrapper to keep the link contiguous.
+      const outsideSuffix = /["'`]:\d/.test(match[0])
+      matches.push({
+        text: outsideSuffix ? match[0] : match[2],
+        start: outsideSuffix ? start : start + 1
+      })
+    }
+  }
 
   for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
+    if (
+      quotedRanges.some(([start, end]) => (match.index ?? 0) >= start && (match.index ?? 0) < end)
+    ) {
+      continue
+    }
     let text = trimTrailingPathPunctuation(match[0])
     let start = match.index ?? -1
     const wrapper = WRAPPER_PAIRS.find(
@@ -124,7 +144,7 @@ export function findFilePathMatches(line: string): FilePathMatch[] {
     matches.push({ text, start })
   }
 
-  return matches
+  return matches.sort((a, b) => a.start - b.start)
 }
 
 /** Extracts file-like links from a rendered terminal line for Ctrl/Cmd+Click activation. */
@@ -245,7 +265,7 @@ function isPathWithinRoot(path: string, root: string): boolean {
 }
 
 function getAllowedRoots(context: FilePathResolutionContext): string[] {
-  const roots = [context.cwd, context.projectRoot]
+  const roots = [context.cwd, context.workspaceCwd, context.projectRoot]
     .map((value) => (value ? canonicalizeAbsolutePath(value) : null))
     .filter((value): value is string => Boolean(value))
 
@@ -322,7 +342,184 @@ function parseLineColumnSuffix(value: string): { line?: number; column?: number 
 
 /** Normalizes a terminal token into a file path candidate before filesystem resolution. */
 export function extractPathCandidate(value: string): string {
-  return stripLineColumnSuffix(trimWrappedPath(value))
+  return trimWrappedPath(stripLineColumnSuffix(trimWrappedPath(value)))
+}
+
+const MAX_SUFFIX_SEARCH_HITS = 256
+const SUFFIX_SEARCH_TIMEOUT_MS = 2500
+let suffixSearchSequence = 0
+
+/** A partial search can never establish uniqueness. Never search home or filesystem roots. */
+function canSearchRoot(root: string): boolean {
+  return (
+    root !== '/' &&
+    root !== '/root' &&
+    root !== '/var/root' &&
+    root !== '/private/var/root' &&
+    !/^[A-Za-z]:\/$/.test(root) &&
+    !/^\/(?:Users|home)(?:\/[^/]+)?\/?$/.test(root) &&
+    !/^[A-Za-z]:\/(?:Users|Documents and Settings)(?:\/[^/]+)?\/?$/i.test(root)
+  )
+}
+
+async function getSearchHomeDirectory(): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      systemApi
+        .getHomeDirectory()
+        .then((result) => (result.success ? canonicalizeAbsolutePath(result.data) : null)),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), SUFFIX_SEARCH_TIMEOUT_MS)
+      })
+    ])
+  } catch {
+    return null
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+async function searchExactSuffix(root: string, suffix: string): Promise<string[] | null> {
+  const searchId = `file-link-${Date.now()}-${++suffixSearchSequence}`
+  const matches = new Set<string>()
+  let count = 0
+  let settled = false
+  let cleanupBatch = (): void => {}
+  let cleanupDone = (): void => {}
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return new Promise((resolve) => {
+    const finish = (result: string[] | null, cancel = false): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      cleanupBatch()
+      cleanupDone()
+      if (cancel) {
+        void filesystemApi.searchFileNamesStreamCancel(searchId).catch(() => {
+          void logFrontendError({
+            source: 'file-path-links',
+            message: 'Suffix search cancellation failed',
+            level: 'warn'
+          })
+        })
+      }
+      resolve(result)
+    }
+    try {
+      cleanupBatch = filesystemApi.onSearchFileNamesBatch((event) => {
+        if (settled || event.searchId !== searchId) return
+        count += event.files.length
+        if (event.truncated || count > MAX_SUFFIX_SEARCH_HITS) {
+          void logFrontendError({
+            source: 'file-path-links',
+            message: 'Suffix search bound reached',
+            level: 'warn'
+          })
+          finish(null, true)
+          return
+        }
+        for (const hit of event.files) {
+          const path =
+            canonicalizeAbsolutePath(hit.path) ?? canonicalizeAbsolutePath(joinPath(root, hit.path))
+          if (path && isPathWithinRoot(path, root) && path.endsWith(`/${suffix}`)) {
+            matches.add(path)
+          }
+        }
+        if (matches.size > 1) finish([...matches], true)
+      })
+      cleanupDone = filesystemApi.onSearchFileNamesDone((event) => {
+        if (settled || event.searchId !== searchId) return
+        if (event.truncated || event.error || event.code) {
+          void logFrontendError({
+            source: 'file-path-links',
+            message: 'Suffix search incomplete',
+            level: 'warn'
+          })
+          finish(null)
+        } else {
+          finish([...matches])
+        }
+      })
+      timer = setTimeout(() => {
+        void logFrontendError({
+          source: 'file-path-links',
+          message: 'Suffix search timed out',
+          level: 'warn'
+        })
+        finish(null, true)
+      }, SUFFIX_SEARCH_TIMEOUT_MS)
+      void filesystemApi
+        .searchFileNamesStreamStart(searchId, root, root, suffix.split('/').at(-1)!, false)
+        .then((result) => {
+          if (!result.success) finish(null, true)
+        })
+        .catch(() => {
+          void logFrontendError({
+            source: 'file-path-links',
+            message: 'Suffix search failed',
+            level: 'warn'
+          })
+          finish(null, true)
+        })
+    } catch {
+      void logFrontendError({
+        source: 'file-path-links',
+        message: 'Suffix search subscription failed',
+        level: 'warn'
+      })
+      finish(null, true)
+    }
+  })
+}
+
+async function resolveUniqueSuffix(
+  candidate: string,
+  roots: string[]
+): Promise<FilePathResolutionResult> {
+  const suffix = normalizePathSeparators(candidate).replace(/^\.\//, '')
+  // Explicit absolute and parent-relative paths must never be reinterpreted as a suffix.
+  if (
+    isAbsolutePath(candidate) ||
+    candidate.startsWith('~') ||
+    suffix.split('/').some((part) => !part || part === '.' || part === '..')
+  ) {
+    return { ok: false, reason: 'not-found' }
+  }
+  const home = await getSearchHomeDirectory()
+  if (!home) {
+    void logFrontendError({
+      source: 'file-path-links',
+      level: 'warn',
+      message: 'Suffix search home boundary unavailable'
+    })
+    return { ok: false, reason: 'not-found' }
+  }
+  const safeRoots = roots.filter((root) => canSearchRoot(root) && !isPathWithinRoot(home, root))
+  const searchRoots = safeRoots.filter(
+    (root) => !safeRoots.some((other) => other !== root && isPathWithinRoot(root, other))
+  )
+  if (!searchRoots.length || searchRoots.length > 3) return { ok: false, reason: 'not-found' }
+  const results = await Promise.all(searchRoots.map((root) => searchExactSuffix(root, suffix)))
+  if (results.some((result) => result === null)) return { ok: false, reason: 'not-found' }
+  const matches = [...new Set(results.flatMap((result) => result ?? []))]
+  if (matches.length > 1) {
+    void logFrontendError({
+      source: 'file-path-links',
+      message: 'Ambiguous path suffix rejected',
+      level: 'warn'
+    })
+    return { ok: false, reason: 'ambiguous' }
+  }
+  if (matches.length === 1) {
+    try {
+      const info = await filesystemApi.getFileInfo(matches[0])
+      if (info.success && info.data.type === 'file') return { ok: true, path: matches[0] }
+    } catch {
+      void logFrontendError({ source: 'file-path-links', message: 'Suffix target stat failed' })
+    }
+  }
+  return { ok: false, reason: 'not-found' }
 }
 
 /** Resolves a terminal path token to an existing file using terminal and project context. */
@@ -349,16 +546,20 @@ export async function resolveFilePathCandidate(
   }
 
   const infoResults = await Promise.all(
-    absoluteCandidates.map(async (absolutePath) => ({
-      absolutePath,
-      infoResult: await filesystemApi.getFileInfo(absolutePath)
-    }))
+    absoluteCandidates.map(async (absolutePath) => {
+      try {
+        return { absolutePath, infoResult: await filesystemApi.getFileInfo(absolutePath) }
+      } catch {
+        void logFrontendError({ source: 'file-path-links', message: 'Exact path stat failed' })
+        return { absolutePath, infoResult: null }
+      }
+    })
   )
 
   let sawDirectoryCandidate = false
 
   for (const { absolutePath, infoResult } of infoResults) {
-    if (!infoResult.success) {
+    if (!infoResult?.success) {
       continue
     }
 
@@ -371,7 +572,7 @@ export async function resolveFilePathCandidate(
 
   return sawDirectoryCandidate
     ? { ok: false, reason: 'not-file' }
-    : { ok: false, reason: 'not-found' }
+    : resolveUniqueSuffix(candidate, allowedRoots)
 }
 
 function getErrorMessage(
@@ -389,6 +590,8 @@ function getErrorMessage(
         'No project or working directory found; set a project/cwd to open paths: {{path}}',
         { path: candidate }
       )
+    case 'ambiguous':
+      return runtimeT('terminal', 'links.ambiguousPath', 'Multiple files match this path.')
     case 'not-file':
       return runtimeT(
         'terminal',
@@ -422,6 +625,11 @@ export async function openFilePathFromTerminal(
   const resolution = await resolveFilePathCandidate(rawCandidate, context)
 
   if (!resolution.ok) {
+    void logFrontendError({
+      source: 'file-path-links',
+      level: 'warn',
+      message: `File link resolution rejected: ${resolution.reason}`
+    })
     return {
       ok: false,
       reason: resolution.reason,
@@ -444,6 +652,7 @@ export async function openFilePathFromTerminal(
     useWorkspaceStore.getState().addEditorTab(resolution.path)
     return { ok: true }
   } catch (error) {
+    void logFrontendError({ source: 'file-path-links', message: 'File link editor open failed' })
     const details = error instanceof Error ? error.message : String(error)
     return {
       ok: false,

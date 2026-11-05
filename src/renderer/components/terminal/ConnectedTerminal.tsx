@@ -2,7 +2,7 @@ import { resolveTerminalScreenEngine } from '@shared/types/terminal-screen.types
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
-import type { IDisposable } from '@xterm/xterm'
+import type { IDisposable, ILink } from '@xterm/xterm'
 import { Terminal } from '@xterm/xterm'
 import {
   AlertTriangle,
@@ -32,6 +32,10 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
+import {
+  getCurrentConversation,
+  useConversationStore
+} from '@/features/agent-session/stores/conversation-store'
 import { PluginMenuItems } from '@/features/plugins/PluginMenuItems'
 import { useCompanionTerminalGeometry } from '@/hooks/use-companion-terminal-geometry'
 import { useCompanionTerminalTextScale } from '@/hooks/use-companion-terminal-text-scale'
@@ -55,6 +59,7 @@ import { resyncRendererInputModes } from '@/lib/terminal-input-resync'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
 import { claimWebglSlot, dropWebglSlot, releaseWebglVisibility } from '@/lib/webgl-renderer-budget'
+import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import {
   useTerminalBufferSize,
   useTerminalFontFamily,
@@ -65,7 +70,7 @@ import {
   useTerminalSymbolFontFamily
 } from '@/stores/app-settings-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
-import { useActiveProject, useProjectStore } from '@/stores/project-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { retireTerminalRecord } from '@/stores/workspace-store'
 import type { TerminalModes, TerminalSpawnOptions } from '../../../shared/types/ipc.types'
@@ -90,6 +95,112 @@ import {
   restoreVisibleTerminalSurface,
   type WebglScrollRepair
 } from './terminal-webgl-repair'
+
+// Bound work on untrusted terminal output. Never link a truncated token.
+const MAX_LINK_LOGICAL_ROWS = 64
+const MAX_LINK_LOGICAL_UNITS = 4096
+const MAX_LINK_LOGICAL_CELLS = 8192
+
+type LinkCellPosition = { x: number; y: number }
+interface TerminalLogicalLine {
+  text: string
+  starts: LinkCellPosition[]
+  ends: LinkCellPosition[]
+}
+
+function logTerminalLinkBoundary(): undefined {
+  void logFrontendError({
+    level: 'warn',
+    source: 'ConnectedTerminal.links',
+    message: 'Terminal link detection skipped an incomplete or oversized logical line'
+  })
+  return undefined
+}
+
+/**
+ * Like xterm's WebLinkProvider, inspect the complete isWrapped chain, not a
+ * viewport row. Unlike string-length arithmetic, each UTF16 unit maps back to
+ * its real cell (including surrogate pairs, combining marks and wide glyphs).
+ */
+function readTerminalLogicalLine(
+  terminal: Terminal,
+  requestedRow: number
+): TerminalLogicalLine | undefined {
+  const buffer = terminal.buffer.active
+  if (requestedRow < 1 || requestedRow > buffer.length) return undefined
+  let first = requestedRow - 1
+  let last = first
+  while (buffer.getLine(first)?.isWrapped) {
+    if (first === 0 || last - first + 1 >= MAX_LINK_LOGICAL_ROWS) {
+      return logTerminalLinkBoundary()
+    }
+    first--
+  }
+  while (last + 1 < buffer.length && buffer.getLine(last + 1)?.isWrapped) {
+    if (last - first + 1 >= MAX_LINK_LOGICAL_ROWS) return logTerminalLinkBoundary()
+    last++
+  }
+
+  const result: TerminalLogicalLine = { text: '', starts: [], ends: [] }
+  let cellsRead = 0
+  for (let row = first; row <= last; row++) {
+    const line = buffer.getLine(row)
+    if (!line) return logTerminalLinkBoundary()
+    if (cellsRead + line.length > MAX_LINK_LOGICAL_CELLS) return logTerminalLinkBoundary()
+    cellsRead += line.length
+    let columns = line.length
+    // A width-2 glyph wraps early if only one column remained. That null
+    // padding cell is not text; ordinary spaces at a wrap ARE text.
+    if (
+      row < last &&
+      line.getCell(columns - 1)?.getChars() === '' &&
+      line.getCell(columns - 1)?.getWidth() === 1 &&
+      buffer
+        .getLine(row + 1)
+        ?.getCell(0)
+        ?.getWidth() === 2
+    ) {
+      columns--
+    }
+    if (row === last) {
+      while (columns > 0 && line.getCell(columns - 1)?.getChars() === '') {
+        // Keep the trailing half of a wide final glyph for its end position.
+        if (line.getCell(columns - 1)?.getWidth() === 0) break
+        columns--
+      }
+    }
+    for (let column = 0; column < columns; column++) {
+      const cell = line.getCell(column)
+      if (!cell) return logTerminalLinkBoundary()
+      const width = cell.getWidth()
+      if (width === 0) continue
+      const chars = cell.getChars() || ' '
+      if (result.text.length + chars.length > MAX_LINK_LOGICAL_UNITS) {
+        return logTerminalLinkBoundary()
+      }
+      result.text += chars
+      for (let unit = 0; unit < chars.length; unit++) {
+        result.starts.push({ x: column + 1, y: row + 1 })
+        result.ends.push({ x: column + width, y: row + 1 })
+      }
+    }
+  }
+  return result
+}
+
+function mapTerminalLinksToCells(
+  links: ILink[],
+  logicalLine: TerminalLogicalLine,
+  requestedRow: number
+): ILink[] {
+  return links.flatMap((link) => {
+    // Builders return inclusive, 1-based UTF16 offsets into the supplied text.
+    const start = logicalLine.starts[link.range.start.x - 1]
+    const end = logicalLine.ends[link.range.end.x - 1]
+    if (!start || !end || requestedRow < start.y || requestedRow > end.y) return []
+    return [{ ...link, range: { start, end } }]
+  })
+}
 
 // Common readline/shell Ctrl sequences that should always pass through to the
 // PTY regardless of platform. On macOS these are already protected by the
@@ -620,7 +731,6 @@ function ConnectedTerminalComponent({
   const rendererPreference = useTerminalRenderer()
   const screenReaderMode = useTerminalScreenReaderMode()
   const imagesEnabled = useTerminalImages()
-  const activeProject = useActiveProject()
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
 
   // 3. REFS
@@ -658,8 +768,6 @@ function ConnectedTerminalComponent({
   externalTerminalIdRef.current = externalTerminalId
   const rendererPreferenceRef = useRef(rendererPreference)
   rendererPreferenceRef.current = rendererPreference
-  const activeProjectPathRef = useRef<string | undefined>(activeProject?.path)
-  activeProjectPathRef.current = activeProject?.path
   const shortcutsRef = useRef(shortcuts)
   shortcutsRef.current = shortcuts
   const cleanupDataListenerRef = useRef<(() => void) | null>(null)
@@ -1122,19 +1230,27 @@ function ConnectedTerminalComponent({
         // sidebar happens to have selected — clicking a path in a background
         // project's terminal otherwise joins it to the wrong root and reports a
         // spurious "file not found".
-        const ownerProjectRoot = record?.projectId
-          ? useProjectStore.getState().projects.find((p) => p.id === record.projectId)?.path
-          : undefined
+        const conversation = record?.conversationId
+          ? getCurrentConversation(useConversationStore.getState(), record.conversationId)
+          : null
+        const ownerProjectId = record?.projectId ?? conversation?.projectAttachment?.projectId
         const result = await openFilePathFromTerminal(uri, {
           cwd: record?.cwd,
-          projectRoot: ownerProjectRoot ?? activeProjectPathRef.current
+          workspaceCwd: conversation?.workspaceCwd,
+          projectRoot: ownerProjectId
+            ? getDefaultCwdForProject(ownerProjectId) || undefined
+            : undefined
         })
 
         if (!result.ok) {
           toast.error(result.message)
         }
-      } catch (error) {
-        console.error('[Terminal File Link Open Failed]', error)
+      } catch {
+        void logFrontendError({
+          level: 'error',
+          source: 'ConnectedTerminal.links',
+          message: 'Terminal file link activation failed'
+        })
         toast.error(tRef.current('links.openFileFailed'))
       }
     }
@@ -1153,18 +1269,36 @@ function ConnectedTerminalComponent({
 
       try {
         await openTerminalUrl(url)
-      } catch (error) {
-        console.error('[Terminal URL Link Open Failed]', error)
+      } catch {
+        void logFrontendError({
+          level: 'error',
+          source: 'ConnectedTerminal.links',
+          message: 'Terminal URL link activation failed'
+        })
         toast.error(tRef.current('links.openUrlFailed'))
       }
     }
 
     fileLinkProviderDisposableRef.current = terminal.registerLinkProvider({
       provideLinks(y, callback) {
-        const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true) ?? ''
-        const pathLinks = buildTerminalPathLinks(line, y, handleFilePathActivate)
-        const urlLinks = buildTerminalUrlLinks(line, y, handleUrlActivate)
-        callback([...urlLinks, ...pathLinks])
+        let links: ILink[] = []
+        try {
+          const logicalLine = readTerminalLogicalLine(terminal, y)
+          if (logicalLine) {
+            const pathLinks = buildTerminalPathLinks(logicalLine.text, y, handleFilePathActivate)
+            const urlLinks = buildTerminalUrlLinks(logicalLine.text, y, handleUrlActivate)
+            links = mapTerminalLinksToCells([...urlLinks, ...pathLinks], logicalLine, y)
+          }
+        } catch {
+          // Buffer reads can race disposal/reflow. Never include terminal text,
+          // paths or thrown messages in persistent logs.
+          void logFrontendError({
+            level: 'warn',
+            source: 'ConnectedTerminal.links',
+            message: 'Terminal link detection failed while reading the buffer'
+          })
+        }
+        callback(links)
       }
     })
 

@@ -1,7 +1,11 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import type { ILink } from '@xterm/xterm'
 import type { ComponentProps, ReactElement } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getCurrentConversation } from '@/features/agent-session/stores/conversation-store'
+import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
+import { logFrontendError } from '@/lib/log-api'
 import * as appSettingsStore from '@/stores/app-settings-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { clearScrollPosition } from '@/utils/terminal-registry'
@@ -23,6 +27,33 @@ vi.mock('@tauri-apps/api/core', () => ({
   )
 }))
 
+const mockLinkOwnership = vi.hoisted(() => ({
+  projects: [] as Array<{
+    id: string
+    path: string
+    activeWorktreeId?: string | null
+    worktrees?: Array<{ id: string; path: string }>
+  }>,
+  conversation: null as {
+    workspaceCwd: string
+    projectAttachment?: { projectId: string }
+  } | null
+}))
+
+vi.mock('@/features/agent-session/stores/conversation-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/agent-session/stores/conversation-store')>()),
+  getCurrentConversation: vi.fn(() => mockLinkOwnership.conversation)
+}))
+
+vi.mock('@/lib/browser/terminal-url-navigation', () => ({
+  openTerminalUrl: vi.fn().mockResolvedValue(undefined)
+}))
+
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: vi.fn().mockResolvedValue(undefined)
+}))
+
 vi.mock('sonner', () => ({
   toast: {
     error: vi.fn()
@@ -34,6 +65,38 @@ vi.mock('sonner', () => ({
 // member fails once instead of drifting per suite.
 const { instance: mockTerminalInstance, handles: xtermHandles } = createXtermTerminalMock()
 const mockTerminalConstructor = xtermHandles.constructorSpy
+
+// Explicit cell widths make these fixtures independent of JS string length.
+function createBufferLine(
+  value: string | Array<[string, number]>,
+  isWrapped = false,
+  columns?: number
+) {
+  const entries: Array<[string, number]> =
+    typeof value === 'string' ? Array.from(value, (char) => [char, 1]) : value
+  const cells = entries.flatMap(([chars, width]) => [
+    { getChars: () => chars, getWidth: () => width },
+    ...(width === 2 ? [{ getChars: () => '', getWidth: () => 0 }] : [])
+  ])
+  while (cells.length < (columns ?? 0)) {
+    cells.push({ getChars: () => '', getWidth: () => 1 })
+  }
+  return {
+    length: cells.length,
+    isWrapped,
+    getCell: (column: number) => cells[column],
+    translateToString: () =>
+      cells
+        .map((cell) => cell.getChars())
+        .join('')
+        .trimEnd()
+  }
+}
+
+function setBufferLines(lines: ReturnType<typeof createBufferLine>[]) {
+  Object.assign(mockTerminalInstance.buffer.active, { length: lines.length })
+  mockTerminalInstance.buffer.active.getLine.mockImplementation((row: number) => lines[row])
+}
 
 const mockFitAddonInstance = {
   fit: vi.fn(),
@@ -148,6 +211,7 @@ vi.mock('@/lib/file-path-links', async (importOriginal) => {
 })
 
 vi.mock('@/stores/project-store', () => ({
+  useProjectStore: { getState: () => ({ projects: mockLinkOwnership.projects }) },
   useActiveProject: vi.fn(() => ({ path: '/project-root' })),
   useProjects: vi.fn(() => []),
   useActiveProjectId: vi.fn(() => 'project-a')
@@ -354,6 +418,7 @@ const primaryRegistry = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/terminal-api', () => ({
+  readTerminalInputModes: vi.fn().mockResolvedValue({ success: true, data: undefined }),
   addRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),
   removeRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),
   subscribeTerminalData: vi.fn(() => vi.fn()),
@@ -410,6 +475,9 @@ describe('ConnectedTerminal', () => {
     _capturedExitCallback = null
     lastCreatedWebglInstance = null
     capturedLinkProviders.length = 0
+    mockLinkOwnership.projects = []
+    mockLinkOwnership.conversation = null
+    setBufferLines([createBufferLine('missing.ts src/renderer/App.tsx')])
 
     global.ResizeObserver = class MockResizeObserver {
       observe = vi.fn()
@@ -648,7 +716,12 @@ describe('ConnectedTerminal', () => {
     const { container } = render(<ConnectedTerminal terminalId="terminal-ended" />)
 
     const banner = await vi.waitFor(() => {
-      const node = container.querySelector('[role="status"]')
+      // Screen-observation diagnostics also expose a status region. Scope this
+      // assertion to the process-ended heading's own outer banner.
+      const heading = screen.getByRole('heading', {
+        name: status === 'crashed' ? 'Session Interrupted' : 'Process Ended'
+      })
+      const node = heading.closest('[role="status"]')
       expect(node).not.toBeNull()
       return node as HTMLElement
     })
@@ -2760,7 +2833,8 @@ describe('ConnectedTerminal', () => {
       expect(ctrlPreventDefaultSpy).toHaveBeenCalled()
       expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx', {
         cwd: '/terminal-cwd',
-        projectRoot: '/project-root'
+        workspaceCwd: undefined,
+        projectRoot: undefined
       })
     })
 
@@ -2798,15 +2872,16 @@ describe('ConnectedTerminal', () => {
       expect(ctrlPreventDefaultSpy).toHaveBeenCalled()
       expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx', {
         cwd: undefined,
-        projectRoot: '/project-root'
+        workspaceCwd: undefined,
+        projectRoot: undefined
       })
       expect(toast.error).toHaveBeenCalledWith(
         'No project or working directory found; set a project/cwd to open paths: src/renderer/App.tsx'
       )
     })
 
-    it('should report unexpected ctrl click open failures with toast and console error', async () => {
-      const failure = new Error('boom')
+    it('should report unexpected ctrl click open failures with toast and safe logging', async () => {
+      const failure = new Error('sensitive terminal content')
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       vi.mocked(openFilePathFromTerminal).mockRejectedValue(failure)
       render(<ConnectedTerminal terminalId="external-123" />)
@@ -2831,8 +2906,270 @@ describe('ConnectedTerminal', () => {
       const ctrlClick = new MouseEvent('click', { ctrlKey: true, metaKey: false })
       await fileLink!.activate(ctrlClick, fileLink!.text)
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith('[Terminal File Link Open Failed]', failure)
+      expect(consoleErrorSpy).not.toHaveBeenCalled()
+      expect(logFrontendError).toHaveBeenCalledWith({
+        level: 'error',
+        source: 'ConnectedTerminal.links',
+        message: 'Terminal file link activation failed'
+      })
       expect(toast.error).toHaveBeenCalledWith('Failed to open file from terminal output.')
+    })
+  })
+
+  describe('logical-line link cell ranges', () => {
+    async function mountProvider() {
+      render(<ConnectedTerminal terminalId="external-123" />)
+      await vi.waitFor(() => expect(capturedLinkProviders.at(-1)).toBeDefined())
+    }
+
+    function linksOnRow(row: number): ILink[] {
+      let links: ILink[] = []
+      capturedLinkProviders.at(-1)?.provideLinks(row, (provided) => {
+        links = provided as ILink[]
+      })
+      return links
+    }
+
+    it.each([
+      'terminal',
+      'conversation',
+      'base',
+      'missing'
+    ])('preserves cwd and workspaceCwd and uses only the %s owner root', async (owner) => {
+      mockLinkOwnership.projects = [
+        {
+          id: 'unrelated-project',
+          path: '/project-root',
+          activeWorktreeId: 'unrelated-tree',
+          worktrees: [{ id: 'unrelated-tree', path: '/unrelated-worktree' }]
+        },
+        {
+          id: 'owner-project',
+          path: '/owner-main',
+          activeWorktreeId: owner === 'base' ? null : 'owner-tree',
+          worktrees: [{ id: 'owner-tree', path: '/owner-worktree' }]
+        }
+      ]
+      mockLinkOwnership.conversation = {
+        workspaceCwd: '/conversation-workspace',
+        projectAttachment: {
+          projectId: owner === 'terminal' ? 'unrelated-project' : 'owner-project'
+        }
+      }
+      mockTerminalStoreState.findTerminalByPtyId.mockImplementation((ptyId: string) => ({
+        id: ptyId,
+        ptyId,
+        conversationId: 'owned-conversation',
+        projectId:
+          owner === 'conversation' ? undefined : owner === 'missing' ? 'missing' : 'owner-project',
+        cwd: '/terminal-process-cwd',
+        healthStatus: 'running'
+      }))
+      await mountProvider()
+
+      const link = linksOnRow(1).find((candidate) => candidate.text === 'src/renderer/App.tsx')!
+      await link.activate(new MouseEvent('click', { ctrlKey: true }), link.text)
+      expect(getCurrentConversation).toHaveBeenCalledWith(expect.anything(), 'owned-conversation')
+      expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx', {
+        cwd: '/terminal-process-cwd',
+        workspaceCwd: '/conversation-workspace',
+        projectRoot:
+          owner === 'missing' ? undefined : owner === 'base' ? '/owner-main' : '/owner-worktree'
+      })
+    })
+
+    it('maps CJK, emoji, combining marks and ZWJ cells before a URL without losing its fragment', async () => {
+      const url = 'https://example.com/path#L42'
+      setBufferLines([
+        createBufferLine([
+          ['中', 2],
+          ['😀', 2],
+          ['e\u0301', 1],
+          ['👩‍💻', 2],
+          [' ', 1],
+          ...Array.from(url, (char): [string, number] => [char, 1])
+        ])
+      ])
+      await mountProvider()
+
+      const link = linksOnRow(1).find((candidate) => candidate.text === url)
+      expect(link?.range).toEqual({
+        start: { x: 9, y: 1 },
+        end: { x: 8 + url.length, y: 1 }
+      })
+      expect(logFrontendError).not.toHaveBeenCalled()
+      expect(link).toBeDefined()
+      await link!.activate(new MouseEvent('click', { ctrlKey: true }), link!.text)
+      expect(openTerminalUrl).toHaveBeenCalledWith(url)
+    })
+
+    it('maps wide glyphs inside a file path and a final wide URL glyph', async () => {
+      const path = './src/文件😀.ts:12:3'
+      const url = 'https://a.co/文'
+      const chars: Array<[string, number]> = Array.from(path, (char) => [
+        char,
+        ['文', '件', '😀'].includes(char) ? 2 : 1
+      ])
+      setBufferLines([
+        createBufferLine(chars),
+        createBufferLine([
+          ...Array.from('https://a.co/', (char): [string, number] => [char, 1]),
+          ['文', 2]
+        ])
+      ])
+      await mountProvider()
+
+      expect(linksOnRow(1).find((link) => link.text === path)?.range).toEqual({
+        start: { x: 1, y: 1 },
+        end: { x: chars.reduce((total, [, width]) => total + width, 0), y: 1 }
+      })
+      expect(linksOnRow(2).find((link) => link.text === url)?.range).toEqual({
+        start: { x: 1, y: 2 },
+        end: { x: 'https://a.co/'.length + 2, y: 2 }
+      })
+    })
+
+    it('returns the same full wrapped file link for either covered buffer row', async () => {
+      const tail = 'App.tsx:42:7'
+      setBufferLines([
+        createBufferLine('unrelated'),
+        createBufferLine('     ./src/renderer/'),
+        createBufferLine(tail, true, 20),
+        createBufferLine('unrelated')
+      ])
+      await mountProvider()
+
+      for (const row of [2, 3]) {
+        const link = linksOnRow(row).find(
+          (candidate) => candidate.text === `./src/renderer/${tail}`
+        )
+        expect(link?.range).toEqual({
+          start: { x: 6, y: 2 },
+          end: { x: tail.length, y: 3 }
+        })
+      }
+      expect(linksOnRow(1)).toEqual([])
+      expect(linksOnRow(4)).toEqual([])
+    })
+
+    it('only returns links covering the requested row of a shared logical line', async () => {
+      setBufferLines([
+        createBufferLine('./src/a.ts'.padEnd(20, ' ')),
+        createBufferLine('https://a.co'.padEnd(20, ' '), true),
+        createBufferLine('./src/c.ts', true)
+      ])
+      await mountProvider()
+
+      expect(linksOnRow(1).map((link) => link.text)).toEqual(['./src/a.ts'])
+      expect(linksOnRow(2).map((link) => link.text)).toEqual(['https://a.co'])
+      expect(linksOnRow(3).map((link) => link.text)).toEqual(['./src/c.ts'])
+      expect(linksOnRow(0)).toEqual([])
+      expect(linksOnRow(4)).toEqual([])
+    })
+
+    it('keeps a URL fragment across wraps and maps both its first and last cells', async () => {
+      setBufferLines([
+        createBufferLine('https://example.com/'),
+        createBufferLine('path#L42', true, 20)
+      ])
+      await mountProvider()
+
+      for (const row of [1, 2]) {
+        const links = linksOnRow(row)
+        expect(links).toHaveLength(1)
+        expect(links[0]).toMatchObject({
+          text: 'https://example.com/path#L42',
+          range: { start: { x: 1, y: 1 }, end: { x: 8, y: 2 } }
+        })
+      }
+    })
+
+    it('does not insert padding before an early-wrapped wide glyph', async () => {
+      setBufferLines([
+        createBufferLine('./src/', false, 7),
+        createBufferLine(
+          [
+            ['文', 2],
+            ['.', 1],
+            ['t', 1],
+            ['s', 1]
+          ],
+          true,
+          7
+        )
+      ])
+      await mountProvider()
+
+      for (const row of [1, 2]) {
+        expect(linksOnRow(row)).toEqual([
+          expect.objectContaining({
+            text: './src/文.ts',
+            range: { start: { x: 1, y: 1 }, end: { x: 5, y: 2 } }
+          })
+        ])
+      }
+    })
+
+    it.each([
+      'rows',
+      'units',
+      'cells',
+      'scrollback'
+    ])('fails closed at the %s boundary without logging terminal content', async (boundary) => {
+      if (boundary === 'rows') {
+        setBufferLines(
+          Array.from({ length: 65 }, (_, row) => createBufferLine('secret.ts', row > 0))
+        )
+      } else if (boundary === 'units') {
+        setBufferLines([createBufferLine(`https://private.example/${'x'.repeat(4096)}`)])
+      } else if (boundary === 'cells') {
+        setBufferLines([createBufferLine('private.ts', false, 8193)])
+      } else {
+        setBufferLines([createBufferLine('secret.ts', true)])
+      }
+      await mountProvider()
+
+      expect(linksOnRow(1)).toEqual([])
+      expect(logFrontendError).toHaveBeenCalledWith({
+        level: 'warn',
+        source: 'ConnectedTerminal.links',
+        message: 'Terminal link detection skipped an incomplete or oversized logical line'
+      })
+      if (boundary === 'rows') expect(linksOnRow(65)).toEqual([])
+    })
+
+    it('reports URL activation failures without logging the thrown message', async () => {
+      setBufferLines([createBufferLine('https://example.com/path#L42')])
+      vi.mocked(openTerminalUrl).mockRejectedValueOnce(new Error('sensitive terminal content'))
+      await mountProvider()
+
+      const link = linksOnRow(1)[0]!
+      await link.activate(new MouseEvent('click', { ctrlKey: true }), link.text)
+      expect(logFrontendError).toHaveBeenCalledWith({
+        level: 'error',
+        source: 'ConnectedTerminal.links',
+        message: 'Terminal URL link activation failed'
+      })
+      expect(toast.error).toHaveBeenCalledWith('Failed to open URL from terminal output.')
+    })
+
+    it('returns no links on buffer failure without logging exception text', async () => {
+      setBufferLines([
+        {
+          ...createBufferLine('private.ts'),
+          getCell: () => {
+            throw new Error('sensitive terminal content')
+          }
+        }
+      ])
+      await mountProvider()
+
+      expect(linksOnRow(1)).toEqual([])
+      expect(logFrontendError).toHaveBeenCalledWith({
+        level: 'warn',
+        source: 'ConnectedTerminal.links',
+        message: 'Terminal link detection failed while reading the buffer'
+      })
     })
   })
 

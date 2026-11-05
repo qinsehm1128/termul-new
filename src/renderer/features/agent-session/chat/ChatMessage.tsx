@@ -399,13 +399,20 @@ function AgentProse({
               event.preventDefault()
               void openFilePathFromTerminal(candidate, context)
                 .then((result) => {
-                  if (!result.ok) toast.error(result.message)
+                  if (!result.ok) {
+                    void logFrontendError({
+                      level: 'warn',
+                      source: 'ChatMessage.filePathLink',
+                      message: `File link could not be opened (${result.reason})`
+                    })
+                    toast.error(result.message)
+                  }
                 })
-                .catch((error: unknown) => {
+                .catch(() => {
                   void logFrontendError({
                     level: 'warn',
                     source: 'ChatMessage.filePathLink',
-                    message: `Failed to open ${candidate}: ${String(error)}`
+                    message: 'Failed to open file link'
                   })
                   toast.error(t('messages.openFileFailed', 'Failed to open file from chat.'))
                 })

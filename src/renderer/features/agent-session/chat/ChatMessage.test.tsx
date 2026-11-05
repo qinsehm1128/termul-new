@@ -5,13 +5,23 @@ import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { ChatMessage as ChatMessageType } from '@/features/agent-session/stores/acp-store'
+import type { FilePathResolutionContext, OpenFilePathResult } from '@/lib/file-path-links'
 import { skillToken } from '@/lib/skill-tokens'
 import { ChatMessage } from './ChatMessage'
 
 const T = skillToken
 
 const openUrlWithSystemBrowser = vi.fn(() => Promise.resolve({ success: true, data: undefined }))
-const openFilePathFromTerminal = vi.fn(() => Promise.resolve({ ok: true as const }))
+const openFilePathFromTerminal = vi.fn<
+  (candidate: string, context: FilePathResolutionContext) => Promise<OpenFilePathResult>
+>(async () => ({ ok: true }))
+const logFrontendError = vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined)
+const toastError = vi.fn()
+
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: (...args: unknown[]) => logFrontendError(...args)
+}))
+vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }))
 
 vi.mock('@/lib/api', () => ({
   openerApi: {
@@ -20,7 +30,8 @@ vi.mock('@/lib/api', () => ({
 }))
 
 vi.mock('@/lib/file-path-links', () => ({
-  openFilePathFromTerminal: (...args: unknown[]) => openFilePathFromTerminal(...args)
+  openFilePathFromTerminal: (candidate: string, context: FilePathResolutionContext) =>
+    openFilePathFromTerminal(candidate, context)
 }))
 
 vi.mock('streamdown', async () => {
@@ -36,6 +47,13 @@ vi.mock('streamdown', async () => {
     }) => ReactNode
   }
 
+  type MarkdownFixtureNode = {
+    type: string
+    url?: string
+    value?: string
+    children?: MarkdownFixtureNode[]
+  }
+
   function MockStreamdown({
     children,
     isAnimating,
@@ -43,7 +61,8 @@ vi.mock('streamdown', async () => {
     animated,
     linkSafety,
     components,
-    plugins
+    plugins,
+    remarkPlugins
   }: {
     children: ReactNode
     isAnimating?: boolean
@@ -52,10 +71,23 @@ vi.mock('streamdown', async () => {
     linkSafety?: LinkSafety
     components?: Record<string, unknown>
     plugins?: { renderers?: { language: string | string[] }[] } & Record<string, unknown>
+    remarkPlugins?: (() => (tree: MarkdownFixtureNode) => void)[]
   }): React.JSX.Element {
     const [open, setOpen] = React.useState(false)
     const url = 'https://example.com/docs'
     const markdown = typeof children === 'string' ? children : ''
+    const explicitLink = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(markdown)
+    const linkNode: MarkdownFixtureNode | undefined = explicitLink
+      ? {
+          type: 'link',
+          url: explicitLink[2],
+          children: [{ type: 'text', value: explicitLink[1] }]
+        }
+      : undefined
+    if (linkNode) {
+      const tree: MarkdownFixtureNode = { type: 'root', children: [linkNode] }
+      for (const plugin of remarkPlugins ?? []) plugin()(tree)
+    }
     const CustomTable = components?.table as React.ElementType | undefined
     const CustomLink = components?.a as React.ElementType | undefined
     const semanticFixture = markdown.startsWith('# Compact heading')
@@ -93,6 +125,11 @@ vi.mock('streamdown', async () => {
         >
           docs
         </button>
+        {linkNode && CustomLink ? (
+          <CustomLink href={linkNode.url} data-testid="explicit-markdown-link">
+            {explicitLink?.[1]}
+          </CustomLink>
+        ) : null}
         {markdown.startsWith('FILE_PATH:') && CustomLink ? (
           <CustomLink
             href="termul-file-path:src%2Frenderer%2FApp.tsx%3A42"
@@ -180,6 +217,8 @@ describe('ChatMessage', () => {
   beforeEach(() => {
     openUrlWithSystemBrowser.mockClear()
     openFilePathFromTerminal.mockClear()
+    logFrontendError.mockClear()
+    toastError.mockClear()
     useReducedMotionMock.mockReturnValue(true)
   })
 
@@ -353,6 +392,109 @@ describe('ChatMessage', () => {
     expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx:42', {
       cwd: '/project'
     })
+  })
+
+  it.each([
+    ['scripts/check', 'scripts/check'],
+    ['docs/guide.md:12:3', 'docs/guide.md:12:3'],
+    ['docs/design%20notes.md:12:3', 'docs/design notes.md:12:3']
+  ])('opens explicit Markdown destination %s using the supplied session context', async (href, path) => {
+    const context: FilePathResolutionContext = {
+      cwd: '/session/cwd',
+      workspaceCwd: '/session/worktree',
+      projectRoot: '/session/project'
+    }
+    render(
+      <ChatMessage
+        message={{
+          ...agentMessage(false),
+          blocks: [{ type: 'text', text: `[Open file](${href})` }]
+        }}
+        filePathContext={context}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle('Open in editor'))
+    await act(async () => undefined)
+
+    expect(openFilePathFromTerminal).toHaveBeenCalledWith(path, context)
+    expect(openFilePathFromTerminal.mock.calls[0]?.[1]).toBe(context)
+    expect(openUrlWithSystemBrowser).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'https://example.com/docs/x.md',
+    '#section',
+    'mailto:hello@example.com'
+  ])('keeps explicit non-file destination %s out of the file resolver', async (href) => {
+    render(
+      <ChatMessage
+        message={{
+          ...agentMessage(false),
+          blocks: [{ type: 'text', text: `[Open link](${href})` }]
+        }}
+        filePathContext={{ cwd: '/session/cwd' }}
+      />
+    )
+
+    const link = screen.getByTestId('explicit-markdown-link')
+    expect(link).toHaveAttribute('href', href)
+    expect(link).not.toHaveAttribute('title', 'Open in editor')
+    fireEvent.click(link)
+    await act(async () => undefined)
+    expect(openFilePathFromTerminal).not.toHaveBeenCalled()
+  })
+
+  it('logs a safe reason and reports missing explicit file links', async () => {
+    openFilePathFromTerminal.mockResolvedValueOnce({
+      ok: false,
+      reason: 'not-found',
+      message: 'File does not exist'
+    })
+    render(
+      <ChatMessage
+        message={{
+          ...agentMessage(false),
+          blocks: [{ type: 'text', text: '[Open](docs/private.md)' }]
+        }}
+        filePathContext={{ cwd: '/private/session' }}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle('Open in editor'))
+    await act(async () => undefined)
+
+    expect(toastError).toHaveBeenCalledWith('File does not exist')
+    expect(logFrontendError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'ChatMessage.filePathLink',
+      message: 'File link could not be opened (not-found)'
+    })
+    expect(JSON.stringify(logFrontendError.mock.calls)).not.toContain('private')
+  })
+
+  it('does not log path or exception contents when opening a file link throws', async () => {
+    openFilePathFromTerminal.mockRejectedValueOnce(new Error('private file contents'))
+    render(
+      <ChatMessage
+        message={{
+          ...agentMessage(false),
+          blocks: [{ type: 'text', text: '[Open](docs/private.md)' }]
+        }}
+        filePathContext={{ cwd: '/private/session' }}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle('Open in editor'))
+    await act(async () => undefined)
+
+    expect(toastError).toHaveBeenCalledWith('Failed to open file from chat.')
+    expect(logFrontendError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'ChatMessage.filePathLink',
+      message: 'Failed to open file link'
+    })
+    expect(JSON.stringify(logFrontendError.mock.calls)).not.toContain('private')
   })
 
   it('does not open file citations on shift-click (allow text selection)', async () => {
