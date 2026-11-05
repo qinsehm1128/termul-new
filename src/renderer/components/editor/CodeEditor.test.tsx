@@ -1,6 +1,8 @@
 import type { EditorView } from '@codemirror/view'
-import { render } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render } from '@testing-library/react'
+import type { PropsWithChildren } from 'react'
+import type { PanelOnResize } from 'react-resizable-panels'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useCodeMirror } from '@/hooks/use-codemirror'
 import {
   EDITOR_REVEAL_LINE_EVENT,
@@ -28,6 +30,29 @@ const { mobileRef, tocSettingsRef } = vi.hoisted(() => ({
     }
   }
 }))
+
+const panelRef = vi.hoisted(() => ({
+  onResize: undefined as PanelOnResize | undefined,
+  setLayout: vi.fn()
+}))
+
+vi.mock('@/components/ui/resizable', async () => {
+  const { forwardRef, useImperativeHandle } = await import('react')
+  return {
+    ResizablePanelGroup: forwardRef<unknown, PropsWithChildren>(({ children }, ref) => {
+      useImperativeHandle(ref, () => ({
+        getLayout: () => [50, 50],
+        setLayout: panelRef.setLayout
+      }))
+      return <div>{children}</div>
+    }),
+    ResizablePanel: ({ children, onResize }: PropsWithChildren<{ onResize?: PanelOnResize }>) => {
+      if (onResize) panelRef.onResize = onResize
+      return <div>{children}</div>
+    },
+    ResizableHandle: () => <div />
+  }
+})
 
 vi.mock('@/hooks/use-codemirror', () => ({
   useCodeMirror: vi.fn()
@@ -143,6 +168,75 @@ describe('CodeEditor', () => {
     const overlay = container.querySelector('[role="status"]')
     expect(overlay).not.toBeNull()
     expect(overlay?.getAttribute('aria-live')).toBe('polite')
+  })
+})
+
+describe('CodeEditor TOC width persistence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mobileRef.current = false
+    tocSettingsRef.current = {
+      isLoaded: true,
+      loadFailed: false,
+      settings: { isVisible: true, width: 280 },
+      setWidth: vi.fn()
+    }
+    panelRef.onResize = undefined
+    // react-resizable-panels synchronously notifies onResize from setLayout.
+    // The editor's existing 60% minimum may constrain the requested TOC size.
+    panelRef.setLayout.mockImplementation((layout: number[]) => {
+      panelRef.onResize?.(Math.min(layout[1], 40), 50)
+    })
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600)
+    vi.mocked(useCodeMirror).mockReturnValue({
+      view: fakeView,
+      isReady: true,
+      setContent: mockSetContent,
+      flushPendingContent: vi.fn(),
+      scrollToLine: mockScrollToLine,
+      restoreViewState: mockRestoreViewState,
+      getVisibleLineRange: vi.fn(() => null)
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('does not persist synchronous resize notifications from programmatic TOC layouts', () => {
+    render(<CodeEditor {...defaultProps} language="markdown" />)
+
+    expect(panelRef.setLayout).toHaveBeenCalled()
+    expect(tocSettingsRef.current.setWidth).not.toHaveBeenCalled()
+  })
+
+  it('does not persist the initial mount resize notification without a previous size', () => {
+    panelRef.setLayout.mockImplementation(() => {})
+    render(<CodeEditor {...defaultProps} language="markdown" />)
+
+    expect(panelRef.onResize).toBeDefined()
+    act(() => panelRef.onResize?.(40, undefined))
+
+    expect(tocSettingsRef.current.setWidth).not.toHaveBeenCalled()
+  })
+
+  it('still persists user resizing after applying the programmatic layout', () => {
+    render(<CodeEditor {...defaultProps} language="markdown" />)
+
+    expect(panelRef.onResize).toBeDefined()
+    act(() => panelRef.onResize?.(35, 40))
+
+    expect(tocSettingsRef.current.setWidth).toHaveBeenCalledExactlyOnceWith(210)
+  })
+
+  it('does not persist user resizing that rounds to the stored pixel width', () => {
+    tocSettingsRef.current.settings.width = 210
+    render(<CodeEditor {...defaultProps} language="markdown" />)
+
+    expect(panelRef.onResize).toBeDefined()
+    act(() => panelRef.onResize?.(35.01, 35))
+
+    expect(tocSettingsRef.current.setWidth).not.toHaveBeenCalled()
   })
 })
 

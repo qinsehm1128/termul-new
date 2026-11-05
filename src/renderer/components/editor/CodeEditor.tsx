@@ -61,6 +61,7 @@ export function CodeEditor({
   const hasRestoredViewStateRef = useRef(false)
   const layoutRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
+  const isApplyingTocLayoutRef = useRef(false)
   const [visibleRange, setVisibleRange] = useState<VisibleLineRange | undefined>()
   const [layoutWidth, setLayoutWidth] = useState(0)
   const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore(
@@ -106,16 +107,20 @@ export function CodeEditor({
 
   const handleTocResize = useCallback<PanelOnResize>(
     (size, prevSize): void => {
+      if (isApplyingTocLayoutRef.current || prevSize === undefined) {
+        return
+      }
+
       const panelWidth = getPanelWidth()
       const { minPercent, maxPercent } = getTocPercentBounds(panelWidth)
       const clampedSize = Math.min(maxPercent, Math.max(minPercent, size))
       const nextPixels = Math.round((clampedSize / 100) * panelWidth)
 
-      if (prevSize !== size) {
+      if (prevSize !== size && nextPixels !== tocWidth) {
         setTocWidth(nextPixels)
       }
     },
-    [getPanelWidth, setTocWidth]
+    [getPanelWidth, setTocWidth, tocWidth]
   )
 
   useEffect(() => {
@@ -256,7 +261,13 @@ export function CodeEditor({
       return
     }
 
-    group.setLayout([100 - tocSize, tocSize])
+    // setLayout synchronously fires onResize; applying saved widths is not a user resize.
+    isApplyingTocLayoutRef.current = true
+    try {
+      group.setLayout([100 - tocSize, tocSize])
+    } finally {
+      isApplyingTocLayoutRef.current = false
+    }
   }, [canRenderToc, getTocPanelSizePercent])
 
   return (

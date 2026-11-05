@@ -132,6 +132,8 @@ interface UseBlockNoteResult {
   /** Capture current body markdown without calling onChange (clears debounce). */
   capturePendingContent: () => Promise<string | null>
   getHeadings: () => TocHeading[]
+  subscribeDocumentChange: (listener: () => void) => () => void
+  getDocumentVersion: () => number
   scrollToBlock: (blockId: string) => void
 }
 
@@ -144,6 +146,22 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
   const isReplacingRef = useRef(false)
   // Incrementing token to discard stale replace results
   const replaceTokenRef = useRef(0)
+  const documentListenersRef = useRef(new Set<() => void>())
+  const documentVersionRef = useRef(0)
+
+  const subscribeDocumentChange = useCallback((listener: () => void) => {
+    documentListenersRef.current.add(listener)
+    return () => {
+      documentListenersRef.current.delete(listener)
+    }
+  }, [])
+
+  const getDocumentVersion = useCallback(() => documentVersionRef.current, [])
+
+  const notifyDocumentChange = useCallback(() => {
+    documentVersionRef.current += 1
+    for (const listener of documentListenersRef.current) listener()
+  }, [])
 
   onChangeRef.current = options.onChange
   filePathRef.current = options.filePath
@@ -190,6 +208,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
         )
         if (token !== replaceTokenRef.current) return
         editor.replaceBlocks(editor.document, processedBlocks)
+        notifyDocumentChange()
       } catch {
         // Failed to parse markdown
       } finally {
@@ -200,7 +219,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
         }
       }
     },
-    [editor]
+    [editor, notifyDocumentChange]
   )
 
   // Load initial markdown content
@@ -216,6 +235,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
       // Skip onChange events triggered by programmatic content replacement
       if (isReplacingRef.current) return
 
+      notifyDocumentChange()
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current)
       }
@@ -237,8 +257,9 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
       if (typeof unsubscribe === 'function') {
         unsubscribe()
       }
+      documentListenersRef.current.clear()
     }
-  }, [editor])
+  }, [editor, notifyDocumentChange])
 
   const replaceContent = useCallback(
     async (markdown: string) => {
@@ -340,6 +361,8 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     flushPendingContent,
     capturePendingContent,
     getHeadings,
+    subscribeDocumentChange,
+    getDocumentVersion,
     scrollToBlock
   }
 }

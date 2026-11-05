@@ -55,6 +55,143 @@ describe('use-active-heading', () => {
     expect(result.current).toBe('heading-line-8')
   })
 
+  it('preserves the active heading and observer for semantically unchanged headings', () => {
+    const container = document.createElement('div')
+    container.innerHTML = `
+      <div data-node-type="blockContainer" data-id="block-1"><div data-content-type="heading"></div></div>
+      <div data-node-type="blockContainer" data-id="block-2"><div data-content-type="heading"></div></div>
+    `
+    const blockHeadings: TocHeading[] = [
+      { id: 'toc-1', blockId: 'block-1', level: 1, text: 'Title' },
+      { id: 'toc-2', blockId: 'block-2', level: 2, text: 'Section' }
+    ]
+    const observe = vi.fn()
+    const disconnect = vi.fn()
+    let observerCallback: IntersectionObserverCallback | undefined
+    const construct = vi.fn()
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          construct()
+          observerCallback = callback
+        }
+        observe = observe
+        disconnect = disconnect
+      }
+    )
+    const { result, rerender, unmount } = renderHook(
+      ({ headings }) => useBlockNoteActiveHeading({ headings, container }),
+      { initialProps: { headings: blockHeadings } }
+    )
+    act(() => {
+      observerCallback?.(
+        [
+          {
+            target: container.children[1],
+            isIntersecting: true,
+            boundingClientRect: { top: 24 }
+          } as IntersectionObserverEntry
+        ],
+        {} as IntersectionObserver
+      )
+    })
+    expect(result.current).toBe('toc-2')
+
+    rerender({ headings: blockHeadings.map((heading) => ({ ...heading })) })
+    expect(result.current).toBe('toc-2')
+    expect(construct).toHaveBeenCalledTimes(1)
+    expect(disconnect).not.toHaveBeenCalled()
+
+    // Text/level edits update the TOC, but do not change the observed block identities.
+    rerender({
+      headings: blockHeadings.map((heading) => ({ ...heading, text: 'Edited', level: 3 }))
+    })
+    expect(result.current).toBe('toc-2')
+    expect(construct).toHaveBeenCalledTimes(1)
+
+    // A real heading addition must rebind, without resetting a still-valid selection.
+    const added = document.createElement('div')
+    added.innerHTML = '<div data-content-type="heading"></div>'
+    added.dataset.nodeType = 'blockContainer'
+    added.dataset.id = 'block-3'
+    container.appendChild(added)
+    rerender({
+      headings: [...blockHeadings, { id: 'toc-3', blockId: 'block-3', level: 2, text: 'New' }]
+    })
+    expect(result.current).toBe('toc-2')
+    expect(construct).toHaveBeenCalledTimes(2)
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    expect(observe).toHaveBeenCalledWith(added)
+    act(() => {
+      observerCallback?.(
+        [
+          {
+            target: added,
+            isIntersecting: true,
+            boundingClientRect: { top: 12 }
+          } as IntersectionObserverEntry
+        ],
+        {} as IntersectionObserver
+      )
+    })
+    expect(result.current).toBe('toc-3')
+
+    // Removing the active heading falls back, and clearing headings clears selection.
+    rerender({ headings: [blockHeadings[0]] })
+    expect(result.current).toBe('toc-1')
+    rerender({ headings: [] })
+    expect(result.current).toBeUndefined()
+    expect(disconnect).toHaveBeenCalledTimes(3)
+    unmount()
+  })
+
+  it('rebinds on container and enabled changes, and cleans up on unmount', () => {
+    const createContainer = () => {
+      const container = document.createElement('div')
+      container.innerHTML =
+        '<div data-node-type="blockContainer" data-id="toc-1"><div data-content-type="heading"></div></div>'
+      return container
+    }
+    const first = createContainer()
+    const second = createContainer()
+    const observe = vi.fn()
+    const disconnect = vi.fn()
+    const roots: Element[] = []
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(_callback: IntersectionObserverCallback, options: IntersectionObserverInit) {
+          roots.push(options.root as Element)
+        }
+        observe = observe
+        disconnect = disconnect
+      }
+    )
+    const { rerender, unmount } = renderHook(
+      ({ container, isEnabled }) =>
+        useBlockNoteActiveHeading({
+          headings: [{ id: 'toc-1', text: 'Title', level: 1 }],
+          container,
+          isEnabled
+        }),
+      { initialProps: { container: first, isEnabled: true } }
+    )
+    expect(roots).toEqual([first])
+    expect(observe).toHaveBeenLastCalledWith(first.children[0])
+    rerender({ container: second, isEnabled: true })
+    expect(roots).toEqual([first, second])
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    expect(observe).toHaveBeenLastCalledWith(second.children[0])
+    rerender({ container: second, isEnabled: false })
+    expect(disconnect).toHaveBeenCalledTimes(2)
+    expect(roots).toHaveLength(2)
+    rerender({ container: second, isEnabled: true })
+    expect(roots).toHaveLength(3)
+    unmount()
+    expect(disconnect).toHaveBeenCalledTimes(3)
+  })
+
   it('maps visible BlockNote block ids back to TOC ids', () => {
     const container = document.createElement('div')
     const headingElement = document.createElement('div')

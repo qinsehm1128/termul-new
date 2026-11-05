@@ -97,7 +97,9 @@ export function MarkdownEditor({
     flushPendingContent,
     capturePendingContent,
     getHeadings,
-    scrollToBlock
+    scrollToBlock,
+    subscribeDocumentChange,
+    getDocumentVersion
   } = useBlockNote({
     filePath,
     initialMarkdown: initialParsedRef.current.body,
@@ -160,6 +162,7 @@ export function MarkdownEditor({
   const layoutRef = useRef<HTMLDivElement>(null)
   const blockNoteScrollRootRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
+  const isApplyingTocLayoutRef = useRef(false)
   const [blockNoteContainer, setBlockNoteContainer] = useState<HTMLDivElement | null>(null)
   const [layoutWidth, setLayoutWidth] = useState(0)
   const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore(
@@ -189,16 +192,18 @@ export function MarkdownEditor({
 
   const handleTocResize = useCallback<PanelOnResize>(
     (size, prevSize): void => {
+      if (isApplyingTocLayoutRef.current || prevSize === undefined) return
+
       const panelWidth = getPanelWidth()
       const { minPercent, maxPercent } = getTocPercentBounds(panelWidth)
       const clampedSize = Math.min(maxPercent, Math.max(minPercent, size))
       const nextPixels = Math.round((clampedSize / 100) * panelWidth)
 
-      if (prevSize !== size) {
+      if (prevSize !== size && nextPixels !== tocWidth) {
         setTocWidth(nextPixels)
       }
     },
-    [getPanelWidth, setTocWidth]
+    [getPanelWidth, setTocWidth, tocWidth]
   )
 
   // Sync content only for external changes (e.g., file reload from disk)
@@ -269,7 +274,13 @@ export function MarkdownEditor({
       return
     }
 
-    group.setLayout([100 - tocSize, tocSize])
+    // react-resizable-panels notifies onResize synchronously from setLayout.
+    isApplyingTocLayoutRef.current = true
+    try {
+      group.setLayout([100 - tocSize, tocSize])
+    } finally {
+      isApplyingTocLayoutRef.current = false
+    }
   }, [canRenderToc, getTocPanelSizePercent])
 
   return (
@@ -323,7 +334,12 @@ export function MarkdownEditor({
                 >
                   <TocPanel
                     editorMode="blocknote"
-                    blocknote={{ getHeadings, scrollToBlock }}
+                    blocknote={{
+                      getHeadings,
+                      scrollToBlock,
+                      subscribeDocumentChange,
+                      getDocumentVersion
+                    }}
                     container={blockNoteContainer}
                   />
                 </div>

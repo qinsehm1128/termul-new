@@ -12,16 +12,54 @@ vi.mock('@/hooks/use-blocknote', () => ({
   useBlockNote: vi.fn()
 }))
 
+const tocState = vi.hoisted(() => ({
+  isVisible: false,
+  setWidth: vi.fn(),
+  onResize: undefined as ((size: number, prevSize: number | undefined) => void) | undefined,
+  getLayout: vi.fn(() => [80, 20]),
+  setLayout: vi.fn()
+}))
+
+vi.mock('@/components/ui/resizable', async () => {
+  const React = await import('react')
+  return {
+    ResizablePanelGroup: React.forwardRef(({ children }: { children: React.ReactNode }, ref) => {
+      React.useImperativeHandle(ref, () => ({
+        getLayout: tocState.getLayout,
+        setLayout: tocState.setLayout
+      }))
+      return <div>{children}</div>
+    }),
+    ResizablePanel: ({
+      children,
+      onResize
+    }: {
+      children: React.ReactNode
+      onResize?: (size: number, prevSize: number | undefined) => void
+    }) => {
+      React.useLayoutEffect(() => {
+        if (onResize) {
+          tocState.onResize = onResize
+          onResize(20, undefined)
+        }
+      }, [onResize])
+      return <div>{children}</div>
+    },
+    ResizableHandle: () => <div />
+  }
+})
+
 vi.mock('@/stores/toc-settings-store', () => ({
   useTocSettingsStore: (selector: (state: unknown) => unknown) =>
     selector({
       isLoaded: true,
       loadFailed: false,
       settings: {
-        isVisible: false,
+        isVisible: tocState.isVisible,
+        maxHeadingLevel: 3,
         width: 280
       },
-      setWidth: vi.fn()
+      setWidth: tocState.setWidth
     })
 }))
 
@@ -50,6 +88,12 @@ describe('MarkdownEditor frontmatter strip/rejoin/flush', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    tocState.isVisible = false
+    tocState.onResize = undefined
+    tocState.setLayout.mockImplementation((layout: number[]) => {
+      // react-resizable-panels notifies synchronously, including group clamping.
+      tocState.onResize?.(Math.min(25, layout[1]), 20)
+    })
     capturePendingContent.mockResolvedValue('# Heading\n\nBody text.\n')
     flushPendingContent.mockImplementation(async () => {
       capturedOptions.onChange('# Heading\n\nBody text.\n')
@@ -63,9 +107,26 @@ describe('MarkdownEditor frontmatter strip/rejoin/flush', () => {
         flushPendingContent,
         capturePendingContent,
         getHeadings: () => [],
-        scrollToBlock: vi.fn()
+        scrollToBlock: vi.fn(),
+        subscribeDocumentChange: () => () => {},
+        getDocumentVersion: () => 0
       }
     })
+  })
+
+  it('does not persist mount or programmatic TOC layout, but persists user resizing', () => {
+    tocState.isVisible = true
+    render(
+      <MarkdownEditor filePath="/docs/spec.md" content={FM_CONTENT} isVisible onChange={vi.fn()} />
+    )
+    expect(tocState.setLayout).toHaveBeenCalled()
+    expect(tocState.setWidth).not.toHaveBeenCalled()
+
+    act(() => tocState.onResize?.(30, 25))
+    expect(tocState.setWidth).toHaveBeenCalledExactlyOnceWith(300)
+    tocState.setWidth.mockClear()
+    act(() => tocState.onResize?.(28, 30))
+    expect(tocState.setWidth).not.toHaveBeenCalled()
   })
 
   it('keeps Properties and BlockNote inside the scoped document shell', () => {

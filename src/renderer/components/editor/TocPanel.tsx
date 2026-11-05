@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useBlockNoteActiveHeading, useCodeMirrorActiveHeading } from '@/hooks/use-active-heading'
 import type { VisibleLineRange } from '@/hooks/use-codemirror'
 import { filterTocHeadings, type TocHeading, useTocHeadings } from '@/hooks/use-toc-headings'
@@ -8,6 +8,8 @@ import { TableOfContents } from './TableOfContents'
 interface BlockNoteTocApi {
   getHeadings: () => TocHeading[]
   scrollToBlock: (blockId: string) => void
+  subscribeDocumentChange: (listener: () => void) => () => void
+  getDocumentVersion: () => number
 }
 
 interface CodeMirrorTocApi {
@@ -27,18 +29,27 @@ type TocPanelProps =
       codemirror: CodeMirrorTocApi
     }
 
+const EMPTY_HEADINGS: TocHeading[] = []
+const subscribeToNothing = (): (() => void) => () => {}
+const getEmptyVersion = (): number => 0
+
 export function TocPanel(props: TocPanelProps): React.JSX.Element {
   const maxHeadingLevel = useTocSettingsStore((state) => state.settings.maxHeadingLevel)
   const setMaxHeadingLevel = useTocSettingsStore((state) => state.setMaxHeadingLevel)
   const [selectedHeadingId, setSelectedHeadingId] = useState<string | undefined>()
 
+  const blocknote = props.editorMode === 'blocknote' ? props.blocknote : undefined
+  const getHeadings = blocknote?.getHeadings
+  const documentVersion = useSyncExternalStore(
+    blocknote?.subscribeDocumentChange ?? subscribeToNothing,
+    blocknote?.getDocumentVersion ?? getEmptyVersion
+  )
   const blockNoteHeadings = useMemo(() => {
-    if (props.editorMode !== 'blocknote') {
-      return []
-    }
-
-    return filterTocHeadings(props.blocknote.getHeadings(), maxHeadingLevel)
-  }, [maxHeadingLevel, props])
+    // The version signals actual edits and completed asynchronous replacements.
+    // Depending on the whole props object would invalidate this on every parent render.
+    void documentVersion
+    return getHeadings ? filterTocHeadings(getHeadings(), maxHeadingLevel) : EMPTY_HEADINGS
+  }, [getHeadings, maxHeadingLevel, documentVersion])
 
   const codeMirrorHeadingsResult = useTocHeadings({
     content: props.editorMode === 'codemirror' ? props.codemirror.content : '',
@@ -77,7 +88,9 @@ export function TocPanel(props: TocPanelProps): React.JSX.Element {
     }
   }, [scrollActiveHeadingId, selectedHeadingId])
 
-  const activeHeadingId = selectedHeadingId ?? scrollActiveHeadingId
+  const activeHeadingId = headings.some((heading) => heading.id === selectedHeadingId)
+    ? selectedHeadingId
+    : scrollActiveHeadingId
 
   const handleHeadingClick = (heading: TocHeading): void => {
     if (props.editorMode === 'blocknote') {

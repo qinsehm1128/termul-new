@@ -61,21 +61,30 @@ export function useBlockNoteActiveHeading({
   container,
   isEnabled = true
 }: UseBlockNoteActiveHeadingOptions): string | undefined {
+  // Only block/TOC identity affects observation. New arrays and text/level edits
+  // must not disconnect the observer or reset a still-valid active heading.
+  const headingIdentity = JSON.stringify(
+    headings.map((heading) => [heading.blockId ?? heading.id, heading.id])
+  )
+  const headingEntries = useMemo(
+    () => JSON.parse(headingIdentity) as [string, string][],
+    [headingIdentity]
+  )
   const [activeHeadingId, setActiveHeadingId] = useState<string | undefined>(headings[0]?.id)
 
   useEffect(() => {
-    setActiveHeadingId(headings[0]?.id)
-  }, [headings])
+    setActiveHeadingId((current) =>
+      headingEntries.some(([, id]) => id === current) ? current : headingEntries[0]?.[1]
+    )
+  }, [headingEntries])
 
   useEffect(() => {
-    if (!isEnabled || !container || !headings.length) {
+    if (!isEnabled || !container || !headingEntries.length) {
       return
     }
 
-    const headingIds = new Set(headings.map((heading) => heading.blockId ?? heading.id))
-    const blockIdToTocId = new Map(
-      headings.map((heading) => [heading.blockId ?? heading.id, heading.id])
-    )
+    const headingIds = new Set(headingEntries.map(([blockId]) => blockId))
+    const blockIdToTocId = new Map(headingEntries)
     const visibleHeadings = new Map<string, number>()
 
     const updateActiveHeading = (): void => {
@@ -131,7 +140,7 @@ export function useBlockNoteActiveHeading({
       observer.disconnect()
       visibleHeadings.clear()
     }
-  }, [container, headings, isEnabled])
+  }, [container, headingEntries, isEnabled])
 
   return activeHeadingId
 }
