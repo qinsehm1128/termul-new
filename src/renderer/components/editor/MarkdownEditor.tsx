@@ -163,6 +163,7 @@ export function MarkdownEditor({
   const blockNoteScrollRootRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const isApplyingTocLayoutRef = useRef(false)
+  const isUserResizingTocRef = useRef(false)
   const [blockNoteContainer, setBlockNoteContainer] = useState<HTMLDivElement | null>(null)
   const [layoutWidth, setLayoutWidth] = useState(0)
   const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore(
@@ -192,7 +193,8 @@ export function MarkdownEditor({
 
   const handleTocResize = useCallback<PanelOnResize>(
     (size, prevSize): void => {
-      if (isApplyingTocLayoutRef.current || prevSize === undefined) return
+      if (!isUserResizingTocRef.current || isApplyingTocLayoutRef.current || prevSize === undefined)
+        return
 
       const panelWidth = getPanelWidth()
       const { minPercent, maxPercent } = getTocPercentBounds(panelWidth)
@@ -321,7 +323,22 @@ export function MarkdownEditor({
 
           {canRenderToc && (
             <>
-              <ResizableHandle />
+              <ResizableHandle
+                onDragging={(dragging) => {
+                  isUserResizingTocRef.current = dragging
+                }}
+                onKeyDownCapture={(event) => {
+                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                    isUserResizingTocRef.current = true
+                  }
+                }}
+                onKeyUpCapture={() => {
+                  isUserResizingTocRef.current = false
+                }}
+                onBlurCapture={() => {
+                  isUserResizingTocRef.current = false
+                }}
+              />
               <ResizablePanel
                 defaultSize={tocPanelDefaultSize}
                 minSize={tocPanelBounds.minPercent}

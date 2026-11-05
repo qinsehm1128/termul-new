@@ -1,6 +1,6 @@
 import type { EditorView } from '@codemirror/view'
-import { act, render } from '@testing-library/react'
-import type { PropsWithChildren } from 'react'
+import { act, fireEvent, render } from '@testing-library/react'
+import type { HTMLAttributes, PropsWithChildren } from 'react'
 import type { PanelOnResize } from 'react-resizable-panels'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useCodeMirror } from '@/hooks/use-codemirror'
@@ -33,6 +33,7 @@ const { mobileRef, tocSettingsRef } = vi.hoisted(() => ({
 
 const panelRef = vi.hoisted(() => ({
   onResize: undefined as PanelOnResize | undefined,
+  onDragging: undefined as ((dragging: boolean) => void) | undefined,
   setLayout: vi.fn()
 }))
 
@@ -50,7 +51,15 @@ vi.mock('@/components/ui/resizable', async () => {
       if (onResize) panelRef.onResize = onResize
       return <div>{children}</div>
     },
-    ResizableHandle: () => <div />
+    ResizableHandle: ({
+      onDragging,
+      ...props
+    }: HTMLAttributes<HTMLDivElement> & {
+      onDragging?: (dragging: boolean) => void
+    }) => {
+      panelRef.onDragging = onDragging
+      return <div {...props} data-testid="toc-resize-handle" />
+    }
   }
 })
 
@@ -224,9 +233,25 @@ describe('CodeEditor TOC width persistence', () => {
     render(<CodeEditor {...defaultProps} language="markdown" />)
 
     expect(panelRef.onResize).toBeDefined()
-    act(() => panelRef.onResize?.(35, 40))
+    act(() => {
+      panelRef.onDragging?.(true)
+      panelRef.onResize?.(35, 40)
+    })
 
     expect(tocSettingsRef.current.setWidth).toHaveBeenCalledExactlyOnceWith(210)
+  })
+
+  it('ignores constraint notifications outside a user gesture and persists keyboard resizing', () => {
+    const { getByTestId } = render(<CodeEditor {...defaultProps} language="markdown" />)
+    act(() => panelRef.onResize?.(35, 40))
+    expect(tocSettingsRef.current.setWidth).not.toHaveBeenCalled()
+    const handle = getByTestId('toc-resize-handle')
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    act(() => panelRef.onResize?.(35, 40))
+    expect(tocSettingsRef.current.setWidth).toHaveBeenCalledExactlyOnceWith(210)
+    fireEvent.keyUp(handle, { key: 'ArrowLeft' })
+    act(() => panelRef.onResize?.(30, 35))
+    expect(tocSettingsRef.current.setWidth).toHaveBeenCalledTimes(1)
   })
 
   it('does not persist user resizing that rounds to the stored pixel width', () => {
@@ -234,7 +259,10 @@ describe('CodeEditor TOC width persistence', () => {
     render(<CodeEditor {...defaultProps} language="markdown" />)
 
     expect(panelRef.onResize).toBeDefined()
-    act(() => panelRef.onResize?.(35.01, 35))
+    act(() => {
+      panelRef.onDragging?.(true)
+      panelRef.onResize?.(35.01, 35)
+    })
 
     expect(tocSettingsRef.current.setWidth).not.toHaveBeenCalled()
   })

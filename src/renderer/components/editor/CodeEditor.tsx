@@ -62,6 +62,7 @@ export function CodeEditor({
   const layoutRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const isApplyingTocLayoutRef = useRef(false)
+  const isUserResizingTocRef = useRef(false)
   const [visibleRange, setVisibleRange] = useState<VisibleLineRange | undefined>()
   const [layoutWidth, setLayoutWidth] = useState(0)
   const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore(
@@ -107,7 +108,11 @@ export function CodeEditor({
 
   const handleTocResize = useCallback<PanelOnResize>(
     (size, prevSize): void => {
-      if (isApplyingTocLayoutRef.current || prevSize === undefined) {
+      if (
+        !isUserResizingTocRef.current ||
+        isApplyingTocLayoutRef.current ||
+        prevSize === undefined
+      ) {
         return
       }
 
@@ -299,7 +304,22 @@ export function CodeEditor({
 
           {canRenderToc && (
             <>
-              <ResizableHandle />
+              <ResizableHandle
+                onDragging={(dragging) => {
+                  isUserResizingTocRef.current = dragging
+                }}
+                onKeyDownCapture={(event) => {
+                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                    isUserResizingTocRef.current = true
+                  }
+                }}
+                onKeyUpCapture={() => {
+                  isUserResizingTocRef.current = false
+                }}
+                onBlurCapture={() => {
+                  isUserResizingTocRef.current = false
+                }}
+              />
               <ResizablePanel
                 defaultSize={tocPanelDefaultSize}
                 minSize={tocPanelBounds.minPercent}

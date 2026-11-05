@@ -86,6 +86,7 @@ export function useBlockNoteActiveHeading({
     const headingIds = new Set(headingEntries.map(([blockId]) => blockId))
     const blockIdToTocId = new Map(headingEntries)
     const visibleHeadings = new Map<string, number>()
+    const observedElements = new Map<string, HTMLElement>()
 
     const updateActiveHeading = (): void => {
       const next = Array.from(visibleHeadings.entries())
@@ -102,7 +103,10 @@ export function useBlockNoteActiveHeading({
         entries.forEach((entry) => {
           const element = entry.target as HTMLElement
           const blockId = element.dataset.id
-          const headingId = blockId ? blockIdToTocId.get(blockId) : undefined
+          const headingId =
+            blockId && observedElements.get(blockId) === element
+              ? blockIdToTocId.get(blockId)
+              : undefined
 
           if (!headingId) {
             return
@@ -124,21 +128,42 @@ export function useBlockNoteActiveHeading({
       }
     )
 
-    const elements = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-node-type="blockContainer"][data-id]')
-    ).filter((element) => {
-      const elementId = element.dataset.id
-      const isHeadingBlock = !!element.querySelector('[data-content-type="heading"]')
-      return !!elementId && isHeadingBlock && headingIds.has(elementId)
-    })
-
-    elements.forEach((element) => {
-      observer.observe(element)
-    })
+    const reconcileElements = (): void => {
+      const next = new Map<string, HTMLElement>()
+      container
+        .querySelectorAll<HTMLElement>('[data-node-type="blockContainer"][data-id]')
+        .forEach((element) => {
+          const id = element.dataset.id
+          if (id && headingIds.has(id) && element.querySelector('[data-content-type="heading"]')) {
+            next.set(id, element)
+          }
+        })
+      observedElements.forEach((element, id) => {
+        if (next.get(id) !== element) {
+          observer.unobserve(element)
+          observedElements.delete(id)
+          const tocId = blockIdToTocId.get(id)
+          if (tocId) visibleHeadings.delete(tocId)
+        }
+      })
+      next.forEach((element, id) => {
+        if (observedElements.get(id) !== element) {
+          observedElements.set(id, element)
+          observer.observe(element)
+        }
+      })
+    }
+    reconcileElements()
+    // ProseMirror can replace/move a block DOM node without changing its ID.
+    // Observe structural changes only, never TOC highlighting/class changes.
+    const mutations = new MutationObserver(reconcileElements)
+    mutations.observe(container, { childList: true, subtree: true })
 
     return () => {
+      mutations.disconnect()
       observer.disconnect()
       visibleHeadings.clear()
+      observedElements.clear()
     }
   }, [container, headingEntries, isEnabled])
 

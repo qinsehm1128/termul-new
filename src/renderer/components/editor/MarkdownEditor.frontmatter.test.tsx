@@ -1,4 +1,5 @@
 import { act, fireEvent, render } from '@testing-library/react'
+import type { HTMLAttributes } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useBlockNote } from '@/hooks/use-blocknote'
 import { flushEditorContent } from '@/lib/editor-content-flush'
@@ -16,6 +17,7 @@ const tocState = vi.hoisted(() => ({
   isVisible: false,
   setWidth: vi.fn(),
   onResize: undefined as ((size: number, prevSize: number | undefined) => void) | undefined,
+  onDragging: undefined as ((dragging: boolean) => void) | undefined,
   getLayout: vi.fn(() => [80, 20]),
   setLayout: vi.fn()
 }))
@@ -45,7 +47,15 @@ vi.mock('@/components/ui/resizable', async () => {
       }, [onResize])
       return <div>{children}</div>
     },
-    ResizableHandle: () => <div />
+    ResizableHandle: ({
+      onDragging,
+      ...props
+    }: HTMLAttributes<HTMLDivElement> & {
+      onDragging?: (dragging: boolean) => void
+    }) => {
+      tocState.onDragging = onDragging
+      return <div {...props} data-testid="toc-resize-handle" />
+    }
   }
 })
 
@@ -122,10 +132,19 @@ describe('MarkdownEditor frontmatter strip/rejoin/flush', () => {
     expect(tocState.setLayout).toHaveBeenCalled()
     expect(tocState.setWidth).not.toHaveBeenCalled()
 
+    // Library constraint adjustments can report a previous size too.
     act(() => tocState.onResize?.(30, 25))
+    expect(tocState.setWidth).not.toHaveBeenCalled()
+    act(() => {
+      tocState.onDragging?.(true)
+      tocState.onResize?.(30, 25)
+    })
     expect(tocState.setWidth).toHaveBeenCalledExactlyOnceWith(300)
     tocState.setWidth.mockClear()
     act(() => tocState.onResize?.(28, 30))
+    expect(tocState.setWidth).not.toHaveBeenCalled()
+    act(() => tocState.onDragging?.(false))
+    act(() => tocState.onResize?.(35, 28))
     expect(tocState.setWidth).not.toHaveBeenCalled()
   })
 

@@ -192,6 +192,75 @@ describe('use-active-heading', () => {
     expect(disconnect).toHaveBeenCalledTimes(3)
   })
 
+  it('rebinds replaced heading nodes without rebuilding the observer or resetting selection', async () => {
+    const container = document.createElement('div')
+    container.innerHTML = `
+      <div data-node-type="blockContainer" data-id="block-1"><div data-content-type="heading"></div></div>
+      <div data-node-type="blockContainer" data-id="block-2"><div data-content-type="heading"></div></div>
+    `
+    const observe = vi.fn()
+    const unobserve = vi.fn()
+    const disconnect = vi.fn()
+    const construct = vi.fn()
+    let callback: IntersectionObserverCallback | undefined
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(next: IntersectionObserverCallback) {
+          construct()
+          callback = next
+        }
+        observe = observe
+        unobserve = unobserve
+        disconnect = disconnect
+      }
+    )
+    const { result, unmount } = renderHook(() =>
+      useBlockNoteActiveHeading({
+        headings: [
+          { id: 'toc-1', blockId: 'block-1', text: 'First', level: 1 },
+          { id: 'toc-2', blockId: 'block-2', text: 'Second', level: 2 }
+        ],
+        container
+      })
+    )
+    const oldNode = container.children[1] as HTMLElement
+    const notify = (node: Element, top: number) =>
+      callback?.(
+        [
+          {
+            target: node,
+            isIntersecting: true,
+            boundingClientRect: { top }
+          } as IntersectionObserverEntry
+        ],
+        {} as IntersectionObserver
+      )
+    act(() => notify(oldNode, 20))
+    expect(result.current).toBe('toc-2')
+    const replacement = oldNode.cloneNode(true) as HTMLElement
+    await act(async () => {
+      oldNode.replaceWith(replacement)
+    })
+    expect(unobserve).toHaveBeenCalledWith(oldNode)
+    expect(observe).toHaveBeenCalledWith(replacement)
+    expect(construct).toHaveBeenCalledTimes(1)
+    expect(result.current).toBe('toc-2')
+    act(() => notify(container.children[0], 10))
+    expect(result.current).toBe('toc-1')
+    // A queued notification for the detached node must not revive it.
+    act(() => notify(oldNode, 0))
+    expect(result.current).toBe('toc-1')
+    act(() => notify(replacement, 0))
+    expect(result.current).toBe('toc-2')
+    unmount()
+    await act(async () => {
+      replacement.replaceWith(oldNode)
+    })
+    expect(observe).toHaveBeenCalledTimes(3)
+    expect(disconnect).toHaveBeenCalledTimes(1)
+  })
+
   it('maps visible BlockNote block ids back to TOC ids', () => {
     const container = document.createElement('div')
     const headingElement = document.createElement('div')
