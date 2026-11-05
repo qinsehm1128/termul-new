@@ -1,18 +1,35 @@
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useTocSettings } from '@/hooks/use-toc-settings'
 import { getPreviewKind, isDiskPreview, previewSourceUrl, svgDataUrl } from '@/lib/file-preview'
 import type { EditorFileState } from '@/stores/editor-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { CodeEditor } from './CodeEditor'
 import { EditorToolbar } from './EditorToolbar'
-import { FilePreview } from './FilePreview'
+import { FilePreview, PreviewFailure } from './FilePreview'
 import { HtmlPreview } from './HtmlPreview'
 import { MarkdownEditor } from './MarkdownEditor'
 
 interface EditorPanelProps {
   filePath: string
   isVisible: boolean
+}
+
+function DiskFilePreview({
+  kind,
+  filePath,
+  version
+}: {
+  kind: NonNullable<ReturnType<typeof getPreviewKind>>
+  filePath: string
+  version: number
+}): React.JSX.Element {
+  return kind === 'image' ? (
+    <FilePreview kind={kind} filePath={filePath} version={version} />
+  ) : (
+    <FilePreview kind={kind} src={previewSourceUrl(filePath, version)} filePath={filePath} />
+  )
 }
 
 export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JSX.Element {
@@ -66,7 +83,13 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
 
   if (isDiskPreview(previewKind) && previewKind) {
     return (
-      <FilePreview kind={previewKind} src={previewSourceUrl(filePath, fileState.lastModified)} />
+      <ErrorBoundary
+        key={`${filePath}:${fileState.lastModified}`}
+        context="editorPane"
+        fallback={(_error, retry) => <PreviewFailure filePath={filePath} onRetry={retry} />}
+      >
+        <DiskFilePreview kind={previewKind} filePath={filePath} version={fileState.lastModified} />
+      </ErrorBoundary>
     )
   }
 

@@ -15,6 +15,9 @@ import { getPreviewKind, isDiskPreview } from '@/lib/file-preview'
 import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 
 const EDITOR_TAB_LIMIT = 15
+// Preview reads contain no editable buffer, but their timestamps still belong
+// to one tab/request lifetime. Late metadata must not resurrect or regress it.
+const previewRequests = new Map<string, symbol>()
 
 function getExtname(filePath: string): string {
   const name = filePath.split(/[\\/]/).pop() || filePath
@@ -127,7 +130,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Read file content. readFile() now performs size + binary checks in a
     // single IPC round-trip pair (stat + readTextFile), avoiding the previous
     // getFileInfo() pre-check that doubled the IPC cost (issue #378).
-    const result = await readEditorSource(path)
+    const previewRequest = isDiskPreview(getPreviewKind(path)) ? Symbol(path) : null
+    if (previewRequest) previewRequests.set(path, previewRequest)
+    let result: Awaited<ReturnType<typeof readEditorSource>>
+    try {
+      result = await readEditorSource(path)
+    } catch (error) {
+      if (previewRequest && previewRequests.get(path) !== previewRequest) return
+      if (previewRequest) previewRequests.delete(path)
+      throw error
+    }
+    if (previewRequest && previewRequests.get(path) !== previewRequest) return
+    if (previewRequest) previewRequests.delete(path)
     if (!result.success) {
       throw new Error(result.error)
     }
@@ -154,6 +168,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })
 
       if (oldestPath) {
+        previewRequests.delete(oldestPath)
         newFiles.delete(oldestPath)
       } else {
         toast.warning(runtimeT('workspace', 'tabs.tooManyTitle', 'Too many open tabs'), {
@@ -185,6 +200,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   closeFile: (path: string): void => {
+    previewRequests.delete(path)
     cancelAutoSave(path)
     const { openFiles, activeFilePath } = get()
     const newFiles = new Map(openFiles)
@@ -209,6 +225,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     const { openFiles: openFiles2, activeFilePath } = get()
+    previewRequests.delete(path)
     const newFiles = new Map(openFiles2)
     newFiles.delete(path)
     cancelAutoSave(path)
@@ -364,6 +381,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Don't reload dirty files silently
     if (file.isDirty) return
 
+    const previewRequest = isDiskPreview(getPreviewKind(path)) ? Symbol(path) : null
+    if (previewRequest) previewRequests.set(path, previewRequest)
+    const isCurrentRequest = (): boolean =>
+      !previewRequest || previewRequests.get(path) === previewRequest
     const snapshotContent = file.content
     const newFiles = new Map(get().openFiles)
     newFiles.set(path, { ...file, operationStatus: 'reloading' })
@@ -371,6 +392,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     try {
       const result = await readEditorSource(path)
+      if (!isCurrentRequest()) return
       if (!result.success) {
         const resetFiles = new Map(get().openFiles)
         const current = resetFiles.get(path)
@@ -404,12 +426,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
       set({ openFiles: updatedFiles })
     } catch {
+      if (!isCurrentRequest()) return
       const resetFiles = new Map(get().openFiles)
       const current = resetFiles.get(path)
       if (current) {
         resetFiles.set(path, { ...current, operationStatus: 'idle' })
         set({ openFiles: resetFiles })
       }
+    } finally {
+      if (previewRequest && isCurrentRequest()) previewRequests.delete(path)
     }
   },
 
@@ -418,6 +443,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   clearAllFiles: (): void => {
+    previewRequests.clear()
     cancelAllAutoSaves()
     set({ openFiles: new Map(), activeFilePath: null })
   },

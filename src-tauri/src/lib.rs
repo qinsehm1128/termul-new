@@ -68,6 +68,7 @@ mod ssh;
 use se_pty::trackers;
 mod updater_api;
 pub mod web;
+pub use web::file_preview;
 pub mod webview_storage_handoff;
 mod worktree;
 
@@ -3761,6 +3762,7 @@ pub fn run() {
             detect_shells,
             get_default_shell,
             get_home_directory,
+            file_preview::read_image_preview,
             suspend_app_menu,
             restore_app_menu,
             set_native_ui_language,

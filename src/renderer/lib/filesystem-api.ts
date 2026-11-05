@@ -9,8 +9,7 @@
  *   const result = await filesystemApi.readFile('/path/to/file')
  */
 
-import type { FilesystemApi } from '@shared/types/ipc.types'
-import { createTauriFilesystemApi } from './tauri-filesystem-api'
+import { createTauriFilesystemApi, type PreviewFilesystemApi } from './tauri-filesystem-api'
 
 /**
  * Singleton FilesystemApi instance
@@ -19,4 +18,4 @@ import { createTauriFilesystemApi } from './tauri-filesystem-api'
  * In the future, this could conditionally export an Electron implementation
  * based on build environment.
  */
-export const filesystemApi: FilesystemApi = createTauriFilesystemApi()
+export const filesystemApi: PreviewFilesystemApi = createTauriFilesystemApi()

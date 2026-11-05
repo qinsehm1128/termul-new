@@ -27,13 +27,13 @@ scope: project
 
 ### 统计
 
-本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-04 用脚本比对）：后端共 324 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-05 用脚本比对）：后端共 325 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
-| 后端 Tauri 命令 | 324 | 288 | 11 | 8 | 17 |
+| 后端 Tauri 命令 | 325 | 289 | 11 | 8 | 17 |
 | 前端独有能力（无 Rust 命令） | 38 | 38 | 0 | 0 | 0 |
-| **合计** | **362** | **326** | **11** | **8** | **17** |
+| **合计** | **363** | **327** | **11** | **8** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -488,7 +488,7 @@ Source of truth: `src-tauri/src/lib.rs:3757-4120` invoke_handler; implementation
 | se.search.fileNames | search_file_names_stream — commands.rs:3575 | R | project | none | OPEN | `{scopeRoot, rootPath, query, searchId, includeIgnored?}` → `()` + `search-file-names-batch`/`-done`. Streaming yes; ignored bucket capped at 20. |
 | se.search.cancel | search_file_names_cancel — commands.rs:3905 | W | project | none | OPEN | **Merged** into `se.search.cancel` (same kill-by-searchId registry, different map). |
 
-#### Filesystem / pasteboard / editor / shell (12)
+#### Filesystem / pasteboard / editor / shell (13)
 
 | op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
 |---|---|---|---|---|---|---|
@@ -496,6 +496,7 @@ Source of truth: `src-tauri/src/lib.rs:3757-4120` invoke_handler; implementation
 | se.fs.watch | fs_watcher_set_roots — fs_watcher.rs:617 | W | project | none | OPEN | `(roots[])` → `()`; restarts the watcher. Excludes node_modules/target/dist/__pycache__/`.git/{objects,refs,…}`. |
 | se.fs.watch (covered) | fs_watcher_subscribe — fs_watcher.rs:608 | W | project | none | INTERNAL | `Channel<Vec<FileChangeEvent>>` install — single process-wide sink (last subscriber wins). |
 | se.fs.readAttachmentBytes | read_attachment_bytes — commands.rs:391 | R | global | none | OPEN | `(path)` → raw `ArrayBuffer`. Absolute path, must exist, image extension, ≤10 MB. No project fence. |
+| se.fs.readImagePreview | read_image_preview — file_preview.rs; HTTP `GET /api/fs/image` — web/fs_api.rs, web/router.rs | R | global (desktop); project (remote HTTP) | none | OPEN | `{path}` → raw `ArrayBuffer` (Tauri) / image bytes (HTTP), ≤20 MiB with bounded read, canonical regular files only; extension + signature allowlist, accurate raster MIME and HTTP `nosniff`/`no-store`. No HTML/SVG, no system conversion; TIFF/HEIC/HEIF return `UNSUPPORTED_IMAGE_FORMAT` (never text fallback), JFIF uses JPEG and APNG uses PNG MIME/signature validation. Remote HTTP uses provenance + canonical `check_project_boundary`, including symlink escapes; loopback preserves `/fs/read` trusted-local parity. Desktop direct IPC preserves existing arbitrary-file read parity (no project/plugin grant enforcement); **not** a granted-scope confinement guarantee. No events or persistent state; no asset-scope or CSP expansion. Renderer uses bounded MIME-specific `data:` image sources on desktop (existing `img-src` policy) and owned, abort/dispose-revoked `blob:` sources on web. HTTP `/api/fs/info` shares `/fs/read` read-only provenance/boundary policy rather than unconditional loopback-only denial. |
 | se.pasteboard.readFilePaths | pasteboard_read_file_paths — file_pasteboard.rs:85 (macOS) / 104 | R | global | none | OPEN | `()` → `{changeCount, paths[]}` from the **general** pasteboard. File URLs only — never clipboard text. macOS-only (empty elsewhere). |
 | se.pasteboard.writeFilePaths | pasteboard_write_file_paths — file_pasteboard.rs:79 / 98 | W | global | none | OPEN | `(paths[])` → new changeCount. Overwrites the user's clipboard. macOS-only (errors elsewhere). |
 | se.pasteboard.dragFilePaths | drag_pasteboard_file_paths — file_pasteboard.rs:92 / 113 | R | global | none | OPEN | `()` → paths from the **drag** pasteboard. macOS-only. |

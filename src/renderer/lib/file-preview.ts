@@ -4,8 +4,8 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 /**
  * Files the editor shows as a preview instead of text. `svg` and `html` are
  * text too, so they keep their source buffer and can switch to the code view;
- * the others have no text buffer and are loaded straight from disk through the
- * asset protocol.
+ * the others have no text buffer. Raster images use binary preview transport;
+ * desktop audio/video continue to use the asset protocol.
  */
 export type PreviewKind = 'image' | 'svg' | 'html' | 'audio' | 'video'
 
@@ -13,6 +13,11 @@ const PREVIEW_KIND_BY_EXTENSION: Record<string, PreviewKind> = {
   png: 'image',
   jpg: 'image',
   jpeg: 'image',
+  jfif: 'image',
+  tif: 'image',
+  tiff: 'image',
+  heic: 'image',
+  heif: 'image',
   gif: 'image',
   webp: 'image',
   bmp: 'image',
@@ -44,15 +49,45 @@ function extensionOf(filePath: string): string {
 }
 
 /**
- * Preview kind for a path, or null when it opens as text. Disk-backed kinds
- * and HTML (rendered from the saved file, so its relative assets resolve) need
- * the desktop asset protocol, so a web client only previews SVG, which renders
- * from the text it already has.
+ * Preview kind for a path, or null when it opens as text. Raster transport is
+ * available in web and desktop. HTML and audio/video still require the desktop
+ * asset protocol; SVG renders from its existing text source in either mode.
+ * A raster extension remains an image even when its codec cannot be decoded:
+ * the preview reports a decode error instead of opening binary bytes as text.
  */
 export function getPreviewKind(filePath: string): PreviewKind | null {
-  const kind = PREVIEW_KIND_BY_EXTENSION[extensionOf(filePath)] ?? null
-  if (kind && kind !== 'svg' && !isTauriContext()) return null
+  const extension = extensionOf(filePath)
+  const kind = Object.hasOwn(PREVIEW_KIND_BY_EXTENSION, extension)
+    ? PREVIEW_KIND_BY_EXTENSION[extension]
+    : null
+  if (kind && kind !== 'svg' && kind !== 'image' && !isTauriContext()) return null
   return kind
+}
+
+// Raster-only MIME allowlist. SVG and HTML must never be loaded by binary
+// preview transport, including when a server responds with an unexpected type.
+const RASTER_MIME_BY_EXTENSION: Record<string, string> = {
+  png: 'image/png',
+  apng: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  jfif: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  avif: 'image/avif',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  heic: 'image/heic',
+  heif: 'image/heif'
+}
+
+export function getRasterImageMimeType(filePath: string): string | null {
+  const extension = extensionOf(filePath)
+  return Object.hasOwn(RASTER_MIME_BY_EXTENSION, extension)
+    ? RASTER_MIME_BY_EXTENSION[extension]
+    : null
 }
 
 /** True for previewable kinds that are text, with a source view to switch to. */

@@ -114,6 +114,7 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             .route("/fs/ls", get(fs_api::ls))
             .route("/fs/browse", get(fs_api::browse))
             .route("/fs/read", get(fs_api::read))
+            .route("/fs/image", get(fs_api::image))
             .route("/fs/info", get(fs_api::info))
             .route("/fs/delete", post(fs_api::delete))
             .route("/fs/rename", post(fs_api::rename))
@@ -396,10 +397,10 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
 /// [`git_api::ensure_within_project_boundary`] (accepts the default
 /// `project_root` or any registered, non-archived project root; rejects
 /// with `OUTSIDE_PROJECT_ROOT`). The `/fs/*` browse/read routes (`ls`/`browse`/
-/// `read`) are intentionally broader — no `project_root` check — for desktop
-/// parity, the directory picker, and editor reads; `/fs/*` writes (`mkdir`/
-/// `write`/`delete`/`rename`/`copy`) and `/fs/info` are loopback-guarded
-/// (`check_local_only`, `FORBIDDEN`). See ADR-007 for the recorded policy.
+/// `read`/`info`/`image`) apply ingress provenance and canonical project-root
+/// checks for remote access, while trusted loopback retains desktop parity.
+/// `/fs/*` writes (`mkdir`/`write`/`delete`/`rename`/`copy`) stay loopback-only
+/// (`check_local_only`, `FORBIDDEN`).
 /// Resolved by the caller from `ServerConfig::project_root` (or its default).
 ///
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
@@ -769,6 +770,65 @@ mod tests {
             .await
             .unwrap();
         assert!(!String::from_utf8_lossy(&local_body).contains("FORBIDDEN"));
+    }
+
+    #[tokio::test]
+    async fn image_and_info_routes_require_bearer_and_allow_project_reads() {
+        const TOKEN: &str = "image-route-token";
+        let dir = TempDir::new("image-auth");
+        let image = dir.path().join("image.png");
+        std::fs::write(&image, b"\x89PNG\r\n\x1a\n").unwrap();
+        let authority = Arc::new(RemoteAccessAuthority::for_tests(TOKEN));
+        let app = api_routes(IngressProvenance::PublicTunnel)
+            .with_state(route_test_state(dir.path()))
+            .layer(Extension(IngressProvenance::PublicTunnel))
+            .layer(Extension(authority));
+        for route in ["image", "info"] {
+            let uri = format!("/fs/{route}?path={}", image.display());
+            let denied = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&uri)
+                        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                            [127, 0, 0, 1],
+                            1234,
+                        ))))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "{route}");
+            let allowed = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&uri)
+                        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                            [127, 0, 0, 1],
+                            1234,
+                        ))))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK, "{route}");
+            if route == "image" {
+                assert_eq!(allowed.headers()[header::CONTENT_TYPE], "image/png");
+            } else {
+                let body = axum::body::to_bytes(allowed.into_body(), 4096)
+                    .await
+                    .unwrap();
+                assert!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["success"]
+                        .as_bool()
+                        .unwrap()
+                );
+            }
+        }
     }
 
     #[tokio::test]

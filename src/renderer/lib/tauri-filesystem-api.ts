@@ -22,7 +22,9 @@ import {
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { runtimeT } from '../i18n/runtime'
+import { getRasterImageMimeType } from './file-preview'
 import { sortDirectoryEntries } from './filesystem-sort'
+import { remoteAccessHeaders } from './remote-access-credential'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 import { webServerFilesystem } from './web-server-api'
 
@@ -55,6 +57,121 @@ const ALWAYS_IGNORE = [
  * `refuses_a_file_over_the_shared_size_ceiling` on each side.
  */
 export const MAX_FILE_SIZE = 3 * 1024 * 1024
+
+/** Must match MAX_IMAGE_PREVIEW_SIZE in the backend image preview reader. */
+export const MAX_IMAGE_PREVIEW_SIZE = 20 * 1024 * 1024
+
+/** Renderer-only extension: binary images never pass through text readFile. */
+export interface PreviewFilesystemApi extends FilesystemApi {
+  readImage(filePath: string, signal?: AbortSignal): Promise<IpcResult<Blob>>
+}
+
+function imageReadError(error: unknown, signal?: AbortSignal): IpcResult<never> {
+  if (
+    signal?.aborted ||
+    (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError')
+  ) {
+    return { success: false, error: 'Image preview cancelled', code: 'ABORTED' }
+  }
+  if (error && typeof error === 'object' && 'code' in error && 'error' in error) {
+    const failure = error as { code: unknown; error: unknown }
+    if (typeof failure.code === 'string' && typeof failure.error === 'string') {
+      return { success: false, code: failure.code, error: failure.error }
+    }
+  }
+  return { success: false, error: String(error), code: 'IMAGE_READ_ERROR' }
+}
+
+function imageTooLarge(): IpcResult<never> {
+  return { success: false, error: 'Image exceeds the 20 MiB preview limit', code: 'FILE_TOO_LARGE' }
+}
+
+async function readImage(filePath: string, signal?: AbortSignal): Promise<IpcResult<Blob>> {
+  const mime = getRasterImageMimeType(filePath)
+  if (!mime) {
+    return {
+      success: false,
+      error: 'Unsupported raster image type',
+      code: 'UNSUPPORTED_IMAGE_TYPE'
+    }
+  }
+  if (signal?.aborted) return imageReadError(null, signal)
+  try {
+    if (isTauriContext()) {
+      // The backend validates raster type, regular-file status and the bounded
+      // read. No asset-protocol scope expansion or unbounded plugin read needed.
+      const payload = await invoke<ArrayBuffer | number[]>('read_image_preview', { path: filePath })
+      if (signal?.aborted) return imageReadError(null, signal)
+      // Tauri's custom-protocol IPC returns ArrayBuffer; its platform fallback
+      // serializes raw responses as number[]. Normalize like plugin-fs.readFile.
+      const size = payload instanceof ArrayBuffer ? payload.byteLength : payload.length
+      if (size > MAX_IMAGE_PREVIEW_SIZE) return imageTooLarge()
+      const bytes = payload instanceof ArrayBuffer ? payload : Uint8Array.from(payload).buffer
+      return { success: true, data: new Blob([bytes], { type: mime }) }
+    }
+
+    const base = typeof window === 'undefined' ? '' : window.location.origin
+    const response = await fetch(`${base}/fs/image?path=${encodeURIComponent(filePath)}`, {
+      method: 'GET',
+      headers: remoteAccessHeaders(),
+      signal
+    })
+    if (!response.ok) {
+      const failure: unknown = await response.json().catch(() => null)
+      if (failure && typeof failure === 'object' && 'error' in failure && 'code' in failure) {
+        return imageReadError(failure, signal)
+      }
+      return {
+        success: false,
+        error: `Failed to load image (HTTP ${response.status})`,
+        code: 'IMAGE_READ_ERROR'
+      }
+    }
+    const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase()
+    // Reject HTML/JSON fallback responses and active SVG; the object URL always
+    // receives the MIME for the requested raster extension, never arbitrary HTML.
+    if (contentType !== mime) {
+      await response.body?.cancel()
+      return {
+        success: false,
+        error: 'Invalid image response type',
+        code: 'INVALID_IMAGE_RESPONSE'
+      }
+    }
+    const length = Number(response.headers.get('content-length'))
+    if (length > MAX_IMAGE_PREVIEW_SIZE) {
+      await response.body?.cancel()
+      return imageTooLarge()
+    }
+    const chunks: ArrayBuffer[] = []
+    let size = 0
+    if (response.body) {
+      const reader = response.body.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          size += value.byteLength
+          if (size > MAX_IMAGE_PREVIEW_SIZE || signal?.aborted) {
+            await reader.cancel()
+            return signal?.aborted ? imageReadError(null, signal) : imageTooLarge()
+          }
+          chunks.push(new Uint8Array(value).buffer)
+        }
+      } finally {
+        reader.releaseLock()
+      }
+    } else {
+      const bytes = await response.arrayBuffer()
+      if (bytes.byteLength > MAX_IMAGE_PREVIEW_SIZE) return imageTooLarge()
+      chunks.push(bytes)
+    }
+    if (signal?.aborted) return imageReadError(null, signal)
+    return { success: true, data: new Blob(chunks, { type: mime }) }
+  } catch (error) {
+    return imageReadError(error, signal)
+  }
+}
 const _SEARCH_MAX_FILES_WITH_MATCHES = 100
 const _SEARCH_MAX_MATCHES_PER_FILE = 30
 
@@ -317,8 +434,9 @@ async function _collectFilesRecursively(rootPath: string): Promise<string[]> {
  * This adapter uses Tauri's filesystem plugin for direct file operations.
  * It maintains the same interface as the Electron preload script for easy migration.
  */
-export function createTauriFilesystemApi(): FilesystemApi {
+export function createTauriFilesystemApi(): PreviewFilesystemApi {
   return {
+    readImage,
     async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
       // Web/remote mode: route through the same-origin server (Story: Web/
       // remote project creation). Desktop stays on @tauri-apps/plugin-fs.

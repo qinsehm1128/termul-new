@@ -2144,6 +2144,85 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  describe('Raster image preview transport parity', () => {
+    it('maps every image-classified extension to an explicit raster MIME', () => {
+      const source = ts.createSourceFile(
+        'file-preview.ts',
+        readFileSync(join(LIB_DIR, 'file-preview.ts'), 'utf-8'),
+        ts.ScriptTarget.Latest,
+        true
+      )
+      const propertyNames = (constant: string, imageOnly: boolean): string[] => {
+        const names: string[] = []
+        const visit = (node: ts.Node): void => {
+          if (
+            ts.isVariableDeclaration(node) &&
+            node.name.getText(source) === constant &&
+            node.initializer &&
+            ts.isObjectLiteralExpression(node.initializer)
+          ) {
+            for (const property of node.initializer.properties) {
+              if (!ts.isPropertyAssignment(property)) continue
+              if (
+                imageOnly &&
+                (!ts.isStringLiteral(property.initializer) || property.initializer.text !== 'image')
+              ) {
+                continue
+              }
+              names.push(property.name.getText(source))
+            }
+          }
+          ts.forEachChild(node, visit)
+        }
+        visit(source)
+        return names.sort()
+      }
+      const classified = propertyNames('PREVIEW_KIND_BY_EXTENSION', true)
+      expect(classified).toContain('apng')
+      expect(propertyNames('RASTER_MIME_BY_EXTENSION', false)).toEqual(classified)
+    })
+
+    it('wires a renderer-only binary read method without changing text reads', () => {
+      const adapter = readFileSync(join(LIB_DIR, 'tauri-filesystem-api.ts'), 'utf-8')
+      const facade = readFileSync(join(LIB_DIR, 'filesystem-api.ts'), 'utf-8')
+      expect(adapter).toMatch(/interface PreviewFilesystemApi extends FilesystemApi/)
+      expect(adapter).toMatch(/readImage\(filePath: string, signal\?: AbortSignal\)/)
+      expect(adapter).toContain(
+        "invoke<ArrayBuffer | number[]>('read_image_preview', { path: filePath })"
+      )
+      expect(adapter).toMatch(/\/fs\/image\?path=\$\{encodeURIComponent\(filePath\)\}/)
+      expect(adapter).toContain('headers: remoteAccessHeaders()')
+      expect(facade).toContain('filesystemApi: PreviewFilesystemApi')
+    })
+
+    it('registers raw-byte desktop and HTTP endpoints with the same 20 MiB ceiling', () => {
+      const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+      const backend = readFileSync(join(root, 'file_preview.rs'), 'utf-8')
+      const commands = readFileSync(join(root, 'lib.rs'), 'utf-8')
+      const routes = readFileSync(join(root, 'web', 'router.rs'), 'utf-8')
+      const adapter = readFileSync(join(LIB_DIR, 'tauri-filesystem-api.ts'), 'utf-8')
+      expect(backend).toMatch(/MAX_IMAGE_SIZE: u64 = 20 \* 1024 \* 1024/)
+      expect(backend).toContain('Result<tauri::ipc::Response, ImagePreviewError>')
+      expect(commands).toContain('file_preview::read_image_preview')
+      expect(routes).toContain('.route("/fs/image", get(fs_api::image))')
+      expect(adapter).toMatch(/MAX_IMAGE_PREVIEW_SIZE = 20 \* 1024 \* 1024/)
+    })
+
+    it('has executable byte-integrity, routing and URL ownership regressions', () => {
+      const transport = readFileSync(
+        join(LIB_DIR, '__tests__', 'tauri-filesystem-api.web.test.ts'),
+        'utf-8'
+      )
+      const ownership = readFileSync(join(LIB_DIR, 'file-preview-api.test.ts'), 'utf-8')
+      const routing = readFileSync(join(LIB_DIR, 'file-preview.test.ts'), 'utf-8')
+      expect(transport).toContain('safely encoded paths')
+      expect(transport).toContain('enforces the cap on chunked responses')
+      expect(ownership).toContain('late desktop response after cancellation')
+      expect(ownership).toContain('disposing stale results cannot revoke newer previews')
+      expect(routing).toContain('does not expand PDF, web HTML, audio or video')
+    })
+  })
+
   describe('Editor workspace import parity', () => {
     it('shared types declare editor workspace candidates', () => {
       const types = readFileSync(

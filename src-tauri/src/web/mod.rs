@@ -22,6 +22,8 @@ pub mod config;
 pub mod conversation_api;
 pub mod conversation_lifecycle_api;
 pub mod editor_workspaces_api;
+#[path = "../file_preview.rs"]
+pub mod file_preview;
 pub mod fs_api;
 pub mod memory_index_api;
 // Rust 1.95 diagnoses three legacy callback adapters inside this pre-existing

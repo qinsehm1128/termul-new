@@ -1,13 +1,19 @@
 import { Maximize, Scan } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Button } from '@/components/ui/button'
 import type { PreviewKind } from '@/lib/file-preview'
+import { type ImagePreviewSource, loadImagePreview } from '@/lib/file-preview-api'
+import { openerApi } from '@/lib/tauri-opener-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
 interface FilePreviewProps {
   /** `svg` sources arrive as a data URL and render like any other image. */
   kind: PreviewKind
-  src: string
+  src?: string
+  filePath?: string
+  version?: number
 }
 
 const CHECKERBOARD_STYLE = {
@@ -15,25 +21,184 @@ const CHECKERBOARD_STYLE = {
   backgroundSize: '16px 16px'
 }
 
-export function FilePreview({ kind, src }: FilePreviewProps): React.JSX.Element {
+export function PreviewFailure({
+  onRetry,
+  filePath,
+  detail
+}: {
+  onRetry: () => void
+  filePath?: string
+  detail?: string
+}): React.JSX.Element {
   const { t } = useTranslation('settings')
-  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const [revealError, setRevealError] = useState<string | null>(null)
 
-  if (failedSrc === src) {
-    return (
-      <div className="flex h-full w-full items-center justify-center p-6 text-sm text-muted-foreground">
-        {t('editor.previewFailed')}
-      </div>
-    )
+  const revealOriginal = async (): Promise<void> => {
+    if (!filePath) return
+    setRevealError(null)
+    try {
+      const result = await openerApi.revealInFileManager(filePath)
+      if (!result.success) setRevealError(result.error)
+    } catch (error) {
+      setRevealError(error instanceof Error ? error.message : String(error))
+    }
   }
 
-  const handleError = (): void => setFailedSrc(src)
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
+      <p role="alert">{t('editor.previewFailed')}</p>
+      {detail && <p>{detail}</p>}
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          {t('editor.previewRetry')}
+        </Button>
+        {filePath && isTauriContext() && (
+          <Button variant="outline" size="sm" onClick={() => void revealOriginal()}>
+            {t('editor.previewRevealOriginal')}
+          </Button>
+        )}
+      </div>
+      {filePath && (
+        <p>{t(isTauriContext() ? 'editor.previewRevealHint' : 'editor.previewOpenOnDesktop')}</p>
+      )}
+      {revealError && <p role="alert">{revealError}</p>}
+    </div>
+  )
+}
+
+export function FilePreview(props: FilePreviewProps): React.JSX.Element {
+  // A new source owns a fresh state tree: old load/error events cannot update the
+  // new preview, and returning to a previously failed URL really retries it.
+  return (
+    <ErrorBoundary
+      key={`${props.kind}:${props.filePath ?? ''}:${props.version ?? ''}:${props.src ?? ''}`}
+      context="editorPane"
+      fallback={(_error, retry) => <PreviewFailure filePath={props.filePath} onRetry={retry} />}
+    >
+      {props.kind === 'image' && props.filePath ? (
+        <ImageFileSession filePath={props.filePath} />
+      ) : (
+        <PreviewSession {...props} />
+      )}
+    </ErrorBoundary>
+  )
+}
+
+function ImageFileSession({ filePath }: { filePath: string }): React.JSX.Element {
+  const [attempt, setAttempt] = useState(0)
+  return (
+    <ImageFileAttempt
+      key={attempt}
+      filePath={filePath}
+      onRetry={() => setAttempt((value) => value + 1)}
+    />
+  )
+}
+
+function ImageFileAttempt({
+  filePath,
+  onRetry
+}: {
+  filePath: string
+  onRetry: () => void
+}): React.JSX.Element {
+  const { t } = useTranslation('settings')
+  const [source, setSource] = useState<ImagePreviewSource | null>(null)
+  const [failure, setFailure] = useState<{ detail?: string } | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let active = true
+    let ownedSource: ImagePreviewSource | undefined
+    void loadImagePreview(filePath, controller.signal)
+      .then((result) => {
+        if (!active) {
+          if (result.success) result.data?.dispose()
+          return
+        }
+        if (!result.success || !result.data) {
+          setFailure({ detail: result.success ? undefined : result.error })
+          return
+        }
+        ownedSource = result.data
+        setSource(result.data)
+      })
+      .catch((error: unknown) => {
+        if (active) setFailure({ detail: error instanceof Error ? error.message : String(error) })
+      })
+    return () => {
+      active = false
+      controller.abort()
+      ownedSource?.dispose()
+    }
+  }, [filePath])
+
+  if (failure)
+    return <PreviewFailure filePath={filePath} onRetry={onRetry} detail={failure.detail} />
+  if (!source)
+    return (
+      <div
+        role="status"
+        className="flex h-full items-center justify-center text-sm text-muted-foreground"
+      >
+        {t('editor.loading')}
+      </div>
+    )
+  return (
+    <ImagePreview
+      src={source.url}
+      onError={() => {
+        source.dispose()
+        setFailure({})
+      }}
+    />
+  )
+}
+
+function PreviewSession(props: FilePreviewProps): React.JSX.Element {
+  const [attempt, setAttempt] = useState(0)
+  return (
+    <PreviewAttempt
+      key={attempt}
+      {...props}
+      attempt={attempt}
+      onRetry={() => setAttempt((value) => value + 1)}
+    />
+  )
+}
+
+function PreviewAttempt({
+  kind,
+  src = '',
+  filePath,
+  attempt,
+  onRetry
+}: FilePreviewProps & {
+  attempt: number
+  onRetry: () => void
+}): React.JSX.Element {
+  const [failed, setFailed] = useState(false)
+  // Revalidate disk/network sources on retry, preserving auth and version query
+  // parameters. Inline SVG and blob URLs must remain byte-for-byte unchanged.
+  const retrySrc =
+    attempt > 0 && !/^(data:|blob:)/i.test(src)
+      ? `${src}${src.includes('?') ? '&' : '?'}previewRetry=${attempt}`
+      : src
+
+  if (failed) return <PreviewFailure filePath={filePath} onRetry={onRetry} />
+  const handleError = (): void => setFailed(true)
 
   if (kind === 'audio') {
     return (
       <div className="flex h-full w-full items-center justify-center p-6">
         {/* biome-ignore lint/a11y/useMediaCaption: user files carry no caption track */}
-        <audio className="w-full max-w-xl" controls src={src} onError={handleError} />
+        <audio
+          key={attempt}
+          className="w-full max-w-xl"
+          controls
+          src={retrySrc}
+          onError={handleError}
+        />
       </div>
     )
   }
@@ -42,12 +207,18 @@ export function FilePreview({ kind, src }: FilePreviewProps): React.JSX.Element 
     return (
       <div className="flex h-full w-full items-center justify-center bg-black/90 p-2">
         {/* biome-ignore lint/a11y/useMediaCaption: user files carry no caption track */}
-        <video className="max-h-full max-w-full" controls src={src} onError={handleError} />
+        <video
+          key={attempt}
+          className="max-h-full max-w-full"
+          controls
+          src={retrySrc}
+          onError={handleError}
+        />
       </div>
     )
   }
 
-  return <ImagePreview src={src} onError={handleError} />
+  return <ImagePreview key={attempt} src={retrySrc} onError={handleError} />
 }
 
 function ImagePreview({ src, onError }: { src: string; onError: () => void }): React.JSX.Element {
@@ -58,6 +229,14 @@ function ImagePreview({ src, onError }: { src: string; onError: () => void }): R
   return (
     <div className="flex h-full w-full flex-col">
       <div className="relative flex-1 overflow-auto" style={CHECKERBOARD_STYLE}>
+        {!size && (
+          <div
+            role="status"
+            className="absolute inset-x-0 top-2 text-center text-sm text-muted-foreground"
+          >
+            {t('editor.loading')}
+          </div>
+        )}
         <div
           className={
             fitToWindow

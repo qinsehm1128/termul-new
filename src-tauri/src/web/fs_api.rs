@@ -7,6 +7,8 @@
 //! the Tauri commands already wrap errors into `IpcResult` rather than using
 //! HTTP status codes for app errors. Only transport/parse failures become
 //! non-200 (the renderer client maps those to `code: "NETWORK_ERROR"`).
+//! Exception: `/fs/image` is a raw binary transport with typed JSON errors
+//! and meaningful HTTP error statuses (400/403/413/415/500).
 //!
 //! Reuses existing Rust logic — no new fs/git/shell implementation:
 //! - `std::fs::create_dir_all` / `write` / `read_dir` wrapped in
@@ -681,26 +683,98 @@ pub async fn read(
     (StatusCode::OK, Json(body))
 }
 
+/// `GET /fs/image?path=...` — bounded binary raster preview, never HTML/SVG.
+/// Shares `/fs/read` provenance/project-boundary policy, not the asset scope.
+pub async fn image(
+    State(state): State<AppState>,
+    axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    Query(q): Query<PathQuery>,
+) -> axum::response::Response {
+    let path = match resolve_request_path(Path::new(&q.path)) {
+        Ok(path) => path,
+        Err((error, code)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(IpcBody::<()>::err(error, code)),
+            )
+                .into_response()
+        }
+    };
+    if let Some(forbidden) = check_project_boundary::<()>(&state, provenance, &path) {
+        return (StatusCode::FORBIDDEN, Json(forbidden)).into_response();
+    }
+    let requested_mime = match super::file_preview::image_mime(Path::new(&q.path)) {
+        Ok(mime) => mime,
+        Err(error) => {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Json(IpcBody::<()>::err(error.error, error.code)),
+            )
+                .into_response()
+        }
+    };
+    let result =
+        tokio::task::spawn_blocking(move || super::file_preview::load_image_preview(&path)).await;
+    match result {
+        Ok(Ok(image)) if image.mime == requested_mime => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, image.mime),
+                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+                (
+                    axum::http::header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; sandbox",
+                ),
+            ],
+            image.bytes,
+        )
+            .into_response(),
+        Ok(Ok(_)) => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(IpcBody::<()>::err(
+                "Image symlink extension does not match its target",
+                "INVALID_IMAGE",
+            )),
+        )
+            .into_response(),
+        Ok(Err(error)) => {
+            let status = match error.code {
+                "FILE_TOO_LARGE" => StatusCode::PAYLOAD_TOO_LARGE,
+                "UNSUPPORTED_IMAGE_FORMAT" | "INVALID_IMAGE" => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "PATH_TRAVERSAL" => StatusCode::BAD_REQUEST,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, Json(IpcBody::<()>::err(error.error, error.code))).into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(IpcBody::<()>::err(
+                format!("Image task failed: {error}"),
+                "READ_ERROR",
+            )),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /fs/info?path=...` — return filesystem metadata for a file or
 /// directory (the web equivalent of the desktop `getFileInfo` facade). Returns
 /// `{ success: true, data: FileInfo }` or `{ success: false, error, code }`
-/// where code is `FORBIDDEN` (non-loopback peer), `PATH_TRAVERSAL` (explicit
-/// `..` component), or `STAT_ERROR` (missing path / io). Loopback-only:
-/// guarded by `check_local_only` so non-loopback peers are rejected before
-/// any path resolution or filesystem access.
+/// where code is `OUTSIDE_PROJECT_ROOT` (remote ingress outside registered
+/// roots), `PATH_TRAVERSAL` (explicit `..`), or `STAT_ERROR` (missing/io).
+/// Like `/fs/read`, canonical paths are checked with trusted ingress provenance:
+/// remote requests stay within project roots; trusted loopback keeps desktop parity.
 ///
 /// `isBinary` is determined from a 512-byte sample (control bytes
 /// `0x00`-`0x08`) mirroring the renderer's `readBinarySample` +
 /// `isBinaryFile` regex and the `/fs/read` sample scan — so the web path
 /// agrees with desktop on which files the editor should refuse to open.
 pub async fn info(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(provenance): axum::Extension<IngressProvenance>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<FileInfoDto>(provenance) {
-        return (StatusCode::OK, Json(forbidden));
-    }
     let requested_path = q.path.clone();
     let path = match resolve_request_path(Path::new(&q.path)) {
         Ok(safe) => safe,
@@ -708,6 +782,9 @@ pub async fn info(
             return (StatusCode::OK, Json(IpcBody::<FileInfoDto>::err(msg, code)));
         }
     };
+    if let Some(forbidden) = check_project_boundary::<FileInfoDto>(&state, provenance, &path) {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let result =
         tokio::task::spawn_blocking(move || -> Result<FileInfoDto, (String, &'static str)> {
             let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "STAT_ERROR"))?;
@@ -1250,6 +1327,7 @@ mod tests {
             .route("/fs/ls", axum::routing::get(ls))
             .route("/fs/browse", axum::routing::get(browse))
             .route("/fs/read", axum::routing::get(read))
+            .route("/fs/image", axum::routing::get(image))
             .route("/fs/info", axum::routing::get(info))
             .route("/fs/delete", axum::routing::post(delete))
             .route("/fs/rename", axum::routing::post(rename))
@@ -1270,8 +1348,7 @@ mod tests {
         get_request_from(state, uri, SocketAddr::from(([127, 0, 0, 1], 54321))).await
     }
 
-    /// GET with an explicit peer address (for loopback-guard tests on read
-    /// routes like `/fs/info` that now apply `check_local_only`).
+    /// GET with explicit peer/provenance (remote ingress uses project boundaries).
     async fn get_request_from(
         state: AppState,
         uri: &str,
@@ -2205,10 +2282,10 @@ mod tests {
         assert_eq!(body.data.expect("FileInfo").path, requested);
     }
 
-    /// `/fs/info` applies the loopback guard (defense-in-depth for reads).
+    /// `/fs/info` permits authenticated remote project files, like `/fs/read`.
     #[tokio::test]
-    async fn info_refused_from_non_loopback_peer() {
-        let root = TempDir::new("info-loopback-root");
+    async fn info_allows_remote_peer_inside_project() {
+        let root = TempDir::new("info-remote-root");
         let file = root.path().join("note.txt");
         fs::write(&file, "hello").expect("write file");
         let uri = format!("/fs/info?path={}", urlencoding(&file.to_string_lossy()));
@@ -2219,8 +2296,202 @@ mod tests {
         )
         .await;
         let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
-        assert!(!body.success, "non-loopback peer must be refused");
-        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        assert!(
+            body.success,
+            "in-root remote metadata should be allowed: {:?}",
+            body.error
+        );
+        assert_eq!(body.data.expect("metadata").size, 5);
+    }
+
+    #[tokio::test]
+    async fn image_preview_returns_raw_rasters_with_safe_headers() {
+        let root = TempDir::new("image-headers");
+        let formats: &[(&str, &str, &[u8])] = &[
+            ("PNG", "image/png", b"\x89PNG\r\n\x1a\n"),
+            (
+                "apng",
+                "image/png",
+                b"\x89PNG\r\n\x1a\n\0\0\0\x08acTL\0\0\0\x02\0\0\0\0",
+            ),
+            ("jpg", "image/jpeg", b"\xff\xd8\xff"),
+            ("jfif", "image/jpeg", b"\xff\xd8\xff\xe0\0\x10JFIF\0"),
+            ("gif", "image/gif", b"GIF89a"),
+            ("webp", "image/webp", b"RIFF0000WEBP"),
+            ("bmp", "image/bmp", b"BM"),
+            ("ico", "image/x-icon", b"\0\0\x01\0"),
+            ("avif", "image/avif", b"\0\0\0\x10ftypavif\0\0\0\0"),
+        ];
+        for (extension, mime, bytes) in formats {
+            let file = root.path().join(format!("image.{extension}"));
+            fs::write(&file, bytes).expect("write raster");
+            let uri = format!("/fs/image?path={}", urlencoding(&file.to_string_lossy()));
+            let response = get_request_from(
+                test_state_with_root(root.path()),
+                &uri,
+                SocketAddr::from(([10, 0, 0, 5], 1234)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{extension}");
+            assert_eq!(response.headers()["content-type"], *mime);
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(
+                response.headers()["content-security-policy"],
+                "default-src 'none'; sandbox"
+            );
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                *bytes
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn image_preview_rejects_unsupported_and_active_content() {
+        let root = TempDir::new("image-invalid");
+        for extension in ["svg", "html", "tif", "tiff", "heic", "heif"] {
+            let file = root.path().join(format!("image.{extension}"));
+            fs::write(&file, b"<svg onload='alert(1)'/>").unwrap();
+            let uri = format!("/fs/image?path={}", urlencoding(&file.to_string_lossy()));
+            let response = get_request(test_state_with_root(root.path()), &uri).await;
+            assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            let body: IpcBody<()> = body_as_json(response.into_body()).await;
+            assert_eq!(body.code.as_deref(), Some("UNSUPPORTED_IMAGE_FORMAT"));
+        }
+        for contents in [
+            b"<svg onload='alert(1)'/>".as_slice(),
+            b"<html><script>bad()</script>",
+            b"GIF89a",
+            b"",
+        ] {
+            let file = root.path().join("renamed.png");
+            fs::write(&file, contents).unwrap();
+            let uri = format!("/fs/image?path={}", urlencoding(&file.to_string_lossy()));
+            let response = get_request(test_state_with_root(root.path()), &uri).await;
+            assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            let body: IpcBody<()> = body_as_json(response.into_body()).await;
+            assert_eq!(body.code.as_deref(), Some("INVALID_IMAGE"));
+        }
+    }
+
+    #[tokio::test]
+    async fn image_preview_rejects_oversized_and_nonregular_files() {
+        let root = TempDir::new("image-large");
+        let file = root.path().join("huge.png");
+        fs::File::create(&file)
+            .unwrap()
+            .set_len(super::super::file_preview::MAX_IMAGE_SIZE + 1)
+            .unwrap();
+        let uri = format!("/fs/image?path={}", urlencoding(&file.to_string_lossy()));
+        let response = get_request(test_state_with_root(root.path()), &uri).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body: IpcBody<()> = body_as_json(response.into_body()).await;
+        assert_eq!(body.code.as_deref(), Some("FILE_TOO_LARGE"));
+        let directory = root.path().join("directory.png");
+        fs::create_dir(&directory).unwrap();
+        let uri = format!(
+            "/fs/image?path={}",
+            urlencoding(&directory.to_string_lossy())
+        );
+        let response = get_request(test_state_with_root(root.path()), &uri).await;
+        assert!(!response.status().is_success());
+        let body: IpcBody<()> = body_as_json(response.into_body()).await;
+        assert_eq!(body.code.as_deref(), Some("READ_ERROR"));
+    }
+
+    #[tokio::test]
+    async fn image_preview_and_info_enforce_remote_canonical_boundary() {
+        let root = TempDir::new("preview-root");
+        let outside = TempDir::new("preview-outside");
+        let file = outside.path().join("secret.png");
+        fs::write(&file, b"\x89PNG\r\n\x1a\n").unwrap();
+        for route in ["info", "image"] {
+            let uri = format!("/fs/{route}?path={}", urlencoding(&file.to_string_lossy()));
+            // A tunnel's socket peer may be loopback. Its trusted provenance,
+            // not ConnectInfo or spoofable forwarding headers, is decisive.
+            let response = test_router(test_state_with_root(root.path()))
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1234))))
+                        .extension(IngressProvenance::PublicTunnel)
+                        .header("x-forwarded-for", "127.0.0.1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if route == "image" {
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            }
+            let body: IpcBody<serde_json::Value> = body_as_json(response.into_body()).await;
+            assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+            let traversal = root.path().join("..").join("secret.png");
+            let uri = format!(
+                "/fs/{route}?path={}",
+                urlencoding(&traversal.to_string_lossy())
+            );
+            let response = get_request_from(
+                test_state_with_root(root.path()),
+                &uri,
+                SocketAddr::from(([10, 0, 0, 5], 1234)),
+            )
+            .await;
+            let body: IpcBody<serde_json::Value> = body_as_json(response.into_body()).await;
+            assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn image_preview_and_info_reject_remote_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+        let root = TempDir::new("preview-link-root");
+        let outside = TempDir::new("preview-link-outside");
+        fs::write(outside.path().join("secret.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        symlink(outside.path(), root.path().join("escape")).unwrap();
+        symlink(
+            outside.path().join("secret.png"),
+            root.path().join("escape.png"),
+        )
+        .unwrap();
+        fs::write(root.path().join("inside.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        symlink(root.path().join("inside.png"), root.path().join("safe.png")).unwrap();
+        for route in ["info", "image"] {
+            for relative in ["escape/secret.png", "escape.png"] {
+                let uri = format!(
+                    "/fs/{route}?path={}",
+                    urlencoding(&root.path().join(relative).to_string_lossy())
+                );
+                let response = get_request_from(
+                    test_state_with_root(root.path()),
+                    &uri,
+                    SocketAddr::from(([10, 0, 0, 5], 1234)),
+                )
+                .await;
+                let body: IpcBody<serde_json::Value> = body_as_json(response.into_body()).await;
+                assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+            }
+            let uri = format!(
+                "/fs/{route}?path={}",
+                urlencoding(&root.path().join("safe.png").to_string_lossy())
+            );
+            let response = get_request_from(
+                test_state_with_root(root.path()),
+                &uri,
+                SocketAddr::from(([10, 0, 0, 5], 1234)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            if route == "info" {
+                let body: IpcBody<FileInfoDto> = body_as_json(response.into_body()).await;
+                assert!(body.success);
+            }
+        }
     }
 
     /// `/fs/delete` removes a file inside the project root.
