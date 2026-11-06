@@ -325,32 +325,6 @@ export function ProjectSidebar({
     [addGroup, moveProjectToGroup, newGroupModal.projectIdToMove]
   )
 
-  const handleAddNewProjectToGroup = useCallback(
-    async (groupId: string) => {
-      try {
-        const result = await dialogApi.selectDirectory()
-        if (result.success && result.data) {
-          const projectPath = result.data
-          const folderName = projectPath.split(/[\\/]/).pop() || t('newProject')
-          const newProject = addProject(folderName, 'blue', projectPath)
-          moveProjectToGroup(newProject.id, groupId)
-          toast({
-            title: t('projectCreated'),
-            description: t('projectCreatedInGroup', { name: folderName })
-          })
-        }
-      } catch (err) {
-        console.error('Failed to create project:', err)
-        toast({
-          title: t('error'),
-          description: t('failedCreateFromFolder'),
-          variant: 'destructive'
-        })
-      }
-    },
-    [addProject, moveProjectToGroup, t]
-  )
-
   /**
    * Imports an existing directory as a project. Unlike "New project", this does
    * not require an empty folder, so it can register a repository that already
