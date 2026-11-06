@@ -61,3 +61,41 @@ describe('ContextMenuItem destructive variant (F5)', () => {
     expect(item.className).not.toContain('text-destructive')
   })
 })
+
+describe('ContextMenuSubContent scrolling', () => {
+  it('keeps a 40-project submenu height-bounded and vertically scrollable', async () => {
+    const { ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } = await import(
+      '@/components/ui/context-menu'
+    )
+
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button type="button">Group actions</button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>Add project</ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {Array.from({ length: 40 }, (_, index) => (
+                <ContextMenuItem key={index}>Project {index + 1}</ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        </ContextMenuContent>
+      </ContextMenu>
+    )
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Group actions' }))
+    const subTrigger = await screen.findByRole('menuitem', { name: 'Add project' })
+    fireEvent.keyDown(subTrigger, { key: 'ArrowRight' })
+
+    const submenu = await screen.findByRole('menu', { name: 'Add project' })
+    expect(submenu.querySelectorAll('[role="menuitem"]')).toHaveLength(40)
+    expect(submenu).toHaveClass(
+      'max-h-[var(--radix-context-menu-content-available-height)]',
+      'overflow-y-auto'
+    )
+    expect(submenu).not.toHaveClass('overflow-hidden')
+  })
+})

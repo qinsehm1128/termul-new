@@ -29,6 +29,7 @@
   "delete": "删除",
   "restore": "恢复",
   "importProject": "导入项目...",
+  "importExistingProject": "导入已有项目",
   "addProject": "添加项目",
   "deleteGroupFolder": "删除分组文件夹",
   "deleteGroupKeep": "删除分组（保留项目）",
@@ -52,6 +53,9 @@
   },
   "projectCreated": "项目已创建",
   "projectCreatedInGroup": "已创建项目“{{name}}”并添加到分组。",
+  "projectImported": "已导入项目“{{name}}”。",
+  "projectAlreadyExists": "项目已存在",
+  "projectAlreadyExistsDescription": "“{{name}}”已经在项目列表中，无需重复导入。",
   "error": "错误",
   "failedCreateFromFolder": "无法从文件夹创建项目。",
   "scaffoldErrors": {

@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
-import { worktreeApi } from '@/lib/api'
+import * as toastModule from '@/hooks/use-toast'
+import { dialogApi, worktreeApi } from '@/lib/api'
+import { filesystemApi } from '@/lib/filesystem-api'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -1705,4 +1707,205 @@ it('attaches plugin actions to the clicked project, never the active project', (
   const target = screen.getByTestId('plugin-project-target')
   expect(target.dataset.location).toBe('project.context')
   expect(JSON.parse(target.textContent ?? '{}')).toEqual({ projectId: '2' })
+})
+
+describe('ProjectSidebar import existing project', () => {
+  const importedProject: Project = {
+    id: 'imported-project',
+    name: 'existing-repo',
+    color: 'blue',
+    path: '/work/existing-repo'
+  }
+  const mockAddProject = vi.fn(() => importedProject)
+  const mockMoveProjectToGroup = vi.fn()
+  const mockToast = vi.fn()
+  let originalProjectState: ReturnType<typeof useProjectStore.getState>
+
+  beforeEach(() => {
+    originalProjectState = useProjectStore.getState()
+    mockAddProject.mockClear()
+    mockMoveProjectToGroup.mockClear()
+    mockToast.mockClear()
+    vi.mocked(dialogApi.selectDirectory).mockReset()
+    vi.mocked(dialogApi.selectDirectory).mockResolvedValue({
+      success: true,
+      data: `${importedProject.path}///`
+    })
+    useProjectStore.setState({
+      projects: [],
+      addProject: mockAddProject,
+      moveProjectToGroup: mockMoveProjectToGroup
+    })
+    vi.spyOn(toastModule, 'toast').mockImplementation(mockToast)
+  })
+
+  afterEach(() => {
+    useProjectStore.setState(originalProjectState)
+    vi.mocked(dialogApi.selectDirectory).mockReset()
+    vi.mocked(dialogApi.selectDirectory).mockResolvedValue({
+      success: false,
+      error: 'No directory selected',
+      code: 'CANCELLED'
+    })
+    vi.restoreAllMocks()
+  })
+
+  function openGroupImport(projectIds: string[] = []): void {
+    useProjectStore.setState({
+      groups: [{ id: 'import-group', name: 'Import Group', projectIds, isCollapsed: false }]
+    })
+    renderWithRouter({ projects: projectIds.length ? [importedProject] : mockProjects })
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Import Group' }))
+    fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Add Project' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Import Project...' }))
+  }
+
+  it('exposes a clickable header import button without opening the new-project flow', async () => {
+    const onNewProject = vi.fn()
+    renderWithRouter({ onNewProject })
+
+    const button = screen.getByTestId('header-import-existing-project')
+    expect(button).toHaveAccessibleName('Import Existing Project')
+    expect(button).toBeEnabled()
+    fireEvent.click(button)
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledTimes(1))
+    expect(dialogApi.selectDirectory).toHaveBeenCalledExactlyOnceWith()
+    expect(mockAddProject).toHaveBeenCalledExactlyOnceWith(
+      'existing-repo',
+      'blue',
+      '/work/existing-repo'
+    )
+    expect(onNewProject).not.toHaveBeenCalled()
+    expect(mockMoveProjectToGroup).not.toHaveBeenCalled()
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Project created',
+      description: 'Imported project "existing-repo".'
+    })
+  })
+
+  it('imports an existing non-empty directory directly without an empty-folder check', async () => {
+    // The new-project flow checks this API for emptiness. Import must bypass
+    // that gate even when the selected directory already contains source files.
+    const readDirectory = vi.spyOn(filesystemApi, 'readDirectory').mockResolvedValue({
+      success: true,
+      data: [
+        {
+          name: 'package.json',
+          path: '/work/existing-repo/package.json',
+          type: 'file',
+          extension: 'json',
+          size: 128,
+          modifiedAt: 0
+        }
+      ]
+    })
+    renderWithRouter({ projects: [] })
+
+    fireEvent.click(screen.getByTestId('header-import-existing-project'))
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledTimes(1))
+    expect(mockAddProject).toHaveBeenCalledExactlyOnceWith(
+      'existing-repo',
+      'blue',
+      '/work/existing-repo'
+    )
+    expect(readDirectory).not.toHaveBeenCalled()
+    expect(mockMoveProjectToGroup).not.toHaveBeenCalled()
+  })
+
+  it('does not add the same path twice after the imported project reaches the sidebar', async () => {
+    const { rerender } = renderWithRouter({ projects: [] })
+    fireEvent.click(screen.getByTestId('header-import-existing-project'))
+    await waitFor(() => expect(mockToast).toHaveBeenCalledTimes(1))
+
+    // Projects are supplied by the parent; model its update after addProject.
+    rerender(
+      <MemoryRouter>
+        <ProjectSidebar {...defaultProps} projects={[importedProject]} />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByTestId('header-import-existing-project'))
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledTimes(2))
+    expect(dialogApi.selectDirectory).toHaveBeenCalledTimes(2)
+    expect(mockAddProject).toHaveBeenCalledExactlyOnceWith(
+      'existing-repo',
+      'blue',
+      '/work/existing-repo'
+    )
+    expect(mockMoveProjectToGroup).not.toHaveBeenCalled()
+    expect(mockToast).toHaveBeenLastCalledWith({
+      title: 'Project already added',
+      description: '"existing-repo" is already in your project list.'
+    })
+  })
+
+  it('imports a directory from the group context menu and moves the new project into that group', async () => {
+    openGroupImport()
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledTimes(1))
+    expect(dialogApi.selectDirectory).toHaveBeenCalledExactlyOnceWith()
+    expect(mockAddProject).toHaveBeenCalledExactlyOnceWith(
+      'existing-repo',
+      'blue',
+      '/work/existing-repo'
+    )
+    expect(mockMoveProjectToGroup).toHaveBeenCalledExactlyOnceWith(
+      importedProject.id,
+      'import-group'
+    )
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Project created',
+      description: 'Created project "existing-repo" and added to group.'
+    })
+  })
+
+  it('moves an already imported project into the requested group without adding a duplicate', async () => {
+    useProjectStore.setState({
+      groups: [{ id: 'import-group', name: 'Import Group', projectIds: [], isCollapsed: false }]
+    })
+    renderWithRouter({ projects: [importedProject] })
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Import Group' }))
+    fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Add Project' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Import Project...' }))
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledTimes(1))
+    expect(mockAddProject).not.toHaveBeenCalled()
+    expect(mockMoveProjectToGroup).toHaveBeenCalledExactlyOnceWith(
+      importedProject.id,
+      'import-group'
+    )
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Project already added',
+      description: '"existing-repo" is already in your project list.'
+    })
+  })
+
+  it('does not move or add an existing project already in the requested group', async () => {
+    openGroupImport([importedProject.id])
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledTimes(1))
+    expect(mockAddProject).not.toHaveBeenCalled()
+    expect(mockMoveProjectToGroup).not.toHaveBeenCalled()
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Project already added',
+      description: '"existing-repo" is already in your project list.'
+    })
+  })
+
+  it.each([
+    { success: false as const, error: 'No directory selected', code: 'CANCELLED' },
+    { success: true as const, data: '' }
+  ])('does not add, move, or toast when the picker returns $success with no path', async (result) => {
+    vi.mocked(dialogApi.selectDirectory).mockResolvedValue(result)
+    renderWithRouter({ projects: [] })
+
+    fireEvent.click(screen.getByTestId('header-import-existing-project'))
+
+    await waitFor(() => expect(dialogApi.selectDirectory).toHaveBeenCalledTimes(1))
+    expect(mockAddProject).not.toHaveBeenCalled()
+    expect(mockMoveProjectToGroup).not.toHaveBeenCalled()
+    expect(mockToast).not.toHaveBeenCalled()
+  })
 })

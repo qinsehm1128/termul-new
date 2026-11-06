@@ -29,6 +29,7 @@
   "delete": "Delete",
   "restore": "Restore",
   "importProject": "Import Project...",
+  "importExistingProject": "Import Existing Project",
   "addProject": "Add Project",
   "deleteGroupFolder": "Delete Group Folder",
   "deleteGroupKeep": "Delete Group (Keep Projects)",
@@ -52,6 +53,9 @@
   },
   "projectCreated": "Project created",
   "projectCreatedInGroup": "Created project \"{{name}}\" and added to group.",
+  "projectImported": "Imported project \"{{name}}\".",
+  "projectAlreadyExists": "Project already added",
+  "projectAlreadyExistsDescription": "\"{{name}}\" is already in your project list.",
   "error": "Error",
   "failedCreateFromFolder": "Failed to create project from folder.",
   "scaffoldErrors": {

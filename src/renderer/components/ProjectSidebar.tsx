@@ -351,6 +351,55 @@ export function ProjectSidebar({
     [addProject, moveProjectToGroup, t]
   )
 
+  /**
+   * Imports an existing directory as a project. Unlike "New project", this does
+   * not require an empty folder, so it can register a repository that already
+   * has files. A groupId is optional: without one the project lands ungrouped.
+   */
+  const handleImportExistingProject = useCallback(
+    async (groupId?: string) => {
+      try {
+        const result = await dialogApi.selectDirectory()
+        if (!result.success || !result.data) {
+          return
+        }
+
+        const projectPath = result.data.replace(/[\\/]+$/, '') || result.data
+        const existing = projects.find((project) => project.path === projectPath)
+        if (existing) {
+          if (groupId && !groups.find((g) => g.id === groupId)?.projectIds.includes(existing.id)) {
+            moveProjectToGroup(existing.id, groupId)
+          }
+          toast({
+            title: t('projectAlreadyExists'),
+            description: t('projectAlreadyExistsDescription', { name: existing.name })
+          })
+          return
+        }
+
+        const folderName = projectPath.split(/[\\/]/).pop() || t('newProject')
+        const newProject = addProject(folderName, 'blue', projectPath)
+        if (groupId) {
+          moveProjectToGroup(newProject.id, groupId)
+        }
+        toast({
+          title: t('projectCreated'),
+          description: groupId
+            ? t('projectCreatedInGroup', { name: folderName })
+            : t('projectImported', { name: folderName })
+        })
+      } catch (err) {
+        console.error('Failed to import existing project:', err)
+        toast({
+          title: t('error'),
+          description: t('failedCreateFromFolder'),
+          variant: 'destructive'
+        })
+      }
+    },
+    [addProject, groups, moveProjectToGroup, projects, t]
+  )
+
   const handleGroupContextMenu = useCallback((e: React.MouseEvent): void => {
     // F1: no preventDefault() — Radix's `<ContextMenuTrigger asChild>` composes
     // this handler ahead of its own handleOpen (checkForDefaultPrevented: true);
@@ -437,7 +486,7 @@ export function ProjectSidebar({
                 )
               })}
               <ContextMenuSeparator />
-              <ContextMenuItem onSelect={() => void handleAddNewProjectToGroup(groupId)}>
+              <ContextMenuItem onSelect={() => void handleImportExistingProject(groupId)}>
                 <FolderPlus className="mr-2 h-4 w-4" /> {t('importProject')}
               </ContextMenuItem>
               {onImportFromEditor ? (
@@ -466,7 +515,7 @@ export function ProjectSidebar({
       projects,
       groups,
       moveProjectToGroup,
-      handleAddNewProjectToGroup,
+      handleImportExistingProject,
       handleOpenColorPicker,
       onImportFromEditor,
       t
@@ -1127,6 +1176,15 @@ export function ProjectSidebar({
               <FolderInput size={14} />
             </button>
           ) : null}
+          <button
+            onClick={() => void handleImportExistingProject()}
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-sidebar-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            title={t('importExistingProject')}
+            aria-label={t('importExistingProject')}
+            data-testid="header-import-existing-project"
+          >
+            <FolderOpen size={14} />
+          </button>
           <button
             onClick={onNewProject}
             className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-sidebar-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
