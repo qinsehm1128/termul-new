@@ -1,17 +1,17 @@
-import {
-  emptyMcpSshGrant,
-  MCP_SSH_OPERATIONS,
-  type McpHostAccessPolicy,
-  type McpHostAccessView,
-  type McpHostJob,
-  type McpSshGrant
+import type {
+  McpHostAccessPolicy,
+  McpHostAccessView,
+  McpHostJob,
+  McpSshGrant
 } from '@shared/types/mcp-host.types'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { callMcpHost, getMcpHostAccess, putMcpHostAccess } from '@/lib/mcp-host-api'
+import { HostAccessSection, hostCheckboxClass, hostInputClass } from './McpHostAccessSection'
+import { McpSshAccessCard } from './McpSshAccessCard'
+import { McpWorkspaceAccess } from './McpWorkspaceAccess'
 
-const HIGH_RISK = new Set(['write_file', 'upload', 'download', 'job_cancel'])
 const roots = (text: string): string[] => [
   ...new Set(
     text
@@ -29,6 +29,9 @@ export function McpHostAccessPanel(): React.JSX.Element {
   const [locked, setLocked] = useState(false)
   const [message, setMessage] = useState('')
   const [jobs, setJobs] = useState<Record<string, McpHostJob[]>>({})
+  const [sshOpen, setSshOpen] = useState(true)
+  const [sshQuery, setSshQuery] = useState('')
+  const [expandedProfiles, setExpandedProfiles] = useState<Record<string, boolean>>({})
   const fail = useCallback(
     (code: string) => {
       if (/FORBIDDEN|PUBLIC_TUNNEL|UNAUTHORIZED/i.test(code)) setLocked(true)
@@ -71,8 +74,8 @@ export function McpHostAccessPanel(): React.JSX.Element {
     const profiles = { ...policy.ssh.profiles }
     const fingerprints = { ...policy.profileFingerprints }
     if (value) {
-      // Only a newly selected profile grants consent to its displayed identity.
-      // Editing roots/operations or unrelated settings must preserve old pins.
+      // Only NEW selection grants consent to the displayed identity. Ordinary
+      // edits, bulk permissions, search and collapse never refresh existing pins.
       if (!profiles[profileId]) {
         const profile = view?.profiles.find((item) => item.profileId === profileId)
         if (profile) fingerprints[profileId] = profile.fingerprint
@@ -161,269 +164,187 @@ export function McpHostAccessPanel(): React.JSX.Element {
     view.policy.profileFingerprints[profileId] ===
       view.profiles.find((profile) => profile.profileId === profileId)?.fingerprint &&
     !!view.policy.ssh.profiles[profileId]?.operations.some((item) => item === operation)
+  const dirty = !!policy && !!view && JSON.stringify(policy) !== JSON.stringify(view.policy)
+  const term = sshQuery.trim().toLocaleLowerCase()
+  const profiles =
+    view?.profiles.filter(
+      (p) =>
+        !term ||
+        `${p.name} ${p.host} ${p.username} ${(p.tags ?? []).join(' ')}`
+          .toLocaleLowerCase()
+          .includes(term)
+    ) ?? []
+  const grantedCount = view?.profiles.filter((p) => policy?.ssh.profiles[p.profileId]).length ?? 0
   return (
     <section
-      className="space-y-3 rounded-lg border border-border bg-secondary/20 p-4"
+      className="min-w-0 space-y-4 rounded-xl border border-border bg-secondary/10 p-3 sm:p-4"
       aria-label={t('hostAccess.title')}
     >
-      <h3 className="text-sm font-medium">{t('hostAccess.title')}</h3>
-      <p className="text-xs text-muted-foreground">{t('hostAccess.globalWarning')}</p>
+      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold">{t('hostAccess.title')}</h3>
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+            {t('hostAccess.globalWarning')}
+          </p>
+        </div>
+        {policy && (
+          <label className="flex min-h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-background px-3 text-xs">
+            <input
+              className={hostCheckboxClass}
+              type="checkbox"
+              disabled={disabled}
+              checked={policy.enabled}
+              onChange={(e) => setPolicy({ ...policy, enabled: e.target.checked })}
+            />
+            {t('hostAccess.enabled')}
+          </label>
+        )}
+      </div>
       {locked && (
-        <p role="alert" className="text-xs text-destructive">
+        <p
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs"
+        >
           {t('hostAccess.readOnly')}
         </p>
       )}
       {message && (
-        <p role="status" className="text-xs">
+        <p
+          role="status"
+          aria-live="polite"
+          className="rounded-md bg-secondary/60 px-3 py-2 text-xs"
+        >
           {message}
         </p>
       )}
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={() => {
-          setMessage('')
-          void reload()
-        }}
-      >
-        {t('hostAccess.reload')}
-      </Button>
       {policy && view && (
         <>
-          <fieldset disabled={disabled} className="space-y-3">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={policy.enabled}
-                onChange={(e) => setPolicy({ ...policy, enabled: e.target.checked })}
-              />
-              {t('hostAccess.enabled')}
-            </label>
-            <fieldset className="space-y-2 rounded border border-border p-3">
-              <legend className="text-sm">{t('hostAccess.workspace')}</legend>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={policy.workspace.enabled}
-                  onChange={(e) =>
-                    setPolicy({
-                      ...policy,
-                      workspace: { ...policy.workspace, enabled: e.target.checked }
-                    })
-                  }
-                />
-                {t('hostAccess.workspaceEnabled')}
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={policy.workspace.projectIds === null}
-                  onChange={(e) =>
-                    setPolicy({
-                      ...policy,
-                      workspace: { ...policy.workspace, projectIds: e.target.checked ? null : [] }
-                    })
-                  }
-                />
-                {t('hostAccess.allProjects')}
-              </label>
-              {policy.workspace.projectIds !== null &&
-                view.projects.map((project) => (
-                  <label key={project.id} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={policy.workspace.projectIds?.includes(project.id) ?? false}
-                      onChange={(e) =>
-                        setPolicy({
-                          ...policy,
-                          workspace: {
-                            ...policy.workspace,
-                            projectIds: e.target.checked
-                              ? [...(policy.workspace.projectIds ?? []), project.id]
-                              : (policy.workspace.projectIds?.filter((id) => id !== project.id) ??
-                                [])
-                          }
-                        })
-                      }
-                    />
-                    {project.name}
-                  </label>
-                ))}
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={policy.workspace.includePaths}
-                  onChange={(e) =>
-                    setPolicy({
-                      ...policy,
-                      workspace: { ...policy.workspace, includePaths: e.target.checked }
-                    })
-                  }
-                />
-                {t('hostAccess.includePaths')}
-              </label>
-            </fieldset>
-            <p className="text-xs text-destructive">{t('hostAccess.executeWarning')}</p>
-            <p className="text-xs text-muted-foreground">{t('hostAccess.localWarning')}</p>
-            {view.profiles.length === 0 && <p className="text-xs">{t('hostAccess.noProfiles')}</p>}
-            {view.profiles.map((profile) => {
-              const selected = policy.ssh.profiles[profile.profileId]
-              return (
-                <fieldset
-                  key={profile.profileId}
-                  className="space-y-2 rounded border border-border p-3"
-                >
-                  <legend className="text-sm">{profile.name}</legend>
-                  <p className="break-all text-xs text-muted-foreground">
-                    {profile.username}@{profile.host}:{profile.port} · {profile.authMethod}
-                  </p>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={!!selected}
-                      onChange={(e) =>
-                        grant(profile.profileId, e.target.checked ? emptyMcpSshGrant() : null)
-                      }
-                    />
-                    {t('hostAccess.grantProfile')}
-                  </label>
-                  {selected && (
-                    <>
-                      {policy.profileFingerprints[profile.profileId] !== profile.fingerprint && (
-                        <div className="space-y-2">
-                          <p className="text-xs text-destructive">
-                            {t('hostAccess.fingerprintChanged')}
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={disabled}
-                            onClick={() =>
-                              setPolicy({
-                                ...policy,
-                                profileFingerprints: {
-                                  ...policy.profileFingerprints,
-                                  [profile.profileId]: profile.fingerprint
-                                }
-                              })
-                            }
-                          >
-                            {t('hostAccess.reauthorizeIdentity')}
-                          </Button>
-                        </div>
-                      )}
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {MCP_SSH_OPERATIONS.map((operation) => (
-                          <label key={operation} className="flex items-center gap-2 text-xs">
-                            <input
-                              type="checkbox"
-                              checked={selected.operations.includes(operation)}
-                              onChange={(e) =>
-                                grant(profile.profileId, {
-                                  ...selected,
-                                  operations: e.target.checked
-                                    ? [...selected.operations, operation]
-                                    : selected.operations.filter((op) => op !== operation)
-                                })
-                              }
-                            />
-                            <span>
-                              {t(`hostAccess.operations.${operation}`)}
-                              {HIGH_RISK.has(operation) ? ` — ${t('hostAccess.highRisk')}` : ''}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                      <label className="block text-xs">
-                        {t('hostAccess.remoteRoots')}
-                        <textarea
-                          className="mt-1 block w-full rounded border border-border bg-background p-2"
-                          rows={2}
-                          value={selected.remoteRoots.join('\n')}
-                          onChange={(e) =>
-                            grant(profile.profileId, {
-                              ...selected,
-                              remoteRoots: e.target.value.split('\n')
-                            })
-                          }
-                        />
-                      </label>
-                      <label className="block text-xs">
-                        {t('hostAccess.localRoots')}
-                        <textarea
-                          className="mt-1 block w-full rounded border border-border bg-background p-2"
-                          rows={2}
-                          value={selected.localRoots.join('\n')}
-                          onChange={(e) =>
-                            grant(profile.profileId, {
-                              ...selected,
-                              localRoots: e.target.value.split('\n')
-                            })
-                          }
-                        />
-                      </label>
-                      <label className="flex items-center gap-2 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={selected.posixJobs}
-                          onChange={(e) =>
-                            grant(profile.profileId, { ...selected, posixJobs: e.target.checked })
-                          }
-                        />
-                        {t('hostAccess.posixJobs')}
-                      </label>
-                    </>
-                  )}
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={disabled || !canCall(profile.profileId, 'test_connection')}
-                      onClick={() => void run(profile.profileId, 'test_connection')}
-                    >
-                      {t('hostAccess.test')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={disabled || !canCall(profile.profileId, 'job_list')}
-                      onClick={() => void run(profile.profileId, 'job_list')}
-                    >
-                      {t('hostAccess.refreshJobs')}
-                    </Button>
-                  </div>
-                  {jobs[profile.profileId] && (
-                    <ul className="space-y-1 text-xs" aria-label={t('hostAccess.jobs')}>
-                      {jobs[profile.profileId].length === 0 && <li>{t('hostAccess.noJobs')}</li>}
-                      {jobs[profile.profileId].map((job) => (
-                        <li key={job.jobId} className="flex items-center justify-between gap-2">
-                          <span>
-                            {job.jobId} · {job.state}
-                          </span>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={
-                              disabled || job.finished || !canCall(profile.profileId, 'job_cancel')
-                            }
-                            onClick={() => void run(profile.profileId, 'job_cancel', job.jobId)}
-                          >
-                            {t('hostAccess.cancelJob')}
-                          </Button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </fieldset>
-              )
+          <McpWorkspaceAccess
+            value={policy.workspace}
+            projects={view.projects}
+            disabled={disabled}
+            onChange={(workspace) => setPolicy({ ...policy, workspace })}
+          />
+          <HostAccessSection
+            title={t('hostAccess.sshProfiles')}
+            open={sshOpen}
+            onOpenChange={setSshOpen}
+            summary={t('hostAccess.authorizedCount', {
+              selected: grantedCount,
+              total: view.profiles.length
             })}
-          </fieldset>
-          <p className="text-xs text-muted-foreground">{t('hostAccess.saveHint')}</p>
-          <Button size="sm" disabled={disabled} onClick={() => void save()}>
-            {t('hostAccess.save')}
-          </Button>
+          >
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="search"
+                  name="mcp-ssh-filter"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={`${hostInputClass} flex-1 basis-48`}
+                  aria-label={t('hostAccess.searchProfiles')}
+                  placeholder={t('hostAccess.searchProfiles')}
+                  value={sshQuery}
+                  onChange={(e) => setSshQuery(e.target.value)}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setExpandedProfiles(
+                      Object.fromEntries(view.profiles.map((p) => [p.profileId, true]))
+                    )
+                  }
+                >
+                  {t('hostAccess.expandAll')}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setExpandedProfiles({})}
+                >
+                  {t('hostAccess.collapseAll')}
+                </Button>
+              </div>
+              <details className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-xs">
+                <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {t('hostAccess.securityDetails')}
+                </summary>
+                <p className="pt-2 leading-relaxed text-muted-foreground">
+                  {t('hostAccess.executeWarning')}
+                </p>
+              </details>
+              {profiles.map((profile) => (
+                <McpSshAccessCard
+                  key={profile.profileId}
+                  profile={profile}
+                  selected={policy.ssh.profiles[profile.profileId]}
+                  fingerprint={policy.profileFingerprints[profile.profileId]}
+                  open={expandedProfiles[profile.profileId] ?? false}
+                  disabled={disabled}
+                  onOpenChange={(open) =>
+                    setExpandedProfiles((old) => ({ ...old, [profile.profileId]: open }))
+                  }
+                  onGrant={(value) => grant(profile.profileId, value)}
+                  onReauthorize={() =>
+                    setPolicy({
+                      ...policy,
+                      profileFingerprints: {
+                        ...policy.profileFingerprints,
+                        [profile.profileId]: profile.fingerprint
+                      }
+                    })
+                  }
+                  onRun={(operation, jobId) => void run(profile.profileId, operation, jobId)}
+                  canCall={(operation) => canCall(profile.profileId, operation)}
+                  jobs={jobs[profile.profileId]}
+                />
+              ))}
+              {!profiles.length && (
+                <p className="py-3 text-center text-xs text-muted-foreground">
+                  {t(view.profiles.length ? 'hostAccess.noMatches' : 'hostAccess.noProfiles')}
+                </p>
+              )}
+            </div>
+          </HostAccessSection>
         </>
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background p-3">
+        <span
+          className={`text-xs ${dirty ? 'font-medium text-primary' : 'text-muted-foreground'}`}
+          role="status"
+        >
+          {t(dirty ? 'hostAccess.unsaved' : 'hostAccess.savedState')}
+        </span>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setMessage('')
+              void reload()
+            }}
+          >
+            {t('hostAccess.reload')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={disabled || !policy}
+            onClick={() => void save()}
+          >
+            {t(busy ? 'hostAccess.saving' : 'hostAccess.save')}
+          </Button>
+        </div>
+      </div>
+      {policy && (
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {t('hostAccess.saveHint')}
+        </p>
       )}
     </section>
   )

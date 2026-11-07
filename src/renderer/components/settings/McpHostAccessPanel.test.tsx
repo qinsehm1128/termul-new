@@ -2,7 +2,8 @@ import {
   emptyMcpHostAccessPolicy,
   emptyMcpSshGrant,
   MCP_SSH_OPERATIONS,
-  type McpHostAccessView
+  type McpHostAccessView,
+  type McpSshOperation
 } from '@shared/types/mcp-host.types'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,8 +17,8 @@ vi.mock('@/lib/mcp-host-api', () => ({
   callMcpHost: call
 }))
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }))
-function translate(key: string): string {
-  return (
+function translate(key: string, options: Record<string, string | number> = {}): string {
+  const text =
     (key
       .split('.')
       .reduce<unknown>(
@@ -25,7 +26,7 @@ function translate(key: string): string {
           value && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined,
         en
       ) as string) ?? key
-  )
+  return text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? `{{${name}}}`))
 }
 function fixture(): McpHostAccessView {
   return {
@@ -63,9 +64,216 @@ beforeEach(() => {
 afterEach(cleanup)
 const check = (name: string) => screen.getByRole('checkbox', { name })
 const button = (key: string) => screen.getByRole('button', { name: translate(`hostAccess.${key}`) })
-async function ready(): Promise<void> {
+const operationLabel = (op: McpSshOperation) =>
+  `${en.hostAccess.operations[op]}${['execute', 'job_start', 'write_file', 'upload', 'download', 'job_cancel'].includes(op) ? ` — ${en.hostAccess.highRisk}` : ''}`
+async function ready(expand = true): Promise<void> {
   await screen.findByText('Production')
+  if (expand)
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: translate('hostAccess.configureProfile', { name: 'Production' })
+      })
+    )
 }
+
+describe('compact host access controls', () => {
+  it('authorizing a new SSH profile selects all 13 operations without implicitly saving or expanding scope', async () => {
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    fireEvent.click(check(en.hostAccess.grantProfile))
+    for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).toBeChecked()
+    expect(check(en.hostAccess.posixJobs)).not.toBeChecked()
+    expect(check(en.hostAccess.enabled)).not.toBeChecked()
+    expect(button('test')).toBeDisabled()
+    expect(put).not.toHaveBeenCalled()
+    expect(call).not.toHaveBeenCalled()
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1]).toMatchObject({
+      enabled: false,
+      workspace: { enabled: false, projectIds: [], includePaths: false },
+      ssh: { profiles: { p: { ...emptyMcpSshGrant(), operations: [...MCP_SSH_OPERATIONS] } } },
+      profileFingerprints: { p: 'fp-current' }
+    })
+  })
+
+  it('keeps an existing restricted grant until explicitly revoked and authorized again', async () => {
+    view.policy.ssh.profiles.p = { ...emptyMcpSshGrant(), operations: ['profile_get'] }
+    view.policy.profileFingerprints.p = 'fp-current'
+    render(<McpHostAccessPanel />)
+    await ready()
+    expect(check(operationLabel('execute'))).not.toBeChecked()
+    expect(check(operationLabel('profile_get'))).toBeChecked()
+    fireEvent.click(check(en.hostAccess.grantProfile))
+    fireEvent.click(check(en.hostAccess.grantProfile))
+    for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).toBeChecked()
+    expect(put).not.toHaveBeenCalled()
+    expect(call).not.toHaveBeenCalled()
+  })
+  it('read-only preset removes all previously granted active and high-risk permissions', async () => {
+    view.policy.ssh.profiles.p = { ...emptyMcpSshGrant(), operations: [...MCP_SSH_OPERATIONS] }
+    view.policy.profileFingerprints.p = 'fp-current'
+    render(<McpHostAccessPanel />)
+    await ready()
+    fireEvent.click(button('selectReadOnly'))
+    for (const op of [
+      'execute',
+      'job_start',
+      'write_file',
+      'upload',
+      'download',
+      'job_cancel',
+      'test_connection'
+    ] as const)
+      expect(check(operationLabel(op))).not.toBeChecked()
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1].ssh.profiles.p.operations).toEqual([
+      'profile_list',
+      'profile_get',
+      'list_files',
+      'read_file',
+      'job_status',
+      'job_list'
+    ])
+  })
+  it('selects only matching projects and keeps selections outside the filter without future grants', async () => {
+    view.policy.workspace.projectIds = ['b']
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    fireEvent.change(screen.getByRole('searchbox', { name: en.hostAccess.searchProjects }), {
+      target: { value: 'Alpha' }
+    })
+    fireEvent.click(button('selectResults'))
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1]).toMatchObject({
+      enabled: false,
+      workspace: { enabled: false, projectIds: ['b', 'a'], includePaths: false }
+    })
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('selects current projects, clears selections and disables select-all for an empty result', async () => {
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    fireEvent.click(button('selectResults'))
+    expect(check('Alpha')).toBeChecked()
+    expect(check('Beta')).toBeChecked()
+    expect(check(en.hostAccess.allProjects)).not.toBeChecked()
+    fireEvent.click(button('clearSelection'))
+    expect(check('Alpha')).not.toBeChecked()
+    expect(check('Beta')).not.toBeChecked()
+    fireEvent.change(screen.getByRole('searchbox', { name: en.hostAccess.searchProjects }), {
+      target: { value: 'missing' }
+    })
+    expect(button('selectResults')).toBeDisabled()
+    expect(screen.getByText(en.hostAccess.noMatches)).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('collapses sections and all SSH cards without changing grants or losing project choices', async () => {
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    expect(screen.queryByRole('button', { name: en.hostAccess.test })).toBeNull()
+    fireEvent.click(check('Alpha'))
+    const section = screen.getByRole('button', { name: /Workspace catalog/ })
+    fireEvent.click(section)
+    expect(section).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('checkbox', { name: 'Alpha' })).toBeNull()
+    fireEvent.click(section)
+    expect(check('Alpha')).toBeChecked()
+    fireEvent.click(button('expandAll'))
+    expect(button('test')).toBeDisabled()
+    fireEvent.click(button('collapseAll'))
+    expect(screen.queryByRole('button', { name: en.hostAccess.test })).toBeNull()
+    expect(check(en.hostAccess.grantProfile)).not.toBeChecked()
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('offers read-only selection and requires explicit confirmation for all high-risk operations', async () => {
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    fireEvent.click(check(en.hostAccess.grantProfile))
+    fireEvent.click(button('selectReadOnly'))
+    const read = [
+      'profile_list',
+      'profile_get',
+      'list_files',
+      'read_file',
+      'job_status',
+      'job_list'
+    ]
+    for (const op of MCP_SSH_OPERATIONS)
+      expect(check(operationLabel(op)).getAttribute('type')).toBe('checkbox')
+    for (const op of MCP_SSH_OPERATIONS)
+      expect((check(operationLabel(op)) as HTMLInputElement).checked).toBe(read.includes(op))
+    fireEvent.click(button('selectAllPermissions'))
+    expect(check(operationLabel('execute'))).not.toBeChecked()
+    fireEvent.click(button('cancelSelection'))
+    expect(screen.queryByRole('button', { name: en.hostAccess.confirmAllPermissions })).toBeNull()
+    fireEvent.click(button('selectAllPermissions'))
+    fireEvent.click(button('confirmAllPermissions'))
+    for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).toBeChecked()
+    expect(check(en.hostAccess.posixJobs)).not.toBeChecked()
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1].ssh.profiles.p).toEqual({
+      ...emptyMcpSshGrant(),
+      operations: [...MCP_SSH_OPERATIONS]
+    })
+    expect(put.mock.calls[0][1].enabled).toBe(false)
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('bulk permission edits never refresh a changed profile identity', async () => {
+    view.policy.ssh.profiles.p = emptyMcpSshGrant()
+    view.policy.profileFingerprints.p = 'old-pin'
+    render(<McpHostAccessPanel />)
+    await ready()
+    fireEvent.click(button('selectAllPermissions'))
+    fireEvent.click(button('confirmAllPermissions'))
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1].profileFingerprints.p).toBe('old-pin')
+  })
+
+  it('searching SSH profiles does not hide grants from the saved policy', async () => {
+    view.profiles.push({
+      ...view.profiles[0],
+      profileId: 'other',
+      name: 'Backup',
+      host: 'backup.invalid',
+      fingerprint: 'backup-pin'
+    })
+    view.policy.ssh.profiles.other = { ...emptyMcpSshGrant(), operations: ['profile_get'] }
+    view.policy.profileFingerprints.other = 'backup-pin'
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    fireEvent.change(screen.getByRole('searchbox', { name: en.hostAccess.searchProfiles }), {
+      target: { value: 'Production' }
+    })
+    expect(screen.queryByText('Backup')).toBeNull()
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1].ssh.profiles.other.operations).toEqual(['profile_get'])
+    expect(put.mock.calls[0][1].profileFingerprints.other).toBe('backup-pin')
+  })
+
+  it('blocks selection shortcuts on PublicTunnel while disclosure remains usable', async () => {
+    view.hostMode = 'PUBLIC_TUNNEL'
+    view.policy.ssh.profiles.p = emptyMcpSshGrant()
+    view.policy.profileFingerprints.p = 'fp-current'
+    render(<McpHostAccessPanel />)
+    await ready()
+    expect(button('selectResults')).toBeDisabled()
+    expect(button('selectReadOnly')).toBeDisabled()
+    expect(button('selectAllPermissions')).toBeDisabled()
+    expect(button('expandAll')).not.toBeDisabled()
+    expect(put).not.toHaveBeenCalled()
+    expect(call).not.toHaveBeenCalled()
+  })
+})
 
 describe('host access management', () => {
   it('shows deny defaults, global principal warning, and no secret inputs', async () => {
@@ -77,7 +285,7 @@ describe('host access management', () => {
     expect(check(en.hostAccess.grantProfile)).not.toBeChecked()
     expect(screen.getByText(en.hostAccess.globalWarning)).toBeInTheDocument()
     expect(screen.getByText(en.hostAccess.executeWarning)).toBeInTheDocument()
-    expect(screen.getByText(en.hostAccess.localWarning)).toBeInTheDocument()
+    expect(screen.getByText(en.hostAccess.grantToConfigure)).toBeInTheDocument()
     expect(container.querySelector('input[type=password]')).toBeNull()
     expect(call).not.toHaveBeenCalled()
   })
@@ -89,13 +297,11 @@ describe('host access management', () => {
     fireEvent.click(check('Alpha'))
     fireEvent.click(check(en.hostAccess.includePaths))
     fireEvent.click(check(en.hostAccess.grantProfile))
-    for (const op of MCP_SSH_OPERATIONS)
-      expect(
-        check(
-          `${en.hostAccess.operations[op]}${['write_file', 'upload', 'download', 'job_cancel'].includes(op) ? ` — ${en.hostAccess.highRisk}` : ''}`
-        )
-      ).not.toBeChecked()
-    fireEvent.click(check(en.hostAccess.operations.execute))
+    for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).toBeChecked()
+    fireEvent.click(button('clearPermissions'))
+    for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).not.toBeChecked()
+    expect(screen.getByText(en.hostAccess.localWarning)).toBeInTheDocument()
+    fireEvent.click(check(operationLabel('execute')))
     fireEvent.click(check(`${en.hostAccess.operations.upload} — ${en.hostAccess.highRisk}`))
     fireEvent.click(check(en.hostAccess.posixJobs))
     fireEvent.change(screen.getByRole('textbox', { name: en.hostAccess.remoteRoots }), {
@@ -232,7 +438,7 @@ describe('host access management', () => {
     await ready()
     fireEvent.click(check(en.hostAccess.enabled))
     fireEvent.click(check(en.hostAccess.grantProfile))
-    fireEvent.click(check(en.hostAccess.operations.test_connection))
+    expect(check(operationLabel('test_connection'))).toBeChecked()
     expect(button('test')).toBeDisabled()
     expect(call).not.toHaveBeenCalled()
   })
