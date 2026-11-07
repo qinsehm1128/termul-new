@@ -112,6 +112,7 @@ export function McpWorkspaceAccess({
               </label>
             </div>
             <div
+              role="group"
               className="grid max-h-52 grid-cols-1 gap-x-2 overflow-y-auto overscroll-contain rounded-md border border-border p-1 sm:grid-cols-2"
               aria-label={t('hostAccess.projectChoices')}
             >

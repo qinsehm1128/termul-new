@@ -157,6 +157,7 @@ describe('compact host access controls', () => {
   it('selects current projects, clears selections and disables select-all for an empty result', async () => {
     render(<McpHostAccessPanel />)
     await ready(false)
+    expect(screen.getByRole('group', { name: en.hostAccess.projectChoices })).toBeVisible()
     fireEvent.click(button('selectResults'))
     expect(check('Alpha')).toBeChecked()
     expect(check('Beta')).toBeChecked()
