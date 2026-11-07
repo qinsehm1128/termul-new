@@ -68,6 +68,8 @@ struct RegisteredBuiltIn {
 /// Instance-owned set of Termul built-in providers.
 pub struct BuiltInRegistry {
     entries: BTreeMap<String, RegisteredBuiltIn>,
+    // Not a provider: retained solely to fence migrated tools and hidden aliases.
+    legacy_project_scope: Option<McpBuiltInConfig>,
 }
 
 impl std::fmt::Debug for BuiltInRegistry {
@@ -89,14 +91,14 @@ impl BuiltInRegistry {
     pub fn empty() -> Self {
         Self {
             entries: BTreeMap::new(),
+            legacy_project_scope: None,
         }
     }
 
-    /// Session-memory and project-scope providers backed by one host-private index.
+    /// One session-memory provider backed by a host-private index.
     ///
-    /// `bound_project_root` pins tools to a single project (ACP session). Open
-    /// plane callers select only an indexed `project` key per call; raw paths
-    /// are never accepted from an unbound client.
+    /// `bound_project_root` pins all six tools to a single project (ACP session).
+    /// Unbound callers must select a project for project-specific operations.
     pub fn memory_backed(
         memory: Arc<MemoryIndexService>,
         bound_project_root: Option<PathBuf>,
@@ -106,10 +108,12 @@ impl BuiltInRegistry {
             bound_project_root,
         };
         let mut registry = Self::empty();
-        registry.register(Arc::new(SessionMemoryProvider {
-            scope: scope.clone(),
-        }));
-        registry.register(Arc::new(ProjectScopeProvider { scope }));
+        registry.register(Arc::new(SessionMemoryProvider { scope }));
+        registry.legacy_project_scope = Some(McpBuiltInConfig {
+            id: BUILTIN_PROJECT_SCOPE.into(),
+            enabled: true,
+            policy: McpCapabilityPolicy::default(),
+        });
         registry
     }
 
@@ -127,8 +131,16 @@ impl BuiltInRegistry {
     }
 
     pub fn apply_config(&mut self, configs: &[McpBuiltInConfig]) {
+        if let Some(legacy) = &mut self.legacy_project_scope {
+            // Each reload is a complete config snapshot; removing a legacy
+            // entry must not leave a stale policy from the previous snapshot.
+            legacy.enabled = true;
+            legacy.policy = McpCapabilityPolicy::default();
+        }
         for config in configs {
-            if let Some(entry) = self.entries.get_mut(&config.id) {
+            if config.id == BUILTIN_PROJECT_SCOPE && self.legacy_project_scope.is_some() {
+                self.legacy_project_scope = Some(config.clone());
+            } else if let Some(entry) = self.entries.get_mut(&config.id) {
                 entry.enabled = config.enabled;
                 entry.policy = config.policy.clone();
             }
@@ -163,10 +175,9 @@ impl BuiltInRegistry {
             }
             for mut tool in entry.provider.tools() {
                 let original = tool.name.to_string();
-                if !policy_allows(&entry.policy, &original) {
-                    continue;
-                }
-                if !permission.allows_tool(id, &original) {
+                if !self.tool_permitted(id, &original)
+                    || !self.permission_allows(permission, id, &original)
+                {
                     continue;
                 }
                 tool.name = format_tool_name(id, &original).into();
@@ -179,13 +190,89 @@ impl BuiltInRegistry {
         items
     }
 
+    /// Explicit legacy grouped-list requests are compatible, but the alias is
+    /// never returned by summaries or global tools/list.
+    pub(crate) fn list_server_tools(
+        &self,
+        server_id: &str,
+        permission: &dyn ToolPermission,
+    ) -> Option<Vec<AggregatedTool>> {
+        let canonical = self.canonical_server(server_id, TOOL_PROJECT_BOUNDARY);
+        let is_alias = canonical != server_id;
+        if !is_alias && !self.enabled_ids().contains(server_id) {
+            return None;
+        }
+        let prefix = format!("{canonical}_");
+        Some(
+            self.list_tools(permission)
+                .into_iter()
+                .filter(|item| {
+                    item.server_id == canonical
+                        && (!is_alias
+                            || self.is_migrated_tool(
+                                canonical,
+                                item.tool.name.strip_prefix(&prefix).unwrap_or_default(),
+                            ))
+                })
+                .collect(),
+        )
+    }
+
     pub fn tool_permitted(&self, server_id: &str, tool_name: &str) -> bool {
+        let canonical = self.canonical_server(server_id, tool_name);
         self.entries
-            .get(server_id)
+            .get(canonical)
             .is_some_and(|entry| entry.enabled && policy_allows(&entry.policy, tool_name))
+            && (!self.is_migrated_tool(canonical, tool_name)
+                || self.legacy_project_scope.as_ref().is_some_and(|legacy| {
+                    legacy.enabled && policy_allows(&legacy.policy, tool_name)
+                }))
+    }
+
+    /// Migrated tools require both old and new authorization identities. A
+    /// legacy denial cannot be bypassed by calling the canonical tool (or vice versa).
+    pub fn permission_allows(
+        &self,
+        permission: &dyn ToolPermission,
+        server_id: &str,
+        tool_name: &str,
+    ) -> bool {
+        let canonical = self.canonical_server(server_id, tool_name);
+        permission.allows_tool(canonical, tool_name)
+            && (!self.is_migrated_tool(canonical, tool_name)
+                || permission.allows_tool(BUILTIN_PROJECT_SCOPE, tool_name))
+    }
+
+    fn is_migrated_tool(&self, server_id: &str, tool_name: &str) -> bool {
+        self.legacy_project_scope.is_some()
+            && server_id == BUILTIN_SESSION_MEMORY
+            && matches!(tool_name, TOOL_PROJECT_BOUNDARY | TOOL_MEMORY_PROJECTS)
+    }
+
+    fn canonical_server<'a>(&self, server_id: &'a str, tool_name: &str) -> &'a str {
+        if server_id == BUILTIN_PROJECT_SCOPE
+            && self.is_migrated_tool(BUILTIN_SESSION_MEMORY, tool_name)
+        {
+            BUILTIN_SESSION_MEMORY
+        } else {
+            server_id
+        }
     }
 
     pub fn route(&self, exposed_name: &str) -> Option<BuiltInRoute> {
+        // Hidden aliases deliberately do not participate in list_tools/summaries.
+        if let Some(name) = exposed_name.strip_prefix("project-scope_") {
+            if self.is_migrated_tool(BUILTIN_SESSION_MEMORY, name) {
+                if let Some(entry) = self.entries.get(BUILTIN_SESSION_MEMORY) {
+                    return Some(BuiltInRoute {
+                        prefix_len: "project-scope_".len(),
+                        server_id: BUILTIN_PROJECT_SCOPE.into(),
+                        name: name.into(),
+                        provider: Arc::clone(&entry.provider),
+                    });
+                }
+            }
+        }
         self.entries
             .iter()
             .filter(|(_, entry)| entry.enabled)
@@ -461,14 +548,14 @@ struct SessionMemoryProvider {
     scope: MemoryScope,
 }
 
-struct ProjectScopeProvider {
-    scope: MemoryScope,
-}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyArgs {}
 
 #[async_trait]
 impl BuiltInCapability for SessionMemoryProvider {
     fn description(&self) -> &str {
-        "Search and read past coding-agent conversations (Claude Code, Codex, pi) on a project."
+        "Search and read past coding-agent conversations (Claude Code, Codex, pi), resolve the authorized project boundary, and list accessible memory projects."
     }
 
     fn id(&self) -> &str {
@@ -550,6 +637,9 @@ impl BuiltInCapability for SessionMemoryProvider {
                 }),
             ),
         ]
+        .into_iter()
+        .chain(Self::project_tools())
+        .collect()
     }
 
     async fn call_tool(
@@ -559,6 +649,11 @@ impl BuiltInCapability for SessionMemoryProvider {
         _cancellation: CancellationToken,
     ) -> Result<CallToolResult, McpDomainError> {
         match name {
+            TOOL_PROJECT_BOUNDARY => self.boundary(arguments),
+            TOOL_MEMORY_PROJECTS => {
+                let _: EmptyArgs = parse_args(BUILTIN_SESSION_MEMORY, name, arguments)?;
+                self.list_projects()
+            }
             TOOL_MEMORY_SEARCH => self.search(arguments).await,
             TOOL_MEMORY_SESSION_LIST => self.list_sessions(arguments).await,
             TOOL_MEMORY_SESSION_GET => self.get_session(arguments).await,
@@ -730,17 +825,8 @@ struct ProjectListing {
     label: String,
 }
 
-#[async_trait]
-impl BuiltInCapability for ProjectScopeProvider {
-    fn description(&self) -> &str {
-        "Resolve which project a caller is scoped to and list the projects whose memory can be searched."
-    }
-
-    fn id(&self) -> &str {
-        BUILTIN_PROJECT_SCOPE
-    }
-
-    fn tools(&self) -> Vec<Tool> {
+impl SessionMemoryProvider {
+    fn project_tools() -> Vec<Tool> {
         vec![
             read_only_tool(
                 TOOL_PROJECT_BOUNDARY,
@@ -766,35 +852,17 @@ impl BuiltInCapability for ProjectScopeProvider {
         ]
     }
 
-    async fn call_tool(
-        &self,
-        name: &str,
-        arguments: Option<Map<String, Value>>,
-        _cancellation: CancellationToken,
-    ) -> Result<CallToolResult, McpDomainError> {
-        match name {
-            TOOL_PROJECT_BOUNDARY => self.boundary(arguments),
-            TOOL_MEMORY_PROJECTS => self.list_projects(),
-            _ => Err(McpDomainError::ToolNotFound(format_tool_name(
-                BUILTIN_PROJECT_SCOPE,
-                name,
-            ))),
-        }
-    }
-}
-
-impl ProjectScopeProvider {
     fn boundary(
         &self,
         arguments: Option<Map<String, Value>>,
     ) -> Result<CallToolResult, McpDomainError> {
-        let args: ScopeArgs = parse_args(BUILTIN_PROJECT_SCOPE, TOOL_PROJECT_BOUNDARY, arguments)?;
+        let args: ScopeArgs = parse_args(BUILTIN_SESSION_MEMORY, TOOL_PROJECT_BOUNDARY, arguments)?;
         let root = self
             .scope
             .resolve(args.project_root.as_deref(), args.project.as_deref())
-            .map_err(|error| scope_error(BUILTIN_PROJECT_SCOPE, TOOL_PROJECT_BOUNDARY, error))?;
+            .map_err(|error| scope_error(BUILTIN_SESSION_MEMORY, TOOL_PROJECT_BOUNDARY, error))?;
         let fence = ProjectFence::single(&root).map_err(|_| McpDomainError::PermissionDenied {
-            server_id: BUILTIN_PROJECT_SCOPE.into(),
+            server_id: BUILTIN_SESSION_MEMORY.into(),
             name: TOOL_PROJECT_BOUNDARY.into(),
         })?;
         json_result(&ProjectBoundary {
@@ -805,6 +873,19 @@ impl ProjectScopeProvider {
     }
 
     fn list_projects(&self) -> Result<CallToolResult, McpDomainError> {
+        let bound_key = self
+            .scope
+            .bound_project_root
+            .as_ref()
+            .map(|root| {
+                ProjectFence::single(root)
+                    .map(|fence| fence.namespace_key())
+                    .map_err(|_| McpDomainError::PermissionDenied {
+                        server_id: BUILTIN_SESSION_MEMORY.into(),
+                        name: TOOL_MEMORY_PROJECTS.into(),
+                    })
+            })
+            .transpose()?;
         let dir = self.scope.memory.state_root().join(INDEX_DIR_NAME);
         let mut listings = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -819,7 +900,8 @@ impl ProjectScopeProvider {
                 else {
                     continue;
                 };
-                if !is_namespace_key(&key) {
+                if !is_namespace_key(&key) || bound_key.as_ref().is_some_and(|bound| bound != &key)
+                {
                     continue;
                 }
                 let database = dir.join(&key).join(INDEX_FILE_NAME);
@@ -1002,8 +1084,11 @@ mod tests {
             .map(|item| item.tool.name.to_string())
             .collect();
         assert!(names.contains(&format!("{BUILTIN_SESSION_MEMORY}_{TOOL_MEMORY_SEARCH}")));
-        assert!(names.contains(&format!("{BUILTIN_PROJECT_SCOPE}_{TOOL_PROJECT_BOUNDARY}")));
-        assert!(names.contains(&format!("{BUILTIN_PROJECT_SCOPE}_{TOOL_MEMORY_PROJECTS}")));
+        assert!(names.contains(&format!("{BUILTIN_SESSION_MEMORY}_{TOOL_PROJECT_BOUNDARY}")));
+        assert!(names.contains(&format!("{BUILTIN_SESSION_MEMORY}_{TOOL_MEMORY_PROJECTS}")));
+        assert_eq!(names.len(), 6);
+        assert_eq!(registry.summaries().len(), 1);
+        assert!(!names.iter().any(|name| name.starts_with("project-scope_")));
         assert!(!format!("{registry:?}").contains(harness.memory.state_root().to_str().unwrap()));
     }
 
@@ -1017,12 +1102,7 @@ mod tests {
             policy: McpCapabilityPolicy::default(),
         }]);
         let tools = registry.list_tools(&AllowAllTools);
-        assert!(!tools
-            .iter()
-            .any(|item| item.server_id == BUILTIN_SESSION_MEMORY));
-        assert!(tools
-            .iter()
-            .any(|item| item.server_id == BUILTIN_PROJECT_SCOPE));
+        assert!(tools.is_empty());
 
         registry.apply_config(&[
             McpBuiltInConfig {

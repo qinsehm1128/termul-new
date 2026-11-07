@@ -1,12 +1,18 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { McpHostAccessPanel } from '@/components/settings/McpHostAccessPanel'
 import { McpServersSettings } from '@/components/settings/McpServersSettings'
 import { MemoryMcpConfigSection } from '@/components/settings/MemoryMcpConfigSection'
 import { Switch } from '@/components/ui/switch'
-import { BUILTIN_PROJECT_SCOPE, BUILTIN_SESSION_MEMORY } from '@/lib/mcp-api'
+import {
+  BUILTIN_PROJECT_SCOPE,
+  BUILTIN_SESSION_MEMORY,
+  BUILTIN_SSH,
+  BUILTIN_WORKSPACE
+} from '@/lib/mcp-api'
 import { useMcpStore } from '@/stores/mcp-store'
 
-const BUILTIN_ORDER = [BUILTIN_SESSION_MEMORY, BUILTIN_PROJECT_SCOPE] as const
+const BUILTIN_ORDER = [BUILTIN_SESSION_MEMORY, BUILTIN_WORKSPACE, BUILTIN_SSH] as const
 
 export function McpControlPanel(): React.JSX.Element {
   const { t } = useTranslation('mcp')
@@ -24,11 +30,13 @@ export function McpControlPanel(): React.JSX.Element {
     void loadStatus()
   }, [loadStatus, revision])
 
-  const orderedBuiltIns = [...builtIns].sort((left, right) => {
-    const leftIndex = BUILTIN_ORDER.indexOf(left.id as (typeof BUILTIN_ORDER)[number])
-    const rightIndex = BUILTIN_ORDER.indexOf(right.id as (typeof BUILTIN_ORDER)[number])
-    return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex)
-  })
+  const orderedBuiltIns = builtIns
+    .filter((item) => item.id !== BUILTIN_PROJECT_SCOPE)
+    .sort((left, right) => {
+      const leftIndex = BUILTIN_ORDER.indexOf(left.id as (typeof BUILTIN_ORDER)[number])
+      const rightIndex = BUILTIN_ORDER.indexOf(right.id as (typeof BUILTIN_ORDER)[number])
+      return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex)
+    })
 
   return (
     <div className="space-y-4">
@@ -67,6 +75,8 @@ export function McpControlPanel(): React.JSX.Element {
           ))}
         </ul>
       </section>
+
+      <McpHostAccessPanel />
 
       <McpServersSettings />
 

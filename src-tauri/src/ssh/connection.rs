@@ -164,7 +164,7 @@ impl SSHConnectionManager {
     /// ALL resolved addresses (a shared deadline), so a dual-stack host whose
     /// IPv6 route black-holes cannot stall for `N * timeout` before falling
     /// back to IPv4.
-    fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
+    pub(super) fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
         let addr = format!("{}:{}", host, port);
         // Resolve via the (host, port) tuple rather than the formatted string so
         // bare IPv6 literals (which as a string would need bracket form
@@ -267,7 +267,37 @@ impl SSHConnectionManager {
     /// `write_file` truncates and re-serializes only what it could parse), both
     /// files are loaded read-only for the check, and newly accepted keys are
     /// appended to the app-managed file only.
-    fn verify_host_key(session: &Session, host: &str, port: u16) -> Result<(), String> {
+    pub(super) fn verify_host_key(session: &Session, host: &str, port: u16) -> Result<(), String> {
+        Self::verify_host_key_policy(session, host, port, false)
+    }
+
+    /// Automation must never enroll hosts or ignore unreadable trust files.
+    pub(super) fn verify_host_key_strict(
+        session: &Session,
+        host: &str,
+        port: u16,
+    ) -> Result<(), String> {
+        Self::verify_host_key_policy(session, host, port, true)
+    }
+
+    /// Pure strict policy: unreadable stores and every non-match are denied.
+    /// No enrollment callback or filesystem access is available in this helper.
+    pub(super) fn strict_host_key_decision(result: Result<CheckResult, ()>) -> Result<(), String> {
+        match result {
+            Ok(CheckResult::Match) => Ok(()),
+            Ok(CheckResult::NotFound) => Err("Host key is not trusted for automation".to_string()),
+            Ok(CheckResult::Mismatch) => Err("Host key does not match the trusted key".to_string()),
+            Ok(CheckResult::Failure) => Err("Host key verification failed".to_string()),
+            Err(()) => Err("Host trust file could not be read".to_string()),
+        }
+    }
+
+    fn verify_host_key_policy(
+        session: &Session,
+        host: &str,
+        port: u16,
+        strict: bool,
+    ) -> Result<(), String> {
         let (key, key_type) = session
             .host_key()
             .ok_or_else(|| "Server did not present a host key".to_string())?;
@@ -286,8 +316,20 @@ impl SSHConnectionManager {
             .into_iter()
             .flatten()
         {
-            if path.exists() {
+            let exists = if strict {
+                match std::fs::symlink_metadata(&path) {
+                    Ok(_) => true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(_) => return Err("Host trust file could not be inspected".to_string()),
+                }
+            } else {
+                path.exists()
+            };
+            if exists {
                 if let Err(e) = known_hosts.read_file(&path, KnownHostFileKind::OpenSSH) {
+                    if strict {
+                        return Self::strict_host_key_decision(Err(()));
+                    }
                     let is_app_file = app_path.as_deref() == Some(path.as_path());
                     if is_app_file {
                         log::error!("[SSH] Failed to read app known_hosts {:?}: {}", path, e);
@@ -301,7 +343,11 @@ impl SSHConnectionManager {
             }
         }
 
-        match known_hosts.check_port(host, port, key) {
+        let check = known_hosts.check_port(host, port, key);
+        if strict {
+            return Self::strict_host_key_decision(Ok(check));
+        }
+        match check {
             CheckResult::Match => Ok(()),
             CheckResult::Mismatch => Err(format!(
                 "Host key verification failed for {}:{}: the server key does not match the known_hosts entry (possible man-in-the-middle). Remove the stale entry to reconnect.",
@@ -455,7 +501,7 @@ impl SSHConnectionManager {
         }
     }
 
-    fn authenticate_session(
+    pub(super) fn authenticate_session(
         session: &Session,
         profile: &SSHProfile,
         secret: Option<&str>,

@@ -3,6 +3,9 @@
 //! Provides SSH connection management, SFTP operations, and port forwarding
 //! for the Se terminal manager.
 
+pub mod automation;
+pub mod automation_backend;
+pub mod automation_jobs;
 pub mod config_parser;
 pub mod connection;
 pub mod credential_store;

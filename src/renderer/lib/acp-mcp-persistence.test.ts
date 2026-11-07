@@ -41,6 +41,38 @@ const registry: StoredMcpServer[] = [
 ]
 
 describe('MCP registry helpers', () => {
+  it.each(
+    registry
+  )('preserves upstream policy through repeated normalization ($type)', (server) => {
+    const policy = { allowTools: ['read', '*_list'], denyTools: ['write'] }
+    const once = normalizeMcpRegistry([{ ...server, policy }])
+    const twice = normalizeMcpRegistry({ upstreams: once })
+    expect(twice).toEqual([{ ...server, policy }])
+    twice[0].policy?.allowTools?.push('extra')
+    expect(policy.allowTools).toEqual(['read', '*_list'])
+    expect(once[0].policy).toEqual(policy)
+  })
+
+  it.each(registry)('retains deny-all and omitted policies distinctly ($type)', (server) => {
+    expect(normalizeMcpRegistry([{ ...server, policy: { allowTools: [] } }])[0].policy).toEqual({
+      allowTools: []
+    })
+    expect(normalizeMcpRegistry([{ ...server, policy: {} }])[0].policy).toEqual({})
+    expect(normalizeMcpRegistry([server])[0]).not.toHaveProperty('policy')
+  })
+
+  it.each(
+    [null, false, [], 'all', { allowTools: 'read' }, { denyTools: [7] }].map((policy) => ({
+      policy
+    }))
+  )('fails closed for malformed upstream policy $policy', ({ policy }) => {
+    for (const server of registry) {
+      const normalized = normalizeMcpRegistry([{ ...server, policy }])
+      expect(normalized[0].policy).toEqual({ allowTools: [] })
+      expect(normalizeMcpRegistry(normalized)).toEqual(normalized)
+    }
+  })
+
   it('validates transport-specific required fields', () => {
     expect(validateMcpServer({ type: 'stdio', name: 'fs' }).valid).toBe(false)
     expect(validateMcpServer({ type: 'stdio', name: 'fs', command: 'npx' }).valid).toBe(true)
@@ -315,6 +347,34 @@ describe('registry persistence parity', () => {
       error: 'missing'
     })
     vi.mocked(syncMcpRegistryToProject).mockResolvedValue({ success: true })
+  })
+
+  it.each([
+    true,
+    false
+  ])('round-trips upstream policies through load/save (desktop=%s)', async (desktop) => {
+    vi.mocked(isTauriContext).mockReturnValue(desktop)
+    const restricted = registry.map((server, index) => ({
+      ...server,
+      policy: index === 0 ? { allowTools: [] } : { allowTools: ['read'], denyTools: ['write'] }
+    }))
+    vi.mocked(loadMcpRegistryFromProject).mockResolvedValue({
+      success: true,
+      data: { schemaVersion: 1, upstreams: restricted }
+    })
+    vi.mocked(webServerMcpServers.get).mockResolvedValue({ success: true, data: restricted })
+    vi.mocked(webServerMcpServers.put).mockResolvedValue({ success: true, data: undefined })
+    const loaded = await loadMcpServers()
+    expect(loaded).toEqual(restricted)
+    await saveMcpServers(loaded)
+    if (desktop) {
+      expect(syncMcpRegistryToProject).toHaveBeenCalledWith(restricted)
+      expect(webServerMcpServers.put).not.toHaveBeenCalled()
+    } else {
+      expect(webServerMcpServers.put).toHaveBeenCalledWith(restricted)
+      expect(syncMcpRegistryToProject).not.toHaveBeenCalled()
+    }
+    expect(persistenceApi.write).not.toHaveBeenCalled()
   })
 
   it('uses the project file in Tauri and falls back to the legacy app-store key', async () => {

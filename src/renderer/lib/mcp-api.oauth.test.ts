@@ -22,6 +22,7 @@ describe('normalizeMcpConfig oauth metadata', () => {
           type: 'http',
           name: 'Remote',
           url: 'https://example.test/mcp',
+          policy: { allowTools: [], denyTools: ['write'] },
           oauth: {
             authMode: 'oauth',
             registrationMode: 'clientMetadata',
@@ -48,6 +49,7 @@ describe('normalizeMcpConfig oauth metadata', () => {
         name: 'Remote',
         url: 'https://example.test/mcp',
         enabled: true,
+        policy: { allowTools: [], denyTools: ['write'] },
         oauth: {
           authMode: 'oauth',
           registrationMode: 'clientMetadata',

@@ -15,15 +15,23 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   loadMcpServers as loadLegacyMcpServers,
   type McpAuthMode,
+  type McpCapabilityPolicy,
   type McpOAuthConfig,
   type McpOAuthEndpoints,
   type McpOAuthRegistrationMode,
+  normalizeCapabilityPolicy,
   normalizeMcpRegistry,
   type StoredMcpServer,
   sanitizeMcpUpstream
 } from '@/lib/acp-mcp-persistence'
 
-export type { McpAuthMode, McpOAuthConfig, McpOAuthEndpoints, McpOAuthRegistrationMode }
+export type {
+  McpAuthMode,
+  McpCapabilityPolicy,
+  McpOAuthConfig,
+  McpOAuthEndpoints,
+  McpOAuthRegistrationMode
+}
 
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpControl } from '@/lib/web-server-api'
@@ -31,13 +39,10 @@ import { webServerMcpControl } from '@/lib/web-server-api'
 export const MCP_CONTROL_PLANE_SCHEMA_VERSION = 1
 export const BUILTIN_SESSION_MEMORY = 'session-memory'
 export const BUILTIN_PROJECT_SCOPE = 'project-scope'
+export const BUILTIN_WORKSPACE = 'workspace'
+export const BUILTIN_SSH = 'ssh'
 
 export type McpNameCollisionPolicy = 'prefixServerId'
-
-export interface McpCapabilityPolicy {
-  allowTools?: string[]
-  denyTools?: string[]
-}
 
 export interface McpBuiltInConfig {
   id: string
@@ -112,7 +117,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function defaultBuiltIns(): McpBuiltInConfig[] {
   return [
     { id: BUILTIN_SESSION_MEMORY, enabled: true },
-    { id: BUILTIN_PROJECT_SCOPE, enabled: true }
+    { id: BUILTIN_WORKSPACE, enabled: true },
+    { id: BUILTIN_SSH, enabled: true }
   ]
 }
 
@@ -143,22 +149,6 @@ function normalizeBuiltIn(value: unknown): McpBuiltInConfig | null {
     enabled: value.enabled ?? true,
     ...(policy === undefined ? {} : { policy })
   }
-}
-
-/** Never turn a configured restriction into unrestricted access during a UI round trip. */
-function normalizeCapabilityPolicy(value: unknown): McpCapabilityPolicy | undefined {
-  if (value === undefined) return undefined
-  if (!isRecord(value)) return { allowTools: [] }
-  const policy: McpCapabilityPolicy = {}
-  for (const key of ['allowTools', 'denyTools'] as const) {
-    const names = value[key]
-    if (names === undefined) continue
-    if (!Array.isArray(names) || !names.every((name) => typeof name === 'string')) {
-      return { allowTools: [] }
-    }
-    policy[key] = [...names]
-  }
-  return policy
 }
 
 export function normalizeMcpConfig(value: unknown): McpControlPlaneConfig {

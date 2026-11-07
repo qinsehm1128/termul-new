@@ -5,9 +5,11 @@ id: plugin-capability-catalog-spec
 title: 插件可调用的 Se Manager 全量能力清单
 date: 2026-11-04
 status: draft
-source: "user:2026-11-04T16:59:29+08:00 只有凭据和秘钥不开放，其它都开放给插件; agent://cat-a; agent://cat-b; agent://cat-c"
+source: user:2026-11-04T16:59:29+08:00 只有凭据和秘钥不开放，其它都开放给插件; agent://cat-a; agent://cat-b; agent://cat-c; user:2026-11-07 req-a1fec49128c8a770f1a9b055e56197e7 MCP host workspace/SSH catalog sync; agent://catalog-host-evidence; src-tauri/src/commands.rs; src-tauri/src/lib.rs; src-tauri/src/web/mcp_host_api.rs; src-tauri/src/mcp_core/host_bridge.rs; src-tauri/src/credentials.rs
+updated: 2026-11-07
 lang: zh-CN
 scope: project
+artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ffbe76ff784f5bf","last_updated_by_session":"session_lizard_1794024668506_6ffbe76ff784f5bf","session_ids":["session_lizard_1794024668506_6ffbe76ff784f5bf"],"todo_refs":[],"goal_refs":[]}
 ---
 
 ## 契约
@@ -27,13 +29,13 @@ scope: project
 
 ### 统计
 
-本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-05 用脚本比对）：后端共 325 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP 同步后用脚本比对）：后端共 328 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
-| 后端 Tauri 命令 | 325 | 289 | 11 | 8 | 17 |
+| 后端 Tauri 命令 | 328 | 291 | 12 | 8 | 17 |
 | 前端独有能力（无 Rust 命令） | 38 | 38 | 0 | 0 | 0 |
-| **合计** | **363** | **327** | **11** | **8** | **17** |
+| **合计** | **366** | **329** | **12** | **8** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -244,9 +246,9 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 
 | op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
 |---|---|---|---|---|---|---|
-| se.ai.listChannels | ai_channels_get `commands.rs:5824` | R | profile | none | OPEN | out `{document, keys: id→bool}`; key values never leave the keychain |
+| se.ai.listChannels | ai_channels_get `commands.rs:5824` | R | profile | none | OPEN | out `{document, keys: id→bool}`; key values never leave the host credential backend (user-private file, not OS keychain) |
 | se.ai.saveChannels | ai_channels_put `commands.rs:5848` | W | profile | grant | OPEN | in `AiChannelsDocument` (endpoint/model only; no secret fields) |
-| se.ai.setChannelKey | ai_channel_set_key `commands.rs:5862` | SEC | profile | per-call | SECRET-EXCLUDED | stores or (`key: null`) deletes the channel API key in the keychain; this op's purpose is the secret itself (a write-only re-open is a policy call) |
+| se.ai.setChannelKey | ai_channel_set_key `commands.rs:5862` | SEC | profile | per-call | SECRET-EXCLUDED | stores or (`key: null`) deletes the channel API key in the host credential backend (user-private file, not OS keychain); this op's purpose is the secret itself (a write-only re-open is a policy call) |
 | se.ai.listModels | ai_channel_models `commands.rs:5889` | R | profile | none | OPEN | in channel config; uses the stored key; out model ids |
 | se.ai.testChannel | ai_channel_test `commands.rs:5911` | R | profile | none | OPEN | in channel + model; one 64-token completion using the stored key; out `{reply≤200 chars, millis}` |
 
@@ -275,7 +277,7 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.mcp.listServers | mcp_service_servers `commands.rs:6129` | R | profile | none | OPEN | out aggregated server list + descriptions |
 | se.mcp.listServerTools | mcp_service_server_tools `commands.rs:6140` | R | profile | none | OPEN | in name; out tool schemas as the gateway sees them |
 | se.mcp.beginOauth | begin_mcp_oauth `commands.rs:5502` | W | profile | per-call | OPEN | in id, challenge?; out `{authorizationUrl, expiresAt}`; opens a browser + loopback callback listener |
-| se.mcp.completeOauth | complete_mcp_oauth `commands.rs:5600` | W | profile | per-call | OPEN | in id, code, state; exchanges the code into the keyring; out redacted status |
+| se.mcp.completeOauth | complete_mcp_oauth `commands.rs:5600` | W | profile | per-call | OPEN | in id, code, state; exchanges the code into the host credential backend (user-private file, not OS keychain); out redacted status |
 | se.mcp.cancelOauth | cancel_mcp_oauth `commands.rs:5618` | W | profile | none | OPEN | in id; drops the pending flow, keeps any prior grant |
 | se.mcp.getOauthStatus | get_mcp_oauth_status `commands.rs:5628` | R | profile | none | OPEN | in id; out `{state, hasCredentials, canRefresh, expiresAt, authorizationRequired}` — booleans only |
 
@@ -511,10 +513,10 @@ Source of truth: `src-tauri/src/lib.rs:3757-4120` invoke_handler; implementation
 | op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
 |---|---|---|---|---|---|---|
 | se.ssh.listProfiles | ssh_list_profiles — commands.rs:4171 | R | sshProfile | none | OPEN-REDACTED | → `SSHProfile[]` from the stored (secret-free) shape: host/user/port/authMethod/privateKeyPath/portForwards + `hasStoredPassword`/`hasStoredPassphrase`. Values never returned. |
-| se.ssh.saveProfile | ssh_save_profile — commands.rs:4181 | W | sshProfile | grant | OPEN | `SSHProfile` → `()`. `password`/`passphrase` are **write-only** (keychain; not persisted to JSON). Recommend a separate SECRET-EXCLUDED `se.ssh.storeCredential`. |
-| se.ssh.deleteProfile | ssh_delete_profile — commands.rs:4192 | D | sshProfile | per-call | OPEN | `(profileId)` → `()`. Removes the profile (and its keychain entries). |
+| se.ssh.saveProfile | ssh_save_profile — commands.rs:4181 | W | sshProfile | grant | OPEN | `SSHProfile` → `()`. `password`/`passphrase` are **write-only** (host credential backend; separate user-private credentials JSON, not profile JSON or the OS keychain). Recommend a separate SECRET-EXCLUDED `se.ssh.storeCredential`. |
+| se.ssh.deleteProfile | ssh_delete_profile — commands.rs:4192 | D | sshProfile | per-call | OPEN | `(profileId)` → `()`. Removes the profile (and its credential-backend entries). |
 | se.ssh.importConfig | ssh_import_config — commands.rs:4203 | W | sshProfile | none | OPEN | `()` → imported `SSHProfile[]`. Parses `~/.ssh/config`; identity paths only, no key material. |
-| se.ssh.connect | ssh_connect — commands.rs:4214 | W | sshConnection | none | OPEN | `{profileId, password?}` → `SSHConnectionInfo`. **Uses** keychain credential / accepts an ad-hoc password; returns no secret. |
+| se.ssh.connect | ssh_connect — commands.rs:4214 | W | sshConnection | none | OPEN | `{profileId, password?}` → `SSHConnectionInfo`. **Uses** the host credential backend / accepts an ad-hoc password; returns no secret. |
 | se.ssh.disconnect | ssh_disconnect — commands.rs:4259 | W | sshConnection | none | OPEN | `(connectionId)` → `()`. |
 | se.ssh.connections | ssh_get_connections — commands.rs:4270 | R | sshConnection | none | OPEN | `()` → `SSHConnectionInfo[]` (id, profile, host, state). |
 | se.ssh.portForwardStart | ssh_port_forward_start — commands.rs:4279 | W | sshConnection | grant | OPEN | `{connectionId, id, type:"local"|"remote", localPort, remoteHost, remotePort, label?}` → `ActivePortForward`. Opens a listener. |
@@ -535,7 +537,7 @@ Source of truth: `src-tauri/src/lib.rs:3757-4120` invoke_handler; implementation
 | op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
 |---|---|---|---|---|---|---|
 | se.tunnel.configGet | tunnel_config_get — remote/tunnel/commands.rs:12 | R | global | none | OPEN-REDACTED | `()` → `TunnelConfigView` (provider, hostname/ports, frp/ssh endpoints, `sshIdentityFile` **path**). `sshPassword`/`sshPrivateKey` never in the view (unit-tested, config.rs:822-833). |
-| se.tunnel.configSet | tunnel_config_set — remote/tunnel/commands.rs:22 | W | global | grant | OPEN | `TunnelConfigUpdate` → `TunnelConfigView`. Secret fields are keyring write-only; the returned view stays redacted. |
+| se.tunnel.configSet | tunnel_config_set — remote/tunnel/commands.rs:22 | W | global | grant | OPEN | `TunnelConfigUpdate` → `TunnelConfigView`. Secret fields are host-credential-backend write-only; the returned view stays redacted. |
 | se.tunnel.sshConfigHosts | tunnel_ssh_config_hosts — remote/tunnel/commands.rs:36 | R | global | none | OPEN | `()` → `ParsedSSHProfile[]` from `~/.ssh/config` (host/user/port/identity path). No keys/secrets. |
 | se.workspace.manifestGet | workspace_manifest_get — commands.rs:8226 | R | project | none | OPEN | `(projectId)` → `WorkspaceManifest?` (success(None) when absent/degraded). |
 | se.workspace.manifestWrite | workspace_manifest_write — commands.rs:8283 | W | project | none | OPEN | `(projectId, basedRevision?, manifest)` → `WriteOutcome{Updated|Conflict}`. Revision-checked; `envVars`/raw claims rejected as VALIDATION_ERROR. |
@@ -650,9 +652,9 @@ Legend — class: **R** read, **W** write, **D** destructive, **SEC** secret-bea
 
 | op id | source | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
-| secure_storage.set | src-tauri/src/secure_storage.rs:174 | W/SEC | keychain, arbitrary key | n/a (excluded) | SECRET-EXCLUDED | rust-main | Writes a raw secret value. No plugin path. |
-| secure_storage.get | src-tauri/src/secure_storage.rs:182 | R/SEC | keychain, arbitrary key | n/a | SECRET-EXCLUDED | rust-main | Returns the raw value; keyring_get (85) falls back to the legacy brand service and copies forward. |
-| secure_storage.delete | src-tauri/src/secure_storage.rs:194 | D/SEC | keychain, arbitrary key | n/a | SECRET-EXCLUDED | rust-main | Deletes a credential; do not expose even as "delete my key". |
+| secure_storage.set | src-tauri/src/secure_storage.rs:174 | W/SEC | credential backend, arbitrary key | n/a (excluded) | SECRET-EXCLUDED | rust-main | Writes a raw secret value. No plugin path. |
+| secure_storage.get | src-tauri/src/secure_storage.rs:182 | R/SEC | credential backend, arbitrary key | n/a | SECRET-EXCLUDED | rust-main | Returns the raw value; keyring_get (85) falls back to the legacy brand service and copies forward. |
+| secure_storage.delete | src-tauri/src/secure_storage.rs:194 | D/SEC | credential backend, arbitrary key | n/a | SECRET-EXCLUDED | rust-main | Deletes a credential; do not expose even as "delete my key". |
 
 **What it stores (checked):** the module's own doc comment states the legacy fallback exists so users do not lose "stored project environment variables" (`secure_storage.rs:75-84`). Renderer access is the thin wrapper `src/renderer/lib/tauri-secure-storage-api.ts:37/66/89`. SSH passwords/keys are separate (`src-tauri/src/ssh/credential_store.rs`). Policy consequence: env-var injection into a pty must stay entirely host-side; a plugin may reference a variable name but never read it.
 
@@ -846,6 +848,70 @@ Per-group: browser 20 (14 OPEN, 6 INTERNAL) · data_migration 6 · secure_storag
 - `src/renderer/lib/themes` directory listing — behavior inferred from `apply-color-theme.test.ts:76`; file inventory not enumerated.
 - Exhaustive unregistered-command diff — not run.
 
+### 宿主 MCP 能力同步（2026-11-07）
+
+本增量补充清单 A 的 MCP 部分；既有 A/B/C 清单、事件、来源和历史 explorer 统计仍保留。合并统计新增 **3 个 Tauri 命令：OPEN +2、OPEN-REDACTED +1**；HTTP twin、私有 bridge、provider 子工具和复用的 renderer 状态操作不重复计数。这里的 OPEN/confirm 是**插件能力目录契约**，不是声称当前 MCP 或 Tauri 原始入口已经接入插件级确认、审计、按插件身份隔离的运行时。
+
+#### 新增公开操作（清单 A / MCP）
+
+| op id | source cmd (file:line) | class | scope | confirm | exposure | provider | notes |
+|---|---|---|---|---|---|---|---|
+| se.mcp.hostAccessGet | mcp_host_access_get `src-tauri/src/commands.rs:5652`；注册 `src-tauri/src/lib.rs:4059` | R | global（宿主授权管理元数据） | none | OPEN-REDACTED | rust-main | `()` → `McpHostAccessView{policy,profiles,projects,hostMode}`；非长任务。profiles 为脱敏候选（profileId/name/host/port/username/authMethod/tags/fingerprint），projects 为 id/name；不返回密码、passphrase、私钥、bearer 或 bridge descriptor/token。policy 的项目范围、remoteRoots/localRoots 等仍属敏感 metadata，不得当作公开无敏感信息；插件投影须按调用方 scope 过滤并最小化路径/主机/用户信息，不直接转发本机管理员完整视图。 |
+| se.mcp.hostAccessPut | mcp_host_access_put `src-tauri/src/commands.rs:5662`；注册 `src-tauri/src/lib.rs:4060` | W | global（所有本宿主 MCP 客户端共享的授权策略） | per-call | OPEN | rust-main | `{expectedRevision,policy}` → 已保存 `HostAccessPolicy`；非长任务。修改 enabled/workspace/projectIds/includePaths、SSH profile/operations/roots/posixJobs 与 profile fingerprints，属于**高权限委托/授予权限**，不是普通 grant 写偏好；每次必须本机确认，不能让调用者自授权。revision CAS 冲突返回 `REVISION_CONFLICT`，先重读而非盲目覆盖；授权回显不含凭据值。 |
+| se.mcp.hostCall | mcp_host_call `src-tauri/src/commands.rs:5675`；注册 `src-tauri/src/lib.rs:4061` | W | global → project / sshProfile / job / local+remote path（operation-specific） | per-call | OPEN | rust-main | `{provider:"workspace"或"ssh",tool,arguments}` → 对应操作结果。仅复用宿主明确授权的 workspace/SSH，宿主读取并使用凭据，不返回凭据；通用入口同时包含执行、文件写入/传输和取消，保守逐次确认，不能仅按 provider 或只读工具 annotation 放行。`job_start` 返回 jobId，`job_status/job_list` 查询；execute/test/传输可能耗时，不能宣称全部调用立即完成。禁止从 arguments 接收 `callerId/grant/confirmed` 充当权限。 |
+
+Tauri 三命令均已注册，不是未接线计划。`commands.rs` 调用同一 `HostCapabilityService`；权限、scope 与凭据使用边界由 `src-tauri/src/mcp_core/{host_service,host_policy,host_capabilities,host_adapters,workspace,host_tools}.rs` 实施。目录中的 per-call 是插件适配层要求，尚不能用原始 IPC 成功作为“插件确认已生效”的证据。
+
+#### HTTP twin：已存在的 shared-live / standalone 路由
+
+已读取 `src-tauri/src/web/mcp_host_api.rs`，并核对 `src-tauri/src/web/router.rs:79-93`；因此以下记录为**已接线 HTTP twin**，不标成 future/unimplemented。它们不另计 Tauri 命令或独立 renderer 能力。
+
+| HTTP surface | source | covering op | exposure / confirm | actual gate and result |
+|---|---|---|---|---|
+| GET /mcp/host/access | `src-tauri/src/web/mcp_host_api.rs:59` | se.mcp.hostAccessGet | OPEN-REDACTED / none | 要求 `RemotePrincipal` 且 `IngressProvenance::LocalOperator`；返回 `IpcBody<McpHostAccessView>`，无凭据。 |
+| PUT /mcp/host/access | `src-tauri/src/web/mcp_host_api.rs:76` | se.mcp.hostAccessPut | OPEN / per-call | 同一 provenance 门禁；body `{expectedRevision,policy}`，返回策略或带错误码的 IpcBody（包括 `REVISION_CONFLICT`），不假定冲突一定是 HTTP 409。 |
+| POST /mcp/host/call | `src-tauri/src/web/mcp_host_api.rs:96` | se.mcp.hostCall | OPEN / per-call | 同一 provenance 门禁；body `{provider,tool,arguments}`，执行已授权操作；HTTP request drop 取消本次调用的 token。 |
+
+无 principal 为 HTTP 401，非 LocalOperator（包括 PublicTunnel）为 HTTP 403。**PublicTunnel 不能调用这三条接口，连宿主授权候选读取也不能**；不能因为其他 MCP 配置接口支持公开隧道只读，就把这三条误写成公开隧道可读。桌面通过 Tauri，本地 shared-live 和 standalone 通过 HTTP 复用同一服务；`WebHostServices` 注入缺失时返回 `UNAVAILABLE`，不是成功的空列表。接线来源另见 `src-tauri/src/web/mod.rs:514-516`、`src-tauri/src/server_main.rs:525,603`、`src-tauri/src/lib.rs:3638-3652` 与 `src-tauri/src/remote/host.rs`。
+
+#### operation-specific scopes（由 se.mcp.hostCall 覆盖，不重复计数）
+
+| provider / tools | class and scope | host-enforced boundary / caveat |
+|---|---|---|
+| workspace.group_list / project_list / project_get | R；授权 project 集合及其 group metadata | 全局 policy 和 workspace.enabled 均默认关闭；`projectIds:null` 为显式授权全部，`[]` 为零项目，集合只可见其成员；`includePaths` 独立控制路径投影。分页和分组计数必须先过滤授权项目，不能泄漏未授权成员、preferredProjectId 或总数。registry 未同步返回 `REGISTRY_NOT_READY`，不伪装成真实空集；group/project list 使用 cursor/limit。 |
+| ssh.profile_list / profile_get | R；显式授权 sshProfile | 仅脱敏资料与已授权能力；不读取或回传凭据值，不能把管理接口的全部候选视图误当作此工具输出。profile_list 为 offset/limit 分页。 |
+| ssh.test_connection | W（主动联网）；sshProfile + operation | 仅使用已信任的 host key，不自动登记/改变 host trust；不是仅凭 profile 可见即可测试。 |
+| ssh.execute / job_start | W/D；sshProfile + execute 或 job_start operation | 显式执行授权等于远端账号权限，不承诺 remoteRoots 能沙箱任意 shell；job_start 另需宿主判定平台能力/posixJobs 授权。execute 的 timeoutMs、输出上限均受约束；job_start.runtimeLimit 单位是**毫秒**，不误写成秒。不自动重试执行。 |
+| ssh.list_files / read_file | R；sshProfile + operation + remoteRoots | 必须 host-side 校验规范化路径/远端 roots；有限分页、字节偏移与输出上限；读取到的文件内容为不可信数据，不能宣称远端文件天然不含用户敏感内容。list_files 使用 offset/limit，而不是 workspace cursor。 |
+| ssh.write_file | W/D；sshProfile + operation + remoteRoots | 仅创建新 UTF-8 文件；当前不支持覆盖已有文件（overwrite 只允许 false），不把旧 SFTP 的任意覆盖契约套过来。 |
+| ssh.upload / download | W/D；sshProfile + operation + remoteRoots + localRoots | localPath 是 **Se 宿主文件系统**，不是外部 MCP 客户端机器；上传为本地读+远端写，下载为远端读+本地写，不能标成 read-only。单文件、非递归，当前 overwrite 只允许 false。 |
+| ssh.job_status / job_list / job_cancel | R / R / W/D；caller + profileId + jobId（取消逐次确认） | 每个 job_* 都需要 profileId；status/cancel 另需 jobId，按宿主归属与授权 profile 过滤，不借 job id 绕过 scope。job_list 用 offset/limit，job_status 用字节 offset/maxBytes。cancel_requested 或 channel/future drop 不等于 remote termination confirmed；不得以断开用户 SSH 终端代替取消。 |
+
+公共 schema 以 `src-tauri/src/mcp_core/host_tools.rs:58-155` 为准；annotation 不是授权门禁。具体 profile grant、operations、localRoots/remoteRoots 和 job 所属检查由宿主服务执行，插件不能通过 tool arguments 扩权。原始 MCP 使用统一主体 `mcp-global`；**所有连接到本宿主的 MCP 客户端共享这套全局授权**，目前没有按客户端/插件的多租户隔离，不能把 catalogue 的目标 caller 范围写成当前实现已经提供的身份隔离。
+
+#### 私有 loopback bridge：INTERNAL，不向插件发布
+
+| internal surface | source | exposure | covering op / boundary |
+|---|---|---|---|
+| POST /v1/call | `src-tauri/src/mcp_core/host_bridge.rs:249`；路由 `:211-215` | INTERNAL | gateway/core 到宿主 `se.mcp.hostCall` 的私有传输，不是另一个公网或插件入口。独立 bearer token 鉴权，监听 `127.0.0.1:0`，descriptor 用户私有（0600，并校验权限/大小）；token 与 descriptor 不通过任何 OPEN/OPEN-REDACTED op、事件、日志返回插件。 |
+| POST /v1/cancel | `src-tauri/src/mcp_core/host_bridge.rs:171`；路由 `:211-215` | INTERNAL | 同一私有 loopback/token 信任边界内，按 requestId（wire 字段 `request_id`）传播显式 cancel 或 future drop；bounded cancellation ledger/tombstone 处理 cancel-before-call 与有界回收。不计新插件 op，不给插件私有 token，也不把 best-effort cancellation 说成远端进程已确认停止。 |
+
+bridge 的独立 token 不是外部 MCP bearer，也不是插件授权令牌。HTTP request drop 与 bridge future drop 的取消传播已经存在；桌面 `mcp_host_call` 当前仅创建 `CancellationToken::new()`，没有同样的 IPC request-drop/cancel 通道，必须保留此 transport 差异。SSH `job_cancel` 仍是公开通用调用中受授权的业务操作，不等于把内部 `/v1/cancel` 暴露给插件。
+
+#### renderer / 持久化状态的覆盖（复用已有 op，不增加前端独有计数）
+
+- **workspace groups**：`src/renderer/hooks/use-projects-persistence.ts:250-278,469-478,738-760` 将 groups 与 project snapshot 一起持久化，并通过 `src/renderer/lib/tauri-remote-api.ts:111-119` → 既有 `remote_sync_projects`（`src-tauri/src/commands.rs:5035-5057`）把 projects/groups/defaultProjectId 同步给宿主 `ProjectRegistry::set_with_groups`。分别由既有 `projects.groups.add/rename/remove/reorder`、`projects.move_to_group/reorder` 与 `se.remote.syncProjects` 覆盖；新增 group summaries、成员顺序及 preferred/default 字段必须做 allowlist 投影，不开放原始 persistence store。activeGroupId 留在客户端本地，不能声称是宿主全局激活组；后端只读查询由 `se.mcp.hostCall` 的 workspace 三工具覆盖，不赋予 renderer 写状态能力。
+- **宿主授权面板状态**：`src/renderer/components/settings/McpHostAccessPanel.tsx:24-401`、`src/renderer/lib/mcp-host-api.ts:13-61`、`src/shared/types/mcp-host.types.ts:25-73`，由 `McpControlPanel.tsx` 挂载。候选/策略加载覆盖 `se.mcp.hostAccessGet`，保存全局 enabled/workspace 范围/includePaths/SSH profiles/operations/roots/posixJobs/fingerprints 覆盖 `se.mcp.hostAccessPut`，测试连接、任务查询/取消覆盖 `se.mcp.hostCall`；未保存表单草稿不另作能力。SSH job UI 需按 operation grant 门禁，PublicTunnel 面板锁定不代替后端鉴权。宿主策略保存于 app-data `mcp-host-policy.json`，不是 renderer 私有持久化授权，也不是凭据文件。
+- **事件**：本次未新增独立宿主授权变更或 job progress 插件事件，不发明 `mcp.hostAccessChanged`、SSH job completion 等 topic。组同步可复用源码已有 `projects_changed`，不重复新增事件计数；现有清单 C 的 renderer event model 仍是 proposed contract，而不是已打通的事实。任务进度以 job_status/job_list 查询为准。
+
+#### 凭据 backend 更正与插件适配边界
+
+`src-tauri/src/credentials.rs:85-93,154-175,213-239` 明确：当前 shipped backend 是用户私有 JSON 文件（通常 `~/.se-manager/credentials.json`，品牌目录/`SE_PROJECT_ROOT` 参与解析），写入用 0600 和原子替换，GUI、cores 和 gateway 共用。**不是 OS keychain，也不能仅凭 0600 声称内容已加密。** `secure_storage.rs:85-139` 的 `keyring_get/keyring_set` 与 legacy/canonical service 名是兼容 API/命名空间，实际调用 `credentials::backend()`；SSH 的 `credential_store` 也走同一 seam。清单中的 SSH、secure_storage、OAuth/tunnel 凭据表述以此更正为准；“不存进 profile JSON”不等于“不存 JSON”。
+
+宿主复用 SSH 凭据是 OPEN 业务操作，凭据值的直接读写仍按原有 SECRET-EXCLUDED 契约，不把整个 SSH feature 排除；公共管理视图不含密码、passphrase、私钥内容、bearer/私有 bridge token。远端命令输出、文件、日志本身是不可信/可能敏感的业务内容，不能将“宿主不返回凭据存储值”夸大为“任意用户命令输出均无秘密”。
+
+已检查当前没有 `src-tauri/src/capability_host/` 运行时插件 operation registry；现有 `BuiltInRegistry` 是 MCP 内置工具注册器，不等同于插件平台 C1–C3 的 descriptor/provider。此变更仅同步目录；建议运行时插件适配就绪时补充三个 descriptor、按 op-specific scope 的 provider 投影、per-call 确认/审计、越权和 sentinel 测试，**不在本次文档 scope 内修改产品代码或伪称这些已实现**。
+
 ## 不变量
 
 1. **密钥不出宿主。** 8 个 SECRET-EXCLUDED 操作在注册表中不存在。即使用户授权，也没有任何 op、事件、日志或审计条目能返回密钥值。OPEN-REDACTED 的输出由契约测试用哨兵值验证不含密钥。
@@ -860,6 +926,10 @@ Per-group: browser 20 (14 OPEN, 6 INTERNAL) · data_migration 6 · secure_storag
 5. **长任务异步执行。** 构建索引、clone、安装、运行定时任务、发提示这类操作立即返回 jobId，再通过事件和状态查询推进，不占用插件 2 秒的回调时限。缺少取消入口的要补齐：未注册的 `memory_index_cancel_cmd`，以及没有取消命令的 SFTP 上传和下载。
 6. **每次调用都记审计，只记元数据。** 时间、调用方、op、范围、结果码和确认来源都要记录，不记录参数和返回内容。
 
+7. **宿主 MCP 授权默认关闭且全局共享。** 调用同时校验宿主 policy、workspace 或 SSH operation scopes；管理策略是高权限委托，插件必须逐次本机确认，不能依靠安装 grant 或 caller-supplied grant/confirmed 自授权。现有 `mcp-global` 不是多租户隔离。
+8. **私有 bridge 永不成为插件凭据获取接口。** `/v1/call` 与 `/v1/cancel` 均 INTERNAL；descriptor/token 留在用户私有 loopback 信任边界。取消只传播请求意图，除非有真实远端证据，不能报告 termination confirmed；Tauri/web/gateway 的取消能力差异必须如实呈现。
+9. **脱敏不等于 metadata 无风险。** `hostAccessGet` 的候选 profile、project id/name、policy roots/路径仍按调用者 scope 最小化；原始本地管理员视图不可直接当作无权限插件 DTO。凭据 backend 是用户私有文件，不再称作 OS keychain。
+
 ## 验收
 
 1. **覆盖完整：** 自动比对 `src-tauri/src/lib.rs` 的 `generate_handler!` 和注册表。每个命令必须恰好对应一个 OPEN、OPEN-REDACTED、SECRET-EXCLUDED 或 INTERNAL 条目，新增命令没有分类时 CI 失败。
@@ -868,3 +938,6 @@ Per-group: browser 20 (14 OPEN, 6 INTERNAL) · data_migration 6 · secure_storag
 4. **确认生效：** 不经确认调用 `per-call` 操作时，断言返回 `CAPABILITY_CONFIRMATION_REQUIRED` 且没有副作用；确认令牌只能使用一次。
 5. **验收场景 H1：** 第三方插件「整理历史会话」完整跑通（见 `plugin-platform-plan` 的 H1）。
 6. **核实遗留项：** 以下各项要逐项核实，结论写回本清单：`conversation_migration_control` 的参数、`acp_fetch_registry_snapshot` 和 `acp_install_registry_binary` 的实现、`RemoteStatus` 的字段、`plugin_web_read` 的路径限定、通知 store、命令面板的置顶与最近使用、项目默认 shell 的写入路径。
+
+7. **本次目录同步检查：** `python3 .agents/skills/plugin-capability-sync/scripts/check_catalog.py` 应输出 `registered commands: 328; unclassified: 0`；合并统计为后端 328（OPEN 291 / OPEN-REDACTED 12 / SECRET-EXCLUDED 8 / INTERNAL 17）与前端 38，共 366。确认既有来源、清单及事件完整保留，新增命令各仅一个主分类；三条 HTTP twin、两条 INTERNAL bridge 路由和 provider 子工具不重复计数。历史 explorer 子表继续按原约定保留。
+8. **后续插件运行时验收（本次不宣称通过）：** 三个新 op 的成功/越权/无确认 per-call/哨兵不泄漏测试；所有 workspace group 计数先过滤授权成员，未同步区别于空集；SSH profile+operation+roots+job 归属限制；HTTP 无 principal 为 401、PublicTunnel 为 403、缺服务为 UNAVAILABLE；私有 bridge token 不出插件边界，取消不误报远端停止。检查策略或相关表单改动不能隐式扩大授权；按插件身份隔离若未实现必须明确标注，不得以共享 MCP policy 冒充多租户授权。

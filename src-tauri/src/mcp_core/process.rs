@@ -30,6 +30,8 @@ pub const MCP_CORE_PARENT_PID_ENV: &str = "TERMUL_MCP_CORE_PARENT_PID";
 /// Optional host-private memory-index state root used by the independent Core
 /// process. The HTTP caller still selects and authorizes its project per call.
 pub const MCP_CORE_MEMORY_STATE_ROOT_ENV: &str = "TERMUL_MCP_CORE_MEMORY_STATE_ROOT";
+/// Optional private bridge discovery path for the env-configured process role.
+pub const MCP_CORE_HOST_DESCRIPTOR_ENV: &str = "TERMUL_MCP_CORE_HOST_DESCRIPTOR";
 pub const MCP_CORE_PROBE_MISSES: u32 = 3;
 
 #[derive(Debug, Clone)]
@@ -295,6 +297,36 @@ fn parent_process_is_alive(_pid: u32) -> bool {
     true
 }
 
+fn process_core(
+    memory_root: Option<PathBuf>,
+    descriptor: Option<PathBuf>,
+) -> Result<McpCore, ProcessError> {
+    let mut builtins = match memory_root {
+        Some(root) => {
+            BuiltInRegistry::memory_backed(std::sync::Arc::new(MemoryIndexService::new(root)), None)
+        }
+        None => BuiltInRegistry::empty(),
+    };
+    if let Some(descriptor) = descriptor {
+        let backend = std::sync::Arc::new(
+            super::host_bridge::RemoteHostBackend::new(descriptor).map_err(|_| {
+                ProcessError::InvalidConfig("host bridge client unavailable".into())
+            })?,
+        );
+        builtins.register(std::sync::Arc::new(
+            super::host_capabilities::HostBackedCapability::workspace(backend.clone()),
+        ));
+        builtins.register(std::sync::Arc::new(
+            super::host_capabilities::HostBackedCapability::ssh(backend),
+        ));
+    }
+    Ok(McpCore::new_with_builtins(
+        McpCoreConfig::default(),
+        std::sync::Arc::new(super::AllowAllTools),
+        builtins,
+    ))
+}
+
 pub fn run_mcp_core_process() -> i32 {
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
@@ -321,19 +353,25 @@ pub fn run_mcp_core_process() -> i32 {
                 return 2;
             }
         };
-        let core = std::env::var_os(MCP_CORE_MEMORY_STATE_ROOT_ENV)
+        let descriptor = std::env::var_os(MCP_CORE_HOST_DESCRIPTOR_ENV)
             .map(PathBuf::from)
-            .map(|state_root| {
-                McpCore::new_with_builtins(
-                    McpCoreConfig::default(),
-                    std::sync::Arc::new(super::AllowAllTools),
-                    BuiltInRegistry::memory_backed(
-                        std::sync::Arc::new(MemoryIndexService::new(state_root)),
-                        None,
-                    ),
-                )
-            })
-            .unwrap_or_default();
+            .or_else(|| {
+                super::service::config_root().map(|root| {
+                    super::host_bridge::descriptor_path(&super::service::gateway_settings_path(
+                        &root,
+                    ))
+                })
+            });
+        let core = match process_core(
+            std::env::var_os(MCP_CORE_MEMORY_STATE_ROOT_ENV).map(PathBuf::from),
+            descriptor,
+        ) {
+            Ok(core) => core,
+            Err(error) => {
+                eprintln!("{error}");
+                return 2;
+            }
+        };
         let gateway = match McpHttpGateway::bind(
             std::sync::Arc::new(core),
             McpHttpGatewayConfig {
@@ -373,6 +411,19 @@ pub fn run_mcp_core_process() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn env_process_registers_host_tools_without_opening_credentials() {
+        let temp = tempfile::tempdir().unwrap();
+        let core = process_core(None, Some(temp.path().join("missing-host.json"))).unwrap();
+        let tools = core.list_tools().await.unwrap().items;
+        assert_eq!(
+            tools.iter().filter(|t| t.server_id == "workspace").count(),
+            3
+        );
+        assert_eq!(tools.iter().filter(|t| t.server_id == "ssh").count(), 13);
+        assert!(!temp.path().join("missing-host.json").exists());
+    }
 
     #[test]
     fn three_consecutive_misses_is_the_restart_threshold() {

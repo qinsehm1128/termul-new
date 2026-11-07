@@ -38,10 +38,16 @@ export interface McpOAuthConfig {
   discoveredAt?: number
 }
 
+export interface McpCapabilityPolicy {
+  allowTools?: string[]
+  denyTools?: string[]
+}
+
 export type StoredMcpServer = McpServerConfig & {
   id: string
   enabled?: boolean
   oauth?: McpOAuthConfig
+  policy?: McpCapabilityPolicy
 }
 
 export interface McpValidation {
@@ -374,10 +380,33 @@ function appendBearerAuthorization(
   return next
 }
 
+/** Never turn a configured restriction into unrestricted access during a UI round trip. */
+export function normalizeCapabilityPolicy(value: unknown): McpCapabilityPolicy | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) return { allowTools: [] }
+  const policy: McpCapabilityPolicy = {}
+  for (const key of ['allowTools', 'denyTools'] as const) {
+    const names = value[key]
+    if (names === undefined) continue
+    if (!Array.isArray(names) || !names.every((name) => typeof name === 'string')) {
+      return { allowTools: [] }
+    }
+    policy[key] = [...names]
+  }
+  return policy
+}
+
 function normalizeStoredServer(value: unknown): StoredMcpServer | null {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string')
     return null
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') return null
+  const policy = normalizeCapabilityPolicy(value.policy)
+  const common = {
+    id: value.id,
+    name: value.name,
+    enabled: value.enabled ?? true,
+    ...(policy === undefined ? {} : { policy })
+  }
   const type = value.type ?? 'stdio'
   if (type === 'stdio') {
     if (typeof value.command !== 'string') return null
@@ -387,13 +416,11 @@ function normalizeStoredServer(value: unknown): StoredMcpServer | null {
     const env = stringPairs(value.env)
     if (value.env !== undefined && env === undefined) return null
     const server: StoredMcpServer = {
-      id: value.id,
+      ...common,
       type: 'stdio',
-      name: value.name,
       command: value.command,
       ...(args ? { args } : {}),
-      ...(env ? { env } : {}),
-      enabled: value.enabled ?? true
+      ...(env ? { env } : {})
     }
     return validateMcpServer(server).valid ? server : null
   }
@@ -404,13 +431,11 @@ function normalizeStoredServer(value: unknown): StoredMcpServer | null {
     const oauth = value.oauth === undefined ? undefined : normalizeOAuthConfig(value.oauth)
     if (oauth === null) return null
     const server: StoredMcpServer = {
-      id: value.id,
+      ...common,
       type,
-      name: value.name,
       url: value.url,
       ...(headers ? { headers } : {}),
-      ...(oauth ? { oauth } : {}),
-      enabled: value.enabled ?? true
+      ...(oauth ? { oauth } : {})
     }
     return validateMcpServer(server).valid ? server : null
   }

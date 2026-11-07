@@ -128,8 +128,9 @@ pub fn prepare_settings(
     Ok(settings)
 }
 
-/// Resolves secret references through the OS keychain; inline values pass
-/// through. Never logs either.
+/// Resolves secret references through the host credential backend; inline values
+/// pass through. The active backend may be a private file, not an OS keychain.
+/// Never logs either.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeyringSecretResolver;
 
@@ -422,10 +423,22 @@ async fn serve(settings_path: PathBuf) -> Result<(), ServeError> {
         .profile_root
         .clone()
         .or_else(|| std::env::var_os("TERMUL_CORE_PROFILE_ROOT").map(PathBuf::from));
-    let builtins = match profile_root {
+    let mut builtins = match profile_root {
         Some(root) => BuiltInRegistry::memory_backed(Arc::new(MemoryIndexService::new(root)), None),
         None => BuiltInRegistry::empty(),
     };
+    let host_backend = Arc::new(
+        super::host_bridge::RemoteHostBackend::new(super::host_bridge::descriptor_path(
+            &settings_path,
+        ))
+        .map_err(|_| ServeError::Other("cannot initialize host bridge client".into()))?,
+    );
+    builtins.register(Arc::new(
+        super::host_capabilities::HostBackedCapability::workspace(host_backend.clone()),
+    ));
+    builtins.register(Arc::new(
+        super::host_capabilities::HostBackedCapability::ssh(host_backend),
+    ));
     let core = Arc::new(McpCore::new_with_builtins(
         McpCoreConfig::default(),
         Arc::new(AllowAllTools),

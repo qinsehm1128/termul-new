@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
+use super::config::{BUILTIN_SSH, BUILTIN_WORKSPACE};
 use super::{
     route_name_from_display, ConfigError, McpConfigSnapshot, McpControlPlaneConfig, McpCore,
     McpCoreError, McpDomainError, McpPersistedTransport, McpUpstreamConfig, McpUpstreamServer,
@@ -173,11 +174,15 @@ pub fn snapshot_from_config_tolerant(
 /// to the id, with a numeric suffix when an earlier upstream or a built-in
 /// already took it.
 fn route_names(upstreams: &[McpUpstreamConfig]) -> Vec<String> {
-    let mut taken: std::collections::BTreeSet<String> =
-        [BUILTIN_SESSION_MEMORY, BUILTIN_PROJECT_SCOPE]
-            .into_iter()
-            .map(String::from)
-            .collect();
+    let mut taken: std::collections::BTreeSet<String> = [
+        BUILTIN_SESSION_MEMORY,
+        BUILTIN_PROJECT_SCOPE,
+        BUILTIN_WORKSPACE,
+        BUILTIN_SSH,
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
     upstreams
         .iter()
         .map(|upstream| {
@@ -543,7 +548,10 @@ mod tests {
             {"id": "2", "name": "context7", "type": "stdio", "command": "x"},
             {"id": "3", "name": "Session Memory", "type": "stdio", "command": "x"},
             {"id": "4", "name": "网页 搜索", "type": "stdio", "command": "x"},
-            {"id": "5-plane", "name": "", "type": "stdio", "command": "x"}
+            {"id": "5-plane", "name": "", "type": "stdio", "command": "x"},
+            {"id": "6", "name": "Workspace", "type": "stdio", "command": "x"},
+            {"id": "7", "name": "SSH", "type": "stdio", "command": "x"},
+            {"id": "8", "name": "Project Scope", "type": "stdio", "command": "x"}
         ]))
         .unwrap()
         .config;
@@ -555,7 +563,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             names,
-            ["context7", "context7-2", "session-memory-2", "4", "5-plane"]
+            [
+                "context7",
+                "context7-2",
+                "session-memory-2",
+                "4",
+                "5-plane",
+                "workspace-2",
+                "ssh-2",
+                "project-scope-2"
+            ]
         );
     }
 

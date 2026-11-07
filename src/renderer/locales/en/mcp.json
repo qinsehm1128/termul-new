@@ -19,6 +19,14 @@
       "project-scope": {
         "name": "Project scope",
         "description": "Expose the current project boundary to MCP clients."
+      },
+      "workspace": {
+        "name": "Workspace",
+        "description": "Query authorized groups and projects."
+      },
+      "ssh": {
+        "name": "SSH",
+        "description": "Reuse explicitly authorized SSH profiles and operations."
       }
     },
     "tabs": {
@@ -255,5 +263,55 @@
     "reset": "Restore defaults",
     "saved": "Generation settings saved.",
     "failed": "Could not save the generation settings."
+  },
+  "hostAccess": {
+    "title": "Host capability access",
+    "globalWarning": "All MCP clients share ONE global authorization principal. These grants are not isolated per user or client. Access is off by default.",
+    "enabled": "Enable host capabilities globally",
+    "workspace": "Workspace catalog",
+    "workspaceEnabled": "Allow workspace queries",
+    "allProjects": "All projects (including future projects)",
+    "includePaths": "Expose project directory paths",
+    "executeWarning": "Execute grants the remote account’s full command permissions, NOT a path sandbox. Job start also runs commands. Write, upload, download and job cancel each require a separate high-risk grant.",
+    "localWarning": "Local roots refer to the Se host filesystem, not this browser. Empty roots grant no file access. Roots do not constrain arbitrary commands.",
+    "grantProfile": "Authorize this SSH profile",
+    "remoteRoots": "Remote roots (one absolute path per line)",
+    "localRoots": "Se host local roots (one absolute path per line)",
+    "posixJobs": "Allow POSIX jobs (requires a compatible POSIX shell; cancellation may not confirm remote termination)",
+    "fingerprintChanged": "This profile changed. Review the current target and explicitly reauthorize it before saving an enabled policy.",
+    "reauthorizeIdentity": "Authorize this current target identity",
+    "highRisk": "High risk",
+    "test": "Test connection",
+    "refreshJobs": "Refresh jobs",
+    "jobs": "SSH jobs",
+    "noJobs": "No jobs in this profile.",
+    "cancelJob": "Cancel job",
+    "noProfiles": "No SSH profiles configured. Configure credentials in SSH settings; no secrets are requested here.",
+    "readOnly": "Host access management and active calls are disabled for public tunnels or forbidden access.",
+    "unauthorized": "Authentication required. Reconnect with your remote access credential, then reload.",
+    "conflict": "The policy changed elsewhere. Reload before saving; your draft has not overwritten it.",
+    "failed": "Request failed. Check host access and granted operations, then retry.",
+    "saved": "Host access saved.",
+    "tested": "Connection test completed.",
+    "jobsRefreshed": "Jobs refreshed.",
+    "cancelRequested": "Cancellation requested. Refresh jobs to verify; remote termination is not guaranteed.",
+    "saveHint": "Save before testing or refreshing jobs. Identity changes require explicit reauthorization. Saving preserves existing fingerprints and removes grants for deleted profiles; unchecking a profile revokes its grant.",
+    "save": "Save host access",
+    "reload": "Reload host access",
+    "operations": {
+      "profile_list": "List profile",
+      "profile_get": "View profile",
+      "test_connection": "Test connection",
+      "execute": "Execute commands",
+      "list_files": "List files",
+      "read_file": "Read files",
+      "write_file": "Write files",
+      "upload": "Upload files",
+      "download": "Download files",
+      "job_start": "Start jobs",
+      "job_status": "Query job status",
+      "job_list": "List jobs",
+      "job_cancel": "Cancel jobs"
+    }
   }
 }

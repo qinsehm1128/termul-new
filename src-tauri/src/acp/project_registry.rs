@@ -46,12 +46,11 @@ use agent_client_protocol::schema::v1::McpServer;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-/// Current on-disk JSON schema version. Bump when the [`RegistryFile`] shape
-/// changes; [`FileProjectRegistry::load`] routes any other version through
-/// the [`migrate`] hook. v3 renamed `activeProjectId` → `defaultProjectId`
-/// (the host default, distinct from any client's active selection); v2 files
-/// deserialize transparently via `#[serde(alias = "activeProjectId")]`.
-pub const SCHEMA_VERSION: u32 = 3;
+/// Current on-disk JSON schema version. v3 renamed `activeProjectId` to
+/// `defaultProjectId`; v4 adds flat `groups`. v1/v2/v3 are upgraded only in
+/// memory (missing groups default to empty). Only an explicit `save_atomic`
+/// writes v4; loading or taking snapshots never rewrites a valid old file.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// A single VFS root served to the web client in VPS mode.
 ///
@@ -81,6 +80,49 @@ pub struct VfsRoot {
     pub mcp_servers: Vec<McpServer>,
 }
 
+/// A flat project group, shared by file persistence and the public web mirror.
+/// Ungrouped projects are derived from membership, never stored as a fake group.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGroup {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub project_ids: Vec<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub preferred_project_id: Option<String>,
+}
+
+/// Normalize both registry sources identically, without touching disk. First
+/// group ID wins; duplicate/stale member IDs are dropped in place. Preserve
+/// group/member order, empty groups, archived members and multi-group membership.
+/// A preferred project is valid only while it remains a member of that group.
+pub(crate) fn normalize_groups<'a>(
+    groups: Vec<ProjectGroup>,
+    project_ids: impl IntoIterator<Item = &'a str>,
+) -> Vec<ProjectGroup> {
+    let project_ids: std::collections::HashSet<_> = project_ids.into_iter().collect();
+    let mut seen_groups = std::collections::HashSet::new();
+    groups
+        .into_iter()
+        .filter_map(|mut group| {
+            if !seen_groups.insert(group.id.clone()) {
+                return None;
+            }
+            let mut seen_members = std::collections::HashSet::new();
+            group
+                .project_ids
+                .retain(|id| project_ids.contains(id.as_str()) && seen_members.insert(id.clone()));
+            group.preferred_project_id = group
+                .preferred_project_id
+                .filter(|id| group.project_ids.contains(id));
+            Some(group)
+        })
+        .collect()
+}
+
 /// On-disk JSON schema for the registry file. CamelCase wire casing (consistent
 /// with `web::project_registry`'s wire types). `schema_version` gates loading.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,6 +142,9 @@ pub struct RegistryFile {
     pub default_project_id: Option<String>,
     /// The VFS roots (non-archived + archived; the web list shows both).
     pub projects: Vec<VfsRoot>,
+    /// Ordered flat groups. Older schemas omitted this field.
+    #[serde(default)]
+    pub groups: Vec<ProjectGroup>,
 }
 
 /// In-memory loaded form of the registry (post-load + post-validation).
@@ -111,6 +156,7 @@ pub struct RegistryFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileProjectRegistry {
     roots: Vec<VfsRoot>,
+    groups: Vec<ProjectGroup>,
     default_project_id: Option<String>,
 }
 
@@ -186,6 +232,7 @@ impl FileProjectRegistry {
     pub fn empty() -> Self {
         Self {
             roots: Vec::new(),
+            groups: Vec::new(),
             default_project_id: None,
         }
     }
@@ -199,6 +246,19 @@ impl FileProjectRegistry {
     /// project must not survive into the in-memory registry).
     #[must_use]
     pub fn from_roots(roots: Vec<VfsRoot>, default_project_id: Option<String>) -> Self {
+        Self::from_roots_with_groups(roots, Vec::new(), default_project_id)
+    }
+
+    /// Build a registry with ordered groups using the same membership rules as
+    /// the web mirror. This performs no path validation or filesystem writes;
+    /// disk-loaded roots are validated by [`load`](Self::load).
+    #[must_use]
+    pub fn from_roots_with_groups(
+        roots: Vec<VfsRoot>,
+        groups: Vec<ProjectGroup>,
+        default_project_id: Option<String>,
+    ) -> Self {
+        let groups = normalize_groups(groups, roots.iter().map(|root| root.id.as_str()));
         let default_project_id = default_project_id.filter(|id| {
             roots
                 .iter()
@@ -206,6 +266,7 @@ impl FileProjectRegistry {
         });
         Self {
             roots,
+            groups,
             default_project_id,
         }
     }
@@ -244,11 +305,9 @@ impl FileProjectRegistry {
             }
         };
 
-        // Route any non-current schema through the migration hook. v1/v2
-        // upgrade to v3: v1→v2 added empty per-project MCP configuration;
-        // v2→v3 renamed `activeProjectId` → `defaultProjectId` (the serde
-        // alias on the field handles the rename transparently, so the migrate
-        // arm only bumps the version). Unknown versions fail.
+        // Upgrade supported older schemas in memory only. Serde supplies the
+        // v1 per-project MCP defaults, the v2 activeProjectId alias and empty
+        // groups for pre-v4 files. Unknown versions fail without rewriting.
         let file = if file.schema_version != SCHEMA_VERSION {
             migrate(file.schema_version, file)?
         } else {
@@ -268,20 +327,11 @@ impl FileProjectRegistry {
             roots.push(root);
         }
 
-        // P4: drop a default_project_id that references a project not in the
-        // loaded roots (a stale id left by a deleted project must not survive
-        // into the in-memory registry). Also reject archived/empty-path
-        // defaults (not switchable — same conditions as `set_default_project`).
-        let default_project_id = file.default_project_id.filter(|id| {
-            roots
-                .iter()
-                .any(|r| r.id == *id && !r.is_archived && !r.path.as_os_str().is_empty())
-        });
-
-        Ok(Self {
+        Ok(Self::from_roots_with_groups(
             roots,
-            default_project_id,
-        })
+            file.groups,
+            file.default_project_id,
+        ))
     }
 
     /// Persist the registry atomically (AC1: temp + rename + fsync).
@@ -298,6 +348,7 @@ impl FileProjectRegistry {
             schema_version: SCHEMA_VERSION,
             default_project_id: self.default_project_id.clone(),
             projects: self.roots.clone(),
+            groups: self.groups.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&file).map_err(ProjectRegistryError::Parse)?;
 
@@ -308,6 +359,39 @@ impl FileProjectRegistry {
     #[must_use]
     pub fn roots(&self) -> &[VfsRoot] {
         &self.roots
+    }
+
+    /// Ordered groups, including empty groups and archived members. Pure read.
+    #[must_use]
+    pub fn groups(&self) -> &[ProjectGroup] {
+        &self.groups
+    }
+
+    /// Owned snapshot for workspace providers; never reads or writes a file.
+    #[must_use]
+    pub fn groups_snapshot(&self) -> Vec<ProjectGroup> {
+        self.groups.clone()
+    }
+
+    /// Remove a project in memory and clear all group/default references to it.
+    /// Empty groups and remaining project/member order are retained. Persistence
+    /// is explicitly caller-owned via [`save_atomic`](Self::save_atomic).
+    pub fn remove_project(&mut self, id: &str) -> bool {
+        let len = self.roots.len();
+        self.roots.retain(|root| root.id != id);
+        if self.roots.len() == len {
+            return false;
+        }
+        for group in &mut self.groups {
+            group.project_ids.retain(|member| member != id);
+            if group.preferred_project_id.as_deref() == Some(id) {
+                group.preferred_project_id = None;
+            }
+        }
+        if self.default_project_id.as_deref() == Some(id) {
+            self.default_project_id = None;
+        }
+        true
     }
 
     /// The host's default project id, or `None`.
@@ -405,6 +489,12 @@ fn migrate(from: u32, mut file: RegistryFile) -> Result<RegistryFile, ProjectReg
         // `activeProjectId` transparently, so the migration only bumps the
         // recorded schema version.
         2 => {
+            file.schema_version = SCHEMA_VERSION;
+            Ok(file)
+        }
+        // v3 → v4 adds groups; serde defaults omitted groups to empty. Do not
+        // synthesize groups or rewrite the source file during this migration.
+        3 => {
             file.schema_version = SCHEMA_VERSION;
             Ok(file)
         }
@@ -780,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_migrates_to_v3_with_empty_mcp_configuration() {
+    fn v1_migrates_to_v4_with_empty_mcp_configuration() {
         let dir = tempdir_like("migrate-v1");
         let root_a = real_dir(&dir, "proj-a");
         let file = dir.join("projects.json");
@@ -803,7 +893,7 @@ mod tests {
         assert_eq!(reg.default_project_id(), Some("p-1"));
         reg.save_atomic(&file).expect("save v3");
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-        assert_eq!(saved["schemaVersion"], 3);
+        assert_eq!(saved["schemaVersion"], SCHEMA_VERSION);
         assert_eq!(saved["defaultProjectId"], "p-1");
         assert!(
             saved.get("activeProjectId").is_none(),
@@ -817,7 +907,7 @@ mod tests {
     /// migrate arm bumps the recorded schema version to 3. After a save→reload
     /// the field is stored under the new `defaultProjectId` name.
     #[test]
-    fn v2_migrates_to_v3_via_serde_alias() {
+    fn v2_migrates_to_v4_via_serde_alias() {
         let dir = tempdir_like("migrate-v2");
         let root_a = real_dir(&dir, "proj-a");
         let file = dir.join("projects.json");
@@ -839,7 +929,7 @@ mod tests {
         // Re-saving persists under the new field name + bumps the version.
         reg.save_atomic(&file).expect("save v3");
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-        assert_eq!(saved["schemaVersion"], 3);
+        assert_eq!(saved["schemaVersion"], SCHEMA_VERSION);
         assert_eq!(saved["defaultProjectId"], "p-1");
         assert!(
             saved.get("activeProjectId").is_none(),

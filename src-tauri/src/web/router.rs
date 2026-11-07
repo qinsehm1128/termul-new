@@ -75,12 +75,22 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 get(mcp_servers_api::get).put(mcp_servers_api::put_config),
             )
             .route("/mcp/status", get(mcp_servers_api::status))
+            .route(
+                "/mcp/host/access",
+                get(super::mcp_host_api::get_access).put(super::mcp_host_api::put_access),
+            )
+            .route("/mcp/host/call", post(super::mcp_host_api::call))
             .route("/mcp/probe", post(mcp_probe_api::probe))
     } else {
         Router::<AppState>::new()
             .route("/mcp-servers", get(mcp_servers_api::get))
             .route("/mcp/config", get(mcp_servers_api::get))
             .route("/mcp/status", get(mcp_servers_api::status))
+            .route(
+                "/mcp/host/access",
+                get(super::mcp_host_api::get_access).put(super::mcp_host_api::put_access),
+            )
+            .route("/mcp/host/call", post(super::mcp_host_api::call))
     };
 
     classified_routes(

@@ -258,7 +258,17 @@ async fn se_mcp_reaches_every_mode_through_the_settings_file() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(names, ["alpha_tool_list", "alpha_tool_call"]);
+    assert_eq!(
+        names,
+        [
+            "ssh_tool_list",
+            "ssh_tool_call",
+            "workspace_tool_list",
+            "workspace_tool_call",
+            "alpha_tool_list",
+            "alpha_tool_call"
+        ]
+    );
     let called = grouped.request(
         3,
         "tools/call",
@@ -275,6 +285,8 @@ async fn se_mcp_reaches_every_mode_through_the_settings_file() {
     );
     let text = servers["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("\"alpha\""), "{text}");
+    assert!(text.contains("\"workspace\""), "{text}");
+    assert!(text.contains("\"ssh\""), "{text}");
 
     let mut direct = Client::spawn(&gateway.settings, "direct");
     initialize(&mut direct);
@@ -284,6 +296,18 @@ async fn se_mcp_reaches_every_mode_through_the_settings_file() {
         json!({"name": "alpha_echo", "arguments": {}}),
     );
     assert_eq!(called["result"]["content"][0]["text"], "stdio", "{called}");
+    // A gateway without its Se host still advertises the stable contract, but
+    // calls must report unavailable instead of a misleading empty project set.
+    let offline = direct.request(
+        3,
+        "tools/call",
+        json!({"name":"workspace_project_list","arguments":{}}),
+    );
+    assert_eq!(offline["result"]["isError"], true, "{offline}");
+    assert!(offline["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("HOST_UNAVAILABLE"));
 }
 
 #[tokio::test]

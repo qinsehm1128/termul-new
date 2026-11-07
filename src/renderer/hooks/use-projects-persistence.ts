@@ -7,7 +7,6 @@ import { randomUUID } from '@/lib/uuid'
 import { webServerProjects } from '@/lib/web-server-api'
 import { useMcpStore } from '@/stores/mcp-store'
 import { useProjectStore } from '@/stores/project-store'
-import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import { isWorktreeSeManaged } from '@/types/project'
@@ -733,11 +732,59 @@ export function useProjectsAutoSave(): void {
     }
     pendingFocusSnapshotFlushes.add(flushCoalescedNow)
 
+    // The desktop store remains the source of truth. Keep the existing host
+    // registry mirror ready for local MCP callers even with remote access off.
+    // Only summaries cross this boundary; environment values stay renderer-local.
+    const syncHostMirror = (
+      state: ReturnType<typeof useProjectStore.getState>,
+      projectSwitched = false
+    ): void => {
+      void syncProjects(
+        toProjectSummaries(state.projects, state.activeProjectId),
+        state.activeProjectId || null,
+        toProjectGroupSummaries(state.groups)
+      )
+        .then((result) => {
+          if (!result.success) {
+            console.warn('[projects] host sync unsuccessful:', result.error)
+          }
+          // Reload only after the host has accepted the new default; otherwise
+          // the project-scoped MCP mirror would target the previous project.
+          if (projectSwitched && result.success) {
+            void useMcpStore.getState().load()
+          }
+        })
+        .catch((err: unknown) => {
+          console.debug('[projects] host sync failed', err)
+        })
+    }
+
+    // A loader can have completed before this effect subscribes (including
+    // remounts). Seed the same host mirror without writing another truth file.
+    const initialState = useProjectStore.getState()
+    if (initialState.isLoaded) syncHostMirror(initialState)
+
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
       // Skip auto-saving if the store is not yet loaded
       if (!state.isLoaded) {
         return
+      }
+
+      if (
+        !prevState.isLoaded ||
+        state.projects !== prevState.projects ||
+        state.groups !== prevState.groups ||
+        state.activeProjectId !== prevState.activeProjectId ||
+        state.activeGroupId !== prevState.activeGroupId
+      ) {
+        const projectSwitched =
+          prevState.isLoaded &&
+          hasInitialized.current &&
+          (state.activeProjectId !== prevState.activeProjectId ||
+            state.projects.find((p) => p.isDefault === true)?.id !==
+              prevState.projects.find((p) => p.isDefault === true)?.id)
+        syncHostMirror(state, projectSwitched)
       }
 
       // If we just transitioned to loaded, mark it initialized and skip saving
@@ -791,42 +838,6 @@ export function useProjectsAutoSave(): void {
             void flushSnapshot(previous)
           }, FOCUS_ONLY_COALESCE_MS)
         }
-      }
-
-      // Epic-4 bridge live push: if the shared-live server is running, mirror
-      // the new project list into the in-memory registry + broadcast
-      // `projects_changed` so connected web clients refetch `GET /projects`.
-      // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
-      if (useRemoteStatusStore.getState().status?.running) {
-        const projectSwitched =
-          state.activeProjectId !== prevState.activeProjectId ||
-          state.projects.find((p) => p.isDefault === true)?.id !==
-            prevState.projects.find((p) => p.isDefault === true)?.id
-        syncProjects(
-          toProjectSummaries(state.projects, state.activeProjectId),
-          state.activeProjectId || null,
-          toProjectGroupSummaries(state.groups)
-        )
-          .then((result) => {
-            if (!result.success) {
-              console.warn('[projects] remote sync unsuccessful:', result.error)
-            }
-            // CAP-7: after the backend `ProjectRegistry` (and thus the resolved
-            // project root) reflects the new default, mirror the MCP registry to
-            // the new project's `.se-manager/mcp-servers.json`. Best-effort +
-            // non-fatal — the action logs failures and never throws, so a
-            // switch still completes even if the sync write fails. Only on a
-            // real project switch (not a projects/groups-only mutation), and
-            // only when the upstream sync succeeded (a failed syncProjects
-            // leaves the backend on the old default — syncing then would write
-            // to the wrong project's file).
-            if (projectSwitched && result.success) {
-              void useMcpStore.getState().load()
-            }
-          })
-          .catch((err: unknown) => {
-            console.debug('[projects] remote sync failed', err)
-          })
       }
     })
 

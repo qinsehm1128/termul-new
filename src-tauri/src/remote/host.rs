@@ -448,6 +448,7 @@ impl RemoteServerState {
         acp_install: Option<Arc<AcpInstallService>>,
         memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
         skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
+        host_service: Option<Arc<crate::mcp_core::host_service::HostCapabilityService>>,
     ) -> Result<RemoteStatus, String> {
         self.start_on_port(
             acp,
@@ -463,6 +464,7 @@ impl RemoteServerState {
             acp_install,
             memory_index,
             skills_hub,
+            host_service,
             0,
         )
         .await
@@ -489,6 +491,7 @@ impl RemoteServerState {
         acp_install: Option<Arc<AcpInstallService>>,
         memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
         skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
+        host_service: Option<Arc<crate::mcp_core::host_service::HostCapabilityService>>,
         bind_port: u16,
     ) -> Result<RemoteStatus, String> {
         // In-process fallback still wires ACP onto the local PTY manager.
@@ -641,6 +644,10 @@ impl RemoteServerState {
             memory_index,
             skills_hub,
             Arc::clone(&self.authority),
+            crate::web::WebHostServices {
+                service: host_service,
+                store: None,
+            },
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
@@ -1216,6 +1223,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("settings-backed host starts");
@@ -1274,6 +1282,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("start on localhost binds an OS-assigned port");
@@ -1319,6 +1328,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("restart after stop succeeds");
@@ -1356,6 +1366,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("first start succeeds");
@@ -1368,6 +1379,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1406,6 +1418,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap_err();
@@ -1421,6 +1434,7 @@ mod tests {
                 maximum,
                 registry,
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1447,6 +1461,7 @@ mod tests {
                 relay,
                 registry,
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1497,6 +1512,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .expect("start succeeds");
@@ -1522,6 +1538,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,
@@ -1569,6 +1586,7 @@ mod tests {
                 relay,
                 registry,
                 RemoteBindMode::All,
+                None,
                 None,
                 None,
                 None,
@@ -1843,6 +1861,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 None,

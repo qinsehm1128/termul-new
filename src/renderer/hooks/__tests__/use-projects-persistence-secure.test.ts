@@ -11,12 +11,14 @@ const apiMocks = vi.hoisted(() => ({
   persistenceWrite: vi.fn(),
   persistenceWriteDebounced: vi.fn(),
   persistenceDelete: vi.fn(),
+  syncProjects: vi.fn(async () => ({ success: true })),
   secureStorageSet: vi.fn(),
   secureStorageGet: vi.fn(),
   secureStorageDelete: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
+  syncProjects: apiMocks.syncProjects,
   persistenceApi: {
     read: apiMocks.persistenceRead,
     write: apiMocks.persistenceWrite,
@@ -28,6 +30,10 @@ vi.mock('@/lib/api', () => ({
     getSecret: apiMocks.secureStorageGet,
     deleteSecret: apiMocks.secureStorageDelete
   }
+}))
+
+vi.mock('@/stores/mcp-store', () => ({
+  useMcpStore: { getState: () => ({ load: vi.fn(async () => undefined) }) }
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({
@@ -159,6 +165,8 @@ describe('use-projects-persistence secure storage integration', () => {
     // No plaintext secret (and no misleading [REDACTED] placeholder) is written to disk,
     // and the recoverable value stays in the in-memory store.
     expect(apiMocks.persistenceWriteDebounced).not.toHaveBeenCalled()
+    expect(apiMocks.syncProjects).toHaveBeenCalled()
+    expect(JSON.stringify(apiMocks.syncProjects.mock.calls)).not.toContain('secret-value')
     expect(useProjectStore.getState().projects[0].envVars).toEqual([
       { key: 'API_KEY', value: 'secret-value', isSecret: true }
     ])

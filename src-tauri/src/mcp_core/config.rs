@@ -16,6 +16,8 @@ use super::oauth::{sanitize_mcp_oauth_metadata, McpOAuthConfig};
 pub const MCP_CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 pub const BUILTIN_SESSION_MEMORY: &str = "session-memory";
 pub const BUILTIN_PROJECT_SCOPE: &str = "project-scope";
+pub const BUILTIN_WORKSPACE: &str = "workspace";
+pub const BUILTIN_SSH: &str = "ssh";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
@@ -294,18 +296,17 @@ fn default_true() -> bool {
 }
 
 pub fn default_built_ins() -> Vec<McpBuiltInConfig> {
-    vec![
-        McpBuiltInConfig {
-            id: BUILTIN_SESSION_MEMORY.into(),
+    // Old project-scope entries remain valid permission fences when loaded.
+    // Host providers are discoverable by default; host access grants remain
+    // deny-all until the user authorizes operations in the single access UI.
+    [BUILTIN_SESSION_MEMORY, BUILTIN_WORKSPACE, BUILTIN_SSH]
+        .into_iter()
+        .map(|id| McpBuiltInConfig {
+            id: id.into(),
             enabled: true,
             policy: McpCapabilityPolicy::default(),
-        },
-        McpBuiltInConfig {
-            id: BUILTIN_PROJECT_SCOPE.into(),
-            enabled: true,
-            policy: McpCapabilityPolicy::default(),
-        },
-    ]
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -859,6 +860,27 @@ pub fn prepare_write(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn default_host_providers_are_enabled_without_a_legacy_memory_group() {
+        let defaults = default_built_ins();
+        assert_eq!(
+            defaults
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            [BUILTIN_SESSION_MEMORY, BUILTIN_WORKSPACE, BUILTIN_SSH]
+        );
+        assert!(defaults
+            .iter()
+            .all(|entry| entry.enabled && entry.policy.is_empty()));
+        let loaded = McpControlPlaneConfig::from_stored_json(&json!({
+            "schemaVersion": 1, "revision": 0, "builtIns": [], "upstreams": []
+        }))
+        .unwrap()
+        .config;
+        assert_eq!(loaded.built_ins, defaults);
+    }
 
     fn legacy_array() -> Value {
         json!([

@@ -15,12 +15,19 @@ pub mod describe;
 pub mod domain;
 pub mod facade;
 pub mod gateway_tools;
+pub mod host_bridge;
+pub mod host_capabilities;
+pub mod host_adapters;
+pub mod host_policy;
+pub mod host_service;
+pub mod host_tools;
 pub mod http;
 pub mod metadata;
 pub mod oauth;
 pub mod process;
 pub mod service;
 pub mod snapshot;
+pub mod workspace;
 pub use builtins::{BuiltInCapability, BuiltInRegistry};
 pub use config::{
     default_built_ins, prepare_write, ConfigError, ConfigSource, McpBuiltInConfig,

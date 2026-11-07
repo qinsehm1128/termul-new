@@ -260,9 +260,13 @@ async fn list_tools_result(
         .await
         .into_iter()
         .find(|summary| summary.name == server);
-    let Some(summary) = summary else {
+    if summary.is_none()
+        && !core
+            .has_builtin_route(server, super::builtins::TOOL_PROJECT_BOUNDARY)
+            .await
+    {
         return unknown_server(core, server).await;
-    };
+    }
     let tools = match core.list_server_tools(server).await {
         Ok(tools) => tools,
         Err(error) => return failure(error.to_string()),
@@ -281,8 +285,9 @@ async fn list_tools_result(
         })
         .collect::<Vec<_>>();
     success(json!({
-        "server": summary.name,
-        "description": summary.description,
+        "server": server,
+        "description": summary.map(|item| item.description).unwrap_or_else(||
+            "Compatibility alias for session-memory project tools.".into()),
         "tools": tools,
     }))
 }
@@ -295,7 +300,7 @@ async fn call_result(
     timeout: Option<Duration>,
     cancellation: CancellationToken,
 ) -> CallToolResult {
-    if core.server_status(server).await.is_none() {
+    if core.server_status(server).await.is_none() && !core.has_builtin_route(server, tool).await {
         return unknown_server(core, server).await;
     }
     let call = core.call_server_tool(server, tool, arguments, cancellation);

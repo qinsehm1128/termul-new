@@ -18,7 +18,6 @@
 //! (desktop-hosted push — the desktop user IS the host operator, so their
 //! active selection IS the default for new clients).
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,7 +26,11 @@ use serde::{Deserialize, Serialize};
 
 use agent_client_protocol::schema::v1::McpServer;
 
-use crate::acp::{FileProjectRegistry, VfsRoot};
+// Keep the ACP module private while exposing the standalone registry through
+// the public registry boundary used by hosts and integration tests.
+pub use crate::acp::project_registry::{
+    FileProjectRegistry, ProjectGroup, ProjectRegistryError, VfsRoot, SCHEMA_VERSION,
+};
 
 /// A single project's summary as exposed to the web/remote client.
 ///
@@ -65,23 +68,7 @@ pub struct ProjectSummary {
 ///
 /// Group membership is display/navigation metadata only. It never participates
 /// in cwd resolution or the singleton `project_root` containment boundary.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectGroupSummary {
-    /// Stable group id.
-    pub id: String,
-    /// Display name.
-    pub name: String,
-    /// Ordered ids of projects in this group.
-    #[serde(default)]
-    pub project_ids: Vec<String>,
-    /// Optional group color token.
-    #[serde(default)]
-    pub color: Option<String>,
-    /// Preferred project within `project_ids`, when valid.
-    #[serde(default)]
-    pub preferred_project_id: Option<String>,
-}
+pub use crate::acp::project_registry::ProjectGroup as ProjectGroupSummary;
 
 /// `GET /projects` response payload (wrapped in `IpcResult<T>` by the handler).
 ///
@@ -128,6 +115,17 @@ struct RegistryData {
     projects: Vec<ProjectSummary>,
     groups: Vec<ProjectGroupSummary>,
     default_project_id: Option<String>,
+    ready: bool,
+    observed_at: Option<String>,
+}
+
+/// Data and synchronization state captured under the same lock. No filesystem
+/// access and no invented revision: observed_at is the last mirror mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistrySnapshot {
+    pub payload: ProjectListPayload,
+    pub ready: bool,
+    pub observed_at: Option<String>,
 }
 
 /// In-memory project registry shared by VPS and desktop-hosted web modes.
@@ -179,39 +177,31 @@ impl ProjectRegistry {
 
     /// Replace the project + group mirror atomically.
     ///
-    /// Unknown project ids are removed from group membership. A preferred id
-    /// is retained only when it remains a member of that group. This
-    /// normalization keeps stale renderer data from reaching browser clients;
-    /// groups remain navigation-only and do not affect cwd/root resolution.
+    /// Duplicate group IDs use the first group. Unknown/duplicate project ids
+    /// are removed from membership without reordering members or dropping empty
+    /// groups. A preferred id is retained only while it remains a member. This
+    /// uses the file registry's rules; groups remain navigation-only and do not
+    /// affect cwd/root resolution.
     pub fn set_with_groups(
         &self,
         mut projects: Vec<ProjectSummary>,
-        mut groups: Vec<ProjectGroupSummary>,
+        groups: Vec<ProjectGroupSummary>,
         default_id: Option<String>,
     ) {
         for project in &mut projects {
             project.is_default = default_id.as_deref() == Some(project.id.as_str());
         }
-        let project_ids: HashSet<&str> =
-            projects.iter().map(|project| project.id.as_str()).collect();
-        for group in &mut groups {
-            let mut seen = HashSet::new();
-            group
-                .project_ids
-                .retain(|id| project_ids.contains(id.as_str()) && seen.insert(id.clone()));
-            if group
-                .preferred_project_id
-                .as_ref()
-                .is_some_and(|id| !group.project_ids.contains(id))
-            {
-                group.preferred_project_id = None;
-            }
-        }
+        let groups = crate::acp::project_registry::normalize_groups(
+            groups,
+            projects.iter().map(|project| project.id.as_str()),
+        );
         {
             let mut g = self.inner.lock();
             g.projects = projects;
             g.groups = groups;
             g.default_project_id = default_id;
+            g.ready = true;
+            g.observed_at = Some(chrono::Utc::now().to_rfc3339());
         }
         self.rebind_project_root();
     }
@@ -225,6 +215,22 @@ impl ProjectRegistry {
             projects: g.projects.clone(),
             groups: g.groups.clone(),
             default_project_id: g.default_project_id.clone(),
+        }
+    }
+
+    /// Capture readiness and data together; callers cannot observe a ready bit
+    /// from one synchronization alongside payload data from another.
+    #[must_use]
+    pub fn snapshot_with_state(&self) -> RegistrySnapshot {
+        let g = self.inner.lock();
+        RegistrySnapshot {
+            payload: ProjectListPayload {
+                projects: g.projects.clone(),
+                groups: g.groups.clone(),
+                default_project_id: g.default_project_id.clone(),
+            },
+            ready: g.ready,
+            observed_at: g.observed_at.clone(),
         }
     }
 
@@ -282,6 +288,7 @@ impl ProjectRegistry {
                 for project in &mut g.projects {
                     project.is_default = project.id == project_id;
                 }
+                g.observed_at = Some(chrono::Utc::now().to_rfc3339());
                 true
             }
         };
@@ -523,7 +530,8 @@ impl From<VfsRoot> for ProjectSummary {
 
 /// Seed an in-memory [`ProjectRegistry`] from a file-backed
 /// [`FileProjectRegistry`] (the VPS-mode load path). Maps each VFS root to a
-/// [`ProjectSummary`], marks the default one, and calls [`ProjectRegistry::set`].
+/// [`ProjectSummary`], preserves groups, marks the default one, and calls
+/// [`ProjectRegistry::set_with_groups`].
 /// The standalone `se-server` binary calls this after `load`; the
 /// desktop-hosted path seeds via `remote_sync_projects` instead (it never
 /// constructs a `FileProjectRegistry`).
@@ -546,7 +554,7 @@ pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry
             }
         }
     }
-    registry.set(summaries, default_id);
+    registry.set_with_groups(summaries, file_reg.groups_snapshot(), default_id);
     *registry.mcp_servers.lock() = mcp_by_project;
 }
 

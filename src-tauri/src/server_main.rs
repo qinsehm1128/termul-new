@@ -44,6 +44,7 @@ use tracing_subscriber::EnvFilter;
 async fn start_standalone_mcp_gateway(
     memory_index: Arc<MemoryIndexService>,
     acp: &AcpManager,
+    host_service: Arc<se_manager_lib::mcp_core::host_service::HostCapabilityService>,
 ) -> Result<Option<McpHttpGateway>, String> {
     let disabled = std::env::var("TERMUL_MCP_CORE_ENABLED")
         .ok()
@@ -85,7 +86,12 @@ async fn start_standalone_mcp_gateway(
         .and_then(|value| value.parse().ok())
         .unwrap_or(8 * 1024 * 1024);
     let auth = AuthBootstrap::new(generation, token).map_err(|error| error.message)?;
-    let builtins = BuiltInRegistry::memory_backed(memory_index, None);
+    let mut builtins = BuiltInRegistry::memory_backed(memory_index, None);
+    use se_manager_lib::mcp_core::host_capabilities::HostBackedCapability;
+    builtins.register(Arc::new(HostBackedCapability::workspace(
+        host_service.clone(),
+    )));
+    builtins.register(Arc::new(HostBackedCapability::ssh(host_service)));
     let core =
         McpCore::new_with_builtins(McpCoreConfig::default(), Arc::new(AllowAllTools), builtins);
     let gateway = McpHttpGateway::bind(
@@ -466,7 +472,77 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
 
-        let mcp_gateway = match start_standalone_mcp_gateway(Arc::clone(&memory_index), &acp).await
+        // Share this exact store with the web persistence API to avoid stale SSH profiles.
+        let web_store = Arc::new(se_manager_lib::web::store::WebStore::open(
+            cfg.store_file
+                .clone()
+                .unwrap_or_else(|| cfg.service_account_state_dir().join("store.json")),
+        ));
+        use se_manager_lib::mcp_core::{
+            host_adapters::{HostCredentials, ServerProfiles},
+            host_policy::HostPolicyStore,
+            host_service::HostCapabilityService,
+        };
+        let profiles = Arc::new(ServerProfiles(web_store.clone()));
+        // No implicit desktop credential path: absent configuration permits only
+        // agent/unprotected keys through the automation runtime.
+        let credential_backend: Option<Arc<dyn se_manager_lib::credentials::CredentialBackend>> =
+            std::env::var_os("SE_SSH_CREDENTIALS_FILE")
+                .filter(|path| !path.is_empty())
+                .map(|path| {
+                    Arc::new(se_manager_lib::credentials::FileBackend::at(
+                        std::path::PathBuf::from(path),
+                    ))
+                        as Arc<dyn se_manager_lib::credentials::CredentialBackend>
+                });
+        let credentials = Arc::new(HostCredentials::new(
+            credential_backend,
+            se_manager_lib::brand::canonical()
+                .keychain_ssh_service
+                .into(),
+            se_manager_lib::brand::LEGACY.keychain_ssh_service.into(),
+        ));
+        let policy_path = std::env::var_os("SE_MCP_HOST_POLICY_FILE")
+            .filter(|path| !path.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| cfg.service_account_state_dir().join("mcp-host-policy.json"));
+        let policy = match HostPolicyStore::open(policy_path) {
+            Ok(policy) => Arc::new(policy),
+            Err(_) => {
+                error!(
+                    stable_code = "POLICY_UNAVAILABLE",
+                    "standalone host policy could not be loaded"
+                );
+                return ExitCode::from(1);
+            }
+        };
+        let ssh = match se_manager_lib::mcp_core::host_adapters::production_host_ssh(
+            profiles.clone(),
+            credentials,
+            &cfg.service_account_state_dir(),
+        ) {
+            Ok(ssh) => Arc::new(ssh),
+            Err(_) => {
+                error!(
+                    stable_code = "JOB_STORE_UNAVAILABLE",
+                    "standalone SSH job state could not be opened"
+                );
+                return ExitCode::from(1);
+            }
+        };
+        let host_service = Arc::new(HostCapabilityService::new(
+            policy,
+            profiles,
+            registry.clone(),
+            ssh,
+            "standalone",
+        ));
+        let mcp_gateway = match start_standalone_mcp_gateway(
+            Arc::clone(&memory_index),
+            &acp,
+            host_service.clone(),
+        )
+        .await
         {
             Ok(gateway) => gateway,
             Err(error) => {
@@ -532,6 +608,10 @@ fn main() -> ExitCode {
             Some(Arc::clone(&memory_index)),
             skills_hub,
             authority,
+            se_manager_lib::web::WebHostServices {
+                service: Some(host_service),
+                store: Some(web_store),
+            },
         )
         .await
         {

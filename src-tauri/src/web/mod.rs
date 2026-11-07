@@ -33,8 +33,17 @@ pub mod memory_index_api;
 pub mod git_api;
 pub mod install_api;
 pub mod log_api;
+pub mod mcp_host_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
+
+/// Process-owned services injected by the desktop or standalone bootstrap.
+/// Reusing this store avoids independent in-memory snapshots of SSH profiles.
+#[derive(Default)]
+pub struct WebHostServices {
+    pub service: Option<Arc<crate::mcp_core::host_service::HostCapabilityService>>,
+    pub store: Option<Arc<store::WebStore>>,
+}
 pub mod operation_policy;
 pub mod permissions;
 pub mod project_registry;
@@ -325,6 +334,7 @@ pub async fn serve(
     memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
     skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     authority: Arc<RemoteAccessAuthority>,
+    host_services: WebHostServices,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let terminal = crate::quick_terminal::with_local_service(
         crate::core::TerminalServiceHandle::in_process(pty.clone()),
@@ -355,6 +365,7 @@ pub async fn serve(
         memory_index,
         skills_hub,
         authority,
+        host_services,
     )
     .await?;
 
@@ -412,6 +423,7 @@ pub async fn serve_router(
     memory_index: Option<Arc<crate::memory_index::service::MemoryIndexService>>,
     skills_hub: Option<Arc<crate::skills::service::SkillsHubService>>,
     authority: Arc<RemoteAccessAuthority>,
+    host_services: WebHostServices,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     // The owning host computes ingress provenance before this shared composition is entered.
     // Capture it independently from the listener address: cloudflared connects to a loopback
@@ -467,11 +479,11 @@ pub async fn serve_router(
     // dir (same resolution posture as workspace-manifests / acp-catalog). The
     // desktop shared-live host passes `store_file: None`, so it lands on the
     // same default and gets a durable store too.
-    let store = Some(Arc::new(WebStore::open(
-        cfg.store_file
-            .clone()
-            .unwrap_or_else(|| cfg.service_account_state_dir().join("store.json")),
-    )));
+    let store = Some(host_services.store.unwrap_or_else(|| {
+        Arc::new(WebStore::open(cfg.store_file.clone().unwrap_or_else(
+            || cfg.service_account_state_dir().join("store.json"),
+        )))
+    }));
     // Origin registration above must not rewrite the host decision. `router` reads this exact
     // value and injects it before request middleware; ConnectInfo remains transport metadata only.
     debug_assert_eq!(authority.ingress_provenance(), host_ingress_provenance);
@@ -499,6 +511,10 @@ pub async fn serve_router(
         store,
         authority,
     );
+    let app = match host_services.service {
+        Some(service) => app.layer(axum::Extension(service)),
+        None => app,
+    };
 
     let handle = tokio::spawn(async move {
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so
@@ -860,6 +876,7 @@ mod tests {
             None,
             None,
             Arc::clone(&authority),
+            WebHostServices::default(),
         )
         .await
         .expect("public-tunnel router starts on loopback");
@@ -926,6 +943,7 @@ mod tests {
             None,
             None,
             authority,
+            WebHostServices::default(),
         )
         .await
         .expect("shared-live router starts");

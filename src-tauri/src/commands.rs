@@ -4656,6 +4656,7 @@ pub async fn sftp_create_file(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn remote_server_start(
+    app: AppHandle,
     acp_manager: State<'_, crate::core::AcpServiceHandle>,
     pty_manager: State<'_, crate::core::TerminalServiceHandle>,
     local_pty: State<'_, Arc<crate::pty::PtyManager>>,
@@ -4746,6 +4747,9 @@ pub async fn remote_server_start(
     let conversation = conversation.inner().0.clone();
     let conversation_creation = conversation_creation.inner().0.clone();
     let memory_index = memory_index.inner().0.clone();
+    let host_capabilities = app
+        .try_state::<Arc<crate::mcp_core::host_service::HostCapabilityService>>()
+        .map(|state| state.inner().clone());
     let started = if let Some(bind_port) = tunnel_config.preferred_bind_port() {
         remote_state
             .start_on_port(
@@ -4762,6 +4766,7 @@ pub async fn remote_server_start(
                 acp_install,
                 memory_index.clone(),
                 skills_hub.clone(),
+                host_capabilities.clone(),
                 bind_port,
             )
             .await
@@ -4781,6 +4786,7 @@ pub async fn remote_server_start(
                 acp_install,
                 memory_index,
                 skills_hub,
+                host_capabilities,
             )
             .await
     };
@@ -5640,6 +5646,59 @@ pub async fn get_mcp_oauth_status(
         });
     }
     oauth_status(&project_root, id)
+}
+
+/// Canonical desktop GET for the global MCP control-plane document.
+#[tauri::command]
+pub async fn mcp_host_access_get(
+    host: State<'_, Arc<crate::mcp_core::host_service::HostCapabilityService>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    Ok(match host.access_view() {
+        Ok(view) => IpcResult::success(view),
+        Err(error) => IpcResult::error(error.message, error.code),
+    })
+}
+
+#[tauri::command]
+pub async fn mcp_host_access_put(
+    expected_revision: u64,
+    policy: crate::mcp_core::host_policy::HostAccessPolicy,
+    host: State<'_, Arc<crate::mcp_core::host_service::HostCapabilityService>>,
+) -> Result<IpcResult<crate::mcp_core::host_policy::HostAccessPolicy>, String> {
+    if let Err(error) = require_host_admission() {
+        return Ok(error);
+    }
+    Ok(match host.put_access(expected_revision, policy) {
+        Ok(policy) => IpcResult::success(policy),
+        Err(error) => IpcResult::error(error.message, error.code),
+    })
+}
+
+#[tauri::command]
+pub async fn mcp_host_call(
+    provider: String,
+    tool: String,
+    arguments: serde_json::Map<String, serde_json::Value>,
+    host: State<'_, Arc<crate::mcp_core::host_service::HostCapabilityService>>,
+) -> Result<IpcResult<serde_json::Value>, String> {
+    use crate::mcp_core::host_capabilities::HostCapabilityBackend;
+    if let Err(error) = require_host_admission() {
+        return Ok(error);
+    }
+    Ok(
+        match host
+            .call(
+                &provider,
+                &tool,
+                arguments,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+        {
+            Ok(value) => IpcResult::success(value),
+            Err(error) => IpcResult::error(error.message, error.code),
+        },
+    )
 }
 
 /// Canonical desktop GET for the global MCP control-plane document.

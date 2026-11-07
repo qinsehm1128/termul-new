@@ -19,6 +19,14 @@
       "project-scope": {
         "name": "项目范围",
         "description": "向 MCP 客户端暴露当前项目边界。"
+      },
+      "workspace": {
+        "name": "工作区",
+        "description": "查询已授权的分组与项目。"
+      },
+      "ssh": {
+        "name": "SSH",
+        "description": "复用显式授权的 SSH 配置与操作。"
       }
     },
     "tabs": {
@@ -255,5 +263,55 @@
     "reset": "恢复默认",
     "saved": "生成设置已保存。",
     "failed": "无法保存生成设置。"
+  },
+  "hostAccess": {
+    "title": "宿主能力授权",
+    "globalWarning": "所有 MCP 客户端共用一个全局授权主体，不按用户或客户端隔离。默认关闭所有访问。",
+    "enabled": "全局启用宿主能力",
+    "workspace": "工作区目录",
+    "workspaceEnabled": "允许工作区查询",
+    "allProjects": "全部项目（含未来新增项目）",
+    "includePaths": "暴露项目目录路径",
+    "executeWarning": "执行命令拥有远端账号的完整权限，不是路径沙箱；启动任务也可执行命令。写入、上传、下载和取消任务均需独立勾选高风险授权。",
+    "localWarning": "本地根目录指 Se 宿主文件系统，不是当前浏览器。空根目录不授予文件访问权限；根目录不能约束任意命令。",
+    "grantProfile": "授权此 SSH 配置",
+    "remoteRoots": "远端根目录（每行一个绝对路径）",
+    "localRoots": "Se 宿主本地根目录（每行一个绝对路径）",
+    "posixJobs": "允许 POSIX 任务（需要兼容 POSIX shell；取消操作不保证确认远端进程终止）",
+    "fingerprintChanged": "此配置的身份已改变。请核对当前目标并单独重新授权，再保存启用策略。",
+    "reauthorizeIdentity": "明确授权当前目标身份",
+    "highRisk": "高风险",
+    "test": "测试连接",
+    "refreshJobs": "刷新任务",
+    "jobs": "SSH 任务",
+    "noJobs": "此配置暂无任务。",
+    "cancelJob": "取消任务",
+    "noProfiles": "尚未配置 SSH 连接。请在 SSH 设置中管理凭据；此处不要求输入任何秘密。",
+    "readOnly": "公网隧道或无管理权限时，宿主授权管理与主动调用均已禁用。",
+    "unauthorized": "需要身份验证。请使用远程访问凭据重新连接后刷新。",
+    "conflict": "授权已在其他位置更改。请重新加载后保存；当前草稿未覆盖远端版本。",
+    "failed": "请求失败。请检查宿主访问与操作授权后重试。",
+    "saved": "宿主授权已保存。",
+    "tested": "连接测试已完成。",
+    "jobsRefreshed": "任务已刷新。",
+    "cancelRequested": "已请求取消。请刷新任务确认；不保证远端进程已终止。",
+    "saveHint": "测试或刷新任务前请先保存。身份变化须单独明确重新授权。保存保留既有指纹并清理已删除配置的授权；取消勾选将撤销该配置授权。",
+    "save": "保存宿主授权",
+    "reload": "重新加载宿主授权",
+    "operations": {
+      "profile_list": "列出配置",
+      "profile_get": "查看配置",
+      "test_connection": "测试连接",
+      "execute": "执行命令",
+      "list_files": "列出文件",
+      "read_file": "读取文件",
+      "write_file": "写入文件",
+      "upload": "上传文件",
+      "download": "下载文件",
+      "job_start": "启动任务",
+      "job_status": "查询任务状态",
+      "job_list": "列出任务",
+      "job_cancel": "取消任务"
+    }
   }
 }

@@ -19,6 +19,28 @@ function normalizePolicy(policy: unknown) {
 }
 
 describe('MCP built-in policy normalization', () => {
+  it.each([
+    undefined,
+    {},
+    [],
+    { builtIns: [] }
+  ])('defaults to memory/workspace/ssh without reviving legacy project-scope (%j)', (input) => {
+    expect(normalizeMcpConfig(input).builtIns).toEqual([
+      { id: 'session-memory', enabled: true },
+      { id: 'workspace', enabled: true },
+      { id: 'ssh', enabled: true }
+    ])
+  })
+
+  it('keeps restrictions for every visible built-in alongside the hidden legacy entry', () => {
+    const builtIns = ['session-memory', 'workspace', 'ssh', 'project-scope'].map((id) => ({
+      id,
+      enabled: false,
+      policy: { allowTools: [], denyTools: ['restricted_tool'] }
+    }))
+    expect(normalizeMcpConfig(normalizeMcpConfig({ builtIns })).builtIns).toEqual(builtIns)
+  })
+
   it('preserves legacy disabled and allow/deny restrictions through repeated normalization', () => {
     const input = {
       builtIns: [
@@ -70,8 +92,21 @@ describe('MCP built-in policy normalization', () => {
     vi.mocked(isTauriContext).mockReturnValue(desktop)
     const config = normalizeMcpConfig({
       revision: 7,
-      builtIns: [{ id: 'session-memory', enabled: true, policy: { allowTools: [] } }],
-      upstreams: []
+      builtIns: [
+        { id: 'session-memory', enabled: true, policy: { allowTools: [] } },
+        { id: 'project-scope', enabled: false, policy: { denyTools: ['project_boundary'] } },
+        { id: 'workspace', enabled: true, policy: { allowTools: ['workspace_list'] } },
+        { id: 'ssh', enabled: false, policy: { allowTools: [] } }
+      ],
+      upstreams: [
+        {
+          id: 'upstream',
+          name: 'Restricted upstream',
+          type: 'stdio',
+          command: 'mcp-server',
+          policy: { allowTools: ['read'], denyTools: ['write'] }
+        }
+      ]
     })
     const response = { success: true as const, data: config }
     vi.mocked(invoke).mockResolvedValue(response)

@@ -64,7 +64,7 @@ use se_foundation::shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
 pub mod skills;
-mod ssh;
+pub mod ssh;
 use se_pty::trackers;
 mod updater_api;
 pub mod web;
@@ -3626,7 +3626,39 @@ pub fn run() {
 
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
-            app.manage(ssh_manager);
+            app.manage(Arc::clone(&ssh_manager));
+            {
+                use crate::mcp_core::{host_adapters::{DesktopProfiles, HostCredentials}, host_bridge::{HostBridge, descriptor_path}, host_policy::HostPolicyStore, host_service::HostCapabilityService};
+                let profiles = Arc::new(DesktopProfiles(ssh_manager));
+                let credentials = Arc::new(HostCredentials::new(
+                    Some(crate::credentials::backend()),
+                    crate::brand::canonical().keychain_ssh_service.into(),
+                    crate::brand::LEGACY.keychain_ssh_service.into(),
+                ));
+                match HostPolicyStore::open(app_data_dir.join("mcp-host-policy.json")) {
+                    Ok(policy) => {
+                        match crate::mcp_core::host_adapters::production_host_ssh(profiles.clone(), credentials, &app_data_dir) {
+                        Ok(ssh) => {
+                        let ssh = Arc::new(ssh);
+                        let capabilities = Arc::new(HostCapabilityService::new(Arc::new(policy), profiles, project_registry.clone(), ssh, "desktop"));
+                        app.manage(capabilities.clone());
+                        if let Some(root) = crate::mcp_core::config_root() {
+                            let path = descriptor_path(&crate::mcp_core::gateway_settings_path(&root));
+                            let bridge_handle = handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                match HostBridge::bind(capabilities).await {
+                                    Ok(bridge) if bridge.endpoint.publish(&path).is_ok() => { bridge_handle.manage(bridge); }
+                                    _ => log::error!(target: "se_manager::mcp_core::host", "operation=host_bridge_start stable_code=HOST_BRIDGE_UNAVAILABLE"),
+                                }
+                            });
+                        }
+                        }
+                        Err(_) => log::error!(target: "se_manager::mcp_core::host", "operation=host_jobs_load stable_code=JOB_STORE_UNAVAILABLE"),
+                        }
+                    }
+                    Err(_) => log::error!(target: "se_manager::mcp_core::host", "operation=host_access_load stable_code=POLICY_UNAVAILABLE"),
+                }
+            }
 
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
@@ -4029,6 +4061,9 @@ pub fn run() {
             commands::remote_sync_chat_history,
             commands::remote_sync_mcp_registry,
             commands::remote_load_mcp_registry,
+            commands::mcp_host_access_get,
+            commands::mcp_host_access_put,
+            commands::mcp_host_call,
             commands::mcp_get_config,
             commands::mcp_put_config,
             commands::mcp_get_status,

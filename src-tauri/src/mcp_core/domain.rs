@@ -482,13 +482,11 @@ impl McpCore {
     /// server is asked.
     pub async fn list_server_tools(&self, name: &str) -> Result<Vec<Tool>, McpDomainError> {
         let builtins = self.builtins.read().await;
-        if builtins.enabled_ids().contains(name) {
-            let prefix = format!("{name}_");
-            return Ok(builtins
-                .list_tools(&*self.permission)
+        if let Some(tools) = builtins.list_server_tools(name, &*self.permission) {
+            return Ok(tools
                 .into_iter()
-                .filter(|item| item.server_id == name)
                 .map(|mut item| {
+                    let prefix = format!("{}_", item.server_id);
                     if let Some(original) = item.tool.name.strip_prefix(&prefix) {
                         item.tool.name = original.to_owned().into();
                     }
@@ -520,6 +518,15 @@ impl McpCore {
             .collect::<Vec<_>>();
         self.enforce_size(&tools)?;
         Ok(tools)
+    }
+
+    /// Resolve a hidden built-in alias without advertising a second server.
+    pub(crate) async fn has_builtin_route(&self, server: &str, tool: &str) -> bool {
+        self.builtins
+            .read()
+            .await
+            .route(&format_tool_name(server, tool))
+            .is_some()
     }
 
     /// State of one routable server by name, built-ins included.
@@ -809,9 +816,12 @@ impl McpCore {
                 name,
                 provider,
             } => {
-                if !self.permission.allows_tool(&server_id, &name)
-                    || !self.builtins.read().await.tool_permitted(&server_id, &name)
-                {
+                let permitted = {
+                    let registry = self.builtins.read().await;
+                    registry.permission_allows(&*self.permission, &server_id, &name)
+                        && registry.tool_permitted(&server_id, &name)
+                };
+                if !permitted {
                     return Err(McpDomainError::PermissionDenied { server_id, name });
                 }
                 let request = provider.call_tool(&name, arguments, cancellation.clone());
