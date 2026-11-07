@@ -111,9 +111,8 @@ export function McpWorkspaceAccess({
                 {t('hostAccess.selectedOnly')}
               </label>
             </div>
-            <div
-              role="group"
-              className="grid max-h-52 grid-cols-1 gap-x-2 overflow-y-auto overscroll-contain rounded-md border border-border p-1 sm:grid-cols-2"
+            <fieldset
+              className="grid max-h-52 min-w-0 grid-cols-1 gap-x-2 overflow-y-auto overscroll-contain rounded-md border border-border p-1 sm:grid-cols-2"
               aria-label={t('hostAccess.projectChoices')}
             >
               {filtered.map((project) => (
@@ -148,7 +147,7 @@ export function McpWorkspaceAccess({
                   {t(projects.length ? 'hostAccess.noMatches' : 'hostAccess.noProjects')}
                 </p>
               )}
-            </div>
+            </fieldset>
             <p className="text-xs leading-relaxed text-muted-foreground">
               {t('hostAccess.selectResultsHint')}
             </p>
