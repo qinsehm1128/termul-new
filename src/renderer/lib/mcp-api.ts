@@ -137,7 +137,28 @@ function fillDefaultBuiltIns(builtIns: McpBuiltInConfig[]): McpBuiltInConfig[] {
 function normalizeBuiltIn(value: unknown): McpBuiltInConfig | null {
   if (!isRecord(value) || typeof value.id !== 'string' || value.id.trim().length === 0) return null
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') return null
-  return { id: value.id, enabled: value.enabled ?? true }
+  const policy = normalizeCapabilityPolicy(value.policy)
+  return {
+    id: value.id,
+    enabled: value.enabled ?? true,
+    ...(policy === undefined ? {} : { policy })
+  }
+}
+
+/** Never turn a configured restriction into unrestricted access during a UI round trip. */
+function normalizeCapabilityPolicy(value: unknown): McpCapabilityPolicy | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) return { allowTools: [] }
+  const policy: McpCapabilityPolicy = {}
+  for (const key of ['allowTools', 'denyTools'] as const) {
+    const names = value[key]
+    if (names === undefined) continue
+    if (!Array.isArray(names) || !names.every((name) => typeof name === 'string')) {
+      return { allowTools: [] }
+    }
+    policy[key] = [...names]
+  }
+  return policy
 }
 
 export function normalizeMcpConfig(value: unknown): McpControlPlaneConfig {
