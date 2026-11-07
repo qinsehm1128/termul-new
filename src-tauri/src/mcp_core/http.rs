@@ -7,13 +7,14 @@ use std::{
 
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, State},
+    extract::State,
     http::{header, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
+use futures_util::StreamExt;
 use rmcp::{
     model::{
         CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
@@ -25,6 +26,10 @@ use rmcp::{
         session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
     },
     ErrorData, RoleServer, ServerHandler,
+};
+use se_mcp_bridge::{
+    GatewayIdentity, Source, GATEWAY_IDENTITY_PATH, GATEWAY_PROTOCOL_VERSION,
+    PROTOCOL_VERSION_HEADER, SOURCE_HEADER,
 };
 use tokio::{net::TcpListener, sync::RwLock, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -345,17 +350,31 @@ impl McpHttpGateway {
             .nest_service(GatewayMode::Direct.path(), service(GatewayMode::Direct))
             .nest_service("/mcp/direct", service(GatewayMode::Direct))
             .merge(config.control.clone().unwrap_or_default())
-            .layer(DefaultBodyLimit::max(request_body_limit))
+            .layer(middleware::from_fn_with_state(
+                request_body_limit,
+                limit_request_body,
+            ))
             .layer(middleware::from_fn(move |request, next| {
                 let auth = auth_for_middleware.clone();
                 async move { require_bearer(request, next, auth).await }
             }));
+        let source = core.source();
         let public = Router::new()
             .route("/health", get(health))
             .route("/ready", get(ready))
             .route("/mcp-core/status", get(ready_status))
+            .route(
+                GATEWAY_IDENTITY_PATH,
+                get(move || async move { axum::Json(GatewayIdentity::new(source)) }),
+            )
             .with_state(readiness.clone());
-        let app = protected.merge(public);
+        // Outermost boundary: even auth, transport, body-limit and routing errors
+        // identify this immutable source. No mode selects or widens the source.
+        let app = protected
+            .merge(public)
+            .layer(middleware::from_fn(move |request, next| {
+                source_boundary(request, next, source)
+            }));
         let shutdown_for_server = shutdown.clone();
         let readiness_for_task = readiness.clone();
         let generation = endpoint.generation;
@@ -446,6 +465,77 @@ impl McpHttpGateway {
         let _ = self.task.await;
         self.core.shutdown().await;
     }
+}
+
+// rmcp is nested as a Tower service and does not use axum's body extractors,
+// so DefaultBodyLimit alone does not enforce the configured transport limit.
+// Collect at most `limit` bytes before dispatch, including chunked/unknown-size
+// bodies; the outer source boundary also marks every rejection response.
+async fn limit_request_body(
+    State(limit): State<usize>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > limit as u64)
+    {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let (parts, body) = request.into_parts();
+    let mut stream = body.into_data_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        if chunk.len() > limit - bytes.len() {
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
+}
+
+async fn source_boundary(request: Request<Body>, next: Next, source: Source) -> Response {
+    let protocol_version = GATEWAY_PROTOCOL_VERSION.to_string();
+    // Missing markers remain compatible with ordinary correct-bearer clients.
+    // Validate every value, including duplicates and non-UTF8 values, fail-closed.
+    let matches = [
+        (SOURCE_HEADER, source.as_str()),
+        (PROTOCOL_VERSION_HEADER, protocol_version.as_str()),
+    ]
+    .into_iter()
+    .all(|(name, expected)| {
+        request
+            .headers()
+            .get_all(name)
+            .iter()
+            .all(|value| value.to_str().is_ok_and(|value| value == expected))
+    });
+    let mut response = if matches {
+        next.run(request).await
+    } else {
+        log::warn!(
+            target: HTTP_BOUNDARY_LOG_TARGET,
+            "operation=mcp_http_identity source={} stable_code=MCP_GATEWAY_IDENTITY_MISMATCH",
+            source.as_str()
+        );
+        (StatusCode::CONFLICT, "MCP_GATEWAY_IDENTITY_MISMATCH").into_response()
+    };
+    response.headers_mut().insert(
+        SOURCE_HEADER,
+        header::HeaderValue::from_static(source.as_str()),
+    );
+    response.headers_mut().insert(
+        PROTOCOL_VERSION_HEADER,
+        header::HeaderValue::from_str(&protocol_version).expect("numeric protocol version"),
+    );
+    response
 }
 
 async fn require_bearer(request: Request<Body>, next: Next, auth: AuthState) -> Response {

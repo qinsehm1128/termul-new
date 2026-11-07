@@ -1,11 +1,11 @@
 {
   "page": {
     "title": "MCP",
-    "subtitle": "Global MCP gateway: built-in capabilities and upstream MCP servers, shared by every agent.",
+    "subtitle": "Two independent MCP connections: Se built-in capabilities and external upstream servers.",
     "builtInsTitle": "Built-in capabilities",
-    "builtInsDescription": "Tools Se Manager itself serves through the gateway.",
+    "builtInsDescription": "Se built-in capabilities served only by the internal MCP connection.",
     "upstreamsTitle": "Upstream MCP servers",
-    "upstreamsDescription": "Enabled servers are aggregated by the gateway.",
+    "upstreamsDescription": "Enabled external servers are served only by the external MCP aggregator.",
     "statusTitle": "Runtime status",
     "statusDescription": "Revision and upstream counts. Secrets are never shown.",
     "revision": "Revision",
@@ -72,7 +72,7 @@
   },
   "settings": {
     "title": "Upstream MCP servers",
-    "description": "Enabled servers are aggregated by the gateway.",
+    "description": "Enabled external servers are served only by the external MCP aggregator.",
     "addServer": "Add server",
     "importExport": {
       "import": "Import JSON",
@@ -170,9 +170,9 @@
     "duplicate": "{{name}}: duplicate server skipped"
   },
   "export": {
-    "title": "Full Se MCP · se-mcp",
+    "title": "MCP connection export",
     "direct": "Direct mode · local stdio export",
-    "description": "Expose all built-in tools (including workspace and SSH tools) and enabled upstream tools directly to external clients via one se-mcp entry.",
+    "description": "Export only this connection’s tools in direct mode as a local stdio configuration. The other source is not included.",
     "authorization": "Tool visibility is not authorization. Host and SSH operations still require their existing permissions; exporting does not grant or change access.",
     "externalOnly": "For external clients only. Do not import this entry into Se's upstream server list: it would create a loop.",
     "desktopOnly": "Desktop only: browser, shared-live, and standalone web sessions cannot export a local stdio command. Open Se desktop to preview or copy it.",
@@ -180,15 +180,15 @@
     "formatJson": "MCP JSON",
     "formatToml": "Codex TOML",
     "preview": "Preview",
-    "copy": "Copy full configuration",
-    "copied": "Full Se MCP configuration copied",
-    "loadFailed": "Unable to read the full Se MCP configuration. Try again from Se desktop.",
+    "copy": "Copy configuration",
+    "copied": "MCP connection configuration copied",
+    "loadFailed": "Unable to read this MCP connection configuration. Try again from Se desktop.",
     "bridgeMissing": "The local stdio bridge is unavailable. Check the Se desktop installation before exporting.",
     "copyFailed": "Unable to copy the configuration. Please try again."
   },
   "gateway": {
     "title": "Connect agents",
-    "description": "One gateway serves every MCP server below. An agent adds a single se-mcp entry and reaches all of them; the gateway keeps running after Se Manager closes.",
+    "description": "Configure Se built-in MCP and the external MCP aggregator independently. Each connection keeps running after Se Manager closes.",
     "running": "Running · v{{version}}",
     "stopped": "Not running",
     "error": "Unavailable",
@@ -211,7 +211,7 @@
       },
       "direct": {
         "name": "Direct",
-        "description": "Every tool of every server as <server>_<tool>. No extra step, largest tool list."
+        "description": "Every tool in this source as <server>_<tool>. No extra step, largest tool list."
       }
     },
     "bridgeMissing": "se-mcp was not found at {{path}}. Development builds need `cargo build --bin se-mcp`.",
@@ -220,8 +220,8 @@
       "connect": "Connect",
       "update": "Update",
       "remove": "Remove",
-      "synced": "{{name}} now uses the Se MCP gateway. Restart it to load the change.",
-      "removed": "Removed the Se MCP gateway from {{name}}.",
+      "synced": "{{name}} now uses this MCP connection. Restart it to load the change.",
+      "removed": "Removed this MCP connection from {{name}}.",
       "state": {
         "connected": "Connected",
         "stale": "Needs update",
@@ -238,6 +238,17 @@
       "copy": "Copy",
       "copied": "Copied",
       "copyFailed": "Could not copy"
+    },
+    "httpNotReady": "HTTP export is unavailable until this connection’s gateway identity and authentication are verified.",
+    "sources": {
+      "internal": {
+        "title": "Se built-in MCP",
+        "description": "Se session memory, workspace, and SSH capabilities only. No external upstream tools."
+      },
+      "aggregator": {
+        "title": "External MCP aggregator",
+        "description": "Configured external upstream servers only. No Se built-in memory, workspace, or SSH capabilities."
+      }
     }
   },
   "descriptions": {

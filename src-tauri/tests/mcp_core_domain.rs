@@ -1,4 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use serde_json::json;
 
@@ -26,7 +33,7 @@ use se_manager_lib::memory_index::service::MemoryIndexService;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default)]
-struct FixtureServer;
+struct FixtureServer(Arc<AtomicUsize>);
 
 impl ServerHandler for FixtureServer {
     fn get_info(&self) -> ServerConfig {
@@ -44,6 +51,7 @@ impl ServerHandler for FixtureServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        self.0.fetch_add(1, Ordering::SeqCst);
         let schema = serde_json::json!({"type": "object"})
             .as_object()
             .unwrap()
@@ -51,7 +59,8 @@ impl ServerHandler for FixtureServer {
         Ok(ListToolsResult::with_all_items(vec![
             Tool::new("echo", "Echo input", schema.clone()),
             Tool::new("slow", "Wait before replying", schema.clone()),
-            Tool::new("large", "Return a large response", schema),
+            Tool::new("large", "Return a large response", schema.clone()),
+            Tool::new("group_list", "External workspace fixture", schema),
         ]))
     }
 
@@ -60,7 +69,11 @@ impl ServerHandler for FixtureServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        self.0.fetch_add(1, Ordering::SeqCst);
         match request.name.as_ref() {
+            "group_list" => {
+                Ok(CallToolResult::success(vec![ContentBlock::text("externalfixture")]).into())
+            }
             "echo" => Ok(CallToolResult::success(vec![ContentBlock::text("echoed")]).into()),
             "slow" => {
                 tokio::time::sleep(Duration::from_millis(250)).await;
@@ -123,6 +136,12 @@ impl ServerHandler for FixtureServer {
 }
 
 async fn spawn_fixture() -> (String, CancellationToken) {
+    let (url, shutdown, _) = spawn_counted_fixture().await;
+    (url, shutdown)
+}
+
+async fn spawn_counted_fixture() -> (String, CancellationToken, Arc<AtomicUsize>) {
+    let requests = Arc::new(AtomicUsize::new(0));
     let server_ct = CancellationToken::new();
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
@@ -130,7 +149,14 @@ async fn spawn_fixture() -> (String, CancellationToken) {
         .with_sse_keep_alive(None)
         .with_cancellation_token(server_ct.child_token());
     let service: StreamableHttpService<FixtureServer, LocalSessionManager> =
-        StreamableHttpService::new(|| Ok(FixtureServer), Default::default(), config);
+        StreamableHttpService::new(
+            {
+                let requests = requests.clone();
+                move || Ok(FixtureServer(requests.clone()))
+            },
+            Default::default(),
+            config,
+        );
     let router = Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -142,7 +168,7 @@ async fn spawn_fixture() -> (String, CancellationToken) {
                 .await;
         }
     });
-    (format!("http://{address}/mcp"), server_ct)
+    (format!("http://{address}/mcp"), server_ct, requests)
 }
 
 fn http_server(id: &str, url: String) -> McpUpstreamServer {
@@ -208,7 +234,7 @@ async fn permission_timeout_cancellation_and_response_limit_are_enforced() {
     let core = McpCore::new(
         McpCoreConfig {
             call_timeout: Duration::from_millis(40),
-            max_response_bytes: 256,
+            max_response_bytes: 512,
             ..Default::default()
         },
         permission,
@@ -401,9 +427,9 @@ async fn one_failed_http_upstream_does_not_hide_healthy_upstream() {
 }
 
 #[tokio::test]
-async fn builtins_aggregate_with_upstreams_and_win_id_collisions() {
-    let (builtin_url, builtin_shutdown) = spawn_fixture().await;
-    let (fixture_url, fixture_shutdown) = spawn_fixture().await;
+async fn internal_rejects_upstreams_and_exposes_only_builtins() {
+    let (builtin_url, builtin_shutdown, builtin_calls) = spawn_counted_fixture().await;
+    let (fixture_url, fixture_shutdown, fixture_calls) = spawn_counted_fixture().await;
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
@@ -413,35 +439,95 @@ async fn builtins_aggregate_with_upstreams_and_win_id_collisions() {
         Arc::new(AllowAllTools),
         BuiltInRegistry::memory_backed(memory, None),
     );
-    core.connect_and_add(http_server(BUILTIN_SESSION_MEMORY, builtin_url))
+    assert_eq!(core.source(), se_mcp_bridge::Source::Internal);
+    for (id, url) in [
+        (BUILTIN_SESSION_MEMORY, builtin_url),
+        ("fixture", fixture_url),
+    ] {
+        assert!(matches!(
+            core.connect_and_add(http_server(id, url)).await,
+            Err(McpDomainError::InvalidConfiguration(_))
+        ));
+    }
+    assert!(core.upstream_ids().await.is_empty());
+    assert!(core.upstream_statuses().await.is_empty());
+    assert!(core.list_resources().await.unwrap().items.is_empty());
+    assert!(core.list_prompts().await.unwrap().items.is_empty());
+    assert!(core
+        .read_resource("fixture", "fixture://hello")
         .await
-        .unwrap();
-    core.connect_and_add(http_server("fixture", fixture_url))
-        .await
-        .unwrap();
-
+        .is_err());
+    assert!(core.get_prompt("fixture_greeting", None).await.is_err());
     let tools = core.list_tools().await.unwrap();
     assert!(tools.items.iter().any(|item| {
         item.server_id == BUILTIN_SESSION_MEMORY && item.tool.name.ends_with("_memory_search")
     }));
-    assert!(!tools
-        .items
-        .iter()
-        .any(|item| item.tool.name == format!("{BUILTIN_SESSION_MEMORY}_echo")));
     assert!(tools
         .items
         .iter()
-        .any(|item| item.tool.name == "fixture_echo"));
+        .all(|item| item.server_id == BUILTIN_SESSION_MEMORY));
+    assert!(core.call_tool("fixture_echo", None).await.is_err());
+    assert!(core
+        .call_server_tool("fixture", "echo", None, CancellationToken::new())
+        .await
+        .is_err());
 
-    let echoed = core.call_tool("fixture_echo", None).await.unwrap();
-    assert_eq!(echoed.content[0].as_text().unwrap().text, "echoed");
-    assert!(matches!(
-        core.call_tool(&format!("{BUILTIN_SESSION_MEMORY}_echo"), None)
-            .await,
-        Err(McpDomainError::ToolNotFound(_)) | Err(McpDomainError::InvalidArguments { .. })
-    ));
-
+    assert_eq!(builtin_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture_calls.load(Ordering::SeqCst), 0);
     core.shutdown().await;
     builtin_shutdown.cancel();
     fixture_shutdown.cancel();
+}
+
+#[tokio::test]
+async fn aggregator_allows_external_workspace_but_never_installs_se_providers() {
+    let (url, shutdown, requests) = spawn_counted_fixture().await;
+    let core = McpCore::new_aggregator(McpCoreConfig::default(), Arc::new(AllowAllTools));
+    assert_eq!(core.source(), se_mcp_bridge::Source::Aggregator);
+    assert_eq!(
+        McpCore::default().source(),
+        se_mcp_bridge::Source::Aggregator
+    );
+    assert!(core
+        .replace_builtins(BuiltInRegistry::empty())
+        .await
+        .is_err());
+    assert!(core.apply_built_in_config(&[]).await.is_err());
+    core.connect_and_add(http_server("workspace", url))
+        .await
+        .unwrap();
+    let before = requests.load(Ordering::SeqCst);
+    let result = core.call_tool("workspace_group_list", None).await.unwrap();
+    assert_eq!(result.content[0].as_text().unwrap().text, "externalfixture");
+    let result = core
+        .call_server_tool("workspace", "group_list", None, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(result.content[0].as_text().unwrap().text, "externalfixture");
+    assert_eq!(requests.load(Ordering::SeqCst), before + 2);
+    // A reserved/hidden Se name cannot route to a host provider in this core.
+    assert!(core
+        .call_tool("project-scope_memory_search", None)
+        .await
+        .is_err());
+    assert!(core
+        .call_server_tool(
+            "project-scope",
+            "memory_search",
+            None,
+            CancellationToken::new()
+        )
+        .await
+        .is_err());
+    assert_eq!(requests.load(Ordering::SeqCst), before + 2);
+    assert!(core.built_in_ids().await.is_empty());
+    assert!(core
+        .list_tools()
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .all(|tool| tool.server_id == "workspace"));
+    core.shutdown().await;
+    shutdown.cancel();
 }

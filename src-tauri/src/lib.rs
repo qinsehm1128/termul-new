@@ -3494,7 +3494,9 @@ pub fn run() {
                 // Sessions created here reach the standalone MCP gateway
                 // through the settings file, reread per session.
                 if let Some(root) = crate::mcp_core::config_root() {
-                    acp_manager.use_mcp_gateway_file(crate::mcp_core::gateway_settings_path(&root));
+                    for source in [se_mcp_bridge::Source::Internal, se_mcp_bridge::Source::Aggregator] {
+                        acp_manager.use_mcp_gateway_file(source, crate::mcp_core::gateway_settings_path(&root, source));
+                    }
                 }
 
                 scheduled_tasks.start_on(tauri::async_runtime::handle().inner());
@@ -3594,32 +3596,30 @@ pub fn run() {
             }
             app.manage(Arc::clone(&project_registry));
 
-            // The MCP gateway is its own process: it keeps serving agents
-            // after the window closes. Start it (or replace an older version)
-            // without holding up startup.
+            // The two MCP sources have independent settings, credentials and
+            // lifecycles. They keep serving agents after the window closes.
             if let (Some(root), Ok(executable), Ok(profile_root)) = (
                 crate::mcp_core::config_root(),
                 std::env::current_exe(),
                 handle.path().app_data_dir(),
             ) {
-                let log_file = handle
-                    .path()
-                    .app_log_dir()
-                    .ok()
-                    .map(|dir| crate::mcp_core::service::gateway_log_file(&dir));
-                let service = Arc::new(crate::mcp_core::McpService::new(
-                    crate::mcp_core::gateway_settings_path(&root),
+                let log_dir = handle.path().app_log_dir().ok();
+                let services = Arc::new(crate::mcp_core::service::McpServices::new(
+                    root,
                     executable,
                     profile_root,
-                    log_file,
+                    log_dir,
                 ));
-                app.manage(Arc::clone(&service));
+                app.manage(Arc::clone(&services));
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = service.ensure_running().await {
-                        log::warn!(
-                            target: "se_manager::mcp_core::service",
-                            "operation=mcp_service_ensure stable_code=MCP_SERVICE_START_FAILED error={error}"
-                        );
+                    for source in [se_mcp_bridge::Source::Internal, se_mcp_bridge::Source::Aggregator] {
+                        if services.ensure_running(source).await.is_err() {
+                            log::warn!(
+                                target: "se_manager::mcp_core::service",
+                                "operation=mcp_service_ensure source={} stable_code=MCP_SERVICE_START_FAILED",
+                                source.as_str()
+                            );
+                        }
                     }
                 });
             }
@@ -3643,7 +3643,7 @@ pub fn run() {
                         let capabilities = Arc::new(HostCapabilityService::new(Arc::new(policy), profiles, project_registry.clone(), ssh, "desktop"));
                         app.manage(capabilities.clone());
                         if let Some(root) = crate::mcp_core::config_root() {
-                            let path = descriptor_path(&crate::mcp_core::gateway_settings_path(&root));
+                            let path = descriptor_path(&crate::mcp_core::gateway_settings_path(&root, se_mcp_bridge::Source::Internal));
                             let bridge_handle = handle.clone();
                             tauri::async_runtime::spawn(async move {
                                 match HostBridge::bind(capabilities).await {

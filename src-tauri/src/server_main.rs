@@ -19,9 +19,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+use se_manager_lib::mcp_core::service::{start_embedded, EmbeddedMcpService};
 use se_manager_lib::mcp_core::{
-    AllowAllTools, AuthBootstrap, BuiltInRegistry, McpCore, McpCoreConfig, McpHttpGateway,
-    McpHttpGatewayConfig,
+    AllowAllTools, AuthBootstrap, BuiltInRegistry, McpCore, McpCoreConfig, McpHttpGatewayConfig,
 };
 use se_manager_lib::memory_index::service::MemoryIndexService;
 use se_manager_lib::server_update::{
@@ -38,23 +38,108 @@ use se_manager_lib::{
     AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
     FileProjectRegistry, GitTracker, PtyManager, TerminalEventHub, WorkspaceManifestService,
 };
+use se_mcp_bridge::Source;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-async fn start_standalone_mcp_gateway(
+fn standalone_mcp_disabled(key: &str) -> bool {
+    std::env::var(key).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+fn standalone_mcp_config(source: Source) -> Result<McpHttpGatewayConfig, String> {
+    let prefix = match source {
+        Source::Internal => "TERMUL_MCP_CORE",
+        Source::Aggregator => "TERMUL_MCP_AGGREGATOR",
+    };
+    let bind_address = std::env::var(format!("{prefix}_BIND"))
+        .ok()
+        .map(|value| value.parse().map_err(|_| "Invalid MCP bind address"))
+        .transpose()?
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let port = std::env::var(format!("{prefix}_PORT"))
+        .ok()
+        .map(|value| value.parse().map_err(|_| "Invalid MCP port"))
+        .transpose()?
+        .unwrap_or(0);
+    let generation = std::env::var(format!("{prefix}_AUTH_GENERATION"))
+        .ok()
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|_| "Invalid MCP authentication generation")
+        })
+        .transpose()?
+        .unwrap_or(1);
+    let token = std::env::var(format!("{prefix}_AUTH_TOKEN"))
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("se-mcp-{}", Uuid::new_v4()));
+    let request_body_limit = std::env::var(format!("{prefix}_REQUEST_LIMIT"))
+        .ok()
+        .map(|value| value.parse().map_err(|_| "Invalid MCP request limit"))
+        .transpose()?
+        .unwrap_or(8 * 1024 * 1024);
+    let auth = AuthBootstrap::new(generation, token).map_err(|_| "Invalid MCP authentication")?;
+    Ok(McpHttpGatewayConfig {
+        bind_address,
+        port,
+        path: "/mcp".into(),
+        generation,
+        auth,
+        request_body_limit,
+        control: None,
+    })
+}
+
+async fn bind_standalone_mcp_sources(
+    config_root: PathBuf,
+    specs: Vec<(Source, Arc<McpCore>, McpHttpGatewayConfig)>,
+) -> Result<Vec<(Source, EmbeddedMcpService, AuthBootstrap)>, String> {
+    for (index, (source, core, config)) in specs.iter().enumerate() {
+        if *source != core.source() {
+            return Err("MCP core source mismatch".into());
+        }
+        for (other_source, _, other) in &specs[..index] {
+            if source == other_source
+                || (config.port != 0 && config.port == other.port)
+                || config.auth.bearer_token() == other.auth.bearer_token()
+            {
+                return Err("MCP sources require distinct identity, ports and credentials".into());
+            }
+        }
+    }
+    let mut services: Vec<(Source, EmbeddedMcpService, AuthBootstrap)> = Vec::new();
+    for (source, core, config) in specs {
+        let auth = config.auth.clone();
+        match start_embedded(core, config_root.clone(), config).await {
+            Ok(service) => services.push((source, service, auth)),
+            Err(_) => {
+                for (_, service, _) in services {
+                    service.shutdown().await;
+                }
+                error!(
+                    source = source.as_str(),
+                    stable_code = "MCP_SOURCE_START_FAILED",
+                    "standalone MCP listener startup failed"
+                );
+                return Err("Standalone MCP source could not be started".into());
+            }
+        }
+    }
+    Ok(services)
+}
+
+async fn start_standalone_mcp_gateways(
     memory_index: Arc<MemoryIndexService>,
     acp: &AcpManager,
     host_service: Arc<se_manager_lib::mcp_core::host_service::HostCapabilityService>,
-) -> Result<Option<McpHttpGateway>, String> {
-    let disabled = std::env::var("TERMUL_MCP_CORE_ENABLED")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "no" | "off"
-            )
-        });
-    if disabled {
+) -> Result<Vec<EmbeddedMcpService>, String> {
+    if standalone_mcp_disabled("TERMUL_MCP_CORE_ENABLED") {
         info!(
             target: "se_manager::acp::mcp_router",
             operation = "mcp_router_apply",
@@ -63,53 +148,178 @@ async fn start_standalone_mcp_gateway(
             stable_code = "UNAVAILABLE",
             "standalone MCP Core HTTP is explicitly disabled; ACP keeps host_mcp only"
         );
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let bind_address = std::env::var("TERMUL_MCP_CORE_BIND")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-    let port = std::env::var("TERMUL_MCP_CORE_PORT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-    let generation = std::env::var("TERMUL_MCP_CORE_AUTH_GENERATION")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(1);
-    let token = std::env::var("TERMUL_MCP_CORE_AUTH_TOKEN")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| format!("se-mcp-{}", Uuid::new_v4()));
-    let request_body_limit = std::env::var("TERMUL_MCP_CORE_REQUEST_LIMIT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(8 * 1024 * 1024);
-    let auth = AuthBootstrap::new(generation, token).map_err(|error| error.message)?;
+    let root = se_manager_lib::mcp_core::config_root()
+        .ok_or_else(|| "MCP configuration root is unavailable".to_string())?;
     let mut builtins = BuiltInRegistry::memory_backed(memory_index, None);
     use se_manager_lib::mcp_core::host_capabilities::HostBackedCapability;
     builtins.register(Arc::new(HostBackedCapability::workspace(
         host_service.clone(),
     )));
     builtins.register(Arc::new(HostBackedCapability::ssh(host_service)));
-    let core =
-        McpCore::new_with_builtins(McpCoreConfig::default(), Arc::new(AllowAllTools), builtins);
-    let gateway = McpHttpGateway::bind(
-        Arc::new(core),
+    let internal =
+        McpCore::new_internal(McpCoreConfig::default(), Arc::new(AllowAllTools), builtins);
+    let mut specs = vec![(
+        Source::Internal,
+        Arc::new(internal),
+        standalone_mcp_config(Source::Internal)?,
+    )];
+    if !standalone_mcp_disabled("TERMUL_MCP_AGGREGATOR_ENABLED") {
+        specs.push((
+            Source::Aggregator,
+            Arc::new(McpCore::new_aggregator(
+                McpCoreConfig::default(),
+                Arc::new(AllowAllTools),
+            )),
+            standalone_mcp_config(Source::Aggregator)?,
+        ));
+    }
+    let services = bind_standalone_mcp_sources(root, specs).await?;
+    let mut handles = Vec::new();
+    for (source, service, auth) in services {
+        acp.apply_mcp_router_endpoint(source, service.endpoint().clone(), auth);
+        info!(
+            source = source.as_str(),
+            operation = "mcp_source_started",
+            "standalone MCP source ready"
+        );
+        handles.push(service);
+    }
+    Ok(handles)
+}
+
+#[cfg(test)]
+mod mcp_source_tests {
+    use super::*;
+
+    fn core(source: Source) -> Arc<McpCore> {
+        Arc::new(match source {
+            Source::Internal => McpCore::new_internal(
+                McpCoreConfig::default(),
+                Arc::new(AllowAllTools),
+                BuiltInRegistry::empty(),
+            ),
+            Source::Aggregator => {
+                McpCore::new_aggregator(McpCoreConfig::default(), Arc::new(AllowAllTools))
+            }
+        })
+    }
+
+    fn config(port: u16, token: &str) -> McpHttpGatewayConfig {
         McpHttpGatewayConfig {
-            bind_address,
+            bind_address: "127.0.0.1".parse().unwrap(),
             port,
             path: "/mcp".into(),
-            generation,
-            auth: auth.clone(),
-            request_body_limit,
+            generation: 1,
+            auth: AuthBootstrap::new(1, token).unwrap(),
+            request_body_limit: 1024 * 1024,
             control: None,
-        },
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    acp.apply_mcp_router_endpoint(gateway.endpoint().clone(), auth);
-    Ok(Some(gateway))
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_source_embedded_pair_has_distinct_verified_identities() {
+        let root = tempfile::tempdir().unwrap();
+        let services = bind_standalone_mcp_sources(
+            root.path().into(),
+            vec![
+                (
+                    Source::Internal,
+                    core(Source::Internal),
+                    config(0, "fixture-internal"),
+                ),
+                (
+                    Source::Aggregator,
+                    core(Source::Aggregator),
+                    config(0, "fixture-aggregator"),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(services.len(), 2);
+        assert_ne!(services[0].1.endpoint().port, services[1].1.endpoint().port);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        for (source, service, _) in &services {
+            let identity: serde_json::Value = client
+                .get(format!(
+                    "http://127.0.0.1:{}/mcp-core/identity",
+                    service.endpoint().port,
+                ))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(identity["source"], source.as_str());
+            assert_eq!(identity["protocol"], "se-mcp-gateway");
+        }
+        for (_, service, _) in services {
+            service.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_source_duplicate_credentials_are_rejected_before_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let result = bind_standalone_mcp_sources(
+            root.path().into(),
+            vec![
+                (
+                    Source::Internal,
+                    core(Source::Internal),
+                    config(0, "same-fixture-token"),
+                ),
+                (
+                    Source::Aggregator,
+                    core(Source::Aggregator),
+                    config(0, "same-fixture-token"),
+                ),
+            ],
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!result.err().unwrap().contains("same-fixture-token"));
+    }
+
+    #[tokio::test]
+    async fn mcp_source_second_bind_failure_releases_first_listener() {
+        let root = tempfile::tempdir().unwrap();
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second_port = occupied.local_addr().unwrap().port();
+        let first = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_port = first.local_addr().unwrap().port();
+        drop(first);
+        let result = bind_standalone_mcp_sources(
+            root.path().into(),
+            vec![
+                (
+                    Source::Internal,
+                    core(Source::Internal),
+                    config(first_port, "first-fixture-token"),
+                ),
+                (
+                    Source::Aggregator,
+                    core(Source::Aggregator),
+                    config(second_port, "second-fixture-token"),
+                ),
+            ],
+        )
+        .await;
+        assert!(result.is_err());
+        let rebound =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, first_port)).await;
+        assert!(
+            rebound.is_ok(),
+            "first listener must be released after second bind failure"
+        );
+    }
 }
 
 fn provision_standalone_authority(
@@ -540,7 +750,7 @@ fn main() -> ExitCode {
             ssh,
             "standalone",
         ));
-        let mcp_gateway = match start_standalone_mcp_gateway(
+        let mcp_gateways = match start_standalone_mcp_gateways(
             Arc::clone(&memory_index),
             &acp,
             host_service.clone(),
@@ -619,14 +829,14 @@ fn main() -> ExitCode {
         .await
         {
             Ok(()) => {
-                if let Some(gateway) = mcp_gateway {
+                for gateway in mcp_gateways {
                     gateway.shutdown().await;
                 }
                 scheduled_tasks.shutdown(Duration::from_secs(10)).await;
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                if let Some(gateway) = mcp_gateway {
+                for gateway in mcp_gateways {
                     gateway.shutdown().await;
                 }
                 scheduled_tasks.shutdown(Duration::from_secs(10)).await;

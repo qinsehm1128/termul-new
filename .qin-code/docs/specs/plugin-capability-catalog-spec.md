@@ -34,8 +34,8 @@ artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ff
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
 | 后端 Tauri 命令 | 327 | 290 | 12 | 8 | 17 |
-| 前端独有能力（无 Rust 命令） | 38 | 38 | 0 | 0 | 0 |
-| **合计** | **365** | **328** | **12** | **8** | **17** |
+| 前端独有能力（无 Rust 命令） | 39 | 39 | 0 | 0 | 0 |
+| **合计** | **366** | **329** | **12** | **8** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -254,26 +254,28 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 
 #### 10. MCP control plane — `commands.rs`
 
+双来源运行边界：`internal`（Se内置）与`aggregator`（外部上游）各自持有独立core、端口、settings与token，不存在Mixed。三种mode仅呈现本来源。新`GET /mcp-core/identity`在每个纯来源端口返回固定protocol/protocolVersion/source，无令牌或路径，作为`se.mcp.getRuntimeStatus`覆盖的公开只读协议元数据，不新增Tauri计数。所有业务及控制请求仍需对应bearer，带错source/version marker时在分发前拒绝。bridge同origin且先无凭据握手，旧mixed无marker不得接入；日志不输出token、settings或原始URL/响应体。HTTP/stdio导出和本机生命周期管理继续desktop-only；standalone内部双来源listener与ACP注入同样隔离，不新增Web凭据导出。描述与OAuth针对聚合器；全局控制文档保持单份并按来源投影。
+
 | op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
 |---|---|---|---|---|---|---|
 | se.mcp.getConfig | mcp_get_config `commands.rs:5647` | R | profile | none | OPEN-REDACTED | out the control-plane document; strip `env` / `headers` values, keep key names |
-| se.mcp.putConfig | mcp_put_config `commands.rs:5657` | W | profile | per-call | OPEN-REDACTED | in full document (may carry env/header secrets); writes + reloads gateway; never echo secret fields |
+| se.mcp.putConfig | mcp_put_config `commands.rs:5657` | W | profile | per-call | OPEN-REDACTED | in full document (may carry env/header secrets); writes + reloads both source projections; never echo secret fields |
 | se.mcp.getStatus | mcp_get_status `commands.rs:5670` | R | profile | none | OPEN | out redacted `McpControlPlaneStatus` |
-| se.mcp.getRuntimeStatus | mcp_get_runtime_status `commands.rs:5679` | R | profile | none | OPEN | out `ServiceView` (running, port, upstream states) |
-| se.mcp.startGateway | mcp_service_start `commands.rs:5687` | W | profile | grant | OPEN | starts/upgrades the gateway if not running or version-mismatched |
-| se.mcp.restartGateway | mcp_service_restart `commands.rs:5697` | W | profile | grant | OPEN | restarts the gateway |
-| se.mcp.setGatewayPort | mcp_service_set_port `commands.rs:5709` | W | profile | grant | OPEN | in port; rewrites gateway settings; agents pick it up on the next request |
-| se.mcp.getConnectionInfo | mcp_connection_info `commands.rs:5731` | R | profile | none | OPEN-REDACTED | out `{command, http endpoint}`; source comment says it **contains the bearer token** — strip it, return `hasToken`; MCP服务器页的完整 `se-mcp` JSON/TOML 导出仅使用 `bridge`，明确直连含内置与已启用上游，不复制/展示 bearer，不启动或重启服务、不改变授权；独立 `se-memory` 导出已退役，记忆查询保留在统一网关 `session-memory` 内置模块中 |
-| se.mcp.detectClients | mcp_clients_detect `commands.rs:5747` | R | profile | none | OPEN | out `DetectedClient[]` (whether each client already launches se-mcp) |
-| se.mcp.syncClient | mcp_client_sync `commands.rs:5768` | W | profile | per-call | OPEN | in clientId, mode?; writes the `se-mcp` entry into another app's MCP config |
-| se.mcp.unsyncClient | mcp_client_unsync `commands.rs:5793` | W | profile | per-call | OPEN | in clientId; removes that entry |
+| se.mcp.getRuntimeStatus | mcp_get_runtime_status `commands.rs:5679` | R | profile | none | OPEN | in source? (`internal` default / `aggregator`); out source-bound `ServiceView` (running, port, source, identity, own upstream states) |
+| se.mcp.startGateway | mcp_service_start `commands.rs:5687` | W | profile | grant | OPEN | in source?; starts/upgrades only the selected pure-source gateway; missing/mismatched identity never enables mixed forwarding |
+| se.mcp.restartGateway | mcp_service_restart `commands.rs:5697` | W | profile | grant | OPEN | in source?; restarts only that source, preserving the other service |
+| se.mcp.setGatewayPort | mcp_service_set_port `commands.rs:5709` | W | profile | grant | OPEN | in source?, port; checks cross-source port conflict, rewrites only selected settings with rollback on failure |
+| se.mcp.getConnectionInfo | mcp_connection_info `commands.rs:5731` | R | profile | none | OPEN-REDACTED | in source?, mode?; out `{source, mode, bridge, url, httpReady, ...}` **contains bearer token** — strip token and auth headers, return `hasToken`; `se-mcp` is internal-only and `se-mcp-aggregator` upstream-only; stdio export uses bridge only, HTTP copy requires verified identity; no authorization changes or se-memory revival |
+| se.mcp.detectClients | mcp_clients_detect `commands.rs:5747` | R | profile | none | OPEN | in source?, mode?; out `DetectedClient[]` for the selected fixed client key; old args require explicit update |
+| se.mcp.syncClient | mcp_client_sync `commands.rs:5768` | W | profile | per-call | OPEN | in clientId, source?, mode?; writes only `se-mcp` or `se-mcp-aggregator`, preserving the companion entry and third-party config under a common mutation lock |
+| se.mcp.unsyncClient | mcp_client_unsync `commands.rs:5793` | W | profile | per-call | OPEN | in clientId, source?; removes only the selected fixed key, preserving the companion entry |
 | se.mcp.getDescriptions | mcp_descriptions_get `commands.rs:5943` | R | profile | none | OPEN | out map configId→description |
-| se.mcp.setDescriptions | mcp_descriptions_put `commands.rs:5952` | W | profile | grant | OPEN | in map; reloads gateway |
+| se.mcp.setDescriptions | mcp_descriptions_put `commands.rs:5952` | W | profile | grant | OPEN | in map; reloads aggregator only |
 | se.mcp.getDescribeSettings | mcp_describe_settings_get `commands.rs:5976` | R | profile | none | OPEN | out `{settings, defaults}` |
 | se.mcp.setDescribeSettings | mcp_describe_settings_put `commands.rs:5991` | W | profile | grant | OPEN | in `DescribeSettings` |
 | se.mcp.describeServers | mcp_describe_servers `commands.rs:6020` | W | profile | per-call | OPEN | in names?, language; calls the `mcp_summary` AI channel with the stored key, stores text, reloads; **long-running** (LLM, concurrency 4) |
-| se.mcp.listServers | mcp_service_servers `commands.rs:6129` | R | profile | none | OPEN | out aggregated server list + descriptions |
-| se.mcp.listServerTools | mcp_service_server_tools `commands.rs:6140` | R | profile | none | OPEN | in name; out tool schemas as the gateway sees them |
+| se.mcp.listServers | mcp_service_servers `commands.rs:6129` | R | profile | none | OPEN | out selected source server list + descriptions; in source? default internal; never a runtime union |
+| se.mcp.listServerTools | mcp_service_server_tools `commands.rs:6140` | R | profile | none | OPEN | in source?, name; out tool schemas from that source only |
 | se.mcp.beginOauth | begin_mcp_oauth `commands.rs:5502` | W | profile | per-call | OPEN | in id, challenge?; out `{authorizationUrl, expiresAt}`; opens a browser + loopback callback listener |
 | se.mcp.completeOauth | complete_mcp_oauth `commands.rs:5600` | W | profile | per-call | OPEN | in id, code, state; exchanges the code into the host credential backend (user-private file, not OS keychain); out redacted status |
 | se.mcp.cancelOauth | cancel_mcp_oauth `commands.rs:5618` | W | profile | none | OPEN | in id; drops the pending flow, keeps any prior grant |
@@ -744,6 +746,7 @@ All of these persist through `persistenceApi` (`src/renderer/lib/persistence-api
 
 | op id | source | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
+| mcp.gatewayModes | stores/mcp-gateway-store.ts; shared/types/mcp-gateway.types.ts | R/W | `mcp/gateway-modes` preference doc | grant | OPEN | renderer | Allowlist `{internal,aggregator}` values grouped/entry/direct. Legacy `mcp/gateway-mode` migrates only to internal; aggregator defaults grouped. Never exposes connection/token/runtime state or changes authorization. |
 | settings.get | app-settings-store.ts:14 (+ `settings` :6) | R | settings/app doc | none | OPEN | renderer | Single settings blob. |
 | settings.set | app-settings-store.ts:25 (`updateSettings`) / :20 (`updateSetting`) | W | settings/app doc | none | OPEN | renderer | Field-whitelisted patch. |
 | settings.reset | app-settings-store.ts:30 | W | settings/app doc | per-call | OPEN | renderer | Whole-blob revert to defaults. |

@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use se_mcp_bridge::Source;
 use serde_json::{json, Value};
 
 const TOKEN: &str = "se-mcp-service-test";
@@ -33,6 +34,7 @@ struct Gateway {
     root: tempfile::TempDir,
     settings: PathBuf,
     port: u16,
+    token: String,
     child: Child,
 }
 
@@ -73,17 +75,29 @@ fn fixture(name: &str) -> Value {
 }
 
 fn start_gateway(servers: Value) -> Gateway {
+    start_source_gateway(servers, Source::Aggregator)
+}
+
+fn start_source_gateway(servers: Value, source: Source) -> Gateway {
     let root = tempfile::tempdir().unwrap();
     let root_path = root.path().canonicalize().unwrap();
     write_servers(&root_path, servers);
     let port = free_port();
-    let settings = root_path.join(".se-manager").join("mcp-gateway.json");
+    let settings = root_path
+        .join(".se-manager")
+        .join(source.default_file_name());
+    let token = match source {
+        Source::Internal => "internal-fixture-token",
+        Source::Aggregator => TOKEN,
+    }
+    .to_owned();
     se_mcp_bridge::GatewaySettings {
-        schema_version: 1,
+        schema_version: 2,
+        source,
         port,
-        token: TOKEN.into(),
+        token: token.clone(),
         executable: Some(env!("CARGO_BIN_EXE_se-manager").into()),
-        profile_root: None,
+        profile_root: (source == Source::Internal).then(|| root_path.join("fixture-profile")),
         log_file: None,
     }
     .save(&settings)
@@ -101,14 +115,19 @@ fn start_gateway(servers: Value) -> Gateway {
         root,
         settings,
         port,
+        token,
         child,
     }
 }
 
 async fn status(gateway: &Gateway) -> Option<Value> {
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
         .get(format!("http://127.0.0.1:{}/control/status", gateway.port))
-        .bearer_auth(TOKEN)
+        .bearer_auth(&gateway.token)
         .send()
         .await
         .ok()?;
@@ -155,7 +174,16 @@ struct Client {
 impl Client {
     fn spawn(settings: &Path, mode: &str) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_se-mcp"))
-            .args(["--mode", mode, "--config"])
+            .args([
+                "--source",
+                se_mcp_bridge::GatewaySettings::load(settings)
+                    .unwrap()
+                    .source
+                    .as_str(),
+                "--mode",
+                mode,
+                "--config",
+            ])
             .arg(settings)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -258,17 +286,7 @@ async fn se_mcp_reaches_every_mode_through_the_settings_file() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        [
-            "ssh_tool_list",
-            "ssh_tool_call",
-            "workspace_tool_list",
-            "workspace_tool_call",
-            "alpha_tool_list",
-            "alpha_tool_call"
-        ]
-    );
+    assert_eq!(names, ["alpha_tool_list", "alpha_tool_call"]);
     let called = grouped.request(
         3,
         "tools/call",
@@ -285,8 +303,8 @@ async fn se_mcp_reaches_every_mode_through_the_settings_file() {
     );
     let text = servers["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("\"alpha\""), "{text}");
-    assert!(text.contains("\"workspace\""), "{text}");
-    assert!(text.contains("\"ssh\""), "{text}");
+    assert!(!text.contains("\"workspace\""), "{text}");
+    assert!(!text.contains("\"ssh\""), "{text}");
 
     let mut direct = Client::spawn(&gateway.settings, "direct");
     initialize(&mut direct);
@@ -296,18 +314,15 @@ async fn se_mcp_reaches_every_mode_through_the_settings_file() {
         json!({"name": "alpha_echo", "arguments": {}}),
     );
     assert_eq!(called["result"]["content"][0]["text"], "stdio", "{called}");
-    // A gateway without its Se host still advertises the stable contract, but
-    // calls must report unavailable instead of a misleading empty project set.
-    let offline = direct.request(
+    let denied = direct.request(
         3,
         "tools/call",
         json!({"name":"workspace_project_list","arguments":{}}),
     );
-    assert_eq!(offline["result"]["isError"], true, "{offline}");
-    assert!(offline["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("HOST_UNAVAILABLE"));
+    assert!(
+        denied["error"].is_object() || denied["result"]["isError"] == true,
+        "{denied}"
+    );
 }
 
 #[tokio::test]
@@ -316,7 +331,11 @@ async fn se_mcp_starts_the_gateway_when_nothing_listens() {
     let gateway = start_gateway(json!([fixture("alpha")]));
     wait_for(&gateway, |status| !upstream_states(status).is_empty()).await;
     // Stop it through the control API, the way Se Manager replaces it.
-    let stopped = reqwest::Client::new()
+    let stopped = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
         .post(format!(
             "http://127.0.0.1:{}/control/shutdown",
             gateway.port
@@ -344,7 +363,11 @@ async fn se_mcp_starts_the_gateway_when_nothing_listens() {
     let mut client = Client::spawn(&gateway.settings, "grouped");
     initialize(&mut client);
     assert!(status(&gateway).await.is_some());
-    let _ = reqwest::Client::new()
+    let _ = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
         .post(format!(
             "http://127.0.0.1:{}/control/shutdown",
             gateway.port
@@ -366,6 +389,7 @@ async fn the_desktop_handle_starts_the_gateway_and_moves_its_port() {
     std::env::set_var("SE_PROJECT_ROOT", &root_path);
     let settings_path = root_path.join(".se-manager").join("mcp-gateway.json");
     let service = se_manager_lib::mcp_core::McpService::new(
+        Source::Aggregator,
         settings_path.clone(),
         env!("CARGO_BIN_EXE_se-manager").into(),
         root_path.join("profile"),
@@ -374,7 +398,8 @@ async fn the_desktop_handle_starts_the_gateway_and_moves_its_port() {
     // The first start creates the settings (port, token) it then serves.
     let first = free_port();
     se_mcp_bridge::GatewaySettings {
-        schema_version: 1,
+        schema_version: 2,
+        source: Source::Aggregator,
         port: first,
         token: TOKEN.into(),
         executable: None,
@@ -402,7 +427,11 @@ async fn the_desktop_handle_starts_the_gateway_and_moves_its_port() {
     let view = service.view().await;
     assert_eq!(view.state, "running");
 
-    let _ = reqwest::Client::new()
+    let _ = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
         .post(format!("http://127.0.0.1:{second}/control/shutdown"))
         .bearer_auth(TOKEN)
         .send()
@@ -423,4 +452,120 @@ async fn the_gateway_exits_when_its_settings_file_is_removed() {
         assert!(Instant::now() < deadline, "gateway kept running");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+#[test]
+fn invalid_settings_errors_do_not_echo_sensitive_values() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("invalid-gateway.json");
+    let sentinel = "SECRET_SENTINEL_MUST_NOT_APPEAR_IN_LOGS";
+    std::fs::write(
+        &path,
+        serde_json::to_vec(
+            &json!({"schemaVersion":2,"source":sentinel,"port":40001,"token":sentinel}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_se-manager"))
+        .args(["--mcp-core", "--config"])
+        .arg(path)
+        .env("SE_PROJECT_ROOT", root.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(sentinel));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(sentinel));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("MCP_SERVICE_START_FAILED"));
+}
+
+#[tokio::test]
+async fn two_sources_have_distinct_identity_tokens_and_single_source_shutdown() {
+    let mut internal = start_source_gateway(json!([]), Source::Internal);
+    let mut aggregator = start_source_gateway(json!([]), Source::Aggregator);
+    assert_ne!(internal.token, aggregator.token);
+    assert_ne!(internal.port, aggregator.port);
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let internal_status = wait_for(&internal, |_| true).await;
+    let aggregate_status = wait_for(&aggregator, |_| true).await;
+    assert_eq!(internal_status["source"], "internal");
+    assert_eq!(aggregate_status["source"], "aggregator");
+    assert_eq!(internal_status["protocol"], "se-mcp-gateway");
+    assert_eq!(aggregate_status["protocolVersion"], 1);
+    for (gateway, expected) in [
+        (&internal, Source::Internal),
+        (&aggregator, Source::Aggregator),
+    ] {
+        let identity: se_mcp_bridge::GatewayIdentity = client
+            .get(format!(
+                "http://127.0.0.1:{}/mcp-core/identity",
+                gateway.port
+            ))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(identity.source, expected);
+    }
+    for (port, token) in [
+        (internal.port, aggregator.token.as_str()),
+        (aggregator.port, internal.token.as_str()),
+    ] {
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/control/status"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    }
+    // Replace only aggregator; internal pid and credentials remain unchanged.
+    aggregator.child.kill().unwrap();
+    aggregator.child.wait().unwrap();
+    aggregator.child = Command::new(env!("CARGO_BIN_EXE_se-manager"))
+        .args(["--mcp-core", "--config"])
+        .arg(&aggregator.settings)
+        .env(
+            "SE_PROJECT_ROOT",
+            aggregator.root.path().canonicalize().unwrap(),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let restarted = wait_for(&aggregator, |_| true).await;
+    assert_ne!(restarted["pid"], aggregate_status["pid"]);
+    assert_eq!(
+        status(&internal).await.unwrap()["pid"],
+        internal_status["pid"]
+    );
+    client
+        .post(format!(
+            "http://127.0.0.1:{}/control/shutdown",
+            internal.port
+        ))
+        .bearer_auth(&internal.token)
+        .send()
+        .await
+        .unwrap();
+    assert!(internal.child.wait().unwrap().success());
+    assert_eq!(status(&aggregator).await.unwrap()["pid"], restarted["pid"]);
+    client
+        .post(format!(
+            "http://127.0.0.1:{}/control/shutdown",
+            aggregator.port
+        ))
+        .bearer_auth(&aggregator.token)
+        .send()
+        .await
+        .unwrap();
+    assert!(aggregator.child.wait().unwrap().success());
 }

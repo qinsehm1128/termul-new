@@ -24,17 +24,22 @@ use tokio::{
     task::JoinSet,
 };
 
-use crate::settings::{GatewaySettings, Mode};
+use crate::{
+    identity::{gateway_http_client, verify_gateway_identity, IdentityError},
+    settings::{
+        GatewaySettings, Mode, Source, GATEWAY_PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER,
+        SOURCE_HEADER,
+    },
+};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(200);
-const ERROR_BODY_EXCERPT: usize = 300;
 
 pub struct BridgeOptions {
     pub settings_path: PathBuf,
+    pub source: Source,
     pub mode: Mode,
-    /// Full endpoint URL, bypassing the settings port (diagnostics only).
+    /// Same-origin, selected-mode endpoint override only.
     pub url: Option<String>,
     /// Start the gateway when it is not running.
     pub autostart: bool,
@@ -42,7 +47,7 @@ pub struct BridgeOptions {
 
 /// Relay stdin to the gateway until stdin closes, then drain in-flight calls.
 pub async fn run(options: BridgeOptions) -> std::io::Result<()> {
-    let gateway = Arc::new(Gateway::new(options));
+    let gateway = Arc::new(Gateway::new(options)?);
     let (replies, mut outbox) = mpsc::unbounded_channel::<Value>();
     let writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
@@ -103,18 +108,15 @@ pub(crate) struct Gateway {
 }
 
 impl Gateway {
-    pub(crate) fn new(options: BridgeOptions) -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .build()
-            .unwrap_or_default();
-        Self {
+    pub(crate) fn new(options: BridgeOptions) -> std::io::Result<Self> {
+        let client = gateway_http_client().map_err(std::io::Error::other)?;
+        Ok(Self {
             options,
             client,
             settings: RwLock::new(None),
             protocol_version: RwLock::new(None),
             start_lock: Mutex::new(()),
-        }
+        })
     }
 
     /// Replies for one inbound message. A failure of a request becomes a
@@ -149,8 +151,9 @@ impl Gateway {
                 let fresh = self.settings(true).await?;
                 match self.post(&fresh, message).await {
                     Err(PostError::Unreachable(_)) if self.options.autostart => {
-                        self.start(&fresh).await?;
-                        self.post(&fresh, message).await.map_err(describe)
+                        self.start().await?;
+                        let started = self.settings(true).await?;
+                        self.post(&started, message).await.map_err(describe)
                     }
                     Err(PostError::Unreachable(_)) => Err(unreachable(&fresh, &first)),
                     other => other.map_err(describe),
@@ -165,22 +168,56 @@ impl Gateway {
                 return Ok(settings);
             }
         }
-        let path = &self.options.settings_path;
-        let settings = GatewaySettings::load(path).map_err(|error| {
-            format!(
-                "cannot read Se Manager MCP gateway settings at {}: {error}. Open Se Manager once to create them.",
-                path.display()
-            )
-        })?;
+        if reload {
+            *self.settings.write().await = None;
+        }
+        let settings =
+            GatewaySettings::load_for_source(&self.options.settings_path, self.options.source)
+                .map_err(|error| error.to_string())?;
+        // Validate diagnostics overrides even if no listener is present.
+        self.endpoint(&settings)?;
         *self.settings.write().await = Some(settings.clone());
         Ok(settings)
     }
 
-    fn endpoint(&self, settings: &GatewaySettings) -> String {
-        self.options
-            .url
-            .clone()
-            .unwrap_or_else(|| format!("{}{}", settings.base_url(), self.options.mode.path()))
+    fn endpoint(&self, settings: &GatewaySettings) -> Result<reqwest::Url, String> {
+        let origin = reqwest::Url::parse(&settings.base_url()).map_err(|_| "MCP_ORIGIN_INVALID")?;
+        let endpoint = match &self.options.url {
+            Some(url) => {
+                let selected = format!("{}{}", settings.base_url(), self.options.mode.path());
+                let direct_alias = format!("{}/mcp/direct", settings.base_url());
+                if url != &selected && !(self.options.mode == Mode::Direct && url == &direct_alias)
+                {
+                    return Err("MCP_ENDPOINT_INVALID".into());
+                }
+                reqwest::Url::parse(url).map_err(|_| "MCP_ENDPOINT_INVALID")?
+            }
+            None => origin
+                .join(self.options.mode.path())
+                .map_err(|_| "MCP_ENDPOINT_INVALID")?,
+        };
+        if endpoint.origin() != origin.origin()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+            || !(endpoint.path() == self.options.mode.path()
+                || (self.options.mode == Mode::Direct && endpoint.path() == "/mcp/direct"))
+        {
+            return Err("MCP_ENDPOINT_INVALID".into());
+        }
+        Ok(endpoint)
+    }
+
+    async fn verify(&self, settings: &GatewaySettings) -> Result<(), IdentityError> {
+        if settings.source != self.options.source {
+            return Err(IdentityError::SourceMismatch);
+        }
+        let origin =
+            reqwest::Url::parse(&settings.base_url()).map_err(|_| IdentityError::InvalidOrigin)?;
+        verify_gateway_identity(&self.client, &origin, self.options.source)
+            .await
+            .map(|_| ())
     }
 
     async fn post(
@@ -188,10 +225,20 @@ impl Gateway {
         settings: &GatewaySettings,
         message: &Value,
     ) -> Result<Vec<Value>, PostError> {
+        let endpoint = self.endpoint(settings).map_err(PostError::Failed)?;
+        self.verify(settings).await.map_err(|error| match error {
+            IdentityError::Unavailable => PostError::Unreachable(error.to_string()),
+            other => PostError::Failed(other.to_string()),
+        })?;
         let mut request = self
             .client
-            .post(self.endpoint(settings))
+            .post(endpoint)
             .bearer_auth(&settings.token)
+            .header(SOURCE_HEADER, self.options.source.as_str())
+            .header(
+                PROTOCOL_VERSION_HEADER,
+                GATEWAY_PROTOCOL_VERSION.to_string(),
+            )
             .header(
                 reqwest::header::ACCEPT,
                 "application/json, text/event-stream",
@@ -202,38 +249,46 @@ impl Gateway {
         }
         let response = request.send().await.map_err(|error| {
             if error.is_connect() {
-                PostError::Unreachable(error.to_string())
+                PostError::Unreachable("MCP_GATEWAY_UNAVAILABLE".into())
             } else {
-                PostError::Failed(format!("Se Manager MCP gateway request failed: {error}"))
+                PostError::Failed("MCP_REQUEST_FAILED".into())
             }
         })?;
+        let marker = |name| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+        };
+        if marker(SOURCE_HEADER) != Some(self.options.source.as_str())
+            || marker(PROTOCOL_VERSION_HEADER) != Some("1")
+        {
+            return Err(PostError::Failed("MCP_RESPONSE_IDENTITY_INVALID".into()));
+        }
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(PostError::Unauthorized);
+        }
+        if !status.is_success() {
+            return Err(PostError::Failed("MCP_HTTP_REJECTED".into()));
         }
         let event_stream = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.starts_with("text/event-stream"));
-        let body = response.text().await.map_err(|error| {
-            PostError::Failed(format!("reading the gateway reply failed: {error}"))
-        })?;
-        if !status.is_success() {
-            let excerpt = body.chars().take(ERROR_BODY_EXCERPT).collect::<String>();
-            return Err(PostError::Failed(format!(
-                "Se Manager MCP gateway answered HTTP {status}: {excerpt}"
-            )));
-        }
+        let body = response
+            .text()
+            .await
+            .map_err(|_| PostError::Failed("MCP_RESPONSE_READ_FAILED".into()))?;
         if body.trim().is_empty() {
             return Ok(Vec::new());
         }
         if event_stream {
             Ok(parse_event_stream(&body))
         } else {
-            let value = serde_json::from_str::<Value>(&body).map_err(|error| {
-                PostError::Failed(format!("the gateway reply is not JSON: {error}"))
-            })?;
+            let value = serde_json::from_str::<Value>(&body)
+                .map_err(|_| PostError::Failed("MCP_RESPONSE_INVALID".into()))?;
             Ok(match value {
                 Value::Array(items) => items,
                 other => vec![other],
@@ -253,57 +308,42 @@ impl Gateway {
         }
     }
 
-    async fn healthy(&self, settings: &GatewaySettings) -> bool {
-        self.client
-            .get(format!("{}/control/status", settings.base_url()))
-            .bearer_auth(&settings.token)
-            .send()
-            .await
-            .is_ok_and(|response| response.status().is_success())
-    }
-
-    /// Start the gateway and wait until it answers with this token. One
-    /// start at a time: concurrent requests wait for the same start.
-    async fn start(&self, settings: &GatewaySettings) -> Result<(), String> {
+    /// One start at a time. An existing incompatible listener is never offline.
+    async fn start(&self) -> Result<(), String> {
         let _starting = self.start_lock.lock().await;
-        if self.healthy(settings).await {
-            return Ok(());
+        let settings = self.settings(true).await?;
+        match self.verify(&settings).await {
+            Ok(()) => return Ok(()),
+            Err(IdentityError::Unavailable) => {}
+            Err(error) => return Err(error.to_string()),
         }
-        let executable = gateway_executable(settings).ok_or_else(|| {
-            "Se Manager MCP gateway is not running and Se Manager's location is unknown; open Se Manager once.".to_owned()
-        })?;
-        spawn_gateway(&executable, &self.options.settings_path, settings)
-            .map_err(|error| format!("could not start the Se Manager MCP gateway: {error}"))?;
+        let executable = gateway_executable(&settings).ok_or("MCP_EXECUTABLE_UNAVAILABLE")?;
+        spawn_gateway(&executable, &self.options.settings_path, &settings)
+            .map_err(|_| "MCP_START_FAILED")?;
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         while tokio::time::Instant::now() < deadline {
-            if self.healthy(settings).await {
-                return Ok(());
+            let fresh = self.settings(true).await?;
+            match self.verify(&fresh).await {
+                Ok(()) => return Ok(()),
+                Err(IdentityError::Unavailable) => {}
+                Err(error) => return Err(error.to_string()),
             }
             tokio::time::sleep(START_POLL).await;
         }
-        Err(format!(
-            "the Se Manager MCP gateway did not come up on port {} within {}s",
-            settings.port,
-            START_TIMEOUT.as_secs()
-        ))
+        Err("MCP_START_TIMEOUT".into())
     }
 }
 
 fn describe(error: PostError) -> String {
     match error {
-        PostError::Unreachable(reason) => format!("Se Manager MCP gateway is unreachable: {reason}"),
-        PostError::Unauthorized => {
-            "Se Manager MCP gateway rejected the token; reopen Se Manager to refresh the gateway settings".into()
-        }
+        PostError::Unreachable(_) => "MCP_GATEWAY_UNAVAILABLE".into(),
+        PostError::Unauthorized => "MCP_AUTH_REJECTED".into(),
         PostError::Failed(reason) => reason,
     }
 }
 
-fn unreachable(settings: &GatewaySettings, reason: &str) -> String {
-    format!(
-        "Se Manager MCP gateway is not running on {} ({reason})",
-        settings.base_url()
-    )
+fn unreachable(_settings: &GatewaySettings, _reason: &str) -> String {
+    "MCP_GATEWAY_UNAVAILABLE".into()
 }
 
 /// The recorded executable, else a `se-manager` next to this client.
@@ -332,8 +372,10 @@ pub fn spawn_gateway(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Some(profile_root) = &settings.profile_root {
-        command.env("TERMUL_CORE_PROFILE_ROOT", profile_root);
+    if settings.source == Source::Internal {
+        if let Some(profile_root) = &settings.profile_root {
+            command.env("TERMUL_CORE_PROFILE_ROOT", profile_root);
+        }
     }
     if let Some(log_file) = &settings.log_file {
         command.env("TERMUL_CORE_LOG_FILE", log_file);
@@ -376,6 +418,10 @@ fn error_reply(id: Value, code: i64, message: String) -> Value {
 }
 
 #[cfg(test)]
+#[path = "bridge_tests.rs"]
+mod isolation_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::{
@@ -396,6 +442,25 @@ mod tests {
     }
 
     async fn spawn(router: Router) -> u16 {
+        let router = router
+            .route(
+                crate::GATEWAY_IDENTITY_PATH,
+                axum::routing::get(|headers: HeaderMap| async move {
+                    assert!(!headers.contains_key("authorization"));
+                    Json(crate::GatewayIdentity::new(Source::Internal))
+                }),
+            )
+            .layer(axum::middleware::map_response(
+                |mut response: axum::response::Response| async move {
+                    response
+                        .headers_mut()
+                        .insert(SOURCE_HEADER, "internal".parse().unwrap());
+                    response
+                        .headers_mut()
+                        .insert(PROTOCOL_VERSION_HEADER, "1".parse().unwrap());
+                    response
+                },
+            ));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -405,7 +470,8 @@ mod tests {
     fn write_settings(dir: &Path, port: u16, token: &str) -> PathBuf {
         let path = dir.join("mcp-gateway.json");
         GatewaySettings {
-            schema_version: 1,
+            schema_version: crate::SCHEMA_VERSION,
+            source: Source::Internal,
             port,
             token: token.into(),
             executable: None,
@@ -420,10 +486,12 @@ mod tests {
     fn gateway(settings_path: PathBuf, mode: Mode) -> Gateway {
         Gateway::new(BridgeOptions {
             settings_path,
+            source: Source::Internal,
             mode,
             url: None,
             autostart: false,
         })
+        .unwrap()
     }
 
     #[tokio::test]
@@ -535,10 +603,7 @@ mod tests {
             .forward(json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}))
             .await;
         assert_eq!(reply[0]["id"], 3);
-        assert!(reply[0]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("not running"));
+        assert_eq!(reply[0]["error"]["message"], "MCP_GATEWAY_UNAVAILABLE");
         let silent = bridge
             .forward(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
             .await;

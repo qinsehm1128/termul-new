@@ -1,5 +1,5 @@
-//! Connect local AI clients to the MCP gateway by writing one `se-mcp` entry
-//! into their own MCP configuration.
+//! Connect local AI clients to the selected MCP gateway source by writing its
+//! fixed `se-mcp` or `se-mcp-aggregator` entry into their MCP configuration.
 //!
 //! Each client keeps its file format: JSON files get an entry under their MCP
 //! key with every other key left in place and in order; Codex's TOML is edited
@@ -10,13 +10,16 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
+use se_mcp_bridge::Source;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-/// Name of the entry written into every client.
-pub const ENTRY_NAME: &str = "se-mcp";
+// Both sources edit the same client files. Hold this process-wide lock for the
+// entire read/modify/backup/atomic-write transaction, not just the final write.
+static MUTATION_LOCK: Mutex<()> = Mutex::new(());
 const BACKUP_SUFFIX: &str = "before-se-mcp.bak";
 /// Codex stops waiting for a tool after 60s by default; gateway calls may run
 /// as long as the gateway's own limit.
@@ -169,13 +172,13 @@ fn spec(id: &str) -> Result<&'static ClientSpec, String> {
         .ok_or_else(|| format!("unknown client `{id}`"))
 }
 
-pub fn detect(home: &Path, bridge: &BridgeCommand) -> Vec<DetectedClient> {
+pub fn detect(home: &Path, source: Source, bridge: &BridgeCommand) -> Vec<DetectedClient> {
     CLIENTS
         .iter()
         .map(|client| {
             let path = (client.config)(home);
             let installed = (client.marker)(home).exists() || path.exists();
-            let (synced, up_to_date, error) = match read_entry(client.format, &path) {
+            let (synced, up_to_date, error) = match read_entry(client.format, &path, source) {
                 Ok(Some((command, args))) => {
                     (true, command == bridge.command && args == bridge.args, None)
                 }
@@ -195,9 +198,17 @@ pub fn detect(home: &Path, bridge: &BridgeCommand) -> Vec<DetectedClient> {
         .collect()
 }
 
-/// Add or refresh the `se-mcp` entry of one client.
-pub fn sync(home: &Path, id: &str, bridge: &BridgeCommand) -> Result<SyncOutcome, String> {
+/// Add or refresh only the selected source's fixed entry in one client.
+pub fn sync(
+    home: &Path,
+    id: &str,
+    source: Source,
+    bridge: &BridgeCommand,
+) -> Result<SyncOutcome, String> {
     let client = spec(id)?;
+    let _mutation = MUTATION_LOCK
+        .lock()
+        .map_err(|_| "MCP_CLIENT_MUTATION_LOCK_POISONED".to_owned())?;
     let path = (client.config)(home);
     let original = read_optional(&path)?;
     let updated = match client.format {
@@ -214,7 +225,7 @@ pub fn sync(home: &Path, id: &str, bridge: &BridgeCommand) -> Result<SyncOutcome
             }
             entry.insert("command".into(), json!(bridge.command));
             entry.insert("args".into(), json!(bridge.args));
-            servers.insert(ENTRY_NAME.into(), Value::Object(entry));
+            servers.insert(source.client_key().into(), Value::Object(entry));
             json_text(&root)?
         }
         Format::CodexToml => {
@@ -236,7 +247,7 @@ pub fn sync(home: &Path, id: &str, bridge: &BridgeCommand) -> Result<SyncOutcome
             }
             entry.insert("args", toml_edit::value(args));
             entry.insert("tool_timeout_sec", toml_edit::value(CODEX_TOOL_TIMEOUT_SEC));
-            servers.insert(ENTRY_NAME, toml_edit::Item::Table(entry));
+            servers.insert(source.client_key(), toml_edit::Item::Table(entry));
             document.to_string()
         }
     };
@@ -248,11 +259,14 @@ pub fn sync(home: &Path, id: &str, bridge: &BridgeCommand) -> Result<SyncOutcome
     })
 }
 
-/// Remove the `se-mcp` entry of one client, leaving everything else.
-pub fn unsync(home: &Path, id: &str) -> Result<SyncOutcome, String> {
+/// Remove only the selected source's fixed entry, leaving everything else.
+pub fn unsync(home: &Path, id: &str, source: Source) -> Result<SyncOutcome, String> {
     let client = spec(id)?;
+    let _mutation = MUTATION_LOCK
+        .lock()
+        .map_err(|_| "MCP_CLIENT_MUTATION_LOCK_POISONED".to_owned())?;
     let path = (client.config)(home);
-    let outcome = SyncOutcome {
+    let mut outcome = SyncOutcome {
         config_path: path.display().to_string(),
         backup_path: None,
     };
@@ -265,7 +279,7 @@ pub fn unsync(home: &Path, id: &str) -> Result<SyncOutcome, String> {
             let removed = root
                 .get_mut(key)
                 .and_then(Value::as_object_mut)
-                .and_then(|servers| servers.shift_remove(ENTRY_NAME))
+                .and_then(|servers| servers.shift_remove(source.client_key()))
                 .is_some();
             if !removed {
                 return Ok(outcome);
@@ -277,7 +291,7 @@ pub fn unsync(home: &Path, id: &str) -> Result<SyncOutcome, String> {
             let removed = document
                 .get_mut("mcp_servers")
                 .and_then(toml_edit::Item::as_table_like_mut)
-                .and_then(|servers| servers.remove(ENTRY_NAME))
+                .and_then(|servers| servers.remove(source.client_key()))
                 .is_some();
             if !removed {
                 return Ok(outcome);
@@ -285,18 +299,26 @@ pub fn unsync(home: &Path, id: &str) -> Result<SyncOutcome, String> {
             document.to_string()
         }
     };
+    outcome.backup_path = backup_once(&path, Some(&original))?;
     write_file(&path, &updated)?;
     Ok(outcome)
 }
 
-fn read_entry(format: Format, path: &Path) -> Result<Option<(String, Vec<String>)>, String> {
+fn read_entry(
+    format: Format,
+    path: &Path,
+    source: Source,
+) -> Result<Option<(String, Vec<String>)>, String> {
     let Some(text) = read_optional(path)? else {
         return Ok(None);
     };
     let entry = match format {
         Format::Json { key, .. } => {
             let root = parse_json_object(Some(&text))?;
-            let Some(entry) = root.get(key).and_then(|servers| servers.get(ENTRY_NAME)) else {
+            let Some(entry) = root
+                .get(key)
+                .and_then(|servers| servers.get(source.client_key()))
+            else {
                 return Ok(None);
             };
             let command = entry["command"].as_str().unwrap_or_default().to_owned();
@@ -314,7 +336,7 @@ fn read_entry(format: Format, path: &Path) -> Result<Option<(String, Vec<String>
             let document = parse_toml(Some(&text))?;
             let Some(entry) = document
                 .get("mcp_servers")
-                .and_then(|servers| servers.get(ENTRY_NAME))
+                .and_then(|servers| servers.get(source.client_key()))
             else {
                 return Ok(None);
             };
@@ -406,9 +428,18 @@ mod tests {
     use super::*;
 
     fn bridge() -> BridgeCommand {
+        source_bridge(Source::Internal)
+    }
+
+    fn source_bridge(source: Source) -> BridgeCommand {
         BridgeCommand {
             command: "/Applications/Se Manager.app/Contents/MacOS/se-mcp".into(),
-            args: vec!["--mode".into(), "entry".into()],
+            args: vec![
+                "--source".into(),
+                source.as_str().into(),
+                "--mode".into(),
+                "entry".into(),
+            ],
         }
     }
 
@@ -419,7 +450,7 @@ mod tests {
         let original = r#"{"numStartups":3,"mcpServers":{"other":{"command":"x"}},"projects":{}}"#;
         fs::write(&path, original).unwrap();
 
-        let outcome = sync(home.path(), "claude-code", &bridge()).unwrap();
+        let outcome = sync(home.path(), "claude-code", Source::Internal, &bridge()).unwrap();
         let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let keys = written.as_object().unwrap().keys().collect::<Vec<_>>();
         assert_eq!(keys, ["numStartups", "mcpServers", "projects"]);
@@ -427,17 +458,17 @@ mod tests {
         assert_eq!(written["mcpServers"]["se-mcp"]["type"], "stdio");
         assert_eq!(
             written["mcpServers"]["se-mcp"]["args"],
-            json!(["--mode", "entry"])
+            json!(bridge().args)
         );
         let backup = outcome.backup_path.unwrap();
         assert_eq!(fs::read_to_string(&backup).unwrap(), original);
 
         // A second sync never replaces the original backup.
-        let again = sync(home.path(), "claude-code", &bridge()).unwrap();
+        let again = sync(home.path(), "claude-code", Source::Internal, &bridge()).unwrap();
         assert!(again.backup_path.is_none());
         assert_eq!(fs::read_to_string(&backup).unwrap(), original);
 
-        unsync(home.path(), "claude-code").unwrap();
+        unsync(home.path(), "claude-code", Source::Internal).unwrap();
         let removed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(removed["mcpServers"].get("se-mcp").is_none());
         assert_eq!(removed["mcpServers"]["other"]["command"], "x");
@@ -455,7 +486,7 @@ mod tests {
         )
         .unwrap();
 
-        sync(home.path(), "codex", &bridge()).unwrap();
+        sync(home.path(), "codex", Source::Internal, &bridge()).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("# my settings\nmodel = \"gpt-5\""));
         assert!(text.contains("command = \"npx\" # keep"));
@@ -464,11 +495,11 @@ mod tests {
         assert_eq!(entry["command"].as_str(), Some(bridge().command.as_str()));
         assert_eq!(entry["tool_timeout_sec"].as_integer(), Some(300));
 
-        let detected = detect(home.path(), &bridge());
+        let detected = detect(home.path(), Source::Internal, &bridge());
         let codex = detected.iter().find(|client| client.id == "codex").unwrap();
         assert!(codex.installed && codex.synced && codex.up_to_date);
 
-        unsync(home.path(), "codex").unwrap();
+        unsync(home.path(), "codex", Source::Internal).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(!text.contains("se-mcp"));
         assert!(text.contains("[mcp_servers.context7]"));
@@ -477,12 +508,12 @@ mod tests {
     #[test]
     fn detect_reports_a_stale_entry_and_an_unreadable_file() {
         let home = tempfile::tempdir().unwrap();
-        sync(home.path(), "cursor", &bridge()).unwrap();
+        sync(home.path(), "cursor", Source::Internal, &bridge()).unwrap();
         let grouped = BridgeCommand {
             command: bridge().command,
             args: Vec::new(),
         };
-        let detected = detect(home.path(), &grouped);
+        let detected = detect(home.path(), Source::Internal, &grouped);
         let cursor = detected
             .iter()
             .find(|client| client.id == "cursor")
@@ -497,12 +528,239 @@ mod tests {
         let gemini = home.path().join(".gemini");
         fs::create_dir_all(&gemini).unwrap();
         fs::write(gemini.join("settings.json"), "{ // comment\n}").unwrap();
-        let detected = detect(home.path(), &grouped);
+        let detected = detect(home.path(), Source::Internal, &grouped);
         let gemini = detected
             .iter()
             .find(|client| client.id == "gemini")
             .unwrap();
         assert!(gemini.error.as_deref().unwrap().contains("not plain JSON"));
-        assert!(sync(home.path(), "gemini", &grouped).is_err());
+        assert!(sync(home.path(), "gemini", Source::Internal, &grouped).is_err());
+    }
+
+    #[test]
+    fn json_source_operations_preserve_the_other_source_and_key_order() {
+        for client in CLIENTS {
+            let Format::Json { key, .. } = client.format else {
+                continue;
+            };
+            let home = tempfile::tempdir().unwrap();
+            let path = (client.config)(home.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let original = format!(
+                r#"{{"before":1,"{key}":{{"third":{{"command":"third","env":{{"KEEP":"yes"}}}},"se-mcp":{{"command":"old-bridge","args":["--mode","entry"],"env":{{"KEEP":"internal"}}}}}},"after":2}}"#
+            );
+            fs::write(&path, &original).unwrap();
+            let initial: Value = serde_json::from_str(&original).unwrap();
+            let aggregator = source_bridge(Source::Aggregator);
+            let outcome = sync(home.path(), client.id, Source::Aggregator, &aggregator).unwrap();
+            let backup = outcome.backup_path.unwrap();
+            let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(written[key]["se-mcp"], initial[key]["se-mcp"]);
+            assert_eq!(written[key]["third"], initial[key]["third"]);
+            assert_eq!(
+                written
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["before", key, "after"]
+            );
+            assert_eq!(
+                written[key]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["third", "se-mcp", "se-mcp-aggregator"]
+            );
+            let legacy = detect(home.path(), Source::Internal, &bridge());
+            let legacy = legacy.iter().find(|item| item.id == client.id).unwrap();
+            assert!(legacy.synced && !legacy.up_to_date);
+            let current = detect(home.path(), Source::Aggregator, &aggregator);
+            assert!(
+                current
+                    .iter()
+                    .find(|item| item.id == client.id)
+                    .unwrap()
+                    .up_to_date
+            );
+
+            sync(home.path(), client.id, Source::Internal, &bridge()).unwrap();
+            unsync(home.path(), client.id, Source::Internal).unwrap();
+            let removed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(removed[key].get("se-mcp").is_none());
+            assert_eq!(
+                removed[key]["se-mcp-aggregator"],
+                written[key]["se-mcp-aggregator"]
+            );
+            assert_eq!(removed[key]["third"], initial[key]["third"]);
+            unsync(home.path(), client.id, Source::Aggregator).unwrap();
+            assert_eq!(fs::read_to_string(backup).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn codex_source_operations_preserve_sibling_table_and_comments() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(".codex/config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = "# user settings\nmodel = \"gpt-5\" # model comment\n\n[mcp_servers.third]\ncommand = \"third\" # keep third\n\n[mcp_servers.se-mcp]\ncommand = \"old-bridge\" # keep internal\nargs = [\"--mode\", \"entry\"]\ncustom = true\n";
+        fs::write(&path, original).unwrap();
+        let outcome = sync(
+            home.path(),
+            "codex",
+            Source::Aggregator,
+            &source_bridge(Source::Aggregator),
+        )
+        .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(original));
+        let parsed: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(
+            parsed["mcp_servers"]["se-mcp-aggregator"]["tool_timeout_sec"].as_integer(),
+            Some(300)
+        );
+        let before: toml::Value = toml::from_str(original).unwrap();
+        assert_eq!(
+            parsed["mcp_servers"]["se-mcp"],
+            before["mcp_servers"]["se-mcp"]
+        );
+        unsync(home.path(), "codex", Source::Aggregator).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(
+            fs::read_to_string(outcome.backup_path.unwrap()).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn unsync_first_takes_one_backup_and_only_removes_selected_source() {
+        for client in CLIENTS {
+            let home = tempfile::tempdir().unwrap();
+            let path = (client.config)(home.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let original = match client.format {
+                Format::Json { key, .. } => format!(
+                    r#"{{"{key}":{{"third":{{"command":"third"}},"se-mcp":{{"command":"old"}},"se-mcp-aggregator":{{"command":"aggregator"}}}}}}"#
+                ),
+                Format::CodexToml => "# keep\n[mcp_servers.third]\ncommand = \"third\"\n[mcp_servers.se-mcp]\ncommand = \"old\"\n[mcp_servers.se-mcp-aggregator]\ncommand = \"aggregator\"\n".to_owned(),
+            };
+            fs::write(&path, &original).unwrap();
+            let outcome = unsync(home.path(), client.id, Source::Internal).unwrap();
+            let backup = outcome.backup_path.unwrap();
+            assert!(read_entry(client.format, &path, Source::Internal)
+                .unwrap()
+                .is_none());
+            assert_eq!(
+                read_entry(client.format, &path, Source::Aggregator)
+                    .unwrap()
+                    .unwrap()
+                    .0,
+                "aggregator"
+            );
+            let after = fs::read_to_string(&path).unwrap();
+            assert!(unsync(home.path(), client.id, Source::Internal)
+                .unwrap()
+                .backup_path
+                .is_none());
+            assert_eq!(fs::read_to_string(&path).unwrap(), after);
+            unsync(home.path(), client.id, Source::Aggregator).unwrap();
+            assert_eq!(fs::read_to_string(backup).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn concurrent_two_source_sync_keeps_both_entries_and_original_backup() {
+        use std::{sync::Barrier, thread};
+
+        for client in CLIENTS {
+            for _ in 0..8 {
+                let home = tempfile::tempdir().unwrap();
+                let path = (client.config)(home.path());
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let original = match client.format {
+                    Format::Json { key, .. } => format!(
+                        r#"{{"before":1,"{key}":{{"third":{{"command":"third"}}}},"after":2}}"#
+                    ),
+                    Format::CodexToml => "# keep\nmodel = \"gpt-5\"\n[mcp_servers.third]\ncommand = \"third\" # keep third\n".to_owned(),
+                };
+                fs::write(&path, &original).unwrap();
+                let start = Barrier::new(2);
+                let outcomes = thread::scope(|scope| {
+                    let handles = [Source::Internal, Source::Aggregator].map(|source| {
+                        let start = &start;
+                        let home = home.path();
+                        scope.spawn(move || {
+                            start.wait();
+                            sync(home, client.id, source, &source_bridge(source)).unwrap()
+                        })
+                    });
+                    handles.map(|handle| handle.join().unwrap())
+                });
+                let backups = outcomes
+                    .iter()
+                    .filter_map(|outcome| outcome.backup_path.as_ref())
+                    .collect::<Vec<_>>();
+                assert_eq!(backups.len(), 1);
+                assert_eq!(fs::read_to_string(backups[0]).unwrap(), original);
+                for source in [Source::Internal, Source::Aggregator] {
+                    let entry = read_entry(client.format, &path, source).unwrap().unwrap();
+                    let expected = source_bridge(source);
+                    assert_eq!(entry, (expected.command, expected.args));
+                }
+                let text = fs::read_to_string(&path).unwrap();
+                match client.format {
+                    Format::Json { key, .. } => {
+                        let parsed: Value = serde_json::from_str(&text).unwrap();
+                        assert_eq!(parsed[key]["third"], json!({"command":"third"}));
+                        assert_eq!(
+                            parsed
+                                .as_object()
+                                .unwrap()
+                                .keys()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>(),
+                            ["before", key, "after"]
+                        );
+                    }
+                    Format::CodexToml => assert!(text.starts_with(&original)),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_and_invalid_configs_are_not_mutated_by_unsync() {
+        for client in CLIENTS {
+            let home = tempfile::tempdir().unwrap();
+            let path = (client.config)(home.path());
+            for source in [Source::Internal, Source::Aggregator] {
+                assert!(unsync(home.path(), client.id, source)
+                    .unwrap()
+                    .backup_path
+                    .is_none());
+                assert!(!path.exists());
+            }
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let invalid = match client.format {
+                Format::Json { .. } => "{not json}",
+                Format::CodexToml => "[not toml",
+            };
+            fs::write(&path, invalid).unwrap();
+            for source in [Source::Internal, Source::Aggregator] {
+                assert!(sync(home.path(), client.id, source, &source_bridge(source)).is_err());
+                assert!(unsync(home.path(), client.id, source).is_err());
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+            assert!(!path
+                .with_file_name(format!(
+                    "{}.{}",
+                    path.file_name().unwrap().to_str().unwrap(),
+                    BACKUP_SUFFIX
+                ))
+                .exists());
+        }
     }
 }

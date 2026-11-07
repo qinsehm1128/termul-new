@@ -12,10 +12,11 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
   MCP_DESCRIPTION_MAX_CHARS,
+  type McpGatewayUpstream,
   type McpServerSummary,
   mcpGatewayApi
 } from '@/lib/mcp-gateway-api'
-import { useMcpGatewayStore } from '@/stores/mcp-gateway-store'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { McpDescribeSettingsForm } from './McpDescribeSettingsForm'
 
 /** The language the model writes in, from the UI language. */
@@ -23,19 +24,23 @@ export function descriptionLanguage(uiLanguage: string): string {
   return uiLanguage.toLowerCase().startsWith('zh') ? 'Chinese' : 'English'
 }
 
-export function McpDescriptionsPanel(): React.JSX.Element {
+function McpDescriptionsContent(): React.JSX.Element {
   const { t, i18n } = useTranslation('mcp')
-  const upstreams = useMcpGatewayStore((state) => state.view?.status?.upstreams)
+  const [upstreams, setUpstreams] = useState<McpGatewayUpstream[]>([])
   const [servers, setServers] = useState<McpServerSummary[]>([])
   const [stored, setStored] = useState<Record<string, string>>({})
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    const [listed, descriptions] = await Promise.all([
-      mcpGatewayApi.servers(),
+    const [view, listed, descriptions] = await Promise.all([
+      mcpGatewayApi.view('aggregator'),
+      mcpGatewayApi.servers('aggregator'),
       mcpGatewayApi.descriptions()
     ])
+    if (view.success && view.data.source === 'aggregator') {
+      setUpstreams(view.data.status?.upstreams ?? [])
+    }
     if (listed.success) setServers(listed.data.servers.filter((server) => !server.builtIn))
     if (descriptions.success) setStored(descriptions.data)
   }, [])
@@ -52,7 +57,7 @@ export function McpDescriptionsPanel(): React.JSX.Element {
     const result = await mcpGatewayApi.putDescriptions(next)
     setBusy(null)
     if (!result.success) {
-      toast.error(result.error ?? t('descriptions.failed'))
+      toast.error(t('descriptions.failed'))
       return
     }
     setEditing(null)
@@ -68,7 +73,7 @@ export function McpDescriptionsPanel(): React.JSX.Element {
       toast.error(
         result.code === 'AI_NOT_CONFIGURED'
           ? t('descriptions.notConfigured')
-          : (result.error ?? t('descriptions.failed'))
+          : t('descriptions.failed')
       )
       return
     }
@@ -76,7 +81,7 @@ export function McpDescriptionsPanel(): React.JSX.Element {
     if (failed.length > 0) {
       toast.error(
         t('descriptions.someFailed', {
-          names: failed.map((item) => `${item.name}: ${item.error}`).join('; ')
+          names: failed.map((item) => item.name).join('; ')
         })
       )
     }
@@ -193,4 +198,12 @@ export function McpDescriptionsPanel(): React.JSX.Element {
       )}
     </section>
   )
+}
+
+export function McpDescriptionsPanel(): React.JSX.Element {
+  const { t } = useTranslation('mcp')
+  if (!isTauriContext()) {
+    return <p className="text-sm text-muted-foreground">{t('export.desktopOnly')}</p>
+  }
+  return <McpDescriptionsContent />
 }

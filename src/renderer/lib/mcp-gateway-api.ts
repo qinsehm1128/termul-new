@@ -7,10 +7,12 @@
  */
 
 import type { IpcResult } from '@shared/types/ipc.types'
+import { MCP_GATEWAY_CLIENT_KEYS, type McpGatewaySource } from '@shared/types/mcp-gateway.types'
 import { invoke } from '@tauri-apps/api/core'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 
-/** How the gateway exposes the aggregated servers to an agent. */
+/** Presentation mode within one isolated source; never selects the source. */
 export type McpGatewayMode = 'grouped' | 'entry' | 'direct'
 
 export const MCP_GATEWAY_MODES: readonly McpGatewayMode[] = ['grouped', 'entry', 'direct']
@@ -26,6 +28,9 @@ export interface McpGatewayUpstream {
 }
 
 export interface McpGatewayStatus {
+  source: McpGatewaySource
+  protocol: string
+  protocolVersion: number
   version: string
   pid: number
   port: number
@@ -37,6 +42,7 @@ export interface McpGatewayStatus {
 }
 
 export interface McpGatewayView {
+  source: McpGatewaySource
   state: 'running' | 'stopped' | 'error'
   port: number | null
   settingsPath: string
@@ -50,6 +56,9 @@ export interface McpBridgeCommand {
 }
 
 export interface McpGatewayConnection {
+  source: McpGatewaySource
+  /** Current source identity and authentication have both been verified. */
+  httpReady: boolean
   mode: McpGatewayMode
   bridge: McpBridgeCommand
   /** `se-mcp` exists next to the app binary. */
@@ -111,28 +120,44 @@ const DESKTOP_ONLY: IpcResult<never> = {
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<IpcResult<T>> {
   if (!isTauriContext()) return DESKTOP_ONLY
+  const logFailure = () => {
+    const source = args?.source === 'internal' ? 'internal' : 'aggregator'
+    const mode = MCP_GATEWAY_MODES.includes(args?.mode as McpGatewayMode) ? args?.mode : 'none'
+    void logFrontendError({
+      source: 'mcp-gateway-api',
+      message: `source=${source} mode=${mode} operation=${command} code=MCP_GATEWAY_REQUEST_FAILED`
+    })
+  }
   try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
+    const result = await invoke<IpcResult<T>>(command, args)
+    if (!result.success) logFailure()
+    return result
+  } catch {
+    logFailure()
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: 'MCP gateway request failed',
       code: 'INVOKE_ERROR'
     }
   }
 }
 
 export const mcpGatewayApi = {
-  view: () => call<McpGatewayView>('mcp_get_runtime_status'),
-  start: () => call<McpGatewayView>('mcp_service_start'),
-  restart: () => call<McpGatewayView>('mcp_service_restart'),
-  setPort: (port: number) => call<McpGatewayView>('mcp_service_set_port', { port }),
-  connection: (mode: McpGatewayMode) => call<McpGatewayConnection>('mcp_connection_info', { mode }),
-  clients: (mode: McpGatewayMode) => call<McpClient[]>('mcp_clients_detect', { mode }),
-  syncClient: (id: string, mode: McpGatewayMode) =>
-    call<McpClientSyncOutcome>('mcp_client_sync', { id, mode }),
-  unsyncClient: (id: string) => call<McpClientSyncOutcome>('mcp_client_unsync', { id }),
-  servers: () => call<{ servers: McpServerSummary[] }>('mcp_service_servers'),
+  view: (source: McpGatewaySource) => call<McpGatewayView>('mcp_get_runtime_status', { source }),
+  start: (source: McpGatewaySource) => call<McpGatewayView>('mcp_service_start', { source }),
+  restart: (source: McpGatewaySource) => call<McpGatewayView>('mcp_service_restart', { source }),
+  setPort: (source: McpGatewaySource, port: number) =>
+    call<McpGatewayView>('mcp_service_set_port', { source, port }),
+  connection: (source: McpGatewaySource, mode: McpGatewayMode) =>
+    call<McpGatewayConnection>('mcp_connection_info', { source, mode }),
+  clients: (source: McpGatewaySource, mode: McpGatewayMode) =>
+    call<McpClient[]>('mcp_clients_detect', { source, mode }),
+  syncClient: (source: McpGatewaySource, id: string, mode: McpGatewayMode) =>
+    call<McpClientSyncOutcome>('mcp_client_sync', { source, id, mode }),
+  unsyncClient: (source: McpGatewaySource, id: string) =>
+    call<McpClientSyncOutcome>('mcp_client_unsync', { source, id }),
+  servers: (source: McpGatewaySource) =>
+    call<{ servers: McpServerSummary[] }>('mcp_service_servers', { source }),
   /** Stored descriptions, config id → text. */
   descriptions: () => call<Record<string, string>>('mcp_descriptions_get'),
   putDescriptions: (descriptions: Record<string, string>) =>
@@ -149,9 +174,13 @@ export const mcpGatewayApi = {
 }
 
 /** The `mcpServers` JSON most clients (Claude Code, Cursor, …) accept. */
-export function mcpServersJson(bridge: McpBridgeCommand): string {
+export function mcpServersJson(source: McpGatewaySource, bridge: McpBridgeCommand): string {
   return JSON.stringify(
-    { mcpServers: { 'se-mcp': { command: bridge.command, args: bridge.args } } },
+    {
+      mcpServers: {
+        [MCP_GATEWAY_CLIENT_KEYS[source]]: { command: bridge.command, args: bridge.args }
+      }
+    },
     null,
     2
   )
@@ -162,10 +191,10 @@ function tomlString(value: string): string {
 }
 
 /** The Codex `config.toml` table. */
-export function codexToml(bridge: McpBridgeCommand): string {
+export function codexToml(source: McpGatewaySource, bridge: McpBridgeCommand): string {
   const args = bridge.args.map(tomlString).join(', ')
   return [
-    '[mcp_servers.se-mcp]',
+    `[mcp_servers.${MCP_GATEWAY_CLIENT_KEYS[source]}]`,
     `command = ${tomlString(bridge.command)}`,
     `args = [${args}]`,
     'tool_timeout_sec = 300'
@@ -174,10 +203,11 @@ export function codexToml(bridge: McpBridgeCommand): string {
 
 /** Streamable HTTP entry for clients that prefer a URL over a command. */
 export function httpServerJson(connection: McpGatewayConnection): string {
+  if (connection.httpReady !== true) throw new Error('MCP_HTTP_NOT_READY')
   return JSON.stringify(
     {
       mcpServers: {
-        'se-mcp': {
+        [MCP_GATEWAY_CLIENT_KEYS[connection.source]]: {
           type: 'http',
           url: connection.url,
           headers: { Authorization: `Bearer ${connection.token}` }

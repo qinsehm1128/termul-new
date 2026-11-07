@@ -1264,15 +1264,16 @@ mod tests {
             "slow-built-in".into(),
             "wait".into(),
         )]));
-        let core = McpCore::new(
+        let core = McpCore::new_internal(
             McpCoreConfig {
                 operation_timeout: Duration::from_millis(40),
                 max_response_bytes: 256,
                 ..Default::default()
             },
             permission,
+            BuiltInRegistry::empty(),
         );
-        core.replace_builtins(registry).await;
+        core.replace_builtins(registry).await.unwrap();
 
         let tools = core.list_tools().await.unwrap();
         assert!(!tools
@@ -1288,18 +1289,19 @@ mod tests {
             Err(McpDomainError::PermissionDenied { .. })
         ));
 
-        let allowed = McpCore::new(
+        let allowed = McpCore::new_internal(
             McpCoreConfig {
                 call_timeout: Duration::from_millis(40),
                 max_response_bytes: 256,
                 ..Default::default()
             },
             Arc::new(AllowAllTools),
+            BuiltInRegistry::empty(),
         );
         let mut registry = BuiltInRegistry::empty();
         registry.register(Arc::new(SlowBuiltIn));
         registry.register(Arc::new(LargeBuiltIn));
-        allowed.replace_builtins(registry).await;
+        allowed.replace_builtins(registry).await.unwrap();
         assert!(matches!(
             allowed.call_tool("slow-built-in_wait", None).await,
             Err(McpDomainError::Timeout {
@@ -1312,10 +1314,14 @@ mod tests {
             Err(McpDomainError::ResponseTooLarge { .. })
         ));
 
-        let cancellable = McpCore::default();
+        let cancellable = McpCore::new_internal(
+            McpCoreConfig::default(),
+            Arc::new(AllowAllTools),
+            BuiltInRegistry::empty(),
+        );
         let mut registry = BuiltInRegistry::empty();
         registry.register(Arc::new(SlowBuiltIn));
-        cancellable.replace_builtins(registry).await;
+        cancellable.replace_builtins(registry).await.unwrap();
         let cancellation = CancellationToken::new();
         let cancel = cancellation.clone();
         let task = tokio::spawn(async move {

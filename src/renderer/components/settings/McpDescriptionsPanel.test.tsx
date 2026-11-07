@@ -1,15 +1,17 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useMcpGatewayStore } from '@/stores/mcp-gateway-store'
 import { descriptionLanguage, McpDescriptionsPanel } from './McpDescriptionsPanel'
 
 const api = vi.hoisted(() => ({
+  view: vi.fn(),
   servers: vi.fn(),
   descriptions: vi.fn(),
   putDescriptions: vi.fn(),
   describe: vi.fn(),
   describeSettings: vi.fn()
 }))
+const runtime = vi.hoisted(() => ({ desktop: true }))
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => runtime.desktop }))
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }))
 
 vi.mock('sonner', () => ({ toast }))
@@ -27,12 +29,18 @@ function row(name: string): HTMLElement {
 describe('McpDescriptionsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useMcpGatewayStore.setState({
-      view: {
+    runtime.desktop = true
+    api.view.mockResolvedValue({
+      success: true,
+      data: {
+        source: 'aggregator',
         state: 'running',
         port: 3290,
         settingsPath: '/x',
         status: {
+          source: 'aggregator',
+          protocol: 'se-mcp-gateway',
+          protocolVersion: 1,
           version: '1',
           pid: 1,
           port: 3290,
@@ -40,7 +48,7 @@ describe('McpDescriptionsPanel', () => {
           configRevision: 1,
           configError: null,
           upstreams: [{ id: 'id-c7', name: 'context7', state: 'connected' }],
-          builtIns: ['session-memory']
+          builtIns: []
         }
       }
     })
@@ -66,6 +74,8 @@ describe('McpDescriptionsPanel', () => {
     render(<McpDescriptionsPanel />)
     expect(await screen.findByText('Library docs')).toBeTruthy()
     expect(screen.queryByText('session-memory')).toBeNull()
+    expect(api.view).toHaveBeenCalledWith('aggregator')
+    expect(api.servers).toHaveBeenCalledWith('aggregator')
   })
 
   it('stores an edited line under the server config id', async () => {
@@ -95,6 +105,39 @@ describe('McpDescriptionsPanel', () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('AI channels page'))
     )
+  })
+
+  it('retains the external directory when the aggregator is stopped', async () => {
+    api.view.mockResolvedValueOnce({
+      success: true,
+      data: { source: 'aggregator', state: 'stopped', port: 3390, settingsPath: '/x' }
+    })
+    render(<McpDescriptionsPanel />)
+    expect(await screen.findByText('Library docs')).toBeTruthy()
+    expect(screen.getByText('context7')).toBeTruthy()
+    expect(api.servers).toHaveBeenCalledWith('aggregator')
+  })
+
+  it('does not surface raw generation errors or leak them to logs', async () => {
+    api.describe.mockResolvedValueOnce({
+      success: false,
+      code: 'INVOKE_ERROR',
+      error: 'SECRET_TOKEN'
+    })
+    render(<McpDescriptionsPanel />)
+    await screen.findByText('context7')
+    fireEvent.click(screen.getByRole('button', { name: 'Describe all with AI' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(JSON.stringify(toast.error.mock.calls)).not.toContain('SECRET_TOKEN')
+  })
+
+  it('does not read local gateway or description APIs on Web', () => {
+    runtime.desktop = false
+    render(<McpDescriptionsPanel />)
+    expect(api.view).not.toHaveBeenCalled()
+    expect(api.servers).not.toHaveBeenCalled()
+    expect(api.descriptions).not.toHaveBeenCalled()
+    expect(api.describeSettings).not.toHaveBeenCalled()
   })
 
   it('maps Chinese UI languages to Chinese descriptions', () => {

@@ -1,3 +1,8 @@
+import {
+  MCP_GATEWAY_CLIENT_KEYS,
+  MCP_GATEWAY_SOURCES,
+  type McpGatewaySource
+} from '@shared/types/mcp-gateway.types'
 import { Copy, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -18,10 +23,19 @@ type Format = 'json' | 'toml'
 type ExportError = 'loadFailed' | 'bridgeMissing' | 'copyFailed'
 
 // Keep only the stdio bridge across the UI/clipboard boundary, never the HTTP token.
-async function readBridge(): Promise<{ bridge: McpBridgeCommand } | { error: ExportError }> {
+async function readBridge(
+  source: McpGatewaySource
+): Promise<{ bridge: McpBridgeCommand } | { error: ExportError }> {
   try {
-    const result = await mcpGatewayApi.connection('direct')
-    if (!result.success || !result.data) return { error: 'loadFailed' }
+    const result = await mcpGatewayApi.connection(source, 'direct')
+    if (
+      !result.success ||
+      !result.data ||
+      result.data.source !== source ||
+      result.data.mode !== 'direct'
+    ) {
+      return { error: 'loadFailed' }
+    }
     const { bridgeAvailable, bridge } = result.data
     if (
       !bridgeAvailable ||
@@ -40,6 +54,25 @@ async function readBridge(): Promise<{ bridge: McpBridgeCommand } | { error: Exp
 }
 
 export function McpGatewayConfigSection(): React.JSX.Element {
+  return (
+    <div className="min-w-0 space-y-4">
+      {MCP_GATEWAY_SOURCES.map((source) => (
+        <McpGatewaySourceConfigCard key={source} source={source} />
+      ))}
+    </div>
+  )
+}
+
+export function McpGatewaySourceConfigCard({
+  source
+}: {
+  source: McpGatewaySource
+}): React.JSX.Element {
+  // Remount on source changes: no old preview or in-flight copy can cross sources.
+  return <SourceConfigCard key={source} source={source} />
+}
+
+function SourceConfigCard({ source }: { source: McpGatewaySource }): React.JSX.Element {
   const { t } = useTranslation('mcp')
   const desktop = isTauriContext()
   const [format, setFormat] = useState<Format>('json')
@@ -79,25 +112,26 @@ export function McpGatewayConfigSection(): React.JSX.Element {
     void logFrontendError({
       level: 'warn',
       source: 'McpGatewayConfigSection',
-      message: 'Full MCP stdio export requested'
+      message: `MCP stdio export requested: ${source} direct`
     })
     const fail = (reason: ExportError): void => {
       if (!current()) return
       setError(reason)
       void logFrontendError({
         source: 'McpGatewayConfigSection',
-        message: `MCP stdio export failed: ${reason}`
+        message: `MCP stdio export failed: ${source} direct ${reason}`
       })
       toast({ title: t(`export.${reason}`), variant: 'destructive' })
     }
     try {
-      const result = await readBridge()
+      const result = await readBridge(source)
       if (!current()) return
       if ('error' in result) {
         fail(result.error)
         return
       }
-      const config = format === 'json' ? mcpServersJson(result.bridge) : codexToml(result.bridge)
+      const config =
+        format === 'json' ? mcpServersJson(source, result.bridge) : codexToml(source, result.bridge)
       setPreview(config)
       if (!copy) return
       try {
@@ -120,10 +154,20 @@ export function McpGatewayConfigSection(): React.JSX.Element {
   }
 
   return (
-    <section className="min-w-0 space-y-3 rounded-lg border border-primary/40 bg-primary/5 p-4">
+    <section
+      aria-label={t(`gateway.sources.${source}.title`)}
+      className="min-w-0 space-y-3 rounded-lg border border-primary/40 bg-primary/5 p-4"
+    >
       <div>
-        <h3 className="text-sm font-semibold text-foreground">{t('export.title')}</h3>
-        <p className="text-xs font-medium text-foreground">{t('export.direct')}</p>
+        <h3 className="text-sm font-semibold text-foreground">
+          {t(`gateway.sources.${source}.title`)}
+        </h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(`gateway.sources.${source}.description`)}
+        </p>
+        <p className="text-xs font-medium text-foreground">
+          {MCP_GATEWAY_CLIENT_KEYS[source]} · {t('export.direct')}
+        </p>
         <p className="mt-1 text-xs text-muted-foreground">{t('export.description')}</p>
       </div>
       <p className="text-xs text-muted-foreground">{t('export.authorization')}</p>
@@ -142,6 +186,7 @@ export function McpGatewayConfigSection(): React.JSX.Element {
             <button
               key={entry}
               type="button"
+              disabled={!desktop}
               aria-pressed={format === entry}
               className={cn(
                 'h-7 rounded px-3 text-sm transition-colors',

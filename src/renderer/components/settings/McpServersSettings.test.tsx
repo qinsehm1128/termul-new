@@ -1,6 +1,9 @@
+import type { McpGatewaySource } from '@shared/types/mcp-gateway.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyMcpConfig } from '@/lib/mcp-api'
+import type { McpGatewayUpstream, McpGatewayView } from '@/lib/mcp-gateway-api'
+import { useMcpGatewayStore } from '@/stores/mcp-gateway-store'
 import { useMcpStore } from '@/stores/mcp-store'
 import { McpServersSettings } from './McpServersSettings'
 
@@ -44,6 +47,31 @@ function seedStore(overrides?: {
   })
 }
 
+function seedGateway(source: McpGatewaySource, upstreams: McpGatewayUpstream[]): void {
+  const view: McpGatewayView = {
+    source,
+    state: 'running',
+    port: source === 'internal' ? 3290 : 3390,
+    settingsPath: '/temporary/gateway.json',
+    status: {
+      source,
+      protocol: 'se-mcp-gateway',
+      protocolVersion: 1,
+      version: 'test',
+      pid: 1,
+      port: source === 'internal' ? 3290 : 3390,
+      startedAt: 0,
+      configRevision: 1,
+      configError: null,
+      upstreams,
+      builtIns: []
+    }
+  }
+  useMcpGatewayStore.setState((state) => ({
+    sources: { ...state.sources, [source]: { ...state.sources[source], view } }
+  }))
+}
+
 function openAddDialog(): void {
   fireEvent.click(screen.getByRole('button', { name: /add server/i }))
 }
@@ -60,6 +88,7 @@ function editorJson(): Record<string, unknown> {
 describe('McpServersSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useMcpGatewayStore.setState({ sources: useMcpGatewayStore.getInitialState().sources })
     seedStore()
   })
 
@@ -460,6 +489,72 @@ describe('McpServersSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: /delete files/i }))
     await waitFor(() => expect(setMcpServerEnabled).toHaveBeenCalledWith('one', false))
     expect(deleteMcpServer).toHaveBeenCalledWith('one')
+  })
+
+  it('prefers aggregator runtime status and routing over probes and internal same-id entries', () => {
+    seedStore({
+      mcpServers: [{ id: 'files', type: 'stdio', name: 'Files', command: 'node', enabled: true }],
+      mcpProbeStatus: { files: 'disconnected' },
+      mcpProbeError: { files: 'PROBE_ERROR_SENTINEL' }
+    })
+    seedGateway('internal', [
+      {
+        id: 'files',
+        name: 'INTERNAL_ROUTE_SENTINEL',
+        state: 'failed',
+        error: 'INTERNAL_ERROR_SENTINEL'
+      }
+    ])
+    seedGateway('aggregator', [
+      {
+        id: 'files',
+        name: 'external_files_route',
+        state: 'connected'
+      }
+    ])
+
+    render(<McpServersSettings />)
+
+    expect(screen.getByTitle('Connected (Se can reach this server)')).toBeInTheDocument()
+    expect(screen.getByText('external_files_route')).toBeInTheDocument()
+    expect(screen.queryByText('INTERNAL_ROUTE_SENTINEL')).not.toBeInTheDocument()
+    expect(screen.queryByText('INTERNAL_ERROR_SENTINEL')).not.toBeInTheDocument()
+    expect(screen.queryByText('PROBE_ERROR_SENTINEL')).not.toBeInTheDocument()
+  })
+
+  it('does not use internal runtime status when aggregator has no upstream status', () => {
+    seedStore({
+      mcpServers: [{ id: 'files', type: 'stdio', name: 'Files', command: 'node', enabled: true }],
+      mcpProbeStatus: { files: 'disconnected' }
+    })
+    seedGateway('internal', [{ id: 'files', name: 'INTERNAL_ROUTE_SENTINEL', state: 'connected' }])
+
+    render(<McpServersSettings />)
+
+    expect(screen.getByTitle('Disconnected (Se could not reach this server)')).toBeInTheDocument()
+    expect(screen.queryByText('INTERNAL_ROUTE_SENTINEL')).not.toBeInTheDocument()
+  })
+
+  it('shows aggregator failure even when internal same-id status and probe are healthy', () => {
+    seedStore({
+      mcpServers: [{ id: 'files', type: 'stdio', name: 'Files', command: 'node', enabled: true }],
+      mcpProbeStatus: { files: 'connected' }
+    })
+    seedGateway('internal', [{ id: 'files', name: 'INTERNAL_ROUTE_SENTINEL', state: 'connected' }])
+    seedGateway('aggregator', [
+      {
+        id: 'files',
+        name: 'external_files_route',
+        state: 'failed',
+        error: 'External upstream unavailable'
+      }
+    ])
+
+    render(<McpServersSettings />)
+
+    expect(screen.getByTitle('Disconnected (Se could not reach this server)')).toBeInTheDocument()
+    expect(screen.getByText(/External upstream unavailable/)).toBeInTheDocument()
+    expect(screen.queryByText('INTERNAL_ROUTE_SENTINEL')).not.toBeInTheDocument()
   })
 
   it('probes enabled servers on mount and shows the connected status dot', async () => {

@@ -270,6 +270,7 @@ enum CallTarget {
 
 #[derive(Clone)]
 pub struct McpCore {
+    source: se_mcp_bridge::Source,
     config: McpCoreConfig,
     permission: Arc<dyn ToolPermission>,
     upstreams: Arc<RwLock<BTreeMap<String, Arc<UpstreamConnection>>>>,
@@ -297,16 +298,50 @@ impl Default for McpCore {
 }
 
 impl McpCore {
+    /// Compatibility constructor: external upstreams only.
     pub fn new(config: McpCoreConfig, permission: Arc<dyn ToolPermission>) -> Self {
-        Self::new_with_builtins(config, permission, BuiltInRegistry::empty())
+        Self::new_aggregator(config, permission)
     }
 
+    pub fn new_aggregator(config: McpCoreConfig, permission: Arc<dyn ToolPermission>) -> Self {
+        Self::with_source(
+            se_mcp_bridge::Source::Aggregator,
+            config,
+            permission,
+            BuiltInRegistry::empty(),
+        )
+    }
+
+    /// Compatibility constructor: Se built-ins only.
     pub fn new_with_builtins(
         config: McpCoreConfig,
         permission: Arc<dyn ToolPermission>,
         builtins: BuiltInRegistry,
     ) -> Self {
+        Self::new_internal(config, permission, builtins)
+    }
+
+    pub fn new_internal(
+        config: McpCoreConfig,
+        permission: Arc<dyn ToolPermission>,
+        builtins: BuiltInRegistry,
+    ) -> Self {
+        Self::with_source(
+            se_mcp_bridge::Source::Internal,
+            config,
+            permission,
+            builtins,
+        )
+    }
+
+    fn with_source(
+        source: se_mcp_bridge::Source,
+        config: McpCoreConfig,
+        permission: Arc<dyn ToolPermission>,
+        builtins: BuiltInRegistry,
+    ) -> Self {
         Self {
+            source,
             config: config.normalized(),
             permission,
             upstreams: Arc::new(RwLock::new(BTreeMap::new())),
@@ -325,12 +360,34 @@ impl McpCore {
         *self.credential_scope.write().await = project_root;
     }
 
-    pub async fn replace_builtins(&self, builtins: BuiltInRegistry) {
-        *self.builtins.write().await = builtins;
+    pub fn source(&self) -> se_mcp_bridge::Source {
+        self.source
     }
 
-    pub async fn apply_built_in_config(&self, configs: &[McpBuiltInConfig]) {
+    fn require_source(&self, expected: se_mcp_bridge::Source) -> Result<(), McpDomainError> {
+        if self.source == expected {
+            Ok(())
+        } else {
+            Err(McpDomainError::InvalidConfiguration(format!(
+                "MCP_SOURCE_MISMATCH: operation requires {} core",
+                expected.as_str()
+            )))
+        }
+    }
+
+    pub async fn replace_builtins(&self, builtins: BuiltInRegistry) -> Result<(), McpDomainError> {
+        self.require_source(se_mcp_bridge::Source::Internal)?;
+        *self.builtins.write().await = builtins;
+        Ok(())
+    }
+
+    pub async fn apply_built_in_config(
+        &self,
+        configs: &[McpBuiltInConfig],
+    ) -> Result<(), McpDomainError> {
+        self.require_source(se_mcp_bridge::Source::Internal)?;
         self.builtins.write().await.apply_config(configs);
+        Ok(())
     }
 
     pub async fn built_in_ids(&self) -> Vec<String> {
@@ -343,6 +400,7 @@ impl McpCore {
     }
 
     pub async fn connect_and_add(&self, server: McpUpstreamServer) -> Result<(), McpDomainError> {
+        self.require_source(se_mcp_bridge::Source::Aggregator)?;
         if !server.enabled {
             return Ok(());
         }
@@ -364,6 +422,7 @@ impl McpCore {
     }
 
     pub async fn apply_snapshot(&self, snapshot: &McpConfigSnapshot) -> Result<(), McpDomainError> {
+        self.require_source(se_mcp_bridge::Source::Aggregator)?;
         snapshot
             .validate()
             .map_err(|error| McpDomainError::InvalidConfiguration(error.message))?;
@@ -570,7 +629,9 @@ impl McpCore {
     /// Record upstreams a tolerant snapshot left out, so they show up as
     /// failed instead of silently missing.
     pub async fn record_rejected(&self, rejected: impl IntoIterator<Item = UpstreamStatus>) {
-        self.statuses.write().await.extend(rejected);
+        if self.source == se_mcp_bridge::Source::Aggregator {
+            self.statuses.write().await.extend(rejected);
+        }
     }
 
     pub async fn remove(&self, server_id: &str) -> bool {
@@ -816,6 +877,7 @@ impl McpCore {
                 name,
                 provider,
             } => {
+                self.require_source(se_mcp_bridge::Source::Internal)?;
                 let permitted = {
                     let registry = self.builtins.read().await;
                     registry.permission_allows(&*self.permission, &server_id, &name)
@@ -844,6 +906,7 @@ impl McpCore {
                 Ok(result)
             }
             CallTarget::Upstream { connection, name } => {
+                self.require_source(se_mcp_bridge::Source::Aggregator)?;
                 if !self.permission.allows_tool(&connection.id, &name)
                     || !connection.server.policy.allows(&name)
                 {
@@ -1017,10 +1080,14 @@ impl McpCore {
     }
 
     async fn connections(&self) -> Vec<Arc<UpstreamConnection>> {
+        if self.source != se_mcp_bridge::Source::Aggregator {
+            return Vec::new();
+        }
         self.upstreams.read().await.values().cloned().collect()
     }
 
     async fn connection(&self, server_id: &str) -> Result<Arc<UpstreamConnection>, McpDomainError> {
+        self.require_source(se_mcp_bridge::Source::Aggregator)?;
         self.upstreams
             .read()
             .await
@@ -1375,6 +1442,50 @@ mod tests {
         assert!(!permissions.allows_tool("a", "blocked"));
         assert!(permissions.allows_tool("a", "other"));
         assert!(permissions.allows_tool("b", "blocked"));
+    }
+
+    #[tokio::test]
+    async fn aggregator_dispatch_rejects_builtin_before_provider_side_effects() {
+        use crate::mcp_core::builtins::BuiltInCapability;
+        use serde_json::Value;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Sentinel(Arc<AtomicUsize>);
+        #[async_trait::async_trait]
+        impl BuiltInCapability for Sentinel {
+            fn id(&self) -> &str {
+                "workspace"
+            }
+            fn tools(&self) -> Vec<Tool> {
+                Vec::new()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: Option<serde_json::Map<String, Value>>,
+                _cancel: CancellationToken,
+            ) -> Result<CallToolResult, McpDomainError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(CallToolResult::success(Vec::new()))
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let core = McpCore::new_aggregator(McpCoreConfig::default(), Arc::new(AllowAllTools));
+        let result = core
+            .dispatch(
+                CallTarget::BuiltIn {
+                    server_id: "workspace".into(),
+                    name: "group_list".into(),
+                    provider: Arc::new(Sentinel(calls.clone())),
+                },
+                None,
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(McpDomainError::InvalidConfiguration(_))
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

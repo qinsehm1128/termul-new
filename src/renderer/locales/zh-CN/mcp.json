@@ -1,11 +1,11 @@
 {
   "page": {
     "title": "MCP",
-    "subtitle": "全局 MCP 网关：内置能力与上游 MCP 服务器，供所有 Agent 共用。",
+    "subtitle": "两个独立 MCP 连接：Se 内置能力与外部上游服务器。",
     "builtInsTitle": "内置能力",
-    "builtInsDescription": "Se Manager 自身通过网关提供的工具。",
+    "builtInsDescription": "Se 内置能力仅由内置 MCP 连接提供。",
     "upstreamsTitle": "上游 MCP 服务器",
-    "upstreamsDescription": "已启用的服务器由网关聚合。",
+    "upstreamsDescription": "已启用的外部服务器仅由外部 MCP 聚合器提供。",
     "statusTitle": "运行状态",
     "statusDescription": "修订号与上游数量。不会显示密钥。",
     "revision": "修订号",
@@ -72,7 +72,7 @@
   },
   "settings": {
     "title": "上游 MCP 服务器",
-    "description": "已启用的服务器由网关聚合。",
+    "description": "已启用的外部服务器仅由外部 MCP 聚合器提供。",
     "addServer": "添加服务器",
     "importExport": {
       "import": "导入 JSON",
@@ -170,9 +170,9 @@
     "duplicate": "{{name}}：已跳过重复服务器"
   },
   "export": {
-    "title": "完整 Se MCP · se-mcp",
+    "title": "MCP 连接导出",
     "direct": "直连模式 · 本机 stdio 导出",
-    "description": "通过一个 se-mcp 入口向外部客户端直接展开全部内置工具（含工作区与 SSH 工具）及已启用的上游工具。",
+    "description": "以直连模式导出此连接的本机 stdio 配置，仅包含此来源的工具，不包含另一个来源。",
     "authorization": "工具可见不等于已获授权。宿主与 SSH 操作仍受现有权限控制；导出不会授予或修改访问权限。",
     "externalOnly": "仅供外部客户端使用。请勿导回 Se 的上游服务器列表，以免形成循环调用。",
     "desktopOnly": "仅桌面端可用：浏览器、shared-live 和 standalone Web 会话无法导出本机 stdio 命令，请在 Se 桌面端预览或复制。",
@@ -180,15 +180,15 @@
     "formatJson": "MCP JSON",
     "formatToml": "Codex TOML",
     "preview": "预览",
-    "copy": "复制完整配置",
-    "copied": "完整 Se MCP 配置已复制",
-    "loadFailed": "读取完整 Se MCP 配置失败，请从 Se 桌面端重试。",
+    "copy": "复制配置",
+    "copied": "MCP 连接配置已复制",
+    "loadFailed": "读取此 MCP 连接配置失败，请从 Se 桌面端重试。",
     "bridgeMissing": "本机 stdio 桥接程序不可用，请检查 Se 桌面端安装后再导出。",
     "copyFailed": "复制配置失败，请重试。"
   },
   "gateway": {
     "title": "连接 Agent",
-    "description": "一个网关聚合下面所有 MCP 服务器。Agent 只需添加一个 se-mcp 条目即可使用全部服务器；关闭 Se Manager 后网关仍会继续运行。",
+    "description": "分别配置 Se 内置 MCP 与外部 MCP 聚合器，两个连接互相独立；关闭 Se Manager 后各自继续运行。",
     "running": "运行中 · v{{version}}",
     "stopped": "未运行",
     "error": "不可用",
@@ -211,7 +211,7 @@
       },
       "direct": {
         "name": "直连",
-        "description": "所有服务器的所有工具平铺为 <服务器>_<工具>。无需额外步骤，工具列表最大。"
+        "description": "此来源的所有工具平铺为 <服务器>_<工具>。无需额外步骤，工具列表最大。"
       }
     },
     "bridgeMissing": "在 {{path}} 未找到 se-mcp。开发构建需先执行 `cargo build --bin se-mcp`。",
@@ -220,8 +220,8 @@
       "connect": "连接",
       "update": "更新",
       "remove": "移除",
-      "synced": "{{name}} 已接入 Se MCP 网关，重启该客户端后生效。",
-      "removed": "已从 {{name}} 移除 Se MCP 网关。",
+      "synced": "{{name}} 已接入此 MCP 连接，重启该客户端后生效。",
+      "removed": "已从 {{name}} 移除此 MCP 连接。",
       "state": {
         "connected": "已连接",
         "stale": "需更新",
@@ -238,6 +238,17 @@
       "copy": "复制",
       "copied": "已复制",
       "copyFailed": "复制失败"
+    },
+    "httpNotReady": "此连接的网关来源身份与认证验证通过前，无法导出 HTTP 配置。",
+    "sources": {
+      "internal": {
+        "title": "Se 内置 MCP",
+        "description": "仅提供 Se 会话记忆、工作区与 SSH 内置能力，不包含外部上游工具。"
+      },
+      "aggregator": {
+        "title": "外部 MCP 聚合器",
+        "description": "仅提供已配置的外部上游服务器，不包含 Se 内置记忆、工作区或 SSH 能力。"
+      }
     }
   },
   "descriptions": {

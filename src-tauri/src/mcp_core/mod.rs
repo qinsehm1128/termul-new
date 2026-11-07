@@ -15,9 +15,9 @@ pub mod describe;
 pub mod domain;
 pub mod facade;
 pub mod gateway_tools;
+pub mod host_adapters;
 pub mod host_bridge;
 pub mod host_capabilities;
-pub mod host_adapters;
 pub mod host_policy;
 pub mod host_service;
 pub mod host_tools;
@@ -58,10 +58,7 @@ pub use oauth::{
     McpOAuthRegistrationMode, McpServerSecrets, McpStoredCredentialKind, OAuthSecret,
     OAuthSecretInput, StaticBearerSecret, StaticHeaderSecret, MCP_OAUTH_KEY_PREFIX,
 };
-pub use process::{
-    run_mcp_core_process, McpCoreProcessConfig, McpCoreSupervisor, ProcessError,
-    MCP_CORE_PROBE_MISSES,
-};
+pub use process::run_mcp_core_process;
 pub use service::{config_root, gateway_settings_path, McpService, ServiceStatus, ServiceView};
 pub use snapshot::{
     build_snapshot, snapshot_from_config, snapshot_from_config_tolerant, InlineSecretResolver,

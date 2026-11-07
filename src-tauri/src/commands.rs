@@ -5162,11 +5162,11 @@ pub async fn remote_sync_chat_history(
 #[tauri::command]
 pub async fn remote_sync_mcp_registry(
     registry: serde_json::Value,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<()>, String> {
     let written = write_global_mcp_config(registry).await;
     if written.success {
-        mcp_service.reload().await;
+        mcp_service.reload_all().await;
     }
     match written {
         IpcResult { success: true, .. } => Ok(IpcResult::success(())),
@@ -5430,11 +5430,13 @@ async fn oauth_callback_listener(
             .and_then(parse_oauth_callback),
         _ => Err("OAuth callback request could not be read".into()),
     };
-    let service = app.try_state::<Arc<crate::mcp_core::McpService>>();
+    let service = app
+        .try_state::<Arc<crate::mcp_core::service::McpServices>>()
+        .map(|services| services.get(se_mcp_bridge::Source::Aggregator));
     let success = if let Ok((code, state, issuer)) = result {
         complete_mcp_oauth_flow(
             &root,
-            service.as_ref().map(|managed| managed.inner().as_ref()),
+            service.as_deref(),
             &server_id,
             &code,
             &state,
@@ -5607,11 +5609,12 @@ pub async fn complete_mcp_oauth(
     id: String,
     code: String,
     state: String,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<crate::mcp_core::oauth::OAuthStatusResult, String> {
+    let service = mcp_service.get(se_mcp_bridge::Source::Aggregator);
     complete_mcp_oauth_flow(
         &mcp_config_root_for_oauth()?,
-        Some(mcp_service.inner()),
+        Some(service.as_ref()),
         &id,
         &code,
         &state,
@@ -5746,11 +5749,11 @@ pub async fn mcp_get_config() -> Result<IpcResult<serde_json::Value>, String> {
 #[tauri::command]
 pub async fn mcp_put_config(
     config: serde_json::Value,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<serde_json::Value>, String> {
     let written = write_global_mcp_config(config).await;
     if written.success {
-        mcp_service.reload().await;
+        mcp_service.reload_all().await;
     }
     Ok(written)
 }
@@ -5767,28 +5770,44 @@ pub async fn mcp_get_status() -> Result<IpcResult<crate::mcp_core::McpControlPla
 /// The gateway process: running or not, its port, and each upstream's state.
 #[tauri::command]
 pub async fn mcp_get_runtime_status(
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    let mcp_service = mcp_service.get(source);
     Ok(IpcResult::success(mcp_service.view().await))
 }
 
 /// Start the gateway if it is not running (or runs another version).
 #[tauri::command]
 pub async fn mcp_service_start(
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
-    Ok(match mcp_service.ensure_running().await {
-        Ok(_) => IpcResult::success(mcp_service.view().await),
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    Ok(match mcp_service.ensure_running(source).await {
+        Ok(_) => IpcResult::success(mcp_service.get(source).view().await),
         Err(error) => IpcResult::error(error, "MCP_SERVICE_START_FAILED"),
     })
 }
 
 #[tauri::command]
 pub async fn mcp_service_restart(
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
-    Ok(match mcp_service.restart().await {
-        Ok(_) => IpcResult::success(mcp_service.view().await),
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    Ok(match mcp_service.restart(source).await {
+        Ok(_) => IpcResult::success(mcp_service.get(source).view().await),
         Err(error) => IpcResult::error(error, "MCP_SERVICE_START_FAILED"),
     })
 }
@@ -5798,12 +5817,54 @@ pub async fn mcp_service_restart(
 #[tauri::command]
 pub async fn mcp_service_set_port(
     port: u16,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<crate::mcp_core::ServiceView>, String> {
-    Ok(match mcp_service.set_port(port).await {
-        Ok(_) => IpcResult::success(mcp_service.view().await),
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    Ok(match mcp_service.set_port(source, port).await {
+        Ok(_) => IpcResult::success(mcp_service.get(source).view().await),
         Err(error) => IpcResult::error(error, "MCP_SERVICE_PORT_FAILED"),
     })
+}
+
+fn parse_mcp_source(source: Option<&str>) -> Result<se_mcp_bridge::Source, String> {
+    match source {
+        None | Some("internal") => Ok(se_mcp_bridge::Source::Internal),
+        Some("aggregator") => Ok(se_mcp_bridge::Source::Aggregator),
+        Some(_) => Err("Unknown MCP source".into()),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn mcp_source_defaults_to_internal_and_rejects_unknown_without_echoing() {
+    assert_eq!(
+        parse_mcp_source(None).unwrap(),
+        se_mcp_bridge::Source::Internal
+    );
+    assert_eq!(
+        parse_mcp_source(Some("internal")).unwrap(),
+        se_mcp_bridge::Source::Internal
+    );
+    assert_eq!(
+        parse_mcp_source(Some("aggregator")).unwrap(),
+        se_mcp_bridge::Source::Aggregator
+    );
+    for value in [
+        "",
+        "mixed",
+        "INTERNAL",
+        "internal,aggregator",
+        "SOURCE-PRIVATE-SENTINEL",
+    ] {
+        assert_eq!(
+            parse_mcp_source(Some(value)).unwrap_err(),
+            "Unknown MCP source"
+        );
+    }
 }
 
 fn parse_mcp_mode(mode: Option<&str>) -> Result<se_mcp_bridge::Mode, String> {
@@ -5820,13 +5881,19 @@ fn parse_mcp_mode(mode: Option<&str>) -> Result<se_mcp_bridge::Mode, String> {
 #[tauri::command]
 pub async fn mcp_connection_info(
     mode: Option<String>,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<crate::mcp_core::service::Connection>, String> {
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    let mcp_service = mcp_service.get(source);
     let mode = match parse_mcp_mode(mode.as_deref()) {
         Ok(mode) => mode,
         Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
     };
-    Ok(match mcp_service.connection(mode) {
+    Ok(match mcp_service.connection(mode).await {
         Ok(connection) => IpcResult::success(connection),
         Err(error) => IpcResult::error(error.to_string(), "MCP_SERVICE_SETTINGS_FAILED"),
     })
@@ -5836,8 +5903,14 @@ pub async fn mcp_connection_info(
 #[tauri::command]
 pub async fn mcp_clients_detect(
     mode: Option<String>,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<Vec<crate::mcp_core::clients::DetectedClient>>, String> {
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    let mcp_service = mcp_service.get(source);
     let mode = match parse_mcp_mode(mode.as_deref()) {
         Ok(mode) => mode,
         Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
@@ -5847,9 +5920,11 @@ pub async fn mcp_clients_detect(
     };
     let bridge = mcp_service.bridge_command(mode);
     Ok(IpcResult::success(
-        tokio::task::spawn_blocking(move || crate::mcp_core::clients::detect(&home, &bridge))
-            .await
-            .unwrap_or_default(),
+        tokio::task::spawn_blocking(move || {
+            crate::mcp_core::clients::detect(&home, source, &bridge)
+        })
+        .await
+        .unwrap_or_default(),
     ))
 }
 
@@ -5858,8 +5933,14 @@ pub async fn mcp_clients_detect(
 pub async fn mcp_client_sync(
     id: String,
     mode: Option<String>,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<crate::mcp_core::clients::SyncOutcome>, String> {
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    let mcp_service = mcp_service.get(source);
     let mode = match parse_mcp_mode(mode.as_deref()) {
         Ok(mode) => mode,
         Err(error) => return Ok(IpcResult::error(error, "MCP_MODE_INVALID")),
@@ -5868,10 +5949,11 @@ pub async fn mcp_client_sync(
         return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
     };
     let bridge = mcp_service.bridge_command(mode);
-    let result =
-        tokio::task::spawn_blocking(move || crate::mcp_core::clients::sync(&home, &id, &bridge))
-            .await
-            .unwrap_or_else(|_| Err("client sync task failed".into()));
+    let result = tokio::task::spawn_blocking(move || {
+        crate::mcp_core::clients::sync(&home, &id, source, &bridge)
+    })
+    .await
+    .unwrap_or_else(|_| Err("client sync task failed".into()));
     Ok(match result {
         Ok(outcome) => IpcResult::success(outcome),
         Err(error) => IpcResult::error(error, "MCP_CLIENT_SYNC_FAILED"),
@@ -5882,13 +5964,19 @@ pub async fn mcp_client_sync(
 #[tauri::command]
 pub async fn mcp_client_unsync(
     id: String,
+    source: Option<String>,
 ) -> Result<IpcResult<crate::mcp_core::clients::SyncOutcome>, String> {
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
     let Some(home) = se_mcp_bridge::settings::home_dir() else {
         return Ok(IpcResult::error("No home directory", "NO_HOME_DIR"));
     };
-    let result = tokio::task::spawn_blocking(move || crate::mcp_core::clients::unsync(&home, &id))
-        .await
-        .unwrap_or_else(|_| Err("client sync task failed".into()));
+    let result =
+        tokio::task::spawn_blocking(move || crate::mcp_core::clients::unsync(&home, &id, source))
+            .await
+            .unwrap_or_else(|_| Err("client sync task failed".into()));
     Ok(match result {
         Ok(outcome) => IpcResult::success(outcome),
         Err(error) => IpcResult::error(error, "MCP_CLIENT_SYNC_FAILED"),
@@ -6041,8 +6129,9 @@ pub async fn mcp_descriptions_get(
 #[tauri::command]
 pub async fn mcp_descriptions_put(
     descriptions: std::collections::BTreeMap<String, String>,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<()>, String> {
+    let mcp_service = mcp_service.get(se_mcp_bridge::Source::Aggregator);
     let root = match mcp_config_root() {
         Ok(root) => root,
         Err(error) => return Ok(error),
@@ -6111,9 +6200,10 @@ pub async fn mcp_describe_servers(
     app: AppHandle,
     names: Option<Vec<String>>,
     language: String,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<Vec<McpDescribed>>, String> {
     use futures::StreamExt;
+    let mcp_service = mcp_service.get(se_mcp_bridge::Source::Aggregator);
 
     let root = match mcp_config_root() {
         Ok(root) => root,
@@ -6149,7 +6239,7 @@ pub async fn mcp_describe_servers(
                 .is_none_or(|names| names.iter().any(|name| name == &upstream.name))
         })
         .collect::<Vec<_>>();
-    let service = Arc::clone(mcp_service.inner());
+    let service = Arc::clone(&mcp_service);
     let resolved = &resolved;
     let settings = &settings;
     let language = language.as_str();
@@ -6217,8 +6307,14 @@ pub async fn mcp_describe_servers(
 /// Servers agents can route to, with the description they read.
 #[tauri::command]
 pub async fn mcp_service_servers(
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<serde_json::Value>, String> {
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    let mcp_service = mcp_service.get(source);
     Ok(match mcp_service.servers().await {
         Ok(servers) => IpcResult::success(servers),
         Err(error) => IpcResult::error(error, "MCP_SERVICE_UNAVAILABLE"),
@@ -6229,8 +6325,14 @@ pub async fn mcp_service_servers(
 #[tauri::command]
 pub async fn mcp_service_server_tools(
     name: String,
-    mcp_service: State<'_, Arc<crate::mcp_core::McpService>>,
+    source: Option<String>,
+    mcp_service: State<'_, Arc<crate::mcp_core::service::McpServices>>,
 ) -> Result<IpcResult<serde_json::Value>, String> {
+    let source = match parse_mcp_source(source.as_deref()) {
+        Ok(source) => source,
+        Err(error) => return Ok(IpcResult::error(error, "MCP_SOURCE_INVALID")),
+    };
+    let mcp_service = mcp_service.get(source);
     Ok(match mcp_service.server_tools(&name).await {
         Ok(tools) => IpcResult::success(tools),
         Err(error) => IpcResult::error(error, "MCP_SERVICE_UNAVAILABLE"),

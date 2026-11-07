@@ -198,7 +198,10 @@ export function McpServersSettings(): React.JSX.Element {
   const reloadMcpConfig = useMcpStore((state) => state.load)
   const reloadMcpStatus = useMcpStore((state) => state.loadStatus)
   const mcpProbeStatus = useMcpStore((state) => state.probeStatus)
-  const gatewayUpstreams = useMcpGatewayStore((state) => state.view?.status?.upstreams)
+  // This page manages external upstreams; internal runtime state must never override their probes.
+  const gatewayUpstreams = useMcpGatewayStore(
+    (state) => state.sources.aggregator.view?.status?.upstreams
+  )
   const mcpProbeError = useMcpStore((state) => state.probeError)
   const mcpTools = useMcpStore((state) => state.tools)
   const mcpProbing = useMcpStore((state) => state.probing)

@@ -12,6 +12,25 @@ fn main() {
         std::process::exit(2);
     }
 
+    let arguments = std::env::args_os().collect::<Vec<_>>();
+    if arguments
+        .iter()
+        .skip(1)
+        .any(|argument| argument == "--mcp-core")
+    {
+        // Only a source-bound settings file may start a gateway. A missing
+        // value must fail closed rather than becoming another process role.
+        let settings = arguments
+            .iter()
+            .position(|argument| argument == "--config")
+            .and_then(|index| arguments.get(index + 1))
+            .filter(|value| !value.to_string_lossy().starts_with("--"));
+        std::process::exit(match settings {
+            Some(path) => se_manager_lib::mcp_core::service::run_service(path.into()),
+            None => se_manager_lib::mcp_core::run_mcp_core_process(),
+        });
+    }
+
     let observer_build_id = option_env!("TERMUL_GUI_BUILD_ID").unwrap_or(env!("CARGO_PKG_VERSION"));
     if let Some(code) = se_ghostty_observer::dispatch(observer_build_id) {
         std::process::exit(code);
@@ -28,23 +47,6 @@ fn main() {
         })
     {
         std::process::exit(se_manager_lib::core::run_core_process(role));
-    }
-
-    if std::env::args()
-        .skip(1)
-        .any(|argument| argument == "--mcp-core")
-    {
-        // `--config <settings>`: the long-lived gateway service. Without it,
-        // the env-configured child of `McpCoreSupervisor`.
-        let arguments = std::env::args().collect::<Vec<_>>();
-        let settings = arguments
-            .iter()
-            .position(|argument| argument == "--config")
-            .and_then(|index| arguments.get(index + 1));
-        std::process::exit(match settings {
-            Some(path) => se_manager_lib::mcp_core::service::run_service(path.into()),
-            None => se_manager_lib::mcp_core::run_mcp_core_process(),
-        });
     }
 
     // Self-spawned `--internal-mcp-plan-server` child: the agent spawns this

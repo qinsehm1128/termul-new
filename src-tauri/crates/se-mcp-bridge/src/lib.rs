@@ -1,29 +1,36 @@
-//! Connects an agent to Se Manager's MCP gateway.
+//! Connect an agent to one isolated Se MCP gateway over stdio.
 //!
-//! An agent configures one stdio MCP server, `se-mcp`, and through it reaches
-//! every MCP server Se Manager aggregates. `se-mcp` reads the gateway's port
-//! and token from the settings file Se Manager writes, so the agent's own
-//! configuration never changes when the port does.
+//! `--source internal` (default) exposes only Se capabilities;
+//! `--source aggregator` exposes only external upstreams. Each reads its own
+//! settings, port, and token; stdio client snippets contain no credentials.
 
 pub mod bridge;
+pub mod identity;
 pub mod settings;
 
 use std::path::PathBuf;
 
-pub use settings::{GatewaySettings, Mode};
+pub use identity::{
+    gateway_http_client, validate_gateway_origin, verify_gateway_identity, IdentityError,
+};
+pub use settings::{
+    GatewayIdentity, GatewaySettings, Mode, Source, GATEWAY_IDENTITY_PATH, GATEWAY_PROTOCOL,
+    GATEWAY_PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, SCHEMA_VERSION, SOURCE_HEADER,
+};
 
 const USAGE: &str = "\
 se-mcp — connect an agent to Se Manager's MCP gateway over stdio
 
 USAGE:
-    se-mcp [--mode grouped|entry|direct] [--config <path>] [--no-autostart]
+    se-mcp [--source internal|aggregator] [--mode grouped|entry|direct] [--config <path>] [--url <url>] [--no-autostart]
 
 OPTIONS:
+    --source <source> internal (default): Se capabilities; aggregator: external upstreams
     --mode <mode>     grouped (default): <server>_tool_list / <server>_tool_call per server
                       entry: list_mcp_servers / list_mcp_tools / call_mcp_tool / get_mcp_server_status
                       direct: every tool of every server
-    --config <path>   gateway settings file (default ~/.se-manager/mcp-gateway.json)
-    --url <url>       talk to this endpoint instead of the one in the settings file
+    --config <path>   source settings file (default ~/.se-manager/mcp-gateway[-aggregator][.dev].json)
+    --url <url>       same settings origin and selected mode path only
     --no-autostart    do not start the gateway when it is not running
 ";
 
@@ -63,6 +70,7 @@ fn parse(
     arguments: impl IntoIterator<Item = String>,
 ) -> Result<Option<bridge::BridgeOptions>, String> {
     let mut mode = Mode::Grouped;
+    let mut source = Source::Internal;
     let mut settings_path: Option<PathBuf> = None;
     let mut url = None;
     let mut autostart = true;
@@ -70,23 +78,28 @@ fn parse(
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-h" | "--help" => return Ok(None),
+            "--source" => {
+                let value = arguments.next().ok_or("MCP_SOURCE_REQUIRED")?;
+                source = Source::parse(&value).ok_or("MCP_SOURCE_INVALID")?;
+            }
             "--mode" => {
-                let value = arguments.next().ok_or("--mode needs a value")?;
-                mode = Mode::parse(&value).ok_or(format!("unknown mode `{value}`"))?;
+                let value = arguments.next().ok_or("MCP_MODE_REQUIRED")?;
+                mode = Mode::parse(&value).ok_or("MCP_MODE_INVALID")?;
             }
             "--config" => {
                 settings_path = Some(arguments.next().ok_or("--config needs a path")?.into());
             }
             "--url" => url = Some(arguments.next().ok_or("--url needs a value")?),
             "--no-autostart" => autostart = false,
-            other => return Err(format!("unknown argument `{other}`")),
+            _ => return Err("MCP_ARGUMENT_INVALID".into()),
         }
     }
     let settings_path = settings_path
-        .or_else(settings::default_path)
+        .or_else(|| settings::default_path_for_source(source))
         .ok_or("cannot locate the home directory; pass --config")?;
     Ok(Some(bridge::BridgeOptions {
         settings_path,
+        source,
         mode,
         url,
         autostart,
@@ -115,6 +128,61 @@ mod tests {
         assert_eq!(options.mode, Mode::Entry);
         assert_eq!(options.settings_path, PathBuf::from("/tmp/g.json"));
         assert!(!options.autostart);
+    }
+
+    #[test]
+    fn parses_six_source_mode_combinations_and_default_files() {
+        for source in [Source::Internal, Source::Aggregator] {
+            for mode in [Mode::Grouped, Mode::Entry, Mode::Direct] {
+                let options = parse(args(&[
+                    "--source",
+                    source.as_str(),
+                    "--mode",
+                    mode.as_str(),
+                ]))
+                .unwrap()
+                .unwrap();
+                assert_eq!(options.source, source);
+                assert_eq!(options.mode, mode);
+                assert_eq!(
+                    options.settings_path.file_name().unwrap(),
+                    source.default_file_name()
+                );
+            }
+        }
+        let options = parse(args(&[])).unwrap().unwrap();
+        assert_eq!(options.source, Source::Internal);
+        assert_eq!(options.mode, Mode::Grouped);
+        let explicit = parse(args(&[
+            "--config",
+            "/custom/settings.json",
+            "--source",
+            "aggregator",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(explicit.source, Source::Aggregator);
+        assert_eq!(
+            explicit.settings_path,
+            PathBuf::from("/custom/settings.json")
+        );
+    }
+
+    #[test]
+    fn parser_does_not_echo_secrets_or_accept_unknown_sources() {
+        for values in [
+            vec!["--source", "SOURCE_SECRET"],
+            vec!["--source", "Internal"],
+            vec!["--source"],
+            vec!["--mode", "MODE_SECRET"],
+            vec!["http://URL_SECRET"],
+        ] {
+            let error = match parse(args(&values)) {
+                Err(error) => error,
+                _ => panic!("expected parser error"),
+            };
+            assert!(!error.contains("SECRET"));
+        }
     }
 
     #[test]

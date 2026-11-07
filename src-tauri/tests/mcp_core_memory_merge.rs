@@ -248,6 +248,72 @@ async fn http_modes_advertise_only_canonical_memory_and_keep_hidden_aliases_call
     gateway.shutdown().await;
 }
 
+#[tokio::test]
+async fn aggregator_modes_cannot_reach_canonical_or_hidden_memory() {
+    let core = Arc::new(McpCore::new_aggregator(
+        McpCoreConfig::default(),
+        Arc::new(AllowAllTools),
+    ));
+    let gateway = McpHttpGateway::bind(
+        core,
+        McpHttpGatewayConfig {
+            bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port: 0,
+            path: "/mcp".into(),
+            generation: 1,
+            auth: AuthBootstrap::new(1, TOKEN).unwrap(),
+            request_body_limit: 64 * 1024,
+            control: None,
+        },
+    )
+    .await
+    .unwrap();
+    for path in ["/mcp", "/mcp/entry", "/mcp/aggregator", "/mcp/direct"] {
+        let client = connect(&gateway, path).await;
+        let tools = client.list_tools(None).await.unwrap();
+        assert!(
+            tools
+                .tools
+                .iter()
+                .all(|tool| !tool.name.contains("session-memory")
+                    && !tool.name.contains("project-scope")),
+            "{path}"
+        );
+        for server in [BUILTIN_SESSION_MEMORY, BUILTIN_PROJECT_SCOPE] {
+            let (name, args) = match path {
+                "/mcp" => (
+                    format!("{server}_tool_call"),
+                    json!({"toolName":"project_boundary", "arguments":{}}),
+                ),
+                "/mcp/entry" => (
+                    gateway_tools::ENTRY_CALL_TOOL.to_owned(),
+                    json!({"mcpName":server, "toolName":"project_boundary", "arguments":{}}),
+                ),
+                _ => (format!("{server}_project_boundary"), json!({})),
+            };
+            let result = client
+                .call_tool(
+                    CallToolRequestParams::new(name)
+                        .with_arguments(args.as_object().unwrap().clone()),
+                )
+                .await;
+            assert!(
+                result.is_err() || result.unwrap().is_error == Some(true),
+                "{path}: {server}"
+            );
+        }
+        assert!(client
+            .list_resources(None)
+            .await
+            .unwrap()
+            .resources
+            .is_empty());
+        assert!(client.list_prompts(None).await.unwrap().prompts.is_empty());
+        client.cancel().await.unwrap();
+    }
+    gateway.shutdown().await;
+}
+
 struct Fixture {
     _temp: tempfile::TempDir,
     memory: Arc<MemoryIndexService>,

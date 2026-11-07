@@ -5,6 +5,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use se_mcp_bridge::Source;
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
@@ -312,6 +313,17 @@ impl McpSnapshotController {
         &self,
         snapshot: McpConfigSnapshot,
     ) -> Result<SnapshotApplyReceipt, SnapshotError> {
+        if self.core.source() != Source::Aggregator {
+            log::warn!(
+                "MCP_SOURCE_MISMATCH source={} operation=snapshot_apply",
+                self.core.source().as_str()
+            );
+            return Err(SnapshotError::ApplyFailed(
+                McpDomainError::InvalidConfiguration(
+                    "MCP_SOURCE_MISMATCH: snapshot apply requires aggregator core".into(),
+                ),
+            ));
+        }
         snapshot
             .validate()
             .map_err(SnapshotError::InvalidSnapshot)?;
@@ -344,12 +356,8 @@ impl McpSnapshotController {
         resolver: &dyn McpSecretResolver,
     ) -> Result<SnapshotApplyReceipt, SnapshotError> {
         let parsed = McpControlPlaneConfig::from_stored_json(registry).map_err(config_error)?;
-        let snapshot = snapshot_from_config(&parsed.config, revision, resolver)?;
-        let receipt = self.apply(snapshot).await?;
-        self.core
-            .apply_built_in_config(&parsed.config.built_ins)
-            .await;
-        Ok(receipt)
+        self.apply_config_revision(&parsed.config, revision, resolver)
+            .await
     }
 
     pub async fn apply_config(
@@ -357,10 +365,46 @@ impl McpSnapshotController {
         config: &McpControlPlaneConfig,
         resolver: &dyn McpSecretResolver,
     ) -> Result<SnapshotApplyReceipt, SnapshotError> {
-        let snapshot = snapshot_from_config(config, config.revision, resolver)?;
-        let receipt = self.apply(snapshot).await?;
-        self.core.apply_built_in_config(&config.built_ins).await;
-        Ok(receipt)
+        self.apply_config_revision(config, config.revision, resolver)
+            .await
+    }
+
+    async fn apply_config_revision(
+        &self,
+        config: &McpControlPlaneConfig,
+        revision: u64,
+        resolver: &dyn McpSecretResolver,
+    ) -> Result<SnapshotApplyReceipt, SnapshotError> {
+        if self.core.source() == Source::Aggregator {
+            let snapshot = snapshot_from_config(config, revision, resolver)?;
+            return self.apply(snapshot).await;
+        }
+
+        // The internal projection never resolves external credentials or
+        // builds/connects upstreams, including on reload and scope changes.
+        let _update = self.update_lock.lock().await;
+        let accepted = self.state.read().await.accepted_revision;
+        if revision <= accepted {
+            return Err(SnapshotError::StaleRevision {
+                accepted,
+                requested: revision,
+            });
+        }
+        self.core
+            .apply_built_in_config(&config.built_ins)
+            .await
+            .map_err(SnapshotError::ApplyFailed)?;
+        let mut state = self.state.write().await;
+        state.accepted_revision = revision;
+        state.last_good = Some(McpConfigSnapshot {
+            contract_version: MCP_CORE_CONTRACT_VERSION,
+            revision,
+            servers: Vec::new(),
+        });
+        Ok(SnapshotApplyReceipt {
+            revision,
+            replaced_last_good: true,
+        })
     }
 
     /// Reset only the revision fence when the desktop switches canonical
@@ -384,7 +428,57 @@ impl McpSnapshotController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp_core::{AllowAllTools, BuiltInCapability, BuiltInRegistry, McpCoreConfig};
     use std::sync::Mutex as StdMutex;
+
+    struct TestBuiltin;
+
+    #[async_trait::async_trait]
+    impl BuiltInCapability for TestBuiltin {
+        fn id(&self) -> &str {
+            BUILTIN_WORKSPACE
+        }
+
+        fn tools(&self) -> Vec<rmcp::model::Tool> {
+            Vec::new()
+        }
+
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _arguments: Option<serde_json::Map<String, Value>>,
+            _cancellation: tokio_util::sync::CancellationToken,
+        ) -> Result<rmcp::model::CallToolResult, McpDomainError> {
+            panic!("snapshot tests must not invoke builtin providers")
+        }
+    }
+
+    fn internal_core() -> Arc<McpCore> {
+        let mut builtins = BuiltInRegistry::empty();
+        builtins.register(Arc::new(TestBuiltin));
+        Arc::new(McpCore::new_internal(
+            McpCoreConfig::default(),
+            Arc::new(AllowAllTools),
+            builtins,
+        ))
+    }
+
+    fn projected_config(revision: u64, builtin_enabled: bool) -> McpControlPlaneConfig {
+        McpControlPlaneConfig::from_stored_json(&serde_json::json!({
+            "schemaVersion": 1,
+            "revision": revision,
+            "builtIns": [{"id": "workspace", "enabled": builtin_enabled}],
+            "upstreams": [{
+                "id": "external",
+                "type": "stdio",
+                "command": "must-not-be-spawned-by-snapshot-tests",
+                "enabled": false,
+                "env": [{"name": "TOKEN", "value": "secure:mcp/external/token"}]
+            }]
+        }))
+        .unwrap()
+        .config
+    }
 
     struct FailingResolver;
 
@@ -441,6 +535,142 @@ mod tests {
                 "enabled": false
             }
         ])
+    }
+
+    #[tokio::test]
+    async fn internal_snapshot_apply_rejects_before_resolving_or_changing_state() {
+        let controller = McpSnapshotController::new(internal_core());
+        let resolver = RecordingResolver(StdMutex::new(Vec::new()));
+        let mut snapshot = snapshot_from_config(&projected_config(1, false), 1, &resolver).unwrap();
+        resolver.0.lock().unwrap().clear();
+        // Even an invalid snapshot must hit the immutable source boundary first.
+        snapshot.contract_version = 0;
+        let error = controller.apply(snapshot).await.unwrap_err();
+        assert!(error.to_string().contains("MCP_SOURCE_MISMATCH"));
+        assert!(resolver.0.lock().unwrap().is_empty());
+        assert_eq!(controller.accepted_revision().await, 0);
+        assert!(controller.last_good().await.is_none());
+        assert_eq!(controller.core.server_summaries().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn internal_config_and_registry_reload_never_resolve_external_secrets() {
+        let core = internal_core();
+        let controller = McpSnapshotController::new(Arc::clone(&core));
+        let resolver = RecordingResolver(StdMutex::new(Vec::new()));
+        controller
+            .apply_config(&projected_config(8, false), &resolver)
+            .await
+            .unwrap();
+        assert!(core.server_summaries().await.is_empty());
+        assert!(core.upstream_statuses().await.is_empty());
+        let last_good = controller.last_good().await.unwrap();
+        assert_eq!(last_good.revision, 8);
+        assert!(last_good.servers.is_empty());
+
+        let canonical = projected_config(9, true).to_canonical_json().unwrap();
+        // Explicit registry revisions remain the fence, not the document field.
+        controller
+            .apply_registry(&canonical, 10, &resolver)
+            .await
+            .unwrap();
+        assert_eq!(core.server_summaries().await.len(), 1);
+        assert_eq!(controller.accepted_revision().await, 10);
+        assert!(controller.last_good().await.unwrap().servers.is_empty());
+        assert!(resolver.0.lock().unwrap().is_empty());
+        controller
+            .apply_config(&projected_config(11, false), &FailingResolver)
+            .await
+            .unwrap();
+        assert!(core.server_summaries().await.is_empty());
+        assert!(controller.last_good().await.unwrap().servers.is_empty());
+
+        let stale = controller
+            .apply_config(&projected_config(11, true), &resolver)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            stale,
+            SnapshotError::StaleRevision {
+                accepted: 11,
+                requested: 11
+            }
+        ));
+        assert!(core.server_summaries().await.is_empty());
+        let invalid = controller.apply_registry(&Value::Null, 12, &resolver).await;
+        assert!(invalid.is_err());
+        assert_eq!(controller.accepted_revision().await, 11);
+        assert_eq!(controller.last_good().await.unwrap().revision, 11);
+        assert!(resolver.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn source_controllers_accept_same_revision_and_reset_independently() {
+        let internal = McpSnapshotController::new(internal_core());
+        let aggregator = McpSnapshotController::new(Arc::new(McpCore::new_aggregator(
+            McpCoreConfig::default(),
+            Arc::new(AllowAllTools),
+        )));
+        let resolver = RecordingResolver(StdMutex::new(Vec::new()));
+        let config = projected_config(5, false);
+        internal.apply_config(&config, &resolver).await.unwrap();
+        assert!(resolver.0.lock().unwrap().is_empty());
+        // Applying builtins here would fail the aggregator's mutation guard.
+        aggregator.apply_config(&config, &resolver).await.unwrap();
+        assert_eq!(resolver.0.lock().unwrap().len(), 1);
+        assert_eq!(internal.accepted_revision().await, 5);
+        assert_eq!(aggregator.accepted_revision().await, 5);
+        assert!(internal.last_good().await.unwrap().servers.is_empty());
+        assert_eq!(aggregator.last_good().await.unwrap().servers.len(), 1);
+        assert!(aggregator.core.server_summaries().await.is_empty());
+
+        internal.reset_revision_for_project_scope().await;
+        assert_eq!(internal.accepted_revision().await, 0);
+        assert_eq!(internal.last_good().await.unwrap().revision, 5);
+        assert_eq!(aggregator.accepted_revision().await, 5);
+        internal
+            .apply_config(&projected_config(1, true), &FailingResolver)
+            .await
+            .unwrap();
+        assert_eq!(internal.core.server_summaries().await.len(), 1);
+        let stale = aggregator
+            .apply_config(&projected_config(1, true), &resolver)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            stale,
+            SnapshotError::StaleRevision {
+                accepted: 5,
+                requested: 1
+            }
+        ));
+        assert_eq!(aggregator.accepted_revision().await, 5);
+    }
+
+    #[tokio::test]
+    async fn aggregator_registry_reload_skips_builtins_and_preserves_last_good_on_secret_error() {
+        let controller = McpSnapshotController::new(Arc::new(McpCore::default()));
+        let resolver = RecordingResolver(StdMutex::new(Vec::new()));
+        let first = projected_config(2, true).to_canonical_json().unwrap();
+        controller
+            .apply_registry(&first, 2, &resolver)
+            .await
+            .unwrap();
+        let previous = controller.last_good().await.unwrap();
+        let next = projected_config(3, false).to_canonical_json().unwrap();
+        assert!(matches!(
+            controller.apply_registry(&next, 3, &FailingResolver).await,
+            Err(SnapshotError::SecretResolution { .. })
+        ));
+        assert_eq!(controller.accepted_revision().await, 2);
+        assert_eq!(controller.last_good().await.unwrap(), previous);
+        controller
+            .apply_registry(&next, 3, &resolver)
+            .await
+            .unwrap();
+        assert_eq!(controller.accepted_revision().await, 3);
+        assert!(controller.core.server_summaries().await.is_empty());
+        assert_eq!(resolver.0.lock().unwrap().len(), 2);
     }
 
     #[test]

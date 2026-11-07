@@ -56,6 +56,10 @@ pub(crate) const MCP_GATEWAY: HostedProcess = HostedProcess {
     id_suffix: "mcp-gateway",
     label: "MCP Gateway",
 };
+pub(crate) const MCP_AGGREGATOR: HostedProcess = HostedProcess {
+    id_suffix: "mcp-gateway-aggregator",
+    label: "MCP Aggregator",
+};
 
 /// Identity of the host app for one [`HostedProcess`].
 pub(crate) struct HostApp {

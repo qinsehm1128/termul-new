@@ -1078,14 +1078,12 @@ pub struct AcpManager {
     /// renders it. See `host_mcp::mod` + the spec
     /// `spec-acp-host-todo-plan-tool.md`.
     host_plan_server: Arc<crate::acp::host_mcp::parent::HostPlanServer>,
-    /// Canonical MCP Core Router endpoint/auth, when the host has threaded one.
-    /// Default is explicit `core_not_wired` absence — callers never fall back
-    /// to the user registry.
-    mcp_router: Mutex<crate::acp::mcp_router::McpRouterAvailability>,
-    /// Settings file of the standalone MCP gateway. When set, each new session
-    /// reads the current port and token from it, so a moved port applies to
-    /// the next session without a restart.
-    mcp_gateway_file: Mutex<Option<std::path::PathBuf>>,
+    /// Explicit endpoints are used only for sources without a configured file.
+    mcp_router:
+        Mutex<HashMap<se_mcp_bridge::Source, crate::acp::mcp_router::McpRouterAvailability>>,
+    /// Re-read source-specific port/token at every session boundary. A configured
+    /// file is authoritative: failure must never fall back to a cached endpoint.
+    mcp_gateway_file: Mutex<HashMap<se_mcp_bridge::Source, std::path::PathBuf>>,
     /// Last advertised mode/model/configOptions per live session. Phone and
     /// web read this instead of reopening a session the driver already owns.
     composer_controls: Arc<ComposerControlCache>,
@@ -1204,8 +1202,8 @@ impl AcpManager {
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
-            mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
-            mcp_gateway_file: Mutex::new(None),
+            mcp_router: Mutex::new(HashMap::new()),
+            mcp_gateway_file: Mutex::new(HashMap::new()),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1231,8 +1229,8 @@ impl AcpManager {
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
-            mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
-            mcp_gateway_file: Mutex::new(None),
+            mcp_router: Mutex::new(HashMap::new()),
+            mcp_gateway_file: Mutex::new(HashMap::new()),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1260,8 +1258,8 @@ impl AcpManager {
             replacement_gates: Mutex::new(HashMap::new()),
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
-            mcp_router: Mutex::new(crate::acp::mcp_router::McpRouterAvailability::default()),
-            mcp_gateway_file: Mutex::new(None),
+            mcp_router: Mutex::new(HashMap::new()),
+            mcp_gateway_file: Mutex::new(HashMap::new()),
             composer_controls: Arc::new(ComposerControlCache::default()),
         }
     }
@@ -1336,6 +1334,7 @@ impl AcpManager {
     /// unavailability; the user registry is never restored.
     pub fn apply_mcp_router_endpoint(
         &self,
+        source: se_mcp_bridge::Source,
         endpoint: crate::mcp_core::McpEndpointDescriptor,
         auth: crate::mcp_core::AuthBootstrap,
     ) {
@@ -1345,7 +1344,8 @@ impl AcpManager {
             crate::acp::mcp_router::McpRouterAvailability::Available { endpoint, auth } => {
                 log::info!(
                     target: crate::acp::mcp_router::MCP_ROUTER_LOG_TARGET,
-                    "operation=mcp_router_apply generation={} port={} auth_generation={} loopback=1 stable_code=OK",
+                    "operation=mcp_router_apply source={} generation={} port={} auth_generation={} loopback=1 stable_code=OK",
+                    source.as_str(),
                     endpoint.generation,
                     endpoint.port,
                     auth.generation
@@ -1354,40 +1354,51 @@ impl AcpManager {
             crate::acp::mcp_router::McpRouterAvailability::Unavailable { reason } => {
                 log::info!(
                     target: crate::acp::mcp_router::MCP_ROUTER_LOG_TARGET,
-                    "operation=mcp_router_apply router=unavailable reason={} stable_code=UNAVAILABLE",
+                    "operation=mcp_router_apply source={} router=unavailable reason={} stable_code=UNAVAILABLE",
+                    source.as_str(),
                     reason.as_str()
                 );
             }
         }
-        *self.mcp_router.lock() = availability;
+        self.mcp_router.lock().insert(source, availability);
     }
 
-    /// Route new sessions to the gateway described by `path` (read per
-    /// session). An unreadable file falls back to any applied endpoint.
-    pub fn use_mcp_gateway_file(&self, path: std::path::PathBuf) {
-        *self.mcp_gateway_file.lock() = Some(path);
+    /// Read the authoritative settings for this source at each session boundary.
+    pub fn use_mcp_gateway_file(&self, source: se_mcp_bridge::Source, path: std::path::PathBuf) {
+        self.mcp_gateway_file.lock().insert(source, path);
     }
 
-    fn current_mcp_router(&self) -> crate::acp::mcp_router::McpRouterAvailability {
-        let path = self.mcp_gateway_file.lock().clone();
-        let from_file = path
-            .and_then(|path| se_mcp_bridge::GatewaySettings::load(&path).ok())
-            .and_then(|settings| {
-                let auth = crate::mcp_core::AuthBootstrap::new(1, settings.token).ok()?;
-                let endpoint = crate::mcp_core::McpEndpointDescriptor {
-                    generation: 1,
-                    bind_address: "127.0.0.1".into(),
-                    port: settings.port,
-                    path: "/mcp".into(),
-                    auth_generation: 1,
-                };
-                Some(
-                    crate::acp::mcp_router::McpRouterAvailability::from_endpoint_auth(
-                        endpoint, auth,
-                    ),
-                )
-            });
-        from_file.unwrap_or_else(|| self.mcp_router.lock().clone())
+    async fn current_mcp_router(
+        &self,
+        source: se_mcp_bridge::Source,
+    ) -> crate::acp::mcp_router::McpRouterAvailability {
+        use crate::acp::mcp_router::McpRouterAvailability;
+
+        // Clone under the synchronous locks, then release them before network I/O.
+        let path = self.mcp_gateway_file.lock().get(&source).cloned();
+        let availability = if let Some(path) = path {
+            se_mcp_bridge::GatewaySettings::load_for_source(&path, source)
+                .ok()
+                .and_then(|settings| {
+                    let auth = crate::mcp_core::AuthBootstrap::new(1, settings.token).ok()?;
+                    let endpoint = crate::mcp_core::McpEndpointDescriptor {
+                        generation: 1,
+                        bind_address: "127.0.0.1".into(),
+                        port: settings.port,
+                        path: "/mcp".into(),
+                        auth_generation: 1,
+                    };
+                    Some(McpRouterAvailability::from_endpoint_auth(endpoint, auth))
+                })
+                .unwrap_or_default()
+        } else {
+            self.mcp_router
+                .lock()
+                .get(&source)
+                .cloned()
+                .unwrap_or_default()
+        };
+        availability.verify_identity(source).await
     }
 
     #[must_use]
@@ -1910,8 +1921,9 @@ impl AcpManager {
             .get(&agent_id)
             .map(|entry| (entry.capabilities.clone(), entry.stable_namespace.clone()))
             .ok_or_else(|| format!("unknown agent: {agent_id}"))?;
-        let (internal, token) =
-            self.assemble_host_session_mcp(&agent_id, &caps, true, 0, "session_replace")?;
+        let (internal, token) = self
+            .assemble_host_session_mcp(&agent_id, &caps, true, 0, "session_replace")
+            .await?;
         let token = token.expect("host_mcp token is issued for replacement sessions");
         let tx = self.command_tx(&agent_id)?;
         let (binding_gate_tx, binding_gate_rx) = watch::channel(None);
@@ -2109,13 +2121,15 @@ impl AcpManager {
         // at most one Core Router HTTP entry. Caller/user-registry servers are
         // discarded rather than restored per agent.
         let discarded_caller_count = mcp_servers.len();
-        let (combined_mcp_servers, plan_token) = self.assemble_host_session_mcp(
-            agent_id,
-            &caps,
-            !context.ephemeral,
-            discarded_caller_count,
-            "session_new",
-        )?;
+        let (combined_mcp_servers, plan_token) = self
+            .assemble_host_session_mcp(
+                agent_id,
+                &caps,
+                !context.ephemeral,
+                discarded_caller_count,
+                "session_new",
+            )
+            .await?;
 
         let stable_for_binding = stable_agent_namespace
             .clone()
@@ -2305,8 +2319,9 @@ impl AcpManager {
             return Ok(outcome);
         }
         let tx = self.command_tx(&agent_id)?;
-        let (mcp_servers, host_token) =
-            self.prepare_reopen_mcp_servers(&agent_id, &session_id, mcp_servers)?;
+        let (mcp_servers, host_token) = self
+            .prepare_reopen_mcp_servers(&agent_id, &session_id, mcp_servers)
+            .await?;
         let session_key = session_id.0.clone();
         let outcome = send_command(&tx, |reply| AcpCommand::LoadSession {
             additional_directories,
@@ -2343,8 +2358,9 @@ impl AcpManager {
             return Ok(outcome);
         }
         let tx = self.command_tx(&agent_id)?;
-        let (mcp_servers, host_token) =
-            self.prepare_reopen_mcp_servers(&agent_id, &session_id, mcp_servers)?;
+        let (mcp_servers, host_token) = self
+            .prepare_reopen_mcp_servers(&agent_id, &session_id, mcp_servers)
+            .await?;
         let session_key = session_id.0.clone();
         let outcome = send_command(&tx, |reply| AcpCommand::ResumeSession {
             additional_directories,
@@ -2362,7 +2378,7 @@ impl AcpManager {
         outcome
     }
 
-    fn prepare_reopen_mcp_servers(
+    async fn prepare_reopen_mcp_servers(
         &self,
         agent_id: &AgentId,
         session_id: &SessionId,
@@ -2374,22 +2390,24 @@ impl AcpManager {
         self.host_plan_server.unregister_session(&session_id.0);
         let caps = self.capabilities(agent_id)?;
         let discarded_caller_count = configured_mcp_servers.len();
-        let (combined, token) = self.assemble_host_session_mcp(
-            agent_id,
-            &caps,
-            true,
-            discarded_caller_count,
-            "session_reopen",
-        )?;
+        let (combined, token) = self
+            .assemble_host_session_mcp(
+                agent_id,
+                &caps,
+                true,
+                discarded_caller_count,
+                "session_reopen",
+            )
+            .await?;
         let token = token.expect("host_mcp token is issued for reopen");
         self.host_plan_server.bind_session(&token, &session_id.0);
         Ok((combined, token))
     }
 
     /// Build the host-owned ACP `mcpServers` list. Never extends with the
-    /// caller/user registry: that configuration lives in the canonical MCP
-    /// Core, reached through one generated Router HTTP entry when available.
-    fn assemble_host_session_mcp(
+    /// caller/user registry: the two source-isolated gateways are reached only
+    /// through generated, identity-verified Router HTTP entries.
+    async fn assemble_host_session_mcp(
         &self,
         agent_id: &AgentId,
         caps: &AgentCapabilities,
@@ -2397,6 +2415,13 @@ impl AcpManager {
         discarded_caller_count: usize,
         operation: &'static str,
     ) -> Result<(Vec<McpServer>, Option<String>), String> {
+        use se_mcp_bridge::Source;
+
+        // No parking_lot guards or provisional host credentials survive these awaits.
+        let (internal, aggregator) = tokio::join!(
+            self.current_mcp_router(Source::Internal),
+            self.current_mcp_router(Source::Aggregator),
+        );
         let (mut servers, token) = if inject_host_mcp {
             let (port, token, provisional_sid) =
                 self.host_plan_server.register_session(&agent_id.0);
@@ -2407,8 +2432,26 @@ impl AcpManager {
         } else {
             (Vec::new(), None)
         };
-        let availability = self.current_mcp_router();
-        let apply = crate::acp::mcp_router::append_router_entry(&mut servers, &availability, caps);
+        for (source, availability) in [
+            (Source::Internal, internal),
+            (Source::Aggregator, aggregator),
+        ] {
+            let apply = crate::acp::mcp_router::append_router_entry(
+                &mut servers,
+                source,
+                &availability,
+                caps,
+            );
+            log::info!(
+                target: crate::acp::mcp_router::MCP_ROUTER_LOG_TARGET,
+                "operation={} source={} agent_id={} router={} router_reason={} stable_code=OK",
+                operation,
+                source.as_str(),
+                agent_id.0,
+                if apply.injected { 1 } else { 0 },
+                apply.reason.map(crate::acp::mcp_router::McpRouterUnavailableReason::as_str).unwrap_or("applied"),
+            );
+        }
         if let Err(error) = gate_mcp_servers(caps, &servers) {
             if let Some(token) = &token {
                 self.host_plan_server.unregister_by_token(token);
@@ -2417,14 +2460,12 @@ impl AcpManager {
         }
         log::info!(
             target: crate::acp::mcp_router::MCP_ROUTER_LOG_TARGET,
-            "operation={} agent_id={} host_mcp={} router={} discarded_caller_count={} total_count={} router_reason={} stable_code=OK",
+            "operation={} agent_id={} host_mcp={} discarded_caller_count={} total_count={} stable_code=OK",
             operation,
             agent_id.0,
             if inject_host_mcp { 1 } else { 0 },
-            if apply.injected { 1 } else { 0 },
             discarded_caller_count,
             servers.len(),
-            apply.reason.map(crate::acp::mcp_router::McpRouterUnavailableReason::as_str).unwrap_or("applied"),
         );
         Ok((servers, token))
     }
@@ -5812,18 +5853,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reopen_methods_inject_one_router_http_when_core_is_wired() {
+    async fn reopen_methods_inject_both_source_routers_when_wired() {
         let manager = AcpManager::new(vec![]);
-        manager.apply_mcp_router_endpoint(
-            crate::mcp_core::McpEndpointDescriptor {
-                generation: 4,
-                bind_address: "127.0.0.1".into(),
-                port: 17310,
-                path: "/mcp".into(),
-                auth_generation: 4,
-            },
-            crate::mcp_core::AuthBootstrap::new(4, "router-secret").unwrap(),
-        );
+        let internal =
+            crate::acp::mcp_router::TestGateway::start(se_mcp_bridge::Source::Internal).await;
+        let aggregator =
+            crate::acp::mcp_router::TestGateway::start(se_mcp_bridge::Source::Aggregator).await;
+        for (source, fixture) in [
+            (se_mcp_bridge::Source::Internal, &internal),
+            (se_mcp_bridge::Source::Aggregator, &aggregator),
+        ] {
+            manager.apply_mcp_router_endpoint(
+                source,
+                fixture.endpoint.clone(),
+                fixture.auth.clone(),
+            );
+        }
         let (agent_id, command_rx) = insert_reopen_agent(&manager, true);
         let capture = tokio::spawn(capture_reopen_mcp(command_rx, 2));
 
@@ -5849,74 +5894,252 @@ mod tests {
             .unwrap();
 
         for servers in capture.await.unwrap() {
-            assert_eq!(servers.len(), 2);
+            assert_eq!(servers.len(), 3);
             assert!(matches!(servers[0], McpServer::Stdio(_)));
-            assert_eq!(crate::acp::mcp_router::router_http_count(&servers), 1);
+            assert_eq!(crate::acp::mcp_router::router_http_count(&servers), 2);
             let value = serde_json::to_value(&servers[1]).unwrap();
             assert_eq!(value["type"], "http");
             assert_eq!(value["name"], crate::acp::mcp_router::MCP_ROUTER_ACP_NAME);
-            assert_eq!(value["url"], "http://127.0.0.1:17310/mcp");
+            assert_eq!(
+                value["url"],
+                format!("http://127.0.0.1:{}/mcp", internal.endpoint.port)
+            );
             assert_ne!(value["name"], "configured");
             let headers = value["headers"].as_array().expect("headers");
             assert_eq!(headers.len(), 1);
             assert_eq!(headers[0]["name"], "Authorization");
-            assert_eq!(headers[0]["value"], "Bearer router-secret");
+            assert_eq!(
+                headers[0]["value"],
+                format!("Bearer {}", internal.auth.bearer_token())
+            );
+            assert!(
+                matches!(&servers[2], McpServer::Http(http) if http.name == crate::acp::mcp_router::router_name(se_mcp_bridge::Source::Aggregator))
+            );
         }
     }
 
-    #[test]
-    fn sessions_follow_the_gateway_settings_file_and_its_port_changes() {
+    #[tokio::test]
+    async fn reopen_single_source_failure_preserves_other_router_and_host() {
+        use se_mcp_bridge::Source;
+        let internal = crate::acp::mcp_router::TestGateway::start(Source::Internal).await;
+        let aggregator = crate::acp::mcp_router::TestGateway::start(Source::Aggregator).await;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("mcp-gateway.json");
-        let manager = AcpManager::new(vec![]);
-        manager.apply_mcp_router_endpoint(
-            crate::mcp_core::McpEndpointDescriptor {
-                generation: 1,
-                bind_address: "127.0.0.1".into(),
-                port: 17310,
-                path: "/mcp".into(),
-                auth_generation: 1,
-            },
-            crate::mcp_core::AuthBootstrap::new(1, "applied").unwrap(),
-        );
-        manager.use_mcp_gateway_file(path.clone());
-        let port = |manager: &AcpManager| match manager.current_mcp_router() {
-            crate::acp::mcp_router::McpRouterAvailability::Available { endpoint, auth } => {
-                (endpoint.port, auth.bearer_token().to_owned())
+        for (failed, healthy) in [
+            (Source::Internal, Source::Aggregator),
+            (Source::Aggregator, Source::Internal),
+        ] {
+            let manager = AcpManager::new(vec![]);
+            for (source, fixture) in [
+                (Source::Internal, &internal),
+                (Source::Aggregator, &aggregator),
+            ] {
+                manager.apply_mcp_router_endpoint(
+                    source,
+                    fixture.endpoint.clone(),
+                    fixture.auth.clone(),
+                );
             }
-            other => panic!("router unavailable: {other:?}"),
-        };
-        // No file yet: the applied endpoint still serves.
-        assert_eq!(port(&manager), (17310, "applied".into()));
+            manager.use_mcp_gateway_file(failed, dir.path().join(failed.default_file_name()));
+            let (agent_id, command_rx) = insert_reopen_agent(&manager, true);
+            let capture = tokio::spawn(capture_reopen_mcp(command_rx, 2));
+            manager
+                .load_session(
+                    &agent_id,
+                    SessionId::new("failed-source-load"),
+                    "/workspace".into(),
+                    Vec::new(),
+                    vec![caller_registry_server()],
+                )
+                .await
+                .unwrap();
+            manager
+                .resume_session(
+                    &agent_id,
+                    SessionId::new("failed-source-resume"),
+                    "/workspace".into(),
+                    Vec::new(),
+                    vec![caller_registry_server()],
+                )
+                .await
+                .unwrap();
+            for servers in capture.await.unwrap() {
+                assert_eq!(servers.len(), 2);
+                assert!(matches!(servers[0], McpServer::Stdio(_)));
+                assert!(
+                    matches!(&servers[1], McpServer::Http(http) if http.name == crate::acp::mcp_router::router_name(healthy))
+                );
+            }
+        }
+    }
 
-        let mut settings = se_mcp_bridge::GatewaySettings {
-            schema_version: 1,
-            port: 3290,
-            token: "se-mcp-file".into(),
+    fn save_gateway_fixture(
+        path: &std::path::Path,
+        source: se_mcp_bridge::Source,
+        fixture: &crate::acp::mcp_router::TestGateway,
+    ) {
+        se_mcp_bridge::GatewaySettings {
+            schema_version: 2,
+            source,
+            port: fixture.endpoint.port,
+            token: fixture.auth.bearer_token().into(),
             executable: None,
             profile_root: None,
             log_file: None,
-        };
-        settings.save(&path).unwrap();
-        assert_eq!(port(&manager), (3290, "se-mcp-file".into()));
-        settings.port = 3301;
-        settings.save(&path).unwrap();
-        assert_eq!(port(&manager), (3301, "se-mcp-file".into()));
+        }
+        .save(path)
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn sessions_follow_source_files_and_port_changes_without_stale_fallback() {
+        use se_mcp_bridge::Source;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp-gateway.json");
+        let manager = AcpManager::new(vec![]);
+        let old = crate::acp::mcp_router::TestGateway::start(Source::Internal).await;
+        let moved = crate::acp::mcp_router::TestGateway::start(Source::Internal).await;
+        let aggregator = crate::acp::mcp_router::TestGateway::start(Source::Aggregator).await;
+        manager.apply_mcp_router_endpoint(Source::Internal, old.endpoint.clone(), old.auth.clone());
+        manager.apply_mcp_router_endpoint(
+            Source::Aggregator,
+            aggregator.endpoint.clone(),
+            aggregator.auth.clone(),
+        );
+        assert!(manager
+            .current_mcp_router(Source::Internal)
+            .await
+            .reason()
+            .is_none());
+        manager.use_mcp_gateway_file(Source::Internal, path.clone());
+        // A configured file is authoritative, including when missing or corrupt.
+        assert!(manager
+            .current_mcp_router(Source::Internal)
+            .await
+            .reason()
+            .is_some());
+        save_gateway_fixture(&path, Source::Internal, &old);
+        for fixture in [&old, &moved] {
+            save_gateway_fixture(&path, Source::Internal, fixture);
+            let crate::acp::mcp_router::McpRouterAvailability::Available { endpoint, auth } =
+                manager.current_mcp_router(Source::Internal).await
+            else {
+                panic!("valid fixture unavailable");
+            };
+            assert_eq!(endpoint.port, fixture.endpoint.port);
+            assert_eq!(auth.bearer_token(), fixture.auth.bearer_token());
+        }
+        for invalid in [
+            "{bad-json",
+            r#"{"schemaVersion":2,"port":1,"token":"ignored"}"#,
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(manager
+                .current_mcp_router(Source::Internal)
+                .await
+                .reason()
+                .is_some());
+            assert!(manager
+                .current_mcp_router(Source::Aggregator)
+                .await
+                .reason()
+                .is_none());
+        }
+        // Wrong-source settings and a correct-source file pointing to the wrong
+        // live identity both fail closed, never adopting the old endpoint.
+        save_gateway_fixture(&path, Source::Aggregator, &aggregator);
+        assert!(manager
+            .current_mcp_router(Source::Internal)
+            .await
+            .reason()
+            .is_some());
+        save_gateway_fixture(&path, Source::Internal, &aggregator);
+        assert!(manager
+            .current_mcp_router(Source::Internal)
+            .await
+            .reason()
+            .is_some());
+        std::fs::remove_file(&path).unwrap();
+        assert!(manager
+            .current_mcp_router(Source::Internal)
+            .await
+            .reason()
+            .is_some());
+        assert!(manager
+            .current_mcp_router(Source::Aggregator)
+            .await
+            .reason()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn new_and_replacement_assembly_keep_sources_independent() {
+        use se_mcp_bridge::Source;
+        let manager = AcpManager::new(vec![]);
+        let internal = crate::acp::mcp_router::TestGateway::start(Source::Internal).await;
+        let aggregator = crate::acp::mcp_router::TestGateway::start(Source::Aggregator).await;
+        let dir = tempfile::tempdir().unwrap();
+        for (source, fixture) in [
+            (Source::Internal, &internal),
+            (Source::Aggregator, &aggregator),
+        ] {
+            let path = dir.path().join(source.default_file_name());
+            save_gateway_fixture(&path, source, fixture);
+            manager.use_mcp_gateway_file(source, path);
+        }
+        let mut caps = AgentCapabilities::default();
+        caps.mcp_capabilities.http = true;
+        for operation in ["session_new", "session_replace"] {
+            let (servers, token) = manager
+                .assemble_host_session_mcp(&AgentId::new(), &caps, false, 3, operation)
+                .await
+                .unwrap();
+            assert!(token.is_none());
+            assert_eq!(servers.len(), 2);
+            assert_eq!(crate::acp::mcp_router::router_http_count(&servers), 2);
+            assert!(
+                matches!(&servers[0], McpServer::Http(http) if http.name == crate::acp::mcp_router::router_name(Source::Internal))
+            );
+            assert!(
+                matches!(&servers[1], McpServer::Http(http) if http.name == crate::acp::mcp_router::router_name(Source::Aggregator))
+            );
+        }
+        for (failed, healthy, fixture) in [
+            (Source::Internal, Source::Aggregator, &internal),
+            (Source::Aggregator, Source::Internal, &aggregator),
+        ] {
+            let path = dir.path().join(failed.default_file_name());
+            std::fs::write(&path, "invalid").unwrap();
+            for operation in ["session_new", "session_replace"] {
+                let (servers, _) = manager
+                    .assemble_host_session_mcp(&AgentId::new(), &caps, false, 3, operation)
+                    .await
+                    .unwrap();
+                assert_eq!(servers.len(), 1);
+                assert!(
+                    matches!(&servers[0], McpServer::Http(http) if http.name == crate::acp::mcp_router::router_name(healthy))
+                );
+            }
+            save_gateway_fixture(&path, failed, fixture);
+        }
     }
 
     #[tokio::test]
     async fn reopen_skips_router_without_http_capability() {
         let manager = AcpManager::new(vec![]);
-        manager.apply_mcp_router_endpoint(
-            crate::mcp_core::McpEndpointDescriptor {
-                generation: 4,
-                bind_address: "127.0.0.1".into(),
-                port: 17311,
-                path: "/mcp".into(),
-                auth_generation: 4,
-            },
-            crate::mcp_core::AuthBootstrap::new(4, "router-secret").unwrap(),
-        );
+        let internal =
+            crate::acp::mcp_router::TestGateway::start(se_mcp_bridge::Source::Internal).await;
+        let aggregator =
+            crate::acp::mcp_router::TestGateway::start(se_mcp_bridge::Source::Aggregator).await;
+        for (source, fixture) in [
+            (se_mcp_bridge::Source::Internal, &internal),
+            (se_mcp_bridge::Source::Aggregator, &aggregator),
+        ] {
+            manager.apply_mcp_router_endpoint(
+                source,
+                fixture.endpoint.clone(),
+                fixture.auth.clone(),
+            );
+        }
         let (agent_id, command_rx) = insert_reopen_agent(&manager, false);
         let capture = tokio::spawn(capture_reopen_mcp(command_rx, 1));
         manager

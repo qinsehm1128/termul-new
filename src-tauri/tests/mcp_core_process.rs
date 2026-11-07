@@ -1,62 +1,106 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, TcpListener},
-    path::PathBuf,
+    net::{Ipv4Addr, TcpListener, TcpStream},
+    process::Stdio,
     time::Duration,
 };
 
-use se_manager_lib::mcp_core::{AuthBootstrap, McpCoreProcessConfig, McpCoreSupervisor};
+const REJECTION: &str =
+    "MCP gateway requires --config; use se-mcp --source internal or --source aggregator.\n";
 
-fn free_port() -> u16 {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    listener.local_addr().unwrap().port()
-}
+async fn assert_rejected(arguments: &[&str], invalid_environment: bool) {
+    let profile = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
 
-fn config() -> McpCoreProcessConfig {
-    McpCoreProcessConfig {
-        executable: PathBuf::from(env!("CARGO_BIN_EXE_se-manager")),
-        bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        port: free_port(),
-        auth: AuthBootstrap::new(1, "process-test-token").unwrap(),
-        request_body_limit: 64 * 1024,
-        startup_timeout: Duration::from_secs(5),
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_se-manager"));
+    command
+        .args(arguments)
+        .env("HOME", profile.path())
+        .env("USERPROFILE", profile.path())
+        .env("XDG_CONFIG_HOME", profile.path())
+        .env("APPDATA", profile.path())
+        .env("TERMUL_MCP_CORE_BIND", "127.0.0.1")
+        .env("TERMUL_MCP_CORE_PORT", address.port().to_string())
+        .env("TERMUL_MCP_CORE_AUTH_TOKEN", "process-test-secret-sentinel")
+        .env("TERMUL_MCP_CORE_AUTH_GENERATION", "1")
+        .env("TERMUL_MCP_CORE_REQUEST_LIMIT", "65536")
+        .env("TERMUL_MCP_CORE_PROFILE_ROOT", profile.path())
+        .env(
+            "TERMUL_MCP_CORE_REGISTRY",
+            profile.path().join("absent.json"),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if invalid_environment {
+        command
+            .env("TERMUL_MCP_CORE_BIND", "not-an-address")
+            .env("TERMUL_MCP_CORE_PORT", "not-a-port")
+            .env("TERMUL_MCP_CORE_AUTH_GENERATION", "not-a-generation")
+            .env("TERMUL_MCP_CORE_REQUEST_LIMIT", "not-a-limit");
     }
+
+    let child = command.spawn().unwrap();
+    let waiting = child.wait_with_output();
+    tokio::pin!(waiting);
+    let output = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                result = &mut waiting => break result,
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                    assert!(
+                        TcpStream::connect_timeout(&address, Duration::from_millis(10)).is_err(),
+                        "retired child must never accept connections"
+                    );
+                }
+            }
+        }
+    })
+    .await
+    .expect("retired child must exit immediately, not start a runtime")
+    .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), REJECTION);
+    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+    let _still_free = TcpListener::bind(address).expect("retired child must not leave a listener");
+    assert_eq!(std::fs::read_dir(profile.path()).unwrap().count(), 0);
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn shutdown_does_not_kill_an_unrelated_process() {
-    let mut unrelated = tokio::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
-    let mut supervisor = McpCoreSupervisor::new(config());
-    supervisor.start().await.unwrap();
-    supervisor.shutdown().await.unwrap();
-    assert!(unrelated.try_wait().unwrap().is_none());
-    unrelated.kill().await.unwrap();
-    unrelated.wait().await.unwrap();
+async fn env_configured_mcp_core_entry_is_rejected_without_opening_a_listener() {
+    assert_rejected(&["--mcp-core"], false).await;
 }
 
 #[tokio::test]
-async fn owned_mcp_core_starts_restarts_after_probe_misses_and_shuts_down_cleanly() {
-    let mut supervisor = McpCoreSupervisor::new(config());
-    supervisor.start().await.unwrap();
-    assert_eq!(supervisor.consecutive_misses(), 0);
-    assert!(supervisor.probe().await.unwrap());
-    let status = supervisor.status().await.unwrap();
-    assert_eq!(status.state, se_manager_lib::mcp_core::McpReadiness::Ready);
-    assert_eq!(status.endpoint.unwrap().auth_generation, 1);
+async fn retired_mcp_core_ignores_even_invalid_environment_values() {
+    assert_rejected(&["--mcp-core"], true).await;
+}
 
-    supervisor.restart().await.unwrap();
-    assert!(supervisor.probe().await.unwrap());
+#[tokio::test]
+async fn missing_config_value_is_rejected_instead_of_falling_through_to_gui() {
+    assert_rejected(&["--mcp-core", "--config"], false).await;
+    assert_rejected(&["--mcp-core", "--config", "--terminal-core"], false).await;
+}
 
-    supervisor.shutdown().await.unwrap();
-    assert!(supervisor.probe().await.is_err());
-    assert!(supervisor.probe().await.is_err());
-    assert!(supervisor.probe().await.unwrap());
-
-    let endpoint = supervisor.endpoint().to_owned();
-    supervisor.shutdown().await.unwrap();
-    let error = reqwest::get(endpoint).await.unwrap_err();
-    assert!(error.is_connect() || error.is_request());
+#[test]
+fn retired_process_module_contains_only_a_fixed_rejection_entrypoint() {
+    let source = include_str!("../src/mcp_core/process.rs");
+    assert_eq!(source.matches("pub fn ").count(), 1);
+    assert!(source.contains("pub fn run_mcp_core_process() -> i32"));
+    for forbidden in [
+        "\nuse ",
+        "std::env",
+        "tokio",
+        "TcpListener",
+        "spawn",
+        "supervisor",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "retired module contains {forbidden}"
+        );
+    }
 }
