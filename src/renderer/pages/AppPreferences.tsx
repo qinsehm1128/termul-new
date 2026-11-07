@@ -151,6 +151,8 @@ const APP_PREF_CATEGORY_DEFS = [
   { id: 'remote-access', labelKey: 'categories.remoteAccess', icon: <Monitor size={16} /> },
   { id: 'shortcuts', labelKey: 'categories.shortcuts', icon: <Keyboard size={16} /> },
   { id: 'updates', labelKey: 'categories.updates', icon: <Download size={16} /> },
+  // Desktop-only; same filtering.
+  { id: 'runtime', labelKey: 'categories.runtime', icon: <Activity size={16} /> },
   // macOS-only; filtered out of the sidebar and the search index below.
   { id: 'privacy', labelKey: 'categories.privacy', icon: <ShieldCheck size={16} /> },
   // Desktop-only; same filtering.
@@ -159,8 +161,6 @@ const APP_PREF_CATEGORY_DEFS = [
     labelKey: 'categories.dataMigration',
     icon: <HardDriveDownload size={16} />
   },
-  // Desktop-only; same filtering.
-  { id: 'runtime', labelKey: 'categories.runtime', icon: <Activity size={16} /> },
   { id: 'diagnostics', labelKey: 'categories.diagnostics', icon: <FileText size={16} /> },
   { id: 'reset', labelKey: 'categories.reset', icon: <RotateCcw size={16} /> }
 ] as const
@@ -329,6 +329,12 @@ const APP_PREF_SEARCH_DEFS = [
     keywords: ['insider', 'nightly', 'stable', 'prerelease', 'beta', 'channel']
   },
   {
+    categoryId: 'runtime',
+    labelKey: 'categories.runtime',
+    descriptionKey: 'runtime.description',
+    keywords: ['core', 'process', 'pid', 'restart', 'terminal core', 'acp core', 'background']
+  },
+  {
     categoryId: 'privacy',
     labelKey: 'categories.privacy',
     descriptionKey: 'macosPrivacy.description',
@@ -364,12 +370,6 @@ const APP_PREF_SEARCH_DEFS = [
       // carry a legacy brand literal.
       LEGACY.displayName.toLowerCase()
     ]
-  },
-  {
-    categoryId: 'runtime',
-    labelKey: 'categories.runtime',
-    descriptionKey: 'runtime.description',
-    keywords: ['core', 'process', 'pid', 'restart', 'terminal core', 'acp core', 'background']
   },
   {
     categoryId: 'diagnostics',
@@ -1898,6 +1898,8 @@ export default function AppPreferences(): React.JSX.Element {
             </div>
           </SettingsSection>
 
+          <SettingsDivider label={tSettings('groups.updatesAndRuntime')} />
+
           {/* Updates Section */}
           <SettingsSection id="updates">
             <div className="flex items-start gap-6 border-b border-border/70 pb-6">
@@ -2255,6 +2257,32 @@ export default function AppPreferences(): React.JSX.Element {
             </div>
           </SettingsSection>
 
+          {/* The background Cores and what they hold. Desktop-only: a browser
+              client has no local processes to inspect. */}
+          {isSettingsCategoryAvailable('runtime', HOST) && (
+            <SettingsSection id="runtime">
+              <div className="flex items-start gap-6 border-b border-border/70 pb-6">
+                <div className="w-1/3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <Activity size={16} className="text-primary" />
+                    <h2 className="text-lg font-medium text-foreground">
+                      {tSettings('categories.runtime')}
+                    </h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {tSettings('runtime.description')}
+                  </p>
+                </div>
+                <CoreRuntimeSettings />
+              </div>
+            </SettingsSection>
+          )}
+
+          {(isSettingsCategoryAvailable('privacy', HOST) ||
+            isSettingsCategoryAvailable('data-migration', HOST)) && (
+            <SettingsDivider label={tSettings('groups.privacyAndData')} />
+          )}
+
           {/* macOS privacy (TCC) grants */}
           {isSettingsCategoryAvailable('privacy', HOST) && (
             <SettingsSection id="privacy">
@@ -2296,28 +2324,7 @@ export default function AppPreferences(): React.JSX.Element {
             </SettingsSection>
           )}
 
-          <SettingsDivider label="Diagnostics & reset" />
-
-          {/* The background Cores and what they hold. Desktop-only: a browser
-              client has no local processes to inspect. */}
-          {isSettingsCategoryAvailable('runtime', HOST) && (
-            <SettingsSection id="runtime">
-              <div className="flex items-start gap-6 border-b border-border/70 pb-6">
-                <div className="w-1/3 pt-1">
-                  <div className="flex items-center gap-2">
-                    <Activity size={16} className="text-primary" />
-                    <h2 className="text-lg font-medium text-foreground">
-                      {tSettings('categories.runtime')}
-                    </h2>
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {tSettings('runtime.description')}
-                  </p>
-                </div>
-                <CoreRuntimeSettings />
-              </div>
-            </SettingsSection>
-          )}
+          <SettingsDivider label={tSettings('groups.diagnosticsAndReset')} />
 
           <SettingsSection id="diagnostics">
             <div className="flex items-start gap-6 border-b border-border/70 pb-6">

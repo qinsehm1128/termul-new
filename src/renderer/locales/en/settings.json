@@ -10,6 +10,11 @@
     "categoriesAria": "Settings categories",
     "noResults": "No settings match “{{query}}”."
   },
+  "groups": {
+    "updatesAndRuntime": "Updates & runtime status",
+    "privacyAndData": "Privacy & data",
+    "diagnosticsAndReset": "Diagnostics & reset"
+  },
   "categories": {
     "appearance": "Terminal Appearance",
     "shell": "Default Shell",

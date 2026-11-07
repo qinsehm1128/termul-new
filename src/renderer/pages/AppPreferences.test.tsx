@@ -8,7 +8,7 @@ import type {
 import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
 import { invoke } from '@tauri-apps/api/core'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
@@ -133,6 +133,31 @@ vi.mock('@/stores/updater-store', () => ({
 vi.mock('@/stores/keyboard-shortcuts-store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/stores/keyboard-shortcuts-store')>()
   return actual
+})
+
+vi.mock('@/lib/core-runtime-api', () => {
+  const core = {
+    mode: 'separate',
+    running: true,
+    pid: 42,
+    startedAtMs: null,
+    buildId: 'test-core',
+    activeResources: 0
+  }
+  return {
+    coreRuntimeApi: {
+      status: vi.fn().mockResolvedValue({
+        gui: { pid: 1, startedAtMs: null, buildId: 'test-gui', version: '0.4.8' },
+        acpCore: core,
+        terminalCore: core,
+        pluginCore: core,
+        terminals: [],
+        agents: []
+      }),
+      restartCore: vi.fn().mockResolvedValue(undefined),
+      restartGui: vi.fn().mockResolvedValue(undefined)
+    }
+  }
 })
 
 vi.mock('@/components/KeybindingSchemePicker', () => ({ KeybindingSchemePicker: () => null }))
@@ -724,5 +749,273 @@ describe('AppPreferences update component diff and forced install', () => {
 
     expect(screen.getByRole('button', { name: /Preparing the download/ })).toBeDisabled()
     expect(screen.queryByRole('button', { name: /0% complete/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('AppPreferences updates and runtime grouping', () => {
+  const tauriWindow = window as Window & { __TAURI_INTERNALS__?: Record<string, unknown> }
+  const originalScrollIntoView = window.HTMLElement.prototype.scrollIntoView
+  let scrollIntoView: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+    scrollIntoView = vi.fn()
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView
+    isAurUpdateMode.mockReturnValue(false)
+    hasActiveTerminalSessions.mockReturnValue(false)
+    Object.assign(updaterFixture, {
+      isChecking: false,
+      updateAvailable: false,
+      downloaded: false,
+      error: null,
+      isManualUpdateMode: false,
+      componentPolicy: null,
+      pendingUpdatePlan: null,
+      isDownloading: false,
+      isPreparingDownload: false,
+      downloadProgress: 0
+    })
+  })
+
+  afterEach(async () => {
+    // Unmount before resetting modules: the runtime panel owns a polling timer.
+    cleanup()
+    delete tauriWindow.__TAURI_INTERNALS__
+    window.HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    vi.restoreAllMocks()
+    const { initializeI18n } = await import('@/i18n')
+    await initializeI18n('en')
+    vi.resetModules()
+  })
+
+  async function renderHostPage({
+    desktop = true,
+    platform = 'MacIntel',
+    language = 'en',
+    section
+  }: {
+    desktop?: boolean
+    platform?: string
+    language?: 'en' | 'zh-CN'
+    section?: 'updates' | 'runtime'
+  } = {}) {
+    if (desktop) tauriWindow.__TAURI_INTERNALS__ = {}
+    else delete tauriWindow.__TAURI_INTERNALS__
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform)
+
+    // HOST is captured at import time. Reload the page and its real layout
+    // after selecting the host; do not change product detection for tests.
+    vi.resetModules()
+    const { initializeI18n } = await import('@/i18n')
+    const i18n = await initializeI18n(language)
+    const { I18nextProvider } = await import('react-i18next')
+    const { MemoryRouter: HostMemoryRouter } = await import('react-router-dom')
+    const { useAppSettingsStore: hostSettingsStore } = await import('@/stores/app-settings-store')
+    hostSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+    const { coreRuntimeApi } = await import('@/lib/core-runtime-api')
+    vi.mocked(coreRuntimeApi.status).mockClear()
+    vi.mocked(coreRuntimeApi.restartCore).mockClear()
+    vi.mocked(coreRuntimeApi.restartGui).mockClear()
+    const { brandMigrationApi } = await import('@/lib/brand-migration-api')
+    vi.spyOn(brandMigrationApi, 'detectLegacyData').mockResolvedValue(null)
+    vi.spyOn(brandMigrationApi, 'lastRun').mockResolvedValue(null)
+    const settingsSearch = await import('@/lib/settings-search')
+    // Observe the index without replacing the search engine or SettingsLayout.
+    const search = vi.spyOn(settingsSearch, 'searchSettings')
+    const { default: HostAppPreferences } = await import('./AppPreferences')
+    const rendered = render(
+      <I18nextProvider i18n={i18n}>
+        <HostMemoryRouter initialEntries={[`/preferences${section ? `?section=${section}` : ''}`]}>
+          <HostAppPreferences />
+        </HostMemoryRouter>
+      </I18nextProvider>
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    return { ...rendered, coreRuntimeApi, i18n, search }
+  }
+
+  function getSection(container: HTMLElement, id: string): HTMLElement {
+    const section = container.querySelector<HTMLElement>(`[data-settings-section="${id}"]`)
+    expect(section).toBeInTheDocument()
+    if (!section) throw new Error(`Missing settings section: ${id}`)
+    return section
+  }
+
+  it.each([
+    {
+      language: 'en' as const,
+      updatesTitle: 'Updates & runtime status',
+      privacyTitle: 'Privacy & data',
+      diagnosticsTitle: 'Diagnostics & reset'
+    },
+    {
+      language: 'zh-CN' as const,
+      updatesTitle: '更新与运行状态',
+      privacyTitle: '隐私与数据',
+      diagnosticsTitle: '诊断与重置'
+    }
+  ])('keeps updates and runtime adjacent under the localized $language group', async ({
+    language,
+    updatesTitle,
+    privacyTitle,
+    diagnosticsTitle
+  }) => {
+    const { container, coreRuntimeApi, i18n } = await renderHostPage({ language })
+    const nav = screen.getByRole('navigation')
+    const updatesButton = within(nav).getByRole('button', {
+      name: i18n.t('categories.updates', { ns: 'settings' }),
+      exact: true
+    })
+    const runtimeButton = within(nav).getByRole('button', {
+      name: i18n.t('categories.runtime', { ns: 'settings' }),
+      exact: true
+    })
+    expect(updatesButton.nextElementSibling).toBe(runtimeButton)
+    expect(runtimeButton.nextElementSibling).toHaveTextContent(
+      i18n.t('categories.privacy', { ns: 'settings' })
+    )
+
+    const updates = getSection(container, 'updates')
+    const runtime = getSection(container, 'runtime')
+    expect(updates.previousElementSibling).toHaveAttribute('data-settings-divider', 'true')
+    expect(updates.previousElementSibling).toHaveTextContent(updatesTitle)
+    // Immediate element siblings, not merely the same section ordering: a
+    // divider or unrelated node between these two must fail this regression.
+    expect(updates.nextElementSibling).toBe(runtime)
+    expect(runtime.previousElementSibling).toBe(updates)
+    expect(runtime.nextElementSibling).toHaveAttribute('data-settings-divider', 'true')
+    expect(runtime.nextElementSibling).toHaveTextContent(privacyTitle)
+    expect(runtime.nextElementSibling?.nextElementSibling).toBe(getSection(container, 'privacy'))
+    expect(getSection(container, 'privacy').nextElementSibling).toBe(
+      getSection(container, 'data-migration')
+    )
+    expect(getSection(container, 'diagnostics').previousElementSibling).toHaveAttribute(
+      'data-settings-divider',
+      'true'
+    )
+    expect(getSection(container, 'diagnostics').previousElementSibling).toHaveTextContent(
+      diagnosticsTitle
+    )
+    await waitFor(() => expect(coreRuntimeApi.status).toHaveBeenCalled())
+    expect(coreRuntimeApi.restartCore).not.toHaveBeenCalled()
+    expect(coreRuntimeApi.restartGui).not.toHaveBeenCalled()
+  })
+
+  it('keeps the privacy/data group when only data migration is available', async () => {
+    const { container } = await renderHostPage({ platform: 'Linux x86_64' })
+    expect(container.querySelector('[data-settings-section="privacy"]')).not.toBeInTheDocument()
+    const migration = getSection(container, 'data-migration')
+    expect(migration.previousElementSibling).toHaveAttribute('data-settings-divider', 'true')
+    expect(migration.previousElementSibling).toHaveTextContent('Privacy & data')
+    expect(migration.previousElementSibling?.previousElementSibling).toBe(
+      getSection(container, 'runtime')
+    )
+    expect(getSection(container, 'updates').nextElementSibling).toBe(
+      getSection(container, 'runtime')
+    )
+  })
+
+  it('keeps the privacy/data group when only macOS privacy is available', async () => {
+    const { container, coreRuntimeApi } = await renderHostPage({ desktop: false })
+    const privacy = getSection(container, 'privacy')
+    expect(privacy.previousElementSibling).toHaveAttribute('data-settings-divider', 'true')
+    expect(privacy.previousElementSibling).toHaveTextContent('Privacy & data')
+    expect(privacy.previousElementSibling?.previousElementSibling).toBe(
+      getSection(container, 'updates')
+    )
+    expect(
+      container.querySelector('[data-settings-section="data-migration"]')
+    ).not.toBeInTheDocument()
+    expect(container.querySelector('[data-settings-section="runtime"]')).not.toBeInTheDocument()
+    expect(coreRuntimeApi.status).not.toHaveBeenCalled()
+    expect(coreRuntimeApi.restartCore).not.toHaveBeenCalled()
+    expect(coreRuntimeApi.restartGui).not.toHaveBeenCalled()
+  })
+
+  it('keeps the runtime search definition after all update entries and before privacy/data, and navigates to runtime', async () => {
+    const { container, i18n, search } = await renderHostPage()
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'runtime' } })
+    const runtimeLabel = i18n.t('categories.runtime', { ns: 'settings' })
+    const result = within(screen.getByRole('navigation')).getByRole('button', {
+      name: `${runtimeLabel}${runtimeLabel}`,
+      exact: true
+    })
+    const index = search.mock.calls.at(-1)?.[1]
+    expect(index).toBeDefined()
+    const categoryIds = index?.map((entry) => entry.categoryId) ?? []
+    const runtimeIndex = categoryIds.indexOf('runtime')
+    expect(runtimeIndex).toBeGreaterThan(categoryIds.lastIndexOf('updates'))
+    expect(categoryIds.filter((id) => id === 'updates')).toHaveLength(3)
+    expect(categoryIds.filter((id) => id === 'runtime')).toHaveLength(1)
+    expect(categoryIds.indexOf('privacy')).toBeGreaterThan(runtimeIndex)
+    expect(categoryIds.indexOf('data-migration')).toBeGreaterThan(runtimeIndex)
+    expect(index?.[runtimeIndex]).toMatchObject({ categoryId: 'runtime', label: runtimeLabel })
+
+    scrollIntoView.mockClear()
+    fireEvent.click(result)
+    expect(scrollIntoView.mock.contexts).toContain(getSection(container, 'runtime'))
+    expect(scrollIntoView.mock.contexts).not.toContain(getSection(container, 'updates'))
+  })
+
+  it.each([
+    'updates',
+    'runtime'
+  ] as const)('preserves the desktop %s deep link', async (section) => {
+    const { container, i18n } = await renderHostPage({ section })
+    const target = getSection(container, section)
+    expect(scrollIntoView.mock.contexts).toContain(target)
+    const label = i18n.t(`categories.${section}`, { ns: 'settings' })
+    expect(
+      within(screen.getByRole('navigation')).getByRole('button', { name: label, exact: true })
+    ).toHaveAttribute('aria-current', 'true')
+  })
+
+  it.each([
+    'updates',
+    'runtime'
+  ] as const)('keeps browser updates available without runtime or empty privacy groups for a %s link', async (section) => {
+    const { container, coreRuntimeApi, i18n, search } = await renderHostPage({
+      desktop: false,
+      platform: 'Linux x86_64',
+      section
+    })
+    const updates = getSection(container, 'updates')
+    expect(updates.previousElementSibling).toHaveTextContent('Updates & runtime status')
+    expect(updates.nextElementSibling).toHaveAttribute('data-settings-divider', 'true')
+    expect(updates.nextElementSibling).toHaveTextContent('Diagnostics & reset')
+    expect(updates.nextElementSibling?.nextElementSibling).toBe(
+      getSection(container, 'diagnostics')
+    )
+    expect(container.querySelector('[data-settings-section="runtime"]')).not.toBeInTheDocument()
+    expect(container.querySelector('[data-settings-section="privacy"]')).not.toBeInTheDocument()
+    expect(
+      container.querySelector('[data-settings-section="data-migration"]')
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Privacy & data')).not.toBeInTheDocument()
+    const nav = screen.getByRole('navigation')
+    expect(
+      within(nav).getByRole('button', {
+        name: i18n.t('categories.updates', { ns: 'settings' }),
+        exact: true
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(nav).queryByRole('button', {
+        name: i18n.t('categories.runtime', { ns: 'settings' }),
+        exact: true
+      })
+    ).not.toBeInTheDocument()
+    if (section === 'updates') expect(scrollIntoView.mock.contexts).toContain(updates)
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'runtime' } })
+    expect(search.mock.calls.at(-1)?.[1].some((entry) => entry.categoryId === 'runtime')).toBe(
+      false
+    )
+    expect(coreRuntimeApi.status).not.toHaveBeenCalled()
+    expect(coreRuntimeApi.restartCore).not.toHaveBeenCalled()
+    expect(coreRuntimeApi.restartGui).not.toHaveBeenCalled()
   })
 })

@@ -10,6 +10,11 @@
     "categoriesAria": "设置类别",
     "noResults": "没有与“{{query}}”匹配的设置。"
   },
+  "groups": {
+    "updatesAndRuntime": "更新与运行状态",
+    "privacyAndData": "隐私与数据",
+    "diagnosticsAndReset": "诊断与重置"
+  },
   "categories": {
     "appearance": "终端外观",
     "shell": "默认 Shell",
