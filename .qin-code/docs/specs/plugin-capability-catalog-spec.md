@@ -29,13 +29,13 @@ artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ff
 
 ### 统计
 
-本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP 与 SSH 命令黑名单预览同步后用脚本比对）：后端共 329 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP、SSH 命令黑名单及独立记忆入口退役同步后用脚本比对）：后端共 327 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
-| 后端 Tauri 命令 | 329 | 292 | 12 | 8 | 17 |
+| 后端 Tauri 命令 | 327 | 290 | 12 | 8 | 17 |
 | 前端独有能力（无 Rust 命令） | 38 | 38 | 0 | 0 | 0 |
-| **合计** | **367** | **330** | **12** | **8** | **17** |
+| **合计** | **365** | **328** | **12** | **8** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -198,8 +198,6 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.memory.search | memory_index_search_cmd `memory_index/commands.rs:228` | R | project | none | OPEN | in `{projectRoot, query, filters}`; out `MemorySearchResponse` |
 | se.memory.listSessions | memory_index_sessions_cmd `memory_index/commands.rs:252` | R | project | none | OPEN | in `{projectRoot, limit, includeUnscoped, agents[]}` |
 | se.memory.getSession | memory_index_session_cmd `memory_index/commands.rs:281` | R | project | none | OPEN | in `{projectRoot, sessionKey, limit, includeStale, includeUnscoped}` |
-| se.memory.mcpInvocation | memory_index_mcp_invocation_cmd `memory_index/commands.rs:317` | R | project | none | OPEN | out argv[] for an external MCP client; a filesystem path, no secret |
-| se.memory.universalMcpInvocation | memory_index_universal_mcp_invocation_cmd `memory_index/commands.rs:346` | R | profile | none | OPEN | out argv[] for the cross-project server |
 
 ---
 
@@ -265,7 +263,7 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.mcp.startGateway | mcp_service_start `commands.rs:5687` | W | profile | grant | OPEN | starts/upgrades the gateway if not running or version-mismatched |
 | se.mcp.restartGateway | mcp_service_restart `commands.rs:5697` | W | profile | grant | OPEN | restarts the gateway |
 | se.mcp.setGatewayPort | mcp_service_set_port `commands.rs:5709` | W | profile | grant | OPEN | in port; rewrites gateway settings; agents pick it up on the next request |
-| se.mcp.getConnectionInfo | mcp_connection_info `commands.rs:5731` | R | profile | none | OPEN-REDACTED | out `{command, http endpoint}`; source comment says it **contains the bearer token** — strip it, return `hasToken`; MCP服务器页的完整 `se-mcp` JSON/TOML 导出仅使用 `bridge`，明确直连含内置与已启用上游，不复制/展示 bearer，不启动或重启服务、不改变授权；旧 `se-memory` 导出仍仅记忆 |
+| se.mcp.getConnectionInfo | mcp_connection_info `commands.rs:5731` | R | profile | none | OPEN-REDACTED | out `{command, http endpoint}`; source comment says it **contains the bearer token** — strip it, return `hasToken`; MCP服务器页的完整 `se-mcp` JSON/TOML 导出仅使用 `bridge`，明确直连含内置与已启用上游，不复制/展示 bearer，不启动或重启服务、不改变授权；独立 `se-memory` 导出已退役，记忆查询保留在统一网关 `session-memory` 内置模块中 |
 | se.mcp.detectClients | mcp_clients_detect `commands.rs:5747` | R | profile | none | OPEN | out `DetectedClient[]` (whether each client already launches se-mcp) |
 | se.mcp.syncClient | mcp_client_sync `commands.rs:5768` | W | profile | per-call | OPEN | in clientId, mode?; writes the `se-mcp` entry into another app's MCP config |
 | se.mcp.unsyncClient | mcp_client_unsync `commands.rs:5793` | W | profile | per-call | OPEN | in clientId; removes that entry |

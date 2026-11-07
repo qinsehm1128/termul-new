@@ -1375,22 +1375,21 @@ describe('Parity Checklist Automation', () => {
       }
     })
 
-    /**
-     * Every member of the capability has to exist on both adapters, including
-     * the ones only one surface can really answer. `mcpInvocation` returns
-     * `null` on the web rather than being absent: a method the browser build
-     * simply does not have is a runtime TypeError at the call site, while
-     * `null` is a value the caller can render.
-     */
-    it('both adapters implement every member of MemoryIndexApi', () => {
+    it('both adapters and the facade retain the complete memory index capability', () => {
       const contract = readFileSync(
         join(ROOT_DIR, 'src/shared/types/memory-index.types.ts'),
         'utf-8'
       )
       const block = contract.split('export interface MemoryIndexApi {')[1]?.split('\n}')[0] ?? ''
       const members = [...block.matchAll(/^\s{2}(\w+)\(/gm)].map((match) => match[1])
-      expect(members).toContain('cancel')
-      expect(members).toContain('mcpInvocation')
+      expect(members.sort()).toEqual([
+        'build',
+        'cancel',
+        'getSession',
+        'listSessions',
+        'search',
+        'status'
+      ])
 
       const tauri = readFileSync(TauriAdapter, 'utf-8')
       const web = readFileSync(WebAdapter, 'utf-8')
@@ -1401,6 +1400,20 @@ describe('Parity Checklist Automation', () => {
         )
         expect(web, `web adapter is missing ${member}`).toMatch(new RegExp(`\\b${member}\\s*\\(`))
         expect(facade, `facade is missing ${member}`).toMatch(new RegExp(`\\b${member}\\s*\\(`))
+      }
+    })
+
+    it('does not expose retired standalone memory invocation methods or commands', () => {
+      const paths = [
+        'src/shared/types/memory-index.types.ts',
+        'src/renderer/lib/memory-index-api.ts',
+        'src/renderer/lib/tauri-memory-index-api.ts',
+        'src/renderer/lib/web-memory-index-api.ts'
+      ]
+      for (const path of paths) {
+        const source = readFileSync(join(ROOT_DIR, path), 'utf-8')
+        expect(source, path).not.toMatch(/\b(?:mcpInvocation|universalMcpInvocation)\b/)
+        expect(source, path).not.toMatch(/memory_index_(?:universal_)?mcp_invocation_cmd/)
       }
     })
 

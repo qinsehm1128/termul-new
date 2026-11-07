@@ -1211,7 +1211,12 @@ mod tests {
     /// cannot widen the scope by passing a parent directory.
     #[test]
     fn an_ancestor_directory_is_a_different_project_not_a_wider_one() {
-        let harness = harness();
+        let mut harness = harness();
+        // Keep the queried ancestor outside the private state root. The
+        // default fixture's top-level ancestor also contains state/ and is
+        // intentionally rejected before namespace isolation is evaluated.
+        harness.project_root = harness.project_root.join("nested-project");
+        std::fs::create_dir_all(&harness.project_root).unwrap();
         seed(&harness, SessionScope::Scoped, "inside");
         let parent = harness.project_root.parent().unwrap().to_path_buf();
         assert!(
@@ -1222,6 +1227,18 @@ mod tests {
                 .is_empty(),
             "the parent directory keys to its own namespace, which is empty"
         );
+    }
+
+    #[test]
+    fn an_ancestor_containing_private_state_is_refused() {
+        let harness = harness();
+        seed(&harness, SessionScope::Scoped, "inside");
+        let parent = harness.project_root.parent().unwrap();
+        let error = harness
+            .service
+            .list_sessions(parent, None, true, &[])
+            .unwrap_err();
+        assert_eq!(error.code, "MEMORY_INDEX_STATE_ROOT_INSIDE_PROJECT");
     }
 
     #[test]

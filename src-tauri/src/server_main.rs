@@ -131,6 +131,16 @@ fn provision_standalone_authority(
 }
 
 fn main() -> ExitCode {
+    // Tombstone only: reject old MCP configurations before any other dispatch
+    // or mutable setup. Keep the error fixed so arguments cannot leak secrets.
+    if std::env::args_os()
+        .skip(1)
+        .any(|argument| argument == "--memory-mcp-server")
+    {
+        eprintln!("se-memory has been removed; migrate to se-mcp (session-memory).");
+        return ExitCode::from(2);
+    }
+
     let observer_build_id =
         option_env!("TERMUL_SERVER_BUILD_ID").unwrap_or(env!("CARGO_PKG_VERSION"));
     if let Some(code) = se_ghostty_observer::dispatch(observer_build_id) {
@@ -157,13 +167,6 @@ fn main() -> ExitCode {
     // `spec-acp-host-todo-plan-tool.md`.
     if se_manager_lib::host_mcp::is_child_invocation() {
         return ExitCode::from(se_manager_lib::host_mcp::child::run() as u8);
-    }
-
-    // `--memory-mcp-server`: standalone read-only memory MCP server for
-    // external clients. Branch before any server stack init, exactly like the
-    // plan child above — it serves stdio and nothing else.
-    if se_manager_lib::memory_index::stdio_mcp::is_invocation() {
-        return ExitCode::from(se_manager_lib::memory_index::stdio_mcp::run() as u8);
     }
 
     let (server_args, maintenance) = match parse_conversation_maintenance_args(&raw_args) {

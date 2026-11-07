@@ -31,7 +31,6 @@ pub mod paths;
 pub mod redact;
 pub mod scope;
 pub mod service;
-pub mod stdio_mcp;
 pub mod store;
 pub mod types;
 

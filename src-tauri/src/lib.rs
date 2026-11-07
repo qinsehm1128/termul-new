@@ -4042,8 +4042,6 @@ pub fn run() {
             memory_index::commands::memory_index_search_cmd,
             memory_index::commands::memory_index_sessions_cmd,
             memory_index::commands::memory_index_session_cmd,
-            memory_index::commands::memory_index_mcp_invocation_cmd,
-            memory_index::commands::memory_index_universal_mcp_invocation_cmd,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,

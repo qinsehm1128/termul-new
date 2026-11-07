@@ -48,6 +48,83 @@ describe('memoryIndexApi (web vs desktop branch)', () => {
     vi.resetModules()
   })
 
+  it.each([
+    false,
+    true
+  ])('exposes only memory operations on the facade and both adapters (desktop=%s)', async (desktop) => {
+    isTauriContext.mockReturnValue(desktop)
+    const { memoryIndexApi, createTauriMemoryIndexApi, webMemoryIndexApi } = await import(
+      '../memory-index-api'
+    )
+    for (const api of [memoryIndexApi, createTauriMemoryIndexApi(), webMemoryIndexApi]) {
+      expect(Object.keys(api).sort()).toEqual([
+        'build',
+        'cancel',
+        'getSession',
+        'listSessions',
+        'search',
+        'status'
+      ])
+      expect(api).not.toHaveProperty('mcpInvocation')
+      expect(api).not.toHaveProperty('universalMcpInvocation')
+    }
+    expect(invoke).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    false,
+    true
+  ])('retains build, status, search and session routing (desktop=%s)', async (desktop) => {
+    isTauriContext.mockReturnValue(desktop)
+    const { memoryIndexApi } = await import('../memory-index-api')
+    const scope = { projectRoot: '/repo' }
+    const searchArgs = { ...scope, query: 'redirect' }
+    const sessionArgs = { ...scope, sessionKey: 'pi:/session.jsonl' }
+    const build = { projectKey: STATUS.projectKey, sessionsIndexed: 2, issues: [] }
+    const search = { projectKey: STATUS.projectKey, hits: [], compactions: [] }
+    const sessions = [{ sessionKey: sessionArgs.sessionKey }]
+    const session = { session: sessions[0], messages: [] }
+    const cases = [
+      { route: 'build', args: scope, data: build, call: () => memoryIndexApi.build(scope) },
+      { route: 'status', args: scope, data: STATUS, call: () => memoryIndexApi.status(scope) },
+      {
+        route: 'search',
+        args: searchArgs,
+        data: search,
+        call: () => memoryIndexApi.search(searchArgs)
+      },
+      {
+        route: 'sessions',
+        args: scope,
+        data: sessions,
+        call: () => memoryIndexApi.listSessions(scope)
+      },
+      {
+        route: 'session',
+        args: sessionArgs,
+        data: session,
+        call: () => memoryIndexApi.getSession(sessionArgs)
+      },
+      { route: 'cancel', args: scope, data: true, call: () => memoryIndexApi.cancel(scope) }
+    ]
+    for (const { route, args, data, call } of cases) {
+      invoke.mockResolvedValueOnce(data)
+      fetchMock.mockReturnValueOnce(okResponse(data))
+      await expect(call()).resolves.toEqual(data)
+      if (desktop) {
+        expect(invoke).toHaveBeenLastCalledWith(`memory_index_${route}_cmd`, { args })
+        expect(fetchMock).not.toHaveBeenCalled()
+      } else {
+        expect(fetchMock).toHaveBeenLastCalledWith(
+          expect.stringMatching(new RegExp(`/memory-index/${route}$`)),
+          expect.objectContaining({ method: 'POST', body: JSON.stringify(args) })
+        )
+        expect(invoke).not.toHaveBeenCalled()
+      }
+    }
+  })
+
   it('desktop: status goes through the Tauri command', async () => {
     isTauriContext.mockReturnValue(true)
     invoke.mockResolvedValue(STATUS)

@@ -4,7 +4,7 @@
  * The host scans past Claude Code / Codex / pi transcripts for one project,
  * normalizes them into one shape, and stores a searchable projection in a
  * host-private SQLite+FTS5 index. These are the wire contracts shared by the
- * Tauri commands, the HTTP routes and the two MCP surfaces.
+ * Tauri commands, the HTTP routes and the unified se-mcp memory tools.
  *
  * Three things worth knowing before consuming them:
  *
@@ -302,23 +302,6 @@ export interface MemoryIndexApi {
   search(args: MemoryIndexSearchArgs): Promise<MemorySearchResponse>
   listSessions(args: MemoryIndexListArgs): Promise<MemoryIndexedSession[]>
   getSession(args: MemoryIndexSessionArgs): Promise<MemorySessionDetail | null>
-  /**
-   * The exact command line an external MCP client should be configured with,
-   * or `null` where it cannot be produced.
-   *
-   * Desktop-only by nature, and `null` is the honest answer on the web rather
-   * than a guess: the invocation names *this machine's* executable and *this
-   * host's* state root. A browser client cannot run either, and handing it a
-   * plausible-looking path that does not exist on the machine it is displayed
-   * on is worse than saying the surface has no answer.
-   */
-  mcpInvocation(args: MemoryIndexScopeArgs): Promise<string[] | null>
-  /**
-   * The universal memory MCP invocation: one server, every indexed project.
-   * `null` on the browser client, whose paths would name a machine it does
-   * not run on.
-   */
-  universalMcpInvocation(): Promise<string[] | null>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

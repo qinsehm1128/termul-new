@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { McpGatewayConfigSection } from '@/components/settings/McpGatewayConfigSection'
 import { McpHostAccessPanel } from '@/components/settings/McpHostAccessPanel'
 import { McpServersSettings } from '@/components/settings/McpServersSettings'
-import { MemoryMcpConfigSection } from '@/components/settings/MemoryMcpConfigSection'
 import { Switch } from '@/components/ui/switch'
 import {
   BUILTIN_PROJECT_SCOPE,
@@ -93,8 +92,6 @@ export function McpControlPanel(): React.JSX.Element {
           <dd className="font-mono text-foreground">{status?.upstreams.length ?? 0}</dd>
         </dl>
       </section>
-
-      <MemoryMcpConfigSection />
     </div>
   )
 }

@@ -5,7 +5,6 @@ import { McpControlPanel } from './McpControlPanel'
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   clipboard: vi.fn(),
-  memory: vi.fn(),
   loadStatus: vi.fn(),
   setBuiltInEnabled: vi.fn(),
   toast: vi.fn()
@@ -13,8 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }))
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => true }))
 vi.mock('@/lib/api', () => ({
-  clipboardApi: { writeText: mocks.clipboard },
-  memoryIndexApi: { universalMcpInvocation: mocks.memory }
+  clipboardApi: { writeText: mocks.clipboard }
 }))
 vi.mock('@/hooks/use-toast', () => ({ toast: mocks.toast }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
@@ -54,28 +52,62 @@ beforeEach(() => {
   })
 })
 
-it('prioritizes full export above upstreams and optional memory-only compatibility, without mutating settings', async () => {
+it.each([
+  {
+    format: 'MCP JSON',
+    expected: JSON.stringify(
+      {
+        mcpServers: {
+          'se-mcp': { command: '/synthetic/Se App/se-mcp', args: ['--mode', 'direct'] }
+        }
+      },
+      null,
+      2
+    )
+  },
+  {
+    format: 'Codex TOML',
+    expected: [
+      '[mcp_servers.se-mcp]',
+      'command = "/synthetic/Se App/se-mcp"',
+      'args = ["--mode", "direct"]',
+      'tool_timeout_sec = 300'
+    ].join('\n')
+  }
+])('offers only full se-mcp $format export above upstreams without mutating settings', async ({
+  format,
+  expected
+}) => {
   const { container } = render(<McpControlPanel />)
   const full = screen.getByRole('heading', { name: 'Full Se MCP · se-mcp' })
-  const memory = screen.getByText('Memory only · se-memory (compatibility)')
   expect(
     full.compareDocumentPosition(screen.getByTestId('upstream-servers')) &
       Node.DOCUMENT_POSITION_FOLLOWING
   ).toBeTruthy()
-  expect(full.compareDocumentPosition(memory) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  expect(mocks.invoke).not.toHaveBeenCalled()
-  expect(mocks.memory).not.toHaveBeenCalled()
+  expect(screen.getByTestId('host-permissions')).toBeInTheDocument()
+  expect(screen.getAllByRole('button', { name: 'Preview', exact: true })).toHaveLength(1)
+  expect(screen.getAllByRole('button', { name: 'Copy full configuration' })).toHaveLength(1)
+  expect(screen.queryByRole('button', { name: 'Copy config', exact: true })).not.toBeInTheDocument()
   expect(
-    screen.getByText(/It does not expose workspace, SSH, or upstream tools/)
-  ).toBeInTheDocument()
+    screen.queryByText(/se-memory|memory\.(title|description|copy|preview)/i)
+  ).not.toBeInTheDocument()
+  expect(mocks.invoke).not.toHaveBeenCalled()
   const card = full.closest('section')
   expect(card).not.toBeNull()
   if (!card) throw new Error('Missing full export card')
+  fireEvent.click(within(card).getByRole('button', { name: format, exact: true }))
+  fireEvent.click(within(card).getByRole('button', { name: 'Preview', exact: true }))
+  await waitFor(() => expect(card.querySelector('pre')?.textContent).toBe(expected))
+  expect(mocks.clipboard).not.toHaveBeenCalled()
   fireEvent.click(within(card).getByRole('button', { name: 'Copy full configuration' }))
-  await waitFor(() => expect(mocks.clipboard).toHaveBeenCalledTimes(1))
-  expect(mocks.invoke.mock.calls).toEqual([['mcp_connection_info', { mode: 'direct' }]])
+  await waitFor(() => expect(mocks.clipboard).toHaveBeenCalledExactlyOnceWith(expected))
+  expect(card.querySelector('pre')?.textContent).toBe(expected)
+  expect(mocks.invoke.mock.calls).toEqual([
+    ['mcp_connection_info', { mode: 'direct' }],
+    ['mcp_connection_info', { mode: 'direct' }]
+  ])
   expect(mocks.setBuiltInEnabled).not.toHaveBeenCalled()
-  expect(mocks.memory).not.toHaveBeenCalled()
   expect(container.textContent).not.toContain('TOKEN_SENTINEL')
+  expect(container.textContent).not.toContain('se-memory')
   expect(mocks.loadStatus).toHaveBeenCalledTimes(1)
 })

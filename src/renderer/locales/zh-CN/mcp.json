@@ -186,18 +186,6 @@
     "bridgeMissing": "本机 stdio 桥接程序不可用，请检查 Se 桌面端安装后再导出。",
     "copyFailed": "复制配置失败，请重试。"
   },
-  "memory": {
-    "title": "仅记忆 · se-memory（兼容入口）",
-    "description": "可选的旧版入口，仅查询已索引项目的记忆，不包含工作区、SSH 或上游工具。需要完整工具入口时，请使用上方的完整 Se MCP。",
-    "format": "配置格式",
-    "formatJson": "Claude JSON",
-    "formatToml": "Codex TOML",
-    "preview": "预览",
-    "copy": "复制配置",
-    "copied": "MCP 配置已复制",
-    "copyFailed": "读取 MCP 配置失败",
-    "unavailable": "浏览器端拿不到 MCP 配置：它指向宿主机的可执行文件与状态目录"
-  },
   "gateway": {
     "title": "连接 Agent",
     "description": "一个网关聚合下面所有 MCP 服务器。Agent 只需添加一个 se-mcp 条目即可使用全部服务器；关闭 Se Manager 后网关仍会继续运行。",

@@ -23,18 +23,5 @@ export const webMemoryIndexApi: MemoryIndexApi = {
   },
   cancel(args) {
     return webServerMemoryIndex.cancel(args)
-  },
-  /**
-   * Not available over HTTP, and `null` rather than a guess.
-   *
-   * The invocation names the *host's* executable path and state root. A browser
-   * client cannot run either, and a plausible-looking path that does not exist
-   * on the machine reading it is worse than an honest absence.
-   */
-  async mcpInvocation() {
-    return null
-  },
-  async universalMcpInvocation() {
-    return null
   }
 }

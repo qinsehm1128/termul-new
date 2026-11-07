@@ -151,8 +151,6 @@ pub const METHOD_MEMORY_STATUS: &str = "memoryStatus";
 pub const METHOD_MEMORY_SEARCH: &str = "memorySearch";
 pub const METHOD_MEMORY_SESSIONS: &str = "memorySessions";
 pub const METHOD_MEMORY_SESSION: &str = "memorySession";
-pub const METHOD_MEMORY_MCP_INVOCATION: &str = "memoryMcpInvocation";
-pub const METHOD_MEMORY_UNIVERSAL_MCP_INVOCATION: &str = "memoryUniversalMcpInvocation";
 
 pub const ACP_EVENT_TOPIC: &str = "acp.event";
 /// Additive GUI/web resync signal. Payload is `{ connected, reason?, watermark? }`.
@@ -2135,28 +2133,6 @@ async fn dispatch(state: &AcpCoreState, request: &CoreRequest) -> Result<Value, 
             .map_err(invalid)?;
             to_json(session)
         }
-        METHOD_MEMORY_MCP_INVOCATION => {
-            let params: MemoryIndexScopeArgs = parse_params(request)?;
-            let executable = std::env::current_exe()
-                .map_err(|error| invalid(format!("could not resolve executable: {error}")))?;
-            let invocation = crate::memory_index::stdio_mcp::invocation_for(
-                &executable,
-                &crate::memory_index::stdio_mcp::StdioConfig {
-                    project_root: Some(PathBuf::from(params.project_root)),
-                    state_root: state.memory.state_root().to_path_buf(),
-                },
-            );
-            to_json(invocation)
-        }
-        METHOD_MEMORY_UNIVERSAL_MCP_INVOCATION => {
-            let executable = std::env::current_exe()
-                .map_err(|error| invalid(format!("could not resolve executable: {error}")))?;
-            let invocation = crate::memory_index::stdio_mcp::universal_invocation_for(
-                &executable,
-                state.memory.state_root(),
-            );
-            to_json(invocation)
-        }
         METHOD_RETIRE_SESSION => {
             let params: SessionIdParams = parse_params(request)?;
             state
@@ -2589,11 +2565,6 @@ mod tests {
         assert_eq!(METHOD_MEMORY_SEARCH, "memorySearch");
         assert_eq!(METHOD_MEMORY_SESSIONS, "memorySessions");
         assert_eq!(METHOD_MEMORY_SESSION, "memorySession");
-        assert_eq!(METHOD_MEMORY_MCP_INVOCATION, "memoryMcpInvocation");
-        assert_eq!(
-            METHOD_MEMORY_UNIVERSAL_MCP_INVOCATION,
-            "memoryUniversalMcpInvocation"
-        );
     }
 
     #[tokio::test]

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
-use serde_json::json;
 use tauri::{AppHandle, Emitter, State};
 
 use super::ingest::{IngestOptions, IngestProgress, IngestReport};
@@ -305,56 +304,4 @@ pub async fn memory_index_session_cmd(
     })
     .await
     .map_err(|error| format!("memory index session join failed: {error}"))?
-}
-
-/// The command line an external MCP client should be configured with for this
-/// project.
-///
-/// Exists so the state root never has to be guessed: the host knows its own,
-/// and hands out the exact invocation rather than documenting a platform path
-/// that could drift from what the app actually uses.
-#[tauri::command]
-pub async fn memory_index_mcp_invocation_cmd(
-    acp: State<'_, crate::core::AcpServiceHandle>,
-    host: State<'_, HostMemoryIndex>,
-    args: MemoryIndexScopeArgs,
-) -> Result<Vec<String>, String> {
-    if let Some(client) = acp.core_client() {
-        return via_core(
-            client.as_ref(),
-            "memoryMcpInvocation",
-            serde_json::to_value(&args).map_err(|error| error.to_string())?,
-        )
-        .await;
-    }
-    let service = require_service(host.inner())?;
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("could not resolve executable: {error}"))?;
-    Ok(super::stdio_mcp::invocation_for(
-        &executable,
-        &super::stdio_mcp::StdioConfig {
-            project_root: Some(PathBuf::from(args.project_root)),
-            state_root: service.state_root().to_path_buf(),
-        },
-    ))
-}
-
-/// The universal memory MCP invocation: one server that lists every indexed
-/// project and lets the client pick per query. No project argument — the
-/// project selection happens inside the server, not in the client config.
-#[tauri::command]
-pub async fn memory_index_universal_mcp_invocation_cmd(
-    acp: State<'_, crate::core::AcpServiceHandle>,
-    host: State<'_, HostMemoryIndex>,
-) -> Result<Vec<String>, String> {
-    if let Some(client) = acp.core_client() {
-        return via_core(client.as_ref(), "memoryUniversalMcpInvocation", json!({})).await;
-    }
-    let service = require_service(host.inner())?;
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("could not resolve executable: {error}"))?;
-    Ok(super::stdio_mcp::universal_invocation_for(
-        &executable,
-        service.state_root(),
-    ))
 }
