@@ -10,11 +10,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import en from '../../locales/en/mcp.json'
 import { McpHostAccessPanel } from './McpHostAccessPanel'
 
-const { get, put, call } = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), call: vi.fn() }))
+const { get, put, call, preview } = vi.hoisted(() => ({
+  get: vi.fn(),
+  put: vi.fn(),
+  call: vi.fn(),
+  preview: vi.fn()
+}))
 vi.mock('@/lib/mcp-host-api', () => ({
   getMcpHostAccess: get,
   putMcpHostAccess: put,
-  callMcpHost: call
+  callMcpHost: call,
+  previewMcpHostAccess: preview
 }))
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }))
 function translate(key: string, options: Record<string, string | number> = {}): string {
@@ -67,7 +73,9 @@ const button = (key: string) => screen.getByRole('button', { name: translate(`ho
 const operationLabel = (op: McpSshOperation) =>
   `${en.hostAccess.operations[op]}${['execute', 'job_start', 'write_file', 'upload', 'download', 'job_cancel'].includes(op) ? ` — ${en.hostAccess.highRisk}` : ''}`
 async function ready(expand = true): Promise<void> {
-  await screen.findByText('Production')
+  await screen.findByRole('button', {
+    name: translate('hostAccess.configureProfile', { name: 'Production' })
+  })
   if (expand)
     fireEvent.click(
       screen.getByRole('button', {
@@ -77,6 +85,107 @@ async function ready(expand = true): Promise<void> {
 }
 
 describe('compact host access controls', () => {
+  it('preserves global and profile rules and stale pins through defaults, readonly, roots and ordinary save', async () => {
+    const globalRules = [{ id: 'g', kind: 'contains' as const, pattern: 'GLOBAL_RULE_SENTINEL' }]
+    const profileRules = [
+      { id: 'p-rule', kind: 'exact' as const, pattern: 'PROFILE_RULE_SENTINEL' }
+    ]
+    view.policy.ssh.commandDeny = globalRules
+    view.policy.ssh.profiles.p = {
+      ...emptyMcpSshGrant(),
+      operations: ['read_file'],
+      commandDeny: profileRules
+    }
+    view.policy.profileFingerprints.p = 'fp-old'
+    view.profiles.push({ ...view.profiles[0], profileId: 'new-profile', name: 'New server' })
+    render(<McpHostAccessPanel />)
+    await ready()
+    fireEvent.click(button('selectReadOnly'))
+    fireEvent.change(screen.getByLabelText(en.hostAccess.remoteRoots), {
+      target: { value: '/srv\n/srv' }
+    })
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: translate('hostAccess.configureProfile', { name: 'New server' })
+      })
+    )
+    // The second grant is all 13 operations; it must not erase global rules or repin p.
+    fireEvent.click(screen.getAllByRole('checkbox', { name: en.hostAccess.grantProfile })[1])
+    fireEvent.click(check(en.hostAccess.workspaceEnabled))
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    const saved = put.mock.calls[0][1]
+    expect(saved.schemaVersion).toBe(2)
+    expect(saved.ssh.commandDeny).toEqual(globalRules)
+    expect(saved.ssh.profiles.p.commandDeny).toEqual(profileRules)
+    expect(saved.ssh.profiles.p.remoteRoots).toEqual(['/srv'])
+    expect(saved.ssh.profiles['new-profile'].operations).toEqual([...MCP_SSH_OPERATIONS])
+    expect(saved.profileFingerprints.p).toBe('fp-old')
+    expect(call).not.toHaveBeenCalled()
+    expect(preview).not.toHaveBeenCalled()
+  })
+  it('adds global rules locally, shows immutable inheritance and saves without profile overrides', async () => {
+    render(<McpHostAccessPanel />)
+    await ready()
+    fireEvent.change(screen.getByLabelText(en.commandDeny.newPattern), {
+      target: { value: 'blocked text' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: en.commandDeny.add }))
+    const patterns = screen.getAllByLabelText(translate('commandDeny.rulePattern', { index: 1 }))
+    expect(patterns).toHaveLength(2)
+    expect(patterns[0]).not.toBeDisabled()
+    expect(patterns[1]).toBeDisabled()
+    expect(
+      screen.getAllByRole('button', { name: translate('commandDeny.removeRule', { index: 1 }) })
+    ).toHaveLength(1)
+    expect(preview).not.toHaveBeenCalled()
+    fireEvent.click(check(en.hostAccess.grantProfile))
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1].ssh.commandDeny).toEqual([
+      expect.objectContaining({ kind: 'exact', pattern: 'blocked text' })
+    ])
+    expect(put.mock.calls[0][1].ssh.profiles.p.commandDeny).toEqual([])
+  })
+  it('loads legacy v1 without false dirty state and saves normalized v2', async () => {
+    view.policy.schemaVersion = 1
+    delete view.policy.ssh.commandDeny
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    expect(screen.queryByText(en.hostAccess.unsaved)).not.toBeInTheDocument()
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(put.mock.calls[0][1]).toMatchObject({ schemaVersion: 2, ssh: { commandDeny: [] } })
+  })
+  it.each([
+    'INVALID_ARGUMENT',
+    'REVISION_CONFLICT'
+  ])('retains rule drafts after save %s', async (code) => {
+    view.policy.ssh.commandDeny = [{ id: 'g', kind: 'regex', pattern: '[' }]
+    put.mockResolvedValue({ success: false, code, error: 'PRIVATE_BACKEND_ERROR' })
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    const input = screen.getAllByLabelText(translate('commandDeny.rulePattern', { index: 1 }))[0]
+    fireEvent.change(input, { target: { value: 'changed[' } })
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(input).toHaveValue('changed[')
+    expect(screen.queryByText('PRIVATE_BACKEND_ERROR')).not.toBeInTheDocument()
+    expect(
+      screen.getByText(
+        code === 'REVISION_CONFLICT' ? en.hostAccess.conflict : en.commandDeny.invalidServer
+      )
+    ).toBeInTheDocument()
+  })
+  it('blocks invalid structural policy locally instead of saving or previewing', async () => {
+    view.policy.ssh.commandDeny = [{ id: 'g', kind: 'exact', pattern: '' }]
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    fireEvent.click(button('save'))
+    expect(put).not.toHaveBeenCalled()
+    expect(preview).not.toHaveBeenCalled()
+    expect(screen.getAllByText(en.commandDeny.invalid).length).toBeGreaterThan(0)
+  })
   it('authorizing a new SSH profile selects all 13 operations without implicitly saving or expanding scope', async () => {
     render(<McpHostAccessPanel />)
     await ready(false)
@@ -254,7 +363,11 @@ describe('compact host access controls', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: en.hostAccess.searchProfiles }), {
       target: { value: 'Production' }
     })
-    expect(screen.queryByText('Backup')).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: translate('hostAccess.configureProfile', { name: 'Backup' })
+      })
+    ).not.toBeInTheDocument()
     fireEvent.click(button('save'))
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     expect(put.mock.calls[0][1].ssh.profiles.other.operations).toEqual(['profile_get'])
@@ -316,13 +429,15 @@ describe('host access management', () => {
     expect(put.mock.calls[0]).toEqual([
       0,
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         revision: 0,
         enabled: true,
         workspace: { enabled: true, projectIds: ['a'], includePaths: true },
         ssh: {
+          commandDeny: [],
           profiles: {
             p: {
+              commandDeny: [],
               operations: ['execute', 'upload'],
               remoteRoots: ['/srv', '/opt'],
               localRoots: ['/host-data'],

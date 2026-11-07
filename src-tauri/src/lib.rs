@@ -4063,6 +4063,7 @@ pub fn run() {
             commands::remote_load_mcp_registry,
             commands::mcp_host_access_get,
             commands::mcp_host_access_put,
+            commands::mcp_host_access_preview,
             commands::mcp_host_call,
             commands::mcp_get_config,
             commands::mcp_put_config,

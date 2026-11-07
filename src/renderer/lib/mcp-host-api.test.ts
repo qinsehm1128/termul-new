@@ -1,6 +1,14 @@
-import { emptyMcpHostAccessPolicy } from '@shared/types/mcp-host.types'
+import {
+  emptyMcpHostAccessPolicy,
+  normalizeMcpHostAccessPolicy
+} from '@shared/types/mcp-host.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { callMcpHost, getMcpHostAccess, putMcpHostAccess } from './mcp-host-api'
+import {
+  callMcpHost,
+  getMcpHostAccess,
+  previewMcpHostAccess,
+  putMcpHostAccess
+} from './mcp-host-api'
 import { _resetRemoteAccessCredentialForTests } from './remote-access-credential'
 
 const { invoke, tauri, logger } = vi.hoisted(() => ({
@@ -29,13 +37,100 @@ beforeEach(() => {
 describe('host access facade', () => {
   it('defaults to deny all', () => {
     expect(emptyMcpHostAccessPolicy()).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       enabled: false,
       workspace: { enabled: false, projectIds: [], includePaths: false },
-      ssh: { profiles: {} },
+      ssh: { profiles: {}, commandDeny: [] },
       profileFingerprints: {}
     })
+  })
+  it('upgrades v1 without replacing grants or identity pins', () => {
+    const policy = emptyMcpHostAccessPolicy()
+    policy.schemaVersion = 1
+    policy.ssh = {
+      profiles: {
+        p: { operations: ['execute'], localRoots: [], remoteRoots: ['/srv'], posixJobs: false }
+      }
+    }
+    policy.profileFingerprints = { p: 'old-pin' }
+    const upgraded = normalizeMcpHostAccessPolicy(policy)
+    expect(upgraded.schemaVersion).toBe(2)
+    expect(upgraded.ssh.commandDeny).toEqual([])
+    expect(upgraded.ssh.profiles.p.commandDeny).toEqual([])
+    expect(upgraded.profileFingerprints).toEqual({ p: 'old-pin' })
+    expect(policy.ssh.profiles.p.commandDeny).toBeUndefined()
+  })
+  it.each([
+    false,
+    true
+  ])('uses a pure preview body, preserving credentials and draft (desktop %s)', async (desktop) => {
+    tauri.mockReturnValue(desktop)
+    const request = {
+      profileId: 'p',
+      operation: 'job_start' as const,
+      command: 'COMMAND_SENTINEL',
+      policy: emptyMcpHostAccessPolicy()
+    }
+    const result = {
+      outcome: 'matched',
+      matches: [{ id: 'r', source: 'global' }],
+      policyRevision: 3,
+      draft: true
+    }
+    invoke.mockResolvedValue({ success: true, data: result })
+    fetchMock.mockResolvedValue(ok(result))
+    expect(await previewMcpHostAccess(request)).toEqual({ success: true, data: result })
+    if (desktop) {
+      expect(invoke.mock.calls).toEqual([['mcp_host_access_preview', { request }]])
+      expect(fetchMock).not.toHaveBeenCalled()
+    } else {
+      expect(invoke).not.toHaveBeenCalled()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${window.location.origin}/mcp/host/access/preview`)
+      expect(init.method).toBe('POST')
+      expect(init.headers.get('authorization')).toBe('Bearer test-credential')
+      expect(JSON.parse(init.body)).toEqual(request)
+      expect(url).not.toContain('COMMAND_SENTINEL')
+    }
+    expect(logger).not.toHaveBeenCalled()
+  })
+  it('preserves invalid preview IPC errors over HTTP', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        success: false,
+        code: 'INVALID_ARGUMENT',
+        error: 'Invalid configuration'
+      })
+    })
+    expect(
+      await previewMcpHostAccess({ profileId: 'p', operation: 'execute', command: 'x' })
+    ).toMatchObject({ success: false, code: 'INVALID_ARGUMENT' })
+  })
+  it.each([
+    false,
+    true
+  ])('never logs preview command, credentials, pattern or exception (desktop %s)', async (desktop) => {
+    tauri.mockReturnValue(desktop)
+    const policy = emptyMcpHostAccessPolicy()
+    policy.ssh.commandDeny = [{ id: 'r', kind: 'exact', pattern: 'PATTERN_SENTINEL' }]
+    invoke.mockRejectedValue(new Error('COMMAND_SENTINEL PATTERN_SENTINEL'))
+    fetchMock.mockRejectedValue(new Error('COMMAND_SENTINEL PATTERN_SENTINEL'))
+    expect(
+      await previewMcpHostAccess({
+        profileId: 'p',
+        operation: 'execute',
+        command: 'COMMAND_SENTINEL',
+        policy
+      })
+    ).toMatchObject({ success: false, code: 'NETWORK_ERROR' })
+    expect(JSON.stringify(logger.mock.calls)).not.toMatch(
+      /COMMAND_SENTINEL|PATTERN_SENTINEL|test-credential/
+    )
+    expect(logger).toHaveBeenCalledTimes(1)
   })
   it('uses frozen desktop commands and argument envelopes', async () => {
     tauri.mockReturnValue(true)

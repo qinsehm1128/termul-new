@@ -80,6 +80,11 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 get(super::mcp_host_api::get_access).put(super::mcp_host_api::put_access),
             )
             .route("/mcp/host/call", post(super::mcp_host_api::call))
+            .route(
+                "/mcp/host/access/preview",
+                post(super::mcp_host_api::preview_access)
+                    .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
+            )
             .route("/mcp/probe", post(mcp_probe_api::probe))
     } else {
         Router::<AppState>::new()
@@ -91,6 +96,11 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 get(super::mcp_host_api::get_access).put(super::mcp_host_api::put_access),
             )
             .route("/mcp/host/call", post(super::mcp_host_api::call))
+            .route(
+                "/mcp/host/access/preview",
+                post(super::mcp_host_api::preview_access)
+                    .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
+            )
     };
 
     classified_routes(

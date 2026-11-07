@@ -128,9 +128,13 @@ fn policy() -> HostAccessPolicy {
             remote_roots: vec![],
             local_roots: vec![],
             posix_jobs: false,
+            command_deny: vec![],
         },
     );
-    policy.ssh = SshPolicy { profiles: grants };
+    policy.ssh = SshPolicy {
+        profiles: grants,
+        ..Default::default()
+    };
     policy.profile_fingerprints =
         BTreeMap::from([("fixture".into(), profile_fingerprint(&profile()))]);
     policy

@@ -4,10 +4,13 @@ import type {
   McpHostJob,
   McpSshGrant
 } from '@shared/types/mcp-host.types'
-import { useCallback, useEffect, useState } from 'react'
+import { normalizeMcpHostAccessPolicy } from '@shared/types/mcp-host.types'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { callMcpHost, getMcpHostAccess, putMcpHostAccess } from '@/lib/mcp-host-api'
+import { McpCommandDenyEditor, validCommandDenyPolicy } from './McpCommandDenyEditor'
+import { McpCommandDenyPreview } from './McpCommandDenyPreview'
 import { HostAccessSection, hostCheckboxClass, hostInputClass } from './McpHostAccessSection'
 import { McpSshAccessCard } from './McpSshAccessCard'
 import { McpWorkspaceAccess } from './McpWorkspaceAccess'
@@ -23,6 +26,10 @@ const roots = (text: string): string[] => [
 
 export function McpHostAccessPanel(): React.JSX.Element {
   const { t } = useTranslation('mcp')
+  const translation = useRef(t)
+  useEffect(() => {
+    translation.current = t
+  }, [t])
   const [view, setView] = useState<McpHostAccessView | null>(null)
   const [policy, setPolicy] = useState<McpHostAccessPolicy | null>(null)
   const [busy, setBusy] = useState(false)
@@ -32,23 +39,22 @@ export function McpHostAccessPanel(): React.JSX.Element {
   const [sshOpen, setSshOpen] = useState(true)
   const [sshQuery, setSshQuery] = useState('')
   const [expandedProfiles, setExpandedProfiles] = useState<Record<string, boolean>>({})
-  const fail = useCallback(
-    (code: string) => {
-      if (/FORBIDDEN|PUBLIC_TUNNEL|UNAUTHORIZED/i.test(code)) setLocked(true)
-      setMessage(
-        t(
-          /CONFLICT/i.test(code)
-            ? 'hostAccess.conflict'
-            : /UNAUTHORIZED/i.test(code)
-              ? 'hostAccess.unauthorized'
-              : /FORBIDDEN|PUBLIC_TUNNEL/i.test(code)
-                ? 'hostAccess.readOnly'
+  const fail = useCallback((code: string) => {
+    if (/FORBIDDEN|PUBLIC_TUNNEL|UNAUTHORIZED/i.test(code)) setLocked(true)
+    setMessage(
+      translation.current(
+        /CONFLICT/i.test(code)
+          ? 'hostAccess.conflict'
+          : /UNAUTHORIZED/i.test(code)
+            ? 'hostAccess.unauthorized'
+            : /FORBIDDEN|PUBLIC_TUNNEL/i.test(code)
+              ? 'hostAccess.readOnly'
+              : /INVALID/i.test(code)
+                ? 'commandDeny.invalidServer'
                 : 'hostAccess.failed'
-        )
       )
-    },
-    [t]
-  )
+    )
+  }, [])
   const reload = useCallback(async () => {
     setBusy(true)
     try {
@@ -58,7 +64,7 @@ export function McpHostAccessPanel(): React.JSX.Element {
         return
       }
       setView(result.data)
-      setPolicy(result.data.policy)
+      setPolicy(normalizeMcpHostAccessPolicy(result.data.policy))
       setLocked(result.data.hostMode.toUpperCase().replaceAll('-', '_') === 'PUBLIC_TUNNEL')
       setJobs({})
     } finally {
@@ -85,17 +91,23 @@ export function McpHostAccessPanel(): React.JSX.Element {
       delete profiles[profileId]
       delete fingerprints[profileId]
     }
-    setPolicy({ ...policy, ssh: { profiles }, profileFingerprints: fingerprints })
+    setPolicy({ ...policy, ssh: { ...policy.ssh, profiles }, profileFingerprints: fingerprints })
   }
   async function save(): Promise<void> {
     if (!policy || !view || locked) return
+    if (!validCommandDenyPolicy(policy)) {
+      setMessage(t('commandDeny.invalid'))
+      return
+    }
     setBusy(true)
     setMessage('')
     try {
       const availableProfiles = new Set(view.profiles.map((profile) => profile.profileId))
       const next = {
-        ...policy,
+        ...normalizeMcpHostAccessPolicy(policy),
         ssh: {
+          ...policy.ssh,
+          commandDeny: policy.ssh.commandDeny ?? [],
           profiles: Object.fromEntries(
             Object.entries(policy.ssh.profiles)
               .filter(([id]) => availableProfiles.has(id))
@@ -103,6 +115,7 @@ export function McpHostAccessPanel(): React.JSX.Element {
                 id,
                 {
                   ...selected,
+                  commandDeny: selected.commandDeny ?? [],
                   remoteRoots: roots(selected.remoteRoots.join('\n')),
                   localRoots: roots(selected.localRoots.join('\n'))
                 }
@@ -164,7 +177,10 @@ export function McpHostAccessPanel(): React.JSX.Element {
     view.policy.profileFingerprints[profileId] ===
       view.profiles.find((profile) => profile.profileId === profileId)?.fingerprint &&
     !!view.policy.ssh.profiles[profileId]?.operations.some((item) => item === operation)
-  const dirty = !!policy && !!view && JSON.stringify(policy) !== JSON.stringify(view.policy)
+  const dirty =
+    !!policy &&
+    !!view &&
+    JSON.stringify(policy) !== JSON.stringify(normalizeMcpHostAccessPolicy(view.policy))
   const term = sshQuery.trim().toLocaleLowerCase()
   const profiles =
     view?.profiles.filter(
@@ -276,11 +292,33 @@ export function McpHostAccessPanel(): React.JSX.Element {
                   {t('hostAccess.executeWarning')}
                 </p>
               </details>
+              <McpCommandDenyEditor
+                title={t('commandDeny.global')}
+                rules={policy.ssh.commandDeny ?? []}
+                disabled={disabled}
+                onChange={(commandDeny) =>
+                  setPolicy({ ...policy, ssh: { ...policy.ssh, commandDeny } })
+                }
+              />
+              <details className="rounded-md border p-3">
+                <summary className="cursor-pointer text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {t('commandDeny.preview')}
+                </summary>
+                <div className="mt-3">
+                  <McpCommandDenyPreview
+                    policy={policy}
+                    profiles={view.profiles}
+                    disabled={disabled}
+                    dirty={dirty}
+                  />
+                </div>
+              </details>
               {profiles.map((profile) => (
                 <McpSshAccessCard
                   key={profile.profileId}
                   profile={profile}
                   selected={policy.ssh.profiles[profile.profileId]}
+                  globalCommandDeny={policy.ssh.commandDeny ?? []}
                   fingerprint={policy.profileFingerprints[profile.profileId]}
                   open={expandedProfiles[profile.profileId] ?? false}
                   disabled={disabled}

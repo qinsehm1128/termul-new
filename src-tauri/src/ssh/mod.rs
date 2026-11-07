@@ -6,6 +6,7 @@
 pub mod automation;
 pub mod automation_backend;
 pub mod automation_jobs;
+pub mod command_policy;
 pub mod config_parser;
 pub mod connection;
 pub mod credential_store;

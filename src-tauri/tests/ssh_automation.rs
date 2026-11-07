@@ -70,6 +70,7 @@ fn all_grant() -> ProfileGrant {
         remote_roots: vec!["/allowed".into()],
         local_roots: vec!["/authorized-local".into()],
         posix_jobs: true,
+        command_deny: vec![],
     }
 }
 fn ctx(caller: &str, grants: &Arc<Grants>) -> CallContext {
@@ -83,6 +84,7 @@ fn allow(grants: &Arc<Grants>, caller: &str, grant: ProfileGrant) {
         caller.into(),
         SshPolicy {
             profiles: HashMap::from([("p".into(), grant)]),
+            ..Default::default()
         },
     );
 }
@@ -584,7 +586,11 @@ async fn jobs_owner_profile_rechecks_cancel_and_log_offsets() {
 #[cfg(unix)]
 fn private_fixture() -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt;
-    let directory = tempfile::tempdir().unwrap();
+    // The store deliberately refuses symlink ancestors. macOS may expose
+    // temp_dir through /var -> /private/var, so create fixtures under its
+    // canonical root rather than weakening production O_NOFOLLOW checks.
+    let root = std::env::temp_dir().canonicalize().unwrap();
+    let directory = tempfile::tempdir_in(root).unwrap();
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     directory
 }

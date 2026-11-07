@@ -1,6 +1,7 @@
 import {
   emptyMcpSshGrant,
   MCP_SSH_OPERATIONS,
+  type McpCommandDenyRule,
   type McpHostJob,
   type McpHostProfile,
   type McpSshGrant,
@@ -10,6 +11,7 @@ import { ChevronDown } from 'lucide-react'
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
+import { McpCommandDenyEditor } from './McpCommandDenyEditor'
 import { hostCheckboxClass } from './McpHostAccessSection'
 
 const READ_OPERATIONS: McpSshOperation[] = [
@@ -41,6 +43,7 @@ const GROUPS = [
 export function McpSshAccessCard({
   profile,
   selected,
+  globalCommandDeny = [],
   fingerprint,
   disabled,
   open,
@@ -53,6 +56,7 @@ export function McpSshAccessCard({
 }: {
   profile: McpHostProfile
   selected?: McpSshGrant
+  globalCommandDeny?: McpCommandDenyRule[]
   fingerprint?: string
   disabled: boolean
   open: boolean
@@ -130,8 +134,15 @@ export function McpSshAccessCard({
         {!selected && (
           <p className="text-xs text-muted-foreground">{t('hostAccess.grantToConfigure')}</p>
         )}
+        <McpCommandDenyEditor title={t('commandDeny.global')} rules={globalCommandDeny} inherited />
         {selected && (
           <fieldset disabled={disabled} className="min-w-0 space-y-3">
+            <McpCommandDenyEditor
+              title={t('commandDeny.profile')}
+              rules={selected.commandDeny ?? []}
+              disabled={disabled}
+              onChange={(commandDeny) => onGrant({ ...selected, commandDeny })}
+            />
             {stale && (
               <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
                 <p className="text-xs leading-relaxed text-destructive">

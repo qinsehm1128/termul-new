@@ -15,6 +15,17 @@ use crate::{
     web::project_registry::ProjectRegistry,
 };
 
+pub use crate::ssh::command_policy::CommandPolicyPreview;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommandPolicyPreviewRequest {
+    pub profile_id: String,
+    pub operation: String,
+    pub command: String,
+    pub policy: Option<HostAccessPolicy>,
+}
+
 pub struct HostCapabilityService {
     pub policy: Arc<HostPolicyStore>,
     pub profiles: Arc<dyn ProfileSource>,
@@ -72,6 +83,73 @@ impl HostCapabilityService {
         Ok(
             json!({"policy":self.policy.snapshot(),"profiles":profiles,"projects":projects,"hostMode":self.host_mode}),
         )
+    }
+
+    /// Local management diagnostic only: a non-match is never an execution grant.
+    pub fn preview(
+        &self,
+        request: CommandPolicyPreviewRequest,
+    ) -> Result<CommandPolicyPreview, HostCapabilityError> {
+        if !["execute", "job_start"].contains(&request.operation.as_str())
+            || request.profile_id.is_empty()
+            || request.profile_id.len() > 256
+        {
+            return Err(HostCapabilityError::new(
+                "INVALID_ARGUMENTS",
+                "Invalid preview request",
+            ));
+        }
+        crate::ssh::command_policy::validate_command(&request.command).map_err(|_| {
+            HostCapabilityError::new("INVALID_ARGUMENTS", "Invalid preview command")
+        })?;
+        let snapshot = self.policy.compiled_snapshot();
+        let revision = snapshot.policy.revision;
+        let draft = request.policy.is_some();
+        let (policy, commands) = match request.policy {
+            Some(policy) => {
+                let commands = Arc::new(super::host_policy::compile(&policy)?);
+                (policy, commands)
+            }
+            None => (snapshot.policy, snapshot.commands),
+        };
+        let profiles = self.profiles.list_profiles().map_err(|_| {
+            HostCapabilityError::new("PROFILES_UNAVAILABLE", "SSH profiles cannot be read")
+        })?;
+        let profile = profiles.iter().find(|p| p.id == request.profile_id);
+        let grant = policy.ssh.profiles.get(&request.profile_id);
+        let blocked_by = if !policy.enabled
+            || !grant.is_some_and(|g| g.operations.contains(&request.operation))
+        {
+            Some("permission_denied")
+        } else if profile.is_none() {
+            Some("profile_not_found")
+        } else if !draft
+            && policy.profile_fingerprints.get(&request.profile_id)
+                != profile.map(profile_fingerprint).as_ref()
+        {
+            Some("profile_identity_changed")
+        } else if request.operation == "job_start" && !grant.is_some_and(|g| g.posix_jobs) {
+            Some("permission_denied")
+        } else {
+            None
+        };
+        let matches = commands
+            .evaluate(&request.profile_id, &request.command)
+            .map_err(|_| {
+                HostCapabilityError::new("INVALID_ARGUMENTS", "Invalid preview command")
+            })?;
+        Ok(CommandPolicyPreview {
+            outcome: if matches.is_empty() {
+                "not_matched"
+            } else {
+                "matched"
+            }
+            .into(),
+            matches,
+            policy_revision: revision,
+            draft,
+            blocked_by: blocked_by.map(str::to_string),
+        })
     }
 
     pub fn put_access(

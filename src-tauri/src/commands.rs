@@ -5674,6 +5674,37 @@ pub async fn mcp_host_access_put(
     })
 }
 
+/// Evaluate a draft command policy without credentials, SSH or persistence.
+#[tauri::command]
+pub async fn mcp_host_access_preview(
+    request: serde_json::Value,
+    host: State<'_, Arc<crate::mcp_core::host_service::HostCapabilityService>>,
+) -> Result<IpcResult<crate::mcp_core::host_service::CommandPolicyPreview>, String> {
+    if let Err(error) = require_host_admission() {
+        return Ok(error);
+    }
+    let request = match serde_json::from_value::<
+        crate::mcp_core::host_service::CommandPolicyPreviewRequest,
+    >(request)
+    {
+        Ok(request) => request,
+        Err(_) => {
+            log::warn!(target: "se_manager::mcp_core::host", "operation=host_access_preview stable_code=INVALID_ARGUMENTS");
+            return Ok(IpcResult::error(
+                "Invalid command policy preview request",
+                "INVALID_ARGUMENTS",
+            ));
+        }
+    };
+    Ok(match host.preview(request) {
+        Ok(preview) => IpcResult::success(preview),
+        Err(error) => {
+            log::warn!(target: "se_manager::mcp_core::host", "operation=host_access_preview stable_code={}", error.code);
+            IpcResult::error(error.message, error.code)
+        }
+    })
+}
+
 #[tauri::command]
 pub async fn mcp_host_call(
     provider: String,

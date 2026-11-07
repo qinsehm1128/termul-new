@@ -127,6 +127,14 @@ impl Job {
                 data.duration_ms = Some(result.duration_ms);
                 data.remote_termination_confirmed = result.remote_termination_confirmed;
             }
+            Err(ref error) if error.code == "command_denied" || error.code == "POLICY_INVALID" => {
+                data.state = "failed";
+                data.error_code = Some(if error.code == "command_denied" {
+                    "command_denied"
+                } else {
+                    "POLICY_INVALID"
+                });
+            }
             Err(_) => {
                 // Backend messages may contain commands, paths or secrets. Never publish them.
                 data.state = "failed";
@@ -242,6 +250,7 @@ impl JobManager {
         backend: Arc<dyn AutomationBackend>,
         mut request: ExecRequest,
     ) -> AutomationResult<Value> {
+        context.authorize_command(&profile, "job_start", &request.command)?;
         self.authorize(&context, &profile.id, "job_start")?;
         let fingerprint = profile_fingerprint(&profile);
         let grant = context.authorize(&profile.id, "job_start")?;
@@ -352,7 +361,7 @@ impl JobManager {
                         .context
                         .as_ref()
                         .ok_or_else(AutomationError::backend)?
-                        .authorize(&profile.id, "job_start")?;
+                        .authorize_command(&profile, "job_start", &request.command)?;
                     if !grant.posix_jobs
                         || grant.profile_fingerprint.as_deref()
                             != Some(worker_job.profile_fingerprint.as_str())
@@ -360,7 +369,9 @@ impl JobManager {
                     {
                         return Err(AutomationError::denied());
                     }
-                    backend.execute_with_progress(&profile, &credentials, request, progress)
+                    backend
+                        .execute_with_progress(&profile, &credentials, request, progress)
+                        .map_err(|_| AutomationError::backend())
                 }))
                 .unwrap_or_else(|_| Err(AutomationError::backend()));
                 worker_job.finish(result, quota);
@@ -674,6 +685,32 @@ fn store_error() -> AutomationError {
 
 // Explicit allowlist: no command, credentials, GrantProvider, raw error, PID or
 // reconnect material can enter this representation. Refuse unknown fields on load.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+enum StoredJobError {
+    #[serde(rename = "command_denied")]
+    CommandDenied,
+    #[serde(rename = "POLICY_INVALID")]
+    PolicyInvalid,
+    #[serde(rename = "ssh_error")]
+    SshError,
+}
+impl StoredJobError {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CommandDenied => "command_denied",
+            Self::PolicyInvalid => "POLICY_INVALID",
+            Self::SshError => "ssh_error",
+        }
+    }
+    fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "command_denied" => Some(Self::CommandDenied),
+            "POLICY_INVALID" => Some(Self::PolicyInvalid),
+            "ssh_error" => Some(Self::SshError),
+            _ => None,
+        }
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredJob {
@@ -688,6 +725,8 @@ struct StoredJob {
     duration_ms: Option<u64>,
     truncated: bool,
     cancel_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_code: Option<StoredJobError>,
     remote_termination_confirmed: bool,
     timestamp_ms: u64,
 }
@@ -706,6 +745,7 @@ impl StoredJob {
             duration_ms: data.duration_ms,
             truncated: data.truncated,
             cancel_requested: job.cancel.load(Ordering::Acquire),
+            error_code: data.error_code.and_then(StoredJobError::from_code),
             remote_termination_confirmed: data.remote_termination_confirmed,
             timestamp_ms: data.timestamp_ms,
         }
@@ -761,7 +801,11 @@ impl StoredJob {
                 duration_ms: self.duration_ms,
                 truncated: self.truncated,
                 remote_termination_confirmed: !interrupted && self.remote_termination_confirmed,
-                error_code: None,
+                error_code: if interrupted {
+                    None
+                } else {
+                    self.error_code.map(StoredJobError::as_str)
+                },
                 finished_at: Some(Instant::now() - age.min(RETENTION)),
                 timestamp_ms: self.timestamp_ms,
                 streamed: false,
@@ -1359,9 +1403,24 @@ mod tests {
             duration_ms: None,
             truncated: false,
             cancel_requested: state == "cancel_requested",
+            error_code: None,
             remote_termination_confirmed: false,
             timestamp_ms: now_ms(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_command_denial_survives_storage_roundtrip() {
+        let mut record = stored_record(1, "failed", String::new());
+        record.error_code = Some(StoredJobError::CommandDenied);
+        let encoded = serde_json::to_vec(&record).unwrap();
+        let recovered: StoredJob = serde_json::from_slice(&encoded).unwrap();
+        let job = recovered.recover().unwrap();
+        assert_eq!(job.value(0, 0).unwrap()["errorCode"], "command_denied");
+        let mut malformed = serde_json::to_value(&record).unwrap();
+        malformed["errorCode"] = json!("untrusted arbitrary backend text");
+        assert!(serde_json::from_value::<StoredJob>(malformed).is_err());
     }
 
     #[cfg(unix)]

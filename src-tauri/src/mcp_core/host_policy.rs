@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 use super::{host_capabilities::HostCapabilityError, workspace::WorkspaceGrant};
 use crate::ssh::{
     automation::{
-        AutomationError, AutomationResult, GrantProvider, ProfileSource, SshPolicy, OPERATIONS,
+        AutomationError, AutomationResult, GrantProvider, ProfileSource, SshGrantSnapshot,
+        SshPolicy, OPERATIONS,
     },
+    command_policy::CompiledCommandPolicy,
     profile_manager::SSHProfile,
 };
 
@@ -33,7 +35,7 @@ pub struct HostAccessPolicy {
 impl Default for HostAccessPolicy {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             revision: 0,
             enabled: false,
             workspace: WorkspaceGrant::default(),
@@ -43,14 +45,19 @@ impl Default for HostAccessPolicy {
     }
 }
 
+#[derive(Clone)]
+pub struct HostPolicySnapshot {
+    pub policy: HostAccessPolicy,
+    pub commands: Arc<CompiledCommandPolicy>,
+}
 pub struct HostPolicyStore {
     path: PathBuf,
-    policy: Mutex<HostAccessPolicy>,
+    policy: Mutex<HostPolicySnapshot>,
 }
 
 impl HostPolicyStore {
     pub fn open(path: PathBuf) -> Result<Self, HostCapabilityError> {
-        let policy = match std::fs::read(&path) {
+        let mut policy: HostAccessPolicy = match std::fs::read(&path) {
             Ok(bytes) if bytes.len() <= 1024 * 1024 => {
                 serde_json::from_slice(&bytes).map_err(|_| {
                     HostCapabilityError::new("POLICY_INVALID", "Host access policy is invalid")
@@ -70,14 +77,18 @@ impl HostPolicyStore {
                 ))
             }
         };
-        validate(&policy)?;
+        let commands = Arc::new(compile(&policy)?);
+        policy.schema_version = 2;
         Ok(Self {
             path,
-            policy: Mutex::new(policy),
+            policy: Mutex::new(HostPolicySnapshot { policy, commands }),
         })
     }
 
     pub fn snapshot(&self) -> HostAccessPolicy {
+        self.policy.lock().policy.clone()
+    }
+    pub fn compiled_snapshot(&self) -> HostPolicySnapshot {
         self.policy.lock().clone()
     }
 
@@ -87,9 +98,10 @@ impl HostPolicyStore {
         mut next: HostAccessPolicy,
         profiles: &[SSHProfile],
     ) -> Result<HostAccessPolicy, HostCapabilityError> {
-        validate(&next)?;
+        let commands = Arc::new(compile(&next)?);
+        next.schema_version = 2;
         let mut current = self.policy.lock();
-        if current.revision != expected_revision {
+        if current.policy.revision != expected_revision {
             return Err(HostCapabilityError::new(
                 "REVISION_CONFLICT",
                 "Host access policy changed; reload before saving",
@@ -113,19 +125,27 @@ impl HostPolicyStore {
         }
         next.profile_fingerprints
             .retain(|id, _| next.ssh.profiles.contains_key(id));
-        next.revision = current.revision.checked_add(1).ok_or_else(|| {
+        next.revision = current.policy.revision.checked_add(1).ok_or_else(|| {
             HostCapabilityError::new("POLICY_INVALID", "Policy revision exhausted")
         })?;
         persist_private(&self.path, &next)?;
-        *current = next.clone();
+        *current = HostPolicySnapshot {
+            policy: next.clone(),
+            commands,
+        };
         log::info!(target:"se_manager::mcp_core::host", "operation=host_access_put revision={} stable_code=UPDATED", next.revision);
         Ok(next)
     }
 }
 
+pub fn compile(policy: &HostAccessPolicy) -> Result<CompiledCommandPolicy, HostCapabilityError> {
+    validate(policy)?;
+    CompiledCommandPolicy::compile(&policy.ssh)
+        .map_err(|_| HostCapabilityError::new("POLICY_INVALID", "Invalid host command policy"))
+}
 fn validate(policy: &HostAccessPolicy) -> Result<(), HostCapabilityError> {
     let invalid = || HostCapabilityError::new("POLICY_INVALID", "Invalid host access policy");
-    if policy.schema_version != 1 || policy.ssh.profiles.len() > 256 {
+    if ![1, 2].contains(&policy.schema_version) || policy.ssh.profiles.len() > 256 {
         return Err(invalid());
     }
     for grant in policy.ssh.profiles.values() {
@@ -192,7 +212,11 @@ pub struct HostGrants {
 
 impl GrantProvider for HostGrants {
     fn policy(&self, caller_id: &str) -> AutomationResult<SshPolicy> {
-        let policy = self.store.snapshot();
+        Ok(self.snapshot(caller_id)?.policy)
+    }
+    fn snapshot(&self, caller_id: &str) -> AutomationResult<SshGrantSnapshot> {
+        let snapshot = self.store.compiled_snapshot();
+        let policy = snapshot.policy;
         if !policy.enabled || caller_id != self.caller_id {
             return Err(AutomationError::denied());
         }
@@ -210,6 +234,10 @@ impl GrantProvider for HostGrants {
         for (id, grant) in &mut ssh.profiles {
             grant.profile_fingerprint = policy.profile_fingerprints.get(id).cloned();
         }
-        Ok(ssh)
+        Ok(SshGrantSnapshot {
+            policy: ssh,
+            commands: snapshot.commands,
+            revision: policy.revision,
+        })
     }
 }

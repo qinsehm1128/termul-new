@@ -1,6 +1,8 @@
 import { decodeIpcResult, type IpcResult } from '@shared/types/ipc.types'
 import type {
   McpHostAccessPolicy,
+  McpHostAccessPreviewRequest,
+  McpHostAccessPreviewResult,
   McpHostAccessView,
   McpHostCall
 } from '@shared/types/mcp-host.types'
@@ -14,12 +16,13 @@ async function request<T>(
   command: string,
   path: string,
   method: string,
-  body?: object
+  body?: object,
+  tauriBody: object | undefined = body
 ): Promise<IpcResult<T>> {
   try {
     if (isTauriContext()) {
       return decodeIpcResult(
-        await invoke(command, body ? { ...body } : undefined),
+        await invoke(command, tauriBody ? { ...tauriBody } : undefined),
         (data) => data as T
       )
     }
@@ -38,6 +41,7 @@ async function request<T>(
         code: 'REVISION_CONFLICT',
         error: 'Reload the current policy before saving'
       }
+    if (response.status === 400) return decodeIpcResult(await response.json(), (data) => data as T)
     if (!response.ok)
       return { success: false, code: 'NETWORK_ERROR', error: 'Host access request failed' }
     return decodeIpcResult(await response.json(), (data) => data as T)
@@ -56,6 +60,14 @@ export function putMcpHostAccess(
 ): Promise<IpcResult<McpHostAccessPolicy>> {
   return request('mcp_host_access_put', '/mcp/host/access', 'PUT', { expectedRevision, policy })
 }
+export function previewMcpHostAccess(
+  previewRequest: McpHostAccessPreviewRequest
+): Promise<IpcResult<McpHostAccessPreviewResult>> {
+  return request('mcp_host_access_preview', '/mcp/host/access/preview', 'POST', previewRequest, {
+    request: previewRequest
+  })
+}
+
 export function callMcpHost(call: McpHostCall): Promise<IpcResult<unknown>> {
   return request('mcp_host_call', '/mcp/host/call', 'POST', call)
 }

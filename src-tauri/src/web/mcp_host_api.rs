@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::rejection::JsonRejection,
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
@@ -16,8 +17,9 @@ use super::{
     fs_api::IpcBody,
 };
 use crate::mcp_core::{
-    host_capabilities::HostCapabilityBackend, host_policy::HostAccessPolicy,
-    host_service::HostCapabilityService,
+    host_capabilities::HostCapabilityBackend,
+    host_policy::HostAccessPolicy,
+    host_service::{CommandPolicyPreview, CommandPolicyPreviewRequest, HostCapabilityService},
 };
 
 #[derive(Deserialize)]
@@ -114,5 +116,62 @@ pub async fn call(
     {
         Ok(value) => Json(IpcBody::ok(value)).into_response(),
         Err(error) => Json(IpcBody::<Value>::err(error.message, error.code)).into_response(),
+    }
+}
+
+/// Management-only dry-run. A draft never becomes authority for an MCP call.
+pub async fn preview_access(
+    principal: Option<Extension<RemotePrincipal>>,
+    ingress: Option<Extension<IngressProvenance>>,
+    service: Option<Extension<Arc<HostCapabilityService>>>,
+    body: Result<Json<CommandPolicyPreviewRequest>, JsonRejection>,
+) -> Response {
+    if let Err(response) = require_local(principal, ingress) {
+        return response;
+    }
+    let request = match body {
+        Ok(Json(request)) => request,
+        Err(rejection) => {
+            // Never format JsonRejection: serde diagnostics can echo an
+            // unrecognized enum value or field containing sensitive input.
+            let too_large = rejection.status() == StatusCode::PAYLOAD_TOO_LARGE;
+            let (status, code, message) = if too_large {
+                (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "REQUEST_TOO_LARGE",
+                    "Preview request exceeds its size limit",
+                )
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENTS",
+                    "Invalid command policy preview request",
+                )
+            };
+            tracing::warn!(
+                operation = "host_access_preview",
+                stable_code = code,
+                "Preview request rejected before evaluation"
+            );
+            return (
+                status,
+                Json(IpcBody::<CommandPolicyPreview>::err(message, code)),
+            )
+                .into_response();
+        }
+    };
+    let Some(Extension(service)) = service else {
+        return unavailable::<CommandPolicyPreview>();
+    };
+    match service.preview(request) {
+        Ok(preview) => Json(IpcBody::ok(preview)).into_response(),
+        Err(error) => {
+            tracing::warn!(operation = "host_access_preview", stable_code = %error.code, "Host command policy preview rejected");
+            Json(IpcBody::<CommandPolicyPreview>::err(
+                error.message,
+                error.code,
+            ))
+            .into_response()
+        }
     }
 }

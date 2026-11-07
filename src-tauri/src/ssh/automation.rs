@@ -1,6 +1,10 @@
-//! Window-independent SSH automation. Context and grants MUST be supplied by the host,
+//! Window-independent MCP-only SSH automation. Interactive terminals and PTYs do not use
+//! this service or its command policy. Context and grants MUST be supplied by the host,
 //! never deserialized from tool arguments. No UI/PTY sessions are used here.
-use super::profile_manager::SSHProfile;
+use super::{
+    command_policy::{validate_command, CommandDenyRule, CompiledCommandPolicy},
+    profile_manager::SSHProfile,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -74,6 +78,7 @@ pub trait CredentialResolver: Send + Sync {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshPolicy {
+    pub command_deny: Vec<CommandDenyRule>,
     pub profiles: HashMap<String, ProfileGrant>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -85,9 +90,25 @@ pub struct ProfileGrant {
     pub remote_roots: Vec<String>,
     pub local_roots: Vec<PathBuf>,
     pub posix_jobs: bool,
+    pub command_deny: Vec<CommandDenyRule>,
+}
+#[derive(Clone)]
+pub struct SshGrantSnapshot {
+    pub policy: SshPolicy,
+    pub commands: Arc<CompiledCommandPolicy>,
+    pub revision: u64,
 }
 pub trait GrantProvider: Send + Sync {
     fn policy(&self, caller_id: &str) -> AutomationResult<SshPolicy>;
+    fn snapshot(&self, caller_id: &str) -> AutomationResult<SshGrantSnapshot> {
+        let policy = self.policy(caller_id)?;
+        let commands = Arc::new(CompiledCommandPolicy::compile(&policy)?);
+        Ok(SshGrantSnapshot {
+            policy,
+            commands,
+            revision: 0,
+        })
+    }
 }
 #[derive(Clone)]
 pub struct CallContext {
@@ -95,6 +116,45 @@ pub struct CallContext {
     pub grants: Arc<dyn GrantProvider>,
 }
 impl CallContext {
+    pub fn authorize_command(
+        &self,
+        profile: &SSHProfile,
+        operation: &str,
+        command: &str,
+    ) -> AutomationResult<ProfileGrant> {
+        validate_command(command)?;
+        if self.caller_id.is_empty() {
+            return Err(AutomationError::denied());
+        }
+        let snapshot = self.grants.snapshot(&self.caller_id)?;
+        let grant = snapshot
+            .policy
+            .profiles
+            .get(&profile.id)
+            .filter(|g| g.operations.contains(operation))
+            .cloned()
+            .ok_or_else(AutomationError::denied)?;
+        check_profile_identity(profile, &grant)?;
+        if operation == "job_start" && !grant.posix_jobs {
+            return Err(AutomationError::denied());
+        }
+        let result = snapshot.commands.check(&profile.id, command);
+        let operation = if operation == "job_start" {
+            "job_start"
+        } else {
+            "execute"
+        };
+        match &result {
+            Ok(()) => {
+                log::debug!(target:"se_manager::mcp_core::host", "operation={} stable_code=COMMAND_NOT_MATCHED revision={}", operation, snapshot.revision)
+            }
+            Err(_) => {
+                log::warn!(target:"se_manager::mcp_core::host", "operation={} stable_code=COMMAND_DENIED revision={}", operation, snapshot.revision)
+            }
+        }
+        result?;
+        Ok(grant)
+    }
     pub fn authorize(&self, profile_id: &str, operation: &str) -> AutomationResult<ProfileGrant> {
         self.grants
             .policy(&self.caller_id)?
@@ -316,6 +376,23 @@ impl SshAutomationService {
         if context.caller_id.is_empty() {
             return Err(AutomationError::denied());
         }
+        if ["execute", "job_start"].contains(&operation) {
+            let id = required_string(&args, "profileId", 256)?;
+            context.authorize(id, operation)?;
+            let profile = self
+                .source
+                .list_profiles()?
+                .into_iter()
+                .find(|p| p.id == id)
+                .ok_or_else(|| {
+                    AutomationError::new("profile_not_found", "SSH profile is unavailable")
+                })?;
+            context.authorize_command(
+                &profile,
+                operation,
+                required_string(&args, "command", 32 * 1024)?,
+            )?;
+        }
         let permit = self
             .workers
             .clone()
@@ -372,6 +449,9 @@ impl SshAutomationService {
                     return Err(AutomationError::denied());
                 }
             }
+            if ["execute", "job_start"].contains(&operation.as_str()) {
+                context.authorize_command(&profile, &operation, required_string(&args, "command", 32 * 1024)?)?;
+            }
             let credentials = resolver.resolve(&profile)?;
             let grant = context.authorize(&profile_id, &operation)?;
             check_profile_identity(&profile, &grant)?;
@@ -385,6 +465,7 @@ impl SshAutomationService {
                     let timeout_ms = if is_job { integer(&args,"runtimeLimit",300_000,100,3_600_000)? } else { integer(&args,"timeoutMs",30_000,100,120_000)? };
                     let max_bytes = integer(&args,"maxOutputBytes",256*1024,1,1024*1024)? as usize;
                     let request = ExecRequest { command, timeout_ms, max_bytes, job_token:None, cancel:cancel.clone() };
+                    context.authorize_command(&profile, &operation, &request.command)?;
                     if is_job { jobs.start(context, profile, credentials, backend, request) }
                     else { serde_json::to_value(backend.execute(&profile, &credentials, request)?).map_err(|_| AutomationError::backend()) }
                 }

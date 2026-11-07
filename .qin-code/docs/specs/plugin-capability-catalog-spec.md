@@ -5,11 +5,11 @@ id: plugin-capability-catalog-spec
 title: 插件可调用的 Se Manager 全量能力清单
 date: 2026-11-04
 status: draft
-source: user:2026-11-04T16:59:29+08:00 只有凭据和秘钥不开放，其它都开放给插件; agent://cat-a; agent://cat-b; agent://cat-c; user:2026-11-07 req-a1fec49128c8a770f1a9b055e56197e7 MCP host workspace/SSH catalog sync; agent://catalog-host-evidence; src-tauri/src/commands.rs; src-tauri/src/lib.rs; src-tauri/src/web/mcp_host_api.rs; src-tauri/src/mcp_core/host_bridge.rs; src-tauri/src/credentials.rs
+source: user:2026-11-04T16:59:29+08:00 只有凭据和秘钥不开放，其它都开放给插件; agent://cat-a; agent://cat-b; agent://cat-c; user:2026-11-07 req-a1fec49128c8a770f1a9b055e56197e7 MCP host workspace/SSH catalog sync; agent://catalog-host-evidence; src-tauri/src/commands.rs; src-tauri/src/lib.rs; src-tauri/src/web/mcp_host_api.rs; src-tauri/src/mcp_core/host_bridge.rs; src-tauri/src/credentials.rs; user:2026-11-07 req-8f01105f55c188c39fdf0e9609e35343 SSH command deny v2/management preview catalog sync; .qin-code/docs/proposals/ssh-command-deny-policy-proposal.md; src-tauri/src/web/router.rs; src/shared/types/mcp-host.types.ts
 updated: 2026-11-07
 lang: zh-CN
 scope: project
-artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ffbe76ff784f5bf","last_updated_by_session":"session_lizard_1794024668506_6ffbe76ff784f5bf","session_ids":["session_lizard_1794024668506_6ffbe76ff784f5bf"],"todo_refs":[],"goal_refs":[]}
+artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ffbe76ff784f5bf","last_updated_by_session":"session_clover_1794039875986_a9f773ef52155584","session_ids":["session_clover_1794039875986_a9f773ef52155584","session_lizard_1794024668506_6ffbe76ff784f5bf"],"todo_refs":[],"goal_refs":[]}
 ---
 
 ## 契约
@@ -29,13 +29,13 @@ artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ff
 
 ### 统计
 
-本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP 同步后用脚本比对）：后端共 328 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP 与 SSH 命令黑名单预览同步后用脚本比对）：后端共 329 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
-| 后端 Tauri 命令 | 328 | 291 | 12 | 8 | 17 |
+| 后端 Tauri 命令 | 329 | 292 | 12 | 8 | 17 |
 | 前端独有能力（无 Rust 命令） | 38 | 38 | 0 | 0 | 0 |
-| **合计** | **366** | **329** | **12** | **8** | **17** |
+| **合计** | **367** | **330** | **12** | **8** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -850,17 +850,18 @@ Per-group: browser 20 (14 OPEN, 6 INTERNAL) · data_migration 6 · secure_storag
 
 ### 宿主 MCP 能力同步（2026-11-07）
 
-本增量补充清单 A 的 MCP 部分；既有 A/B/C 清单、事件、来源和历史 explorer 统计仍保留。合并统计新增 **3 个 Tauri 命令：OPEN +2、OPEN-REDACTED +1**；HTTP twin、私有 bridge、provider 子工具和复用的 renderer 状态操作不重复计数。这里的 OPEN/confirm 是**插件能力目录契约**，不是声称当前 MCP 或 Tauri 原始入口已经接入插件级确认、审计、按插件身份隔离的运行时。
+本增量补充清单 A 的 MCP 部分；既有 A/B/C 清单、事件、来源和历史 explorer 统计仍保留。前轮合并统计新增 **3 个 Tauri 命令：OPEN +2、OPEN-REDACTED +1**；本轮纯管理预览另增 **1 个 OPEN 命令**，该补充累计 4 个（OPEN +3、OPEN-REDACTED +1）；HTTP twin、私有 bridge、provider 子工具和复用的 renderer 状态操作不重复计数。这里的 OPEN/confirm 是**插件能力目录契约**，不是声称当前 MCP 或 Tauri 原始入口已经接入插件级确认、审计、按插件身份隔离的运行时。
 
 #### 新增公开操作（清单 A / MCP）
 
 | op id | source cmd (file:line) | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
-| se.mcp.hostAccessGet | mcp_host_access_get `src-tauri/src/commands.rs:5652`；注册 `src-tauri/src/lib.rs:4059` | R | global（宿主授权管理元数据） | none | OPEN-REDACTED | rust-main | `()` → `McpHostAccessView{policy,profiles,projects,hostMode}`；非长任务。profiles 为脱敏候选（profileId/name/host/port/username/authMethod/tags/fingerprint），projects 为 id/name；不返回密码、passphrase、私钥、bearer 或 bridge descriptor/token。policy 的项目范围、remoteRoots/localRoots 等仍属敏感 metadata，不得当作公开无敏感信息；插件投影须按调用方 scope 过滤并最小化路径/主机/用户信息，不直接转发本机管理员完整视图。 |
-| se.mcp.hostAccessPut | mcp_host_access_put `src-tauri/src/commands.rs:5662`；注册 `src-tauri/src/lib.rs:4060` | W | global（所有本宿主 MCP 客户端共享的授权策略） | per-call | OPEN | rust-main | `{expectedRevision,policy}` → 已保存 `HostAccessPolicy`；非长任务。修改 enabled/workspace/projectIds/includePaths、SSH profile/operations/roots/posixJobs 与 profile fingerprints，属于**高权限委托/授予权限**，不是普通 grant 写偏好；每次必须本机确认，不能让调用者自授权。revision CAS 冲突返回 `REVISION_CONFLICT`，先重读而非盲目覆盖；授权回显不含凭据值。 |
+| se.mcp.hostAccessGet | mcp_host_access_get `src-tauri/src/commands.rs:5652`；注册 `src-tauri/src/lib.rs:4059` | R | global（宿主授权管理元数据） | none | OPEN-REDACTED | rust-main | `()` → `McpHostAccessView{policy,profiles,projects,hostMode}`；非长任务。profiles 为脱敏候选（profileId/name/host/port/username/authMethod/tags/fingerprint），projects 为 id/name；不返回密码、passphrase、私钥、bearer 或 bridge descriptor/token。policy 的项目范围、remoteRoots/localRoots 等仍属敏感 metadata，不得当作公开无敏感信息；插件投影须按调用方 scope 过滤并最小化路径/主机/用户信息，不直接转发本机管理员完整视图。  v2 policy 包含全局 `ssh.commandDeny` 与 `ssh.profiles[profileId].commandDeny` 数组；规则 `{id,kind:exact或contains或regex,pattern}`，规则文本亦须按调用方权限最小化投影。 |
+| se.mcp.hostAccessPut | mcp_host_access_put `src-tauri/src/commands.rs:5662`；注册 `src-tauri/src/lib.rs:4060` | W | global（所有本宿主 MCP 客户端共享的授权策略） | per-call | OPEN | rust-main | `{expectedRevision,policy}` → 已保存 `HostAccessPolicy`；非长任务。修改 enabled/workspace/projectIds/includePaths、SSH profile/operations/roots/posixJobs 与 profile fingerprints，属于**高权限委托/授予权限**，不是普通 grant 写偏好；每次必须本机确认，不能让调用者自授权。revision CAS 冲突返回 `REVISION_CONFLICT`，先重读而非盲目覆盖；授权回显不含凭据值。  v2 同时保存全局/profile `commandDeny`；非法规则整份拒绝、fail closed；普通 UI 授权编辑必须保留两层规则。全局与 profile deny 取并集，默认全 13 operations 仍不能绕过。 |
+| se.mcp.hostAccessPreview | mcp_host_access_preview(request) `src-tauri/src/commands.rs:5679`；注册 `src-tauri/src/lib.rs:4066` | R | global（请求中的 sshProfile） | none | OPEN | rust-main | `{profileId,operation:execute或job_start,command,policy?}` → `{outcome:matched或not_matched,matches:[{id,source:global或profile}],policyRevision,draft,blockedBy?}`；纯管理预览，不把输入命令当执行。不读取 credentials、不联网、不占用/排队 worker、不创建 jobs、不持久化；草稿不保存、不授权；非法规则 IPC 错误；无原始 command/pattern 回显；未命中不等于可执行。Web 仅 LocalOperator，PublicTunnel 403。 |
 | se.mcp.hostCall | mcp_host_call `src-tauri/src/commands.rs:5675`；注册 `src-tauri/src/lib.rs:4061` | W | global → project / sshProfile / job / local+remote path（operation-specific） | per-call | OPEN | rust-main | `{provider:"workspace"或"ssh",tool,arguments}` → 对应操作结果。仅复用宿主明确授权的 workspace/SSH，宿主读取并使用凭据，不返回凭据；通用入口同时包含执行、文件写入/传输和取消，保守逐次确认，不能仅按 provider 或只读工具 annotation 放行。`job_start` 返回 jobId，`job_status/job_list` 查询；execute/test/传输可能耗时，不能宣称全部调用立即完成。禁止从 arguments 接收 `callerId/grant/confirmed` 充当权限。 |
 
-Tauri 三命令均已注册，不是未接线计划。`commands.rs` 调用同一 `HostCapabilityService`；权限、scope 与凭据使用边界由 `src-tauri/src/mcp_core/{host_service,host_policy,host_capabilities,host_adapters,workspace,host_tools}.rs` 实施。目录中的 per-call 是插件适配层要求，尚不能用原始 IPC 成功作为“插件确认已生效”的证据。
+前轮 Tauri 三命令均已注册；本轮追加 preview 后共四命令，不是未接线计划。`commands.rs` 调用同一 `HostCapabilityService`；权限、scope 与凭据使用边界由 `src-tauri/src/mcp_core/{host_service,host_policy,host_capabilities,host_adapters,workspace,host_tools}.rs` 实施。目录中的 per-call 是插件适配层要求，尚不能用原始 IPC 成功作为“插件确认已生效”的证据。
 
 #### HTTP twin：已存在的 shared-live / standalone 路由
 
@@ -870,9 +871,10 @@ Tauri 三命令均已注册，不是未接线计划。`commands.rs` 调用同一
 |---|---|---|---|---|
 | GET /mcp/host/access | `src-tauri/src/web/mcp_host_api.rs:59` | se.mcp.hostAccessGet | OPEN-REDACTED / none | 要求 `RemotePrincipal` 且 `IngressProvenance::LocalOperator`；返回 `IpcBody<McpHostAccessView>`，无凭据。 |
 | PUT /mcp/host/access | `src-tauri/src/web/mcp_host_api.rs:76` | se.mcp.hostAccessPut | OPEN / per-call | 同一 provenance 门禁；body `{expectedRevision,policy}`，返回策略或带错误码的 IpcBody（包括 `REVISION_CONFLICT`），不假定冲突一定是 HTTP 409。 |
+| POST /mcp/host/access/preview | `src-tauri/src/web/mcp_host_api.rs:120`；`src-tauri/src/web/router.rs:83,95` | se.mcp.hostAccessPreview | OPEN / none | 两种 provenance 路径均注册，handler 仍 `require_local`；body 为 request，结果为预览或 IPC 错误。无 credentials/network/worker/jobs/persist，不回显原始 command/pattern，PublicTunnel 403。 |
 | POST /mcp/host/call | `src-tauri/src/web/mcp_host_api.rs:96` | se.mcp.hostCall | OPEN / per-call | 同一 provenance 门禁；body `{provider,tool,arguments}`，执行已授权操作；HTTP request drop 取消本次调用的 token。 |
 
-无 principal 为 HTTP 401，非 LocalOperator（包括 PublicTunnel）为 HTTP 403。**PublicTunnel 不能调用这三条接口，连宿主授权候选读取也不能**；不能因为其他 MCP 配置接口支持公开隧道只读，就把这三条误写成公开隧道可读。桌面通过 Tauri，本地 shared-live 和 standalone 通过 HTTP 复用同一服务；`WebHostServices` 注入缺失时返回 `UNAVAILABLE`，不是成功的空列表。接线来源另见 `src-tauri/src/web/mod.rs:514-516`、`src-tauri/src/server_main.rs:525,603`、`src-tauri/src/lib.rs:3638-3652` 与 `src-tauri/src/remote/host.rs`。
+无 principal 为 HTTP 401，非 LocalOperator（包括 PublicTunnel）为 HTTP 403。**PublicTunnel 不能调用这四条接口（前三条及本轮 preview），连宿主授权候选读取也不能**；不能因为其他 MCP 配置接口支持公开隧道只读，就把这四条误写成公开隧道可读。桌面通过 Tauri，本地 shared-live 和 standalone 通过 HTTP 复用同一服务；`WebHostServices` 注入缺失时返回 `UNAVAILABLE`，不是成功的空列表。接线来源另见 `src-tauri/src/web/mod.rs:514-516`、`src-tauri/src/server_main.rs:525,603`、`src-tauri/src/lib.rs:3638-3652` 与 `src-tauri/src/remote/host.rs`。
 
 #### operation-specific scopes（由 se.mcp.hostCall 覆盖，不重复计数）
 
@@ -881,7 +883,7 @@ Tauri 三命令均已注册，不是未接线计划。`commands.rs` 调用同一
 | workspace.group_list / project_list / project_get | R；授权 project 集合及其 group metadata | 全局 policy 和 workspace.enabled 均默认关闭；`projectIds:null` 为显式授权全部，`[]` 为零项目，集合只可见其成员；`includePaths` 独立控制路径投影。分页和分组计数必须先过滤授权项目，不能泄漏未授权成员、preferredProjectId 或总数。registry 未同步返回 `REGISTRY_NOT_READY`，不伪装成真实空集；group/project list 使用 cursor/limit。 |
 | ssh.profile_list / profile_get | R；显式授权 sshProfile | 仅脱敏资料与已授权能力；不读取或回传凭据值，不能把管理接口的全部候选视图误当作此工具输出。profile_list 为 offset/limit 分页。 |
 | ssh.test_connection | W（主动联网）；sshProfile + operation | 仅使用已信任的 host key，不自动登记/改变 host trust；不是仅凭 profile 可见即可测试。 |
-| ssh.execute / job_start | W/D；sshProfile + execute 或 job_start operation | 显式执行授权等于远端账号权限，不承诺 remoteRoots 能沙箱任意 shell；job_start 另需宿主判定平台能力/posixJobs 授权。execute 的 timeoutMs、输出上限均受约束；job_start.runtimeLimit 单位是**毫秒**，不误写成秒。不自动重试执行。 |
+| ssh.execute / job_start | W/D；sshProfile + execute 或 job_start operation | 显式执行授权等于远端账号权限，不承诺 remoteRoots 能沙箱任意 shell；job_start 另需宿主判定平台能力/posixJobs 授权。execute 的 timeoutMs、输出上限均受约束；job_start.runtimeLimit 单位是**毫秒**，不误写成秒。不自动重试执行。  MCP-only 全局/profile commandDeny 并集在凭据/网络/worker/job 副作用前强制检查；直接 MCP managed-job 入口与分发复用同一宿主门禁，非法规则 fail closed；不限制普通终端/PTY/交互 SSH。 |
 | ssh.list_files / read_file | R；sshProfile + operation + remoteRoots | 必须 host-side 校验规范化路径/远端 roots；有限分页、字节偏移与输出上限；读取到的文件内容为不可信数据，不能宣称远端文件天然不含用户敏感内容。list_files 使用 offset/limit，而不是 workspace cursor。 |
 | ssh.write_file | W/D；sshProfile + operation + remoteRoots | 仅创建新 UTF-8 文件；当前不支持覆盖已有文件（overwrite 只允许 false），不把旧 SFTP 的任意覆盖契约套过来。 |
 | ssh.upload / download | W/D；sshProfile + operation + remoteRoots + localRoots | localPath 是 **Se 宿主文件系统**，不是外部 MCP 客户端机器；上传为本地读+远端写，下载为远端读+本地写，不能标成 read-only。单文件、非递归，当前 overwrite 只允许 false。 |
@@ -901,7 +903,7 @@ bridge 的独立 token 不是外部 MCP bearer，也不是插件授权令牌。H
 #### renderer / 持久化状态的覆盖（复用已有 op，不增加前端独有计数）
 
 - **workspace groups**：`src/renderer/hooks/use-projects-persistence.ts:250-278,469-478,738-760` 将 groups 与 project snapshot 一起持久化，并通过 `src/renderer/lib/tauri-remote-api.ts:111-119` → 既有 `remote_sync_projects`（`src-tauri/src/commands.rs:5035-5057`）把 projects/groups/defaultProjectId 同步给宿主 `ProjectRegistry::set_with_groups`。分别由既有 `projects.groups.add/rename/remove/reorder`、`projects.move_to_group/reorder` 与 `se.remote.syncProjects` 覆盖；新增 group summaries、成员顺序及 preferred/default 字段必须做 allowlist 投影，不开放原始 persistence store。activeGroupId 留在客户端本地，不能声称是宿主全局激活组；后端只读查询由 `se.mcp.hostCall` 的 workspace 三工具覆盖，不赋予 renderer 写状态能力。
-- **宿主授权面板状态**：`src/renderer/components/settings/McpHostAccessPanel.tsx:24-401`、`src/renderer/lib/mcp-host-api.ts:13-61`、`src/shared/types/mcp-host.types.ts:25-73`，由 `McpControlPanel.tsx` 挂载。候选/策略加载覆盖 `se.mcp.hostAccessGet`，保存全局 enabled/workspace 范围/includePaths/SSH profiles/operations/roots/posixJobs/fingerprints 覆盖 `se.mcp.hostAccessPut`，测试连接、任务查询/取消覆盖 `se.mcp.hostCall`；未保存表单草稿不另作能力。SSH job UI 需按 operation grant 门禁，PublicTunnel 面板锁定不代替后端鉴权。宿主策略保存于 app-data `mcp-host-policy.json`，不是 renderer 私有持久化授权，也不是凭据文件。
+- **宿主授权面板状态**：`src/renderer/components/settings/McpHostAccessPanel.tsx:24-401`、`src/renderer/lib/mcp-host-api.ts:13-61`、`src/shared/types/mcp-host.types.ts:25-73`，由 `McpControlPanel.tsx` 挂载。候选/策略加载覆盖 `se.mcp.hostAccessGet`，保存全局 enabled/workspace 范围/includePaths/SSH profiles/operations/roots/posixJobs/fingerprints 覆盖 `se.mcp.hostAccessPut`，测试连接、任务查询/取消覆盖 `se.mcp.hostCall`；本轮全局/profile 黑名单编辑仍由 get/put 覆盖，普通授权编辑须保留两层规则；纯管理草稿预览由 `se.mcp.hostAccessPreview` 覆盖，测试 command/草稿只在内存，不存 localStorage/URL/analytics，未保存表单草稿不另作能力。SSH job UI 需按 operation grant 门禁，PublicTunnel 面板锁定不代替后端鉴权。宿主策略保存于 app-data `mcp-host-policy.json`，不是 renderer 私有持久化授权，也不是凭据文件。
 - **事件**：本次未新增独立宿主授权变更或 job progress 插件事件，不发明 `mcp.hostAccessChanged`、SSH job completion 等 topic。组同步可复用源码已有 `projects_changed`，不重复新增事件计数；现有清单 C 的 renderer event model 仍是 proposed contract，而不是已打通的事实。任务进度以 job_status/job_list 查询为准。
 
 #### 凭据 backend 更正与插件适配边界
@@ -910,7 +912,18 @@ bridge 的独立 token 不是外部 MCP bearer，也不是插件授权令牌。H
 
 宿主复用 SSH 凭据是 OPEN 业务操作，凭据值的直接读写仍按原有 SECRET-EXCLUDED 契约，不把整个 SSH feature 排除；公共管理视图不含密码、passphrase、私钥内容、bearer/私有 bridge token。远端命令输出、文件、日志本身是不可信/可能敏感的业务内容，不能将“宿主不返回凭据存储值”夸大为“任意用户命令输出均无秘密”。
 
-已检查当前没有 `src-tauri/src/capability_host/` 运行时插件 operation registry；现有 `BuiltInRegistry` 是 MCP 内置工具注册器，不等同于插件平台 C1–C3 的 descriptor/provider。此变更仅同步目录；建议运行时插件适配就绪时补充三个 descriptor、按 op-specific scope 的 provider 投影、per-call 确认/审计、越权和 sentinel 测试，**不在本次文档 scope 内修改产品代码或伪称这些已实现**。
+已检查当前没有 `src-tauri/src/capability_host/` 运行时插件 operation registry；现有 `BuiltInRegistry` 是 MCP 内置工具注册器，不等同于插件平台 C1–C3 的 descriptor/provider。此变更仅同步目录；建议运行时插件适配就绪时补充四个 descriptor（前轮三个及本轮 preview）、按 op-specific scope 的 provider 投影、per-call 确认/审计、越权和 sentinel 测试，**不在本次文档 scope 内修改产品代码或伪称这些已实现**。
+
+### SSH 命令黑名单 v2 与纯管理预览（2026-11-07）
+
+本轮新增 `se.mcp.hostAccessPreview`，分类为 **R / global（当前 sshProfile 的管理预览）/ none / OPEN / rust-main**；不是命令执行能力，不新增 MCP provider 子工具。以下为本轮目录契约；transport 注册已只读核对，核心/UI 行为由对应实现与回归验收，不以本次目录检查冒充整体功能验收。
+
+- **v2 策略字段：** `mcp_host_access_get` 返回、`mcp_host_access_put` CAS 保存的 `HostAccessPolicy` 包含 `ssh.commandDeny` 与 `ssh.profiles[profileId].commandDeny` 数组；规则为 `{id,kind:"exact"或"contains"或"regex",pattern}`。v1 缺失字段兼容为空数组，不能因迁移或普通授权编辑隐式扩大授权、丢失规则或重置身份 fingerprints。全局规则与当前 profile 规则取并集，profile 不可覆盖/清除全局 deny；新增授权默认全部 13 个 SSH operations 也不能绕过 deny。非法规则必须整份拒绝、fail closed，不能忽略坏规则继续执行。
+- **共享宿主门禁：** `ssh.execute`、`ssh.job_start`、MCP 专用 managed-job 的直接 JobManager start 及 worker 分发均复用宿主权威规则；初始拒绝须早于凭据解析、网络、worker 入队、job slot/记录/持久化。排队及实际分发前复查权威策略；预览、前端判断或调用者参数不能成为执行许可。job_status/job_list/job_cancel 仍独立授权，不拿内部管理包装命令匹配黑名单，也不承诺追杀已运行任务。
+- **匹配与边界：** exact 对原始 command 整串相等、contains 为字面子串、regex 使用 Rust regex search；不隐式 trim/重写输入。文本 deny 只是防误操作护栏，不是 shell 沙箱，不能保证阻止脚本/变量/解释器/编码等语义绕过，也不控制普通本地终端、PTY/terminal-core、交互 SSH shell 或其他 SSH 客户端；这些终端路径及共享底层连接不读取/追加该 MCP-only policy。是否限制按 MCP 工具调用链判断，从终端启动 MCP 客户端仍受限。文件与 SFTP 操作继续按各自 roots/operation 授权，不能宣称它们自动受到命令黑名单控制。
+- **纯管理 preview：** `mcp_host_access_preview(request)` 输入 `{profileId,operation:"execute"或"job_start",command,policy?:HostAccessPolicy}`，policy 是可选未保存草稿；输出 `{outcome:"matched"或"not_matched",matches:[{id,source:"global"或"profile"}],policyRevision,draft,blockedBy?}`。返回匹配 ID/来源，不回显原始 command、pattern 或匹配片段；非法规则经 IPC 错误返回，不伪装成 `not_matched`。未命中不等于可执行，仍需展示 blockedBy；draft 不写盘、不授予权限、不替换权威策略。
+- **无执行副作用与隐私：** preview 不读取 credentials、不联网、不取得 worker permit/排队、不创建 jobs、不持久化；允许读取必要的策略/profile 管理元数据，不宣称零磁盘读取。测试文本/草稿只在内存，不进 URL、localStorage 或 analytics；日志/审计仅稳定操作、结果码、revision 等元数据，不记 command、pattern、匹配片段或完整异常。规则字段本身不是凭据值，但管理策略/规则文本可能敏感，仍需按调用方 scope 最小化投影，不能把管理员完整 policy 公开给无权限插件。
+- **transport 已接线：** IPC `src-tauri/src/commands.rs:5679-5693`、注册 `src-tauri/src/lib.rs:4066`；HTTP `POST /mcp/host/access/preview` 对应 `src-tauri/src/web/mcp_host_api.rs:120-140`，`src-tauri/src/web/router.rs:83,95` 在两种 provenance 分支均注册（请求 body 上限 1 MiB），但 handler 仍 `require_local`：无 principal 401，PublicTunnel/非 LocalOperator 403，缺服务返回 `UNAVAILABLE`。HTTP twin 不另计能力；桌面、shared-live、standalone 与 browser 复用同一 preview 服务，不提供 public tunnel 只读豁免。
 
 ## 不变量
 
@@ -930,6 +943,8 @@ bridge 的独立 token 不是外部 MCP bearer，也不是插件授权令牌。H
 8. **私有 bridge 永不成为插件凭据获取接口。** `/v1/call` 与 `/v1/cancel` 均 INTERNAL；descriptor/token 留在用户私有 loopback 信任边界。取消只传播请求意图，除非有真实远端证据，不能报告 termination confirmed；Tauri/web/gateway 的取消能力差异必须如实呈现。
 9. **脱敏不等于 metadata 无风险。** `hostAccessGet` 的候选 profile、project id/name、policy roots/路径仍按调用者 scope 最小化；原始本地管理员视图不可直接当作无权限插件 DTO。凭据 backend 是用户私有文件，不再称作 OS keychain。
 
+10. **命令 deny 不可降级成前端提示。** 全局与 profile 规则只叠加，execute/job_start 和直接 job 入口共享宿主 fail-closed 门禁；默认 13 操作授权、草稿预览和 `not_matched` 均不能越过它。纯管理 preview 不执行、不保存、不返回原始 command/pattern，不改变普通 PTY 或远端 shell 的安全模型。
+
 ## 验收
 
 1. **覆盖完整：** 自动比对 `src-tauri/src/lib.rs` 的 `generate_handler!` 和注册表。每个命令必须恰好对应一个 OPEN、OPEN-REDACTED、SECRET-EXCLUDED 或 INTERNAL 条目，新增命令没有分类时 CI 失败。
@@ -939,5 +954,6 @@ bridge 的独立 token 不是外部 MCP bearer，也不是插件授权令牌。H
 5. **验收场景 H1：** 第三方插件「整理历史会话」完整跑通（见 `plugin-platform-plan` 的 H1）。
 6. **核实遗留项：** 以下各项要逐项核实，结论写回本清单：`conversation_migration_control` 的参数、`acp_fetch_registry_snapshot` 和 `acp_install_registry_binary` 的实现、`RemoteStatus` 的字段、`plugin_web_read` 的路径限定、通知 store、命令面板的置顶与最近使用、项目默认 shell 的写入路径。
 
-7. **本次目录同步检查：** `python3 .agents/skills/plugin-capability-sync/scripts/check_catalog.py` 应输出 `registered commands: 328; unclassified: 0`；合并统计为后端 328（OPEN 291 / OPEN-REDACTED 12 / SECRET-EXCLUDED 8 / INTERNAL 17）与前端 38，共 366。确认既有来源、清单及事件完整保留，新增命令各仅一个主分类；三条 HTTP twin、两条 INTERNAL bridge 路由和 provider 子工具不重复计数。历史 explorer 子表继续按原约定保留。
-8. **后续插件运行时验收（本次不宣称通过）：** 三个新 op 的成功/越权/无确认 per-call/哨兵不泄漏测试；所有 workspace group 计数先过滤授权成员，未同步区别于空集；SSH profile+operation+roots+job 归属限制；HTTP 无 principal 为 401、PublicTunnel 为 403、缺服务为 UNAVAILABLE；私有 bridge token 不出插件边界，取消不误报远端停止。检查策略或相关表单改动不能隐式扩大授权；按插件身份隔离若未实现必须明确标注，不得以共享 MCP policy 冒充多租户授权。
+7. **本次目录同步检查：** `python3 .agents/skills/plugin-capability-sync/scripts/check_catalog.py` 应输出 `registered commands: 329; unclassified: 0`；合并统计为后端 329（OPEN 292 / OPEN-REDACTED 12 / SECRET-EXCLUDED 8 / INTERNAL 17）与前端 38，共 367；原宿主 MCP 追加后的后端 328 / OPEN 291、总计 366 / OPEN 329 为本轮前基线，仅新增 preview 一个 OPEN。确认既有来源、清单及事件完整保留，新增命令各仅一个主分类；四条 HTTP twin（前轮三条及本轮 preview）、两条 INTERNAL bridge 路由和 provider 子工具不重复计数。历史 explorer 子表继续按原约定保留。
+8. **后续插件运行时验收（本次不宣称通过）：** 四个增量 op 的成功/越权/哨兵不泄漏测试（其中 put/call 的无确认 per-call 拒绝；get/preview 为 none）；所有 workspace group 计数先过滤授权成员，未同步区别于空集；SSH profile+operation+roots+job 归属限制；HTTP 无 principal 为 401、PublicTunnel 为 403、缺服务为 UNAVAILABLE；私有 bridge token 不出插件边界，取消不误报远端停止。检查策略或相关表单改动不能隐式扩大授权；按插件身份隔离若未实现必须明确标注，不得以共享 MCP policy 冒充多租户授权。
+9. **本轮 SSH deny 目录契约（运行时由对应 owner 验收，本次仅静态同步）：** 覆盖 v2 规则读写、全局/profile 并集、非法规则 fail closed、默认全部 13 操作仍受 deny、execute/job_start/direct-job/worker 统一门禁及普通授权编辑保留规则；preview 的 matched/not_matched、matches ID/source、policyRevision/draft/blockedBy 与非法规则 IPC 错误均有对应实现验收。验证 preview 零 credentials/network/worker/jobs/persist、无 command/pattern 回显及日志泄漏；两种 HTTP provenance 分支均注册但 PublicTunnel 必须 403。不得把目录 checker 通过写成 Rust/UI 功能回归或插件 registry 已实现。
