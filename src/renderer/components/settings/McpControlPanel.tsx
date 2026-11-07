@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { McpGatewayConfigSection } from '@/components/settings/McpGatewayConfigSection'
 import { McpHostAccessPanel } from '@/components/settings/McpHostAccessPanel'
 import { McpServersSettings } from '@/components/settings/McpServersSettings'
 import { MemoryMcpConfigSection } from '@/components/settings/MemoryMcpConfigSection'
@@ -45,6 +46,8 @@ export function McpControlPanel(): React.JSX.Element {
           {saveError ?? loadError}
         </p>
       )}
+
+      <McpGatewayConfigSection />
 
       <section className="space-y-3 rounded-lg border border-border bg-secondary/20 p-4">
         <div>

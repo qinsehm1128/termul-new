@@ -265,7 +265,7 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.mcp.startGateway | mcp_service_start `commands.rs:5687` | W | profile | grant | OPEN | starts/upgrades the gateway if not running or version-mismatched |
 | se.mcp.restartGateway | mcp_service_restart `commands.rs:5697` | W | profile | grant | OPEN | restarts the gateway |
 | se.mcp.setGatewayPort | mcp_service_set_port `commands.rs:5709` | W | profile | grant | OPEN | in port; rewrites gateway settings; agents pick it up on the next request |
-| se.mcp.getConnectionInfo | mcp_connection_info `commands.rs:5731` | R | profile | none | OPEN-REDACTED | out `{command, http endpoint}`; source comment says it **contains the bearer token** — strip it, return `hasToken` |
+| se.mcp.getConnectionInfo | mcp_connection_info `commands.rs:5731` | R | profile | none | OPEN-REDACTED | out `{command, http endpoint}`; source comment says it **contains the bearer token** — strip it, return `hasToken`; MCP服务器页的完整 `se-mcp` JSON/TOML 导出仅使用 `bridge`，明确直连含内置与已启用上游，不复制/展示 bearer，不启动或重启服务、不改变授权；旧 `se-memory` 导出仍仅记忆 |
 | se.mcp.detectClients | mcp_clients_detect `commands.rs:5747` | R | profile | none | OPEN | out `DetectedClient[]` (whether each client already launches se-mcp) |
 | se.mcp.syncClient | mcp_client_sync `commands.rs:5768` | W | profile | per-call | OPEN | in clientId, mode?; writes the `se-mcp` entry into another app's MCP config |
 | se.mcp.unsyncClient | mcp_client_unsync `commands.rs:5793` | W | profile | per-call | OPEN | in clientId; removes that entry |

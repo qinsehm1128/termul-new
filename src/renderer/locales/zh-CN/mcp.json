@@ -169,9 +169,26 @@
     "validation": "{{name}}：{{errors}}",
     "duplicate": "{{name}}：已跳过重复服务器"
   },
+  "export": {
+    "title": "完整 Se MCP · se-mcp",
+    "direct": "直连模式 · 本机 stdio 导出",
+    "description": "通过一个 se-mcp 入口向外部客户端直接展开全部内置工具（含工作区与 SSH 工具）及已启用的上游工具。",
+    "authorization": "工具可见不等于已获授权。宿主与 SSH 操作仍受现有权限控制；导出不会授予或修改访问权限。",
+    "externalOnly": "仅供外部客户端使用。请勿导回 Se 的上游服务器列表，以免形成循环调用。",
+    "desktopOnly": "仅桌面端可用：浏览器、shared-live 和 standalone Web 会话无法导出本机 stdio 命令，请在 Se 桌面端预览或复制。",
+    "format": "配置格式",
+    "formatJson": "MCP JSON",
+    "formatToml": "Codex TOML",
+    "preview": "预览",
+    "copy": "复制完整配置",
+    "copied": "完整 Se MCP 配置已复制",
+    "loadFailed": "读取完整 Se MCP 配置失败，请从 Se 桌面端重试。",
+    "bridgeMissing": "本机 stdio 桥接程序不可用，请检查 Se 桌面端安装后再导出。",
+    "copyFailed": "复制配置失败，请重试。"
+  },
   "memory": {
-    "title": "记忆库 MCP 服务器",
-    "description": "一个通用的记忆库 MCP 服务器，覆盖所有已建索引的项目。粘贴到外部客户端（Claude Desktop、Codex、Claude Code）后，客户端会自行列出项目并选择查询。",
+    "title": "仅记忆 · se-memory（兼容入口）",
+    "description": "可选的旧版入口，仅查询已索引项目的记忆，不包含工作区、SSH 或上游工具。需要完整工具入口时，请使用上方的完整 Se MCP。",
     "format": "配置格式",
     "formatJson": "Claude JSON",
     "formatToml": "Codex TOML",

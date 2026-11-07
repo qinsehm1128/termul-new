@@ -169,9 +169,26 @@
     "validation": "{{name}}: {{errors}}",
     "duplicate": "{{name}}: duplicate server skipped"
   },
+  "export": {
+    "title": "Full Se MCP · se-mcp",
+    "direct": "Direct mode · local stdio export",
+    "description": "Expose all built-in tools (including workspace and SSH tools) and enabled upstream tools directly to external clients via one se-mcp entry.",
+    "authorization": "Tool visibility is not authorization. Host and SSH operations still require their existing permissions; exporting does not grant or change access.",
+    "externalOnly": "For external clients only. Do not import this entry into Se's upstream server list: it would create a loop.",
+    "desktopOnly": "Desktop only: browser, shared-live, and standalone web sessions cannot export a local stdio command. Open Se desktop to preview or copy it.",
+    "format": "Configuration format",
+    "formatJson": "MCP JSON",
+    "formatToml": "Codex TOML",
+    "preview": "Preview",
+    "copy": "Copy full configuration",
+    "copied": "Full Se MCP configuration copied",
+    "loadFailed": "Unable to read the full Se MCP configuration. Try again from Se desktop.",
+    "bridgeMissing": "The local stdio bridge is unavailable. Check the Se desktop installation before exporting.",
+    "copyFailed": "Unable to copy the configuration. Please try again."
+  },
   "memory": {
-    "title": "Memory MCP server",
-    "description": "One universal server for every indexed project. Paste it into an external client (Claude Desktop, Codex, Claude Code); the client lists your projects and picks what to query.",
+    "title": "Memory only · se-memory (compatibility)",
+    "description": "Optional legacy entry for indexed project memory queries only. It does not expose workspace, SSH, or upstream tools. Use Full Se MCP above for the complete tool entry.",
     "format": "Config format",
     "formatJson": "Claude JSON",
     "formatToml": "Codex TOML",
