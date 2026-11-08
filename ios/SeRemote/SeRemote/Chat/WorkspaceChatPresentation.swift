@@ -18,6 +18,28 @@ enum WorkspaceChatPresentation {
         })
     }
 
+    enum PermissionFeedback: Equatable {
+        case approval
+        case denial
+        case failure
+    }
+
+    /// Provider option IDs carry semantics such as `reject_once`; the name is
+    /// a fallback for providers with opaque IDs. A failed request never emits
+    /// either success or denial feedback.
+    static func permissionFeedback(
+        optionID: String?, optionName: String?, acknowledged: Bool
+    ) -> PermissionFeedback {
+        guard acknowledged else { return .failure }
+        guard let optionID else { return .denial }
+        let words = (optionID + " " + (optionName ?? ""))
+            .lowercased().split { !$0.isLetter }
+        let denialWords = ["deny", "denied", "reject", "decline", "cancel"]
+        return words.contains { word in
+            denialWords.contains { word.hasPrefix($0) }
+        } ? .denial : .approval
+    }
+
     static func outcome(_ status: String) -> String {
         switch status {
         case "pending": String(localized: "Queued")

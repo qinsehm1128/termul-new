@@ -51,6 +51,38 @@ struct WorkspaceChatPresentationTests {
         #expect(WorkspaceChatPresentation.outcome("host_cancelled") == "Host Cancelled")
     }
 
+    @Test("Permission feedback follows host acknowledgement, not the tap")
+    func permissionFailureFeedback() {
+        for option in [nil, "allow_once", "reject_once"] as [String?] {
+            #expect(WorkspaceChatPresentation.permissionFeedback(
+                optionID: option, optionName: nil, acknowledged: false
+            ) == .failure)
+        }
+    }
+
+    @Test("Acknowledged explicit denial and provider reject choices warn")
+    func permissionDenialFeedback() {
+        #expect(WorkspaceChatPresentation.permissionFeedback(
+            optionID: nil, optionName: nil, acknowledged: true
+        ) == .denial)
+        #expect(WorkspaceChatPresentation.permissionFeedback(
+            optionID: "reject_once", optionName: "Reject once", acknowledged: true
+        ) == .denial)
+        #expect(WorkspaceChatPresentation.permissionFeedback(
+            optionID: "rejectOnce", optionName: nil, acknowledged: true
+        ) == .denial)
+        #expect(WorkspaceChatPresentation.permissionFeedback(
+            optionID: "opaque-provider-id", optionName: "Deny", acknowledged: true
+        ) == .denial)
+    }
+
+    @Test("Acknowledged approve choices succeed")
+    func permissionApprovalFeedback() {
+        #expect(WorkspaceChatPresentation.permissionFeedback(
+            optionID: "allow_once", optionName: "Approve once", acknowledged: true
+        ) == .approval)
+    }
+
     @Test("Failed execution cannot disappear behind a folded activity")
     func failureAttention() {
         let failed = ToolCard(id: "failed", title: "swift test failed", status: "failed")

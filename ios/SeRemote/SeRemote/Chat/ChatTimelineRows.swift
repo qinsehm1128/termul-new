@@ -307,8 +307,23 @@ struct Receipt {
 
 struct PermissionCardView: View {
     let card: PermissionCard
-    var isSubmitting = false
+    let submission: CardSubmission?
     var onChoose: (String?) -> Void
+    @State private var lastChoice: String?
+    @State private var hasChosen = false
+
+    private var isSubmitting: Bool { submission == .submitting }
+
+    private var retry: (() -> Void)? {
+        guard hasChosen else { return nil }
+        return { onChoose(lastChoice) }
+    }
+
+    private func choose(_ option: String?) {
+        lastChoice = option
+        hasChosen = true
+        onChoose(option)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SeSpace.sm) {
@@ -331,6 +346,14 @@ struct PermissionCardView: View {
                 VStack(spacing: SeSpace.xs) { choices }
             }
             .disabled(isSubmitting)
+            if case .failed(let message) = submission {
+                SeErrorBanner(message: message, retry: retry)
+                if !hasChosen {
+                    Text("Choose an option to retry.")
+                        .font(SeFont.caption)
+                        .foregroundStyle(SeTheme.secondaryInk)
+                }
+            }
             if isSubmitting {
                 Text("Waiting for host…")
                     .font(.caption)
@@ -347,11 +370,11 @@ struct PermissionCardView: View {
 
     @ViewBuilder
     private var choices: some View {
-        Button("Deny") { onChoose(nil) }
+        Button("Deny") { choose(nil) }
             .frame(maxWidth: .infinity, minHeight: 44)
             .buttonStyle(SeSecondaryButtonStyle())
         ForEach(card.options) { option in
-            Button(option.name) { onChoose(option.id) }
+            Button(option.name) { choose(option.id) }
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .buttonStyle(SePrimaryButtonStyle())
         }
@@ -360,8 +383,16 @@ struct PermissionCardView: View {
 
 struct QuestionCardView: View {
     let card: QuestionCard
+    let submission: CardSubmission?
     var onChoose: (String) -> Void
-    @State private var submitted = false
+    @State private var lastChoice: String?
+
+    private var isSubmitting: Bool { submission == .submitting }
+
+    private var retry: (() -> Void)? {
+        guard let lastChoice else { return nil }
+        return { onChoose(lastChoice) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SeSpace.sm) {
@@ -369,12 +400,23 @@ struct QuestionCardView: View {
                 .font(.headline)
             ForEach(card.options) { option in
                 Button(option.label) {
-                    guard !submitted else { return }
-                    submitted = true
+                    lastChoice = option.id
                     onChoose(option.id)
                 }
                 .buttonStyle(SeSecondaryButtonStyle())
-                .disabled(submitted)
+                .disabled(isSubmitting)
+            }
+            if isSubmitting {
+                ProgressView("Waiting for host…")
+                    .font(SeFont.caption)
+            }
+            if case .failed(let message) = submission {
+                SeErrorBanner(message: message, retry: retry)
+                if lastChoice == nil {
+                    Text("Choose an answer to retry.")
+                        .font(SeFont.caption)
+                        .foregroundStyle(SeTheme.secondaryInk)
+                }
             }
         }
         .padding(SeSpace.md)

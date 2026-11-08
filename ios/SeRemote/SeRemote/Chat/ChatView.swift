@@ -16,7 +16,8 @@ struct ChatView: View {
     @State private var pendingSentIDs: Set<String> = []
     @State private var sendHaptic = 0
     @State private var acknowledgedSendIDs: Set<String> = []
-    @State private var inFlightPermissions: [String: PermissionCard] = [:]
+    @State private var cardHapticSerial = 0
+    @State private var cardHaptic: SeHaptic = .success
     @State private var renderedPermissions: [PermissionCard] = []
     @State private var containerWidth: CGFloat = 0
 
@@ -48,6 +49,7 @@ struct ChatView: View {
         .background(SeTheme.canvas)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
         .seHaptic(.send, trigger: sendHaptic)
+        .seHaptic(trigger: cardHapticSerial) { _, _ in cardHaptic }
         .onChange(of: session.chat.timeline, initial: true) { _, items in
             updateTimeline(items)
         }
@@ -74,7 +76,6 @@ struct ChatView: View {
             entranceIDs = []
             pendingSentIDs = []
             acknowledgedSendIDs = []
-            inFlightPermissions = [:]
             renderedPermissions = session.chat.permissions
             renderedTimeline = session.chat.timeline
         }
@@ -248,22 +249,34 @@ struct ChatView: View {
             ScrollView {
                 VStack(spacing: SeSpace.sm) {
                     ForEach(renderedPermissions) { card in
-                        PermissionCardView(card: card, isSubmitting: inFlightPermissions[card.id] != nil) { option in
-                            guard inFlightPermissions[card.id] == nil else { return }
-                            inFlightPermissions[card.id] = card
+                        PermissionCardView(card: card, submission: session.chat.permissionSubmissions[card.id]) { option in
+                            guard session.chat.permissionSubmissions[card.id] != .submitting else { return }
                             Task {
-                                // The store currently removes optimistically and swallows
-                                // errors. Do not emit a false acknowledgement haptic.
-                                await session.chat.respond(permission: card, optionId: option)
-                                inFlightPermissions[card.id] = nil
-                                updatePermissions()
+                                let acknowledged = await session.chat.respond(permission: card, optionId: option)
+                                let feedback = WorkspaceChatPresentation.permissionFeedback(
+                                    optionID: option,
+                                    optionName: card.options.first(where: { $0.id == option })?.name,
+                                    acknowledged: acknowledged
+                                )
+                                switch feedback {
+                                case .approval: cardHaptic = .success
+                                case .denial: cardHaptic = .warning
+                                case .failure: cardHaptic = .error
+                                }
+                                cardHapticSerial += 1
                             }
                         }
                         .seEntrance()
                     }
                     ForEach(session.chat.questions) { card in
-                        QuestionCardView(card: card) { value in
-                            Task { await session.chat.answer(question: card, values: [value]) }
+                        QuestionCardView(card: card, submission: session.chat.questionSubmissions[card.id]) { value in
+                            guard session.chat.questionSubmissions[card.id] != .submitting else { return }
+                            Task {
+                                if !(await session.chat.answer(question: card, values: [value])) {
+                                    cardHaptic = .error
+                                    cardHapticSerial += 1
+                                }
+                            }
                         }
                     }
                 }
@@ -278,11 +291,8 @@ struct ChatView: View {
     }
 
     private func updatePermissions() {
-        var cards = session.chat.permissions
-        let known = Set(cards.map(\.id))
-        cards += inFlightPermissions.values.filter { !known.contains($0.id) }.sorted { $0.id < $1.id }
         seWithAnimation(.disclosure, reduceMotion: reduceMotion) {
-            renderedPermissions = cards
+            renderedPermissions = session.chat.permissions
         }
     }
 
