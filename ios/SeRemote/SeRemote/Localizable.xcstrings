@@ -4,11 +4,78 @@
     "" : {
 
     },
+    " " : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " "
+          }
+        }
+      }
+    },
     "/" : {
 
     },
     "%lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld"
+          }
+        }
+      }
+    },
+    "%lld added" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增 %lld 行"
+          }
+        }
+      }
+    },
+    "%lld ahead" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领先 %lld"
+          }
+        }
+      }
+    },
+    "%lld behind" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "落后 %lld"
+          }
+        }
+      }
+    },
+    "%lld commits" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个 commit"
+          }
+        }
+      }
+    },
+    "%lld files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个文件"
+          }
+        }
+      }
     },
     "%lld new" : {
 
@@ -23,8 +90,55 @@
         }
       }
     },
+    "%lld new messages" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条新消息"
+          }
+        }
+      }
+    },
+    "%lld of %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 个，共 %lld 个"
+          }
+        }
+      }
+    },
     "%lld percent" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "百分之 %lld"
+          }
+        }
+      }
+    },
+    "%lld removed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 %lld 行"
+          }
+        }
+      }
+    },
+    "%lld staged" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂存 %lld"
+          }
+        }
+      }
     },
     "%lld turns" : {
       "localizations" : {
@@ -36,8 +150,98 @@
         }
       }
     },
+    "%llu days" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%llu 天"
+          }
+        }
+      }
+    },
+    "%llu hours" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%llu 小时"
+          }
+        }
+      }
+    },
+    "%llu minutes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%llu 分钟"
+          }
+        }
+      }
+    },
+    "%llu seconds" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%llu 秒"
+          }
+        }
+      }
+    },
+    "1 day" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 天"
+          }
+        }
+      }
+    },
+    "1 hour" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 小时"
+          }
+        }
+      }
+    },
+    "1 minute" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 分钟"
+          }
+        }
+      }
+    },
+    "1 second" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 秒"
+          }
+        }
+      }
+    },
     "A conversation or project is required." : {
 
+    },
+    "A read-only text snapshot from the host. This is not live screen sharing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自主机的只读文本快照，并非实时屏幕共享。"
+          }
+        }
+      }
     },
     "A scanned or pasted link stays here for the next open." : {
       "localizations" : {
@@ -49,23 +253,144 @@
         }
       }
     },
+    "A terminal was started on the host; it is not attached here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在主机上启动终端，但未连接到此处。"
+          }
+        }
+      }
+    },
+    "About" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于"
+          }
+        }
+      }
+    },
     "ACP" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ACP"
+          }
+        }
+      }
     },
     "Active" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前"
+          }
+        }
+      }
+    },
+    "Active project root" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前项目根目录"
+          }
+        }
+      }
+    },
+    "Actor" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作者"
+          }
+        }
+      }
     },
     "Actual Size" : {
 
     },
+    "Added" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已添加"
+          }
+        }
+      }
+    },
+    "Added %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加于 %@"
+          }
+        }
+      }
+    },
+    "After" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "之后"
+          }
+        }
+      }
+    },
     "Agent" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
+          }
+        }
+      }
+    },
+    "Agent configuration" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 配置"
+          }
+        }
+      }
     },
     "Agent question" : {
 
     },
     "Align the QR code inside the frame" : {
 
+    },
+    "All terminals for this shortcut were closed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此快捷方式的所有终端已关闭。"
+          }
+        }
+      }
+    },
+    "An existing host terminal was found; it is not attached here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找到了现有的主机终端，但未连接到此处。"
+          }
+        }
+      }
     },
     "Appearance" : {
       "localizations" : {
@@ -80,6 +405,56 @@
     "Approval needed" : {
 
     },
+    "Arrow down" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下方向键"
+          }
+        }
+      }
+    },
+    "Arrow left" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "左方向键"
+          }
+        }
+      }
+    },
+    "Arrow right" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "右方向键"
+          }
+        }
+      }
+    },
+    "Arrow up" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上方向键"
+          }
+        }
+      }
+    },
+    "Audit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "审计"
+          }
+        }
+      }
+    },
     "Back" : {
 
     },
@@ -93,8 +468,115 @@
         }
       }
     },
+    "Back to the field." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随时回到工作现场。"
+          }
+        }
+      }
+    },
     "Background alerts" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台提醒"
+          }
+        }
+      }
+    },
+    "Background alerts notify when an agent finishes a turn, asks for approval, or a terminal exits while the app is in the background. Haptics confirm actions and outcomes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App 在后台时，Agent 完成本轮、请求批准或终端退出都会触发提醒。触感反馈用于确认操作和结果。"
+          }
+        }
+      }
+    },
+    "Backspace" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退格"
+          }
+        }
+      }
+    },
+    "Before" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "之前"
+          }
+        }
+      }
+    },
+    "Binary file · no source preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "二进制文件 · 无法预览源码"
+          }
+        }
+      }
+    },
+    "Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "branch"
+          }
+        }
+      }
+    },
+    "Branches" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "branch 列表"
+          }
+        }
+      }
+    },
+    "Bring your desktop along." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把电脑带在身边。"
+          }
+        }
+      }
+    },
+    "Build" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "构建版本"
+          }
+        }
+      }
+    },
+    "Camera access is requested only when you open the scanner. You can always paste the URL instead." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在打开扫描器时请求相机权限，也可随时改为粘贴 URL。"
+          }
+        }
+      }
     },
     "Camera unavailable" : {
       "localizations" : {
@@ -107,7 +589,64 @@
       }
     },
     "Cancel" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
+    "Cancelled" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消"
+          }
+        }
+      }
+    },
+    "Captured" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取时间"
+          }
+        }
+      }
+    },
+    "Catch up" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "补跑"
+          }
+        }
+      }
+    },
+    "Catch-up window" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "补跑时间窗口"
+          }
+        }
+      }
+    },
+    "Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改"
+          }
+        }
+      }
     },
     "Chat" : {
       "localizations" : {
@@ -130,11 +669,118 @@
         }
       }
     },
+    "Checked out in another worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在另一个工作树中检出"
+          }
+        }
+      }
+    },
+    "Choose a file to view its read-only contents." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择文件以查看其只读内容。"
+          }
+        }
+      }
+    },
+    "Choose a session or project" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择会话或项目"
+          }
+        }
+      }
+    },
+    "Choose a terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择终端"
+          }
+        }
+      }
+    },
+    "Choose an answer to retry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择一个答案以重试。"
+          }
+        }
+      }
+    },
+    "Choose an option to retry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择一个选项以重试。"
+          }
+        }
+      }
+    },
     "Choose from the sidebar" : {
 
     },
+    "Clear filter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除筛选"
+          }
+        }
+      }
+    },
+    "Clear line" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除本行"
+          }
+        }
+      }
+    },
+    "Clear name filter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除名称筛选"
+          }
+        }
+      }
+    },
+    "Clear screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清屏"
+          }
+        }
+      }
+    },
     "Clear search" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除搜索"
+          }
+        }
+      }
     },
     "Close" : {
       "localizations" : {
@@ -146,8 +792,135 @@
         }
       }
     },
+    "Close all terminals" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭所有终端"
+          }
+        }
+      }
+    },
     "Collapse" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起"
+          }
+        }
+      }
+    },
+    "Collapsed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收起"
+          }
+        }
+      }
+    },
+    "Command" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令"
+          }
+        }
+      }
+    },
+    "Completed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
+          }
+        }
+      }
+    },
+    "Confirm host action" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认主机操作"
+          }
+        }
+      }
+    },
+    "Conflict" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "冲突"
+          }
+        }
+      }
+    },
+    "Connect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接"
+          }
+        }
+      }
+    },
+    "CONNECT A HOST" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接主机"
+          }
+        }
+      }
+    },
+    "Connect only to a desktop you trust. The access secret stays on this device and is sent only to that host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请仅连接你信任的电脑。访问密钥保存在此设备上，仅发送给该主机。"
+          }
+        }
+      }
+    },
+    "Connect to a trusted host. Pick up where you left off." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接受信任的主机，接着上次的进度继续。"
+          }
+        }
+      }
+    },
+    "Connected host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连接的主机"
+          }
+        }
+      }
+    },
+    "Connecting" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在连接"
+          }
+        }
+      }
     },
     "Connecting to host…" : {
       "localizations" : {
@@ -155,6 +928,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在连接主机…"
+          }
+        }
+      }
+    },
+    "Context" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文"
+          }
+        }
+      }
+    },
+    "Continue the conversation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续对话"
           }
         }
       }
@@ -169,11 +962,68 @@
         }
       }
     },
+    "Control key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl 键"
+          }
+        }
+      }
+    },
+    "Copied" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制"
+          }
+        }
+      }
+    },
     "Copy" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制"
+          }
+        }
+      }
+    },
+    "Copy file text" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制文件文本"
+          }
+        }
+      }
     },
     "Copy Path" : {
 
+    },
+    "Copy snapshot" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制快照"
+          }
+        }
+      }
+    },
+    "Copy terminal ID" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制终端 ID"
+          }
+        }
+      }
     },
     "Could not confirm the computer session. Pull to refresh, then try again." : {
 
@@ -209,8 +1059,198 @@
         }
       }
     },
+    "Create" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建"
+          }
+        }
+      }
+    },
+    "Create a persistent host shortcut in a workspace folder or the active project root." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在工作区文件夹或当前项目根目录中创建持久保存的主机快捷方式。"
+          }
+        }
+      }
+    },
+    "Create a session on the desktop to continue it here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在电脑上创建会话，即可在这里继续。"
+          }
+        }
+      }
+    },
+    "Create another terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再创建一个终端"
+          }
+        }
+      }
+    },
+    "Creating on host…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在主机上创建…"
+          }
+        }
+      }
+    },
+    "Cron %@ · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cron %@ · %@"
+          }
+        }
+      }
+    },
+    "Ctrl" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl"
+          }
+        }
+      }
+    },
+    "Ctrl · Held" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl · 按住"
+          }
+        }
+      }
+    },
+    "Ctrl · Latched" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl · 锁定"
+          }
+        }
+      }
+    },
+    "Ctrl+A" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+A"
+          }
+        }
+      }
+    },
+    "Ctrl+C" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+C"
+          }
+        }
+      }
+    },
+    "Ctrl+D" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+D"
+          }
+        }
+      }
+    },
+    "Ctrl+E" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+E"
+          }
+        }
+      }
+    },
+    "Ctrl+L" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+L"
+          }
+        }
+      }
+    },
+    "Ctrl+R" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+R"
+          }
+        }
+      }
+    },
+    "Ctrl+U" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+U"
+          }
+        }
+      }
+    },
+    "Ctrl+W" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+W"
+          }
+        }
+      }
+    },
+    "Ctrl+Z" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ctrl+Z"
+          }
+        }
+      }
+    },
     "Current" : {
 
+    },
+    "Current branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前 branch"
+          }
+        }
+      }
     },
     "Dark" : {
       "localizations" : {
@@ -222,17 +1262,98 @@
         }
       }
     },
+    "Default text size" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认字号"
+          }
+        }
+      }
+    },
     "Delete" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除"
+          }
+        }
+      }
+    },
+    "Delete %@ and end all its running shells? The host folder is kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 %@ 并结束其所有运行中的 shell？主机上的文件夹会保留。"
+          }
+        }
+      }
+    },
+    "Delete quick terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除快捷终端"
+          }
+        }
+      }
+    },
+    "Delete saved host?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除已保存的主机？"
+          }
+        }
+      }
+    },
+    "Delete shortcut" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除快捷方式"
+          }
+        }
+      }
     },
     "Delete this session?" : {
 
     },
+    "Delete word" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除单词"
+          }
+        }
+      }
+    },
     "Deleted" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已删除"
+          }
+        }
+      }
     },
     "Deny" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拒绝"
+          }
+        }
+      }
     },
     "Desk actions" : {
       "localizations" : {
@@ -257,6 +1378,46 @@
     "Desktop" : {
 
     },
+    "Desktop access URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑访问 URL"
+          }
+        }
+      }
+    },
+    "Desktop fit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适配桌面"
+          }
+        }
+      }
+    },
+    "Diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "diff"
+          }
+        }
+      }
+    },
+    "Disconnect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "断开连接"
+          }
+        }
+      }
+    },
     "Disconnected from the host." : {
       "localizations" : {
         "zh-Hans" : {
@@ -268,7 +1429,14 @@
       }
     },
     "Dismiss" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        }
+      }
     },
     "Done" : {
       "localizations" : {
@@ -281,10 +1449,47 @@
       }
     },
     "Edit & Resend" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑并重发"
+          }
+        }
+      }
+    },
+    "Empty file" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空文件"
+          }
+        }
+      }
     },
     "Empty folder" : {
 
+    },
+    "End all running shells for %@? Unsaved work may be lost. The shortcut and folder are kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束 %@ 的所有运行中的 shell？未保存的工作可能丢失。快捷方式和文件夹会保留。"
+          }
+        }
+      }
+    },
+    "End of line" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行尾"
+          }
+        }
+      }
     },
     "English" : {
       "localizations" : {
@@ -296,14 +1501,158 @@
         }
       }
     },
+    "Enter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回车"
+          }
+        }
+      }
+    },
+    "Error code" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "错误代码"
+          }
+        }
+      }
+    },
+    "Esc" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esc"
+          }
+        }
+      }
+    },
+    "Escape" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esc 键"
+          }
+        }
+      }
+    },
+    "Every %@ · UTC · anchored %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每 %@ · UTC · 起算于 %@"
+          }
+        }
+      }
+    },
+    "Execution policy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行策略"
+          }
+        }
+      }
+    },
+    "Execution target" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行目标"
+          }
+        }
+      }
+    },
+    "Existing worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现有工作树"
+          }
+        }
+      }
+    },
     "Expand" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开"
+          }
+        }
+      }
+    },
+    "Expanded" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已展开"
+          }
+        }
+      }
+    },
+    "Failed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败"
+          }
+        }
+      }
+    },
+    "Feedback" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "反馈"
+          }
+        }
+      }
     },
     "File" : {
 
     },
     "File editing is desktop-only. Changes need the host's local web client." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件编辑仅支持电脑端。修改需使用主机上的本地 Web 客户端。"
+          }
+        }
+      }
+    },
+    "File preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件预览"
+          }
+        }
+      }
+    },
+    "File text copied" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件文本已复制"
+          }
+        }
+      }
     },
     "Files" : {
       "localizations" : {
@@ -315,17 +1664,248 @@
         }
       }
     },
+    "Filter names in this folder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选此文件夹中的名称"
+          }
+        }
+      }
+    },
+    "Find text in the current workspace." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在当前工作区中查找文本。"
+          }
+        }
+      }
+    },
+    "Finished" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束时间"
+          }
+        }
+      }
+    },
     "Fit the phone" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适配手机"
+          }
+        }
+      }
+    },
+    "Fixed-string, case-insensitive search. Up to 500 characters." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按固定文本搜索，不区分大小写。最多 500 个字符。"
+          }
+        }
+      }
     },
     "Folder" : {
 
     },
+    "Folder unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹不可用"
+          }
+        }
+      }
+    },
+    "Git" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git"
+          }
+        }
+      }
+    },
+    "Git and Files are read-only. View changes and browse files without modifying your desktop." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 和文件仅供查看。查看更改、浏览文件不会修改电脑上的内容。"
+          }
+        }
+      }
+    },
+    "Git sections" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 分区"
+          }
+        }
+      }
+    },
+    "Go back to inspect the selected workspace." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回以查看所选工作区。"
+          }
+        }
+      }
+    },
+    "Haptic feedback" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "触感反馈"
+          }
+        }
+      }
+    },
+    "Header" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件头"
+          }
+        }
+      }
+    },
+    "Held" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按住"
+          }
+        }
+      }
+    },
     "Hide keyboard" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏键盘"
+          }
+        }
+      }
+    },
+    "History" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "历史"
+          }
+        }
+      }
+    },
+    "History will appear after the first commit." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首次 commit 后将显示历史。"
+          }
+        }
+      }
+    },
+    "Host accepted the run request. Check run history for its outcome." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机已接受运行请求。请查看运行历史以了解结果。"
+          }
+        }
+      }
+    },
+    "Host acknowledged the status change." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机已确认状态更改。"
+          }
+        }
+      }
     },
     "Host received" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机已收到"
+          }
+        }
+      }
+    },
+    "Host screen text" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机屏幕文本"
+          }
+        }
+      }
+    },
+    "Host status is checked when you open it. Git and Files are read-only." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开主机时会检查其状态。Git 和文件仅供查看。"
+          }
+        }
+      }
+    },
+    "Host terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机终端"
+          }
+        }
+      }
+    },
+    "Host terminal screen engine" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机终端屏幕引擎"
+          }
+        }
+      }
+    },
+    "Host workspace" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机工作区"
+          }
+        }
+      }
     },
     "How it works" : {
       "localizations" : {
@@ -333,6 +1913,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作方式"
+          }
+        }
+      }
+    },
+    "https://host.example/#access_token=…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "https://host.example/#access_token=…"
           }
         }
       }
@@ -347,12 +1937,682 @@
         }
       }
     },
+    "Ignored" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已忽略"
+          }
+        }
+      }
+    },
+    "Inspect its prompt, policy and run history." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看其提示词、策略和运行历史。"
+          }
+        }
+      }
+    },
+    "Interrupt" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中断"
+          }
+        }
+      }
+    },
+    "Language and appearance apply to this app." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语言和外观设置仅适用于此 App。"
+          }
+        }
+      }
+    },
+    "Last connected %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次连接 %@"
+          }
+        }
+      }
+    },
+    "Last opened %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次打开 %@"
+          }
+        }
+      }
+    },
+    "Latched" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "锁定"
+          }
+        }
+      }
+    },
+    "Line %lld: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 行：%@"
+          }
+        }
+      }
+    },
+    "Live" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时"
+          }
+        }
+      }
+    },
+    "Loading diff…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载 diff…"
+          }
+        }
+      }
+    },
+    "Loading files…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载文件…"
+          }
+        }
+      }
+    },
+    "Loading quick terminals…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载快捷终端…"
+          }
+        }
+      }
+    },
+    "Loading task details…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载任务详情…"
+          }
+        }
+      }
+    },
+    "Loading tasks…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载任务…"
+          }
+        }
+      }
+    },
+    "Manage persistent host terminal shortcuts." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理持久保存的主机终端快捷方式。"
+          }
+        }
+      }
+    },
+    "Manage quick terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理快捷终端"
+          }
+        }
+      }
+    },
+    "Modified" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已修改"
+          }
+        }
+      }
+    },
+    "Name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称"
+          }
+        }
+      }
+    },
+    "Names in this folder only. File contents are not searched." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅筛选此文件夹中的名称，不搜索文件内容。"
+          }
+        }
+      }
+    },
+    "Needs approval" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要批准"
+          }
+        }
+      }
+    },
+    "New quick terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建快捷终端"
+          }
+        }
+      }
+    },
+    "Next run" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次运行"
+          }
+        }
+      }
+    },
+    "Next run: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次运行：%@"
+          }
+        }
+      }
+    },
+    "No audit events." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无审计事件。"
+          }
+        }
+      }
+    },
+    "No branches" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无 branch"
+          }
+        }
+      }
+    },
+    "No commits yet" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无 commit"
+          }
+        }
+      }
+    },
+    "No corresponding line" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无对应行"
+          }
+        }
+      }
+    },
+    "No files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无文件"
+          }
+        }
+      }
+    },
+    "No matches" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配结果"
+          }
+        }
+      }
+    },
+    "No matching names" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的名称"
+          }
+        }
+      }
+    },
+    "No quick terminals" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无快捷终端"
+          }
+        }
+      }
+    },
+    "No runs yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无运行记录。"
+          }
+        }
+      }
+    },
+    "No scheduled tasks" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无定时任务"
+          }
+        }
+      }
+    },
+    "No sessions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无会话"
+          }
+        }
+      }
+    },
+    "No staged changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无已暂存的更改"
+          }
+        }
+      }
+    },
+    "No stashes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无贮藏"
+          }
+        }
+      }
+    },
+    "No summary available." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无摘要。"
+          }
+        }
+      }
+    },
+    "No terminals" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无终端"
+          }
+        }
+      }
+    },
+    "No text is shown because the host could not confirm a consistent screen. Refresh after the terminal settles." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机无法确认屏幕状态一致，因此未显示文本。请待终端稳定后刷新。"
+          }
+        }
+      }
+    },
+    "No textual diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无文本 diff"
+          }
+        }
+      }
+    },
+    "No unstaged changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无未暂存的更改"
+          }
+        }
+      }
+    },
+    "No upstream configured" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未配置上游"
+          }
+        }
+      }
+    },
+    "No workspace selected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未选择工作区"
+          }
+        }
+      }
+    },
+    "None" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无"
+          }
+        }
+      }
+    },
+    "Not connected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未连接"
+          }
+        }
+      }
+    },
+    "Not connected to the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未连接到主机。"
+          }
+        }
+      }
+    },
+    "Not finished" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未结束"
+          }
+        }
+      }
+    },
+    "Not scheduled" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安排"
+          }
+        }
+      }
+    },
     "Not started" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "未启动"
+          }
+        }
+      }
+    },
+    "Notifications are not allowed. Enable them in iOS Settings to receive background alerts." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知未获授权。请在 iOS 设置中启用，以接收后台提醒。"
+          }
+        }
+      }
+    },
+    "Offline" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线"
+          }
+        }
+      }
+    },
+    "Once · UTC · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "单次 · UTC · %@"
+          }
+        }
+      }
+    },
+    "Online" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在线"
+          }
+        }
+      }
+    },
+    "Only the last 80 lines are shown. The host truncated this snapshot." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅显示最后 80 行。主机截断了此快照。"
+          }
+        }
+      }
+    },
+    "Open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开"
+          }
+        }
+      }
+    },
+    "Open a conversation or project to inspect its repository." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开对话或项目以查看其仓库。"
+          }
+        }
+      }
+    },
+    "Open a terminal in this workspace first, then return to capture its text." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先在此工作区打开终端，再返回获取其文本。"
+          }
+        }
+      }
+    },
+    "Open folder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开文件夹"
+          }
+        }
+      }
+    },
+    "Open host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开主机"
+          }
+        }
+      }
+    },
+    "Open on host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在主机上打开"
+          }
+        }
+      }
+    },
+    "Open read-only preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开只读预览"
+          }
+        }
+      }
+    },
+    "Open scanner" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开扫描器"
+          }
+        }
+      }
+    },
+    "Open SeRemote on your desktop, then scan its QR code or copy its access URL." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在电脑上打开 SeRemote，然后扫描二维码或复制访问 URL。"
+          }
+        }
+      }
+    },
+    "Open SeRemote on your desktop. Scan or paste its access link. You choose when to connect." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在电脑上打开 SeRemote，扫描或粘贴访问链接，由你决定何时连接。"
+          }
+        }
+      }
+    },
+    "Open this file in Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在“文件”中打开此文件"
+          }
+        }
+      }
+    },
+    "Open this folder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开此文件夹"
+          }
+        }
+      }
+    },
+    "Open this host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开此主机"
+          }
+        }
+      }
+    },
+    "Opening preview…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在打开预览…"
           }
         }
       }
@@ -422,7 +2682,14 @@
 
     },
     "Larger terminal text" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放大终端文字"
+          }
+        }
+      }
     },
     "Light" : {
       "localizations" : {
@@ -444,13 +2711,27 @@
 
     },
     "Mode" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模式"
+          }
+        }
+      }
     },
     "Mode, model, and thinking come from the host agent after the session is live. If they stay empty, keep this chat open on the Mac once so the agent can advertise them, then pull to refresh." : {
 
     },
     "Model" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型"
+          }
+        }
+      }
     },
     "Need you" : {
       "localizations" : {
@@ -500,7 +2781,14 @@
       }
     },
     "New Terminal" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建终端"
+          }
+        }
+      }
     },
     "Next Terminal" : {
 
@@ -516,13 +2804,27 @@
       }
     },
     "No live terminal" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无运行中的终端"
+          }
+        }
+      }
     },
     "No messages yet" : {
 
     },
     "No projects" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无项目"
+          }
+        }
+      }
     },
     "No saved desks" : {
       "localizations" : {
@@ -541,10 +2843,24 @@
 
     },
     "Not received" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未收到"
+          }
+        }
+      }
     },
     "Off" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        }
+      }
     },
     "OK" : {
 
@@ -556,7 +2872,14 @@
 
     },
     "Open a project on the desktop to watch its terminals here." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在电脑上打开项目，即可在这里查看其终端。"
+          }
+        }
+      }
     },
     "Open a session before switching agents." : {
 
@@ -593,7 +2916,14 @@
       }
     },
     "Open project" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开项目"
+          }
+        }
+      }
     },
     "Open Se to answer." : {
 
@@ -646,12 +2976,122 @@
         }
       }
     },
+    "Overlap" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重叠执行"
+          }
+        }
+      }
+    },
+    "Pair a host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对主机"
+          }
+        }
+      }
+    },
+    "Pair a trusted host to return to your sessions, terminal and files." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对受信任的主机，继续访问会话、终端和文件。"
+          }
+        }
+      }
+    },
+    "Pairing method" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对方式"
+          }
+        }
+      }
+    },
+    "Paste" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴"
+          }
+        }
+      }
+    },
     "Paste access link" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "粘贴访问链接"
+          }
+        }
+      }
+    },
+    "Paste from clipboard" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从剪贴板粘贴"
+          }
+        }
+      }
+    },
+    "Paste URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴 URL"
+          }
+        }
+      }
+    },
+    "Path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "路径"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停"
+          }
+        }
+      }
+    },
+    "Paused" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂停"
+          }
+        }
+      }
+    },
+    "Pending" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待处理"
           }
         }
       }
@@ -666,8 +3106,25 @@
         }
       }
     },
+    "Permissions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "权限"
+          }
+        }
+      }
+    },
     "Phone" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机"
+          }
+        }
+      }
     },
     "Pick a project to watch its terminals." : {
 
@@ -679,7 +3136,24 @@
 
     },
     "Project" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目"
+          }
+        }
+      }
+    },
+    "Project root" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目根目录"
+          }
+        }
+      }
     },
     "Project view is terminals only. Open a session to talk." : {
       "localizations" : {
@@ -712,8 +3186,378 @@
         }
       }
     },
+    "Prompt" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提示词"
+          }
+        }
+      }
+    },
     "Public hosts need HTTPS. Private LAN ranges such as 192.168.x.x are allowed over HTTP." : {
       "extractionState" : "stale"
+    },
+    "Pull to refresh desktop history. Your phone continues the same host session." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下拉刷新电脑端历史记录。手机将继续同一个主机会话。"
+          }
+        }
+      }
+    },
+    "Queued" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已排队"
+          }
+        }
+      }
+    },
+    "Quick terminal created. Open it to start a shell on the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷终端已创建。打开即可在主机上启动 shell。"
+          }
+        }
+      }
+    },
+    "Quick terminal deleted. Its host folder was kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷终端已删除，主机上的文件夹已保留。"
+          }
+        }
+      }
+    },
+    "Quick terminal renamed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷终端已重命名。"
+          }
+        }
+      }
+    },
+    "Quick terminals" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷终端"
+          }
+        }
+      }
+    },
+    "Quick terminals run on the host. They are separate from this workspace's terminal tabs." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷终端运行在主机上，与本工作区的终端标签相互独立。"
+          }
+        }
+      }
+    },
+    "Read a terminal text snapshot, not live screen sharing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看终端文本快照，并非实时屏幕共享。"
+          }
+        }
+      }
+    },
+    "Read only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读"
+          }
+        }
+      }
+    },
+    "Read-only changes, diffs and history." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以只读方式查看更改、diff 和历史。"
+          }
+        }
+      }
+    },
+    "Read-only host preference. iOS rendering is unchanged." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机的只读设置，不影响 iOS 渲染。"
+          }
+        }
+      }
+    },
+    "Read-only preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读预览"
+          }
+        }
+      }
+    },
+    "Reading up to 80 lines…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取最多 80 行…"
+          }
+        }
+      }
+    },
+    "Ready to capture" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以获取快照"
+          }
+        }
+      }
+    },
+    "Recent history" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近历史"
+          }
+        }
+      }
+    },
+    "Recent hosts" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近的主机"
+          }
+        }
+      }
+    },
+    "Reconnecting" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重新连接"
+          }
+        }
+      }
+    },
+    "Refresh" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新"
+          }
+        }
+      }
+    },
+    "Refresh diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新 diff"
+          }
+        }
+      }
+    },
+    "Refresh Git" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新 Git"
+          }
+        }
+      }
+    },
+    "Refresh snapshot" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新快照"
+          }
+        }
+      }
+    },
+    "Refreshing preview…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在刷新预览…"
+          }
+        }
+      }
+    },
+    "Refreshing repository…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在刷新仓库…"
+          }
+        }
+      }
+    },
+    "Refs" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "引用"
+          }
+        }
+      }
+    },
+    "Remote worktree creation is not available." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不支持远程创建工作树。"
+          }
+        }
+      }
+    },
+    "Removed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除"
+          }
+        }
+      }
+    },
+    "Rename quick terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名快捷终端"
+          }
+        }
+      }
+    },
+    "Renamed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已重命名"
+          }
+        }
+      }
+    },
+    "Repository" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仓库"
+          }
+        }
+      }
+    },
+    "Results were truncated. Narrow your search to find more specific matches." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结果已被截断。请缩小搜索范围以找到更精确的匹配。"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续"
+          }
+        }
+      }
+    },
+    "Reverse search" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "反向搜索"
+          }
+        }
+      }
+    },
+    "Review schedules, run history and task controls." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看计划、运行历史和任务控制。"
+          }
+        }
+      }
+    },
+    "Revision" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修订版本"
+          }
+        }
+      }
+    },
+    "Root" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "根目录"
+          }
+        }
+      }
+    },
+    "Run now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即运行"
+          }
+        }
+      }
     },
     "Running projects first, then desktop groups" : {
       "localizations" : {
@@ -726,10 +3570,24 @@
       }
     },
     "Ready" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "就绪"
+          }
+        }
+      }
     },
     "Reasoning" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考过程"
+          }
+        }
+      }
     },
     "Recent desks" : {
       "localizations" : {
@@ -753,7 +3611,14 @@
       }
     },
     "Regenerate" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新生成"
+          }
+        }
+      }
     },
     "Remove" : {
       "localizations" : {
@@ -766,7 +3631,14 @@
       }
     },
     "Rename" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名"
+          }
+        }
+      }
     },
     "Rename desk" : {
       "localizations" : {
@@ -782,7 +3654,14 @@
 
     },
     "Resend" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重发"
+          }
+        }
+      }
     },
     "Retry" : {
       "localizations" : {
@@ -804,6 +3683,26 @@
         }
       }
     },
+    "Running terminals" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中的终端"
+          }
+        }
+      }
+    },
+    "Runs" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行记录"
+          }
+        }
+      }
+    },
     "Save" : {
       "localizations" : {
         "zh-Hans" : {
@@ -814,12 +3713,32 @@
         }
       }
     },
+    "Save the new title on the host. An empty title restores the default name." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将新标题保存到主机。留空则恢复默认名称。"
+          }
+        }
+      }
+    },
     "Saved connection" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "已保存的连接"
+          }
+        }
+      }
+    },
+    "Scan" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫描"
           }
         }
       }
@@ -840,6 +3759,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "扫描二维码"
+          }
+        }
+      }
+    },
+    "Scan the desktop QR code" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫描电脑上的二维码"
           }
         }
       }
@@ -865,6 +3794,46 @@
         }
       }
     },
+    "Scheduled for" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计划时间"
+          }
+        }
+      }
+    },
+    "Scheduled tasks" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定时任务"
+          }
+        }
+      }
+    },
+    "Screen observation is disabled on this host. The terminal itself is unaffected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机已禁用屏幕观察，终端本身不受影响。"
+          }
+        }
+      }
+    },
+    "Screen text is not available" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "屏幕文本不可用"
+          }
+        }
+      }
+    },
     "Se Remote" : {
       "localizations" : {
         "zh-Hans" : {
@@ -876,25 +3845,170 @@
       }
     },
     "Search" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索"
+          }
+        }
+      }
+    },
+    "Search file contents without changing anything on the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索文件内容，不会更改主机上的任何内容。"
+          }
+        }
+      }
+    },
+    "Search sessions or projects" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索会话或项目"
+          }
+        }
+      }
+    },
+    "Search this workspace" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索此工作区"
+          }
+        }
+      }
+    },
+    "Search workspace contents" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索工作区内容"
+          }
+        }
+      }
+    },
+    "Searching…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜索…"
+          }
+        }
+      }
+    },
+    "Select a file" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择文件"
+          }
+        }
+      }
+    },
+    "Select a task" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择任务"
+          }
+        }
+      }
+    },
+    "Select a terminal and refresh. Snapshots do not update automatically." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择终端并刷新。快照不会自动更新。"
+          }
+        }
+      }
+    },
+    "Selected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选择"
+          }
+        }
+      }
     },
     "Send" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送"
+          }
+        }
+      }
     },
     "Send command" : {
 
     },
+    "Send EOF" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送 EOF"
+          }
+        }
+      }
+    },
     "Sending…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在发送…"
+          }
+        }
+      }
+    },
+    "SeRemote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SeRemote"
+          }
+        }
+      }
     },
     "Session" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话"
+          }
+        }
+      }
     },
     "Session name" : {
 
     },
     "Sessions" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话"
+          }
+        }
+      }
     },
     "Settings" : {
       "localizations" : {
@@ -907,10 +4021,54 @@
       }
     },
     "Share" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享"
+          }
+        }
+      }
+    },
+    "Share file text" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享文件文本"
+          }
+        }
+      }
+    },
+    "Shortcut" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷方式"
+          }
+        }
+      }
+    },
+    "Show host details" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示主机详情"
+          }
+        }
+      }
     },
     "Show keyboard for live terminal input" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示键盘以实时输入终端内容"
+          }
+        }
+      }
     },
     "Sign in on the computer, then wait…" : {
 
@@ -926,16 +4084,160 @@
       }
     },
     "Smaller terminal text" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缩小终端文字"
+          }
+        }
+      }
+    },
+    "Split diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分栏 diff"
+          }
+        }
+      }
+    },
+    "Staged" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂存"
+          }
+        }
+      }
+    },
+    "Staged · read only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂存 · 只读"
+          }
+        }
+      }
+    },
+    "Start of line" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行首"
+          }
+        }
+      }
+    },
+    "Started" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始时间"
+          }
+        }
+      }
     },
     "Starting the agent" : {
 
     },
     "Starting the agent on the Mac. First launch can take a few minutes." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在 Mac 上启动 Agent。首次启动可能需要几分钟。"
+          }
+        }
+      }
+    },
+    "Stashes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "贮藏"
+          }
+        }
+      }
+    },
+    "Stop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止"
+          }
+        }
+      }
+    },
+    "Stop response" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止回复"
+          }
+        }
+      }
+    },
+    "Submitting" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在提交"
+          }
+        }
+      }
+    },
+    "Suspend" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "挂起"
+          }
+        }
+      }
+    },
+    "Switch to command field" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到命令输入框"
+          }
+        }
+      }
+    },
+    "Switch to desktop fit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换为适配桌面"
+          }
+        }
+      }
     },
     "Switch to desktop size" : {
 
+    },
+    "Switch to live keyboard" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到实时键盘"
+          }
+        }
+      }
     },
     "System" : {
       "localizations" : {
@@ -947,14 +4249,105 @@
         }
       }
     },
+    "Tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tab"
+          }
+        }
+      }
+    },
     "Tap to hide keyboard" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点隐藏键盘"
+          }
+        }
+      }
+    },
+    "Tap to latch the next key, or hold while typing a key." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点以锁定下一个按键，或在输入按键时按住。"
+          }
+        }
+      }
     },
     "Tap to resend" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点重发"
+          }
+        }
+      }
     },
     "Tap to show keyboard" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点显示键盘"
+          }
+        }
+      }
+    },
+    "Target" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标"
+          }
+        }
+      }
+    },
+    "Target unavailable · Duration unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标不可用 · 时长不可用"
+          }
+        }
+      }
+    },
+    "Task details" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务详情"
+          }
+        }
+      }
+    },
+    "Task unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务不可用"
+          }
+        }
+      }
+    },
+    "Tasks created on the host will appear here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在主机上创建的任务会显示在这里。"
+          }
+        }
+      }
     },
     "Terminal" : {
       "localizations" : {
@@ -962,6 +4355,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "终端"
+          }
+        }
+      }
+    },
+    "Terminal ID copied." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端 ID 已复制。"
           }
         }
       }
@@ -990,6 +4393,16 @@
     "The access token was rejected. Scan the desktop QR again." : {
 
     },
+    "The active project root is no longer available. Choose Host workspace." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前项目根目录已不可用。请选择“主机工作区”。"
+          }
+        }
+      }
+    },
     "The agent finished its turn." : {
 
     },
@@ -999,14 +4412,94 @@
     "The desktop keeps its files; the chat is removed from the list." : {
 
     },
+    "The file may be untracked or unchanged. The host returned no diff." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件可能未被跟踪或没有更改。主机未返回 diff。"
+          }
+        }
+      }
+    },
+    "The host confirmed a consistent terminal screen." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机已确认终端屏幕状态一致。"
+          }
+        }
+      }
+    },
+    "The host could not open this file preview." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机无法打开此文件预览。"
+          }
+        }
+      }
+    },
+    "The host creates a dedicated workspace folder. Creating a shortcut does not start a shell." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机会创建专用的工作区文件夹。创建快捷方式不会启动 shell。"
+          }
+        }
+      }
+    },
     "The host did not finish the agent request. Try again, or start the agent on the desktop." : {
 
+    },
+    "The host is catching up with terminal output. Refresh when the screen settles." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机正在同步终端输出，请待屏幕稳定后刷新。"
+          }
+        }
+      }
+    },
+    "The host is starting screen observation. Refresh in a moment." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机正在启动屏幕观察，请稍后刷新。"
+          }
+        }
+      }
     },
     "The host kept this session: live terminals or an active agent still reference it." : {
 
     },
     "The host rejected the request." : {
 
+    },
+    "The host returned this terminal ID. It is not attached here: quick terminals use a separate host scope, which this workspace cannot safely retain. Use the host to interact with it, or close it below." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机返回了此终端 ID，但未连接到此处：快捷终端使用独立的主机作用域，本工作区无法安全保留。请在主机上操作，或在下方关闭。"
+          }
+        }
+      }
+    },
+    "The host's screen observation is incomplete or out of sync. Text is hidden until a consistent snapshot is available." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机的屏幕观察不完整或已失去同步。在获得一致的快照前，文本将保持隐藏。"
+          }
+        }
+      }
     },
     "The HTTPS tunnel failed its certificate check." : {
       "localizations" : {
@@ -1068,6 +4561,16 @@
     "The terminal exited." : {
 
     },
+    "The terminal screen is empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端屏幕为空。"
+          }
+        }
+      }
+    },
     "The tunnel returned an unexpected response." : {
 
     },
@@ -1081,8 +4584,25 @@
         }
       }
     },
+    "There are no staged or unstaged changes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有已暂存或未暂存的更改。"
+          }
+        }
+      }
+    },
     "Thinking" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考中"
+          }
+        }
+      }
     },
     "This access link is missing its token. Scan the QR again." : {
 
@@ -1092,6 +4612,46 @@
     },
     "This directory has no visible files." : {
 
+    },
+    "This file has no text to preview." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此文件没有可预览的文本。"
+          }
+        }
+      }
+    },
+    "This folder is empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此文件夹为空。"
+          }
+        }
+      }
+    },
+    "This format is not supported for text preview. Open it in the host's local web client." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此格式不支持文本预览。请在主机上的本地 Web 客户端中打开。"
+          }
+        }
+      }
+    },
+    "This host or terminal does not support consistent screen text. The terminal itself is unaffected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机或终端不支持一致的屏幕文本，终端本身不受影响。"
+          }
+        }
+      }
     },
     "This iPhone is offline." : {
       "localizations" : {
@@ -1106,14 +4666,214 @@
     "This link is missing the access secret. Copy or scan the full QR from the desktop." : {
 
     },
+    "This removes the saved host and its access secret from this device. It does not change your desktop." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这会从此设备移除已保存的主机及其访问密钥，不会更改电脑上的内容。"
+          }
+        }
+      }
+    },
     "Thought" : {
 
+    },
+    "Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间"
+          }
+        }
+      }
+    },
+    "Title" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题"
+          }
+        }
+      }
+    },
+    "Title (optional)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题（可选）"
+          }
+        }
+      }
+    },
+    "Tool call" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具调用"
+          }
+        }
+      }
+    },
+    "Tools" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具"
+          }
+        }
+      }
+    },
+    "Trigger" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "触发方式"
+          }
+        }
+      }
+    },
+    "Try another name or clear the filter to see this folder's files." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尝试其他名称，或清除筛选以查看此文件夹中的文件。"
+          }
+        }
+      }
     },
     "Type a command…" : {
 
     },
+    "Type changed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "类型已更改"
+          }
+        }
+      }
+    },
     "Unavailable" : {
 
+    },
+    "Unified diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统一 diff"
+          }
+        }
+      }
+    },
+    "Unknown" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
+          }
+        }
+      }
+    },
+    "Unknown (%@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知（%@）"
+          }
+        }
+      }
+    },
+    "Unknown change" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知更改"
+          }
+        }
+      }
+    },
+    "Unknown schedule: %@ · timezone unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知计划：%@ · 时区不可用"
+          }
+        }
+      }
+    },
+    "Unknown target" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知目标"
+          }
+        }
+      }
+    },
+    "Unstaged" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未暂存"
+          }
+        }
+      }
+    },
+    "Unstaged · read only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未暂存 · 只读"
+          }
+        }
+      }
+    },
+    "Unsupported preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不支持预览"
+          }
+        }
+      }
+    },
+    "Untitled quick terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未命名快捷终端"
+          }
+        }
+      }
+    },
+    "Untracked" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未跟踪"
+          }
+        }
+      }
     },
     "Use an http or https access link from the desktop QR." : {
       "localizations" : {
@@ -1135,14 +4895,94 @@
         }
       }
     },
+    "Use Retry above to load this folder again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请使用上方的“重试”重新加载此文件夹。"
+          }
+        }
+      }
+    },
+    "Use the complete http or https link, including its access secret." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请使用包含访问密钥的完整 http 或 https 链接。"
+          }
+        }
+      }
+    },
     "Used %lld tools" : {
 
     },
     "Used 1 tool" : {
 
     },
+    "Used when opening a terminal. You can adjust the text size again in the terminal toolbar." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开终端时使用此字号，也可在终端工具栏中再次调整。"
+          }
+        }
+      }
+    },
+    "Version" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本"
+          }
+        }
+      }
+    },
     "View" : {
 
+    },
+    "View read-only diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看只读 diff"
+          }
+        }
+      }
+    },
+    "Waiting for host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在等待主机"
+          }
+        }
+      }
+    },
+    "Waiting for host acknowledgement…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在等待主机确认…"
+          }
+        }
+      }
+    },
+    "Waiting for host…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在等待主机…"
+          }
+        }
+      }
     },
     "Watches a live host PTY in a native terminal." : {
       "localizations" : {
@@ -1178,6 +5018,26 @@
         }
       }
     },
+    "Working directory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作目录"
+          }
+        }
+      }
+    },
+    "Working tree clean" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区干净"
+          }
+        }
+      }
+    },
     "Working…" : {
 
     },
@@ -1191,11 +5051,151 @@
         }
       }
     },
+    "Workspace actions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区操作"
+          }
+        }
+      }
+    },
+    "Workspace changed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区已更改"
+          }
+        }
+      }
+    },
+    "WORKSPACE SCOPE" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区范围"
+          }
+        }
+      }
+    },
+    "Worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作树"
+          }
+        }
+      }
+    },
+    "Your desktop, within reach." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的电脑，触手可及。"
+          }
+        }
+      }
+    },
+    "Your field console" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的随身控制台"
+          }
+        }
+      }
+    },
+    "YOUR FIELD CONSOLE" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的随身控制台"
+          }
+        }
+      }
+    },
+    "Your hosts and sessions, right here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机和会话，就在手边。"
+          }
+        }
+      }
+    },
+    "Your sessions stay on the host. Choose one to continue working." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话保留在主机上，选择一个即可继续工作。"
+          }
+        }
+      }
+    },
     "Zoom In" : {
 
     },
     "Zoom Out" : {
 
+    },
+    "←" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "←"
+          }
+        }
+      }
+    },
+    "↑" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↑"
+          }
+        }
+      }
+    },
+    "→" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "→"
+          }
+        }
+      }
+    },
+    "↓" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↓"
+          }
+        }
+      }
+    },
+    "⌫" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⌫"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
