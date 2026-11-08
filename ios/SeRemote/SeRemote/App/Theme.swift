@@ -1,39 +1,41 @@
 import SwiftUI
 import UIKit
 
-/// Warm graphite companion chrome: one lichen accent, cyan lamp for live work.
+/// Field Console palette (design-spec.md section 2). Warm graphite, one lichen
+/// accent for actions, cyan `live` for connection and working state.
+///
+/// The original names (`muted`, `lamp`, `wordmark`, `display`, `radius`) stay
+/// as aliases so existing views keep compiling while they migrate.
 enum SeTheme {
-    static let canvas = Color(
-        light: Color(red: 0.967, green: 0.961, blue: 0.938),
-        dark: Color(red: 0.054, green: 0.059, blue: 0.036)
-    )
-    static let surface = Color(
-        light: Color(red: 0.997, green: 0.994, blue: 0.982),
-        dark: Color(red: 0.091, green: 0.093, blue: 0.069)
-    )
-    static let ink = Color(
-        light: Color(red: 0.077, green: 0.068, blue: 0.045),
-        dark: Color(red: 0.897, green: 0.884, blue: 0.832)
-    )
-    static let muted = Color(
-        light: Color(red: 0.379, green: 0.366, blue: 0.333),
-        dark: Color(red: 0.584, green: 0.574, blue: 0.534)
-    )
-    static let stroke = Color(
-        light: Color(red: 0.854, green: 0.844, blue: 0.816),
-        dark: Color(red: 0.199, green: 0.202, blue: 0.171)
-    )
-    static let accent = Color(
-        light: Color(red: 0.370, green: 0.443, blue: 0.235),
-        dark: Color(red: 0.546, green: 0.616, blue: 0.430)
-    )
-    static let lamp = Color(
-        light: Color(red: 0.203, green: 0.448, blue: 0.521),
-        dark: Color(red: 0.486, green: 0.652, blue: 0.706)
-    )
-    static let wordmark: Font = .system(.largeTitle, design: .serif).bold()
+    static let canvas = Color(lightHex: 0xF7F5EF, darkHex: 0x202320)
+    static let surface = Color(lightHex: 0xFFFEFA, darkHex: 0x2A2E29)
+    static let elevated = Color(lightHex: 0xECEEE5, darkHex: 0x343A31)
+    static let ink = Color(lightHex: 0x20271F, darkHex: 0xF1EDDF)
+    static let secondaryInk = Color(lightHex: 0x596451, darkHex: 0xB0B5A9)
+    static let tertiaryInk = Color(lightHex: 0x66715F, darkHex: 0xAAB2A0)
+    static let stroke = Color(lightHex: 0xD5D9CD, darkHex: 0x41473E)
+    static let accent = Color(lightHex: 0x4E6431, darkHex: 0xBDCBA1)
+    static let onAccent = Color(lightHex: 0xFFFFFF, darkHex: 0x20251B)
+    static let accentSubtle = Color(lightHex: 0xE6EDD9, darkHex: 0x343E2A)
+    static let live = Color(lightHex: 0x246578, darkHex: 0x91D4D5)
+    static let liveSubtle = Color(lightHex: 0xE1EFF2, darkHex: 0x253F43)
+    static let warning = Color(lightHex: 0x8B4B0B, darkHex: 0xE9BB75)
+    static let warningSubtle = Color(lightHex: 0xFFF0D9, darkHex: 0x423523)
+    static let success = Color(lightHex: 0x3D673B, darkHex: 0xB2D4A6)
+    static let danger = Color(lightHex: 0xA52F36, darkHex: 0xEFA595)
+    static let dangerSubtle = Color(lightHex: 0xFBE5E5, darkHex: 0x442D2D)
+    static let codeCanvas = Color(lightHex: 0xF1F3EB, darkHex: 0x191E19)
+    static let diffAdded = Color(lightHex: 0xDDEED8, darkHex: 0x253B29)
+    static let diffAddedInk = Color(lightHex: 0x284F2E, darkHex: 0xB8DEBC)
+    static let diffRemoved = Color(lightHex: 0xF9E2DF, darkHex: 0x412B29)
+    static let diffRemovedInk = Color(lightHex: 0x8E302E, darkHex: 0xF0BAB4)
+
+    // Legacy aliases.
+    static let muted = secondaryInk
+    static let lamp = live
+    static let wordmark: Font = SeFont.identity
     static let display: Font = .system(.title2, design: .serif)
-    static let radius: CGFloat = 14
+    static let radius: CGFloat = SeRadius.content
 }
 
 enum HostRowStatus: Equatable {
@@ -87,5 +89,19 @@ extension Color {
         self.init(uiColor: UIColor { @Sendable traits in
             traits.userInterfaceStyle == .dark ? darkUI : lightUI
         })
+    }
+
+    init(lightHex: UInt32, darkHex: UInt32) {
+        self.init(light: Color(hex: lightHex), dark: Color(hex: darkHex))
+    }
+
+    init(hex: UInt32) {
+        self.init(
+            .sRGB,
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255,
+            opacity: 1
+        )
     }
 }

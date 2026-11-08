@@ -40,6 +40,7 @@ final class AppSettings {
     private static let languageKey = "se.app.language"
     private static let appearanceKey = "se.app.appearance"
     private static let notificationsKey = "se.app.notifications"
+    private static let hapticsKey = "se.app.haptics"
 
     /// Pre-rename keys. Read-only: the first launch after the rename falls back
     /// to them so a chosen language and appearance survive. Never written again
@@ -61,10 +62,16 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(notificationsEnabled, forKey: Self.notificationsKey) }
     }
 
+    /// Haptic feedback opt-out. On by default; injected as `seHapticsEnabled`.
+    var hapticsEnabled: Bool {
+        didSet { UserDefaults.standard.set(hapticsEnabled, forKey: Self.hapticsKey) }
+    }
+
     init() {
         language = AppLanguage(rawValue: Self.stored(Self.languageKey, legacy: Self.legacyLanguageKey) ?? "") ?? .system
         appearance = AppAppearance(rawValue: Self.stored(Self.appearanceKey, legacy: Self.legacyAppearanceKey) ?? "") ?? .dark
         notificationsEnabled = UserDefaults.standard.bool(forKey: Self.notificationsKey)
+        hapticsEnabled = UserDefaults.standard.object(forKey: Self.hapticsKey) as? Bool ?? true
     }
 
     /// The current key if it has ever been written, otherwise the pre-rename one.

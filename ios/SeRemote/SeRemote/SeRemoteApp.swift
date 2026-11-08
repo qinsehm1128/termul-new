@@ -10,6 +10,7 @@ struct SeRemoteApp: App {
         WindowGroup {
             RootView(store: store, settings: settings)
                 .environment(\.locale, settings.locale)
+                .environment(\.seHapticsEnabled, settings.hapticsEnabled)
                 .preferredColorScheme(settings.appearance.colorScheme)
                 .tint(SeTheme.accent)
                 .onOpenURL { store.openIncomingURL($0) }

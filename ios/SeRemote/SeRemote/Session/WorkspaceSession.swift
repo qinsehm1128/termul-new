@@ -48,6 +48,10 @@ final class WorkspaceSession {
     let projects = ProjectStore()
     let files = FileStore()
     let terminals = TerminalStore()
+    let git = GitStore()
+    let scheduledTasks = ScheduledTaskStore()
+    let quickTerminals = QuickTerminalStore()
+    let search = SearchStore()
 
     /// Chat sits on a Conversation. A project workspace is terminals only.
     var showChat = true
@@ -80,6 +84,10 @@ final class WorkspaceSession {
         conversations.attach(http: http)
         projects.attach(http: http, socket: acp)
         files.attach(http: http)
+        git.attach(http: http)
+        scheduledTasks.attach(http: http)
+        quickTerminals.attach(http: http)
+        search.attach(http: http)
         terminals.attach(socket: terminalSocket, origin: origin, credentials: credentials)
     }
 
@@ -301,17 +309,16 @@ final class WorkspaceSession {
             }
         }
         HostLog.session.info("Workspace tab \(tab.rawValue, privacy: .public)")
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(80))
-            workspaceTab = tab
-            showChat = tab == .chat
-            terminals.geometryActive = isWideLayout ? (workspace != .home) : (tab == .terminal)
-            if tab == .terminal {
-                // Returning to the terminal surface re-asserts the phone fit:
-                // the release on the way out restored the desktop grid, and no
-                // sizeChanged will fire because the view never unmounted.
-                terminals.scheduleRefit(force: true)
-            }
+        // Flip state in the same transaction so the caller's animation drives
+        // the tab change. Keyboard resign and geometry park above already ran.
+        workspaceTab = tab
+        showChat = tab == .chat
+        terminals.geometryActive = isWideLayout ? (workspace != .home) : (tab == .terminal)
+        if tab == .terminal {
+            // Returning to the terminal surface re-asserts the phone fit:
+            // the release on the way out restored the desktop grid, and no
+            // sizeChanged will fire because the view never unmounted.
+            terminals.scheduleRefit(force: true)
         }
     }
 
@@ -345,6 +352,19 @@ final class WorkspaceSession {
         guard isWideLayout else { return }
         terminals.geometryActive = true
         terminals.scheduleRefit(force: true)
+    }
+
+    /// Host folder the open workspace is rooted at: the conversation's
+    /// workspace cwd, or the project path. Git, search and Tools scope to it.
+    var workspaceRoot: String? {
+        switch workspace {
+        case .conversation:
+            conversations.active?.workspaceCwd
+        case .project:
+            projects.active?.path
+        case .home:
+            nil
+        }
     }
 
     /// Spawn a conversation/project-scoped PTY on the host and reveal it.
