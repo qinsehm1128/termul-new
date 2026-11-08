@@ -1,25 +1,58 @@
 import SwiftUI
 
 struct ChatView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var session: WorkspaceSession
     var embedded = false
     @State private var draft = ""
     @State private var isAtBottom = true
     @State private var unreadCount = 0
     @FocusState private var composerFocused: Bool
+    @State private var renderedTimeline: [ChatTimelineItem] = []
+    @State private var entranceIDs: Set<String> = []
+    @State private var sendRequested = false
+    @State private var pendingSentIDs: Set<String> = []
+    @State private var sendHaptic = 0
+    @State private var acknowledgedSendIDs: Set<String> = []
+    @State private var inFlightPermissions: [String: PermissionCard] = [:]
+    @State private var renderedPermissions: [PermissionCard] = []
+    @State private var containerWidth: CGFloat = 0
+
+    private var columnWidth: CGFloat? {
+        let columns = SeLayout.columns(
+            width: containerWidth, isRegular: sizeClass == .regular,
+            largeText: dynamicTypeSize.isAccessibilitySize
+        )
+        switch columns {
+        case .single:
+            return sizeClass == .regular ? SeLayout.readableColumnMaxWidth : nil
+        case .split, .splitWithInspector:
+            return SeLayout.readableColumnMaxWidth
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             messageList
             permissionStack
             if let error = session.chat.errorMessage, !error.isEmpty {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
+                SeErrorBanner(message: error)
+                    .frame(maxWidth: columnWidth)
+                    .padding(.horizontal, SeSpace.md)
+                    .padding(.bottom, SeSpace.xs)
             }
-            composer
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .background(SeTheme.canvas)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
+        .seHaptic(.send, trigger: sendHaptic)
+        .onChange(of: session.chat.timeline, initial: true) { _, items in
+            updateTimeline(items)
+        }
+        .onChange(of: session.chat.permissions, initial: true) { _, _ in
+            updatePermissions()
         }
         .onChange(of: session.workspaceTab) { _, tab in
             if tab != .chat {
@@ -37,6 +70,13 @@ struct ChatView: View {
         .onChange(of: session.chat.activeSessionId) { _, _ in
             isAtBottom = true
             unreadCount = 0
+            sendRequested = false
+            entranceIDs = []
+            pendingSentIDs = []
+            acknowledgedSendIDs = []
+            inFlightPermissions = [:]
+            renderedPermissions = session.chat.permissions
+            renderedTimeline = session.chat.timeline
         }
         .onReceive(ShortcutCenter.shortcuts) { shortcut in
             if shortcut == .focusChat {
@@ -52,20 +92,21 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             // Single timeline materialization per body: rows must not each
             // re-walk (and the store's timeline getter re-build) the array.
-            let items = session.chat.timeline
+            let items = renderedTimeline
             let lastAgentId = latestAgentId(in: items)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if !session.chat.hasVisibleTranscript && !session.chat.isLoading {
-                        ContentUnavailableView(
-                            "No messages yet",
-                            systemImage: "bubble.left",
-                            description: Text("If this session has desktop history, pull to refresh. The phone continues the computer session instead of starting a new one.")
+                        SeEmptyState(
+                            title: String(localized: "Continue the conversation"),
+                            systemImage: "bubble.left.and.bubble.right",
+                            message: String(localized: "Pull to refresh desktop history. Your phone continues the same host session.")
                         )
                         .frame(maxWidth: .infinity, minHeight: 180)
                     }
                     ForEach(items) { item in
                         timelineRow(item, lastAgentId: lastAgentId)
+                            .modifier(WorkspaceMessageEntrance(enabled: entranceIDs.contains(item.id)))
                             .id(item.id)
                     }
                     if session.chat.isLoading {
@@ -73,8 +114,11 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(16)
+                .padding(SeSpace.md)
+                .frame(maxWidth: columnWidth)
+                .frame(maxWidth: .infinity)
             }
+            .background(SeTheme.canvas)
             // History sessions open pinned to the newest message instead of
             // relying on scroll-to-bottom racing the first layout pass.
             .defaultScrollAnchor(.bottom)
@@ -109,6 +153,7 @@ struct ChatView: View {
                 }
             }
             .refreshable {
+                sendRequested = false
                 if let conversation = session.conversations.active {
                     let binding = await session.conversations.binding(for: conversation)
                     await session.chat.bindConversation(conversation, binding: binding)
@@ -125,7 +170,7 @@ struct ChatView: View {
     private func jumpToLatest(proxy: ScrollViewProxy) -> some View {
         Button {
             if let id = session.chat.timeline.last?.id {
-                withAnimation {
+                seWithAnimation(.fade, reduceMotion: reduceMotion) {
                     proxy.scrollTo(id, anchor: .bottom)
                 }
             }
@@ -133,7 +178,7 @@ struct ChatView: View {
         } label: {
             HStack(spacing: 6) {
                 if unreadCount > 0 {
-                    Text("\(unreadCount)")
+                    Text("\(unreadCount) new messages")
                         .font(.caption.weight(.semibold))
                         .monospacedDigit()
                 }
@@ -143,7 +188,8 @@ struct ChatView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .foregroundStyle(SeTheme.ink)
-            .background(.ultraThinMaterial, in: Capsule())
+            .frame(minHeight: 44)
+            .background(SeTheme.elevated, in: Capsule())
             .overlay(
                 Capsule().stroke(SeTheme.stroke, lineWidth: 1)
             )
@@ -155,7 +201,8 @@ struct ChatView: View {
         .accessibilityHidden(isAtBottom)
         .opacity(isAtBottom ? 0 : 1)
         .allowsHitTesting(isAtBottom ? false : true)
-        .animation(.easeOut(duration: 0.15), value: isAtBottom)
+        .seAnimation(.fade, value: isAtBottom)
+        .seAnimation(.fade, value: unreadCount)
     }
 
     @ViewBuilder
@@ -169,14 +216,14 @@ struct ChatView: View {
                     composerFocused = true
                 },
                 onRetry: {
-                    Task { await session.chat.retry(message, in: session.conversations.active) }
+                    performSend { await session.chat.retry(message, in: session.conversations.active) }
                 }
             )
         case .agent(let message):
             MessageBubble(
                 message: message,
                 onRetry: message.id == lastAgentId
-                    ? { Task { await session.chat.regenerateLastTurn(in: session.conversations.active) } }
+                    ? { performSend { await session.chat.regenerateLastTurn(in: session.conversations.active) } }
                     : nil
             )
         case .activity(let activity):
@@ -197,21 +244,99 @@ struct ChatView: View {
 
     @ViewBuilder
     private var permissionStack: some View {
-        if !session.chat.permissions.isEmpty || !session.chat.questions.isEmpty {
-            VStack(spacing: 10) {
-                ForEach(session.chat.permissions) { card in
-                    PermissionCardView(card: card) { option in
-                        Task { await session.chat.respond(permission: card, optionId: option) }
+        if !renderedPermissions.isEmpty || !session.chat.questions.isEmpty {
+            ScrollView {
+                VStack(spacing: SeSpace.sm) {
+                    ForEach(renderedPermissions) { card in
+                        PermissionCardView(card: card, isSubmitting: inFlightPermissions[card.id] != nil) { option in
+                            guard inFlightPermissions[card.id] == nil else { return }
+                            inFlightPermissions[card.id] = card
+                            Task {
+                                // The store currently removes optimistically and swallows
+                                // errors. Do not emit a false acknowledgement haptic.
+                                await session.chat.respond(permission: card, optionId: option)
+                                inFlightPermissions[card.id] = nil
+                                updatePermissions()
+                            }
+                        }
+                        .seEntrance()
+                    }
+                    ForEach(session.chat.questions) { card in
+                        QuestionCardView(card: card) { value in
+                            Task { await session.chat.answer(question: card, values: [value]) }
+                        }
                     }
                 }
-                ForEach(session.chat.questions) { card in
-                    QuestionCardView(card: card) { value in
-                        Task { await session.chat.answer(question: card, values: [value]) }
-                    }
-                }
+                .padding(.horizontal, SeSpace.md)
+                .padding(.bottom, SeSpace.xs)
+                .frame(maxWidth: columnWidth)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
+            .frame(maxHeight: 300)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func updatePermissions() {
+        var cards = session.chat.permissions
+        let known = Set(cards.map(\.id))
+        cards += inFlightPermissions.values.filter { !known.contains($0.id) }.sorted { $0.id < $1.id }
+        seWithAnimation(.disclosure, reduceMotion: reduceMotion) {
+            renderedPermissions = cards
+        }
+    }
+
+    private func updateTimeline(_ items: [ChatTimelineItem]) {
+        let sent = WorkspaceChatPresentation.sentMessageIDs(
+            previous: renderedTimeline, current: items,
+            sendRequested: sendRequested, isLoading: session.chat.isLoading
+        )
+        if !sent.isEmpty {
+            entranceIDs.formUnion(sent)
+            pendingSentIDs.formUnion(sent)
+            sendRequested = false
+            withAnimation(SeMotion.control.animation(reduceMotion: reduceMotion), completionCriteria: .logicallyComplete) {
+                renderedTimeline = items
+            } completion: {
+                entranceIDs.subtract(sent)
+            }
+        } else {
+            // No implicit animation on history, reasoning text or streaming tokens.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { renderedTimeline = items }
+        }
+        for item in items {
+            guard case .user(let message) = item,
+                  pendingSentIDs.contains(message.id) else { continue }
+            if message.delivery == .accepted {
+                pendingSentIDs.remove(message.id)
+                acknowledgeSend(message.id)
+            } else if message.delivery == .failed {
+                pendingSentIDs.remove(message.id)
+            }
+        }
+    }
+
+    private func acknowledgeSend(_ id: String) {
+        guard acknowledgedSendIDs.insert(id).inserted else { return }
+        sendHaptic += 1
+    }
+
+    private func performSend(_ action: @escaping @MainActor () async -> Void) {
+        let existing = Set(session.chat.messages.map(\.id))
+        let conversationID = session.chat.activeSessionId
+        sendRequested = true
+        Task {
+            await action()
+            guard session.chat.activeSessionId == conversationID else { return }
+            // A quick host reply may coalesce .sending and .accepted into one
+            // render. This completion path still confirms acceptance once.
+            if let sent = session.chat.messages.last(where: { $0.role == .user }),
+               !existing.contains(sent.id), sent.id.hasPrefix("turn:"), sent.delivery == .accepted {
+                acknowledgeSend(sent.id)
+            }
+            sendRequested = false
         }
     }
 
@@ -225,93 +350,106 @@ struct ChatView: View {
                     .focused($composerFocused)
                     .padding(12)
                     .background(SeTheme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: SeRadius.composer, style: .continuous))
                 if session.chat.isSending {
                     Button {
                         Task { await session.chat.cancel() }
                     } label: {
-                        Image(systemName: "stop.fill")
-                            .frame(width: 44, height: 44)
+                        Label("Stop", systemImage: "stop.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(minWidth: 44, minHeight: 44)
                     }
-                    .accessibilityLabel(Text("Cancel"))
+                    .buttonStyle(SeSecondaryButtonStyle())
+                    .accessibilityLabel(Text("Stop response"))
                 } else {
                     Button {
                         let text = draft
                         draft = ""
                         composerFocused = false
-                        Task { await session.chat.send(text, in: session.conversations.active) }
+                        performSend { await session.chat.send(text, in: session.conversations.active) }
                     } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title)
-                            .frame(width: 44, height: 44)
+                        Label("Send", systemImage: "arrow.up")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(minWidth: 44, minHeight: 44)
                     }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(SePrimaryButtonStyle())
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || session.chat.isLoading || session.chat.isSwitchingAgent)
                     .accessibilityLabel(Text("Send"))
                 }
             }
         }
-        .padding(16)
-        .background(.ultraThinMaterial)
+        .padding(SeSpace.md)
+        .frame(maxWidth: columnWidth)
+        .frame(maxWidth: .infinity)
+        .background(SeTheme.canvas)
+        .overlay(alignment: .top) { Rectangle().fill(SeTheme.stroke).frame(height: 1) }
+        .seAnimation(.control, value: session.chat.isSending)
     }
 
     private var composerChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                agentChip
-                if let modes = session.chat.modes?.availableModes, !modes.isEmpty {
-                    Menu {
-                        ForEach(modes) { mode in
-                            Button {
-                                Task { await session.chat.setMode(mode.id) }
-                            } label: {
-                                if mode.id == session.chat.modes?.currentModeId {
-                                    Label(mode.name, systemImage: "checkmark")
-                                } else {
-                                    Text(mode.name)
-                                }
+        ViewThatFits(in: .horizontal) {
+            chipRow
+            ScrollView(.horizontal, showsIndicators: false) { chipRow }
+        }
+    }
+
+    private var chipRow: some View {
+        HStack(spacing: SeSpace.xs) {
+            agentChip
+            if let modes = session.chat.modes?.availableModes, !modes.isEmpty {
+                Menu {
+                    ForEach(modes) { mode in
+                        Button {
+                            Task { await session.chat.setMode(mode.id) }
+                        } label: {
+                            if mode.id == session.chat.modes?.currentModeId {
+                                Label(mode.name, systemImage: "checkmark")
+                            } else {
+                                Text(mode.name)
                             }
                         }
-                    } label: {
-                        chipLabel(session.chat.modes?.availableModes?.first(where: { $0.id == session.chat.modes?.currentModeId })?.name ?? String(localized: "Mode"))
                     }
-                    .accessibilityLabel(Text("Mode"))
+                } label: {
+                    chipLabel(session.chat.modes?.availableModes?.first(where: { $0.id == session.chat.modes?.currentModeId })?.name ?? String(localized: "Mode"))
                 }
-                if let models = session.chat.models?.availableModels, !models.isEmpty {
-                    Menu {
-                        ForEach(models) { model in
-                            Button {
-                                Task { await session.chat.setModel(model.modelId) }
-                            } label: {
-                                if model.modelId == session.chat.models?.currentModelId {
-                                    Label(model.name, systemImage: "checkmark")
-                                } else {
-                                    Text(model.name)
-                                }
+                .accessibilityLabel(Text("Mode"))
+            }
+            if let models = session.chat.models?.availableModels, !models.isEmpty {
+                Menu {
+                    ForEach(models) { model in
+                        Button {
+                            Task { await session.chat.setModel(model.modelId) }
+                        } label: {
+                            if model.modelId == session.chat.models?.currentModelId {
+                                Label(model.name, systemImage: "checkmark")
+                            } else {
+                                Text(model.name)
                             }
                         }
-                    } label: {
-                        chipLabel(session.chat.models?.availableModels?.first(where: { $0.modelId == session.chat.models?.currentModelId })?.name ?? String(localized: "Model"))
                     }
-                    .accessibilityLabel(Text("Model"))
+                } label: {
+                    chipLabel(session.chat.models?.availableModels?.first(where: { $0.modelId == session.chat.models?.currentModelId })?.name ?? String(localized: "Model"))
                 }
-                if let thought = session.chat.thoughtOption, let values = thought.options, !values.isEmpty {
-                    Menu {
-                        ForEach(values) { value in
-                            Button {
-                                Task { await session.chat.setConfig(optionId: thought.id, valueId: value.value) }
-                            } label: {
-                                if value.value == thought.currentValue {
-                                    Label(value.name, systemImage: "checkmark")
-                                } else {
-                                    Text(value.name)
-                                }
+                .accessibilityLabel(Text("Model"))
+            }
+            if let thought = session.chat.thoughtOption, let values = thought.options, !values.isEmpty {
+                Menu {
+                    ForEach(values) { value in
+                        Button {
+                            Task { await session.chat.setConfig(optionId: thought.id, valueId: value.value) }
+                        } label: {
+                            if value.value == thought.currentValue {
+                                Label(value.name, systemImage: "checkmark")
+                            } else {
+                                Text(value.name)
                             }
                         }
-                    } label: {
-                        chipLabel(values.first(where: { $0.value == thought.currentValue })?.name ?? thought.name)
                     }
-                    .accessibilityLabel(Text("Thinking"))
+                } label: {
+                    chipLabel(values.first(where: { $0.value == thought.currentValue })?.name ?? thought.name)
                 }
+                .accessibilityLabel(Text("Thinking"))
             }
         }
     }
@@ -325,314 +463,8 @@ struct ChatView: View {
         .accessibilityLabel(Text("Agent"))
     }
 
-    private func chipLabel(_ title: String, systemImage: String = "chevron.up.chevron.down") -> some View {
-        HStack(spacing: 6) {
-            if systemImage == "cpu" {
-                Image(systemName: "cpu")
-            }
-            Text(title)
-                .lineLimit(1)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .font(.subheadline.weight(.medium))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(SeTheme.surface)
-        .clipShape(Capsule())
-    }
-}
-
-private struct ActivityDisclosure: View {
-    let activity: TurnActivity
-    @State private var expanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                expanded.toggle()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                    Text(activity.summary)
-                        .font(.subheadline.weight(.medium))
-                    Spacer()
-                }
-                .foregroundStyle(activity.attentionRequired ? Color.red : Color.secondary)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(activity.summary))
-            .accessibilityHint(Text(expanded ? "Collapse" : "Expand"))
-
-            if expanded {
-                if !activity.thoughts.isEmpty {
-                    ThoughtBlock(messages: activity.thoughts)
-                }
-                if !activity.tools.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(activity.tools) { tool in
-                            HStack(spacing: 8) {
-                                Image(systemName: "wrench.and.screwdriver")
-                                    .font(.caption)
-                                Text(tool.title)
-                                    .lineLimit(1)
-                                Spacer()
-                                Text(tool.status.replacingOccurrences(of: "_", with: " "))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.leading, 18)
-                }
-            }
-        }
-        .padding(.vertical, 2)
-    }
-}
-
-private struct ThoughtBlock: View {
-    let messages: [ChatMessage]
-    @State private var expanded = false
-
-    private var text: String {
-        messages.map(\.text).joined()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                expanded.toggle()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                    Text("Reasoning")
-                    Spacer()
-                }
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            if expanded {
-                Text(text)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .padding(.leading, 16)
-            }
-        }
-        .padding(.leading, 18)
-    }
-}
-
-private struct MessageBubble: View {
-    let message: ChatMessage
-    var onEdit: (() -> Void)?
-    var onRetry: (() -> Void)?
-
-    var body: some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 48) }
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-                // Equatable content: streaming token updates re-render only
-                // the changed bubble, so unchanged rows skip the markdown
-                // reparse instead of every visible bubble reparsing per token.
-                MessageBubbleContent(message: message)
-                    .equatable()
-                if let receipt {
-                    if message.delivery == .failed, let onRetry {
-                        Button(action: onRetry) {
-                            receiptView(receipt)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint(Text("Tap to resend"))
-                    } else {
-                        receiptView(receipt)
-                    }
-                }
-            }
-            if message.role != .user { Spacer(minLength: 48) }
-        }
-        .contextMenu { messageActions }
-    }
-
-    @ViewBuilder
-    private var messageActions: some View {
-        Button {
-            UIPasteboard.general.string = message.text
-        } label: {
-            Label(String(localized: "Copy"), systemImage: "doc.on.doc")
-        }
-        if message.role == .user {
-            if let onEdit {
-                Button(action: onEdit) {
-                    Label(String(localized: "Edit & Resend"), systemImage: "square.and.pencil")
-                }
-            }
-            if message.delivery == .failed, let onRetry {
-                Button(action: onRetry) {
-                    Label(String(localized: "Resend"), systemImage: "arrow.up.circle")
-                }
-            }
-        } else if let onRetry {
-            Button(action: onRetry) {
-                Label(String(localized: "Regenerate"), systemImage: "arrow.clockwise")
-            }
-        }
-        ShareLink(item: message.text) {
-            Label(String(localized: "Share"), systemImage: "square.and.arrow.up")
-        }
-    }
-
-    private func receiptView(_ receipt: Receipt) -> some View {
-        HStack(spacing: 4) {
-            if receipt.showsProgress {
-                ProgressView()
-                    .controlSize(.mini)
-            } else {
-                Image(systemName: receipt.symbol)
-            }
-            Text(receipt.label)
-        }
-        .font(.caption2)
-        .foregroundStyle(receipt.tint)
-        .padding(.horizontal, 4)
-        .accessibilityLabel(Text(receipt.label))
-    }
-
-    private var receipt: Receipt? {
-        guard message.role == .user, let delivery = message.delivery else { return nil }
-        switch delivery {
-        case .sending:
-            return Receipt(
-                symbol: "arrow.up.circle",
-                label: String(localized: "Sending…"),
-                tint: .secondary,
-                showsProgress: true
-            )
-        case .accepted:
-            return Receipt(
-                symbol: "checkmark",
-                label: String(localized: "Host received"),
-                tint: .secondary,
-                showsProgress: false
-            )
-        case .failed:
-            return Receipt(
-                symbol: "exclamationmark.circle",
-                label: String(localized: "Not received"),
-                tint: .red,
-                showsProgress: false
-            )
-        }
-    }
-
-    private var attributed: AttributedString {
-        var options = AttributedString.MarkdownParsingOptions()
-        options.interpretedSyntax = .full
-        options.failurePolicy = .returnPartiallyParsedIfPossible
-        return (try? AttributedString(markdown: message.text, options: options))
-            ?? AttributedString(message.text)
-    }
-}
-
-/// Equatable bubble payload — equality over the render-affecting fields so
-/// `.equatable()` can skip unchanged rows (actions stay on the wrapper).
-private struct MessageBubbleContent: View, Equatable {
-    let message: ChatMessage
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.message.id == rhs.message.id
-            && lhs.message.role == rhs.message.role
-            && lhs.message.text == rhs.message.text
-            && lhs.message.streaming == rhs.message.streaming
-            && lhs.message.delivery == rhs.message.delivery
-    }
-
-    var body: some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
-            Text(attributed)
-                .font(.body)
-                .textSelection(.enabled)
-            if message.streaming {
-                ProgressView()
-                    .controlSize(.mini)
-            }
-        }
-        .padding(12)
-        .background(message.role == .user ? SeTheme.accent.opacity(0.16) : SeTheme.surface)
-        .foregroundStyle(.primary)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    private var attributed: AttributedString {
-        var options = AttributedString.MarkdownParsingOptions()
-        options.interpretedSyntax = .full
-        options.failurePolicy = .returnPartiallyParsedIfPossible
-        return (try? AttributedString(markdown: message.text, options: options))
-            ?? AttributedString(message.text)
-    }
-}
-
-private struct Receipt {
-    var symbol: String
-    var label: String
-    var tint: Color
-    var showsProgress: Bool
-}
-
-private struct PermissionCardView: View {
-    let card: PermissionCard
-    var onChoose: (String?) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Need you to approve")
-                .font(.headline)
-            Text(card.title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            HStack {
-                ForEach(card.options) { option in
-                    Button(option.name) { onChoose(option.id) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(SeTheme.accent)
-                }
-                Button("Deny") { onChoose(nil) }
-                    .buttonStyle(.bordered)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SeTheme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-}
-
-private struct QuestionCardView: View {
-    let card: QuestionCard
-    var onChoose: (String) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(card.question)
-                .font(.headline)
-            ForEach(card.options) { option in
-                Button(option.label) { onChoose(option.id) }
-                    .buttonStyle(.bordered)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SeTheme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    private func chipLabel(_ title: String, systemImage: String = "chevron.down") -> some View {
+        SeChip(title: title, systemImage: systemImage)
+            .frame(minHeight: SeSpace.hitTarget)
     }
 }

@@ -5,46 +5,46 @@ struct TerminalTabStrip: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: SeSpace.xs) {
                 ForEach(session.terminals.terminals) { item in
+                    let isSelected = session.terminals.activeId == item.id
                     Button {
                         Task { await session.revealTerminal(item.id) }
                     } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title)
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(1)
-                            if let folder = HostTimestamp.folderName(from: item.cwd) {
-                                Text(folder)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                        HStack(spacing: SeSpace.xs) {
+                            Image(systemName: isSelected ? "terminal.fill" : "terminal")
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: SeSpace.xxs) {
+                                Text(item.title)
+                                    .font(SeFont.label)
                                     .lineLimit(1)
-                            } else if let branch = item.gitBranch, !branch.isEmpty {
-                                Text(branch)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                if let folder = HostTimestamp.folderName(from: item.cwd) {
+                                    Text(folder)
+                                        .font(SeFont.caption)
+                                        .foregroundStyle(SeTheme.secondaryInk)
+                                        .lineLimit(1)
+                                } else if let branch = item.gitBranch, !branch.isEmpty {
+                                    Text(branch)
+                                        .font(SeFont.caption)
+                                        .foregroundStyle(SeTheme.secondaryInk)
+                                        .lineLimit(1)
+                                }
                             }
-                            Text(session.terminals.activeId == item.id
-                                 ? String(localized: "Active")
-                                 : String(localized: "Idle"))
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .frame(minHeight: 44)
-                        .background(
-                            session.terminals.activeId == item.id
-                                ? SeTheme.accent.opacity(0.16)
-                                : SeTheme.surface
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(SeTheme.stroke, lineWidth: 1)
-                        )
+                        .foregroundStyle(isSelected ? SeTheme.accent : SeTheme.secondaryInk)
+                        .padding(.horizontal, SeSpace.md)
+                        .padding(.vertical, SeSpace.xs)
+                        .frame(minHeight: SeSpace.hitTarget)
+                        .background(isSelected ? SeTheme.accentSubtle : SeTheme.elevated, in: Capsule())
+                        .overlay {
+                            Capsule().strokeBorder(isSelected ? SeTheme.accent : SeTheme.stroke, lineWidth: 1)
+                        }
+                        // Selection chrome only; no animation reaches the PTY.
+                        .seAnimation(.control, value: isSelected)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityValue(Text(isSelected ? String(localized: "Active") : String(localized: "Idle")))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                     .contextMenu {
                         Button {
                             UIPasteboard.general.string = item.cwd
@@ -58,13 +58,22 @@ struct TerminalTabStrip: View {
                     Task { await session.spawnTerminal() }
                 } label: {
                     Image(systemName: "plus")
-                        .frame(minWidth: 44, minHeight: 44)
+                        .foregroundStyle(SeTheme.accent)
+                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                        .background(SeTheme.elevated, in: Circle())
                 }
-                .accessibilityLabel(Text("New terminal"))
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("New Terminal"))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, SeSpace.md)
+            .padding(.vertical, SeSpace.xs)
         }
-        .background(.ultraThinMaterial)
+        .background(SeTheme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(SeTheme.stroke).frame(height: 1)
+        }
+        .seHaptic(trigger: session.terminals.activeId) { old, new in
+            old != nil && new != nil ? .selection : nil
+        }
     }
 }

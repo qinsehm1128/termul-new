@@ -5,6 +5,7 @@ struct TerminalWorkspaceView: View {
     @State private var focusToken: UInt64 = 0
     @State private var textScale = TerminalTextScale.current
     @State private var scaleHud: String?
+    @State private var controlModifier = TerminalControlModifier()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,9 +21,7 @@ struct TerminalWorkspaceView: View {
                         hostCols: activeTerminal?.cols ?? 80,
                         lockToHostCols: session.terminals.displayMode == .desktop,
                         textScale: textScale,
-                        onSend: { text in
-                            Task { await session.terminals.write(text) }
-                        },
+                        onSend: sendTerminalInput,
                         onResize: { cols, rows in
                             session.terminals.resize(cols: cols, rows: rows)
                         },
@@ -44,6 +43,7 @@ struct TerminalWorkspaceView: View {
                         blurToken: session.terminalBlurToken
                     )
                     .id(id)
+                    .transaction { $0.animation = nil }
                     .onAppear {
                         session.terminals.pendingOutput[id] = nil
                     }
@@ -57,31 +57,21 @@ struct TerminalWorkspaceView: View {
                     }
                 }
             } else {
-                ContentUnavailableView(
-                    "No live terminal",
+                SeEmptyState(
+                    title: String(localized: "No live terminal"),
                     systemImage: "apple.terminal",
-                    description: Text("Open a terminal on the desktop, or start a new one here.")
+                    message: String(localized: "Open a terminal on the desktop, or start a new one here."),
+                    actionTitle: canSpawnTerminal ? String(localized: "New Terminal") : nil,
+                    action: canSpawnTerminal ? { Task { await session.spawnTerminal() } } : nil
                 )
-                if session.workspace == .conversation || session.workspace == .project {
-                    Button {
-                        Task { await session.spawnTerminal() }
-                    } label: {
-                        Text("New terminal")
-                            .frame(minHeight: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(SeTheme.accent)
-                    .padding(.bottom, 24)
-                }
             }
             TerminalInputDock(
                 isEnabled: session.terminals.activeId != nil,
                 isKeyboardVisible: session.terminalKeyboardVisible,
                 displayMode: session.terminals.displayMode,
                 textScale: textScale,
-                onSend: { text in
-                    Task { await session.terminals.write(text) }
-                },
+                controlModifier: $controlModifier,
+                onSend: sendTerminalInput,
                 onFocusTerminal: {
                     focusToken &+= 1
                 },
@@ -104,6 +94,10 @@ struct TerminalWorkspaceView: View {
                 }
             )
             .zIndex(1)
+        }
+        .background(SeTheme.codeCanvas)
+        .onChange(of: session.terminals.activeId) { _, _ in
+            controlModifier = TerminalControlModifier()
         }
         .onAppear {
             session.activateTerminalGeometry()
@@ -187,31 +181,23 @@ struct TerminalWorkspaceView: View {
         return summary
     }
 
-    /// Terminal failures used to surface only in a distant workspace alert;
-    /// keep them inline where the terminal lives, dismissible once read.
+    private var canSpawnTerminal: Bool {
+        session.workspace == .conversation || session.workspace == .project
+    }
+
+    private func sendTerminalInput(_ text: String) {
+        let input = controlModifier.apply(to: text)
+        Task { await session.terminals.write(input) }
+    }
+
+    /// Keep failures inline where the terminal lives, dismissible once read.
     private func terminalErrorBanner(_ error: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-            Text(error)
-                .font(.footnote)
-                .lineLimit(2)
-            Spacer(minLength: 8)
-            Button {
-                session.terminals.errorMessage = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.footnote.weight(.semibold))
-                    .frame(minWidth: 32, minHeight: 32)
-            }
-            .accessibilityLabel(Text("Dismiss"))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(SeTheme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(SeTheme.stroke).frame(height: 1)
-        }
+        SeErrorBanner(
+            message: error,
+            retryTitle: String(localized: "Dismiss"),
+            retry: { session.terminals.errorMessage = nil }
+        )
+        .padding(SeSpace.md)
         .accessibilityIdentifier("terminal-error")
     }
 
