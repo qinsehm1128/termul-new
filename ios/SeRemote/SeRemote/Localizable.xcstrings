@@ -15,7 +15,14 @@
       }
     },
     "/" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/"
+          }
+        }
+      }
     },
     "%lld" : {
       "localizations" : {
@@ -78,7 +85,14 @@
       }
     },
     "%lld new" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条新消息"
+          }
+        }
+      }
     },
     "%lld live terminals" : {
       "localizations" : {
@@ -231,7 +245,14 @@
       }
     },
     "A conversation or project is required." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要先选择一个会话或项目。"
+          }
+        }
+      }
     },
     "A read-only text snapshot from the host. This is not live screen sharing." : {
       "localizations" : {
@@ -314,7 +335,14 @@
       }
     },
     "Actual Size" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实际大小"
+          }
+        }
+      }
     },
     "Added" : {
       "localizations" : {
@@ -367,10 +395,24 @@
       }
     },
     "Agent question" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 提问"
+          }
+        }
+      }
     },
     "Align the QR code inside the frame" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将二维码对准取景框"
+          }
+        }
+      }
     },
     "All terminals for this shortcut were closed." : {
       "localizations" : {
@@ -403,7 +445,14 @@
       }
     },
     "Approval needed" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要你批准"
+          }
+        }
+      }
     },
     "Arrow down" : {
       "localizations" : {
@@ -456,7 +505,14 @@
       }
     },
     "Back" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回"
+          }
+        }
+      }
     },
     "Back to home" : {
       "localizations" : {
@@ -730,7 +786,14 @@
       }
     },
     "Choose from the sidebar" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从侧边栏选择"
+          }
+        }
+      }
     },
     "Clear filter" : {
       "localizations" : {
@@ -1003,7 +1066,14 @@
       }
     },
     "Copy Path" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制路径"
+          }
+        }
+      }
     },
     "Copy snapshot" : {
       "localizations" : {
@@ -1026,7 +1096,14 @@
       }
     },
     "Could not confirm the computer session. Pull to refresh, then try again." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认电脑上的会话。请下拉刷新后重试。"
+          }
+        }
+      }
     },
     "Could not load session" : {
       "localizations" : {
@@ -1240,7 +1317,14 @@
       }
     },
     "Current" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前"
+          }
+        }
+      }
     },
     "Current branch" : {
       "localizations" : {
@@ -1323,7 +1407,14 @@
       }
     },
     "Delete this session?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这个会话？"
+          }
+        }
+      }
     },
     "Delete word" : {
       "localizations" : {
@@ -1376,7 +1467,14 @@
       }
     },
     "Desktop" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面"
+          }
+        }
+      }
     },
     "Desktop access URL" : {
       "localizations" : {
@@ -1469,7 +1567,14 @@
       }
     },
     "Empty folder" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空文件夹"
+          }
+        }
+      }
     },
     "End all running shells for %@? Unsaved work may be lost. The shortcut and folder are kept." : {
       "localizations" : {
@@ -1622,7 +1727,14 @@
       }
     },
     "File" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件"
+          }
+        }
+      }
     },
     "File editing is desktop-only. Changes need the host's local web client." : {
       "localizations" : {
@@ -1715,7 +1827,14 @@
       }
     },
     "Folder" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹"
+          }
+        }
+      }
     },
     "Folder unavailable" : {
       "localizations" : {
@@ -2628,7 +2747,14 @@
       }
     },
     "If this session has desktop history, pull to refresh. The phone continues the computer session instead of starting a new one." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果这个会话在桌面端有历史记录，请下拉刷新。手机会接续电脑上的会话，而不是新开一个。"
+          }
+        }
+      }
     },
     "Independent chats, not project terminals" : {
       "localizations" : {
@@ -2641,7 +2767,14 @@
       }
     },
     "Install on desktop" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在桌面端安装"
+          }
+        }
+      }
     },
     "iOS only opens HTTPS tunnels. Use a TLS reverse proxy in front of FRP, or Cloudflare." : {
       "extractionState" : "stale",
@@ -2655,7 +2788,14 @@
       }
     },
     "Jump to latest" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳到最新"
+          }
+        }
+      }
     },
     "Language" : {
       "localizations" : {
@@ -2679,7 +2819,14 @@
       }
     },
     "Language and appearance apply to this app. Background alerts notify when the agent finishes a turn, asks for approval, or a terminal exits while the app is in the background." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语言和外观只作用于本 app。开启后台提醒后，app 在后台时，Agent 完成一轮回复、请求批准或终端退出都会通知你。"
+          }
+        }
+      }
     },
     "Larger terminal text" : {
       "localizations" : {
@@ -2702,13 +2849,34 @@
       }
     },
     "Live input" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时输入"
+          }
+        }
+      }
     },
     "Manual install" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手动安装"
+          }
+        }
+      }
     },
     "Message the host agent" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给主机上的 Agent 发消息"
+          }
+        }
+      }
     },
     "Mode" : {
       "localizations" : {
@@ -2721,7 +2889,14 @@
       }
     },
     "Mode, model, and thinking come from the host agent after the session is live. If they stay empty, keep this chat open on the Mac once so the agent can advertise them, then pull to refresh." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模式、模型和思考强度会在会话就绪后由主机上的 Agent 提供。如果一直为空，请先在 Mac 上打开一次这个聊天，让 Agent 上报这些选项，然后下拉刷新。"
+          }
+        }
+      }
     },
     "Model" : {
       "localizations" : {
@@ -2754,10 +2929,24 @@
       }
     },
     "Needs a runtime" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要运行环境"
+          }
+        }
+      }
     },
     "Needs attention" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要处理"
+          }
+        }
+      }
     },
     "New chat" : {
       "extractionState" : "stale",
@@ -2791,7 +2980,14 @@
       }
     },
     "Next Terminal" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一个终端"
+          }
+        }
+      }
     },
     "No agent is running on the host. Start one on the desktop, then try again." : {
       "localizations" : {
@@ -2814,7 +3010,14 @@
       }
     },
     "No messages yet" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有消息"
+          }
+        }
+      }
     },
     "No projects" : {
       "localizations" : {
@@ -2837,10 +3040,24 @@
       }
     },
     "No sessions yet" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有会话"
+          }
+        }
+      }
     },
     "Not connected." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未连接。"
+          }
+        }
+      }
     },
     "Not received" : {
       "localizations" : {
@@ -2863,13 +3080,34 @@
       }
     },
     "OK" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好"
+          }
+        }
+      }
     },
     "On" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开"
+          }
+        }
+      }
     },
     "Open a chat on the desktop. These sessions are not projects." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在桌面端打开一个聊天。这里的会话不是项目。"
+          }
+        }
+      }
     },
     "Open a project on the desktop to watch its terminals here." : {
       "localizations" : {
@@ -2882,7 +3120,14 @@
       }
     },
     "Open a session before switching agents." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先打开一个会话，再切换 Agent。"
+          }
+        }
+      }
     },
     "Open a terminal on the desktop, or start a new one here." : {
       "localizations" : {
@@ -2926,7 +3171,14 @@
       }
     },
     "Open Se to answer." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Se 回答。"
+          }
+        }
+      }
     },
     "Open session" : {
       "localizations" : {
@@ -2949,10 +3201,24 @@
       }
     },
     "Opening a chat session…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在打开聊天会话…"
+          }
+        }
+      }
     },
     "Opening the existing session on the Mac…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在打开 Mac 上已有的会话…"
+          }
+        }
+      }
     },
     "Opens or focuses a host PTY tab." : {
       "extractionState" : "stale",
@@ -3127,13 +3393,34 @@
       }
     },
     "Pick a project to watch its terminals." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择一个项目，查看它的终端。"
+          }
+        }
+      }
     },
     "Pick a session to continue it here." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择一个会话，在这里继续。"
+          }
+        }
+      }
     },
     "Previous Terminal" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一个终端"
+          }
+        }
+      }
     },
     "Project" : {
       "localizations" : {
@@ -3651,7 +3938,14 @@
       }
     },
     "Rename session" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名会话"
+          }
+        }
+      }
     },
     "Resend" : {
       "localizations" : {
@@ -3955,7 +4249,14 @@
       }
     },
     "Send command" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送命令"
+          }
+        }
+      }
     },
     "Send EOF" : {
       "localizations" : {
@@ -3998,7 +4299,14 @@
       }
     },
     "Session name" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话名称"
+          }
+        }
+      }
     },
     "Sessions" : {
       "localizations" : {
@@ -4071,7 +4379,14 @@
       }
     },
     "Sign in on the computer, then wait…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在电脑上登录，然后稍候…"
+          }
+        }
+      }
     },
     "Simplified Chinese" : {
       "localizations" : {
@@ -4144,7 +4459,14 @@
       }
     },
     "Starting the agent" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在启动 Agent"
+          }
+        }
+      }
     },
     "Starting the agent on the Mac. First launch can take a few minutes." : {
       "localizations" : {
@@ -4227,7 +4549,14 @@
       }
     },
     "Switch to desktop size" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到桌面尺寸"
+          }
+        }
+      }
     },
     "Switch to live keyboard" : {
       "localizations" : {
@@ -4391,7 +4720,14 @@
       }
     },
     "The access token was rejected. Scan the desktop QR again." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "访问令牌被拒绝。请重新扫描桌面端的二维码。"
+          }
+        }
+      }
     },
     "The active project root is no longer available. Choose Host workspace." : {
       "localizations" : {
@@ -4404,13 +4740,34 @@
       }
     },
     "The agent finished its turn." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 已完成这一轮回复。"
+          }
+        }
+      }
     },
     "The agent is waiting for your approval." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 正在等待你的批准。"
+          }
+        }
+      }
     },
     "The desktop keeps its files; the chat is removed from the list." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面端的文件会保留，只是把这个聊天从列表中移除。"
+          }
+        }
+      }
     },
     "The file may be untracked or unchanged. The host returned no diff." : {
       "localizations" : {
@@ -4453,7 +4810,14 @@
       }
     },
     "The host did not finish the agent request. Try again, or start the agent on the desktop." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机没有完成这次 Agent 请求。请重试，或在桌面端启动 Agent。"
+          }
+        }
+      }
     },
     "The host is catching up with terminal output. Refresh when the screen settles." : {
       "localizations" : {
@@ -4476,10 +4840,24 @@
       }
     },
     "The host kept this session: live terminals or an active agent still reference it." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机保留了这个会话：仍有运行中的终端或活动的 Agent 在使用它。"
+          }
+        }
+      }
     },
     "The host rejected the request." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机拒绝了这个请求。"
+          }
+        }
+      }
     },
     "The host returned this terminal ID. It is not attached here: quick terminals use a separate host scope, which this workspace cannot safely retain. Use the host to interact with it, or close it below." : {
       "localizations" : {
@@ -4512,16 +4890,44 @@
       }
     },
     "The phone could not open the host WebSocket." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机无法建立与主机的 WebSocket 连接。"
+          }
+        }
+      }
     },
     "The phone could not reach the host tunnel. Confirm remote access is still on, then retry." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机无法连上主机隧道。请确认远程访问仍处于开启状态，然后重试。"
+          }
+        }
+      }
     },
     "The phone could not reach the host." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机无法连上主机。"
+          }
+        }
+      }
     },
     "The phone could not reach the Mac on this Wi-Fi. Confirm remote access is on and both devices are on the same network." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机无法在当前 Wi-Fi 下连上 Mac。请确认已开启远程访问，并且两台设备在同一网络。"
+          }
+        }
+      }
     },
     "The phone could not reach the tunnel. Quick Tunnels go through Cloudflare, not your LAN." : {
       "extractionState" : "stale",
@@ -4545,7 +4951,14 @@
       }
     },
     "The session changed on the desktop. Try deleting again." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个会话在桌面端有了变化。请再试一次删除。"
+          }
+        }
+      }
     },
     "The session page crashed. Retry to reload." : {
       "extractionState" : "stale",
@@ -4559,7 +4972,14 @@
       }
     },
     "The terminal exited." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端已退出。"
+          }
+        }
+      }
     },
     "The terminal screen is empty." : {
       "localizations" : {
@@ -4572,7 +4992,14 @@
       }
     },
     "The tunnel returned an unexpected response." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隧道返回了意外的响应。"
+          }
+        }
+      }
     },
     "The tunnel timed out. Check that remote access is still on." : {
       "localizations" : {
@@ -4605,13 +5032,34 @@
       }
     },
     "This access link is missing its token. Scan the QR again." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个访问链接缺少令牌。请重新扫描二维码。"
+          }
+        }
+      }
     },
     "This agent cannot be started from the phone. Start it on the desktop, then try again." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 Agent 无法从手机启动。请在桌面端启动后再试。"
+          }
+        }
+      }
     },
     "This directory has no visible files." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个目录里没有可见的文件。"
+          }
+        }
+      }
     },
     "This file has no text to preview." : {
       "localizations" : {
@@ -4664,7 +5112,14 @@
       }
     },
     "This link is missing the access secret. Copy or scan the full QR from the desktop." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个链接缺少访问密钥。请复制或扫描桌面端完整的二维码。"
+          }
+        }
+      }
     },
     "This removes the saved host and its access secret from this device. It does not change your desktop." : {
       "localizations" : {
@@ -4677,7 +5132,14 @@
       }
     },
     "Thought" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考过程"
+          }
+        }
+      }
     },
     "Time" : {
       "localizations" : {
@@ -4750,7 +5212,14 @@
       }
     },
     "Type a command…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入命令…"
+          }
+        }
+      }
     },
     "Type changed" : {
       "localizations" : {
@@ -4763,7 +5232,14 @@
       }
     },
     "Unavailable" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不可用"
+          }
+        }
+      }
     },
     "Unified diff" : {
       "localizations" : {
@@ -4916,10 +5392,24 @@
       }
     },
     "Used %lld tools" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用了 %lld 个工具"
+          }
+        }
+      }
     },
     "Used 1 tool" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用了 1 个工具"
+          }
+        }
+      }
     },
     "Used when opening a terminal. You can adjust the text size again in the terminal toolbar." : {
       "localizations" : {
@@ -4942,7 +5432,14 @@
       }
     },
     "View" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看"
+          }
+        }
+      }
     },
     "View read-only diff" : {
       "localizations" : {
@@ -5006,7 +5503,14 @@
       }
     },
     "Worked · %lld tools" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成 · %lld 个工具"
+          }
+        }
+      }
     },
     "Working" : {
       "localizations" : {
@@ -5039,7 +5543,14 @@
       }
     },
     "Working…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "处理中…"
+          }
+        }
+      }
     },
     "Workspace" : {
       "localizations" : {
@@ -5142,10 +5653,24 @@
       }
     },
     "Zoom In" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放大"
+          }
+        }
+      }
     },
     "Zoom Out" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缩小"
+          }
+        }
+      }
     },
     "←" : {
       "localizations" : {
