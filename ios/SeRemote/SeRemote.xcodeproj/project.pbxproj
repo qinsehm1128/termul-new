@@ -12,7 +12,26 @@
 
 /* Begin PBXFileReference section */
 		A11A00000000000000000001 /* SeRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SeRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A11A00000000000000000030 /* SeRemoteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeRemoteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A11A00000000000000000040 /* SeRemoteUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeRemoteUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXContainerItemProxy section */
+		A11A00000000000000000039 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A11A00000000000000000004 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A11A00000000000000000003;
+			remoteInfo = SeRemote;
+		};
+		A11A00000000000000000049 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A11A00000000000000000004 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A11A00000000000000000003;
+			remoteInfo = SeRemote;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		A11A00000000000000000005 /* Exceptions for "SeRemote" folder in "SeRemote" target */ = {
@@ -33,6 +52,16 @@
 			path = SeRemote;
 			sourceTree = "<group>";
 		};
+		A11A00000000000000000031 /* SeRemoteTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SeRemoteTests;
+			sourceTree = "<group>";
+		};
+		A11A00000000000000000041 /* SeRemoteUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SeRemoteUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,6 +73,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A11A00000000000000000034 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A11A00000000000000000044 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -51,6 +94,8 @@
 			isa = PBXGroup;
 			children = (
 				A11A00000000000000000002 /* SeRemote */,
+				A11A00000000000000000031 /* SeRemoteTests */,
+				A11A00000000000000000041 /* SeRemoteUITests */,
 				A11A00000000000000000008 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -59,6 +104,8 @@
 			isa = PBXGroup;
 			children = (
 				A11A00000000000000000001 /* SeRemote.app */,
+				A11A00000000000000000030 /* SeRemoteTests.xctest */,
+				A11A00000000000000000040 /* SeRemoteUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,6 +136,52 @@
 			productReference = A11A00000000000000000001 /* SeRemote.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A11A00000000000000000032 /* SeRemoteTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A11A00000000000000000036 /* Build configuration list for PBXNativeTarget "SeRemoteTests" */;
+			buildPhases = (
+				A11A00000000000000000033 /* Sources */,
+				A11A00000000000000000034 /* Frameworks */,
+				A11A00000000000000000035 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A11A0000000000000000003A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A11A00000000000000000031 /* SeRemoteTests */,
+			);
+			name = SeRemoteTests;
+			packageProductDependencies = (
+			);
+			productName = SeRemoteTests;
+			productReference = A11A00000000000000000030 /* SeRemoteTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A11A00000000000000000042 /* SeRemoteUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A11A00000000000000000046 /* Build configuration list for PBXNativeTarget "SeRemoteUITests" */;
+			buildPhases = (
+				A11A00000000000000000043 /* Sources */,
+				A11A00000000000000000044 /* Frameworks */,
+				A11A00000000000000000045 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A11A0000000000000000004A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A11A00000000000000000041 /* SeRemoteUITests */,
+			);
+			name = SeRemoteUITests;
+			packageProductDependencies = (
+			);
+			productName = SeRemoteUITests;
+			productReference = A11A00000000000000000040 /* SeRemoteUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -101,6 +194,14 @@
 				TargetAttributes = {
 					A11A00000000000000000003 = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					A11A00000000000000000032 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = A11A00000000000000000003;
+					};
+					A11A00000000000000000042 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = A11A00000000000000000003;
 					};
 				};
 			};
@@ -123,12 +224,28 @@
 			projectRoot = "";
 			targets = (
 				A11A00000000000000000003 /* SeRemote */,
+				A11A00000000000000000032 /* SeRemoteTests */,
+				A11A00000000000000000042 /* SeRemoteUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A11A0000000000000000000B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A11A00000000000000000035 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A11A00000000000000000045 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -145,7 +262,34 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A11A00000000000000000033 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A11A00000000000000000043 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A11A0000000000000000003A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A11A00000000000000000003 /* SeRemote */;
+			targetProxy = A11A00000000000000000039 /* PBXContainerItemProxy */;
+		};
+		A11A0000000000000000004A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A11A00000000000000000003 /* SeRemote */;
+			targetProxy = A11A00000000000000000049 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A11A0000000000000000000D /* Debug */ = {
@@ -319,6 +463,82 @@
 			};
 			name = Release;
 		};
+		A11A00000000000000000037 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.se-manager.remote.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SeRemote.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SeRemote";
+			};
+			name = Debug;
+		};
+		A11A00000000000000000038 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.se-manager.remote.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SeRemote.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SeRemote";
+			};
+			name = Release;
+		};
+		A11A00000000000000000047 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.se-manager.remote.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SeRemote;
+			};
+			name = Debug;
+		};
+		A11A00000000000000000048 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.se-manager.remote.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SeRemote;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -336,6 +556,24 @@
 			buildConfigurations = (
 				A11A0000000000000000000D /* Debug */,
 				A11A0000000000000000000E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A11A00000000000000000036 /* Build configuration list for PBXNativeTarget "SeRemoteTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A11A00000000000000000037 /* Debug */,
+				A11A00000000000000000038 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A11A00000000000000000046 /* Build configuration list for PBXNativeTarget "SeRemoteUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A11A00000000000000000047 /* Debug */,
+				A11A00000000000000000048 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
