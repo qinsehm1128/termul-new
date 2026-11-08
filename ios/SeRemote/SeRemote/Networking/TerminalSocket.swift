@@ -1,5 +1,31 @@
 import Foundation
 
+/// `screen_read` nests the status document that `screen_status` returns flat.
+/// Never expose text when the host cannot prove a ready, synchronized observer.
+struct HostScreenReadReply: Decodable, Sendable, Hashable {
+    let status: HostScreenObservation
+    let text: String?
+    let appliedSeq: Int?
+    let truncated: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case status, text, appliedSeq, truncated
+    }
+
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        let observation = (try? fields.decode(HostScreenObservation.self, forKey: .status))
+            ?? .unavailable(reason: .protocol)
+        let sequence = try fields.decodeIfPresent(Int.self, forKey: .appliedSeq)
+        let synchronized = sequence == nil || sequence == observation.appliedSeq
+        status = synchronized ? observation : .unavailable(reason: .protocol)
+        appliedSeq = synchronized && observation.isReady ? sequence : nil
+        let rawText = try fields.decodeIfPresent(String.self, forKey: .text)
+        text = status.isReady ? rawText : nil
+        truncated = try fields.decode(Bool.self, forKey: .truncated)
+    }
+}
+
 struct SpawnedTerminal: Decodable, Sendable {
     let id: String
     var shell: String?
@@ -156,6 +182,19 @@ final class TerminalSocket {
             payload: ["terminalId": terminalId],
             as: HostScreenObservation.self
         )
+    }
+
+    /// Read a host-observed screen without sending input or changing ownership.
+    func screenRead(terminalId: String, maxLines: Int? = nil) async throws -> HostScreenReadReply {
+        var payload: [String: Any] = ["terminalId": terminalId]
+        if let maxLines { payload["maxLines"] = maxLines }
+        HostLog.session.debug("Host screen read request")
+        do {
+            return try await request("screen_read", payload: payload, as: HostScreenReadReply.self)
+        } catch {
+            HostLog.session.error("Host screen read failed")
+            throw error
+        }
     }
 
     func watch(terminalId: String, lastSeq: Int) async throws -> TerminalAttachResult {
