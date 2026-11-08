@@ -1,42 +1,64 @@
 import SwiftUI
 
-/// Entry point for the secondary host tools: Git, scheduled tasks, quick
-/// terminals, content search and host screen text. Chat, Terminal and Files
-/// stay the three primary destinations; Tools opens from the toolbar.
-///
-/// Placeholder owned by the foundation lane. The feature-screen lane replaces
-/// the body with the real destinations and keeps this initializer.
+/// Tools retain the workspace scope; navigation never creates or closes a PTY.
 struct ToolsView: View {
-    let session: WorkspaceSession
+    var session: WorkspaceSession
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicType
 
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(ToolDestination.allCases) { tool in
-                    Label(tool.title, systemImage: tool.systemImage)
-                        .frame(minHeight: SeSpace.hitTarget)
+            GeometryReader { geometry in
+                let columns = SeLayout.columns(width: geometry.size.width,
+                    isRegular: sizeClass == .regular, largeText: dynamicType.isAccessibilitySize)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: SeSpace.section) {
+                        VStack(alignment: .leading, spacing: SeSpace.xs) {
+                            Text("WORKSPACE SCOPE").font(SeFont.label).foregroundStyle(SeTheme.secondaryInk)
+                            Text(session.workspaceRoot ?? String(localized: "No workspace selected"))
+                                .font(SeFont.support.monospaced()).textSelection(.enabled)
+                        }
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .top),
+                            count: columns == .single ? 1 : 2), spacing: SeSpace.md) {
+                            ForEach(ToolDestination.allCases) { tool in
+                                NavigationLink(value: tool) {
+                                    HStack(alignment: .top, spacing: SeSpace.sm) {
+                                        Image(systemName: tool.symbol).foregroundStyle(SeTheme.accent)
+                                            .frame(width: 28)
+                                        VStack(alignment: .leading, spacing: SeSpace.xs) {
+                                            Text(tool.title).font(SeFont.rowTitle)
+                                            Text(tool.detail).font(SeFont.support).foregroundStyle(SeTheme.secondaryInk)
+                                        }
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "chevron.right").foregroundStyle(SeTheme.tertiaryInk)
+                                    }
+                                    .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
+                                    .padding(SeSpace.md).background(SeTheme.surface, in: RoundedRectangle(cornerRadius: SeRadius.content))
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                    }.padding(SeSpace.screenInset)
+                }.background(SeTheme.canvas)
+            }
+            .navigationTitle("Tools")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.frame(minHeight: SeSpace.hitTarget) } }
+            .navigationDestination(for: ToolDestination.self) { destination in
+                switch destination {
+                case .git: GitFeatureView(session: session)
+                case .scheduledTasks: ScheduledTasksFeatureView(session: session)
+                case .quickTerminals: QuickTerminalsFeatureView(session: session)
+                case .search: SearchFeatureView(session: session, onOpenFile: { dismiss() })
+                case .screenText: ScreenTextFeatureView(session: session)
                 }
             }
-            .navigationTitle(String(localized: "Tools"))
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(String(localized: "Done")) { dismiss() }
-                }
-            }
-        }
+        }.tint(SeTheme.accent)
     }
 }
 
 enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
-    case git
-    case scheduledTasks
-    case quickTerminals
-    case search
-    case screenText
-
+    case git, scheduledTasks, quickTerminals, search, screenText
     var id: String { rawValue }
-
     var title: String {
         switch self {
         case .git: String(localized: "Git")
@@ -46,14 +68,23 @@ enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
         case .screenText: String(localized: "Host screen text")
         }
     }
-
-    var systemImage: String {
+    var systemImage: String { symbol }
+    var symbol: String {
         switch self {
-        case .git: "arrow.triangle.branch"
-        case .scheduledTasks: "calendar.badge.clock"
-        case .quickTerminals: "bolt.horizontal"
-        case .search: "text.magnifyingglass"
+        case .git: "point.3.connected.trianglepath.dotted"
+        case .scheduledTasks: "clock"
+        case .quickTerminals: "terminal"
+        case .search: "magnifyingglass"
         case .screenText: "text.viewfinder"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .git: String(localized: "Read-only changes, diffs and history.")
+        case .scheduledTasks: String(localized: "Review schedules, run history and task controls.")
+        case .quickTerminals: String(localized: "Manage persistent host terminal shortcuts.")
+        case .search: String(localized: "Find text in the current workspace.")
+        case .screenText: String(localized: "Read a terminal text snapshot, not live screen sharing.")
         }
     }
 }
