@@ -11,6 +11,9 @@ enum ScheduledTaskLoadState: Equatable {
 final class ScheduledTaskStore {
     private(set) var tasks: [ScheduledTaskWire] = []
     private(set) var selectedTask: ScheduledTaskWire?
+    /// The task the user asked to inspect. Survives the window where
+    /// `selectedTask` is cleared while its details load.
+    private(set) var selectedTaskId: String?
     private(set) var runs: [ScheduledTaskRunWire] = []
     private(set) var auditEvents: [ScheduledTaskAuditEventWire] = []
     private(set) var state: ScheduledTaskLoadState = .idle
@@ -35,6 +38,7 @@ final class ScheduledTaskStore {
         detailRequest = UUID()
         tasks = []
         selectedTask = nil
+        selectedTaskId = nil
         runs = []
         auditEvents = []
         projectId = nil
@@ -78,6 +82,7 @@ final class ScheduledTaskStore {
         let request = UUID()
         let host = attachment
         detailRequest = request
+        selectedTaskId = taskId
         selectedTask = nil
         runs = []
         auditEvents = []
@@ -129,7 +134,7 @@ final class ScheduledTaskStore {
             return
         }
         let host = attachment
-        let selectedId = selectedTask?.taskId
+        let selectedId = selectedTaskId
         actionState = .loading
         do {
             let updated = try await action(client)
@@ -138,11 +143,16 @@ final class ScheduledTaskStore {
             if let updated, let index = tasks.firstIndex(where: { $0.taskId == updated.taskId }) {
                 tasks[index] = updated
             }
-            if let updated, selectedTask?.taskId == updated.taskId { selectedTask = updated }
+            if let updated, selectedTaskId == updated.taskId {
+                // A detail load that started before this mutation carries the
+                // old revision. Retire it so it cannot overwrite the new one.
+                detailRequest = UUID()
+                selectedTask = updated
+            }
             await refresh(projectId: projectId)
             guard host == attachment else { return }
             // Do not steal selection if the user opened a different task while the action ran.
-            if let selectedId, selectedTask?.taskId == selectedId {
+            if let selectedId, selectedTaskId == selectedId {
                 await loadDetails(taskId: selectedId)
             }
             guard host == attachment else { return }

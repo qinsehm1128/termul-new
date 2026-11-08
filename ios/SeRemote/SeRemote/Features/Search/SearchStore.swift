@@ -21,13 +21,18 @@ final class SearchStore {
         return nil
     }
 
-    private var client: SearchClient?
+    private var client: (any SearchServing)?
     private var pending: Task<Void, Never>?
     private var generation = UUID()
 
     func attach(http: HostHTTP) {
+        attach(client: SearchClient(http: http))
+    }
+
+    /// Test seam: the store depends on the search operation, not the transport.
+    func attach(client: any SearchServing) {
         cancelSearch()
-        client = SearchClient(http: http)
+        self.client = client
         response = nil
         state = .empty
     }
@@ -110,7 +115,13 @@ final class SearchStore {
         let body = SearchContentBody(scopeRoot: scopeRoot, rootPath: rootPath, query: query)
         do {
             let response = try await client.content(body)
-            guard !Task.isCancelled, generation == self.generation else { return }
+            guard generation == self.generation else { return }
+            // Cancellation can race a response that already arrived. Settle
+            // the state either way so the UI never stays in loading.
+            if Task.isCancelled {
+                state = results.isEmpty ? .empty : .loaded
+                return
+            }
             self.response = response
             state = response.results.isEmpty ? .empty : .loaded
         } catch {

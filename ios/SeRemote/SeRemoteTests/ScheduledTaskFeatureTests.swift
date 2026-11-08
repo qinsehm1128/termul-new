@@ -257,6 +257,34 @@ struct ScheduledTaskFeatureTests {
         #expect(store.actionState == .loaded)
     }
 
+    @Test func pauseDuringDetailLoadKeepsNewRevision() async throws {
+        let client = StubClient()
+        client.task = try decode(ScheduledTaskWire.self, Self.taskFixture)
+        client.suspendRuns = true
+        let store = ScheduledTaskStore()
+        store.attach(client: client)
+        // Detail load fetches revision 7, then waits on run history.
+        let staleDetail = Task { await store.loadDetails(taskId: "task-1") }
+        while client.runsContinuation == nil { await Task.yield() }
+        #expect(store.selectedTaskId == "task-1")
+        // Pause lands while that load is still suspended and bumps the revision.
+        var paused = Self.taskFixture
+        paused["revision"] = 8
+        paused["status"] = "paused"
+        let updated = try decode(ScheduledTaskWire.self, paused)
+        client.task = updated
+        client.tasks = [updated]
+        await store.pause(taskId: "task-1", expectedRevision: 7)
+        #expect(client.actions == ["pause:task-1:7"])
+        // The old response arrives last and must not restore revision 7.
+        client.runsContinuation?.resume(returning: [])
+        await staleDetail.value
+        #expect(store.selectedTask?.revision == 8)
+        #expect(store.selectedTask?.status == .paused)
+        #expect(store.tasks.first?.revision == 8)
+        #expect(store.actionState == .loaded)
+    }
+
     private static let taskFixture: [String: Any] = [
         "schemaVersion": 1, "taskId": "task-1", "name": "Daily summary", "description": "A task",
         "status": "active", "schedule": ["kind": "cron", "expression": "0 9 * * *", "timezone": "Asia/Shanghai"],
@@ -290,6 +318,9 @@ struct ScheduledTaskFeatureTests {
         var actions: [String] = []
         var suspendList = false
         var listContinuation: CheckedContinuation<[ScheduledTaskWire], any Error>?
+        /// Suspends only the next `runs` call, then serves normally.
+        var suspendRuns = false
+        var runsContinuation: CheckedContinuation<[ScheduledTaskRunWire], any Error>?
         func list(projectId: String?) async throws -> [ScheduledTaskWire] {
             lastProjectId = projectId
             if suspendList { return try await withCheckedThrowingContinuation { listContinuation = $0 } }
@@ -301,6 +332,10 @@ struct ScheduledTaskFeatureTests {
             return try #require(task)
         }
         func runs(taskId: String) async throws -> [ScheduledTaskRunWire] {
+            if suspendRuns {
+                suspendRuns = false
+                return try await withCheckedThrowingContinuation { runsContinuation = $0 }
+            }
             if let failure { throw failure }
             return history
         }

@@ -1,6 +1,10 @@
 import Foundation
 
-struct SearchClient {
+protocol SearchServing {
+    func content(_ body: SearchContentBody) async throws -> FileSearchResponse
+}
+
+struct SearchClient: SearchServing {
     let http: HostHTTP
 
     /// Fixed-string, case-insensitive search. The host supplies all ignore rules.

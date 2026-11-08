@@ -52,6 +52,59 @@ struct SearchFeatureTests {
         #expect(store.state == .empty)
         #expect(store.results.isEmpty)
     }
+
+    @Test func canceledRefreshSettlesWhenResponseAlreadyArrived() async throws {
+        let client = SuspendingSearchClient()
+        let store = SearchStore()
+        store.attach(client: client)
+        store.configure(scopeRoot: "/p", rootPath: "/p")
+        store.setQuery("needle", debounce: .seconds(3600))
+        let refresh = Task { await store.refresh() }
+        while client.continuation == nil { await Task.yield() }
+        #expect(store.isLoading)
+        // Cancel first, then let the already-received response complete.
+        refresh.cancel()
+        let reply = FileSearchResponse(results: [], truncated: false, scannedFiles: 0, failedFiles: 0)
+        client.continuation?.resume(returning: reply)
+        await refresh.value
+        #expect(!store.isLoading)
+        #expect(store.state == .empty)
+    }
+
+    @Test func latestRefreshWinsOverLateResponse() async throws {
+        let client = SuspendingSearchClient()
+        let store = SearchStore()
+        store.attach(client: client)
+        store.configure(scopeRoot: "/p", rootPath: "/p")
+        store.setQuery("old", debounce: .seconds(3600))
+        let first = Task { await store.refresh() }
+        while client.continuation == nil { await Task.yield() }
+        let stale = try #require(client.continuation)
+        client.continuation = nil
+        client.suspend = false
+        client.reply = FileSearchResponse(
+            results: [FileSearchResult(filePath: "/p/new.swift", matches: [])],
+            truncated: false, scannedFiles: 0, failedFiles: 0)
+        await store.refresh()
+        stale.resume(returning: FileSearchResponse(
+            results: [FileSearchResult(filePath: "/p/old.swift", matches: [])],
+            truncated: false, scannedFiles: 0, failedFiles: 0))
+        await first.value
+        #expect(store.results.map(\.filePath) == ["/p/new.swift"])
+        #expect(store.state == .loaded)
+    }
+}
+
+@MainActor
+private final class SuspendingSearchClient: SearchServing {
+    var suspend = true
+    var reply = FileSearchResponse(results: [], truncated: false, scannedFiles: 0, failedFiles: 0)
+    var continuation: CheckedContinuation<FileSearchResponse, any Error>?
+
+    func content(_ body: SearchContentBody) async throws -> FileSearchResponse {
+        if suspend { return try await withCheckedThrowingContinuation { continuation = $0 } }
+        return reply
+    }
 }
 
 @MainActor
@@ -83,6 +136,16 @@ struct HostScreenReadReplyTests {
             let reply = try decode("{\(prefix)\"text\":\"unsafe\",\"appliedSeq\":8,\"truncated\":false}")
             #expect(!reply.status.isReady)
             #expect(reply.status.reason == .protocol)
+            #expect(reply.text == nil)
+            #expect(reply.appliedSeq == nil)
+        }
+    }
+
+    @Test func readyTextWithoutCorrelatedSequenceIsHidden() throws {
+        for sequence in ["", ",\"appliedSeq\":null"] {
+            let reply = try decode("{\"status\":\(ready),\"text\":\"unsafe\"\(sequence),\"truncated\":false}")
+            // The status itself is still a valid ready report.
+            #expect(reply.status.isReady)
             #expect(reply.text == nil)
             #expect(reply.appliedSeq == nil)
         }

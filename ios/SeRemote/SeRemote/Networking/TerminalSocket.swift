@@ -17,11 +17,15 @@ struct HostScreenReadReply: Decodable, Sendable, Hashable {
         let observation = (try? fields.decode(HostScreenObservation.self, forKey: .status))
             ?? .unavailable(reason: .protocol)
         let sequence = try fields.decodeIfPresent(Int.self, forKey: .appliedSeq)
-        let synchronized = sequence == nil || sequence == observation.appliedSeq
-        status = synchronized ? observation : .unavailable(reason: .protocol)
-        appliedSeq = synchronized && observation.isReady ? sequence : nil
+        // A reply-level sequence that disagrees with the status is a protocol fault.
+        let consistent = sequence.map { $0 == observation.appliedSeq } ?? true
+        status = consistent ? observation : .unavailable(reason: .protocol)
+        appliedSeq = status.isReady ? sequence : nil
         let rawText = try fields.decodeIfPresent(String.self, forKey: .text)
-        text = status.isReady ? rawText : nil
+        // Text is only trustworthy when its own sequence proves it matches the
+        // ready observation. A missing or null sequence cannot prove that.
+        let correlated = sequence != nil && sequence == status.appliedSeq
+        text = status.isReady && correlated ? rawText : nil
         truncated = try fields.decode(Bool.self, forKey: .truncated)
     }
 }
