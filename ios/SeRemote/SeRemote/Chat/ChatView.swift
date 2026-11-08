@@ -171,8 +171,17 @@ struct ChatView: View {
     private func jumpToLatest(proxy: ScrollViewProxy) -> some View {
         Button {
             if let id = session.chat.timeline.last?.id {
-                seWithAnimation(.fade, reduceMotion: reduceMotion) {
-                    proxy.scrollTo(id, anchor: .bottom)
+                if reduceMotion {
+                    // Reduce Motion: jump instantly. Never animate viewport travel.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                } else {
+                    withAnimation(SeMotion.context.animation) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
                 }
             }
             unreadCount = 0

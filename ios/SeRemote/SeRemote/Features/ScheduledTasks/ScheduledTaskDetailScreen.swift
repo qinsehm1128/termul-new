@@ -4,7 +4,6 @@ struct ScheduledTaskDetailScreen: View {
     let session: WorkspaceSession
     let taskId: String
     @State private var pendingAction: Action?
-    @State private var successTick = 0
     @State private var errorTick = 0
     @State private var selectionTick = 0
     @State private var actionNotice: String?
@@ -58,7 +57,6 @@ struct ScheduledTaskDetailScreen: View {
         .navigationTitle(task?.name ?? String(localized: "Task details"))
         .refreshable { guard !busy else { return }; await reload() }
         .task(id: taskId) { await reload() }
-        .seHaptic(.success, trigger: successTick)
         .seHaptic(.error, trigger: errorTick)
         .seHaptic(.selection, trigger: selectionTick)
     }
@@ -215,7 +213,8 @@ struct ScheduledTaskDetailScreen: View {
             switch store.actionState {
             case .loaded:
                 if action == .run {
-                    successTick += 1
+                    // The host only accepted the request; the run's outcome is
+                    // not known yet. Report acceptance in text, not as success.
                     actionNotice = String(localized: "Host accepted the run request. Check run history for its outcome.")
                 } else {
                     selectionTick += 1

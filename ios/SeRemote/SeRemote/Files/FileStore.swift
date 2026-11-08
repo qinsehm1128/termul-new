@@ -27,14 +27,21 @@ final class FileStore {
     }
 
     func open(_ entry: DirectoryEntry) async {
+        _ = await openReturningSuccess(entry)
+    }
+
+    /// Same as `open`, but reports whether this specific operation succeeded,
+    /// so callers never infer the outcome from shared, older error state.
+    @discardableResult
+    func openReturningSuccess(_ entry: DirectoryEntry) async -> Bool {
         if entry.isDirectory {
             crumbs.append(entry)
             preview = nil
             previewName = nil
             previewPath = nil
-            await load(entry.path)
+            return await load(entry.path)
         } else {
-            await read(entry)
+            return await read(entry)
         }
     }
 
@@ -57,8 +64,9 @@ final class FileStore {
         }
     }
 
-    private func load(_ path: String) async {
-        guard let http else { return }
+    @discardableResult
+    private func load(_ path: String) async -> Bool {
+        guard let http else { return false }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -67,29 +75,38 @@ final class FileStore {
                 if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
+            // A successful load supersedes an earlier failure.
+            errorMessage = nil
+            return true
         } catch {
             HostLog.session.error("File list load failed")
             errorMessage = error.localizedDescription
             entries = []
+            return false
         }
     }
 
-    private func read(_ entry: DirectoryEntry) async {
+    @discardableResult
+    private func read(_ entry: DirectoryEntry) async -> Bool {
         await read(name: entry.name, path: entry.path)
     }
 
-    private func read(name: String, path: String) async {
-        guard let http else { return }
+    @discardableResult
+    private func read(name: String, path: String) async -> Bool {
+        guard let http else { return false }
         isLoading = true
         defer { isLoading = false }
         do {
             preview = try await http.get("fs/read", query: ["path": path])
             previewName = name
             previewPath = path
+            errorMessage = nil
+            return true
         } catch {
             HostLog.session.error("File preview load failed")
             errorMessage = error.localizedDescription
             preview = nil
+            return false
         }
     }
 

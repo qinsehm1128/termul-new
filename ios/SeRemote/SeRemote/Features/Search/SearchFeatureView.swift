@@ -6,6 +6,9 @@ struct SearchFeatureView: View {
     @State private var query = ""
     @State private var openingFile = false
     @State private var fileError: String?
+    /// The in-flight file open. Cancelled when the screen goes away so a slow
+    /// read cannot navigate after the user has left.
+    @State private var openTask: Task<Void, Never>?
     @ScaledMetric(relativeTo: .subheadline) private var codeSize = SeFont.codeBaseSize
 
     var body: some View {
@@ -39,7 +42,7 @@ struct SearchFeatureView: View {
                 Section {
                     ForEach(group.matches, id: \.self) { match in
                         Button {
-                            Task { await openFile(group.filePath) }
+                            openFile(group.filePath)
                         } label: {
                             HStack(alignment: .top, spacing: SeSpace.sm) {
                                 Text("\(match.lineNumber)").foregroundStyle(SeTheme.tertiaryInk)
@@ -82,7 +85,11 @@ struct SearchFeatureView: View {
             if !query.isEmpty { session.search.setQuery(query) }
         }
         .onChange(of: query) { _, value in session.search.setQuery(value) }
-        .onDisappear { session.search.cancelSearch() }
+        .onDisappear {
+            session.search.cancelSearch()
+            openTask?.cancel()
+            openTask = nil
+        }
         .refreshable { await session.search.refresh() }
     }
 
@@ -98,19 +105,24 @@ struct SearchFeatureView: View {
         return result
     }
 
-    private func openFile(_ path: String) async {
+    private func openFile(_ path: String) {
         guard !openingFile else { return }
         openingFile = true
-        defer { openingFile = false }
-        // FileStore.open is the read-only public preview entry point.
         fileError = nil
-        await session.files.open(DirectoryEntry(name: URL(fileURLWithPath: path).lastPathComponent,
-            path: path, type: "file"))
-        guard session.files.preview != nil, session.files.errorMessage == nil else {
-            fileError = session.files.errorMessage ?? String(localized: "The host could not open this file preview.")
-            return
+        // Capture the workspace this result belongs to. If it changes while
+        // the read is in flight, the result is no longer this screen's to apply.
+        let root = session.workspaceRoot
+        openTask = Task { @MainActor in
+            defer { openingFile = false }
+            let opened = await session.files.openReturningSuccess(DirectoryEntry(
+                name: URL(fileURLWithPath: path).lastPathComponent, path: path, type: "file"))
+            guard !Task.isCancelled, session.workspaceRoot == root else { return }
+            guard opened else {
+                fileError = session.files.errorMessage ?? String(localized: "The host could not open this file preview.")
+                return
+            }
+            session.setWorkspaceTab(.files)
+            onOpenFile()
         }
-        session.setWorkspaceTab(.files)
-        onOpenFile()
     }
 }
