@@ -1,6 +1,7 @@
 import SwiftUI
 import VisionKit
 
+@MainActor
 struct ScannerView: View {
     var onScan: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -37,7 +38,9 @@ struct ScannerView: View {
 /// Camera viewfinder chrome: dimmed mask with a rounded-rect cutout, corner
 /// brackets, and a sweeping scan line. Purely decorative — hit-testing is off
 /// so taps still reach the scanner's own barcode-tap recognition.
+@MainActor
 struct ScannerFrameOverlay: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sweep: CGFloat = 0
 
     var body: some View {
@@ -53,7 +56,9 @@ struct ScannerFrameOverlay: View {
                 maskWithCutout(size: geo.size, cutout: rect)
                 CornerBrackets(rect: rect)
                     .stroke(.white.opacity(0.95), lineWidth: 4)
-                scanLine(rect: rect)
+                if !reduceMotion {
+                    scanLine(rect: rect)
+                }
                 Text(String(localized: "Align the QR code inside the frame"))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.white)
@@ -62,7 +67,13 @@ struct ScannerFrameOverlay: View {
             }
         }
         .allowsHitTesting(false)
-        .onAppear {
+        .task(id: reduceMotion) {
+            var reset = Transaction(animation: nil)
+            reset.disablesAnimations = true
+            withTransaction(reset) { sweep = 0 }
+            guard !reduceMotion else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
             withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) {
                 sweep = 1
             }
@@ -139,6 +150,7 @@ private struct CornerBrackets: Shape {
 /// Starts the camera only after the scanner is in a window. Starting in
 /// `makeUIViewController` races the keyboard InputUI scene and can abort
 /// the app with `No scene exists for identity: com.apple.InputUI.keyboard`.
+@MainActor
 private struct DataScannerRepresentable: UIViewControllerRepresentable {
     var onScan: (String) -> Void
 
@@ -177,6 +189,7 @@ private struct DataScannerRepresentable: UIViewControllerRepresentable {
         Coordinator(onScan: onScan)
     }
 
+    @MainActor
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         var onScan: (String) -> Void
         weak var controller: DataScannerViewController?

@@ -3,240 +3,172 @@ import UIKit
 
 struct SessionScreen: View {
     @Bindable var session: WorkspaceSession
+    var hostDirectory: AnyView? = nil
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var filesVisibility: NavigationSplitViewVisibility = .automatic
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var containerWidth: CGFloat = 0
+    @State private var filesVisibility: NavigationSplitViewVisibility = .detailOnly
+    @State private var showTools = false
+    @State private var tabForward = true
+    @Namespace private var tabSelection
 
-    /// Plus/Max iPhones report .regular in landscape; only actual iPads get
-    /// the split tree, so the phone chrome survives rotation.
-    private var isWide: Bool { sizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad }
+    private var columns: SeLayout.Columns {
+        SeLayout.columns(width: containerWidth, isRegular: sizeClass == .regular,
+                         largeText: dynamicTypeSize.isAccessibilitySize)
+    }
+    private var isWide: Bool { columns != .single }
+    private var sideBySide: Bool { columns == .splitWithInspector }
+    private var showingFiles: Bool {
+        session.workspaceTab == .files || (isWide && filesVisibility == .all)
+    }
 
     var body: some View {
         @Bindable var chat = session.chat
-        Group {
-            if isWide {
-                wideLayout
-            } else {
-                compactLayout
-            }
-        }
-        .background(SeTheme.canvas.ignoresSafeArea())
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
-            guard session.workspaceTab == .terminal || isWide else { return }
-            let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
-            withAnimation(.easeOut(duration: duration)) {
-                session.noteTerminalKeyboard(height: KeyboardGuard.overlapHeight(from: notification))
-            }
-        }
-        .sheet(isPresented: $chat.showAgentSheet) {
-            AgentConfigSheet(session: session)
-        }
-        .task(id: workspaceTaskId) {
-            await session.refreshActiveTerminals()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
-                await session.refreshActiveTerminals()
-            }
-        }
-        .onAppear {
-            session.noteWideLayout(isWide)
-            ShortcutAvailability.shared.sessionActive = true
-        }
-        .onDisappear {
-            ShortcutAvailability.shared.sessionActive = false
-        }
-        .onChange(of: isWide) { _, wide in
-            session.noteWideLayout(wide)
-        }
-        .onReceive(ShortcutCenter.shortcuts) { shortcut in
-            handleShortcut(shortcut)
-        }
-    }
-
-    // MARK: Wide (iPad) layout — Files sidebar + terminal/chat split
-
-    private var wideLayout: some View {
-        NavigationSplitView(columnVisibility: $filesVisibility) {
-            FileBrowserView(session: session, embedded: true)
-                .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
-                .navigationTitle(WorkspaceTab.files.title)
-                .navigationBarTitleDisplayMode(.inline)
-        } detail: {
-            wideDetail
-                .navigationTitle(title)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            session.leaveWorkspace()
-                        } label: {
-                            Image(systemName: "chevron.backward")
-                        }
-                        .accessibilityLabel(Text("Back"))
-                    }
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        if session.workspace == .conversation {
-                            Button {
-                                session.chat.showAgentSheet = true
-                            } label: {
-                                Image(systemName: "cpu")
-                            }
-                            .accessibilityLabel(Text("Agent"))
-                        }
-                        Button {
-                            Task { await session.spawnTerminal() }
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityLabel(Text("New terminal"))
-                    }
-                }
-        }
-        .navigationSplitViewStyle(.balanced)
-    }
-
-    /// Terminal and chat live side by side; neither is torn down by focus
-    /// changes, so PTY scrollback and chat streaming stay warm.
-    private var wideDetail: some View {
         VStack(spacing: 0) {
-            TerminalTabStrip(session: session)
-            HStack(spacing: 0) {
-                TerminalWorkspaceView(session: session)
-                    .frame(minWidth: 420, maxWidth: .infinity)
-                    .layoutPriority(1)
-                if session.workspace == .conversation {
-                    Divider()
-                    ChatView(session: session, embedded: true)
-                        .frame(minWidth: 320, idealWidth: 440, maxWidth: 620)
-                }
-            }
-        }
-    }
-
-    // MARK: Compact (iPhone) layout
-
-    private var compactLayout: some View {
-        VStack(spacing: 0) {
-            header
-            if session.workspaceTab == .terminal {
-                TerminalTabStrip(session: session)
-            }
-            content
+            adaptiveContent
             if !session.terminalKeyboardVisible {
                 tabBar
             }
         }
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Button {
-                session.leaveWorkspace()
-            } label: {
-                Image(systemName: "chevron.backward")
-                    .font(.body.bold())
-                    .frame(minWidth: 44, minHeight: 44)
-            }
-            .accessibilityLabel(Text("Back"))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
+        .background(SeTheme.canvas.ignoresSafeArea())
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: SeSpace.xxs) {
+                    Text(title).font(SeFont.rowTitle).lineLimit(1)
+                    SeStatusBadge(status: session.phase == .connected ? .online : .reconnecting)
                 }
+                .accessibilityElement(children: .combine)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                session.dismissTerminalKeyboard()
-            }
-            Spacer(minLength: 8)
-            if session.workspace == .conversation {
-                Button {
-                    session.chat.showAgentSheet = true
+            ToolbarItemGroup(placement: .primaryAction) {
+                if session.workspace == .conversation {
+                    Button("Agent", systemImage: "cpu") { session.chat.showAgentSheet = true }
+                }
+                Menu {
+                    Button("Tools", systemImage: "wrench.and.screwdriver") { showTools = true }
+                    Button("New terminal", systemImage: "plus") {
+                        Task { await session.spawnTerminal() }
+                    }
                 } label: {
-                    Image(systemName: "cpu")
-                        .frame(minWidth: 44, minHeight: 44)
+                    Label("Workspace actions", systemImage: "ellipsis.circle")
                 }
-                .accessibilityLabel(Text("Agent"))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 6)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(SeTheme.stroke).frame(height: 1)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            guard session.workspaceTab == .terminal || sideBySide else { return }
+            // Keyboard/PTY resize follows the system, without animating output.
+            session.noteTerminalKeyboard(height: KeyboardGuard.overlapHeight(from: notification))
         }
+        .sheet(isPresented: $chat.showAgentSheet) { AgentConfigSheet(session: session) }
+        .sheet(isPresented: $showTools) { ToolsView(session: session) }
+        .task(id: workspaceTaskId) {
+            if session.phase == .connected { await session.refreshActiveTerminals() }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(15)) }
+                catch { break }
+                if session.phase == .connected { await session.refreshActiveTerminals() }
+            }
+        }
+        .onAppear {
+            session.noteWideLayout(sideBySide)
+            ShortcutAvailability.shared.sessionActive = true
+        }
+        .onDisappear { ShortcutAvailability.shared.sessionActive = false }
+        .onChange(of: sideBySide) { _, visible in session.noteWideLayout(visible) }
+        .onChange(of: session.workspaceTab) { old, new in
+            tabForward = (WorkspaceTab.allCases.firstIndex(of: new) ?? 0)
+                > (WorkspaceTab.allCases.firstIndex(of: old) ?? 0)
+        }
+        .seHaptic(.selection, trigger: session.workspaceTab)
+        .onReceive(ShortcutCenter.shortcuts) { handleShortcut($0) }
     }
 
-    @ViewBuilder
-    private var content: some View {
-        ZStack {
+    /// AnyLayout changes arrangement, not child identity. File tree, chat,
+    /// terminal, drafts and scroll anchors survive tab switches AND folding.
+    private var adaptiveContent: some View {
+        let layout = isWide ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(ZStackLayout())
+        return layout {
+            ZStack {
+                if let hostDirectory {
+                    hostDirectory
+                        .opacity(isWide && !showingFiles ? 1 : 0)
+                        .allowsHitTesting(isWide && !showingFiles)
+                        .accessibilityHidden(!isWide || showingFiles)
+                }
+                FileBrowserView(session: session, embedded: true)
+                    .modifier(ShellTabVisibility(visible: showingFiles, forward: tabForward,
+                                                 reduceMotion: reduceMotion))
+            }
+            .frame(width: isWide ? 300 : nil)
+            .frame(maxWidth: isWide ? nil : .infinity, maxHeight: .infinity)
+            .overlay(alignment: .trailing) {
+                if isWide { Rectangle().fill(SeTheme.stroke).frame(width: 1) }
+            }
             keepAliveWorkspace
-                .opacity(session.workspaceTab == .files ? 0 : 1)
-                .allowsHitTesting(session.workspaceTab != .files)
-                .accessibilityHidden(session.workspaceTab == .files)
-            FileBrowserView(session: session, embedded: true)
-                .opacity(session.workspaceTab == .files ? 1 : 0)
-                .allowsHitTesting(session.workspaceTab == .files)
-                .accessibilityHidden(session.workspaceTab != .files)
+                .modifier(ShellTabVisibility(visible: isWide || !showingFiles, forward: tabForward,
+                                             reduceMotion: reduceMotion))
         }
     }
 
-    @ViewBuilder
     private var keepAliveWorkspace: some View {
-        ZStack {
-            if session.workspace == .project {
-                ContentUnavailableView(
-                    String(localized: "Chat"),
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Project view is terminals only. Open a session to talk.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(session.workspaceTab == .chat ? 1 : 0)
-                .allowsHitTesting(session.workspaceTab == .chat)
-            } else {
-                ChatView(session: session, embedded: true)
-                    .opacity(session.workspaceTab == .chat ? 1 : 0)
-                    .allowsHitTesting(session.workspaceTab == .chat)
-                    .accessibilityHidden(session.workspaceTab != .chat)
+        let layout = sideBySide ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(ZStackLayout())
+        let chatVisible = sideBySide || session.workspaceTab == .chat
+            || (isWide && session.workspaceTab == .files)
+        let terminalVisible = sideBySide || session.workspaceTab == .terminal
+        return layout {
+            Group {
+                if session.workspace == .project {
+                    SeEmptyState(title: String(localized: "Chat"), systemImage: "bubble.left.and.bubble.right",
+                                 message: String(localized: "Project view is terminals only. Open a session to talk."))
+                } else {
+                    ChatView(session: session, embedded: true)
+                }
             }
-            TerminalWorkspaceView(session: session)
-                .opacity(session.workspaceTab == .terminal ? 1 : 0)
-                .allowsHitTesting(session.workspaceTab == .terminal)
-                .accessibilityHidden(session.workspaceTab != .terminal)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .modifier(ShellTabVisibility(visible: chatVisible, forward: tabForward,
+                                         reduceMotion: reduceMotion))
+            VStack(spacing: 0) {
+                TerminalTabStrip(session: session)
+                TerminalWorkspaceView(session: session)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .modifier(ShellTabVisibility(visible: terminalVisible, forward: tabForward,
+                                         reduceMotion: reduceMotion))
         }
     }
 
     private var tabBar: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: SeSpace.xs) {
             ForEach(WorkspaceTab.allCases) { tab in
                 Button {
                     session.setWorkspaceTab(tab)
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: tab.systemImage)
-                            .font(.body.weight(.medium))
-                        Text(tab.title)
-                            .font(.caption2.weight(.medium))
-                    }
-                    .foregroundStyle(session.workspaceTab == tab ? SeTheme.accent : SeTheme.muted)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 48)
+                    Label(tab.title, systemImage: tab.systemImage)
+                        .font(SeFont.support)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .foregroundStyle(session.workspaceTab == tab ? SeTheme.onAccent : SeTheme.secondaryInk)
+                        .background {
+                            if session.workspaceTab == tab {
+                                if reduceMotion {
+                                    Capsule().fill(SeTheme.accent)
+                                } else {
+                                    Capsule().fill(SeTheme.accent)
+                                        .matchedGeometryEffect(id: "selected-tab", in: tabSelection)
+                                }
+                            }
+                        }
                 }
-                .accessibilityLabel(Text(tab.title))
+                .buttonStyle(.plain)
                 .accessibilityAddTraits(session.workspaceTab == tab ? .isSelected : [])
             }
         }
-        .padding(.top, 4)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) {
-            Rectangle().fill(SeTheme.stroke).frame(height: 1)
-        }
+        .padding(SeSpace.xs)
+        .background(SeTheme.surface)
+        .overlay(alignment: .top) { Rectangle().fill(SeTheme.stroke).frame(height: 1) }
+        .animation(SeMotion.control.animation(reduceMotion: reduceMotion), value: session.workspaceTab)
     }
 
     // MARK: Shortcuts
@@ -249,7 +181,14 @@ struct SessionScreen: View {
             session.setWorkspaceTab(.terminal)
         case .toggleFiles:
             if isWide {
-                filesVisibility = filesVisibility == .detailOnly ? .all : .detailOnly
+                if showingFiles {
+                    filesVisibility = .detailOnly
+                    if session.workspaceTab == .files {
+                        session.setWorkspaceTab(session.workspace == .project ? .terminal : .chat)
+                    }
+                } else {
+                    filesVisibility = .all
+                }
             } else {
                 session.setWorkspaceTab(.files)
             }
@@ -310,5 +249,24 @@ struct SessionScreen: View {
         case .home:
             "home"
         }
+    }
+}
+
+/// Stable panes use the same fade/travel as SeTransition.tabContent without
+/// removing a hidden terminal. The transition also handles first insertion;
+/// explicit opacity is what makes subsequent keep-alive swaps animate.
+private struct ShellTabVisibility: ViewModifier {
+    let visible: Bool
+    let forward: Bool
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(visible ? 1 : 0)
+            .offset(x: visible || reduceMotion ? 0 : (forward ? -SeMotion.entranceTravel : SeMotion.entranceTravel))
+            .allowsHitTesting(visible)
+            .accessibilityHidden(!visible)
+            .transition(SeTransition.tabContent(reduceMotion: reduceMotion, forward: forward))
+            .animation(SeMotion.fade.animation(reduceMotion: reduceMotion), value: visible)
     }
 }

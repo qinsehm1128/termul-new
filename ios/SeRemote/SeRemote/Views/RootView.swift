@@ -3,14 +3,24 @@ import SwiftUI
 struct RootView: View {
     @Bindable var store: ConnectionStore
     @Bindable var settings: AppSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        // No insert/remove transition. Animating this swap used to fire
-        // WorkspaceView.onDisappear mid-connect and leave the spinner up.
-        if let link = store.activeLink {
-            WorkspaceView(store: store, settings: settings, link: link)
-        } else {
-            HomeView(store: store, settings: settings)
+        // The old hard cut protected WorkspaceView's socket lifetime: a
+        // transition can report disappearance before an insertion completes.
+        // WorkspaceView now checks the authoritative active link before
+        // stopping, and each link has a distinct, stable session identity.
+        ZStack {
+            if let link = store.activeLink {
+                WorkspaceView(store: store, settings: settings, link: link)
+                    .id(link.id)
+                    .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+            } else {
+                HomeView(store: store, settings: settings)
+                    .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+            }
         }
+        .background(SeTheme.canvas.ignoresSafeArea())
+        .seAnimation(.context, value: store.activeLink?.id)
     }
 }

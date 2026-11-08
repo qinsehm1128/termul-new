@@ -6,6 +6,11 @@ struct WorkspaceView: View {
     let link: RemoteLink
     @State private var session: WorkspaceSession
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hasConnected = false
+    @State private var successFeedback = 0
+    @State private var failureFeedback = 0
+    @State private var startTask: Task<Void, Never>?
 
     init(store: ConnectionStore, settings: AppSettings, link: RemoteLink) {
         self.store = store
@@ -15,30 +20,64 @@ struct WorkspaceView: View {
     }
 
     var body: some View {
-        Group {
+        ZStack {
+            // Once connected, keep the navigation tree alive even during a
+            // foreground reconnect. In particular, never remount the PTY view.
+            if hasConnected {
+                NavigationStack {
+                    HostHomeView(session: session, store: store, link: link)
+                        .navigationDestination(isPresented: workspacePresented) {
+                            SessionScreen(session: session, hostDirectory: AnyView(
+                                HostHomeView(session: session, store: store, link: link, directoryOnly: true)
+                            ))
+                        }
+                }
+                .opacity(session.phase == .connected ? 1 : 0)
+                .allowsHitTesting(session.phase == .connected)
+                .accessibilityHidden(session.phase != .connected)
+                .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+            }
             switch session.phase {
             case .connecting, .idle:
                 connectingState
+                    .transition(SeTransition.entrance(reduceMotion: reduceMotion))
             case .failed(let message):
                 failedState(message)
+                    .transition(SeTransition.entrance(reduceMotion: reduceMotion))
             case .connected:
-                switch session.workspace {
-                case .home:
-                    HostHomeView(session: session, store: store, link: link)
-                case .conversation, .project:
-                    SessionScreen(session: session)
-                }
+                EmptyView()
             }
         }
         .background(SeTheme.canvas.ignoresSafeArea())
-        .onDisappear {
-            // Leaving the workspace view (cancel, back, disconnect) closes
-            // the sockets; retry keeps the view mounted so this only fires
-            // on real teardown.
-            session.stop()
+        .seAnimation(.context, value: session.phase)
+        .seAnimation(.context, value: hasConnected)
+        .seHaptic(.success, trigger: successFeedback)
+        .seHaptic(.error, trigger: failureFeedback)
+        .onChange(of: session.phase) { old, phase in
+            if phase == .connected {
+                // Pairing succeeded only after the host handshake, not parsing.
+                ShellPairingActivity().recordConnection(link)
+                if !hasConnected { successFeedback += 1 }
+                hasConnected = true
+            }
+            if case .failed = phase, old != phase { failureFeedback += 1 }
         }
-        .task(id: link.id) {
-            await session.start()
+        .onDisappear {
+            // Animated insertion may transiently disappear mid-connect. Only
+            // an authoritative disconnect/link replacement tears down sockets.
+            if ShellConnectionLifecycle.shouldStop(disappearingLinkID: link.id,
+                                                   activeLinkID: store.activeLink?.id) {
+                startTask?.cancel()
+                startTask = nil
+                session.stop()
+            }
+        }
+        .onAppear {
+            // Unlike .task, this handshake is not cancelled by an animated
+            // insertion's transient disappearance. Real teardown cancels it.
+            if startTask == nil {
+                startTask = Task { await session.start() }
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             session.handleScene(isBackground: phase != .active)
@@ -58,7 +97,7 @@ struct WorkspaceView: View {
 
     private var connectingState: some View {
         VStack(spacing: 16) {
-            ProgressView()
+            SeStatusBadge(status: .connecting)
             Text("Connecting to host…")
                 .font(SeTheme.display)
             Text(link.title)
@@ -82,6 +121,7 @@ struct WorkspaceView: View {
 
     private func failedState(_ message: String) -> some View {
         VStack(spacing: 16) {
+            SeStatusBadge(status: .failed)
             Text("Could not open this desk")
                 .font(SeTheme.display)
                 .multilineTextAlignment(.center)
@@ -98,8 +138,7 @@ struct WorkspaceView: View {
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 48)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(SeTheme.accent)
+                .buttonStyle(SePrimaryButtonStyle())
                 Button {
                     store.disconnect()
                 } label: {
@@ -115,6 +154,17 @@ struct WorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SeTheme.canvas.ignoresSafeArea())
         .accessibilityIdentifier("connect-error")
+    }
+
+    private var workspacePresented: Binding<Bool> {
+        Binding(
+            get: { session.workspace != .home },
+            set: { presented in
+                if !presented, session.workspace != .home {
+                    session.leaveWorkspace()
+                }
+            }
+        )
     }
 
     private var alertBinding: Binding<Bool> {

@@ -6,6 +6,7 @@ struct HostListRow: View {
     var previewMono = false
     var meta: String?
     var status: HostRowStatus?
+    var lifecycle: ShellHostLifecycle?
     var time: String?
     var glyph: String = "bubble.left.and.bubble.right"
     var showsChevron = false
@@ -40,8 +41,22 @@ struct HostListRow: View {
                         .lineLimit(1)
                 }
 
-                if let status {
-                    HostStatusChip(status: status)
+                if let lifecycle {
+                    HStack(spacing: 4) {
+                        if lifecycle.kind == .unknown {
+                            Image(systemName: "questionmark.circle")
+                                .foregroundStyle(SeTheme.secondaryInk)
+                        } else {
+                            SeStatusBadge(status: lifecycle.kind == .deleted ? .offline : .idle, compact: true)
+                                .accessibilityHidden(true)
+                        }
+                        Text(lifecycle.label)
+                            .foregroundStyle(SeTheme.secondaryInk)
+                    }
+                    .font(SeFont.label)
+                    .accessibilityElement(children: .combine)
+                } else if let status {
+                    SeStatusBadge(status: status.seStatus)
                 }
             }
 
@@ -70,35 +85,6 @@ struct HostStatusChip: View {
     let status: HostRowStatus
 
     var body: some View {
-        HStack(spacing: 6) {
-            if status == .working {
-                Circle()
-                    .fill(SeTheme.lamp)
-                    .frame(width: 6, height: 6)
-            }
-            Text(status.title)
-                .font(.caption.weight(.medium))
-        }
-        .foregroundStyle(foreground)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(background)
-        .clipShape(Capsule())
-    }
-
-    private var foreground: Color {
-        switch status {
-        case .need: SeTheme.accent
-        case .working: SeTheme.lamp
-        case .idle: SeTheme.muted
-        }
-    }
-
-    private var background: Color {
-        switch status {
-        case .need: SeTheme.accent.opacity(0.14)
-        case .working: SeTheme.lamp.opacity(0.12)
-        case .idle: SeTheme.stroke.opacity(0.45)
-        }
+        SeStatusBadge(status: status.seStatus)
     }
 }

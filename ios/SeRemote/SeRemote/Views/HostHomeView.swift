@@ -1,11 +1,8 @@
 import SwiftUI
 
 enum HostHomeSection: String, CaseIterable, Identifiable {
-    case sessions
-    case projects
-
+    case sessions, projects
     var id: String { rawValue }
-
     var title: String {
         switch self {
         case .sessions: String(localized: "Sessions")
@@ -18,37 +15,83 @@ struct HostHomeView: View {
     @Bindable var session: WorkspaceSession
     @Bindable var store: ConnectionStore
     let link: RemoteLink
+    /// Embedded in the workspace sidebar, where the parent owns sizing and chrome.
+    var directoryOnly: Bool = false
     @State private var section: HostHomeSection = .sessions
-    @State private var selectedId: String?
+    @State private var selectedSessionID: String?
+    @State private var selectedProjectID: String?
+    @State private var initializedSelection = false
     @State private var searchText = ""
     @State private var renaming: HostConversation?
     @State private var renameDraft = ""
     @State private var deleting: HostConversation?
     @Environment(\.horizontalSizeClass) private var sizeClass
-
-    /// iPad-only split, matching SessionScreen: landscape iPhones stay phone-laid-out.
-    private var isWide: Bool { sizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         Group {
-            if isWide {
-                wideLayout
+            if directoryOnly {
+                directory(previewSelection: false)
             } else {
-                compactLayout
+                GeometryReader { geometry in
+                    let columns = SeLayout.columns(
+                        width: geometry.size.width,
+                        isRegular: sizeClass == .regular,
+                        largeText: dynamicTypeSize.isAccessibilitySize
+                    )
+                    if columns == .single {
+                        directory(previewSelection: false)
+                    } else {
+                        HStack(spacing: 0) {
+                            directory(previewSelection: true)
+                                .frame(width: min(SeLayout.sidebarWidth.upperBound,
+                                                  max(SeLayout.sidebarWidth.lowerBound, geometry.size.width * 0.3)))
+                            Divider().overlay(SeTheme.stroke)
+                            detail
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                }
+                .navigationTitle(deskTitle)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            store.disconnect()
+                        } label: {
+                            Label(String(localized: "Disconnect"), systemImage: "eject")
+                        }
+                    }
+                }
             }
         }
         .background(SeTheme.canvas)
-        .onChange(of: section) { _, _ in
-            selectedId = nil
+        .onAppear {
+            // A fold may reappear this view; do not reset a browsing selection.
+            guard !initializedSelection else { return }
+            initializedSelection = true
+            selectedSessionID = session.conversations.active?.id
+            selectedProjectID = session.projects.active?.id
+            switch session.workspace {
+            case .conversation: section = .sessions
+            case .project: section = .projects
+            case .home:
+                if selectedSessionID != nil { section = .sessions }
+                else if selectedProjectID != nil { section = .projects }
+            }
         }
-        // Attached to the shared trunk so the dialogs survive the
-        // compact/regular branch swap.
+        .onChange(of: session.conversations.active?.id) { _, id in
+            selectedSessionID = id
+            if directoryOnly, id != nil { section = .sessions }
+        }
+        .onChange(of: session.projects.active?.id) { _, id in
+            selectedProjectID = id
+            if directoryOnly, id != nil { section = .projects }
+        }
+        // Both dialogs and both selection IDs survive width-class changes.
         .alert(
             String(localized: "Rename session"),
-            isPresented: Binding(
-                get: { renaming != nil },
-                set: { if !$0 { renaming = nil } }
-            ),
+            isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
             presenting: renaming
         ) { conversation in
             TextField(String(localized: "Session name"), text: $renameDraft)
@@ -59,17 +102,12 @@ struct HostHomeView: View {
         }
         .confirmationDialog(
             String(localized: "Delete this session?"),
-            isPresented: Binding(
-                get: { deleting != nil },
-                set: { if !$0 { deleting = nil } }
-            ),
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
             titleVisibility: .visible,
             presenting: deleting
         ) { conversation in
             Button(String(localized: "Delete"), role: .destructive) {
-                if session.conversations.active?.id == conversation.id {
-                    session.leaveConversation()
-                }
+                if session.conversations.active?.id == conversation.id { session.leaveConversation() }
                 Task { await session.conversations.delete(conversation) }
             }
             Button(String(localized: "Cancel"), role: .cancel) {}
@@ -78,20 +116,7 @@ struct HostHomeView: View {
         }
     }
 
-    // MARK: Wide (iPad) layout — sidebar list + detail preview
-
-    private var wideLayout: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationTitle(deskTitle)
-                .navigationBarTitleDisplayMode(.inline)
-        } detail: {
-            detail
-        }
-        .navigationSplitViewStyle(.balanced)
-    }
-
-    private var sidebar: some View {
+    private func directory(previewSelection: Bool) -> some View {
         VStack(spacing: 0) {
             Picker(String(localized: "Workspace"), selection: $section) {
                 ForEach(HostHomeSection.allCases) { item in
@@ -99,503 +124,249 @@ struct HostHomeView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.horizontal, SeSpace.md)
+            .padding(.vertical, SeSpace.sm)
 
+            HStack(spacing: SeSpace.xs) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(SeTheme.secondaryInk)
+                TextField(String(localized: "Search sessions or projects"), text: $searchText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("host-home-search")
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                    }
+                    .accessibilityLabel(String(localized: "Clear search"))
+                }
+            }
+            .padding(.horizontal, SeSpace.md)
+            .frame(minHeight: SeSpace.hitTarget)
+
+            // Always keep a scroll container, even when empty, so pull-to-refresh
+            // is available without requiring an already populated directory.
             List {
                 if section == .sessions {
-                    ForEach(filteredRows) { row in
-                        Button {
-                            selectedId = row.id
-                        } label: {
-                            HostListRow(
-                                title: row.title,
-                                preview: row.preview,
-                                previewMono: true,
-                                meta: row.meta,
-                                status: .idle,
-                                time: row.time,
-                                glyph: row.glyph
-                            )
+                    Section {
+                        ForEach(filteredConversations) { conversation in
+                            Button {
+                                selectedSessionID = conversation.id
+                                if !previewSelection { open(conversation) }
+                            } label: {
+                                conversationRow(conversation)
+                            }
+                            .listRowBackground(rowBackground(selectedSessionID == conversation.id))
+                            .listRowSeparatorTint(SeTheme.stroke)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) { deleting = conversation } label: {
+                                    Label(String(localized: "Delete"), systemImage: "trash")
+                                }
+                                Button { beginRename(conversation) } label: {
+                                    Label(String(localized: "Rename"), systemImage: "pencil")
+                                }
+                                .tint(SeTheme.accent)
+                            }
+                            .contextMenu { conversationActions(conversation) }
                         }
-                        .listRowBackground(SeTheme.canvas)
-                        .listRowSeparatorTint(SeTheme.stroke)
-                        .contextMenu { rowActions(for: row) }
+                        if filteredConversations.isEmpty { emptyState }
+                    } header: {
+                        SeSectionHeader(title: String(localized: "Sessions"), detail: "\(filteredConversations.count)")
                     }
                 } else {
-                    ForEach(filteredProjectSections) { group in
-                        Section(group.title) {
+                    ForEach(projectSections) { group in
+                        Section {
                             ForEach(group.projects) { project in
                                 Button {
-                                    selectedId = project.id
+                                    selectedProjectID = project.id
+                                    if !previewSelection { open(project) }
                                 } label: {
                                     projectRow(project)
                                 }
-                                .listRowBackground(SeTheme.canvas)
+                                .listRowBackground(rowBackground(selectedProjectID == project.id))
                                 .listRowSeparatorTint(SeTheme.stroke)
                                 .contextMenu {
-                                    Button {
-                                        Task { await session.selectProject(project) }
-                                    } label: {
+                                    Button { open(project) } label: {
                                         Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
                                     }
                                 }
                             }
+                        } header: {
+                            SeSectionHeader(title: group.title, detail: "\(group.projects.count)")
                         }
                     }
+                    if projectSections.isEmpty {
+                        Section { emptyState } header: {
+                            SeSectionHeader(title: String(localized: "Projects"), detail: "0")
+                        }
+                    }
+                }
+                Section {
+                    HStack {
+                        Label(String(localized: "Running terminals"), systemImage: "terminal")
+                        Spacer()
+                        Text("\(ShellHostProjects.terminalCount(in: session.projects.projects))")
+                            .monospacedDigit()
+                    }
+                    .font(SeFont.support)
+                    .foregroundStyle(SeTheme.secondaryInk)
+                    .listRowBackground(SeTheme.canvas)
+                } header: {
+                    SeSectionHeader(title: String(localized: "Workspace"))
                 }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .searchable(text: $searchText, prompt: Text("Search"))
-            .overlay {
-                if filteredRows.isEmpty && listIsLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
+            .scrollBounceBehavior(.always)
+            .refreshable { await refreshDirectory() }
+
         }
     }
 
     @ViewBuilder
+    private var emptyState: some View {
+        if listIsLoading {
+            HStack { Spacer(); ProgressView(); Spacer() }
+                .padding(.vertical, SeSpace.lg)
+                .listRowBackground(SeTheme.canvas)
+        } else if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ContentUnavailableView.search(text: searchText)
+                .listRowBackground(SeTheme.canvas)
+        } else {
+            ContentUnavailableView(
+                section == .sessions ? String(localized: "No sessions") : String(localized: "No projects"),
+                systemImage: section == .sessions ? "bubble.left.and.bubble.right" : "square.stack",
+                description: Text(section == .sessions
+                    ? String(localized: "Create a session on the desktop to continue it here.")
+                    : String(localized: "Open a project on the desktop to watch its terminals here."))
+            )
+            .listRowBackground(SeTheme.canvas)
+        }
+    }
+
     private var detail: some View {
-        VStack {
-            if let row = selectedRow {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 12) {
-                        Image(systemName: row.glyph)
-                            .font(.title2)
-                            .foregroundStyle(SeTheme.accent)
-                        Text(row.title)
-                            .font(SeTheme.display)
-                            .lineLimit(2)
-                    }
-                    Text(row.preview ?? "")
-                        .font(.body.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                        .background(SeTheme.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: SeTheme.radius, style: .continuous))
-                    Text(row.meta ?? "")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    if section == .projects,
-                       let project = filteredProjects.first(where: { $0.id == row.id }) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            LabeledContent("Host terminal screen engine") {
-                                Text(project.terminalScreenEngine.rawValue)
-                                    .font(.footnote.monospaced())
-                            }
-                            Text("Read-only host preference. iOS rendering is unchanged.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Button {
-                        open(row)
-                    } label: {
-                        Text(row.openTitle)
-                            .font(.body.bold())
-                            .frame(minHeight: 48)
-                            .frame(maxWidth: 240)
+        ScrollView {
+            VStack(alignment: .leading, spacing: SeSpace.md) {
+                if section == .sessions,
+                   let conversation = session.conversations.conversations.first(where: { $0.id == selectedSessionID }) {
+                    SeSectionHeader(title: String(localized: "Session"))
+                    Text(conversation.displayTitle).font(SeFont.screenTitle)
+                    conversationRow(conversation)
+                    Button { open(conversation) } label: {
+                        Label(String(localized: "Open session"), systemImage: "arrow.up.forward.app")
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(SeTheme.accent)
-                }
-                .padding(32)
-                .frame(maxWidth: 560, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-                ContentUnavailableView(
-                    String(localized: "Choose from the sidebar"),
-                    systemImage: section == .sessions ? "bubble.left.and.bubble.right" : "folder",
-                    description: Text(section == .sessions
-                        ? String(localized: "Pick a session to continue it here.")
-                        : String(localized: "Pick a project to watch its terminals."))
-                )
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle(selectedRow?.title ?? String(localized: "Workspace"))
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    store.disconnect()
-                } label: {
-                    Image(systemName: "chevron.backward")
-                }
-                .accessibilityLabel(Text("Back to home"))
-            }
-        }
-    }
-
-    // MARK: Compact (iPhone) layout
-
-    private var compactLayout: some View {
-        VStack(spacing: 0) {
-            header
-            Picker(String(localized: "Workspace"), selection: $section) {
-                ForEach(HostHomeSection.allCases) { item in
-                    Text(item.title).tag(item)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .frame(minHeight: 44)
-            compactSearchBar
-
-            switch section {
-            case .sessions:
-                sessionList
-            case .projects:
-                projectList
-            }
-        }
-    }
-
-    /// Explicit field on compact: there is no visible navigation bar for
-    /// `.searchable` to attach to under the custom header.
-    private var compactSearchBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(SeTheme.muted)
-            TextField(String(localized: "Search"), text: $searchText)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityIdentifier("host-home-search")
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(SeTheme.muted)
-                }
-                .accessibilityLabel(Text("Clear search"))
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(SeTheme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Button {
-                store.disconnect()
-            } label: {
-                Image(systemName: "chevron.backward")
-                    .font(.body.bold())
-                    .frame(minWidth: 44, minHeight: 44)
-            }
-            .accessibilityLabel(Text("Back to home"))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(deskTitle)
-                    .font(SeTheme.display)
-                    .lineLimit(1)
-                Text(section == .sessions
-                     ? String(localized: "Independent chats, not project terminals")
-                     : String(localized: "Running projects first, then desktop groups"))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(SeTheme.stroke).frame(height: 1)
-        }
-    }
-
-    @ViewBuilder
-    private var sessionList: some View {
-        if filteredConversations.isEmpty {
-            if session.conversations.isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if !searchText.isEmpty {
-                ContentUnavailableView.search(text: searchText)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ContentUnavailableView(
-                    "No sessions yet",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Open a chat on the desktop. These sessions are not projects.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        } else {
-            List(filteredConversations) { conversation in
-                Button {
-                    Task { await session.selectConversation(conversation) }
-                } label: {
-                    HostListRow(
-                        title: conversation.displayTitle,
-                        preview: conversation.previewText,
-                        previewMono: true,
-                        meta: conversation.countLabel,
-                        status: .idle,
-                        time: conversation.relativeCreatedLabel,
-                        glyph: "bubble.left.and.bubble.right"
+                    .contextMenu { conversationActions(conversation) }
+                } else if section == .projects,
+                          let project = session.projects.projects.first(where: { $0.id == selectedProjectID }) {
+                    SeSectionHeader(title: String(localized: "Project"))
+                    Text(project.name).font(SeFont.screenTitle)
+                    projectRow(project)
+                    VStack(alignment: .leading, spacing: SeSpace.xxs) {
+                        LabeledContent(String(localized: "Host terminal screen engine")) {
+                            Text(project.terminalScreenEngine.rawValue)
+                                .font(SeFont.support.monospaced())
+                        }
+                        Text("Read-only host preference. iOS rendering is unchanged.")
+                            .font(SeFont.caption)
+                            .foregroundStyle(SeTheme.secondaryInk)
+                    }
+                    Button { open(project) } label: {
+                        Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    ContentUnavailableView(
+                        String(localized: "Choose a session or project"),
+                        systemImage: "sidebar.left",
+                        description: Text("Your sessions stay on the host. Choose one to continue working.")
                     )
                 }
-                .listRowBackground(SeTheme.canvas)
-                .listRowSeparatorTint(SeTheme.stroke)
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) {
-                        deleting = conversation
-                    } label: {
-                        Label(String(localized: "Delete"), systemImage: "trash")
-                    }
-                    Button {
-                        renameDraft = conversation.displayTitle
-                        renaming = conversation
-                    } label: {
-                        Label(String(localized: "Rename"), systemImage: "pencil")
-                    }
-                    .tint(SeTheme.lamp)
-                }
-                .contextMenu {
-                    conversationActions(for: conversation, openAction: {
-                        Task { await session.selectConversation(conversation) }
-                    })
-                }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+            .frame(maxWidth: SeLayout.readableColumnMaxWidth, alignment: .leading)
+            .padding(SeSpace.lg)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
-    @ViewBuilder
-    private var projectList: some View {
-        if filteredProjects.isEmpty {
-            if session.projects.isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if !searchText.isEmpty {
-                ContentUnavailableView.search(text: searchText)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ContentUnavailableView(
-                    "No projects",
-                    systemImage: "square.stack",
-                    description: Text("Open a project on the desktop to watch its terminals here.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        } else {
-            List {
-                ForEach(filteredProjectSections) { group in
-                    Section(group.title) {
-                        ForEach(group.projects) { project in
-                            Button {
-                                Task { await session.selectProject(project) }
-                            } label: {
-                                projectRow(project)
-                            }
-                            .listRowBackground(SeTheme.canvas)
-                            .listRowSeparatorTint(SeTheme.stroke)
-                            .contextMenu {
-                                Button {
-                                    Task { await session.selectProject(project) }
-                                } label: {
-                                    Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-        }
+    private func conversationRow(_ conversation: HostConversation) -> HostListRow {
+        HostListRow(
+            title: conversation.displayTitle,
+            preview: conversation.previewText,
+            previewMono: true,
+            meta: conversation.countLabel,
+            lifecycle: ShellHostLifecycle(conversation.lifecycleState),
+            time: conversation.relativeCreatedLabel,
+            showsChevron: true
+        )
     }
 
     private func projectRow(_ project: HostProject) -> HostListRow {
         HostListRow(
             title: project.name,
             preview: HostTimestamp.folderName(from: project.path),
-            previewMono: false,
-            meta: project.isRunning
-                ? String(localized: "\(project.liveTerminalCount) live terminals")
-                : String(localized: "Not started"),
+            meta: String(localized: "\(max(0, project.liveTerminalCount)) live terminals"),
             status: project.isRunning ? .working : .idle,
             glyph: project.isRunning ? "bolt.horizontal.circle.fill" : "folder",
             showsChevron: true
         )
     }
 
+    private func rowBackground(_ selected: Bool) -> Color {
+        selected ? SeTheme.accentSubtle : SeTheme.canvas
+    }
+
     private var filteredConversations: [HostConversation] {
-        let conversations = session.conversations.conversations
-        guard !searchText.isEmpty else { return conversations }
-        return conversations.filter {
-            $0.displayTitle.localizedCaseInsensitiveContains(searchText)
-                || $0.previewText.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
-    private var filteredProjects: [HostProject] {
-        filteredProjectSections.flatMap(\.projects)
-    }
-
-    private var filteredProjectSections: [HostProjectSection] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return projectSections.compactMap { section in
-            let projects: [HostProject]
-            if query.isEmpty {
-                projects = section.projects
-            } else {
-                projects = section.projects.filter {
-                    $0.name.localizedCaseInsensitiveContains(query)
-                        || ($0.path ?? "").localizedCaseInsensitiveContains(query)
-                }
-            }
-            guard !projects.isEmpty else { return nil }
-            return HostProjectSection(id: section.id, title: section.title, projects: projects)
+        return session.conversations.conversations.filter {
+            query.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(query)
+                || $0.previewText.localizedCaseInsensitiveContains(query)
         }
     }
 
-    private var projectSections: [HostProjectSection] {
-        let visible = session.projects.projects.filter { !$0.isArchived }
-        let byId = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
-        var claimed = Set<String>()
-        var sections: [HostProjectSection] = []
-
-        let running = visible
-            .filter(\.isRunning)
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        if !running.isEmpty {
-            sections.append(HostProjectSection(
-                id: "running",
-                title: String(localized: "Running"),
-                projects: running
-            ))
-            claimed.formUnion(running.map(\.id))
-        }
-
-        for group in session.projects.groups {
-            let items = group.projectIds.compactMap { byId[$0] }.filter { !claimed.contains($0.id) }
-            guard !items.isEmpty else { continue }
-            sections.append(HostProjectSection(id: group.id, title: group.name, projects: items))
-            claimed.formUnion(items.map(\.id))
-        }
-
-        let rest = visible
-            .filter { !claimed.contains($0.id) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        if !rest.isEmpty {
-            sections.append(HostProjectSection(
-                id: "ungrouped",
-                title: String(localized: "Other projects"),
-                projects: rest
-            ))
-        }
-        return sections
+    private var projectSections: [ShellHostProjectSection] {
+        ShellHostProjects.sections(projects: session.projects.projects, groups: session.projects.groups, query: searchText)
     }
 
-    private var filteredRows: [HostHomeRow] {
-        section == .sessions
-            ? filteredConversations.map(HostHomeRow.init)
-            : filteredProjects.map(HostHomeRow.init)
+    private func refreshDirectory() async {
+        // Sequential actor-isolated refresh avoids moving the observable stores
+        // across executors under strict Swift 6 checking. Both are always fetched.
+        await session.conversations.refresh()
+        await session.projects.refresh()
     }
 
-    private var selectedRow: HostHomeRow? {
-        filteredRows.first { $0.id == selectedId }
+    private func open(_ conversation: HostConversation) {
+        Task { await session.selectConversation(conversation) }
     }
 
-    private func open(_ row: HostHomeRow) {
-        if let conversation = filteredConversations.first(where: { $0.id == row.id }) {
-            Task { await session.selectConversation(conversation) }
-        } else if let project = filteredProjects.first(where: { $0.id == row.id }) {
-            Task { await session.selectProject(project) }
-        }
+    private func open(_ project: HostProject) {
+        Task { await session.selectProject(project) }
     }
 
-    /// Sidebar rows route through the id back to the concrete record so the
-    /// actions operate on the live model, not the projection.
-    @ViewBuilder
-    private func rowActions(for row: HostHomeRow) -> some View {
-        if let conversation = filteredConversations.first(where: { $0.id == row.id }) {
-            conversationActions(for: conversation, openAction: { open(row) })
-        } else {
-            Button {
-                open(row)
-            } label: {
-                Label(String(localized: "Open project"), systemImage: "arrow.up.forward.app")
-            }
-        }
+    private func beginRename(_ conversation: HostConversation) {
+        renameDraft = conversation.displayTitle
+        renaming = conversation
     }
 
     @ViewBuilder
-    private func conversationActions(for conversation: HostConversation, openAction: @escaping () -> Void) -> some View {
-        Button(action: openAction) {
+    private func conversationActions(_ conversation: HostConversation) -> some View {
+        Button { open(conversation) } label: {
             Label(String(localized: "Open session"), systemImage: "arrow.up.forward.app")
         }
-        Button {
-            renameDraft = conversation.displayTitle
-            renaming = conversation
-        } label: {
+        Button { beginRename(conversation) } label: {
             Label(String(localized: "Rename"), systemImage: "pencil")
         }
-        Button(role: .destructive) {
-            deleting = conversation
-        } label: {
+        Button(role: .destructive) { deleting = conversation } label: {
             Label(String(localized: "Delete"), systemImage: "trash")
         }
     }
 
     private var deskTitle: String {
-        link.title.split(separator: "·").first.map { String($0).trimmingCharacters(in: .whitespaces) }
-            ?? link.title
+        link.title.split(separator: "·").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? link.title
     }
 
     private var listIsLoading: Bool {
         section == .sessions ? session.conversations.isLoading : session.projects.isLoading
     }
-}
-
-/// Sidebar/detail projection of a session or project entry.
-private struct HostHomeRow: Identifiable {
-    let id: String
-    let title: String
-    let preview: String?
-    let meta: String?
-    let time: String?
-    let glyph: String
-    let openTitle: String
-
-    init(conversation: HostConversation) {
-        id = conversation.id
-        title = conversation.displayTitle
-        preview = conversation.previewText
-        meta = conversation.countLabel
-        time = conversation.relativeCreatedLabel
-        glyph = "bubble.left.and.bubble.right"
-        openTitle = String(localized: "Open session")
-    }
-
-    init(project: HostProject) {
-        id = project.id
-        title = project.name
-        preview = HostTimestamp.folderName(from: project.path)
-        meta = project.isRunning
-            ? String(localized: "\(project.liveTerminalCount) live terminals")
-            : String(localized: "Not started")
-        time = ""
-        glyph = project.isRunning ? "bolt.horizontal.circle.fill" : "folder"
-        openTitle = String(localized: "Open project")
-    }
-}
-
-private struct HostProjectSection: Identifiable {
-    let id: String
-    let title: String
-    let projects: [HostProject]
 }
