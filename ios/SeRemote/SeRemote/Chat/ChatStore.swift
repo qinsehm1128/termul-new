@@ -61,6 +61,14 @@ struct QuestionChoice: Identifiable, Hashable, Sendable {
     var label: String
 }
 
+/// Per-card submission state for permission and question replies. A card is
+/// removed only after the host acknowledges it. On failure it stays visible
+/// with the error so the user can retry.
+enum CardSubmission: Equatable, Sendable {
+    case submitting
+    case failed(String)
+}
+
 @MainActor
 @Observable
 final class ChatStore {
@@ -72,6 +80,10 @@ final class ChatStore {
     var tools: [ToolCard] = []
     var permissions: [PermissionCard] = []
     var questions: [QuestionCard] = []
+    /// Keyed by `PermissionCard.id`. Absent means idle.
+    var permissionSubmissions: [String: CardSubmission] = [:]
+    /// Keyed by `QuestionCard.id`. Absent means idle.
+    var questionSubmissions: [String: CardSubmission] = [:]
     /// True while the composer owns first responder. Distinguishes a chat
     /// keyboard from a terminal keyboard in the wide split layout.
     var composerActive = false
@@ -546,9 +558,16 @@ final class ChatStore {
         await send(last.text, in: conversation)
     }
 
-    func respond(permission: PermissionCard, optionId: String?) async {
-        permissions.removeAll { $0.id == permission.id }
-        guard let socket else { return }
+    /// Sends the permission choice and waits for the host. Returns true only
+    /// when the host acknowledged it, so callers can give outcome feedback
+    /// (for example a success or warning haptic) without guessing.
+    @discardableResult
+    func respond(permission: PermissionCard, optionId: String?) async -> Bool {
+        guard permissionSubmissions[permission.id] != .submitting else { return false }
+        guard let socket else {
+            permissionSubmissions[permission.id] = .failed(String(localized: "Not connected to the host."))
+            return false
+        }
         var payload: [String: Any] = [
             "agentId": permission.agentId,
             "requestId": permission.id
@@ -556,20 +575,45 @@ final class ChatStore {
         if let optionId {
             payload["optionId"] = optionId
         }
-        _ = try? await socket.request("respond_permission", payload: payload)
+        permissionSubmissions[permission.id] = .submitting
+        do {
+            _ = try await socket.request("respond_permission", payload: payload)
+            permissionSubmissions[permission.id] = nil
+            permissions.removeAll { $0.id == permission.id }
+            return true
+        } catch {
+            HostLog.session.error("Permission response failed")
+            permissionSubmissions[permission.id] = .failed(error.localizedDescription)
+            return false
+        }
     }
 
-    func answer(question: QuestionCard, values: [String]) async {
-        questions.removeAll { $0.id == question.id }
-        guard let socket else { return }
-        _ = try? await socket.request(
-            "answer_question",
-            payload: [
-                "agentId": question.agentId,
-                "questionId": question.id,
-                "values": values
-            ]
-        )
+    /// Sends the answer and waits for the host. Returns true on acknowledgement.
+    @discardableResult
+    func answer(question: QuestionCard, values: [String]) async -> Bool {
+        guard questionSubmissions[question.id] != .submitting else { return false }
+        guard let socket else {
+            questionSubmissions[question.id] = .failed(String(localized: "Not connected to the host."))
+            return false
+        }
+        questionSubmissions[question.id] = .submitting
+        do {
+            _ = try await socket.request(
+                "answer_question",
+                payload: [
+                    "agentId": question.agentId,
+                    "questionId": question.id,
+                    "values": values
+                ]
+            )
+            questionSubmissions[question.id] = nil
+            questions.removeAll { $0.id == question.id }
+            return true
+        } catch {
+            HostLog.session.error("Question answer failed")
+            questionSubmissions[question.id] = .failed(error.localizedDescription)
+            return false
+        }
     }
 
     private func resetTranscript() {
@@ -577,6 +621,8 @@ final class ChatStore {
         tools = []
         permissions = []
         questions = []
+        permissionSubmissions = [:]
+        questionSubmissions = [:]
         modes = nil
         models = nil
         configOptions = []
