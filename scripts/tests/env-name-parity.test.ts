@@ -289,7 +289,12 @@ describe('environment variable names documented in the settings UI', () => {
     // trivially true, and a `spelledInProduction` that swallowed the whole
     // inventory would make it unfalsifiable.
     expect(documented.size).toBeGreaterThan(0)
-    expect(spelledInProduction.size).toBeLessThan(frozenInventory().length)
+    // Measured within the frozen inventory: names added after the freeze (for
+    // example the agent-hook variables) are legitimately read and must not
+    // count toward "every inventory name looks read".
+    const inventory = new Set(frozenInventory())
+    const readFromInventory = [...spelledInProduction].filter((name) => inventory.has(name))
+    expect(readFromInventory.length).toBeLessThan(inventory.size)
   })
 
   it('documents only env names production code actually spells', () => {
