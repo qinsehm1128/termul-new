@@ -48,7 +48,6 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
 /// the section below them lists the real projects reported by the host.
 struct WorkspaceHubView: View {
     @Environment(\.sePalette) private var palette
-    @Environment(\.seThemeMode) private var mode
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var host: String
@@ -127,11 +126,6 @@ struct WorkspaceHubView: View {
             // Both stay hidden instead of showing an invented value.
             Spacer(minLength: 8)
 
-            NocturneIconButton(
-                systemImage: mode == .night ? "sun.max" : "moon",
-                label: String(localized: "Switch theme"),
-                action: onToggleTheme
-            )
             NocturneIconButton(
                 systemImage: "sidebar.left",
                 label: String(localized: "All destinations"),

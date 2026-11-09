@@ -335,7 +335,7 @@ struct QuickTerminalsFeatureView: View {
     }
 
     private func targetOption(_ target: QuickTerminalTargetWire, label: String) -> some View {
-        let selected = useProject || target != .workspace
+        let isSelected = target == .workspace ? !useProject : useProject
         return Button {
             useProject = target != .workspace
         } label: {
@@ -352,9 +352,9 @@ struct QuickTerminalsFeatureView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                Image(systemName: (target == .workspace ? !useProject : selected) ? "largecircle.fill.circle" : "circle")
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
                     .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(target == .workspace ? (useProject ? palette.inkTertiary : palette.accent) : (selected ? palette.accent : palette.inkTertiary))
+                    .foregroundStyle(isSelected ? palette.accent : palette.inkTertiary)
             }
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
@@ -469,7 +469,9 @@ struct QuickTerminalsFeatureView: View {
     }
 
     private var renameBinding: Binding<Bool> {
-        Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+        // The alert buttons clear this state explicitly. Clearing it from the
+        // setter can race ahead of the Rename action and lose the record.
+        Binding(get: { renaming != nil }, set: { _ in })
     }
 
     private var pendingBinding: Binding<Bool> {
