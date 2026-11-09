@@ -4,7 +4,8 @@ kind: audit
 id: active-file-tree-follow
 title: 活动文件与文件树联动验收
 date: 2026-10-24
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-24T11:00:56+08:00; agent://active-file-tree-discovery; agent://active-file-tree-tests; agent://active-file-mobile-parity; agent://active-file-tree-review
 lang: zh-CN
 ---

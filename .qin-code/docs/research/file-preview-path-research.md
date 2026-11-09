@@ -4,7 +4,8 @@ kind: research
 id: file-preview-path-research
 title: 文件链接和预览问题的实现参考
 date: 2026-11-05
-status: draft
+status: accepted
+updated: 2026-11-09
 source: 2026-11-05 用户问题及本轮第一方网络检索
 lang: zh-CN
 scope: project

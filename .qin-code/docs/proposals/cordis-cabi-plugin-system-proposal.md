@@ -4,7 +4,8 @@ kind: proposal
 id: cordis-cabi-plugin-system
 title: 插件系统方案：rpi 式 C-ABI 动态装载 + cordis-rs 生命周期管理
 date: 2026-11-03
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-11-03T15:27:25+08:00; github:redoop/cordis-rust@c50d4ffd; github:dshbox/cordis-rs@cd540033; github:bigfish1913/pi-rust@20476080; commit:e83cf9f3
 lang: zh-CN
 scope: project

@@ -4,7 +4,8 @@ kind: audit
 id: mcp-source-isolation-verification
 title: Se内置MCP与外部聚合器来源隔离验收
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: Confirmed user contract, implementation lanes, independent boundary analyses and passed Goal acceptance
 lang: zh-CN
 scope: project

@@ -4,7 +4,8 @@ kind: spec
 id: quick-terminal-multi-tab-workspace
 title: 快捷终端多终端与文件标签工作区契约
 date: 2026-10-26
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-26T15:14:24+08:00; session_search:current:turn1795; agent://quick-workspace-discovery
 lang: zh-CN
 scope: project

@@ -4,7 +4,8 @@ kind: plan
 id: release-0-15-24-download-only
 title: Se Manager v0.15.24完整发版与安装包下载
 date: 2026-10-24
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-24T11:42:55+08:00; agent://release-workflow-preflight; agent://release-regression-check
 lang: zh-CN
 ---

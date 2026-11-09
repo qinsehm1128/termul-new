@@ -4,7 +4,8 @@ kind: plan
 id: mcp-source-isolation
 title: Se内置MCP与外部聚合器双入口实施
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: Confirmed user boundary plus read-only routing/entry exploration and split-implementation-plan
 lang: zh-CN
 scope: project

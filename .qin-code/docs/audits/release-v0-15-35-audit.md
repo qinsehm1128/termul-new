@@ -4,7 +4,8 @@ kind: audit
 id: release-v0-15-35
 title: Se Manager v0.15.35正式发布验收
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: Git remote refs, GitHub Release/CodeQL/Secret Scan and downloaded asset verification
 lang: zh-CN
 scope: project

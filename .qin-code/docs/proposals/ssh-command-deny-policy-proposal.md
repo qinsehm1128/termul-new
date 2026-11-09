@@ -4,7 +4,8 @@ kind: proposal
 id: ssh-command-deny-policy
 title: SSH命令黑名单与宿主执行门禁方案
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: 用户需求req-8f01105f55c188c39fdf0e9609e35343；agent://ssh-command-deny-design；classfang/ssh-mcp-server@ff97574651f6e1efe938797ba29f526c499c36a3
 lang: zh-CN
 scope: project

@@ -4,7 +4,8 @@ kind: audit
 id: file-preview-path-fixes
 title: Markdown、文件定位和图片预览修复验收
 date: 2026-11-05
-status: draft
+status: accepted
+updated: 2026-11-09
 source: 本轮提交、测试输出、Goal验收和teammate独立复核
 lang: zh-CN
 scope: project

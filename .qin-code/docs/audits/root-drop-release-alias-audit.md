@@ -4,7 +4,8 @@ kind: audit
 id: root-drop-release-alias
 title: v0.15.27发布与独立Canary别名安装验收
 date: 2026-10-30
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-30T08:52:57+08:00; commit:8b4f1ed1; github-run:40984099110; agent://root-drop-canary-artifact-review; file:/Users/qs/.qin-code/scratch/root-drop-release-alias-0n4eep6o/final-install-acceptance.json
 lang: zh-CN
 scope: project

@@ -4,9 +4,9 @@ kind: plan
 id: ghostty-release-publication
 title: Ghostty VT 正式发布进度与失败修复计划
 date: 2026-10-23
-status: draft
+status: accepted
 source: user:2026-10-23T16:49:36+08:00; commit:74101363; github-run:39928758964; release:v0.15.23; goal:passed:2026-10-23T17:35:23+08:00
-updated: 2026-10-23
+updated: 2026-11-09
 lang: zh-CN
 ---
 

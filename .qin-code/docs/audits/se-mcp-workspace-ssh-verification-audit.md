@@ -4,9 +4,9 @@ kind: audit
 id: se-mcp-workspace-ssh-verification
 title: Se MCP 扩展集成验收记录
 date: 2026-11-07
-status: draft
+status: accepted
 source: Goal mechanical verify 2026-11-07 13:26+08:00；本会话测试任务5162622zf9/643352bemo/6433990anz/8481941rm9；agent://mcp-final-boundary-review；agent://ssh-runtime-impl；req-a1fec49128c8a770f1a9b055e56197e7
-updated: 2026-11-07
+updated: 2026-11-09
 lang: zh-CN
 scope: project
 artifact: {"work_id":null,"created_by_session":"session_tulip_1794019733357_8f5e0fabbf52f18c","last_updated_by_session":"session_tulip_1794019733357_8f5e0fabbf52f18c","session_ids":["session_tulip_1794019733357_8f5e0fabbf52f18c"],"todo_refs":[{"session_id":"session_tulip_1794019733357_8f5e0fabbf52f18c","id":"6"},{"session_id":"session_tulip_1794019733357_8f5e0fabbf52f18c","id":"7"},{"session_id":"session_tulip_1794019733357_8f5e0fabbf52f18c","id":"8"},{"session_id":"session_tulip_1794019733357_8f5e0fabbf52f18c","id":"9"}],"goal_refs":[{"session_id":"session_tulip_1794019733357_8f5e0fabbf52f18c","id":"goal-0d7e8bfa-8555-4bc5-8aa1-d77f2afd84fe"},{"session_id":"session_tulip_1794019733357_8f5e0fabbf52f18c","id":"goal-bea3315f-0654-4818-9cd1-a87976268802"}]}

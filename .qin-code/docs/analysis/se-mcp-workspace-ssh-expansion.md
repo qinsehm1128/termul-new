@@ -4,7 +4,8 @@ kind: analysis
 id: se-mcp-workspace-ssh-expansion
 title: Se 内置 MCP 分组项目查询与 SSH 复用分析
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: 用户需求 req-a1fec49128c8a770f1a9b055e56197e7；本地源码；classfang/ssh-mcp-server@ff97574651f6e1efe938797ba29f526c499c36a3；当前SSH MCP schema
 lang: zh-CN
 scope: project

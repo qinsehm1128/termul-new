@@ -4,9 +4,9 @@ kind: plan
 id: file-preview-path-fixes
 title: Markdown和文件预览修复计划
 date: 2026-11-05
-status: draft
+status: accepted
 source: 本轮实际提交、Goal验收、构建和独立审查
-updated: 2026-11-05
+updated: 2026-11-09
 lang: zh-CN
 scope: project
 artifact: {"work_id":null,"created_by_session":"session_crocodile_1792734636572_27d03ccc6cf693c1","last_updated_by_session":"session_crocodile_1792734636572_27d03ccc6cf693c1","session_ids":["session_crocodile_1792734636572_27d03ccc6cf693c1"],"todo_refs":[{"session_id":"session_crocodile_1792734636572_27d03ccc6cf693c1","id":"implement"},{"session_id":"session_crocodile_1792734636572_27d03ccc6cf693c1","id":"investigate"},{"session_id":"session_crocodile_1792734636572_27d03ccc6cf693c1","id":"verify"}],"goal_refs":[{"session_id":"session_crocodile_1792734636572_27d03ccc6cf693c1","id":"goal-2d7024f9-fbf1-4486-9437-bc902ffbe878"}]}

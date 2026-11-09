@@ -4,7 +4,8 @@ kind: audit
 id: file-tree-root-drop
 title: 文件树根目录拖放修复验收
 date: 2026-10-30
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-29T23:52:16+08:00; commit:0d48d768; agent://file-tree-root-drop-review; agent://root-drop-browser-harness; agent://root-drop-touch-resolver
 lang: zh-CN
 scope: project

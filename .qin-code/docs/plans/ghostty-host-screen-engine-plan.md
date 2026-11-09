@@ -4,9 +4,9 @@ kind: plan
 id: ghostty-host-screen-engine
 title: 项目级可选 Ghostty VT 宿主屏幕观察引擎实施计划
 date: 2026-10-23
-status: draft
+status: accepted
 source: user:approved-implementation; baseline:5b1782d4; agent:ghostty-implementation-plan; agent:ghostty-server-packaging-opinion
-updated: 2026-10-23
+updated: 2026-11-09
 lang: zh-CN
 ---
 

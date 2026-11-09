@@ -4,9 +4,9 @@ kind: audit
 id: ghostty-host-screen-engine
 title: Ghostty 宿主屏幕观察引擎交付与验收审计
 date: 2026-10-23
-status: draft
+status: accepted
 source: goal:passed:2026-10-23T14:35:05+08:00; agent://ghostty-final-review-retry; run:930423tv0q
-updated: 2026-10-23
+updated: 2026-11-09
 lang: zh-CN
 ---
 

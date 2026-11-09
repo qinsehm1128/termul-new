@@ -4,9 +4,9 @@ kind: plan
 id: quick-tabs-release-canary
 title: 快捷多标签远程发布与Canary安全替换计划
 date: 2026-10-26
-status: draft
+status: accepted
 source: user:2026-10-26T16:57:57+08:00; commit:45f48a0b; github-run:40297303973; file:/Users/qs/.qin-code/scratch/quick-tabs-canary-release-IVm8yCR4/final-install-acceptance.json
-updated: 2026-10-26
+updated: 2026-11-09
 lang: zh-CN
 scope: project
 artifact: {"work_id":null,"created_by_session":"session_dolphin_1792723909440_951d256685611548","last_updated_by_session":"session_dolphin_1792723909440_951d256685611548","session_ids":["session_dolphin_1792723909440_951d256685611548"],"todo_refs":[{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"canary-release-install"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"canary-release-preflight"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"canary-release-remote"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"canary-release-verify"}],"goal_refs":[]}

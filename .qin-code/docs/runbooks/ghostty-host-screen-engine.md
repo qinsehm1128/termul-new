@@ -4,9 +4,9 @@ kind: runbook
 id: ghostty-host-screen-engine
 title: 可选 Ghostty VT 宿主屏幕观察引擎构建与排错
 date: 2026-10-23
-status: draft
+status: accepted
 source: goal:passed:2026-10-23T14:35:05+08:00; agent://ghostty-final-review-retry; audit:ghostty-host-screen-engine
-updated: 2026-10-23
+updated: 2026-11-09
 lang: zh-CN
 ---
 

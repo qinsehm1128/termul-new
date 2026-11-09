@@ -4,7 +4,8 @@ kind: audit
 id: legacy-se-memory-retirement
 title: 独立se-memory退役验收
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: User retirement request, disjoint implementation, live configuration/process verification and independent analysis
 lang: zh-CN
 scope: project

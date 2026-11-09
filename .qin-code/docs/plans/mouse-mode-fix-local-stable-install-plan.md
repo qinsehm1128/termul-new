@@ -4,7 +4,8 @@ kind: plan
 id: mouse-mode-fix-local-stable-install
 title: 鼠标模式恢复修复与本地正式版安装
 date: 2026-10-24
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-24T09:55:42+08:00; user:2026-10-24T09:57:35+08:00; ask:2026-10-24T09:59:53+08:00
 lang: zh-CN
 ---

@@ -4,7 +4,8 @@ kind: runbook
 id: ghostty-canary-local-test-install
 title: Ghostty Canary 本地测试安装与回滚
 date: 2026-10-23
-status: draft
+status: superseded
+updated: 2026-11-09
 source: user:2026-10-23T17:59:39+08:00; ask:2026-10-23T18:11:07+08:00; agent://build-ghostty-canary; agent://review-canary-install-safety; goal:passed:2026-10-23T18:40:11+08:00
 lang: zh-CN
 ---

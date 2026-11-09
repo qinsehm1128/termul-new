@@ -4,7 +4,8 @@ kind: decision
 id: canary-persistence-archive
 title: Canary持久数据无损归档备份决策
 date: 2026-10-26
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-26T16:57:57+08:00; agent://canary-webkit-backup-debug; agent://canary-provenance-backup-decision
 lang: zh-CN
 scope: project

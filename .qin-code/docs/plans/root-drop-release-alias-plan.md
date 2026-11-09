@@ -4,9 +4,9 @@ kind: plan
 id: root-drop-release-alias
 title: 根目录拖放修复发布与独立Canary别名安装计划
 date: 2026-10-30
-status: draft
+status: accepted
 source: user:2026-10-30T08:52:57+08:00; commit:8b4f1ed1; github-run:40984099110; file:/Users/qs/.qin-code/scratch/root-drop-release-alias-0n4eep6o/final-install-acceptance.json
-updated: 2026-10-30
+updated: 2026-11-09
 lang: zh-CN
 scope: project
 artifact: {"work_id":null,"created_by_session":"session_dolphin_1792723909440_951d256685611548","last_updated_by_session":"session_dolphin_1792723909440_951d256685611548","session_ids":["session_dolphin_1792723909440_951d256685611548"],"todo_refs":[{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"root-release-alias-install"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"root-release-alias-prepare"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"root-release-preflight"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"root-release-publish"}],"goal_refs":[]}

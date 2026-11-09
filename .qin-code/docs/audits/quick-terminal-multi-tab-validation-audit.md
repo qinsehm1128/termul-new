@@ -4,9 +4,9 @@ kind: audit
 id: quick-terminal-multi-tab-validation
 title: 快捷终端多终端与统一标签验收记录
 date: 2026-10-26
-status: draft
+status: accepted
 source: user:2026-10-26T15:14:24+08:00; agent://quick-tabs-host-integration; agent://quick-tabs-editor-final-review; agent://quick-tabs-draft-isolation; agent://quick-tabs-drafts-final-review; bg:7304300t5b; bg:762299i399; bg:874137nrme; commit:c2ade681; commit:ed36b611
-updated: 2026-10-26
+updated: 2026-11-09
 lang: zh-CN
 scope: project
 artifact: {"work_id":null,"created_by_session":"session_dolphin_1792723909440_951d256685611548","last_updated_by_session":"session_dolphin_1792723909440_951d256685611548","session_ids":["session_dolphin_1792723909440_951d256685611548"],"todo_refs":[{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"quick-tabs-close-safety"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"quick-tabs-drafts"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"quick-tabs-editor-safety"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"quick-tabs-host"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"quick-tabs-ui"},{"session_id":"session_dolphin_1792723909440_951d256685611548","id":"quick-tabs-verify"}],"goal_refs":[]}

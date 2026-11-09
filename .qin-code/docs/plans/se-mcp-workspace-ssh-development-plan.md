@@ -4,7 +4,8 @@ kind: plan
 id: se-mcp-workspace-ssh-development
 title: Se MCP 完整扩展实施计划
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: 用户批准req-a1fec49128c8a770f1a9b055e56197e7；agent://mcp-implementation-plan；当前实施接口
 lang: zh-CN
 scope: project

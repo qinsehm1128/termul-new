@@ -4,7 +4,8 @@ kind: audit
 id: release-0-15-24-download-only
 title: Se Manager v0.15.24正式发布与只下载验收
 date: 2026-10-24
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-24T11:42:55+08:00; commit:eff547348a3d8cbd276436d5b92710246ddbf090; run:40060215052; file:/Users/qs/Downloads/se-manager-v0.15.24/release-verification.json
 lang: zh-CN
 ---

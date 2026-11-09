@@ -4,7 +4,8 @@ kind: audit
 id: mcp-host-access-ux
 title: MCP宿主授权面板体验优化验收
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: 用户授权面板优化与默认全权限要求；req-1542e4731165f87cace3f1731e1a65d3；任务903806lh0a；host-ux-review与host-ux-runtime-debug结果
 lang: zh-CN
 scope: project

@@ -4,9 +4,9 @@ kind: research
 id: terminal-drag-selection-mouse-capture
 title: AI终端拖选间歇失效：鼠标捕获、重绘与状态恢复调查
 date: 2026-10-24
-status: draft
+status: accepted
 source: user:2026-10-24T09:22:12+08:00; user:2026-10-24T09:23:05+08:00; agent://terminal-selection-paths; agent://xterm-selection-upstream; agent://agent-tui-selection-upstream; isolated-repro:2026-10-24T09:36+08:00
-updated: 2026-10-24
+updated: 2026-11-09
 lang: zh-CN
 ---
 

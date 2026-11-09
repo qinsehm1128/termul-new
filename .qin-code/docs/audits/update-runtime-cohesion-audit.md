@@ -4,7 +4,8 @@ kind: audit
 id: update-runtime-cohesion
 title: 更新与运行状态界面整合验收
 date: 2026-11-08
-status: draft
+status: accepted
+updated: 2026-11-09
 source: Scoped implementation, independent 100-test/build verification and read-only review
 lang: zh-CN
 scope: project

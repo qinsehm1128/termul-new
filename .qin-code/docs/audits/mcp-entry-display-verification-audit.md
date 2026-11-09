@@ -4,7 +4,8 @@ kind: audit
 id: mcp-entry-display-verification
 title: MCP完整入口展示与复制验收
 date: 2026-11-07
-status: draft
+status: superseded
+updated: 2026-11-09
 source: Live process snapshot, installed protocol probes, UI implementation, tests and independent boundary analysis
 lang: zh-CN
 scope: project

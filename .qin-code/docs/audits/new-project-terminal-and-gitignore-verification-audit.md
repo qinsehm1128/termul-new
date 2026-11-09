@@ -4,7 +4,8 @@ kind: audit
 id: new-project-terminal-and-gitignore-verification
 title: 新建项目终端与Gitignore选项验收记录
 date: 2026-10-24
-status: draft
+status: accepted
+updated: 2026-11-09
 source: session_goal:passed; agent://project-template-ignore-review; agent://new-project-ui-review; agent://new-project-host-review; file:src-tauri/src/project_gitignore.rs
 lang: zh-CN
 ---

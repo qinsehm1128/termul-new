@@ -4,7 +4,8 @@ kind: audit
 id: ssh-command-deny-verification
 title: MCP-only SSH命令黑名单实施验收
 date: 2026-11-07
-status: draft
+status: accepted
+updated: 2026-11-09
 source: current implementation, independent reviews, Goal verification and isolated browser fixture
 lang: zh-CN
 scope: project

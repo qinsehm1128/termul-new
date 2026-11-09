@@ -4,7 +4,8 @@ kind: audit
 id: worktree-hover-v01526-release
 title: v0.15.26 worktree悬浮提示远程发布验收
 date: 2026-10-28
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-28T17:18:28+08:00; commit:8217aa37; github-run:40663980405; agent://hover-v01526-release-review; agent://release-v01526-windows-native-debug; file:/Users/qs/.qin-code/scratch/worktree-hover-release-v01526-74x_fp6y/publication-acceptance.json
 lang: zh-CN
 scope: project

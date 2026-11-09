@@ -4,9 +4,9 @@ kind: plan
 id: new-project-terminal-and-gitignore
 title: 新建项目终端引擎与自定义Git忽略规则
 date: 2026-10-23
-status: draft
+status: accepted
 source: user:2026-10-23T22:24:27+08:00; session_goal:passed; agent://new-project-host-review
-updated: 2026-10-24
+updated: 2026-11-09
 lang: zh-CN
 ---
 

@@ -4,9 +4,9 @@ kind: spec
 id: plugin-capability-catalog-spec
 title: 插件可调用的 Se Manager 全量能力清单
 date: 2026-11-04
-status: draft
+status: accepted
 source: user:2026-11-04T16:59:29+08:00 只有凭据和秘钥不开放，其它都开放给插件; agent://cat-a; agent://cat-b; agent://cat-c; user:2026-11-07 req-a1fec49128c8a770f1a9b055e56197e7 MCP host workspace/SSH catalog sync; agent://catalog-host-evidence; src-tauri/src/commands.rs; src-tauri/src/lib.rs; src-tauri/src/web/mcp_host_api.rs; src-tauri/src/mcp_core/host_bridge.rs; src-tauri/src/credentials.rs; user:2026-11-07 req-8f01105f55c188c39fdf0e9609e35343 SSH command deny v2/management preview catalog sync; .qin-code/docs/proposals/ssh-command-deny-policy-proposal.md; src-tauri/src/web/router.rs; src/shared/types/mcp-host.types.ts
-updated: 2026-11-07
+updated: 2026-11-09
 lang: zh-CN
 scope: project
 artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ffbe76ff784f5bf","last_updated_by_session":"session_clover_1794039875986_a9f773ef52155584","session_ids":["session_clover_1794039875986_a9f773ef52155584","session_lizard_1794024668506_6ffbe76ff784f5bf"],"todo_refs":[],"goal_refs":[]}
