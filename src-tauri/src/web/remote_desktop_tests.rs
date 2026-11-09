@@ -176,6 +176,20 @@ async fn revoke_closes_live_desktop_websocket_with_policy_code() {
     assert!(
         matches!(rejected,WsMessage::Text(text) if serde_json::from_str::<Value>(&text).unwrap()["code"]==expected)
     );
+    if screen::supported() {
+        socket
+            .send(WsMessage::Text(json!({"type":"stop"}).to_string().into()))
+            .await
+            .unwrap();
+        let stopped = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(stopped,WsMessage::Text(text) if serde_json::from_str::<Value>(&text).unwrap()==json!({"type":"control_state","enabled":false,"active":false}))
+        );
+    }
     authority.revoke_device(&paired.device_id).unwrap();
     assert_eq!(registry.cancel_device(&paired.device_id), 1);
     let close = tokio::time::timeout(Duration::from_secs(2), socket.next())

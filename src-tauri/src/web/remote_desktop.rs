@@ -426,6 +426,7 @@ async fn run(
     });
     let mut stream: Option<LiveStream> = None;
     let mut input: Option<InputController> = None;
+    let mut control_active = false;
     let mut last_control = service.control_enabled();
     let mut pump = tokio::time::interval(Duration::from_millis(15));
     pump.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -448,7 +449,7 @@ async fn run(
                 if let Some(p) = &principal {
                     if authority.require_scope(p,"screen.view").is_err() { code=(1008,"device access revoked"); break; }
                     let enabled = service.control_enabled();
-                    if !enabled { input = None; }
+                    if !enabled { input = None; control_active = false; }
                     if enabled != last_control {
                         last_control = enabled;
                         if !send_json(&tx,json!({"type":"control_state","enabled":enabled,"active":input.is_some()})) {break}
@@ -495,7 +496,7 @@ async fn run(
                             Err(e) => Err(e.code()),
                             Ok(displays) if !displays.iter().any(|d|d.id==display) => Err("DISPLAY_NOT_FOUND"),
                             Ok(displays) => {
-                                stop_stream(&mut stream,&service,id,&principal,"OK"); input=None;
+                                stop_stream(&mut stream,&service,id,&principal,"OK"); input=None; control_active=false;
                                 match StreamSession::start(StreamConfig {display:display.clone(),fps,max_width:max_width.unwrap_or(1920),quality:quality.unwrap_or(80),queue_capacity:2}) {
                                     Err(e) => Err(e.code()),
                                     Ok((session,receiver)) => {
@@ -528,11 +529,21 @@ async fn run(
                         }
                     }
                     ClientMessage::Keyframe => { if let Some(live)=&stream {live.session.request_keyframe();Ok(())} else {Err("INVALID_REQUEST")} }
-                    ClientMessage::Stop => { stop_stream(&mut stream,&service,id,&principal,"OK");input=None;Ok(()) }
+                    ClientMessage::Stop => {
+                        stop_stream(&mut stream,&service,id,&principal,"OK");input=None;control_active=false;
+                        if !send_json(&tx,json!({"type":"control_state","enabled":service.control_enabled(),"active":false})){break}
+                        Ok(())
+                    }
                     msg => {
                         let result=inject(msg,&stream,&mut input);
-                        if result.is_ok() { service.controller_active(id); if !send_json(&tx,json!({"type":"control_state","enabled":true,"active":true})){break} }
-                        else { log::warn!("desktop_input_rejected device_id={} display={} stable_code={}",p.device_id(),stream.as_ref().map(|s|s.display.as_str()).unwrap_or("none"),result.unwrap_err()); }
+                        if result.is_ok() && !control_active {
+                            control_active=true;
+                            service.controller_active(id);
+                            if !send_json(&tx,json!({"type":"control_state","enabled":true,"active":true})){break}
+                        }
+                        if let Err(rejected)=&result {
+                            log::warn!("desktop_input_rejected device_id={} display={} stable_code={}",p.device_id(),stream.as_ref().map(|s|s.display.as_str()).unwrap_or("none"),rejected);
+                        }
                         result
                     }
                 };
