@@ -4,9 +4,9 @@ kind: analysis
 id: herdr-borrowing-analysis
 title: Se Manager 与 herdr：架构对比及可借鉴设计
 date: 2026-10-23
-status: draft
+status: accepted
 source: user:https://github.com/herdrdev/herdr; local:8662be45; upstream:5bd900d88c80d95f5b145397e45bbeea398b8165
-updated: 2026-10-23
+updated: 2026-11-09
 lang: zh-CN
 ---
 

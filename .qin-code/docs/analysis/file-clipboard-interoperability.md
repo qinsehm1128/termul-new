@@ -4,7 +4,8 @@ kind: analysis
 id: file-clipboard-interoperability
 title: 系统文件剪贴板、跨项目文件树与外部应用互通调研
 date: 2026-10-28
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-28T17:31:27+08:00; commit:8217aa37; agent://file-clipboard-code-discovery; agent://file-clipboard-platform-research
 lang: zh-CN
 scope: project

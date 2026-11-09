@@ -4,7 +4,8 @@ kind: analysis
 id: herdr-session-detection
 title: Herdr会话识别机制与Se的15秒qin-code探针对照
 date: 2026-10-26
-status: draft
+status: accepted
+updated: 2026-11-09
 source: user:2026-10-26T20:50:43+08:00; url:https://github.com/herdrdev/herdr; upstream:5608de0608918aba2f9d501e7793b984a0ca9cfa; agent://herdr-session-detection-scout
 lang: zh-CN
 scope: project
