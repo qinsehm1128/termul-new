@@ -116,6 +116,12 @@ struct ConnectedShellScreen: View {
         .onChange(of: session.workspace) { _, workspace in
             if workspace != .home { showsWorkbench = true }
         }
+        .onChange(of: workbenchVisible) { _, visible in
+            // The workbench (and its SwiftTerm view) stays mounted while
+            // hidden. Drop the keyboard with it so no first responder survives
+            // in an opacity-0 view.
+            if !visible { session.dismissTerminalKeyboard() }
+        }
         .onDisappear { selectionTask?.cancel() }
         .sheet(isPresented: $showsNeeds) {
             NeedsSheetView(items: needs, onOpen: openNeed)

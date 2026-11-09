@@ -334,19 +334,12 @@ final class TerminalSocket {
             handleReply(id: id, object: object)
             return
         }
+        if let output = Self.output(from: object) {
+            onBytes?(output.terminalId, output.data)
+            return
+        }
         guard let type = object["type"] as? String else { return }
         switch type {
-        case "data":
-            if let terminalId = object["terminalId"] as? String {
-                onBytes?(terminalId, Self.bytes(from: object["data"]))
-            }
-        case "replay":
-            if let terminalId = object["terminalId"] as? String,
-               let chunks = object["chunks"] as? [[String: Any]] {
-                for chunk in chunks {
-                    onBytes?(terminalId, Self.bytes(from: chunk["data"]))
-                }
-            }
         case "event":
             if let payload = object["payload"] as? [String: Any],
                let eventType = payload["type"] as? String {
@@ -367,6 +360,27 @@ final class TerminalSocket {
             }
         default:
             break
+        }
+    }
+
+    /// Pure mapping for the two terminal-output frames the host sends over the
+    /// v2 JSON protocol: `data` for live bytes and `replay` for backlog chunks.
+    /// Keeping it pure lets the wire contract be tested without a socket.
+    nonisolated static func output(from object: [String: Any]) -> (terminalId: String, data: Data)? {
+        switch object["type"] as? String {
+        case "data":
+            guard let terminalId = object["terminalId"] as? String else { return nil }
+            return (terminalId, bytes(from: object["data"]))
+        case "replay":
+            guard let terminalId = object["terminalId"] as? String,
+                  let chunks = object["chunks"] as? [[String: Any]] else { return nil }
+            var data = Data()
+            for chunk in chunks {
+                data.append(bytes(from: chunk["data"]))
+            }
+            return (terminalId, data)
+        default:
+            return nil
         }
     }
 
@@ -404,7 +418,7 @@ final class TerminalSocket {
         }
     }
 
-    private static func bytes(from raw: Any?) -> Data {
+    nonisolated private static func bytes(from raw: Any?) -> Data {
         if let numbers = raw as? [Any] {
             let bytes = numbers.compactMap { item -> UInt8? in
                 if let number = item as? NSNumber { return UInt8(truncating: number) }

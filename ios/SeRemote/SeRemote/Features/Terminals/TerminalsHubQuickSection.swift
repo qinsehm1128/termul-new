@@ -356,6 +356,9 @@ struct TerminalsHubQuickSection: View {
         defer { busy = false }
         do {
             let result = try await store.open(id: record.id, cols: 80, rows: 24)
+            // Never present the console while a hidden workbench terminal owns
+            // the keyboard: dismiss first so the cover gets a clean responder.
+            session.dismissTerminalKeyboard()
             console = QuickTerminalConsoleRequest(
                 opened: result,
                 title: QuickTerminalPresentation.title(record)

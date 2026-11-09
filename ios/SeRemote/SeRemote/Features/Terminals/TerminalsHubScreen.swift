@@ -184,6 +184,10 @@ struct TerminalsHubScreen: View {
 
     private func terminalRow(_ terminal: TerminalsHubTerminal) -> some View {
         Button {
+            // The workbench terminal stays mounted (opacity 0) behind the hub.
+            // Presenting a full-screen console while it holds first responder
+            // leaves the keyboard attached to an invisible view.
+            session.dismissTerminalKeyboard()
             console = TerminalsHubConsoleRequest(terminalId: terminal.id, title: terminal.title)
         } label: {
             HStack(spacing: 10) {

@@ -71,7 +71,15 @@ struct SessionScreen: View {
         }
         .onChange(of: isActive) { _, active in
             ShortcutAvailability.shared.sessionActive = active
-            if active { session.noteWideLayout(sideBySide) }
+            if active {
+                session.noteWideLayout(sideBySide)
+            } else {
+                // The screen stays mounted at opacity 0. A terminal that keeps
+                // first responder here leaves the keyboard attached to an
+                // invisible view (KeyboardCoordinator conversion / snapshot
+                // warnings), so hand focus back before the next presentation.
+                session.dismissTerminalKeyboard()
+            }
         }
         .onChange(of: session.workspaceTab) { old, new in
             tabForward = (WorkspaceTab.allCases.firstIndex(of: new) ?? 0)
