@@ -156,11 +156,13 @@ struct ScheduledTaskDetailScreen: View {
                     Task { await store.pause(taskId: task.taskId, expectedRevision: task.revision) }
                 }
                 .disabled(isWorking)
+                .accessibilityHint(String(localized: "Keeps run history."))
             } else if task.status == .paused {
                 NocturneRunButton(title: String(localized: "Resume"), systemImage: "play.circle") {
                     Task { await store.resume(taskId: task.taskId, expectedRevision: task.revision) }
                 }
                 .disabled(isWorking)
+                .accessibilityHint(String(localized: "Continues from the next scheduled occurrence."))
             }
             Spacer(minLength: 0)
         }

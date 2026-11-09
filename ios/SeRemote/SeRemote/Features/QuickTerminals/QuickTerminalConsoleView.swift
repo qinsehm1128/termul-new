@@ -142,9 +142,9 @@ struct QuickTerminalConsoleView: View {
                 ? String(localized: "Attaching to the host shell…")
                 : String(localized: "Not attached")
         }
-        if viewer.hasExited { return String(localized: "Shell exited · detach leaves the tab on the host") }
+        if viewer.hasExited { return String(localized: "Shell exited") }
         return viewer.isAttached
-            ? String(localized: "Attached to the existing host shell · detach keeps it running")
+            ? String(localized: "Attached")
             : String(localized: "Attaching to the host shell…")
     }
 
@@ -189,7 +189,7 @@ struct QuickTerminalConsoleView: View {
             .id(viewer.terminalId)
             .transaction { $0.animation = nil }
             if viewer.hasExited {
-                Text("The shell exited on the host.")
+                Text("Shell exited")
                     .font(SeNocturneType.font(10, weight: .medium, mono: true))
                     .foregroundStyle(palette.ink)
                     .padding(.horizontal, 12)

@@ -9,9 +9,9 @@ enum PaletteItemKind: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .session: "会话"
-        case .file: "文件"
-        case .command: "命令"
+        case .session: String(localized: "Session")
+        case .file: String(localized: "File")
+        case .command: String(localized: "Command")
         }
     }
 
@@ -102,11 +102,6 @@ struct CommandPaletteView: View {
                             }
                         }
                     }
-                    Text("命令面板替代了独立的搜索与速启入口：输一次，三种结果。")
-                        .font(SeNocturneType.font(9.5))
-                        .foregroundStyle(palette.inkTertiary)
-                        .padding(.top, 18)
-                        .padding(.horizontal, 4)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 74)
@@ -119,7 +114,7 @@ struct CommandPaletteView: View {
     private var searchField: some View {
         HStack(spacing: 9) {
             SeIconView(icon: .search, size: 15, stroke: 1.6, color: palette.inkTertiary)
-            TextField("搜索会话、文件或命令", text: queryBinding)
+            TextField("Search sessions, files or commands", text: queryBinding)
                 .font(SeNocturneType.font(13))
                 .foregroundStyle(palette.ink)
                 .textInputAutocapitalization(.never)
@@ -142,7 +137,7 @@ struct CommandPaletteView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("关闭命令面板")
+            .accessibilityLabel(String(localized: "Close command palette"))
         }
         .padding(.horizontal, 12)
         .frame(height: 46)
@@ -183,8 +178,8 @@ struct CommandPaletteView: View {
 
     private func statusDot(_ shortcut: String) -> SeNeedDot.Kind {
         switch shortcut {
-        case "等待你": .wait
-        case "运行中": .live
+        case "Waiting": .wait
+        case "Running": .live
         default: .idle
         }
     }
@@ -193,9 +188,9 @@ struct CommandPaletteView: View {
 #if DEBUG
 #Preview("Palette") {
     CommandPaletteView(items: [
-        PaletteItem(id: "s1", kind: .session, title: "优化远程连接恢复", detail: "Claude Code · MacBook Pro", shortcut: "等待你"),
-        PaletteItem(id: "f1", kind: .file, title: "TerminalSocket.swift", detail: "src/net · 2 处命中", shortcut: "2 处命中"),
-        PaletteItem(id: "c1", kind: .command, title: "swift test --filter Reconnect", detail: "速启", shortcut: "速启")
+        PaletteItem(id: "s1", kind: .session, title: String(localized: "Improve remote reconnect"), detail: "Claude Code · MacBook Pro", shortcut: "Waiting"),
+        PaletteItem(id: "f1", kind: .file, title: "TerminalSocket.swift", detail: String(localized: "src/net · 2 hits"), shortcut: String(localized: "2 hits")),
+        PaletteItem(id: "c1", kind: .command, title: "swift test --filter Reconnect", detail: String(localized: "Quick action"), shortcut: String(localized: "Quick action"))
     ])
     .seThemeMode(.night)
 }

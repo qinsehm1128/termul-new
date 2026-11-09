@@ -164,7 +164,7 @@ struct QuickTerminalsFeatureView: View {
                 NocturneEmptyState(
                     systemImage: "terminal",
                     title: String(localized: "No quick terminals"),
-                    message: String(localized: "Create a shortcut to a host folder. Creating it does not start a shell.")
+                    message: String(localized: "Create a shortcut to a host folder.")
                 )
             } else {
                 ForEach(visibleRecords) { record in
@@ -175,13 +175,7 @@ struct QuickTerminalsFeatureView: View {
             createRow
         }
         .padding(.horizontal, NocturneToolMetrics.gutter)
-
-        NocturneGroupLabel(title: String(localized: "Note"), detail: "")
-        NocturneNotice(
-            message: String(localized: "Quick terminals save a command target, not output. Output stays in the host terminal."),
-            isError: false
-        )
-        .padding(.horizontal, NocturneToolMetrics.gutter)
+        .padding(.bottom, 18)
     }
 
     // MARK: Rows
@@ -290,11 +284,6 @@ struct QuickTerminalsFeatureView: View {
                     Text("New quick terminal")
                         .font(SeNocturneType.font(19, weight: .semibold))
                         .foregroundStyle(palette.ink)
-
-                    Text("The host creates the folder on demand. Creating a shortcut does not start a shell.")
-                        .font(SeNocturneType.font(11, weight: .regular))
-                        .foregroundStyle(palette.inkSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
 
                     NocturneGroupLabel(title: String(localized: "Title"), detail: String(localized: "Optional"))
                         .padding(.horizontal, -NocturneToolMetrics.gutter)

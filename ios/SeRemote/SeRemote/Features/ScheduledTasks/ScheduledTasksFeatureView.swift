@@ -97,8 +97,7 @@ struct ScheduledTasksFeatureView: View {
             } else if visibleTasks.isEmpty {
                 NocturneEmptyState(
                     systemImage: "clock",
-                    title: String(localized: "No scheduled tasks"),
-                    message: String(localized: "The host reports no task in this filter. Pausing keeps run history.")
+                    title: String(localized: "No scheduled tasks")
                 )
             } else {
                 ForEach(visibleTasks) { task in
@@ -107,19 +106,7 @@ struct ScheduledTasksFeatureView: View {
             }
         }
         .padding(.horizontal, NocturneToolMetrics.gutter)
-
-        NocturneGroupLabel(title: String(localized: "Notes"), detail: "i")
-        NocturneNotice(
-            message: String(localized: "Tasks run only on a host you approved. Pausing keeps history; resuming continues from the next scheduled occurrence."),
-            isError: false
-        )
-        .padding(.horizontal, NocturneToolMetrics.gutter)
-
-        Text("Open a task to see its recent runs.")
-            .font(SeNocturneType.font(10, weight: .regular))
-            .foregroundStyle(palette.inkTertiary)
-            .padding(.horizontal, NocturneToolMetrics.gutter)
-            .padding(.top, 14)
+        .padding(.bottom, 18)
     }
 
     private var loadingRow: some View {

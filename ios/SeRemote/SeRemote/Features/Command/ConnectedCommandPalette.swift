@@ -47,8 +47,8 @@ struct ConnectedCommandPalette: View {
         .disabled(openingResult)
         .overlay(alignment: .bottom) {
             VStack(spacing: SeSpace.xs) {
-                if openingResult { ProgressView("正在打开文件…") }
-                if session.search.isLoading { ProgressView("正在搜索文件…") }
+                if openingResult { ProgressView("Opening file…") }
+                if session.search.isLoading { ProgressView("Searching files…") }
                 if let fileError { Text(fileError).foregroundStyle(palette.inkSecondary) }
                 if let error = session.search.errorMessage { Text(error).foregroundStyle(palette.inkSecondary) }
             }
@@ -84,7 +84,7 @@ struct ConnectedCommandPalette: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("完成") { presentedRoute = nil }
+                        Button("Done") { presentedRoute = nil }
                             .frame(minHeight: SeSpace.hitTarget)
                     }
                 }

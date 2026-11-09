@@ -16,7 +16,7 @@ struct GitDiffView: View {
                     rawSurface(rawText)
                 } else {
                     NocturneNotice(
-                        message: String(localized: "The host returned an empty diff for this file."),
+                        message: String(localized: "Empty diff"),
                         isError: false
                     )
                 }

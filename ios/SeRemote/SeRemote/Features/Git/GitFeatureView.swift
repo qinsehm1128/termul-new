@@ -78,7 +78,7 @@ struct GitFeatureView: View {
             NocturneEmptyState(
                 systemImage: "folder.badge.questionmark",
                 title: String(localized: "No repository scope"),
-                message: String(localized: "Open a project or conversation to read its Git status.")
+                message: String(localized: "Open a project or conversation first.")
             )
             .padding(.horizontal, NocturneToolMetrics.gutter)
             .padding(.top, 18)
@@ -107,9 +107,6 @@ struct GitFeatureView: View {
 
     private var hostHead: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Repository")
-                .font(SeNocturneType.font(10, weight: .regular, mono: true))
-                .foregroundStyle(palette.inkTertiary)
             Text(verbatim: repoName)
                 .font(SeNocturneType.font(23, weight: .semibold))
                 .tracking(-0.9)
@@ -146,8 +143,7 @@ struct GitFeatureView: View {
         } else if git.status.isEmpty {
             NocturneEmptyState(
                 systemImage: "checkmark.circle",
-                title: String(localized: "Clean working tree"),
-                message: String(localized: "The host reports no uncommitted changes for this project.")
+                title: String(localized: "Clean working tree")
             )
             .padding(.horizontal, NocturneToolMetrics.gutter)
             .padding(.top, 16)
@@ -170,18 +166,13 @@ struct GitFeatureView: View {
                 GitDiffView(diff: git.diff, rawText: git.rawDiff, path: path)
             } else {
                 NocturneNotice(
-                    message: String(localized: "Select a changed file to load its diff from the host."),
+                    message: String(localized: "Select a changed file to see its diff."),
                     isError: false
                 )
             }
         }
         .padding(.horizontal, 14)
-
-        Text("Read only. Commits and rollbacks happen on the host.")
-            .font(SeNocturneType.font(10, weight: .regular))
-            .foregroundStyle(palette.inkTertiary)
-            .padding(.horizontal, NocturneToolMetrics.gutter)
-            .padding(.top, 12)
+        .padding(.bottom, 18)
     }
 
     private func changeRow(_ change: GitStatusDetailWire) -> some View {
@@ -235,8 +226,7 @@ struct GitFeatureView: View {
         } else if git.diffPath == nil {
             NocturneEmptyState(
                 systemImage: "doc.text.magnifyingglass",
-                title: String(localized: "No diff loaded"),
-                message: String(localized: "Pick a changed file on the Status tab. The host returns its diff, read only.")
+                title: String(localized: "No diff loaded")
             )
             .padding(.horizontal, NocturneToolMetrics.gutter)
             .padding(.top, 16)

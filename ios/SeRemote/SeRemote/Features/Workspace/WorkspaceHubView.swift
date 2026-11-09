@@ -29,15 +29,15 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
 
     var title: LocalizedStringKey {
         switch self {
-        case .tools: "工具"
-        case .projects: "项目"
+        case .tools: "Tools"
+        case .projects: "Projects"
         }
     }
 
     var label: String {
         switch self {
-        case .tools: String(localized: "工具")
-        case .projects: String(localized: "项目")
+        case .tools: String(localized: "Tools")
+        case .projects: String(localized: "Projects")
         }
     }
 }
@@ -138,7 +138,7 @@ struct WorkspaceHubView: View {
                            minHeight: NocturneToolMetrics.minimumTarget)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(String(localized: "命令面板"))
+            .accessibilityLabel(String(localized: "Command palette"))
 
             NocturneIconButton(
                 systemImage: "sidebar.left",
@@ -152,7 +152,7 @@ struct WorkspaceHubView: View {
 
     private var title: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("工具")
+            Text("Tools")
                 .font(SeNocturneType.font(33, weight: .semibold))
                 .tracking(-1.4)
                 .foregroundStyle(palette.ink)
@@ -188,7 +188,7 @@ struct WorkspaceHubView: View {
 
     private var toolSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            NocturneGroupLabel(title: String(localized: "工具"), detail: twoDigit(tools.count))
+            NocturneGroupLabel(title: String(localized: "Tools"), detail: twoDigit(tools.count))
             LazyVGrid(
                 columns: Array(repeating: GridItem(.flexible(), spacing: NocturneToolMetrics.cardGap),
                                count: 2),
@@ -256,15 +256,14 @@ struct WorkspaceHubView: View {
     private var projectSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             NocturneGroupLabel(
-                title: section == .tools ? String(localized: "最近项目") : String(localized: "项目"),
+                title: section == .tools ? String(localized: "Recent projects") : String(localized: "Projects"),
                 detail: twoDigit(projects.count)
             )
             VStack(spacing: NocturneToolMetrics.cardGap) {
                 if projects.isEmpty {
                     NocturneEmptyState(
                         systemImage: "folder",
-                        title: String(localized: "No projects"),
-                        message: String(localized: "The host has not reported a project for this workspace.")
+                        title: String(localized: "No projects")
                     )
                 } else {
                     ForEach(projects) { project in
@@ -286,13 +285,13 @@ struct WorkspaceHubView: View {
 
     private var settingsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            NocturneGroupLabel(title: String(localized: "设置"), detail: "")
+            NocturneGroupLabel(title: String(localized: "Settings"), detail: "")
             Button(action: onOpenSettings) {
                 HStack(spacing: 10) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(palette.inkTertiary)
-                    Text("设置")
+                    Text("Settings")
                         .font(SeNocturneType.font(12, weight: .semibold))
                         .foregroundStyle(palette.ink)
                     Spacer(minLength: 0)
@@ -310,7 +309,7 @@ struct WorkspaceHubView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(NocturnePressStyle(reduceMotion: reduceMotion))
-            .accessibilityLabel(String(localized: "设置"))
+            .accessibilityLabel(String(localized: "Settings"))
             .padding(.horizontal, NocturneToolMetrics.gutter)
             .padding(.top, NocturneToolMetrics.cardGap)
         }
@@ -323,7 +322,7 @@ struct WorkspaceHubView: View {
 
 // MARK: - Previews
 
-#Preview("工具 · Night") {
+#Preview("Tools · Night") {
     WorkspaceHubView(
         host: "MacBook Pro",
         latency: "",
@@ -343,7 +342,7 @@ struct WorkspaceHubView: View {
     .seThemeMode(.night)
 }
 
-#Preview("工具 · Day") {
+#Preview("Tools · Day") {
     WorkspaceHubView(
         host: "MacBook Pro",
         latency: "",

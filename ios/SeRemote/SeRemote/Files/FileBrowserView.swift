@@ -190,8 +190,7 @@ struct FileBrowserView: View {
         } else {
             SeEmptyState(
                 title: String(localized: "Select a file"),
-                systemImage: "doc.text",
-                message: String(localized: "Choose a file to view its read-only contents.")
+                systemImage: "doc.text"
             )
         }
     }

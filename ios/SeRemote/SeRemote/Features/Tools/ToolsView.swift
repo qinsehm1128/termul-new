@@ -16,8 +16,8 @@ struct ToolsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: SeSpace.section) {
                         VStack(alignment: .leading, spacing: SeSpace.xs) {
-                            Text("工具范围").font(SeNocturneType.monoSmall).foregroundStyle(palette.inkSecondary)
-                            Text(session.workspaceRoot ?? String(localized: "未选择项目"))
+                            Text("Tool scope").font(SeNocturneType.monoSmall).foregroundStyle(palette.inkSecondary)
+                            Text(session.workspaceRoot ?? String(localized: "No project selected"))
                                 .font(SeNocturneType.secondary.monospaced()).textSelection(.enabled)
                         }
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .top),
@@ -44,8 +44,8 @@ struct ToolsView: View {
                     }.padding(SeSpace.screenInset)
                 }.background(palette.canvas)
             }
-            .navigationTitle("工具")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.frame(minHeight: SeSpace.hitTarget) } }
+            .navigationTitle(String(localized: "Tools"))
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.frame(minHeight: SeSpace.hitTarget) } }
             .navigationDestination(for: ToolDestination.self) { destination in
                 WorkspaceToolDestinationView(session: session, destination: destination, onOpenFile: { dismiss() })
             }
@@ -103,10 +103,10 @@ enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .git: String(localized: "Read-only changes, diffs and history.")
-        case .scheduledTasks: String(localized: "Review schedules, run history and task controls.")
-        case .quickTerminals: String(localized: "Manage persistent host terminal shortcuts.")
-        case .search: String(localized: "Find text in the current workspace.")
-        case .screenText: String(localized: "Read a terminal text snapshot, not live screen sharing.")
+        case .scheduledTasks: String(localized: "Schedules and run history.")
+        case .quickTerminals: String(localized: "Host terminal shortcuts.")
+        case .search: String(localized: "Find text in this workspace.")
+        case .screenText: String(localized: "Read a terminal text snapshot.")
         }
     }
 }

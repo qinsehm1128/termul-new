@@ -43,14 +43,13 @@ struct WorkspaceFileListView: View {
                             systemImage: hasError ? "folder.badge.questionmark" : "folder",
                             message: hasError
                                 ? String(localized: "Use Refresh above to load this folder again.")
-                                : String(localized: "This folder is empty.")
+                                : nil
                         )
                         .frame(maxWidth: .infinity, minHeight: 160)
                     } else if filteredEntries.isEmpty && !isLoading {
                         SeEmptyState(
                             title: String(localized: "No matching names"),
                             systemImage: "line.3.horizontal.decrease",
-                            message: String(localized: "Try another name or clear the filter to see this folder's files."),
                             actionTitle: String(localized: "Clear filter"),
                             action: { query = "" }
                         )

@@ -135,10 +135,7 @@ struct SearchFeatureView: View {
         if groups.isEmpty && !store.isLoading && store.errorMessage == nil {
             NocturneEmptyState(
                 systemImage: "magnifyingglass",
-                title: trimmedQuery.isEmpty ? String(localized: "Search this workspace") : String(localized: "No matches"),
-                message: trimmedQuery.isEmpty
-                    ? String(localized: "Search file contents without changing anything on the host.")
-                    : String(localized: "The host found no file containing this text.")
+                title: trimmedQuery.isEmpty ? String(localized: "Search this workspace") : String(localized: "No matches")
             )
             .padding(.horizontal, NocturneToolMetrics.gutter)
             .padding(.top, 18)

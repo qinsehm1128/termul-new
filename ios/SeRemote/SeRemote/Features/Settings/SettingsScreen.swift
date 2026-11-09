@@ -18,50 +18,50 @@ struct SettingsScreen: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 SeNavBar(
-                    title: "设置",
+                    title: String(localized: "Settings"),
                     subtitle: hostSubtitle,
                     onBack: onBack
                 )
 
-                SeGroupLabel(title: "主机", count: nil)
+                SeGroupLabel(title: String(localized: "Hosts"), count: nil)
                 SeGroupCard {
                     if let host = store?.activeLink ?? store?.savedLinks.first {
                         SeRowItem(icon: .hosts, title: host.title, detail: host.originHost, value: nil) {
                             EmptyView()
                         }
                     } else {
-                        SeRowItem(icon: .hosts, title: "还没有主机", detail: "配对新主机后出现在这里") {
+                        SeRowItem(icon: .hosts, title: String(localized: "No hosts yet"), detail: String(localized: "Pair a new host and it appears here")) {
                             EmptyView()
                         }
                     }
                     SeRowItem(
                         icon: .clock,
-                        title: "通知",
-                        detail: "只在需要你处理时提醒",
-                        value: settings.notificationsEnabled ? "开启" : "关闭"
+                        title: String(localized: "Notifications"),
+                        detail: String(localized: "Notifies only when you need to act"),
+                        value: settings.notificationsEnabled ? String(localized: "On") : String(localized: "Off")
                     ) {
-                        SeToggle(isOn: $settings.notificationsEnabled, label: "通知")
+                        SeToggle(isOn: $settings.notificationsEnabled, label: String(localized: "Notifications"))
                     }
                 }
                 .padding(.horizontal, 18)
 
                 if notificationDenied {
-                    Text("通知未获允许。到 iOS 设置里打开，才能收到后台提醒。")
+                    Text("Notifications are not allowed. Enable them in iOS Settings to receive background alerts.")
                         .font(SeNocturneType.font(10))
                         .foregroundStyle(palette.warning)
                         .padding(.horizontal, 18)
                         .padding(.top, 8)
                 }
 
-                SeGroupLabel(title: "外观", count: nil)
+                SeGroupLabel(title: String(localized: "Appearance"), count: nil)
                 SeGroupCard {
-                    SeRowItem(title: "主题", detail: "日间 / 夜间，只影响本机") {
+                    SeRowItem(title: String(localized: "Theme")) {
                         SeThemePick(mode: Binding(
                             get: { mode },
                             set: { settings.appearance = $0.appearance }
                         ))
                     }
-                    SeRowItem(title: "语言", detail: "跟随系统或手动选择") {
+                    SeRowItem(title: String(localized: "Language")) {
                         Menu {
                             ForEach(AppLanguage.allCases) { language in
                                 Button(languageTitle(language)) { settings.language = language }
@@ -77,12 +77,12 @@ struct SettingsScreen: View {
                 }
                 .padding(.horizontal, 18)
 
-                SeGroupLabel(title: "交互", count: nil)
+                SeGroupLabel(title: String(localized: "Interaction"), count: nil)
                 SeGroupCard {
-                    SeRowItem(title: "触觉反馈", detail: "批准与拒绝时轻点一次") {
-                        SeToggle(isOn: $settings.hapticsEnabled, label: "触觉反馈")
+                    SeRowItem(title: String(localized: "Haptics")) {
+                        SeToggle(isOn: $settings.hapticsEnabled, label: String(localized: "Haptics"))
                     }
-                    SeRowItem(title: "终端字号", detail: "默认在打开终端时使用") {
+                    SeRowItem(title: String(localized: "Terminal font size")) {
                         HStack(spacing: 4) {
                             scaleButton("A−", direction: -1)
                             scaleButton("A+", direction: 1)
@@ -91,19 +91,19 @@ struct SettingsScreen: View {
                 }
                 .padding(.horizontal, 18)
 
-                SeGroupLabel(title: "隐私", count: nil)
+                SeGroupLabel(title: String(localized: "Privacy"), count: nil)
                 SeGroupCard {
-                    SeRowItem(icon: .lock, title: "凭据", detail: "保存在本机钥匙串，不上传", value: "Face ID") {
+                    SeRowItem(icon: .lock, title: String(localized: "Credentials"), detail: String(localized: "Stored in this device keychain, never uploaded"), value: "Face ID") {
                         EmptyView()
                     }
                     if let host = store?.activeLink ?? store?.savedLinks.first {
-                        SeRowItem(title: "解除这台主机", destructive: true, action: {
+                        SeRowItem(title: String(localized: "Unpair this host"), destructive: true, action: {
                             hostToForget = host
                         }) {
                             EmptyView()
                         }
                     } else {
-                        SeRowItem(title: "Git 与文件只读", detail: "查看不会修改你的桌面") {
+                        SeRowItem(title: String(localized: "Git and files are read-only")) {
                             EmptyView()
                         }
                     }
@@ -136,12 +136,12 @@ struct SettingsScreen: View {
         }
         .seHaptic(.selection, trigger: settings.language)
         .seHaptic(.selection, trigger: settings.appearance)
-        .alert("解除主机？", isPresented: Binding(
+        .alert("Unpair host?", isPresented: Binding(
             get: { hostToForget != nil },
             set: { if !$0 { hostToForget = nil } }
         )) {
-            Button("取消", role: .cancel) { hostToForget = nil }
-            Button("解除", role: .destructive) {
+            Button("Cancel", role: .cancel) { hostToForget = nil }
+            Button("Unpair", role: .destructive) {
                 if let host = hostToForget {
                     ShellPairingActivity().forget(host)
                     store?.forget(host)
@@ -149,13 +149,15 @@ struct SettingsScreen: View {
                 hostToForget = nil
             }
         } message: {
-            Text("这会从本机删除主机和已保存的访问密钥。重新配对后才能连接。")
+            Text("This deletes the host and saved access key from this device. Re-pair to connect again.")
         }
     }
 
     private var hostSubtitle: String {
-        guard let host = store?.activeLink ?? store?.savedLinks.first else { return "本机 · 未配对" }
-        return "\(host.title) · 已保存"
+        guard let host = store?.activeLink ?? store?.savedLinks.first else {
+            return String(localized: "This device · Unpaired")
+        }
+        return String(localized: "\(host.title) · Saved")
     }
 
     private var versionLine: String {
@@ -164,9 +166,9 @@ struct SettingsScreen: View {
 
     private func languageTitle(_ language: AppLanguage) -> String {
         switch language {
-        case .system: "跟随系统"
+        case .system: String(localized: "Follow system")
         case .english: "English"
-        case .simplifiedChinese: "简体中文"
+        case .simplifiedChinese: String(localized: "Simplified Chinese")
         }
     }
 
@@ -187,6 +189,6 @@ struct SettingsScreen: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(SePressable())
-        .accessibilityLabel(direction > 0 ? "增大终端字号" : "减小终端字号")
+        .accessibilityLabel(direction > 0 ? String(localized: "Increase terminal font size") : String(localized: "Decrease terminal font size"))
     }
 }

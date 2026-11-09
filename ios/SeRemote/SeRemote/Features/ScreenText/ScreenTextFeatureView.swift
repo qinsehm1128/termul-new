@@ -67,7 +67,7 @@ struct ScreenTextFeatureView: View {
             NocturneEmptyState(
                 systemImage: "terminal",
                 title: String(localized: "No terminals"),
-                message: String(localized: "Open a terminal in this workspace first, then return to capture its text.")
+                message: String(localized: "Open a terminal in this workspace first.")
             )
             .padding(.horizontal, NocturneToolMetrics.gutter)
             .padding(.top, 18)
@@ -99,8 +99,7 @@ struct ScreenTextFeatureView: View {
             } else if !loading && errorMessage == nil {
                 NocturneEmptyState(
                     systemImage: "text.viewfinder",
-                    title: String(localized: "Ready to capture"),
-                    message: String(localized: "Select a terminal and refresh. Snapshots do not update automatically.")
+                    title: String(localized: "Ready to capture")
                 )
                 .padding(.horizontal, NocturneToolMetrics.gutter)
                 .padding(.top, 18)
@@ -110,18 +109,16 @@ struct ScreenTextFeatureView: View {
 
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: "server.rack")
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(palette.inkTertiary)
                 Text(verbatim: session.origin.host() ?? String(localized: "Connected host"))
                     .font(SeNocturneType.font(11, weight: .medium))
                     .foregroundStyle(palette.inkSecondary)
+                SeInfoTip(text: String(localized: "A read-only text snapshot from the host. This is not live screen sharing."), size: 24)
+                Spacer(minLength: 0)
             }
-            Text("A read-only text snapshot from the host. This is not live screen sharing.")
-                .font(SeNocturneType.font(11, weight: .regular))
-                .foregroundStyle(palette.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, NocturneToolMetrics.gutter)
         .padding(.top, 16)
@@ -203,7 +200,7 @@ struct ScreenTextFeatureView: View {
                         .foregroundStyle(palette.inkTertiary)
                 }
                 if reply.truncated {
-                    Text("Only the last 80 lines are shown. The host truncated this snapshot.")
+                    Text("The host truncated this snapshot to the last 80 lines.")
                         .font(SeNocturneType.font(10, weight: .regular))
                         .foregroundStyle(palette.warning)
                 }
@@ -224,8 +221,7 @@ struct ScreenTextFeatureView: View {
             if text.isEmpty {
                 NocturneEmptyState(
                     systemImage: "terminal",
-                    title: String(localized: "The terminal screen is empty"),
-                    message: String(localized: "The host returned a consistent but empty screen.")
+                    title: String(localized: "The terminal screen is empty")
                 )
                 .padding(.horizontal, NocturneToolMetrics.gutter)
             } else {
@@ -248,7 +244,7 @@ struct ScreenTextFeatureView: View {
             NocturneEmptyState(
                 systemImage: "text.viewfinder",
                 title: String(localized: "Screen text is not available"),
-                message: String(localized: "No text is shown because the host could not confirm a consistent, applied screen sequence. Refresh after the terminal settles.")
+                message: String(localized: "Refresh after the terminal settles.")
             )
             .padding(.horizontal, NocturneToolMetrics.gutter)
         }
