@@ -63,9 +63,30 @@ enum DesktopKeyboardPolicy {
     static let hardwareShortcutInputs = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;'`,./!@#$%^&*()_+{}|:\"<>?~ "
 
     static func committedKeyCode(_ text: String, hasModifiers: Bool) -> String? {
-        // Keep multi-scalar/multi-character IME commits as text, even with a
-        // sticky modifier; a single key must preserve Shift/Control/etc flags.
-        hasModifiers ? hostKeyCode(text) : nil
+        // Enter/Tab are actions, including with no sticky modifier. Ordinary
+        // text and multi-scalar/multi-character IME commits stay on the text path.
+        if text == "\n" || text == "\r" { return "Enter" }
+        if text == "\t" { return "Tab" }
+        return hasModifiers ? hostKeyCode(text) : nil
+    }
+
+    static func hardwareKeyCode(_ usage: Int) -> String? {
+        // USB HID Keyboard/Keypad usages. The wire contract accepts F1-F12 only.
+        if (58...69).contains(usage) { return "F\(usage - 57)" }
+        switch usage {
+        case 74: return "Home"
+        case 75: return "PageUp"
+        case 76: return "Delete" // Forward Delete, not Backspace.
+        case 77: return "End"
+        case 78: return "PageDown"
+        default: return nil
+        }
+    }
+
+    static func consumesHardwareUsage(_ usage: Int) -> Bool {
+        // F13-F24 have no valid wire code. Swallow them rather than inserting
+        // UIKit's private-use function-key characters into the remote text path.
+        hardwareKeyCode(usage) != nil || (104...115).contains(usage)
     }
 
     static func hostKeyCode(_ input: String) -> String? {

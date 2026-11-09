@@ -41,7 +41,10 @@ final class DesktopSocket {
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private var urlSession: URLSession?
     @ObservationIgnored private var gate: HostWebSocketOpenGate?
-    @ObservationIgnored private let compositor = DesktopFrameCompositor()
+    @ObservationIgnored private let frameWorker = DesktopFrameWorker()
+    @ObservationIgnored private var frameTask: Task<Void, Never>?
+    @ObservationIgnored private var frameConfiguration: Task<Void, Never>?
+    @ObservationIgnored private var frameGeneration = 0
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
     @ObservationIgnored private var sendTask: Task<Void, Never>?
     @ObservationIgnored private var heartbeatTask: Task<Void, Never>?
@@ -50,13 +53,44 @@ final class DesktopSocket {
     @ObservationIgnored private var heldKeys: [String: DesktopModifiers] = [:]
     @ObservationIgnored private var heldButtons: Set<String> = []
     @ObservationIgnored private var authenticated = false
-    @ObservationIgnored private var displayFence = DesktopDisplayFence()
     @ObservationIgnored private var lastServerError: (code: String, capability: String?)?
     private var visible = false
     private var backgrounded = false
     private var generation = 0
 
     func configure(http: HostHTTP) { self.http = http }
+
+    deinit { frameWorker.finish() }
+
+    private func configureFrames(display: String?, newStream: Bool = false) {
+        if frameTask == nil {
+            let worker = frameWorker
+            frameTask = Task { [weak self] in
+                await worker.run { [weak self] update in
+                    guard let self, self.frameGeneration == update.generation,
+                          self.selectedDisplay == update.display, self.authenticated else { return }
+                    if update.needsKeyframe {
+                        self.enqueue(["type": "keyframe"])
+                    } else if let image = update.image {
+                        self.image = image
+                        self.state = .streaming
+                    }
+                }
+            }
+        }
+        // Advance the publication fence synchronously, before the actor hop.
+        frameGeneration += 1
+        let token = frameGeneration
+        let previous = frameConfiguration
+        let worker = frameWorker
+        frameConfiguration = Task { [weak self] in
+            // Preserve every A→B→A request for ordered meta acknowledgments.
+            await previous?.value
+            let preview = await worker.configure(generation: token, display: display, newStream: newStream)
+            guard let self, self.frameGeneration == token, display != nil else { return }
+            self.image = preview
+        }
+    }
 
     func open() async {
         guard state != .revoked else { return }
@@ -99,13 +133,11 @@ final class DesktopSocket {
         guard displays.contains(where: { $0.id == display }), display != selectedDisplay else { return }
         setControlActive(false)
         selectedDisplay = display
-        image = compositor.image(for: display)
-        // A display switch starts a new delta ancestry. Keep its old preview until the keyframe arrives.
-        compositor.reset(display: display)
+        image = nil
+        configureFrames(display: display)
         issue = nil
         if authenticated {
             state = .connecting
-            displayFence.request(display)
             enqueue(["type": "switch_display", "display": display])
             enqueue(["type": "keyframe"])
         }
@@ -169,7 +201,7 @@ final class DesktopSocket {
 
     private func invalidateTransport() {
         authenticated = false
-        displayFence.reset()
+        configureFrames(display: nil, newStream: true)
         controlActive = false
         pointerCoalescer.reset()
         heldKeys.removeAll()
@@ -197,7 +229,7 @@ final class DesktopSocket {
                 while !Task.isCancelled, generation == epoch {
                     let message = try await socket.receive()
                     guard generation == epoch else { return }
-                    try receive(message)
+                    try await receive(message, epoch: epoch)
                 }
                 return
             } catch {
@@ -296,9 +328,10 @@ final class DesktopSocket {
             throw HostError.network(String(localized: "Desktop connection interrupted."))
         }
         let activeDisplay = selectedDisplay ?? display
-        compositor.beginStream()
+        configureFrames(display: activeDisplay, newStream: true)
+        await frameConfiguration?.value
+        guard generation == epoch else { throw CancellationError() }
         authenticated = true
-        displayFence.request(activeDisplay)
         // Startup joins the same ordered queue as subsequent display switches and inputs.
         enqueue(["type": "start", "display": activeDisplay, "fps": 3, "maxWidth": 1920, "quality": 80])
         enqueue(["type": "keyframe"])
@@ -350,28 +383,20 @@ final class DesktopSocket {
         }
     }
 
-    private func receive(_ message: URLSessionWebSocketTask.Message) throws {
+    private func receive(_ message: URLSessionWebSocketTask.Message, epoch: Int) async throws {
+        await frameConfiguration?.value
+        guard generation == epoch, authenticated else { return }
         switch message {
         case .data(let data):
-            do {
-                let packet = try DesktopPacket.decode(data)
-                guard displayFence.accepts(packet.display), packet.display == selectedDisplay else { return }
-                if try compositor.apply(packet), let display = selectedDisplay {
-                    image = compositor.image(for: display)
-                    state = .streaming
-                }
-            } catch {
-                // Atomic compositor failure retains its watermark and preview; only a new keyframe can recover.
-                enqueue(["type": "keyframe"])
-            }
+            frameWorker.submit(data, generation: frameGeneration)
         case .string(let text):
             guard let data = text.data(using: .utf8), let object = try? WireJSON.object(from: data) else { return }
             switch object["type"] as? String {
             case "meta":
                 if let list = object["displays"], let bytes = try? JSONSerialization.data(withJSONObject: list),
                    let parsed = try? JSONDecoder().decode([DesktopDisplay].self, from: bytes) { displays = parsed }
-                if let display = object["display"] as? String, displayFence.acknowledge(display) {
-                    compositor.reset(display: display)
+                if let display = object["display"] as? String {
+                    await frameWorker.acknowledge(display, generation: frameGeneration)
                 }
             case "control_state":
                 controlEnabled = object["enabled"] as? Bool ?? false

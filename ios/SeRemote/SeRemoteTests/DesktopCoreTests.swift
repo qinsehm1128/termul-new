@@ -46,6 +46,144 @@ struct DesktopCoreTests {
         return Array(UnsafeBufferPointer(start: bytes + offset, count: 4))
     }
 
+    @Test func compositorEvictsByBytesAndKeepsCurrentDisplay() throws {
+        let bytes = 128 * 128 * 4
+        let compositor = DesktopFrameCompositor(imageByteBudget: bytes * 2)
+        compositor.selectDisplay("a")
+        try compositor.apply(key(display: "a"))
+        try compositor.apply(key(display: "b"))
+        #expect(compositor.retainedImageBytes == bytes * 2)
+        try compositor.apply(key(display: "c"))
+        #expect(compositor.image(for: "a") != nil)
+        #expect(compositor.image(for: "b") == nil)
+        #expect(compositor.image(for: "c") != nil)
+        #expect(compositor.retainedImageBytes == bytes * 2)
+
+        // A larger current frame leaves insufficient bytes for the other preview.
+        compositor.selectDisplay("c")
+        try compositor.apply(key(display: "c", seq: 2, width: 256))
+        #expect(compositor.image(for: "a") == nil)
+        #expect(compositor.image(for: "c") != nil)
+        #expect(compositor.retainedImageBytes == bytes * 2)
+    }
+
+    @Test func compositorKeepsAtMostOneOtherDisplayEvenWithSpareBudget() throws {
+        let compositor = DesktopFrameCompositor()
+        for display in ["a", "b", "c"] {
+            compositor.selectDisplay(display)
+            try compositor.apply(key(display: display))
+        }
+        #expect(compositor.image(for: "a") == nil)
+        #expect(compositor.image(for: "b") != nil)
+        #expect(compositor.image(for: "c") != nil)
+        // An evicted display must not accept a delta against its old sequence.
+        compositor.selectDisplay("a")
+        let delta = try DesktopPacket.decode(wire(type: "tiles", display: "a", seq: 2, payload: jpeg()))
+        #expect(throws: DesktopProtocolError.missingKeyframe) { try compositor.apply(delta) }
+    }
+
+    @Test func workerCoalescesOnePendingFrameAndKeyframeResetsAncestry() async throws {
+        let worker = DesktopFrameWorker()
+        _ = await worker.configure(generation: 1, display: "display-1", newStream: true)
+        await worker.acknowledge("display-1", generation: 1)
+        let first = try wire(payload: jpeg())
+        let second = try wire(type: "tiles", seq: 2, payload: jpeg())
+        let third = try wire(type: "tiles", seq: 3, payload: jpeg())
+        let fourth = try wire(seq: 4, payload: jpeg(green: 1))
+        worker.submit(first, generation: 1)
+        var sequences: [UInt64] = []
+        await worker.run { update in
+            MainActor.preconditionIsolated()
+            #expect(!update.needsKeyframe && update.image != nil)
+            if let sequence = update.sequence { sequences.append(sequence) }
+            if update.sequence == 1 {
+                #expect(!worker.submit(second, generation: 1))
+                #expect(worker.submit(third, generation: 1))
+                #expect(worker.submit(fourth, generation: 1))
+                worker.finish()
+            }
+        }
+        #expect(sequences == [1, 4])
+    }
+
+    @Test func coalescedDeltaGapRequestsKeyframeInsteadOfPublishingIncompleteImage() async throws {
+        let worker = DesktopFrameWorker()
+        _ = await worker.configure(generation: 1, display: "display-1", newStream: true)
+        await worker.acknowledge("display-1", generation: 1)
+        let first = try wire(payload: jpeg())
+        let second = try wire(type: "tiles", seq: 2, payload: jpeg())
+        let third = try wire(type: "tiles", seq: 3, payload: jpeg())
+        worker.submit(first, generation: 1)
+        var updates: [DesktopFrameWorker.Update] = []
+        await worker.run { update in
+            updates.append(update)
+            if update.sequence == 1 {
+                worker.submit(second, generation: 1)
+                worker.submit(third, generation: 1)
+                worker.finish()
+            }
+        }
+        #expect(updates.count == 2)
+        #expect(updates.last?.needsKeyframe == true)
+        #expect(updates.last?.image == nil)
+    }
+
+    @Test func workerDropsStaleGenerationBeforeDecodeOrPublication() async throws {
+        let worker = DesktopFrameWorker()
+        _ = await worker.configure(generation: 1, display: "display-1", newStream: true)
+        await worker.acknowledge("display-1", generation: 1)
+        worker.submit(try wire(payload: jpeg()), generation: 1)
+        _ = await worker.configure(generation: 2, display: "display-1", newStream: true)
+        await worker.acknowledge("display-1", generation: 2)
+        worker.finish()
+        var publications = 0
+        await worker.run { _ in publications += 1 }
+        #expect(publications == 0)
+    }
+
+    @Test func workerNewStreamRequiresKeyframeAndPublishesStateOnMainActor() async throws {
+        let worker = DesktopFrameWorker()
+        _ = await worker.configure(generation: 2, display: "display-1", newStream: true)
+        // An old asynchronous configuration cannot reopen the generation fence.
+        _ = await worker.configure(generation: 1, display: "display-1", newStream: true)
+        await worker.acknowledge("display-1", generation: 2)
+        worker.submit(try wire(type: "tiles", seq: 2, payload: jpeg()), generation: 2)
+        worker.finish()
+        var updates: [DesktopFrameWorker.Update] = []
+        await worker.run { update in
+            MainActor.preconditionIsolated()
+            updates.append(update)
+        }
+        #expect(updates.count == 1)
+        #expect(updates.first?.generation == 2)
+        #expect(updates.first?.needsKeyframe == true)
+        #expect(updates.first?.image == nil)
+    }
+
+    @Test func workerDoesNotReplayPreMetaPacketAfterAcknowledgement() async throws {
+        let worker = DesktopFrameWorker()
+        _ = await worker.configure(generation: 1, display: "display-1", newStream: true)
+        worker.submit(try wire(payload: jpeg()), generation: 1)
+        await worker.acknowledge("display-1", generation: 1)
+        worker.finish()
+        var publications = 0
+        await worker.run { _ in publications += 1 }
+        #expect(publications == 0)
+    }
+
+    @Test func workerRequiresLatestOrderedDisplayAcknowledgement() async throws {
+        let worker = DesktopFrameWorker()
+        _ = await worker.configure(generation: 1, display: "a", newStream: true)
+        _ = await worker.configure(generation: 2, display: "b", newStream: false)
+        _ = await worker.configure(generation: 3, display: "a", newStream: false)
+        await worker.acknowledge("a", generation: 3)
+        worker.submit(try wire(display: "a", payload: jpeg()), generation: 3)
+        worker.finish()
+        var publications = 0
+        await worker.run { _ in publications += 1 }
+        #expect(publications == 0)
+    }
+
     @Test func metadataUsesExactHostFieldNames() throws {
         let json = """
         {"supported":true,"viewEnabled":true,"controlEnabled":false,

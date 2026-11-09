@@ -48,6 +48,7 @@ final class DesktopKeyboardTextView: UITextView, UITextViewDelegate {
     var inputEnabled = false
     var wantsKeyboard = false
     private var sticky = DesktopModifiers()
+    private var consumedHardwarePresses = Set<UIPress>()
     private var accessoryButtons: [UIButton] = []
 
     func applyTheme(background: UIColor, foreground: UIColor, accent: UIColor, night: Bool) {
@@ -273,17 +274,32 @@ final class DesktopKeyboardTextView: UITextView, UITextViewDelegate {
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let remaining = presses.filter { press in
-            guard inputEnabled, let key = press.key,
-                  (58...69).contains(key.keyCode.rawValue) else { return true }
+            guard let key = press.key,
+                  DesktopKeyboardPolicy.consumesHardwareUsage(key.keyCode.rawValue) else { return true }
+            consumedHardwarePresses.insert(press)
+            guard inputEnabled,
+                  let code = DesktopKeyboardPolicy.hardwareKeyCode(key.keyCode.rawValue) else { return false }
             var mods = sticky
             mods.shift = mods.shift || key.modifierFlags.contains(.shift)
             mods.control = mods.control || key.modifierFlags.contains(.control)
             mods.alt = mods.alt || key.modifierFlags.contains(.alternate)
             mods.meta = mods.meta || key.modifierFlags.contains(.command)
-            sendKey("F\(key.keyCode.rawValue - 57)", modifiers: mods)
+            sendKey(code, modifiers: mods)
             return false
         }
         if !remaining.isEmpty { super.pressesBegan(Set(remaining), with: event) }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        // sendKey already emitted a balanced remote down/up pair at press begin.
+        // Consume the matching UIKit release even if control was disabled since.
+        let remaining = presses.filter { consumedHardwarePresses.remove($0) == nil }
+        if !remaining.isEmpty { super.pressesEnded(Set(remaining), with: event) }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let remaining = presses.filter { consumedHardwarePresses.remove($0) == nil }
+        if !remaining.isEmpty { super.pressesCancelled(Set(remaining), with: event) }
     }
 
 }
