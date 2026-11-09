@@ -6,6 +6,7 @@ import { createPortableRouter } from '@/app/portable-router'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { BrandMigrationBanner } from '@/components/migration/BrandMigrationBanner'
+import { RemoteDesktopBanner } from '@/components/RemoteDesktopBanner'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -46,6 +47,7 @@ export default function TauriApp(): React.JSX.Element {
       <TooltipProvider>
         <GlobalContextMenu>
           <ErrorBoundary context="appRoot">
+            <RemoteDesktopBanner />
             <PortableAppEffects />
             <ConversationHostStatus />
             <ConversationRecoveryPanel />
