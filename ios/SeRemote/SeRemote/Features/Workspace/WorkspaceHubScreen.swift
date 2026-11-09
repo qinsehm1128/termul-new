@@ -28,7 +28,8 @@ struct WorkspaceHubScreen: View {
             gitBranch: gitReady ? git.context?.branch : nil,
             gitChangedFileCount: gitReady ? Set(git.status.map(\.path)).count : nil,
             scheduledTaskCount: tasksReady ? tasks.tasks.count : nil,
-            quickTerminalCount: quickReady ? quick.records.count : nil)
+            quickTerminalCount: quickReady ? quick.records.count : nil,
+            liveAgentSessionCounts: session.liveAgents.countsByProject)
     }
 
     private var hostName: String {
@@ -68,6 +69,8 @@ struct WorkspaceHubScreen: View {
             .task {
                 // These stores retain their own results and cancel stale requests.
                 await session.projects.refresh()
+                guard !Task.isCancelled else { return }
+                await session.liveAgents.refresh()
                 guard !Task.isCancelled else { return }
                 if let cwd = session.workspaceRoot { await session.git.refresh(cwd: cwd) }
                 guard !Task.isCancelled else { return }

@@ -46,7 +46,8 @@ struct ConnectedShellScreen: View {
             isRunning: LivePresentation.isRunning(isSending: session.chat.isSending,
                                                   messages: session.chat.messages,
                                                   tools: session.chat.tools),
-            needsAttention: !needs.isEmpty
+            needsAttention: !needs.isEmpty,
+            agentSessions: session.liveAgents.sessions
         )
     }
 

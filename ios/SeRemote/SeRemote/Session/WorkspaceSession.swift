@@ -52,6 +52,7 @@ final class WorkspaceSession {
     let scheduledTasks = ScheduledTaskStore()
     let quickTerminals = QuickTerminalStore()
     let search = SearchStore()
+    let liveAgents = LiveAgentSessionStore()
 
     /// Chat sits on a Conversation. A project workspace is terminals only.
     var showChat = true
@@ -67,6 +68,9 @@ final class WorkspaceSession {
     private(set) var isBackgrounded = false
     private var isStarting = false
     private var reconnectTask: Task<Void, Never>?
+    /// Host-backed running state (live terminals + live agent processes) is
+    /// polled: the host does not push a terminal-started event to the phone.
+    private var runningRefreshTask: Task<Void, Never>?
     private var startEpoch = 0
     private let notificationSettings: AppSettings?
 
@@ -83,6 +87,7 @@ final class WorkspaceSession {
         wireBackgroundNotifications()
         conversations.attach(http: http)
         projects.attach(http: http, socket: acp)
+        liveAgents.attach(http: http)
         files.attach(http: http)
         git.attach(http: http)
         scheduledTasks.attach(http: http)
@@ -143,6 +148,7 @@ final class WorkspaceSession {
             guard startEpoch == epoch else { return }
             await conversations.refresh()
             await projects.refresh()
+            await liveAgents.refresh()
             do {
                 try await terminals.ensureConnected()
             } catch {
@@ -150,6 +156,7 @@ final class WorkspaceSession {
             }
             guard startEpoch == epoch else { return }
             phase = .connected
+            startRunningRefresh()
             HostLog.session.info("Host connect succeeded")
         } catch is CancellationError {
             HostLog.session.info("Host connect cancelled")
@@ -187,8 +194,29 @@ final class WorkspaceSession {
         isStarting = false
         reconnectTask?.cancel()
         reconnectTask = nil
+        runningRefreshTask?.cancel()
+        runningRefreshTask = nil
         acp.stop()
         terminalSocket.stop()
+    }
+
+    /// Poll the same 15 s cadence as the desktop agent tracker. The first tick
+    /// is skipped because `start()` already refreshed both stores.
+    private func startRunningRefresh() {
+        runningRefreshTask?.cancel()
+        runningRefreshTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard let self, !Task.isCancelled else { return }
+                guard self.phase == .connected, !self.isBackgrounded else { continue }
+                await self.refreshRunningState()
+            }
+        }
+    }
+
+    private func refreshRunningState() async {
+        await projects.refresh()
+        await liveAgents.refresh()
     }
 
     func handleScene(isBackground: Bool) {
@@ -199,6 +227,11 @@ final class WorkspaceSession {
             // re-assert equal dims to converge after resume.
             terminals.scheduleRefit(force: true)
             reconnectIfNeeded()
+            // Running state may have changed while polling was parked.
+            Task { [weak self] in
+                guard let self, self.phase == .connected else { return }
+                await self.refreshRunningState()
+            }
         }
     }
 

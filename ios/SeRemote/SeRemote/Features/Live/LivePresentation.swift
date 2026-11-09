@@ -9,7 +9,8 @@ enum LivePresentation {
     static func sessions(
         conversations: [HostConversation], projects: [HostProject], host: String,
         activeConversationID: String?, activeProjectID: String?,
-        agent: String?, isRunning: Bool, needsAttention: Bool
+        agent: String?, isRunning: Bool, needsAttention: Bool,
+        agentSessions: [HostLiveAgentSession] = []
     ) -> [LiveSession] {
         let chats = conversations.filter { !$0.isDeleted }.map { conversation in
             let active = conversation.id == activeConversationID
@@ -27,7 +28,44 @@ enum LivePresentation {
                 timing: ""
             )
         }
-        return chats + terminals
+        // The host only returns processes it found under a live terminal, so
+        // these rows are running evidence, not session files on disk.
+        let agents = agentSessions.map { session in
+            LiveSession(
+                id: "agent:\(session.destinationProjectId ?? ""):\(session.terminalId):\(session.sessionId)",
+                title: agentTitle(for: session),
+                agent: agentLabel(session.agentId),
+                host: host,
+                status: .running,
+                timing: ""
+            )
+        }
+        return chats + terminals + agents
+    }
+
+    /// Display name for the agent the host detected.
+    static func agentLabel(_ agentId: String) -> String {
+        switch agentId {
+        case "claude-code": "Claude Code"
+        case "qin-code": "qin-code"
+        case "codex": "Codex"
+        case "gemini-cli": "Gemini CLI"
+        case "cursor": "Cursor"
+        case "opencode": "OpenCode"
+        case "pi": "Pi"
+        default: agentId
+        }
+    }
+
+    /// A real title: the session's working folder when the host reported one,
+    /// otherwise the agent name. Never a fabricated conversation title.
+    static func agentTitle(for session: HostLiveAgentSession) -> String {
+        if let cwd = session.cwd,
+           let folder = HostTimestamp.folderName(from: cwd),
+           !folder.isEmpty {
+            return folder
+        }
+        return agentLabel(session.agentId)
     }
 
     static func needs(permissions: [PermissionCard], questions: [QuestionCard], tools: [ToolCard], context: String) -> [NeedsItem] {
@@ -72,6 +110,14 @@ enum LivePresentation {
     static func destination(id: String) -> LiveDestination? {
         if id.hasPrefix("conversation:") { return .conversation(String(id.dropFirst("conversation:".count))) }
         if id.hasPrefix("project:") { return .project(String(id.dropFirst("project:".count))) }
+        if id.hasPrefix("agent:") {
+            // `agent:<projectId>:<terminalId>:<sessionId>` — only the project
+            // attribution is meaningful to the current workbench.
+            let rest = id.dropFirst("agent:".count)
+            guard let projectId = rest.split(separator: ":", maxSplits: 1).first,
+                  !projectId.isEmpty else { return nil }
+            return .project(String(projectId))
+        }
         return nil
     }
 }
