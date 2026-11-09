@@ -1,86 +1,61 @@
 import type { RemoteStatus } from '@shared/types/ipc.types'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TooltipProvider } from '@/components/ui/tooltip'
 import { RemoteAccessPopover } from './RemoteAccessPopover'
 
-// QR mock: expose the encoded value so tests assert the URL the QR would draw,
-// without depending on qrcode.react's SVG internals under jsdom.
+const mocks = vi.hoisted(() => ({
+  status: vi.fn(),
+  setStatus: vi.fn(),
+  start: vi.fn(),
+  stop: vi.fn(),
+  intent: vi.fn(),
+  setIntent: vi.fn(),
+  sync: vi.fn(),
+  pairing: vi.fn(),
+  clipboard: vi.fn()
+}))
 vi.mock('qrcode.react', () => ({
   QRCodeSVG: ({ value }: { value: string }) => <div data-testid="qr" data-value={value} />
 }))
-
-// Remote status store: `useRemoteStatus` is configurable per test; `getState`
-// is used only on the toggle-success path.
-const setStatus = vi.fn()
-vi.mock('@/stores/remote-status-store', () => ({
-  useRemoteStatus: vi.fn((): RemoteStatus | null => null),
-  useRemoteRestoreError: vi.fn((): string | null => null),
-  useRemoteStatusStore: { getState: () => ({ setStatus, setRestoreError: vi.fn() }) }
+vi.mock('@/components/DeviceManagementPanel', () => ({
+  DeviceManagementPanel: () => <div>设备管理</div>
 }))
-
-const startMock = vi.fn()
-const stopMock = vi.fn()
-// Factory-level default so the mount effect never observes a bare
-// `undefined` resolve, regardless of test ordering or reset timing.
-const intentMock = vi.fn(() =>
-  Promise.resolve({ success: true, data: { wanted: false, publishMode: 'tunnel' } })
-)
-const setIntentMock = vi.fn()
-const rotateMock = vi.fn()
+vi.mock('@/stores/remote-status-store', () => ({
+  useRemoteStatus: mocks.status,
+  useRemoteRestoreError: () => null,
+  useRemoteStatusStore: {
+    getState: () => ({ setStatus: mocks.setStatus, setRestoreError: vi.fn() })
+  }
+}))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@/lib/remote-devices-api', () => ({ remoteDevicesApi: { pairingCode: mocks.pairing } }))
 vi.mock('@/lib/api', () => ({
   remoteServerApi: {
-    start: (...args: unknown[]) => startMock(...args),
-    stop: () => stopMock(),
-    status: vi.fn(),
-    intent: (...args: unknown[]) => intentMock(...args),
-    setIntent: (...args: unknown[]) => setIntentMock(...args),
-    rotateCredential: (...args: unknown[]) => rotateMock(...args)
+    start: mocks.start,
+    stop: mocks.stop,
+    intent: mocks.intent,
+    setIntent: mocks.setIntent
   },
-  syncProjects: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+  syncProjects: mocks.sync
 }))
-
 vi.mock('@/stores/project-store', () => ({
-  useProjectStore: {
-    getState: () => ({ projects: [], activeProjectId: null })
-  }
+  useProjectStore: { getState: () => ({ projects: [], groups: [], activeProjectId: 'p1' }) }
 }))
-
-vi.mock('@/features/agent-session/stores/acp-store', () => ({
-  useAcpStore: {
-    getState: () => ({
-      loadSessionIndex: vi.fn(async () => {}),
-      sessionIndex: [],
-      messages: {}
-    })
-  }
-}))
-
 vi.mock('@/hooks/use-projects-persistence', () => ({
-  toProjectSummaries: vi.fn(() => []),
-  toProjectGroupSummaries: vi.fn(() => [])
+  toProjectSummaries: () => [],
+  toProjectGroupSummaries: () => []
 }))
-
-vi.mock('@/lib/acp-history-persistence', () => ({
-  toPersistedSessionSummaries: vi.fn(() => [])
-}))
-
-// Silence sonner toasts in test output.
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
-import { syncProjects } from '@/lib/api'
-import { useRemoteStatus } from '@/stores/remote-status-store'
-
-const RAW_CREDENTIAL = 'secret-bootstrap-credential'
-const NEXT_RAW_CREDENTIAL = 'rotated-bootstrap-credential'
+const SECRET = 'secret-bootstrap-credential'
 const RUNNING: RemoteStatus = {
   running: true,
   url: 'http://127.0.0.1:5123',
   port: 5123,
   bindMode: 'localhost',
   bindHost: '127.0.0.1',
-  tunnelUrl: 'https://foo-bar.trycloudflare.com',
-  accessUrl: `https://foo-bar.trycloudflare.com/#access_token=${RAW_CREDENTIAL}`
+  tunnelUrl: 'https://foo.trycloudflare.com',
+  accessUrl: `https://foo.trycloudflare.com/#access_token=${SECRET}`
 }
 const STOPPED: RemoteStatus = {
   running: false,
@@ -91,187 +66,187 @@ const STOPPED: RemoteStatus = {
   tunnelUrl: null,
   accessUrl: null
 }
-const RUNNING_AGAIN: RemoteStatus = {
-  ...RUNNING,
-  port: 6124,
-  url: 'http://127.0.0.1:6124',
-  tunnelUrl: 'https://new-generation.trycloudflare.com',
-  accessUrl: `https://new-generation.trycloudflare.com/#access_token=${NEXT_RAW_CREDENTIAL}`
-}
-const clipboardWrite = vi.fn(async () => undefined)
-
-function renderPopover(): ReturnType<typeof render> {
-  return render(
-    <TooltipProvider>
-      <RemoteAccessPopover />
-    </TooltipProvider>
-  )
-}
-
-/** Click the StatusBar trigger to open the Radix popover, then wait for the
- * toggle switch to mount (the content is portalled into document.body). */
-async function openPopover(): Promise<HTMLElement> {
-  const trigger = screen.getByLabelText('Remote terminal access')
-  await fireEvent.click(trigger)
+async function open(): Promise<HTMLElement> {
+  fireEvent.click(screen.getByLabelText('Remote terminal access'))
   return screen.findByRole('switch')
 }
-
 beforeEach(() => {
   vi.clearAllMocks()
-  intentMock.mockResolvedValue({ success: true, data: { wanted: false, publishMode: 'tunnel' } })
-  setIntentMock.mockResolvedValue({ success: true, data: { wanted: true, publishMode: 'tunnel' } })
-  rotateMock.mockResolvedValue({ success: true, data: RUNNING })
-  vi.mocked(useRemoteStatus).mockReturnValue(null)
+  mocks.status.mockReturnValue(null)
+  mocks.intent.mockResolvedValue({ success: true, data: { wanted: false, publishMode: 'tunnel' } })
+  mocks.setIntent.mockResolvedValue({ success: true })
+  mocks.sync.mockResolvedValue({ success: true })
+  mocks.pairing.mockImplementation(async () => ({
+    code: 'ONE_TIME_CODE',
+    expiresAt: Math.floor(Date.now() / 1000) + 60
+  }))
+  mocks.clipboard.mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
-    value: { writeText: clipboardWrite }
+    value: { writeText: mocks.clipboard }
   })
 })
-
-afterEach(() => {
-  vi.mocked(useRemoteStatus).mockReturnValue(null)
-})
+afterEach(() => vi.useRealTimers())
 
 describe('RemoteAccessPopover', () => {
-  it('shows the globe trigger with the toggle off when no status', () => {
-    renderPopover()
-    const trigger = screen.getByLabelText('Remote terminal access')
-    expect(trigger.getAttribute('aria-pressed')).toBe('false')
-    // Popover is closed → no QR / copy-link in the DOM yet.
-    expect(screen.queryByTestId('qr')).toBeNull()
-    expect(screen.queryByText('Copy link')).toBeNull()
-  })
-
-  it('uses only the credentialed accessUrl for QR/copy without displaying the raw credential', async () => {
-    vi.mocked(useRemoteStatus).mockReturnValue(RUNNING)
-    renderPopover()
-    await openPopover()
-
-    const qr = screen.getByTestId('qr')
-    expect(qr.getAttribute('data-value')).toBe(RUNNING.accessUrl)
-    expect(qr.getAttribute('data-value')).not.toBe(RUNNING.tunnelUrl)
-    expect(screen.queryByText(RAW_CREDENTIAL)).toBeNull()
-    expect(document.body.textContent).not.toContain(RAW_CREDENTIAL)
-
-    const copyButton = screen.getByRole('button', { name: 'Copy access link' })
-    await fireEvent.click(copyButton)
-    await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith(RUNNING.accessUrl))
-
-    // The simplify goal: no bind selector, no open-in-browser text row.
-    expect(screen.queryByText('Listen on')).toBeNull()
-    expect(screen.queryByText('Open in browser')).toBeNull()
-    expect(await screen.findByText('Copied')).toBeDefined()
-  })
-
-  it('renders a newly generated local Desktop access URL and QR after host generation starts', async () => {
-    vi.mocked(useRemoteStatus).mockReturnValue(RUNNING)
-    stopMock.mockResolvedValueOnce({ success: true, data: STOPPED })
-    startMock.mockResolvedValueOnce({ success: true, data: RUNNING_AGAIN })
-    const view = renderPopover()
-    let toggle = await openPopover()
-
-    expect(screen.getByTestId('qr').getAttribute('data-value')).toBe(RUNNING.accessUrl)
-    await fireEvent.click(toggle)
-    await waitFor(() => expect(stopMock).toHaveBeenCalledTimes(1))
-    expect(setStatus).toHaveBeenLastCalledWith(STOPPED)
-
-    vi.mocked(useRemoteStatus).mockReturnValue(STOPPED)
-    view.rerender(
-      <TooltipProvider>
-        <RemoteAccessPopover />
-      </TooltipProvider>
+  it('keeps the closed trigger inert without requesting a pairing secret', () => {
+    render(<RemoteAccessPopover />)
+    expect(screen.getByLabelText('Remote terminal access').getAttribute('aria-pressed')).toBe(
+      'false'
     )
-    expect(screen.queryByTestId('qr')).toBeNull()
-    expect(document.body.textContent).not.toContain(RAW_CREDENTIAL)
-
-    toggle = screen.getByRole('switch')
-    await fireEvent.click(toggle)
-    await waitFor(() => expect(startMock).toHaveBeenCalledTimes(1))
-    expect(setStatus).toHaveBeenLastCalledWith(RUNNING_AGAIN)
-
-    vi.mocked(useRemoteStatus).mockReturnValue(RUNNING_AGAIN)
-    view.rerender(
-      <TooltipProvider>
-        <RemoteAccessPopover />
-      </TooltipProvider>
+    expect(mocks.pairing).not.toHaveBeenCalled()
+  })
+  it('issues one-time pairing QR/copy links, never a host bearer', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    render(<RemoteAccessPopover />)
+    await open()
+    const qr = await screen.findByTestId('qr')
+    expect(qr.getAttribute('data-value')).toBe('https://foo.trycloudflare.com/#pair=ONE_TIME_CODE')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy access link' }))
+    await waitFor(() =>
+      expect(mocks.clipboard).toHaveBeenCalledWith(
+        'https://foo.trycloudflare.com/#pair=ONE_TIME_CODE'
+      )
     )
-    const rotatedQr = screen.getByTestId('qr')
-    expect(rotatedQr.getAttribute('data-value')).toBe(RUNNING_AGAIN.accessUrl)
-    expect(rotatedQr.getAttribute('data-value')).not.toBe(RUNNING.accessUrl)
-    expect(document.body.textContent).not.toContain(RAW_CREDENTIAL)
-    expect(document.body.textContent).not.toContain(NEXT_RAW_CREDENTIAL)
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Copy access link' }))
-    await waitFor(() => expect(clipboardWrite).toHaveBeenLastCalledWith(RUNNING_AGAIN.accessUrl))
-    expect(clipboardWrite).not.toHaveBeenCalledWith(RUNNING.accessUrl)
-
-    const revokedPeerFrame = {
-      type: 'reauthentication_required',
-      payload: { code: 'REAUTHENTICATION_REQUIRED' }
-    }
-    expect(JSON.stringify(revokedPeerFrame)).not.toContain(NEXT_RAW_CREDENTIAL)
-    expect(rotatedQr.getAttribute('data-value')).toBe(RUNNING_AGAIN.accessUrl)
+    expect(document.body.textContent).not.toContain(SECRET)
+    expect(document.body.innerHTML).not.toContain('access_token')
+    expect(screen.getByText('设备管理')).toBeDefined()
   })
-
-  it('does not fall back to an uncredentialed tunnel URL when accessUrl is explicitly absent', async () => {
-    vi.mocked(useRemoteStatus).mockReturnValue({ ...RUNNING, accessUrl: null })
-    renderPopover()
-    await openPopover()
-
+  it('builds a pairing link from a public origin even when legacy accessUrl is absent', async () => {
+    mocks.status.mockReturnValue({ ...RUNNING, accessUrl: null })
+    render(<RemoteAccessPopover />)
+    await open()
+    expect((await screen.findByTestId('qr')).getAttribute('data-value')).toContain('#pair=')
+  })
+  it('does not show a legacy credential when pairing-code issuance fails', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    mocks.pairing.mockRejectedValue(new Error(SECRET))
+    render(<RemoteAccessPopover />)
+    await open()
+    expect(await screen.findByText('配对码生成失败 · 重试')).toBeDefined()
     expect(screen.queryByTestId('qr')).toBeNull()
-    expect(screen.queryByText('Copy link')).toBeNull()
+    expect(document.body.innerHTML).not.toContain(SECRET)
   })
-
-  it('shows an inline error when start fails (no QR)', async () => {
-    startMock.mockResolvedValueOnce({ success: false, error: 'tunnel down' })
-    renderPopover()
-
-    const toggle = await openPopover()
-    await fireEvent.click(toggle)
-
-    expect(await screen.findByText('tunnel down')).toBeDefined()
+  it('starts with the selected bind mode and seeds projects', async () => {
+    mocks.start.mockResolvedValue({ success: true, data: RUNNING })
+    render(<RemoteAccessPopover />)
+    fireEvent.click(await open())
+    await waitFor(() => expect(mocks.sync).toHaveBeenCalledTimes(1))
+    expect(mocks.start).toHaveBeenCalledWith({ bindMode: 'localhost' })
+    expect(mocks.setStatus).toHaveBeenCalledWith(RUNNING)
+  })
+  it('shows a safe inline error when the start fails', async () => {
+    mocks.start.mockResolvedValue({ success: false, error: SECRET })
+    render(<RemoteAccessPopover />)
+    fireEvent.click(await open())
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '远程服务切换失败')
     expect(screen.queryByTestId('qr')).toBeNull()
   })
-
-  it('starts remote access with the selected publish bind mode and seeds the web client', async () => {
-    startMock.mockResolvedValueOnce({ success: true, data: RUNNING })
-    renderPopover()
-
-    const toggle = await openPopover()
-    await fireEvent.click(toggle)
-
-    await waitFor(() => {
-      expect(startMock).toHaveBeenCalledTimes(1)
-    })
-    expect(startMock).toHaveBeenCalledWith({ bindMode: 'localhost' })
-    expect(setStatus).toHaveBeenCalledWith(RUNNING)
-    // Project metadata is seeded; chat history is read directly from the
-    // durable Rust provider by the desktop-hosted browser.
-    await waitFor(() => {
-      expect(syncProjects).toHaveBeenCalledTimes(1)
-    })
-  })
-
-  it('uses the credentialed LAN URL when local-network publish is selected', async () => {
-    const lanAccess = `http://192.168.1.8:5123/#access_token=${RAW_CREDENTIAL}`
-    intentMock.mockResolvedValue({ success: true, data: { wanted: true, publishMode: 'lan' } })
-    vi.mocked(useRemoteStatus).mockReturnValue({
+  it('selects LAN and strips host credentials from its pairing URL', async () => {
+    mocks.status.mockReturnValue({
       ...RUNNING,
-      bindMode: 'all',
-      bindHost: '0.0.0.0',
       publishMode: 'lan',
-      lanUrl: 'http://192.168.1.8:5123',
-      lanAccessUrl: lanAccess,
-      accessUrl: lanAccess,
-      tunnelAccessUrl: RUNNING.accessUrl
+      bindMode: 'all',
+      lanAccessUrl: `http://192.168.1.8:5123/?token=${SECRET}#access_token=${SECRET}`,
+      lanUrl: null
     })
-    renderPopover()
-    await openPopover()
-    expect(screen.getByRole('tab', { name: 'Local network' }).getAttribute('aria-selected')).toBe(
-      'true'
+    render(<RemoteAccessPopover />)
+    await open()
+    expect((await screen.findByTestId('qr')).getAttribute('data-value')).toBe(
+      'http://192.168.1.8:5123/#pair=ONE_TIME_CODE'
     )
-    expect(screen.getByTestId('qr').getAttribute('data-value')).toBe(lanAccess)
-    expect(document.body.textContent).not.toContain(RAW_CREDENTIAL)
-    expect(screen.getByText('Same Wi-Fi. HTTP plus the secret in the link.')).toBeDefined()
+    expect(screen.getByRole('tab', { name: '局域网' }).getAttribute('aria-selected')).toBe('true')
+    expect(document.body.innerHTML).not.toContain(SECRET)
+  })
+  it('discards a pairing response from a previous host generation', async () => {
+    let resolve!: (value: { code: string; expiresAt: number }) => void
+    mocks.status.mockReturnValue(RUNNING)
+    mocks.pairing.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    const view = render(<RemoteAccessPopover />)
+    await open()
+    mocks.status.mockReturnValue({ ...RUNNING, tunnelUrl: 'https://next.trycloudflare.com' })
+    view.rerender(<RemoteAccessPopover />)
+    await screen.findByTestId('qr')
+    await act(async () => resolve({ code: 'OLD_CODE', expiresAt: Date.now() / 1000 + 60 }))
+    expect(screen.getByTestId('qr').getAttribute('data-value')).toBe(
+      'https://next.trycloudflare.com/#pair=ONE_TIME_CODE'
+    )
+  })
+  it('refreshes on the 60-second TTL and removes the expired QR while issuing a new code', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    render(<RemoteAccessPopover />)
+    await open()
+    await screen.findByTestId('qr')
+    vi.useFakeTimers()
+    mocks.pairing.mockImplementationOnce(() => new Promise(() => {}))
+    // Reissue so the refresh timer is registered under fake timers.
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await act(async () => {})
+    expect(screen.queryByTestId('qr')).toBeNull()
+    mocks.pairing.mockImplementation(async () => ({
+      code: 'NEW_CODE',
+      expiresAt: Date.now() / 1000 + 60
+    }))
+    fireEvent.click(screen.getByLabelText('Remote terminal access'))
+    fireEvent.click(screen.getByLabelText('Remote terminal access'))
+    await act(async () => {})
+    expect(screen.getByTestId('qr').getAttribute('data-value')).toContain('NEW_CODE')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60001)
+    })
+    expect(mocks.pairing.mock.calls.length).toBeGreaterThanOrEqual(4)
+  })
+  it('rejects already expired pairing codes instead of drawing them', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    mocks.pairing.mockResolvedValue({
+      code: 'EXPIRED',
+      expiresAt: Math.floor(Date.now() / 1000) - 1
+    })
+    render(<RemoteAccessPopover />)
+    await open()
+    await screen.findByText('配对码生成失败 · 重试')
+    expect(screen.queryByTestId('qr')).toBeNull()
+  })
+  it('never reuses an issued code when the public host origin changes', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    const view = render(<RemoteAccessPopover />)
+    await open()
+    await screen.findByTestId('qr')
+    mocks.pairing.mockImplementationOnce(() => new Promise(() => {}))
+    mocks.status.mockReturnValue({ ...RUNNING, tunnelUrl: 'https://replacement.trycloudflare.com' })
+    view.rerender(<RemoteAccessPopover />)
+    expect(screen.queryByTestId('qr')).toBeNull()
+  })
+  it('persists the selected publish mode and restarts an active host with its bind mode', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    mocks.stop.mockResolvedValue({ success: true, data: STOPPED })
+    mocks.start.mockResolvedValue({
+      success: true,
+      data: { ...RUNNING, bindMode: 'all', publishMode: 'lan' }
+    })
+    render(<RemoteAccessPopover />)
+    await open()
+    fireEvent.click(screen.getByRole('tab', { name: '局域网' }))
+    await waitFor(() => expect(mocks.sync).toHaveBeenCalledTimes(1))
+    expect(mocks.setIntent).toHaveBeenCalledWith({ publishMode: 'lan' })
+    expect(mocks.stop).toHaveBeenCalledTimes(1)
+    expect(mocks.start).toHaveBeenCalledWith({ bindMode: 'all' })
+  })
+  it('stops service and removes pairing QR when status stops', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    mocks.stop.mockResolvedValue({ success: true, data: STOPPED })
+    const view = render(<RemoteAccessPopover />)
+    const toggle = await open()
+    await screen.findByTestId('qr')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(mocks.setStatus).toHaveBeenCalledWith(STOPPED))
+    mocks.status.mockReturnValue(STOPPED)
+    view.rerender(<RemoteAccessPopover />)
+    expect(screen.queryByTestId('qr')).toBeNull()
   })
 })

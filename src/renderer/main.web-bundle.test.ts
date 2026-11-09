@@ -84,14 +84,23 @@ describe('boot instrumentation reaches every renderer entry', () => {
   ] as const
 
   for (const [name, entryPath] of entries) {
-    it(`${name} imports and calls installBootInstrumentation at module scope`, () => {
+    it(`${name} imports and installs boot instrumentation in the correct bootstrap phase`, () => {
       const source = readFileSync(entryPath, 'utf8')
       expect(source).toMatch(
         /import\s*\{[^}]*\binstallBootInstrumentation\b[^}]*\}\s*from\s*['"]\.\/boot-instrumentation['"]/
       )
-      // Anchored to the line start so a call nested inside `bootstrap()` — which
-      // would run after the first `await`, missing early boot — does not pass.
-      expect(source).toMatch(/^installBootInstrumentation\(\)$/m)
+      if (name === 'tauri-main.tsx') {
+        // Packaged desktop diagnostics remain eager and unchanged.
+        expect(source).toMatch(/^installBootInstrumentation\(\)$/m)
+      } else {
+        // Browser diagnostics perform HTTP requests; pairing must finish first.
+        const auth = source.indexOf('await initializeRemoteAuth()')
+        const instrumentation = source.indexOf('  installBootInstrumentation()')
+        expect(auth).toBeGreaterThan(0)
+        expect(instrumentation).toBeGreaterThan(auth)
+        expect(source).not.toMatch(/import\s+App\s+from\s+['"]\.\/App['"]/)
+        expect(source.indexOf("await import('./App')")).toBeGreaterThan(instrumentation)
+      }
     })
   }
 })

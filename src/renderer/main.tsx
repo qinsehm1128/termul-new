@@ -14,8 +14,9 @@
  *    - Desktop production entry remains: tauri-index.html -> tauri-main.tsx
  *      (static TauriApp import — unchanged).
  *
- * 2. Browser / web client: Renders App synchronously when not in Tauri.
- *    Real `@tauri-apps/*` packages are aliased to stubs in `vite.config.web.ts`
+ * 2. Browser / web client: Redeems a one-time #pair code before importing App.
+ *    The legacy fragment credential path remains supported. Real `@tauri-apps/*`
+ *    packages are aliased to stubs in `vite.config.web.ts`
  *    so the App import graph does not ship native IPC code in `dist-web/`.
  *
  * Context Detection:
@@ -35,17 +36,15 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import '@fontsource-variable/geist/index.css'
 import '@fontsource-variable/inter/index.css'
 import '@fontsource-variable/jetbrains-mono/index.css'
-import App from './App'
 import { installBootInstrumentation } from './boot-instrumentation'
+import { initializeRemoteAuth } from './lib/remote-auth'
 import './index.css'
 // Streamdown streaming animation keyframes (sd-fadeIn / sd-blurIn / sd-slideUp),
 // used by AgentProse's `animated` word-by-word reveal.
 import 'streamdown/styles.css'
 
-// Error forwarding + renderer lifecycle markers. Shared with `tauri-main.tsx`
-// so the desktop entry cannot end up with a subset of them — see
-// `boot-instrumentation.ts` for why that distinction has teeth.
-installBootInstrumentation()
+// Error forwarding and lifecycle markers are installed after browser pairing.
+// This keeps startup HTTP/WS requests behind the redeemed device credential.
 
 // Prime CodeMirror language caches after first paint so the entry path stays fast.
 const runIdle = (fn: () => void): void => {
@@ -62,6 +61,19 @@ const runIdle = (fn: () => void): void => {
  * preserve the existing Tauri-safe dynamic import boundary.
  */
 async function bootstrap(): Promise<void> {
+  if (!isTauriContext()) {
+    try {
+      await initializeRemoteAuth()
+    } catch {
+      createRoot(document.getElementById('root')!).render(
+        <div role="alert" className="p-6 text-sm">
+          配对失败，请重新扫码
+        </div>
+      )
+      return
+    }
+  }
+  installBootInstrumentation()
   await bootstrapI18n()
   const root = createRoot(document.getElementById('root')!)
 
@@ -71,9 +83,11 @@ async function bootstrap(): Promise<void> {
       root.render(<TauriApp />)
     } catch (err) {
       console.error('Failed to load TauriApp; falling back to App', err)
+      const { default: App } = await import('./App')
       root.render(<App />)
     }
   } else {
+    const { default: App } = await import('./App')
     root.render(<App />)
   }
 
