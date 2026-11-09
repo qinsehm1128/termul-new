@@ -13,16 +13,20 @@ enum NocturneWorkspacePresentation {
     static func tool(_ destination: ToolDestination, snapshot: NocturneWorkspaceSnapshot) -> WorkspaceTool {
         let detail: String
         let note: String
+        var metricIsLoaded = false
         switch destination {
         case .git:
             detail = snapshot.gitChangedFileCount.map { String(localized: "\($0) changed files") } ?? destination.detail
             note = String(localized: "Read only")
+            metricIsLoaded = snapshot.gitChangedFileCount != nil
         case .scheduledTasks:
             detail = snapshot.scheduledTaskCount.map { String(localized: "\($0) tasks") } ?? destination.detail
             note = String(localized: "Host schedules")
+            metricIsLoaded = snapshot.scheduledTaskCount != nil
         case .quickTerminals:
             detail = snapshot.quickTerminalCount.map { String(localized: "\($0) terminals") } ?? destination.detail
             note = String(localized: "Persistent host terminals")
+            metricIsLoaded = snapshot.quickTerminalCount != nil
         case .search:
             detail = destination.detail
             note = String(localized: "Read only")
@@ -31,7 +35,8 @@ enum NocturneWorkspacePresentation {
             note = String(localized: "Matching terminal snapshot required")
         }
         return WorkspaceTool(id: destination.rawValue, title: destination.title,
-                             detail: detail, note: note, systemImage: destination.symbol)
+                             detail: detail, note: note, systemImage: destination.symbol,
+                             metricIsLoaded: metricIsLoaded)
     }
 
     static func project(_ project: HostProject, snapshot: NocturneWorkspaceSnapshot) -> WorkspaceProject {

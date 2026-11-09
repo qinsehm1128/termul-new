@@ -40,12 +40,6 @@ struct GitChangePresentation: Equatable, Sendable {
     }
 }
 
-struct GitDiffSelection: Hashable {
-    let cwd: String
-    let path: String
-    let staged: Bool
-}
-
 /// Formatting and alignment are independent of SwiftUI and never invent gutters.
 enum GitDiffPresentation {
     struct SplitRow: Equatable {

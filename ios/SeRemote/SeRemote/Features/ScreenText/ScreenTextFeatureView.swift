@@ -1,10 +1,15 @@
 import SwiftUI
 import UIKit
 
-/// Manual, read-only host observation. It never watches, claims, or mutates a PTY.
+/// Manual, read-only host observation. It never watches, claims or mutates a
+/// PTY. Text is gated on a correlated `appliedSeq`; when the host cannot prove
+/// the snapshot matches a ready observer, the text stays hidden.
 struct ScreenTextFeatureView: View {
-    @Environment(\.sePalette) private var p
-    var session: WorkspaceSession
+    @Environment(\.sePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let session: WorkspaceSession
+
     @State private var selectedId: String?
     @State private var reply: HostScreenReadReply?
     @State private var capturedAt: Date?
@@ -13,97 +18,243 @@ struct ScreenTextFeatureView: View {
     @State private var copied = 0
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Label(session.origin.host() ?? String(localized: "Connected host"), systemImage: "server.rack")
-                    .toolNocturneFont(.label).foregroundStyle(p.inkSecondary)
-                Text("A read-only text snapshot from the host. This is not live screen sharing.")
-                    .toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
-                if session.terminals.terminals.isEmpty {
-                    ToolNocturneEmptyState(title: String(localized: "No terminals"), systemImage: "terminal",
-                        message: String(localized: "Open a terminal in this workspace first, then return to capture its text."))
-                } else {
-                    Picker("Terminal", selection: $selectedId) {
-                        Text("Choose a terminal").tag(String?.none)
-                        ForEach(session.terminals.terminals) { terminal in
-                            Text(terminal.title.isEmpty ? terminal.id : terminal.title).tag(Optional(terminal.id))
-                        }
-                    }
-                    .pickerStyle(.menu).frame(minHeight: 44)
-                    .padding(.horizontal, 12)
-                    .background(p.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                    .overlay { RoundedRectangle(cornerRadius: SeNocturneRadius.control).strokeBorder(p.stroke) }
-                    .disabled(loading)
-                    Button {
-                        Task { await capture() }
-                    } label: {
-                        Label("Refresh snapshot", systemImage: "arrow.clockwise")
-                            .frame(minHeight: 44)
-                    }
-                    .buttonStyle(ToolNocturneButtonStyle()).disabled(loading || selectedId == nil)
+        NocturneToolScreen(
+            title: String(localized: "Host screen text"),
+            subtitle: navSubtitle,
+            onRefresh: { await capture() }
+        ) {
+            content
+                .task {
+                    selectedId = session.terminals.activeId ?? session.terminals.terminals.first?.id
+                    if selectedId != nil { await capture() }
                 }
-                if loading { ToolNocturneProgress(String(localized: "Reading up to 80 lines…")) }
-                if let errorMessage {
-                    ToolNocturneErrorBanner(message: errorMessage) { Task { await capture() } }
+                .onChange(of: selectedId) { _, _ in
+                    reply = nil
+                    capturedAt = nil
+                    errorMessage = nil
                 }
-                if let reply {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            ToolNocturneStatusBadge(status: ScreenTextPresentation.semanticStatus(reply.status.state))
-                            Text(reply.status.state.rawValue.capitalized).toolNocturneFont(.label)
-                        }
-                        Text(ScreenTextPresentation.explanation(reply.status.state)).toolNocturneFont(.support)
-                        if let reason = reply.status.reason {
-                            Label(reason.rawValue, systemImage: "info.circle")
-                                .toolNocturneFont(.caption).foregroundStyle(p.inkSecondary)
-                        }
-                        if let capturedAt {
-                            LabeledContent("Captured") { Text(capturedAt, format: .dateTime.hour().minute().second()) }
-                                .toolNocturneFont(.caption)
-                        }
-                        if reply.truncated {
-                            Label("Only the last 80 lines are shown. The host truncated this snapshot.", systemImage: "text.badge.minus")
-                                .toolNocturneFont(.support).foregroundStyle(p.warning)
-                        }
-                        if let text = reply.text {
-                            ToolNocturneCodeBlock(text: text)
-                            if text.isEmpty {
-                                Text("The terminal screen is empty.").toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
-                            }
-                            Button("Copy snapshot", systemImage: "doc.on.doc") {
-                                UIPasteboard.general.string = text
-                                copied += 1
-                            }
-                            .frame(minHeight: 44)
-                            .buttonStyle(ToolNocturneButtonStyle())
-                        } else {
-                            ToolNocturneEmptyState(title: String(localized: "Screen text is not available"), systemImage: "text.viewfinder",
-                                message: String(localized: "No text is shown because the host could not confirm a consistent screen. Refresh after the terminal settles."))
-                        }
-                    }
-                } else if !loading && errorMessage == nil && !session.terminals.terminals.isEmpty {
-                    ToolNocturneEmptyState(title: String(localized: "Ready to capture"), systemImage: "text.viewfinder",
-                        message: String(localized: "Select a terminal and refresh. Snapshots do not update automatically."))
-                }
-            }.padding(20)
-        }
-        .background(p.canvas)
-        .foregroundStyle(p.ink)
-        .toolNocturneFont(.body)
-        .tint(p.accent)
-        .navigationTitle("Host screen text")
-        .seHaptic(.selection, trigger: copied)
-        .task {
-            selectedId = session.terminals.activeId ?? session.terminals.terminals.first?.id
-            if selectedId != nil { await capture() }
-        }
-        .onChange(of: selectedId) { _, _ in
-            reply = nil
-            capturedAt = nil
-            errorMessage = nil
+                .seHaptic(.selection, trigger: copied)
         }
     }
 
+    // MARK: Data
+
+    private var terminal: LiveTerminal? {
+        session.terminals.terminals.first(where: { $0.id == selectedId })
+    }
+
+    private var navSubtitle: String {
+        let host = session.origin.host() ?? String(localized: "Host")
+        guard let terminal else { return host }
+        let title = terminal.title.isEmpty ? terminal.id : terminal.title
+        return "\(host) · \(title)"
+    }
+
+    /// The single gate: a non-nil appliedSeq and a ready observation. `text` is
+    /// already nil upstream unless it also correlates with that sequence.
+    private var gatedText: String? {
+        guard let reply, reply.appliedSeq != nil, reply.status.isReady else { return nil }
+        return reply.text
+    }
+
+    // MARK: Body
+
+    @ViewBuilder
+    private var content: some View {
+        intro
+
+        if session.terminals.terminals.isEmpty {
+            NocturneEmptyState(
+                systemImage: "terminal",
+                title: String(localized: "No terminals"),
+                message: String(localized: "Open a terminal in this workspace first, then return to capture its text.")
+            )
+            .padding(.horizontal, NocturneToolMetrics.gutter)
+            .padding(.top, 18)
+        } else {
+            terminalPicker
+            captureButton
+
+            if loading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Reading up to 80 lines…")
+                        .font(SeNocturneType.font(11, weight: .regular))
+                        .foregroundStyle(palette.inkSecondary)
+                }
+                .padding(.horizontal, NocturneToolMetrics.gutter)
+                .padding(.top, 14)
+                .frame(minHeight: NocturneToolMetrics.minimumTarget)
+            }
+
+            if let errorMessage {
+                NocturneNotice(message: errorMessage, isError: true)
+                    .padding(.horizontal, NocturneToolMetrics.gutter)
+                    .padding(.top, 14)
+            }
+
+            if let reply {
+                statusCard(reply)
+                textSection(reply)
+            } else if !loading && errorMessage == nil {
+                NocturneEmptyState(
+                    systemImage: "text.viewfinder",
+                    title: String(localized: "Ready to capture"),
+                    message: String(localized: "Select a terminal and refresh. Snapshots do not update automatically.")
+                )
+                .padding(.horizontal, NocturneToolMetrics.gutter)
+                .padding(.top, 18)
+            }
+        }
+    }
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(palette.inkTertiary)
+                Text(verbatim: session.origin.host() ?? String(localized: "Connected host"))
+                    .font(SeNocturneType.font(11, weight: .medium))
+                    .foregroundStyle(palette.inkSecondary)
+            }
+            Text("A read-only text snapshot from the host. This is not live screen sharing.")
+                .font(SeNocturneType.font(11, weight: .regular))
+                .foregroundStyle(palette.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, NocturneToolMetrics.gutter)
+        .padding(.top, 16)
+    }
+
+    private var terminalPicker: some View {
+        Menu {
+            ForEach(session.terminals.terminals) { terminal in
+                Button {
+                    selectedId = terminal.id
+                } label: {
+                    Text(verbatim: terminal.title.isEmpty ? terminal.id : terminal.title)
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(palette.inkTertiary)
+                Text(verbatim: terminal.map { $0.title.isEmpty ? $0.id : $0.title }
+                     ?? String(localized: "Choose a terminal"))
+                    .font(SeNocturneType.font(12, weight: .medium))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(palette.inkTertiary)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
+                    .strokeBorder(palette.stroke, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .padding(.horizontal, NocturneToolMetrics.gutter)
+        .padding(.top, 16)
+        .disabled(loading)
+    }
+
+    private var captureButton: some View {
+        NocturneRunButton(title: String(localized: "Refresh snapshot"), systemImage: "arrow.clockwise") {
+            Task { await capture() }
+        }
+        .disabled(loading || selectedId == nil)
+        .padding(.horizontal, NocturneToolMetrics.gutter)
+        .padding(.top, 10)
+    }
+
+    private func statusCard(_ reply: HostScreenReadReply) -> some View {
+        NocturneCard {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    NocturnePill(text: reply.status.state.rawValue.capitalized,
+                                 tone: ScreenTextPresentation.semanticStatus(reply.status.state) == .completed ? .live
+                                     : (ScreenTextPresentation.semanticStatus(reply.status.state) == .working ? .blue : .wait))
+                    Spacer(minLength: 8)
+                    if let appliedSeq = reply.appliedSeq {
+                        Text(verbatim: "seq \(appliedSeq)")
+                            .font(SeNocturneType.font(9, weight: .regular, mono: true))
+                            .foregroundStyle(palette.inkTertiary)
+                    }
+                }
+                Text(verbatim: ScreenTextPresentation.explanation(reply.status.state))
+                    .font(SeNocturneType.font(11, weight: .regular))
+                    .foregroundStyle(palette.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let reason = reply.status.reason {
+                    Text(verbatim: reason.rawValue)
+                        .font(SeNocturneType.font(9.5, weight: .regular, mono: true))
+                        .foregroundStyle(palette.inkTertiary)
+                }
+                if let capturedAt {
+                    Text("Captured \(capturedAt, format: .dateTime.hour().minute().second())")
+                        .font(SeNocturneType.font(9.5, weight: .regular))
+                        .foregroundStyle(palette.inkTertiary)
+                }
+                if reply.truncated {
+                    Text("Only the last 80 lines are shown. The host truncated this snapshot.")
+                        .font(SeNocturneType.font(10, weight: .regular))
+                        .foregroundStyle(palette.warning)
+                }
+            }
+        }
+        .padding(.horizontal, NocturneToolMetrics.gutter)
+        .padding(.top, 16)
+    }
+
+    @ViewBuilder
+    private func textSection(_ reply: HostScreenReadReply) -> some View {
+        NocturneGroupLabel(
+            title: String(localized: "Snapshot"),
+            detail: gatedText == nil ? String(localized: "Hidden") : String(localized: "Read only")
+        )
+
+        if let text = gatedText {
+            if text.isEmpty {
+                NocturneEmptyState(
+                    systemImage: "terminal",
+                    title: String(localized: "The terminal screen is empty"),
+                    message: String(localized: "The host returned a consistent but empty screen.")
+                )
+                .padding(.horizontal, NocturneToolMetrics.gutter)
+            } else {
+                NocturneTerminalBlock(maxHeight: 320) {
+                    Text(verbatim: text)
+                        .foregroundStyle(palette.terminalInk)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 14)
+
+                NocturneRunButton(title: String(localized: "Copy snapshot"), systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = text
+                    copied += 1
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+            }
+        } else {
+            NocturneEmptyState(
+                systemImage: "text.viewfinder",
+                title: String(localized: "Screen text is not available"),
+                message: String(localized: "No text is shown because the host could not confirm a consistent, applied screen sequence. Refresh after the terminal settles.")
+            )
+            .padding(.horizontal, NocturneToolMetrics.gutter)
+        }
+    }
+
+    // MARK: Capture
 
     private func capture() async {
         guard !loading, let id = selectedId else { return }

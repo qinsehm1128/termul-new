@@ -8,6 +8,8 @@ struct WorkspaceTool: Identifiable, Equatable, Sendable {
     let detail: String
     let note: String
     let systemImage: String
+    /// True only when the host actually reported the number in `detail`.
+    var metricIsLoaded = false
 }
 
 struct WorkspaceProject: Identifiable, Equatable, Sendable {
@@ -31,12 +33,19 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
         case .projects: "Projects"
         }
     }
+
+    var label: String {
+        switch self {
+        case .tools: String(localized: "Tools")
+        case .projects: String(localized: "Projects")
+        }
+    }
 }
 
 // MARK: - Screen
 
-/// The second destination: everything that is not a live session. Tools are
-/// entry points, not separate top-level tabs.
+/// The second top-level destination: the workspace hub. Tools are entry points;
+/// the section below them lists the real projects reported by the host.
 struct WorkspaceHubView: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -58,31 +67,27 @@ struct WorkspaceHubView: View {
     var onToggleTheme: () -> Void = {}
     var showsBottomBar = true
 
-    @Environment(\.dynamicTypeSize) private var dynamicType
     @State private var section: WorkspaceSection = .tools
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
-                    .padding(.top, SeSpace.xs)
+                    .padding(.horizontal, NocturneToolMetrics.gutter)
+                    .padding(.top, 8)
                 title
-                    .padding(.top, SeSpace.lg)
+                    .padding(.horizontal, NocturneToolMetrics.gutter)
+                    .padding(.top, 10)
                 sectionSwitch
-                    .padding(.top, SeSpace.md)
                 switch section {
                 case .tools:
-                    toolGrid
-                        .padding(.top, SeSpace.lg)
-                    projectList
-                        .padding(.top, SeSpace.lg)
+                    toolSection
+                    projectSection
                 case .projects:
-                    projectList
-                        .padding(.top, SeSpace.md)
+                    projectSection
                 }
             }
-            .padding(.horizontal, SeSpace.lg)
-            .padding(.bottom, SeSpace.xxl)
+            .padding(.bottom, 30)
         }
         .scrollIndicators(.hidden)
         .background(palette.canvas.ignoresSafeArea())
@@ -91,41 +96,43 @@ struct WorkspaceHubView: View {
         }
     }
 
+    // MARK: Header
+
     private var header: some View {
         HStack(spacing: 8) {
             Button(action: onSelectHost) {
                 HStack(spacing: 6) {
                     Text(verbatim: host)
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .medium))
+                        .font(SeNocturneType.font(11, weight: .medium))
                         .foregroundStyle(palette.ink)
+                        .lineLimit(1)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(palette.inkTertiary)
                 }
                 .padding(.horizontal, 10)
-                .frame(minHeight: 44)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                .frame(height: 30)
+                .background(palette.card, in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
-                    RoundedRectangle(cornerRadius: SeNocturneRadius.control)
+                    RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(palette.stroke, lineWidth: 1)
                 }
+                .frame(minHeight: NocturneToolMetrics.minimumTarget)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "Select host"))
 
-            if !latency.isEmpty {
-                Text(verbatim: latency)
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-            }
-
+            // The host protocol does not report latency or a connection count.
+            // Both stay hidden instead of showing an invented value.
             Spacer(minLength: 8)
 
-            iconButton(
+            NocturneIconButton(
                 systemImage: mode == .night ? "sun.max" : "moon",
                 label: String(localized: "Switch theme"),
                 action: onToggleTheme
             )
-            iconButton(
+            NocturneIconButton(
                 systemImage: "sidebar.left",
                 label: String(localized: "All destinations"),
                 action: onOpenDrawer
@@ -133,137 +140,142 @@ struct WorkspaceHubView: View {
         }
     }
 
+    // MARK: Title
+
     private var title: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             Text("Workspace")
-                .font(SeNocturneType.screenTitle)
+                .font(SeNocturneType.font(33, weight: .semibold))
+                .tracking(-1.4)
                 .foregroundStyle(palette.ink)
-            Text(verbatim: NocturneWorkspacePresentation.rowText(branch: project, detail: branch))
-                .font(SeNocturneType.secondary)
-                .foregroundStyle(palette.inkTertiary)
+            Text(verbatim: lede)
+                .font(SeNocturneType.font(12, weight: .regular))
+                .foregroundStyle(palette.inkSecondary)
+                .lineLimit(2)
         }
     }
+
+    /// Real scope only: project name, branch, and a changed-file count that the
+    /// host actually reported for this workspace.
+    private var lede: String {
+        var parts: [String] = []
+        if !project.isEmpty { parts.append(project) }
+        if !branch.isEmpty { parts.append(branch) }
+        if let git = tools.first(where: { $0.id == ToolDestination.git.rawValue }), git.metricIsLoaded {
+            parts.append(git.detail)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: Section switch
 
     private var sectionSwitch: some View {
-        HStack(spacing: 3) {
-            ForEach(WorkspaceSection.allCases) { item in
-                let isOn = section == item
-                Button {
-                    withAnimation(SeNocturneMotion.resolved(SeNocturneMotion.panel, reduceMotion: reduceMotion)) {
-                        section = item
-                    }
-                } label: {
-                    Text(item.title)
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: isOn ? .medium : .regular))
-                        .foregroundStyle(isOn ? palette.onAccent : palette.inkSecondary)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 44)
-                        .background(
-                            isOn ? palette.ink : .clear,
-                            in: RoundedRectangle(cornerRadius: SeNocturneRadius.control)
+        NocturneSegmented(
+            segments: WorkspaceSection.allCases.map { NocturneSegment(value: $0, title: $0.label) },
+            selection: $section
+        )
+    }
+
+    // MARK: Tools
+
+    private var toolSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            NocturneGroupLabel(title: String(localized: "Tools"), detail: twoDigit(tools.count))
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: NocturneToolMetrics.cardGap),
+                               count: 2),
+                spacing: NocturneToolMetrics.cardGap
+            ) {
+                ForEach(tools) { tool in
+                    toolTile(tool)
+                }
+            }
+            .padding(.horizontal, NocturneToolMetrics.gutter)
+        }
+    }
+
+    private func toolTile(_ tool: WorkspaceTool) -> some View {
+        Button {
+            onOpenTool(tool)
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) {
+                    Image(systemName: tool.systemImage)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(palette.inkTertiary)
+                    Text(verbatim: shortTitle(tool))
+                        .font(SeNocturneType.font(8.5, weight: .regular, mono: true))
+                        .foregroundStyle(palette.inkTertiary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                Text(verbatim: tool.detail)
+                    .font(SeNocturneType.font(12, weight: .semibold))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(2)
+                    .padding(.top, 16)
+                Text(verbatim: tool.note)
+                    .font(SeNocturneType.font(8.5, weight: .regular, mono: true))
+                    .foregroundStyle(palette.inkTertiary)
+                    .lineLimit(2)
+                    .padding(.top, 3)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(12)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(palette.stroke, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(NocturnePressStyle(reduceMotion: reduceMotion))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func shortTitle(_ tool: WorkspaceTool) -> String {
+        switch tool.id {
+        case ToolDestination.git.rawValue: String(localized: "Changes")
+        case ToolDestination.scheduledTasks.rawValue: String(localized: "Scheduled")
+        case ToolDestination.quickTerminals.rawValue: String(localized: "Quick")
+        case ToolDestination.search.rawValue: String(localized: "Search")
+        case ToolDestination.screenText.rawValue: String(localized: "Screen")
+        default: tool.title
+        }
+    }
+
+    // MARK: Projects
+
+    private var projectSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            NocturneGroupLabel(
+                title: section == .tools ? String(localized: "Recent projects") : String(localized: "Projects"),
+                detail: twoDigit(projects.count)
+            )
+            VStack(spacing: NocturneToolMetrics.cardGap) {
+                if projects.isEmpty {
+                    NocturneEmptyState(
+                        systemImage: "folder",
+                        title: String(localized: "No projects"),
+                        message: String(localized: "The host has not reported a project for this workspace.")
+                    )
+                } else {
+                    ForEach(projects) { project in
+                        NocturneSessionCard(
+                            title: project.name,
+                            subtitle: NocturneWorkspacePresentation.rowText(branch: project.branch, detail: project.detail),
+                            spine: project.hasChanges ? .live : .none,
+                            trailingSystemImage: "arrow.right",
+                            action: { onOpenProject(project) }
                         )
+                    }
                 }
-                .buttonStyle(.plain)
             }
-        }
-        .padding(3)
-        .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control + 3))
-        .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.control + 3)
-                .strokeBorder(palette.stroke, lineWidth: 1)
+            .padding(.horizontal, NocturneToolMetrics.gutter)
         }
     }
 
-    private var toolGrid: some View {
-        LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: dynamicType.isAccessibilitySize ? 1 : 2),
-            spacing: 8
-        ) {
-            ForEach(tools) { tool in
-                Button {
-                    onOpenTool(tool)
-                } label: {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: 6) {
-                            Image(systemName: tool.systemImage)
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundStyle(palette.inkTertiary)
-                            Text(verbatim: tool.title)
-                                .font(SeNocturneType.monoSmall)
-                                .foregroundStyle(palette.inkTertiary)
-                            Spacer(minLength: 0)
-                        }
-                        Text(verbatim: tool.detail)
-                            .font(SeNocturneType.font(SeNocturneType.sectionTitleSize, weight: .semibold))
-                            .foregroundStyle(palette.ink)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 18)
-                        Text(verbatim: tool.note)
-                            .font(SeNocturneType.monoSmall)
-                            .foregroundStyle(palette.inkTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 3)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: 44)
-                    .padding(12)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                            .strokeBorder(palette.stroke, lineWidth: 1)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var projectList: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Projects").font(SeNocturneType.secondary).foregroundStyle(palette.inkTertiary)
-            if projects.isEmpty {
-                Text("No projects available").font(SeNocturneType.secondary).foregroundStyle(palette.inkSecondary)
-                    .padding(.vertical, SeSpace.md)
-            }
-            ForEach(projects) { project in
-                Button {
-                    onOpenProject(project)
-                } label: {
-                    HStack(spacing: 10) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(project.hasChanges ? palette.live : palette.inkTertiary)
-                            .frame(width: 3, height: 24)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(verbatim: project.name)
-                                .font(SeNocturneType.rowTitle)
-                                .foregroundStyle(palette.ink)
-                            if !project.path.isEmpty {
-                                Text(verbatim: project.path)
-                                    .font(SeNocturneType.monoSmall)
-                                    .foregroundStyle(palette.inkSecondary)
-                                    .lineLimit(2)
-                            }
-                            Text(verbatim: NocturneWorkspacePresentation.rowText(branch: project.branch, detail: project.detail))
-                                .font(SeNocturneType.monoSmall)
-                                .foregroundStyle(palette.inkTertiary)
-                        }
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(palette.inkTertiary)
-                    }
-                    .frame(minHeight: 44)
-                    .padding(12)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                            .strokeBorder(palette.stroke, lineWidth: 1)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
+    // MARK: Bottom bar
 
     private var bottomBar: some View {
         HStack(spacing: 6) {
@@ -274,15 +286,16 @@ struct WorkspaceHubView: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(palette.accent)
                     .frame(width: 52, height: 44)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
                     .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.control)
+                        RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
                             .strokeBorder(palette.strokeStrong, lineWidth: 1)
                     }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "Command palette"))
         }
-        .padding(.horizontal, SeSpace.md)
+        .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background(palette.surface)
@@ -302,35 +315,25 @@ struct WorkspaceHubView: View {
         Button(action: action) {
             VStack(spacing: 3) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 17, weight: .regular))
+                    .font(.system(size: 18, weight: .regular))
                 Text(title)
-                    .font(SeNocturneType.font(SeNocturneType.monoSmallSize))
+                    .font(SeNocturneType.font(9.5, weight: .regular))
             }
             .foregroundStyle(isOn ? palette.ink : palette.inkTertiary)
             .frame(maxWidth: .infinity)
             .frame(height: 44)
             .background(
-                isOn ? palette.card.opacity(0.6) : .clear,
-                in: RoundedRectangle(cornerRadius: SeNocturneRadius.control)
+                isOn ? palette.card.opacity(0.55) : .clear,
+                in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
     }
 
-    private func iconButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(palette.inkSecondary)
-                .frame(width: 44, height: 44)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                .overlay {
-                    RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                        .strokeBorder(palette.stroke, lineWidth: 1)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
+    private func twoDigit(_ count: Int) -> String {
+        String(format: "%02d", count)
     }
 }
 
@@ -339,20 +342,19 @@ struct WorkspaceHubView: View {
 #Preview("Workspace · Night") {
     WorkspaceHubView(
         host: "MacBook Pro",
-        latency: "12 ms · 2 connections",
+        latency: "",
         project: "Termul",
-        branch: "main · 2 changes",
+        branch: "main",
         tools: [
-            WorkspaceTool(id: "files", title: "Files", detail: "482", note: "Read only", systemImage: "folder"),
-            WorkspaceTool(id: "git", title: "Changes", detail: "2 files", note: "+12 −4", systemImage: "arrow.triangle.branch"),
-            WorkspaceTool(id: "tasks", title: "Schedules", detail: "4 tasks", note: "1 running", systemImage: "clock"),
-            WorkspaceTool(id: "quick", title: "Quick", detail: "4 commands", note: "Latest 2m", systemImage: "apple.terminal"),
-            WorkspaceTool(id: "search", title: "Search", detail: "Sessions & files", note: "Or press ⌘", systemImage: "magnifyingglass"),
-            WorkspaceTool(id: "pair", title: "Pair", detail: "New host", note: "QR or link", systemImage: "plus")
+            WorkspaceTool(id: "git", title: "Git", detail: "2 changed files", note: "Read only", systemImage: "point.3.connected.trianglepath.dotted", metricIsLoaded: true),
+            WorkspaceTool(id: "scheduledTasks", title: "Scheduled tasks", detail: "4 tasks", note: "Host schedules", systemImage: "clock", metricIsLoaded: true),
+            WorkspaceTool(id: "quickTerminals", title: "Quick terminals", detail: "2 terminals", note: "Persistent host terminals", systemImage: "terminal", metricIsLoaded: true),
+            WorkspaceTool(id: "search", title: "Search", detail: "Sessions & files", note: "Read only", systemImage: "magnifyingglass"),
+            WorkspaceTool(id: "screenText", title: "Host screen text", detail: "Terminal snapshot", note: "Matching snapshot required", systemImage: "text.viewfinder")
         ],
         projects: [
-            WorkspaceProject(id: "p1", name: "Termul", branch: "main", detail: "2 changes · just now", hasChanges: true),
-            WorkspaceProject(id: "p2", name: "se-server", branch: "dev", detail: "clean · yesterday", hasChanges: false)
+            WorkspaceProject(id: "p1", name: "Termul", branch: "main", detail: "2 changed files", hasChanges: true),
+            WorkspaceProject(id: "p2", name: "se-server", branch: "dev", detail: "0 live terminals", hasChanges: false)
         ]
     )
     .seThemeMode(.night)
@@ -361,11 +363,11 @@ struct WorkspaceHubView: View {
 #Preview("Workspace · Day") {
     WorkspaceHubView(
         host: "MacBook Pro",
-        latency: "12 ms",
+        latency: "",
         project: "Termul",
         branch: "main",
         tools: [
-            WorkspaceTool(id: "files", title: "Files", detail: "482", note: "Read only", systemImage: "folder")
+            WorkspaceTool(id: "git", title: "Git", detail: "2 changed files", note: "Read only", systemImage: "point.3.connected.trianglepath.dotted", metricIsLoaded: true)
         ],
         projects: []
     )

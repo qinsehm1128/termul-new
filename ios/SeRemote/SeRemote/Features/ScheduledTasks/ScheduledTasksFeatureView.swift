@@ -1,133 +1,269 @@
 import SwiftUI
 
-/// Read/manage existing host tasks. Creation and editing stay on the host.
+/// Scheduled tasks in the prototype's list language. Run, pause and resume send
+/// real host requests; every row reports the host outcome instead of optimistic
+/// state. Run now deliberately plays no success haptic.
 struct ScheduledTasksFeatureView: View {
-    @Environment(\.sePalette) private var p
+    @Environment(\.sePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let session: WorkspaceSession
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    @Environment(\.dynamicTypeSize) private var dynamicType
-    @State private var selectedId: String?
+
+    @State private var filter: TaskFilter = .all
+    @State private var busy = false
 
     private var store: ScheduledTaskStore { session.scheduledTasks }
-    private var projectId: String? { session.projects.active?.id }
 
     var body: some View {
-        GeometryReader { geometry in
-            let wide = SeLayout.columns(width: geometry.size.width,
-                isRegular: sizeClass == .regular, largeText: dynamicType.isAccessibilitySize) != .single
-            HStack(spacing: 0) {
-                taskList(wide: wide)
-                    .frame(maxWidth: wide ? SeLayout.sidebarWidth.upperBound : .infinity)
-                if wide {
-                    Divider()
-                    if let selectedId {
-                        ScheduledTaskDetailScreen(session: session, taskId: selectedId)
-                            .id(selectedId)
-                    } else {
-                        ToolNocturneEmptyState(title: String(localized: "Select a task"), systemImage: "clock",
-                            message: String(localized: "Inspect its prompt, policy and run history."))
-                            .frame(maxWidth: .infinity)
+        NocturneToolScreen(
+            title: String(localized: "Scheduled tasks"),
+            subtitle: navSubtitle,
+            onRefresh: refresh
+        ) {
+            content
+                .task { await refreshIfNeeded() }
+        }
+    }
+
+    // MARK: Data
+
+    private var hostName: String {
+        session.origin.host() ?? String(localized: "Host")
+    }
+
+    private var tasksLoaded: Bool {
+        store.state == .loaded || store.state == .empty
+    }
+
+    private var navSubtitle: String {
+        guard tasksLoaded else { return hostName }
+        return "\(hostName) · \(String(localized: "\(store.tasks.count) tasks"))"
+    }
+
+    private var activeCount: Int { store.tasks.filter { $0.status == .active }.count }
+    private var pausedCount: Int { store.tasks.filter { $0.status == .paused }.count }
+
+    private var visibleTasks: [ScheduledTaskWire] {
+        switch filter {
+        case .all: store.tasks
+        case .active: store.tasks.filter { $0.status == .active }
+        case .paused: store.tasks.filter { $0.status == .paused }
+        }
+    }
+
+    private var actionError: String? {
+        if case let .failed(message) = store.actionState { return message }
+        return nil
+    }
+
+    private var loadError: String? {
+        if case let .failed(message) = store.state { return message }
+        return nil
+    }
+
+    // MARK: Body
+
+    @ViewBuilder
+    private var content: some View {
+        NocturneSegmented(
+            segments: [
+                NocturneSegment(value: TaskFilter.all, title: String(localized: "All"), count: tasksLoaded ? store.tasks.count : nil),
+                NocturneSegment(value: TaskFilter.active, title: String(localized: "Enabled"), count: tasksLoaded ? activeCount : nil),
+                NocturneSegment(value: TaskFilter.paused, title: String(localized: "Paused"), count: tasksLoaded ? pausedCount : nil)
+            ],
+            selection: $filter
+        )
+
+        if let actionError {
+            NocturneNotice(message: actionError, isError: true)
+                .padding(.horizontal, NocturneToolMetrics.gutter)
+                .padding(.top, 16)
+        }
+
+        if let loadError {
+            NocturneNotice(message: loadError, isError: true)
+                .padding(.horizontal, NocturneToolMetrics.gutter)
+                .padding(.top, 16)
+        }
+
+        NocturneGroupLabel(
+            title: dateLabel,
+            detail: tasksLoaded ? String(format: "%02d", visibleTasks.count) : ""
+        )
+
+        VStack(spacing: NocturneToolMetrics.cardGap) {
+            if store.state == .loading && store.tasks.isEmpty {
+                loadingRow
+            } else if visibleTasks.isEmpty {
+                NocturneEmptyState(
+                    systemImage: "clock",
+                    title: String(localized: "No scheduled tasks"),
+                    message: String(localized: "The host reports no task in this filter. Pausing keeps run history.")
+                )
+            } else {
+                ForEach(visibleTasks) { task in
+                    taskRow(task)
+                }
+            }
+        }
+        .padding(.horizontal, NocturneToolMetrics.gutter)
+
+        NocturneGroupLabel(title: String(localized: "Notes"), detail: "i")
+        NocturneNotice(
+            message: String(localized: "Tasks run only on a host you approved. Pausing keeps history; resuming continues from the next scheduled occurrence."),
+            isError: false
+        )
+        .padding(.horizontal, NocturneToolMetrics.gutter)
+
+        Text("Open a task to see its recent runs.")
+            .font(SeNocturneType.font(10, weight: .regular))
+            .foregroundStyle(palette.inkTertiary)
+            .padding(.horizontal, NocturneToolMetrics.gutter)
+            .padding(.top, 14)
+    }
+
+    private var loadingRow: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text("Loading from the host…")
+                .font(SeNocturneType.font(11, weight: .regular))
+                .foregroundStyle(palette.inkSecondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
+    }
+
+    // MARK: Row
+
+    private func taskRow(_ task: ScheduledTaskWire) -> some View {
+        HStack(spacing: 11) {
+            NavigationLink {
+                ScheduledTaskDetailScreen(session: session, taskId: task.taskId)
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: task.name)
+                        .font(SeNocturneType.font(12.5, weight: .semibold))
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(verbatim: ScheduledTaskScheduleFormatter.summary(task.schedule))
+                            .font(SeNocturneType.font(8.5, weight: .regular, mono: true))
+                            .foregroundStyle(palette.inkTertiary)
+                            .lineLimit(1)
+                        Text(verbatim: statusWord(task.status))
+                            .font(SeNocturneType.font(8.5, weight: .regular, mono: true))
+                            .foregroundStyle(statusTint(task.status))
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-        }
-        .background(p.canvas)
-        .tint(p.accent)
-        .toolNocturneFont(.body)
-        .foregroundStyle(p.ink)
-        .navigationTitle("Scheduled tasks")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { Task { await refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .frame(minHeight: 44)
-                    .disabled(store.state == .loading || store.actionState == .loading)
+            .buttonStyle(.plain)
+
+            if task.status == .active || task.status == .paused {
+                NocturneRunButton(
+                    title: String(localized: "Run"),
+                    systemImage: "play.fill"
+                ) {
+                    Task { await store.run(taskId: task.taskId) }
+                }
+                .disabled(isWorking)
             }
+
+            toggle(for: task)
         }
-        .task(id: projectId) { selectedId = nil; await refresh() }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 13))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13)
+                .strokeBorder(palette.stroke, lineWidth: 1)
+        }
     }
 
-    private func taskList(wide: Bool) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                ToolNocturneSectionHeader(title: String(localized: "Scheduled tasks"), detail: "\(store.tasks.count)")
-                switch store.state {
-                case .idle, .loading:
-                    ToolNocturneProgress(String(localized: "Loading tasks…")).frame(maxWidth: .infinity, minHeight: 44)
-                case .empty:
-                    ToolNocturneEmptyState(title: String(localized: "No scheduled tasks"), systemImage: "clock",
-                        message: String(localized: "Tasks created on the host will appear here."))
-                case .failed(let message):
-                    ToolNocturneErrorBanner(message: message) { Task { await refresh() } }
-                case .loaded: EmptyView()
+    private func toggle(for task: ScheduledTaskWire) -> some View {
+        let isOn = task.status == .active
+        let canToggle = !isWorking && (task.status == .active || task.status == .paused)
+        return Button {
+            Task {
+                switch task.status {
+                case .active: await store.pause(taskId: task.taskId, expectedRevision: task.revision)
+                case .paused: await store.resume(taskId: task.taskId, expectedRevision: task.revision)
+                default: break
                 }
-                ForEach(store.tasks) { task in
-                    if wide {
-                        Button { selectedId = task.id } label: { ScheduledTaskRow(task: task) }
-                            .buttonStyle(.plain)
-                            .accessibilityAddTraits(selectedId == task.id ? [.isSelected] : [])
-                    } else {
-                        NavigationLink {
-                            ScheduledTaskDetailScreen(session: session, taskId: task.id)
-                        } label: { ScheduledTaskRow(task: task) }
-                            .buttonStyle(.plain)
-                    }
+            }
+        } label: {
+            Capsule()
+                .fill(isOn ? palette.accent : palette.cardAlt)
+                .frame(width: 38, height: 22)
+                .overlay {
+                    Capsule().strokeBorder(isOn ? palette.accent : palette.strokeStrong, lineWidth: 1)
                 }
-            }.padding(20)
+                .overlay(alignment: .leading) {
+                    Circle()
+                        .fill(isOn ? palette.onAccent : palette.inkTertiary)
+                        .frame(width: 16, height: 16)
+                        .padding(2)
+                        .offset(x: isOn ? 16 : 0)
+                }
+                .frame(width: NocturneToolMetrics.minimumTarget, height: NocturneToolMetrics.minimumTarget)
+                .contentShape(Rectangle())
+                .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: reduceMotion), value: isOn)
         }
-        .refreshable { await refresh() }
+        .buttonStyle(.plain)
+        .disabled(!canToggle)
+        .accessibilityLabel(isOn
+                            ? String(localized: "Pause \(task.name)")
+                            : String(localized: "Resume \(task.name)"))
+        .accessibilityValue(isOn ? String(localized: "Enabled") : String(localized: "Paused"))
     }
 
-    private func refresh() async { await store.refresh(projectId: projectId) }
+    private var isWorking: Bool {
+        store.actionState == .loading
+    }
+
+    // MARK: Labels
+
+    private var dateLabel: String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("EEEE")
+        return "\(String(localized: "Today")) · \(formatter.string(from: .now))"
+    }
+
+    private func statusWord(_ status: ScheduledTaskStatusWire) -> String {
+        switch status {
+        case .draft: String(localized: "draft")
+        case .active: String(localized: "enabled")
+        case .paused: String(localized: "paused")
+        case .unknown(let value): value
+        }
+    }
+
+    private func statusTint(_ status: ScheduledTaskStatusWire) -> Color {
+        switch status {
+        case .active: palette.live
+        case .paused: palette.warning
+        default: palette.inkTertiary
+        }
+    }
+
+    // MARK: Actions
+
+    private func refreshIfNeeded() async {
+        if store.state == .idle {
+            await store.refresh()
+        }
+    }
+
+    private func refresh() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        await store.refresh()
+    }
 }
 
-private struct ScheduledTaskRow: View {
-    @Environment(\.sePalette) private var p
-    let task: ScheduledTaskWire
-
-    var body: some View {
-        ToolNocturneCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(task.name).toolNocturneFont(.rowTitle).foregroundStyle(p.ink)
-                ScheduledTaskStatusLabel(taskStatus: task.status)
-                Text(ScheduledTaskScheduleFormatter.summary(task.schedule))
-                    .toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
-                Text("Next run: \(ScheduledTaskScheduleFormatter.timestamp(task.nextRunAt))")
-                    .toolNocturneFont(.timing).foregroundStyle(p.inkSecondary)
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// Keeps exact wire status text (including future values) instead of calling an active task “Online”.
-struct ScheduledTaskStatusLabel: View {
-    @Environment(\.sePalette) private var p
-    let title: String
-    let status: SeStatus
-
-    init(taskStatus: ScheduledTaskStatusWire) {
-        title = taskStatus.rawValue
-        status = switch taskStatus {
-        case .active: .working
-        case .paused: .paused
-        case .draft: .idle
-        case .unknown: .idle
-        }
-    }
-
-    init(runStatus: ScheduledTaskRunStatusWire) {
-        title = runStatus.rawValue
-        status = switch runStatus {
-        case .running: .working
-        case .queued: .connecting
-        case .succeeded: .completed
-        case .failed, .interrupted: .failed
-        case .cancelled, .skipped, .unknown: .idle
-        }
-    }
-
-    var body: some View {
-        ToolNocturneStatusBadge(status: status, title: title)
-    }
+enum TaskFilter: Hashable {
+    case all, active, paused
 }
