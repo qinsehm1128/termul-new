@@ -73,6 +73,7 @@ pub const TCC_GRANTS_RESET_NOTICE: &str = "macOS privacy permissions cannot be \
 /// `dead_code` would delete the guard.
 #[cfg(test)]
 pub const TCC_GRANTS_RESET_CATEGORIES: &[&str] = &[
+    "NSAccessibilityUsageDescription",
     "NSAppleEventsUsageDescription",
     "NSBluetoothAlwaysUsageDescription",
     "NSCalendarsUsageDescription",
