@@ -1605,10 +1605,48 @@ mod tests {
     fn diagnostic_commands_are_bounded_and_json_verification_is_non_destructive() {
         let (_temp, adapter) = fixture(AgentKind::QinCode);
         let cli = adapter.home.join("qin-code-fixture");
-        atomic_write(&cli, b"#!/bin/sh\nwhile :; do :; done\n", 0o755).unwrap();
+        // Login-shell PATH initialization is independently bounded and cached;
+        // do not charge its first-use latency to the child timeout assertion.
+        crate::pty::env_refresh::apply_fresh_path(&mut HashMap::new());
+        let natural_runtime = Duration::from_secs(10);
+        let scheduling_budget = natural_runtime / 2;
+        atomic_write(
+            &cli,
+            format!("#!/bin/sh\nexec sleep {}\n", natural_runtime.as_secs()).as_bytes(),
+            0o755,
+        )
+        .unwrap();
         let before = Instant::now();
         assert!(bounded_output(&cli, &[], Duration::from_millis(50)).is_none());
-        assert!(before.elapsed() < Duration::from_secs(1));
+        assert!(
+            before.elapsed() < scheduling_budget,
+            "timed-out child took {:?}; must return well before its {:?} natural completion",
+            before.elapsed(),
+            natural_runtime,
+        );
+        // A successful parent can leave a grandchild holding stdout open.
+        // The reader must return without waiting for that inherited pipe's EOF.
+        atomic_write(
+            &cli,
+            format!(
+                "#!/bin/sh\nsleep {} &\nprintf '%s' \"$!\"\n",
+                natural_runtime.as_secs()
+            )
+            .as_bytes(),
+            0o755,
+        )
+        .unwrap();
+        let before = Instant::now();
+        let output = bounded_output(&cli, &[], scheduling_budget).unwrap();
+        let elapsed = before.elapsed();
+        let grandchild: libc::pid_t = std::str::from_utf8(&output).unwrap().parse().unwrap();
+        assert!(grandchild > 0);
+        // SAFETY: this positive PID was emitted by the fixture's own shell.
+        unsafe { libc::kill(grandchild, libc::SIGTERM) };
+        assert!(
+            elapsed < scheduling_budget,
+            "inherited stdout delayed return by {elapsed:?}; must not wait for the grandchild's {natural_runtime:?} completion",
+        );
         atomic_write(
             &cli,
             b"#!/bin/sh\nprintf '{\"level\":\"minimal\",\"rules\":[]}'\n",
