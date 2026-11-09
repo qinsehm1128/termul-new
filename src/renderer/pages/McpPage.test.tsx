@@ -8,7 +8,10 @@ vi.mock('@/stores/mcp-store', () => ({
     select({ load: () => Promise.resolve() })
 }))
 vi.mock('@/components/settings/McpGatewayPanel', () => ({ McpGatewayPanel: () => <p>gateway</p> }))
-vi.mock('@/components/settings/McpControlPanel', () => ({ McpControlPanel: () => <p>servers</p> }))
+vi.mock('@/components/settings/McpControlPanel', () => ({
+  McpUpstreamsPanel: () => <p>servers</p>,
+  McpCapabilitiesPanel: () => <p>capabilities</p>
+}))
 vi.mock('@/components/settings/McpDescriptionsPanel', () => ({
   McpDescriptionsPanel: () => <p>descriptions</p>
 }))
@@ -25,7 +28,12 @@ describe('McpPage', () => {
   it('splits the desktop page into tabs, opening on the agent connection', () => {
     runtime.desktop = true
     render(<McpPage />)
-    expect(tabNames()).toEqual(['Connect agents', 'MCP servers', 'Server descriptions'])
+    expect(tabNames()).toEqual([
+      'Connect agents',
+      'MCP servers',
+      'Se capabilities',
+      'Server descriptions'
+    ])
     expect(
       screen.getByText('gateway').closest('[role="tabpanel"]')?.getAttribute('data-state')
     ).toBe('active')
@@ -34,7 +42,7 @@ describe('McpPage', () => {
   it('offers only the servers on the web, where the gateway does not run', () => {
     runtime.desktop = false
     render(<McpPage />)
-    expect(tabNames()).toEqual(['MCP servers'])
+    expect(tabNames()).toEqual(['MCP servers', 'Se capabilities'])
     expect(screen.queryByText('gateway')).toBeNull()
     expect(
       screen.getByText('servers').closest('[role="tabpanel"]')?.getAttribute('data-state')

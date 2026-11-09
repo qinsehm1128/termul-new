@@ -131,6 +131,8 @@ describe('compact host access controls', () => {
       target: { value: 'blocked text' }
     })
     fireEvent.click(screen.getByRole('button', { name: en.commandDeny.add }))
+    // Inherited global rules show read-only inside a granted connection.
+    fireEvent.click(check(en.hostAccess.grantProfile))
     const patterns = screen.getAllByLabelText(translate('commandDeny.rulePattern', { index: 1 }))
     expect(patterns).toHaveLength(2)
     expect(patterns[0]).not.toBeDisabled()
@@ -139,7 +141,6 @@ describe('compact host access controls', () => {
       screen.getAllByRole('button', { name: translate('commandDeny.removeRule', { index: 1 }) })
     ).toHaveLength(1)
     expect(preview).not.toHaveBeenCalled()
-    fireEvent.click(check(en.hostAccess.grantProfile))
     fireEvent.click(button('save'))
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     expect(put.mock.calls[0][1].ssh.commandDeny).toEqual([
@@ -185,6 +186,17 @@ describe('compact host access controls', () => {
     expect(put).not.toHaveBeenCalled()
     expect(preview).not.toHaveBeenCalled()
     expect(screen.getAllByText(en.commandDeny.invalid).length).toBeGreaterThan(0)
+  })
+  it('discards unsaved edits back to the saved policy without saving', async () => {
+    render(<McpHostAccessPanel />)
+    await ready(false)
+    expect(button('discard')).toBeDisabled()
+    fireEvent.click(check(en.hostAccess.grantProfile))
+    expect(screen.getByText(en.hostAccess.unsaved)).toBeInTheDocument()
+    fireEvent.click(button('discard'))
+    expect(check(en.hostAccess.grantProfile)).not.toBeChecked()
+    expect(screen.getByText(en.hostAccess.savedState)).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
   })
   it('authorizing a new SSH profile selects all 13 operations without implicitly saving or expanding scope', async () => {
     render(<McpHostAccessPanel />)

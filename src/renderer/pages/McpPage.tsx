@@ -1,7 +1,7 @@
-import { Cable, FileText, Plug, Server } from 'lucide-react'
+import { Boxes, Cable, FileText, Plug, Server } from 'lucide-react'
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { McpControlPanel } from '@/components/settings/McpControlPanel'
+import { McpCapabilitiesPanel, McpUpstreamsPanel } from '@/components/settings/McpControlPanel'
 import { McpDescriptionsPanel } from '@/components/settings/McpDescriptionsPanel'
 import { McpGatewayPanel } from '@/components/settings/McpGatewayPanel'
 import { PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from '@/components/ui/page-tabs'
@@ -20,14 +20,14 @@ export default function McpPage(): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col overflow-auto bg-background">
-      <header className="border-b border-border px-6 py-4">
+      <header className="border-b border-border px-4 py-4 sm:px-6">
         <div className="flex items-center gap-2">
           <Plug size={16} className="text-primary" />
           <h1 className="text-lg font-medium text-foreground">{t('page.title')}</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">{t('page.subtitle')}</p>
       </header>
-      <div className="mx-auto w-full max-w-6xl p-6">
+      <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6">
         <PageTabs defaultValue={desktop ? 'gateway' : 'servers'}>
           <PageTabsList aria-label={t('page.tabs.label')}>
             {desktop ? (
@@ -37,6 +37,9 @@ export default function McpPage(): React.JSX.Element {
             ) : null}
             <PageTabsTrigger value="servers" icon={<Server aria-hidden="true" />}>
               {t('page.tabs.servers')}
+            </PageTabsTrigger>
+            <PageTabsTrigger value="capabilities" icon={<Boxes aria-hidden="true" />}>
+              {t('page.tabs.capabilities')}
             </PageTabsTrigger>
             {desktop ? (
               <PageTabsTrigger value="descriptions" icon={<FileText aria-hidden="true" />}>
@@ -50,7 +53,10 @@ export default function McpPage(): React.JSX.Element {
             </PageTabsContent>
           ) : null}
           <PageTabsContent value="servers">
-            <McpControlPanel />
+            <McpUpstreamsPanel />
+          </PageTabsContent>
+          <PageTabsContent value="capabilities">
+            <McpCapabilitiesPanel />
           </PageTabsContent>
           {desktop ? (
             <PageTabsContent value="descriptions">

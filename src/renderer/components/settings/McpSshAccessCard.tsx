@@ -140,13 +140,6 @@ export function McpSshAccessCard({
         {!selected && (
           <p className="text-xs text-muted-foreground">{t('hostAccess.grantToConfigure')}</p>
         )}
-        {!selected && (
-          <McpCommandDenyEditor
-            title={t('commandDeny.global')}
-            rules={globalCommandDeny}
-            inherited
-          />
-        )}
         {selected && (
           <fieldset disabled={disabled} className="min-w-0 space-y-4">
             {stale && (
@@ -325,20 +318,32 @@ export function McpSshAccessCard({
                 </div>
               </div>
             </details>
-            <McpCommandDenyEditor
-              title={t('commandDeny.global')}
-              rules={globalCommandDeny}
-              inherited
-            />
-            <McpCommandDenyEditor
-              title={t('commandDeny.profile')}
-              rules={selected.commandDeny ?? []}
-              disabled={disabled}
-              onChange={(commandDeny) => onGrant({ ...selected, commandDeny })}
-            />
+            <details className="min-w-0 rounded-md border border-border">
+              <summary className="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
+                {t('hostAccess.profileRulesTitle')}
+                <span className="ml-auto tabular-nums">
+                  {t('hostAccess.ruleCount', {
+                    count: globalCommandDeny.length + (selected.commandDeny ?? []).length
+                  })}
+                </span>
+              </summary>
+              <div className="space-y-3 border-t border-border p-3">
+                <McpCommandDenyEditor
+                  title={t('commandDeny.global')}
+                  rules={globalCommandDeny}
+                  inherited
+                />
+                <McpCommandDenyEditor
+                  title={t('commandDeny.profile')}
+                  rules={selected.commandDeny ?? []}
+                  disabled={disabled}
+                  onChange={(commandDeny) => onGrant({ ...selected, commandDeny })}
+                />
+              </div>
+            </details>
           </fieldset>
         )}
-        <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
           <Button
             type="button"
             size="sm"

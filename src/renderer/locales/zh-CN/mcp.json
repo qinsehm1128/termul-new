@@ -3,7 +3,7 @@
     "title": "MCP",
     "subtitle": "两个独立 MCP 连接：Se 内置能力与外部上游服务器。",
     "builtInsTitle": "内置能力",
-    "builtInsDescription": "Se 内置能力仅由内置 MCP 连接提供。",
+    "builtInsDescription": "Se 内置 MCP 连接提供的工具。在这里开启，再在下方授权访问范围。",
     "upstreamsTitle": "上游 MCP 服务器",
     "upstreamsDescription": "已启用的外部服务器仅由外部 MCP 聚合器提供。",
     "statusTitle": "运行状态",
@@ -33,7 +33,8 @@
       "label": "MCP 分区",
       "gateway": "连接 Agent",
       "servers": "MCP 服务器",
-      "descriptions": "服务器说明"
+      "descriptions": "服务器说明",
+      "capabilities": "Se 内置能力"
     }
   },
   "common": {
@@ -140,7 +141,14 @@
       "delete": "无法删除 MCP 服务器，已恢复之前的设置。"
     },
     "routeName": "Agent 通过网关使用的名称",
-    "gatewayFailed": "网关连接失败：{{error}}"
+    "gatewayFailed": "网关连接失败：{{error}}",
+    "testAll": "全部测试",
+    "summary": {
+      "total_one": "{{count}} 个服务器",
+      "total_other": "{{count}} 个服务器",
+      "connected": "{{count}} 个已连接",
+      "failed": "{{count}} 个失败"
+    }
   },
   "validation": {
     "nameRequired": "名称为必填项。",
@@ -350,7 +358,6 @@
     "readPermissions": "读取与查询",
     "connectionPermissions": "连接检查",
     "riskPermissions": "执行与变更 · 高风险",
-    "securityDetails": "权限边界与安全说明",
     "unsaved": "有未保存的更改",
     "savedState": "与已保存策略一致",
     "saving": "处理中…",
@@ -403,6 +410,11 @@
     "pathLimitTitle": "路径限制（可选，默认不限制）",
     "pathLimitActive": "已限制",
     "pathLimitHint": "留空表示不限路径。填写后，文件操作和传输只能在这些目录内进行。本地根目录指 Se 宿主文件系统，不是当前浏览器。根目录不约束命令执行。",
-    "unrestricted": "留空 = 不限制"
+    "unrestricted": "留空 = 不限制",
+    "discard": "放弃更改",
+    "commandRulesTitle": "命令黑名单与预览",
+    "profileRulesTitle": "此连接的命令黑名单",
+    "ruleCount_one": "{{count}} 条规则",
+    "ruleCount_other": "{{count}} 条规则"
   }
 }

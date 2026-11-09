@@ -36,6 +36,7 @@ import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { downloadMcpJsonExport, prepareMcpJsonImport } from '@/lib/mcp-json-transfer'
 import { listen } from '@/lib/tauri-event'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { useMcpGatewayStore } from '@/stores/mcp-gateway-store'
 import { useMcpStore } from '@/stores/mcp-store'
@@ -456,14 +457,53 @@ export function McpServersSettings(): React.JSX.Element {
     }
   }
 
+  const connectedCount = servers.filter((server) => {
+    const gateway = gatewayUpstreams?.find((item) => item.id === server.id)
+    return (gateway?.state ?? mcpProbeStatus[server.id]) === 'connected'
+  }).length
+  const failedCount = servers.filter((server) => {
+    const gateway = gatewayUpstreams?.find((item) => item.id === server.id)
+    const state = gateway?.state ?? mcpProbeStatus[server.id]
+    return state === 'failed' || state === 'disconnected'
+  }).length
+  const enabledServers = servers.filter((server) => server.enabled !== false)
+  const anyProbing = servers.some((server) => Boolean(mcpProbing[server.id]))
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm font-medium text-foreground">{t('page.upstreamsTitle')}</p>
-          <p className="text-xs text-muted-foreground">{t('page.upstreamsDescription')}</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-foreground">{t('page.upstreamsTitle')}</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t('page.upstreamsDescription')}</p>
+          {servers.length > 0 ? (
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+              <span>{t('settings.summary.total', { count: servers.length })}</span>
+              <span className="inline-flex items-center gap-1.5">
+                <span aria-hidden="true" className="size-1.5 rounded-full bg-emerald-500" />
+                {t('settings.summary.connected', { count: connectedCount })}
+              </span>
+              {failedCount > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-destructive">
+                  <span aria-hidden="true" className="size-1.5 rounded-full bg-red-500" />
+                  {t('settings.summary.failed', { count: failedCount })}
+                </span>
+              ) : null}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={enabledServers.length === 0 || anyProbing}
+            onClick={() => {
+              for (const server of enabledServers) void probeMcpServer(server.id)
+            }}
+          >
+            <RefreshCw size={14} className={cn('mr-1.5', anyProbing && 'animate-spin')} />
+            {t('settings.testAll')}
+          </Button>
           <Button
             type="button"
             size="sm"
@@ -472,7 +512,13 @@ export function McpServersSettings(): React.JSX.Element {
           >
             <Upload size={14} className="mr-1.5" /> {t('settings.importExport.import')}
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={handleExport}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={servers.length === 0}
+            onClick={handleExport}
+          >
             <Download size={14} className="mr-1.5" /> {t('settings.importExport.export')}
           </Button>
           <Button type="button" size="sm" onClick={openAdd}>
@@ -491,13 +537,6 @@ export function McpServersSettings(): React.JSX.Element {
             if (file) void handleImportFile(file)
           }}
         />
-      </div>
-
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
-        <div className="flex items-start gap-2">
-          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          <p>{t('settings.storageWarning')}</p>
-        </div>
       </div>
 
       {servers.length === 0 ? (
@@ -679,9 +718,17 @@ export function McpServersSettings(): React.JSX.Element {
         </div>
       )}
 
-      <div className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">{t('settings.experimentalTitle')}</p>
-        <p className="mt-1">{t('settings.experimentalDescription')}</p>
+      <div className="space-y-2 border-t border-border pt-3 text-[11px] leading-relaxed text-muted-foreground">
+        <p className="flex items-start gap-1.5">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          {t('settings.storageWarning')}
+        </p>
+        <details>
+          <summary className="cursor-pointer select-none hover:text-foreground">
+            {t('settings.experimentalTitle')}
+          </summary>
+          <p className="mt-1">{t('settings.experimentalDescription')}</p>
+        </details>
       </div>
 
       <Dialog

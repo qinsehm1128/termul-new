@@ -192,19 +192,18 @@ export function McpHostAccessPanel(): React.JSX.Element {
     ) ?? []
   const grantedCount = view?.profiles.filter((p) => policy?.ssh.profiles[p.profileId]).length ?? 0
   return (
-    <section
-      className="min-w-0 space-y-4 rounded-xl border border-border bg-secondary/10 p-3 sm:p-4"
-      aria-label={t('hostAccess.title')}
-    >
-      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row">
+    <section className="min-w-0 space-y-4" aria-label={t('hostAccess.title')}>
+      <div className="flex flex-col items-start justify-between gap-3 border-t border-border pt-5 sm:flex-row">
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold">{t('hostAccess.title')}</h3>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+          <h2 className="text-sm font-semibold text-foreground">{t('hostAccess.title')}</h2>
+          <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-muted-foreground">
             {t('hostAccess.globalWarning')}
           </p>
         </div>
         {policy && (
-          <label className="flex min-h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-background px-3 text-xs">
+          <label
+            className={`flex min-h-9 shrink-0 items-center gap-2 rounded-md border px-3 text-xs font-medium ${policy.enabled ? 'border-primary/40 bg-primary/10 text-foreground' : 'border-border bg-background text-muted-foreground'}`}
+          >
             <input
               className={hostCheckboxClass}
               type="checkbox"
@@ -284,27 +283,25 @@ export function McpHostAccessPanel(): React.JSX.Element {
                   {t('hostAccess.collapseAll')}
                 </Button>
               </div>
-              <details className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-xs">
-                <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  {t('hostAccess.securityDetails')}
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {t('hostAccess.executeWarning')}
+              </p>
+              <details className="group rounded-md border border-border">
+                <summary className="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-xs font-medium hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {t('hostAccess.commandRulesTitle')}
+                  <span className="ml-auto font-normal tabular-nums text-muted-foreground">
+                    {t('hostAccess.ruleCount', { count: (policy.ssh.commandDeny ?? []).length })}
+                  </span>
                 </summary>
-                <p className="pt-2 leading-relaxed text-muted-foreground">
-                  {t('hostAccess.executeWarning')}
-                </p>
-              </details>
-              <McpCommandDenyEditor
-                title={t('commandDeny.global')}
-                rules={policy.ssh.commandDeny ?? []}
-                disabled={disabled}
-                onChange={(commandDeny) =>
-                  setPolicy({ ...policy, ssh: { ...policy.ssh, commandDeny } })
-                }
-              />
-              <details className="rounded-md border p-3">
-                <summary className="cursor-pointer text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  {t('commandDeny.preview')}
-                </summary>
-                <div className="mt-3">
+                <div className="space-y-3 border-t border-border p-3">
+                  <McpCommandDenyEditor
+                    title={t('commandDeny.global')}
+                    rules={policy.ssh.commandDeny ?? []}
+                    disabled={disabled}
+                    onChange={(commandDeny) =>
+                      setPolicy({ ...policy, ssh: { ...policy.ssh, commandDeny } })
+                    }
+                  />
                   <McpCommandDenyPreview
                     policy={policy}
                     profiles={view.profiles}
@@ -349,7 +346,9 @@ export function McpHostAccessPanel(): React.JSX.Element {
           </HostAccessSection>
         </>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background p-3">
+      <div
+        className={`sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5 backdrop-blur ${dirty ? 'border-primary/40 bg-background/95 shadow-lg' : 'border-border bg-background/90'}`}
+      >
         <span
           className={`text-xs ${dirty ? 'font-medium text-primary' : 'text-muted-foreground'}`}
           role="status"
@@ -357,6 +356,19 @@ export function McpHostAccessPanel(): React.JSX.Element {
           {t(dirty ? 'hostAccess.unsaved' : 'hostAccess.savedState')}
         </span>
         <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={busy || !dirty || !view}
+            onClick={() => {
+              if (!view) return
+              setMessage('')
+              setPolicy(normalizeMcpHostAccessPolicy(view.policy))
+            }}
+          >
+            {t('hostAccess.discard')}
+          </Button>
           <Button
             type="button"
             size="sm"

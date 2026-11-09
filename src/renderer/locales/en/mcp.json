@@ -3,7 +3,7 @@
     "title": "MCP",
     "subtitle": "Two independent MCP connections: Se built-in capabilities and external upstream servers.",
     "builtInsTitle": "Built-in capabilities",
-    "builtInsDescription": "Se built-in capabilities served only by the internal MCP connection.",
+    "builtInsDescription": "Tools the built-in Se MCP connection offers. Switch them on here, then grant access below.",
     "upstreamsTitle": "Upstream MCP servers",
     "upstreamsDescription": "Enabled external servers are served only by the external MCP aggregator.",
     "statusTitle": "Runtime status",
@@ -33,7 +33,8 @@
       "label": "MCP sections",
       "gateway": "Connect agents",
       "servers": "MCP servers",
-      "descriptions": "Server descriptions"
+      "descriptions": "Server descriptions",
+      "capabilities": "Se capabilities"
     }
   },
   "common": {
@@ -140,7 +141,14 @@
       "delete": "Could not delete the MCP server. Your previous settings were restored."
     },
     "routeName": "Name agents use through the gateway",
-    "gatewayFailed": "Gateway could not connect: {{error}}"
+    "gatewayFailed": "Gateway could not connect: {{error}}",
+    "testAll": "Test all",
+    "summary": {
+      "total_one": "{{count}} server",
+      "total_other": "{{count}} servers",
+      "connected": "{{count}} connected",
+      "failed": "{{count}} failed"
+    }
   },
   "validation": {
     "nameRequired": "Name is required.",
@@ -350,7 +358,6 @@
     "readPermissions": "Read and query",
     "connectionPermissions": "Connection check",
     "riskPermissions": "Execution and changes · high risk",
-    "securityDetails": "Permission boundaries and safety notes",
     "unsaved": "Unsaved changes",
     "savedState": "Matches saved policy",
     "saving": "Working…",
@@ -403,6 +410,11 @@
     "pathLimitTitle": "Path restriction (optional, unrestricted by default)",
     "pathLimitActive": "Restricted",
     "pathLimitHint": "Leave empty to allow any path. When filled, file operations and transfers only work inside these directories. Local roots refer to the Se host filesystem, not this browser. Roots do not constrain commands.",
-    "unrestricted": "Empty = unrestricted"
+    "unrestricted": "Empty = unrestricted",
+    "discard": "Discard changes",
+    "commandRulesTitle": "Command blocklist and preview",
+    "profileRulesTitle": "Command blocklist for this connection",
+    "ruleCount_one": "{{count}} rule",
+    "ruleCount_other": "{{count}} rules"
   }
 }
