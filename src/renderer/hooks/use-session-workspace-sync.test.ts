@@ -1,6 +1,9 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const resumeHooks = vi.hoisted(() => ({ resumePlan: vi.fn(), resumeSpawn: vi.fn() }))
+vi.mock('@/lib/agent-hooks-api', () => ({ agentHooksApi: resumeHooks }))
+
 const {
   getMock,
   writeMock,
@@ -40,7 +43,10 @@ vi.mock('@/hooks/useTerminalAutoSave', () => ({ isTerminalRestoreInProgress: () 
 import type { SessionWorkspaceV1 } from '@shared/types/session-workspace.types'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
+import { useAgentHookStateStore } from '@/stores/agent-hook-state-store'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useEditorStore } from '@/stores/editor-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -90,6 +96,17 @@ function workspace(conversationId: string, revision: number, leafId: string): Se
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useAgentHookStateStore.getState().reset()
+  useAppSettingsStore.setState((state) => ({
+    settings: { ...state.settings, resumeAgentSessionsOnRestore: true }
+  }))
+  resumeHooks.resumePlan.mockReset().mockResolvedValue({ plan_id: 'plan-1' })
+  resumeHooks.resumeSpawn.mockReset().mockResolvedValue({
+    pty_id: 'pty-recovered',
+    generation: 5,
+    attempt_id: 'attempt-1',
+    pending_confirmation: true
+  })
   useSessionWorkspaceSyncStore.setState({
     activeConversationId: null,
     basedRevisionByConversation: {},
@@ -117,6 +134,163 @@ afterEach(() => {
 })
 
 describe('Conversation-scoped SessionWorkspace sync', () => {
+  function trustedWorkspace(): SessionWorkspaceV1 {
+    const result = workspace(one, 3, 'leaf-trusted')
+    result.resources.push({
+      kind: 'terminal',
+      terminalId: 'pty-gone',
+      terminalRecordId: 'record-trusted',
+      conversationId: one,
+      agentDescriptor: { descriptorId: 'descriptor-1', generation: 4 }
+    })
+    if (result.topology.type === 'leaf') {
+      result.topology.terminalIds = ['pty-gone']
+      result.topology.activeTabId = 'term-pty-gone'
+    }
+    return result
+  }
+
+  function successfulResume(id = 'pty-recovered') {
+    return {
+      success: true,
+      data: {
+        terminal: {
+          id,
+          shell: 'bash',
+          cwd: '/workspace',
+          pid: 42,
+          cols: 100,
+          rows: 30,
+          latestSeq: 0,
+          gap: false
+        },
+        claim: 'resume-grant'
+      }
+    }
+  }
+
+  it('rebinds one trusted owned descriptor after TERMINAL_GONE without client spawning', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    getMock.mockResolvedValue({
+      success: true,
+      data: { status: 'loaded', workspace: trustedWorkspace() }
+    })
+    terminalResumeMock
+      .mockResolvedValueOnce({ success: false, code: 'TERMINAL_GONE', error: 'gone' })
+      .mockResolvedValue(successfulResume())
+    await loadSessionWorkspace(one)
+    expect(resumeHooks.resumePlan).toHaveBeenCalledWith({
+      descriptor_id: 'descriptor-1',
+      project_id: 'p1',
+      expected_generation: 4
+    })
+    expect(resumeHooks.resumeSpawn).toHaveBeenCalledTimes(1)
+    expect(
+      useTerminalStore.getState().terminals.find((t) => t.id === 'record-trusted')?.ptyId
+    ).toBe('pty-recovered')
+    expect(buildSessionWorkspace(one).resources).toContainEqual(
+      expect.objectContaining({
+        terminalId: 'pty-recovered',
+        agentDescriptor: { descriptorId: 'descriptor-1', generation: 5 }
+      })
+    )
+    expect(terminalSpawnMock).not.toHaveBeenCalled()
+    expect(terminalTerminateMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'setting-off',
+    'no-descriptor',
+    'stale',
+    'ended',
+    'unconfirmed',
+    'non-owned'
+  ])('retains retire instead of automatic respawn for %s', async (reason) => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    const saved = trustedWorkspace()
+    const resource = saved.resources[0]
+    if (resource.kind !== 'terminal') throw new Error('terminal fixture required')
+    if (reason === 'no-descriptor') delete resource.agentDescriptor
+    if (reason === 'non-owned') resource.conversationId = two
+    if (reason === 'setting-off')
+      useAppSettingsStore.setState((state) => ({
+        settings: { ...state.settings, resumeAgentSessionsOnRestore: false }
+      }))
+    resumeHooks.resumePlan.mockRejectedValue({
+      code: reason === 'stale' ? 'IDENTITY_STALE' : 'FORBIDDEN'
+    })
+    getMock.mockResolvedValue({ success: true, data: { status: 'loaded', workspace: saved } })
+    terminalResumeMock.mockResolvedValue({ success: false, code: 'TERMINAL_GONE', error: 'gone' })
+    await loadSessionWorkspace(one)
+    expect(resumeHooks.resumeSpawn).not.toHaveBeenCalled()
+    expect(terminalSpawnMock).not.toHaveBeenCalled()
+    expect(terminalTerminateMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'pending_confirmation',
+    'unconfirmed',
+    'stale',
+    'ended'
+  ] as const)('does not request a plan for runtime %s', async (restoreState) => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    useAgentHookStateStore.getState().applySync({
+      kind: 'snapshot',
+      instance_id: 'host-1',
+      current_revision: 1,
+      tombstones: [],
+      states: [
+        {
+          instance_id: 'host-1',
+          terminal_id: 'pty-gone',
+          generation: 4,
+          adapter_install_id: 'install-1',
+          agent_session_id: 'session-1',
+          project_id: 'p1',
+          state: restoreState === 'ended' ? 'ended' : 'idle',
+          restore_state: restoreState,
+          revision: 1,
+          identity: {
+            adapter_id: 'pi',
+            agent_session_id: 'session-1',
+            transcript_path: null,
+            cwd: '/workspace',
+            source: 'hook',
+            descriptor_id: 'descriptor-1',
+            resume_argv: null
+          }
+        }
+      ]
+    })
+    getMock.mockResolvedValue({
+      success: true,
+      data: { status: 'loaded', workspace: trustedWorkspace() }
+    })
+    terminalResumeMock.mockResolvedValue({ success: false, code: 'TERMINAL_GONE', error: 'gone' })
+    await loadSessionWorkspace(one)
+    expect(resumeHooks.resumePlan).not.toHaveBeenCalled()
+    expect(resumeHooks.resumeSpawn).not.toHaveBeenCalled()
+    expect(terminalTerminateMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the same live PTY when switching projects with a trusted descriptor', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    getMock.mockResolvedValue({
+      success: true,
+      data: { status: 'loaded', workspace: trustedWorkspace() }
+    })
+    terminalResumeMock.mockResolvedValue(successfulResume('pty-gone'))
+    await loadSessionWorkspace(one)
+    useProjectStore.setState({ activeProjectId: 'p2' })
+    await loadSessionWorkspace(one)
+    expect(
+      useTerminalStore.getState().terminals.find((t) => t.id === 'record-trusted')?.ptyId
+    ).toBe('pty-gone')
+    expect(resumeHooks.resumePlan).not.toHaveBeenCalled()
+    expect(terminalSpawnMock).not.toHaveBeenCalled()
+    expect(terminalTerminateMock).not.toHaveBeenCalled()
+  })
+
   it('restores two Conversations independently and keeps their revisions isolated', async () => {
     getMock
       .mockResolvedValueOnce({

@@ -5,12 +5,14 @@ import { useEffect, useRef } from 'react'
 import { useAcpStore } from '@/features/agent-session/stores/acp-store'
 import { i18n } from '@/i18n'
 import { formatNumber } from '@/i18n/format'
+import { agentHooksApi } from '@/lib/agent-hooks-api'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
 import { resumeCommandLine, reviveTerminalAgentSession } from '@/lib/agents/live-agent-sessions'
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { logFrontendError } from '@/lib/log-api'
 import { shellApi } from '@/lib/shell-api'
 import {
   beginProjectContinuityCorrelation,
@@ -1103,6 +1105,73 @@ async function restoreFromLayout(
 
         // The process is gone. If it was running an agent session, reopen that
         // session where it ran instead of only replaying its old screen.
+        const trustedRef = persistedTerminal.agentSession?.descriptor_ref
+        if (resumeAgentSessions && trustedRef) {
+          // Display argv in the layout is never executable authority.
+          const facade = agentHooksApi
+          try {
+            const plan = await facade.resumePlan({
+              descriptor_id: trustedRef.descriptor_id,
+              project_id: projectId,
+              expected_generation: trustedRef.generation
+            })
+            if (isCancelled()) {
+              await cleanupSpawnedPtys(newTerminals, restoreId, 'cancelled-trusted-resume')
+              return { status: 'cancelled', path: 'persisted-replay' }
+            }
+            const restored = await facade.resumeSpawn({
+              plan_id: plan.plan_id,
+              descriptor_id: trustedRef.descriptor_id,
+              expected_generation: trustedRef.generation
+            })
+            // A project switch cannot kill a PTY already started by the host.
+            if (isCancelled()) {
+              await cleanupSpawnedPtys(newTerminals, restoreId, 'cancelled-trusted-resume')
+              return { status: 'cancelled', path: 'persisted-replay' }
+            }
+            idMap.set(persistedTerminal.id, newId)
+            newTerminals.push({
+              id: newId,
+              name: persistedTerminal.name,
+              projectId,
+              shell: normalizedShell,
+              cwd: persistedTerminal.cwd,
+              output: [],
+              viewState: 'visible',
+              ptyId: restored.pty_id,
+              adopted: true,
+              ...(isAgentTerminal
+                ? {
+                    kind: 'agent' as const,
+                    agentId: persistedTerminal.agentId,
+                    agentName: persistedTerminal.agentName,
+                    agentProgram: persistedTerminal.agentProgram,
+                    agentArgs: persistedTerminal.agentArgs
+                  }
+                : {}),
+              ...(rememberedSession
+                ? {
+                    agentSession: {
+                      ...rememberedSession,
+                      descriptor_ref: {
+                        descriptor_id: trustedRef.descriptor_id,
+                        generation: restored.generation
+                      }
+                    }
+                  }
+                : {})
+            })
+          } catch {
+            void logFrontendError({
+              source: 'terminal-restore',
+              message: 'Trusted agent resume refused',
+              level: 'warn'
+            })
+          }
+          // Do not fall back to layout argv when the trusted host refuses.
+          continue
+        }
+
         const sessionKey = rememberedSession
           ? `${rememberedSession.agentId}:${rememberedSession.sessionId}`
           : ''
@@ -1258,6 +1327,12 @@ async function restoreFromLayout(
     }
 
     if (newTerminals.length === 0) {
+      if (
+        resumeAgentSessions &&
+        layout.terminals.some((terminal) => terminal.agentSession?.descriptor_ref)
+      ) {
+        return { status: 'failed', path: 'persisted-replay' }
+      }
       debugLog(
         'restoreFromLayout',
         `NO TERMINALS RESTORED [${restoreId}] - falling back to default terminal`,

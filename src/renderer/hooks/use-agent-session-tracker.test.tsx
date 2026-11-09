@@ -1,9 +1,10 @@
-import type { AgentHookEvent } from '@shared/types/agent-hooks.types'
+import type { HookStateDto, HookStateSyncResponse } from '@shared/types/agent-hooks.types'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getAgentHookRuntimeState, useAgentHookStateStore } from '@/stores/agent-hook-state-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import {
-  applyAgentHookEvent,
+  applyAgentHookStateSync,
   syncTerminalAgentSessions,
   useAgentSessionTracker
 } from './use-agent-session-tracker'
@@ -11,86 +12,138 @@ import {
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   detect: vi.fn(),
-  events: vi.fn(),
-  listen: vi.fn(),
-  desktop: true
+  subscribe: vi.fn(),
+  unsubscribe: vi.fn()
 }))
 vi.mock('@/lib/api', () => ({ terminalApi: { list: mocks.list } }))
-vi.mock('@/lib/agent-hooks-api', () => ({ agentHooksApi: { events: mocks.events } }))
-vi.mock('@/lib/tauri-event', () => ({ listen: mocks.listen }))
-vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => mocks.desktop }))
+vi.mock('@/lib/agent-hooks-api', () => ({ agentHooksApi: { subscribeState: mocks.subscribe } }))
 vi.mock('@/lib/agents/live-agent-sessions', async (original) => ({
   ...(await original<object>()),
   detectLiveAgentSessions: mocks.detect
 }))
-const event: AgentHookEvent = {
-  sequence: 1,
+const state = (revision = 1, extra: Partial<HookStateDto> = {}): HookStateDto => ({
+  instance_id: 'host',
   terminal_id: 'host-pty',
   project_id: 'project',
-  agent: 'claude-code',
-  session_id: 'sess-1',
-  kind: 'needs_approval',
-  at: 10
-}
-function terminal() {
-  useTerminalStore.setState({
-    terminals: [{ id: 'tab', ptyId: 'host-pty', projectId: 'project', title: 'shell' } as never]
-  })
+  generation: 1,
+  adapter_install_id: 'install',
+  agent_session_id: 'sess-1',
+  state: 'busy',
+  revision,
+  restore_state: 'confirmed',
+  identity: {
+    adapter_id: 'claude-code',
+    agent_session_id: 'sess-1',
+    source: 'hook',
+    descriptor_id: 'descriptor',
+    cwd: '/repo',
+    transcript_path: '/repo/session.jsonl',
+    resume_argv: ['claude', '--resume', 'sess-1']
+  },
+  ...extra
+})
+function sync(row = state(), kind: 'snapshot' | 'delta' = 'snapshot'): HookStateSyncResponse {
+  return {
+    kind,
+    instance_id: row.instance_id,
+    current_revision: row.revision,
+    states: [row],
+    tombstones: []
+  }
 }
 beforeEach(() => {
   vi.resetAllMocks()
-  mocks.desktop = true
-  terminal()
+  useAgentHookStateStore.getState().reset()
+  useTerminalStore.setState({
+    terminals: [{ id: 'tab', ptyId: 'host-pty', projectId: 'project', title: 'shell' } as never]
+  })
   mocks.detect.mockResolvedValue([])
-  mocks.events.mockResolvedValue([])
   mocks.list.mockResolvedValue({ success: true, data: [{ id: 'host-pty', pid: 42 }] })
-  mocks.listen.mockResolvedValue(vi.fn())
+  mocks.subscribe.mockReturnValue(mocks.unsubscribe)
 })
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
 })
 
-describe('hook-first session tracker', () => {
-  it('uses host PTY/project identity and applies hook activity immediately', () => {
-    applyAgentHookEvent({ ...event, project_id: 'other' })
+describe('subscription-fed runtime and identity tracker', () => {
+  it('uses immutable PTY/project identity and stores activity only in runtime', () => {
+    applyAgentHookStateSync(sync(state(1, { project_id: 'other' })))
     expect(useTerminalStore.getState().terminals[0].agentSession).toBeUndefined()
-    applyAgentHookEvent(event)
-    expect(useTerminalStore.getState().terminals[0]).toMatchObject({
-      agentState: 'blocked',
-      agentSession: { source: 'hook', hook_kind: 'needs_approval', sessionId: 'sess-1' }
+    applyAgentHookStateSync(sync(state(2)))
+    expect(useTerminalStore.getState().terminals[0].agentSession).toEqual({
+      agentId: 'claude-code',
+      sessionId: 'sess-1',
+      source: 'hook',
+      descriptor_ref: { descriptor_id: 'descriptor', generation: 1 },
+      cwd: '/repo',
+      transcript_path: '/repo/session.jsonl',
+      resumeArgv: ['claude', '--resume', 'sess-1']
     })
-    applyAgentHookEvent({ ...event, kind: 'turn_done', sequence: 2 })
-    expect(useTerminalStore.getState().terminals[0].agentState).toBe('idle')
+    expect(useTerminalStore.getState().terminals[0].agentState).toBeUndefined()
+    expect(getAgentHookRuntimeState('host-pty')?.state).toBe('busy')
   })
-  it('does not let process polling overwrite a hook session, then falls back after session_end', async () => {
-    applyAgentHookEvent(event)
-    mocks.detect.mockResolvedValue([
-      { rootPid: 42, agentId: 'pi', sessionId: 'poll-sess', cwd: null, selfDev: false }
-    ])
-    await syncTerminalAgentSessions()
-    expect(useTerminalStore.getState().terminals[0].agentSession?.source).toBe('hook')
-    applyAgentHookEvent({ ...event, session_id: 'old-sess', kind: 'session_end' })
-    expect(useTerminalStore.getState().terminals[0].agentSession?.source).toBe('hook')
-    applyAgentHookEvent({ ...event, kind: 'session_end' })
-    await syncTerminalAgentSessions()
-    expect(useTerminalStore.getState().terminals[0].agentSession).toMatchObject({
-      source: 'poll',
-      sessionId: 'poll-sess'
+  it('100 runtime/tool changes never touch terminal identity or its store', () => {
+    applyAgentHookStateSync(sync())
+    const identity = useTerminalStore.getState().terminals[0].agentSession
+    const changed = vi.fn()
+    const unsubscribe = useTerminalStore.subscribe(changed)
+    for (let revision = 2; revision <= 101; revision++) {
+      applyAgentHookStateSync(
+        sync(
+          {
+            ...state(revision),
+            state: revision % 2 ? 'busy' : 'idle',
+            hook_kind: 'tool_start',
+            hook_at: revision,
+            tool_name: `tool-${revision}`
+          } as HookStateDto,
+          'delta'
+        )
+      )
+    }
+    unsubscribe()
+    expect(changed).not.toHaveBeenCalled()
+    expect(useTerminalStore.getState().terminals[0].agentSession).toBe(identity)
+    expect(getAgentHookRuntimeState('host-pty')).toMatchObject({
+      revision: 101,
+      tool_name: 'tool-101'
     })
   })
-  it('restores hook evidence from initial web event catchup without desktop subscriptions', async () => {
-    mocks.desktop = false
-    mocks.events.mockResolvedValue([event])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await waitFor(() =>
-      expect(useTerminalStore.getState().terminals[0].agentSession?.source).toBe('hook')
+  it('keeps durable resume identity on ended state and tombstone', () => {
+    applyAgentHookStateSync(sync())
+    const identity = useTerminalStore.getState().terminals[0].agentSession
+    applyAgentHookStateSync(sync(state(2, { state: 'ended' }), 'delta'))
+    applyAgentHookStateSync({
+      kind: 'delta',
+      instance_id: 'host',
+      current_revision: 3,
+      states: [],
+      tombstones: [{ instance_id: 'host', terminal_id: 'host-pty', revision: 3 }]
+    })
+    expect(getAgentHookRuntimeState('host-pty')).toBeUndefined()
+    expect(useTerminalStore.getState().terminals[0].agentSession).toBe(identity)
+  })
+  it('ignores delayed runtime and retired host epochs without altering identity', () => {
+    applyAgentHookStateSync(sync(state(5)))
+    applyAgentHookStateSync(
+      sync(state(4, { identity: { ...state().identity, agent_session_id: 'old' } }), 'delta')
     )
-    expect(mocks.events).toHaveBeenCalledWith(0)
-    expect(mocks.listen).not.toHaveBeenCalled()
-    hook.unmount()
+    expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('sess-1')
+    applyAgentHookStateSync(sync(state(1, { instance_id: 'new-host' })))
+    applyAgentHookStateSync(
+      sync(state(6, { identity: { ...state().identity, agent_session_id: 'old' } }))
+    )
+    expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('sess-1')
+    expect(useAgentHookStateStore.getState().instanceId).toBe('new-host')
   })
-  it('does not overwrite a newer live event with an in-flight older snapshot', async () => {
+  it('process discovery cannot overwrite a confirmed hook identity', async () => {
+    applyAgentHookStateSync(sync())
+    mocks.detect.mockResolvedValue([{ rootPid: 42, agentId: 'pi', sessionId: 'poll', cwd: null }])
+    await syncTerminalAgentSessions()
+    expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('sess-1')
+  })
+  it('rechecks identity when an older process discovery completes in flight', async () => {
     let resolve!: (value: unknown) => void
     mocks.detect.mockReturnValue(
       new Promise((done) => {
@@ -99,256 +152,64 @@ describe('hook-first session tracker', () => {
     )
     const pending = syncTerminalAgentSessions()
     await Promise.resolve()
-    applyAgentHookEvent({ ...event, kind: 'tool_start' })
-    resolve([
-      {
-        rootPid: 42,
-        agentId: event.agent,
-        sessionId: event.session_id,
-        source: 'hook',
-        hook_kind: 'needs_approval'
-      }
-    ])
+    applyAgentHookStateSync(sync())
+    resolve([{ rootPid: 42, agentId: 'pi', sessionId: 'old', cwd: null }])
     await pending
-    expect(useTerminalStore.getState().terminals[0].agentSession?.hook_kind).toBe('tool_start')
-    expect(useTerminalStore.getState().terminals[0].agentState).toBe('working')
+    expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('sess-1')
   })
-  it('rejects malformed session ids rather than constructing unsafe resume argv', () => {
-    applyAgentHookEvent({ ...event, session_id: 'x; touch /bad' })
+  it('rejects malformed identity ids without constructing resume metadata', () => {
+    applyAgentHookStateSync(
+      sync(state(1, { identity: { ...state().identity, agent_session_id: 'x; touch /bad' } }))
+    )
     expect(useTerminalStore.getState().terminals[0].agentSession).toBeUndefined()
   })
-  it.each([true, false])('preserves hook-derived live fallback for desktop=%s', async (desktop) => {
-    mocks.desktop = desktop
-    mocks.detect.mockResolvedValue([
-      {
-        rootPid: 42,
-        agentId: 'pi',
-        sessionId: 'live-hook',
-        cwd: null,
-        source: 'hook',
-        hook_kind: 'needs_approval',
-        transcript_path: '/host/log.jsonl'
-      }
-    ])
-    await syncTerminalAgentSessions()
-    expect(useTerminalStore.getState().terminals[0]).toMatchObject({
-      agentState: 'blocked',
-      agentSession: {
-        source: 'hook',
-        sessionId: 'live-hook',
-        hook_kind: 'needs_approval',
-        transcript_path: '/host/log.jsonl'
-      }
+  it('supports custom adapter identity and exact host display argv', () => {
+    applyAgentHookStateSync(
+      sync(
+        state(1, {
+          identity: {
+            ...state().identity,
+            adapter_id: 'custom-cli',
+            resume_argv: ['custom-cli', 'reopen', 'sess-1']
+          }
+        })
+      )
+    )
+    expect(useTerminalStore.getState().terminals[0].agentSession).toMatchObject({
+      agentId: 'custom-cli',
+      descriptor_ref: { descriptor_id: 'descriptor', generation: 1 },
+      resumeArgv: ['custom-cli', 'reopen', 'sess-1']
     })
   })
-  it('keeps legacy discovery running when hook commands are unavailable', async () => {
-    mocks.events.mockRejectedValue(new Error('unknown command'))
+  it('subscribes through B facade, tears down, and has only the old process discovery timer', async () => {
+    vi.useFakeTimers()
+    const hook = renderHook(() => useAgentSessionTracker())
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(mocks.subscribe).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(1)
+    const receive = mocks.subscribe.mock.calls[0][0] as (response: HookStateSyncResponse) => void
+    act(() => receive(sync()))
+    expect(getAgentHookRuntimeState('host-pty')?.state).toBe('busy')
+    await act(async () => {
+      vi.advanceTimersByTime(15_000)
+    })
+    expect(mocks.list).toHaveBeenCalledTimes(2)
+    hook.unmount()
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+    receive(sync(state(2, { state: 'error' }), 'delta'))
+    expect(getAgentHookRuntimeState('host-pty')?.revision).toBe(1)
+  })
+  it('keeps legacy process fallback available when no hook state is received', async () => {
     mocks.detect.mockResolvedValue([
-      { rootPid: 42, agentId: 'pi', sessionId: 'legacy', cwd: null, selfDev: false }
+      { rootPid: 42, agentId: 'codex', sessionId: 'legacy', cwd: null }
     ])
     const hook = renderHook(() => useAgentSessionTracker())
     await waitFor(() =>
       expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('legacy')
     )
-    expect(useTerminalStore.getState().terminals[0].agentSession?.source).toBe('poll')
     hook.unmount()
-  })
-  it('catches web session switches within 750ms without waiting for slow process discovery', async () => {
-    vi.useFakeTimers()
-    mocks.desktop = false
-    mocks.list.mockReturnValue(new Promise(() => {}))
-    mocks.events
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([{ ...event, session_id: 'after-clear', kind: 'session_start' }])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    await act(async () => vi.advanceTimersByTimeAsync(749))
-    expect(mocks.events).toHaveBeenCalledTimes(1)
-    await act(async () => vi.advanceTimersByTimeAsync(1))
-    expect(mocks.events).toHaveBeenCalledTimes(2)
-    expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('after-clear')
-    expect(mocks.list).toHaveBeenCalledTimes(1)
-    hook.unmount()
-  })
-  it('recovers lower host-generation sequences and releases old live hook guards', async () => {
-    vi.useFakeTimers()
-    mocks.desktop = false
-    mocks.events.mockResolvedValueOnce([{ ...event, sequence: 100 }])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await act(async () => vi.advanceTimersByTimeAsync(0))
-    useTerminalStore.setState((state) => ({
-      terminals: [
-        ...state.terminals,
-        {
-          ...state.terminals[0],
-          id: 'other-tab',
-          ptyId: 'other-pty',
-          agentSession: { ...state.terminals[0].agentSession!, sessionId: 'obsolete' }
-        },
-        {
-          ...state.terminals[0],
-          id: 'poll-tab',
-          ptyId: 'poll-pty',
-          agentSession: { ...state.terminals[0].agentSession!, source: 'poll' }
-        }
-      ]
-    }))
-    mocks.events.mockResolvedValueOnce([
-      { ...event, sequence: 2, session_id: 'new-generation', kind: 'tool_start' },
-      { ...event, sequence: 1, session_id: 'new-generation', kind: 'session_start' }
-    ])
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(100)
-    expect(useTerminalStore.getState().terminals[0]).toMatchObject({
-      agentState: 'working',
-      agentSession: { source: 'hook', sessionId: 'new-generation', hook_kind: 'tool_start' }
-    })
-    expect(useTerminalStore.getState().terminals[1].agentSession).toBeUndefined()
-    expect(useTerminalStore.getState().terminals[1].agentState).toBe('idle')
-    expect(useTerminalStore.getState().terminals[2].agentSession?.source).toBe('poll')
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(2)
-    hook.unmount()
-  })
-  it('does not infer restart from empty or equal-sequence recovery batches', async () => {
-    vi.useFakeTimers()
-    mocks.desktop = false
-    mocks.events
-      .mockResolvedValueOnce([{ ...event, sequence: 100 }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ ...event, sequence: 100, session_id: 'duplicate' }])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await act(async () => vi.advanceTimersByTimeAsync(0))
-    await act(async () => vi.advanceTimersByTimeAsync(1500))
-    expect(mocks.events).toHaveBeenLastCalledWith(100)
-    expect(useTerminalStore.getState().terminals[0]).toMatchObject({
-      agentState: 'blocked',
-      agentSession: { source: 'hook', sessionId: 'sess-1' }
-    })
-    hook.unmount()
-  })
-  it('does not mistake an older catchup batch for restart after a concurrent live event', async () => {
-    vi.useFakeTimers()
-    let receive!: (value: { payload: AgentHookEvent }) => void
-    let resolve!: (value: AgentHookEvent[]) => void
-    mocks.listen.mockImplementation(async (_name, cb) => {
-      receive = cb
-      return vi.fn()
-    })
-    mocks.events.mockResolvedValueOnce([{ ...event, sequence: 50 }])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await act(async () => vi.advanceTimersByTimeAsync(0))
-    mocks.events.mockReturnValueOnce(
-      new Promise<AgentHookEvent[]>((done) => {
-        resolve = done
-      })
-    )
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(50)
-    act(() =>
-      receive({ payload: { ...event, sequence: 100, session_id: 'live', kind: 'tool_start' } })
-    )
-    await act(async () =>
-      resolve([{ ...event, sequence: 60, session_id: 'older', kind: 'turn_done' }])
-    )
-    expect(useTerminalStore.getState().terminals[0]).toMatchObject({
-      agentState: 'working',
-      agentSession: { sessionId: 'live', hook_kind: 'tool_start' }
-    })
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(100)
-    hook.unmount()
-  })
-  it('retries initial catchup after a transport failure and still recognizes a restarted host', async () => {
-    vi.useFakeTimers()
-    mocks.desktop = false
-    mocks.events
-      .mockResolvedValueOnce([{ ...event, sequence: 100 }])
-      .mockRejectedValueOnce(new Error('Failed to fetch'))
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { ...event, sequence: 1, session_id: 'after-reconnect', kind: 'tool_start' }
-      ])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await act(async () => vi.advanceTimersByTimeAsync(0))
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(100)
-    expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('sess-1')
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(0)
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(0)
-    expect(useTerminalStore.getState().terminals[0]).toMatchObject({
-      agentState: 'working',
-      agentSession: { sessionId: 'after-reconnect' }
-    })
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    expect(mocks.events).toHaveBeenLastCalledWith(1)
-    hook.unmount()
-  })
-  it.each([
-    'unknown command',
-    'Command agent_hook_events not found',
-    'HTTP 404 Not Found'
-  ])('preserves the cursor and polling fallback on unsupported old host: %s', async (message) => {
-    vi.useFakeTimers()
-    mocks.events
-      .mockResolvedValueOnce([{ ...event, sequence: 100, kind: 'session_end' }])
-      .mockRejectedValue(new Error(message))
-    mocks.detect.mockResolvedValue([
-      { rootPid: 42, agentId: 'pi', sessionId: 'legacy', cwd: null, selfDev: false }
-    ])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await act(async () => vi.advanceTimersByTimeAsync(0))
-    await act(async () => vi.advanceTimersByTimeAsync(1500))
-    expect(mocks.events).toHaveBeenLastCalledWith(100)
-    expect(useTerminalStore.getState().terminals[0].agentSession).toMatchObject({
-      source: 'poll',
-      sessionId: 'legacy'
-    })
-    hook.unmount()
-  })
-  it('ignores a lower-generation request that resolves after unmount', async () => {
-    vi.useFakeTimers()
-    let resolve!: (value: AgentHookEvent[]) => void
-    mocks.events.mockResolvedValueOnce([{ ...event, sequence: 100 }])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await act(async () => vi.advanceTimersByTimeAsync(0))
-    mocks.events.mockReturnValueOnce(
-      new Promise<AgentHookEvent[]>((done) => {
-        resolve = done
-      })
-    )
-    await act(async () => vi.advanceTimersByTimeAsync(750))
-    hook.unmount()
-    await act(async () =>
-      resolve([{ ...event, sequence: 1, session_id: 'stale', kind: 'tool_start' }])
-    )
-    expect(useTerminalStore.getState().terminals[0]).toMatchObject({
-      agentState: 'blocked',
-      agentSession: { sessionId: 'sess-1' }
-    })
-  })
-  it('deduplicates event catchup and live events and cleans up subscriptions', async () => {
-    const stop = vi.fn()
-    let receive: ((value: { payload: AgentHookEvent }) => void) | undefined
-    mocks.listen.mockImplementation(async (_name, cb) => {
-      receive = cb
-      return stop
-    })
-    mocks.events.mockResolvedValue([event])
-    const hook = renderHook(() => useAgentSessionTracker())
-    await waitFor(() => expect(useTerminalStore.getState().terminals[0].agentState).toBe('blocked'))
-    act(() => receive?.({ payload: { ...event, sequence: 2, kind: 'turn_done' } }))
-    act(() => receive?.({ payload: event }))
-    expect(useTerminalStore.getState().terminals[0].agentState).toBe('idle')
-    hook.unmount()
-    expect(stop).toHaveBeenCalledOnce()
-    act(() => receive?.({ payload: { ...event, sequence: 3 } }))
-    expect(useTerminalStore.getState().terminals[0].agentState).toBe('idle')
   })
 })

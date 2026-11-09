@@ -158,7 +158,8 @@ vi.mock('./pages/NotFound', () => ({
 }))
 
 vi.mock('./hooks/useTerminalAutoSave', () => ({
-  useTerminalAutoSave: () => undefined
+  useTerminalAutoSave: () => undefined,
+  isTerminalRestoreInProgress: () => false
 }))
 
 vi.mock('./hooks/use-terminal-restore', () => ({

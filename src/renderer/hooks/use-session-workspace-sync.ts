@@ -1,3 +1,4 @@
+import type { ResumeSpawnResult } from '@shared/types/agent-hooks.types'
 import type { ConversationId } from '@shared/types/conversation.types'
 import type {
   RecoveryActionName,
@@ -17,9 +18,12 @@ import {
   useConversationStore
 } from '@/features/agent-session/stores/conversation-store'
 import { isTerminalRestoreInProgress } from '@/hooks/useTerminalAutoSave'
+import { agentHooksApi } from '@/lib/agent-hooks-api'
 import { logFrontendError } from '@/lib/log-api'
 import { sessionWorkspaceApi } from '@/lib/session-workspace-api'
 import { randomUUID } from '@/lib/uuid'
+import { getAgentHookRuntimeState } from '@/stores/agent-hook-state-store'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSessionWorkspaceSyncStore } from '@/stores/session-workspace-sync-store'
@@ -110,11 +114,18 @@ export function buildSessionWorkspace(conversationId: ConversationId): SessionWo
     // comes from. A hidden record that is still healthy stays: it is a live PTY
     // the user can reopen.
     if (terminal.isHidden && terminal.healthStatus === 'disconnected') continue
+    const agentDescriptor = terminal.agentSession?.descriptor_ref
+      ? {
+          descriptorId: terminal.agentSession.descriptor_ref.descriptor_id,
+          generation: terminal.agentSession.descriptor_ref.generation
+        }
+      : terminal.agentDescriptor
     const descriptor: TerminalResourceDescriptor = {
       kind: 'terminal',
       terminalId: terminal.ptyId,
       terminalRecordId: terminal.id,
-      conversationId
+      conversationId,
+      ...(agentDescriptor ? { agentDescriptor } : {})
     }
     resources.push(descriptor)
   }
@@ -212,6 +223,58 @@ function projectIdForConversation(conversationId: ConversationId): string {
   return useProjectStore.getState().activeProjectId
 }
 
+// Sharing a promise avoids duplicate client plans during concurrent reconciles.
+// The host's durable descriptor/generation claim remains the authorization and
+// cross-window/cross-instance idempotency boundary.
+const pendingAgentResumes = new Map<string, Promise<ResumeSpawnResult>>()
+
+async function resumeOwnedAgent(
+  resource: TerminalResourceDescriptor,
+  conversationId: ConversationId
+): Promise<ResumeSpawnResult | null> {
+  const reference = resource.agentDescriptor
+  const projectId = projectIdForConversation(conversationId)
+  if (
+    !reference ||
+    !projectId ||
+    resource.conversationId !== conversationId ||
+    !useAppSettingsStore.getState().settings.resumeAgentSessionsOnRestore
+  )
+    return null
+  const runtime = getAgentHookRuntimeState(resource.terminalId)
+  if (
+    runtime &&
+    (runtime.state === 'ended' ||
+      !['confirmed', 'interrupted'].includes(runtime.restore_state) ||
+      runtime.identity.source !== 'hook')
+  )
+    return null
+  const facade = agentHooksApi
+  const key = `${reference.descriptorId}:${reference.generation}`
+  const existing = pendingAgentResumes.get(key)
+  if (existing) return existing
+  const operation = (async () => {
+    // The host re-checks hook confirmation, ownership, ended/stale state,
+    // settings and PTY liveness. A saved reference alone grants no trust.
+    const plan = await facade.resumePlan!({
+      descriptor_id: reference.descriptorId,
+      project_id: projectId,
+      expected_generation: reference.generation
+    })
+    return facade.resumeSpawn!({
+      plan_id: plan.plan_id,
+      descriptor_id: reference.descriptorId,
+      expected_generation: reference.generation
+    })
+  })()
+  pendingAgentResumes.set(key, operation)
+  try {
+    return await operation
+  } finally {
+    pendingAgentResumes.delete(key)
+  }
+}
+
 async function reconcileTerminalResources(
   conversationId: ConversationId,
   workspace: SessionWorkspaceV1,
@@ -236,6 +299,15 @@ async function reconcileTerminalResources(
     // Materialize the passive record before requesting replay so the global
     // detached-output listener can capture bytes delivered during resume.
     terminalStore.hydrateTerminalResource(descriptor, undefined, projectId)
+    if (descriptor.agentDescriptor) {
+      useTerminalStore.setState((state) => ({
+        terminals: state.terminals.map((record) =>
+          record.id === (descriptor.terminalRecordId ?? descriptor.terminalId)
+            ? { ...record, agentDescriptor: descriptor.agentDescriptor }
+            : record
+        )
+      }))
+    }
   }
 
   await Promise.all(
@@ -261,7 +333,48 @@ async function reconcileTerminalResources(
         // dead tab in whatever project is active next and `persistState` can
         // write that zombie into the saved layout. The guard below still covers
         // everything that IS activation-scoped.
-        if (result.code === 'TERMINAL_GONE') retireTerminalRecord(recordId)
+        if (result.code === 'TERMINAL_GONE') {
+          let replacement: ResumeSpawnResult | null = null
+          if (isCurrent()) {
+            try {
+              replacement = await resumeOwnedAgent(descriptor, conversationId)
+            } catch {
+              // The host rejects ended/stale/unconfirmed/non-owned identities.
+              // No client retry loop and no fallback to layout-supplied argv.
+            }
+          }
+          if (replacement) {
+            // Project switches never cancel or kill a host-owned replacement.
+            // Rebind the passive record and index together, even if the view
+            // changed while the host was responding.
+            descriptor.terminalRecordId ??= recordId
+            descriptor.terminalId = replacement.pty_id
+            descriptor.agentDescriptor = {
+              descriptorId: descriptor.agentDescriptor!.descriptorId,
+              generation: replacement.generation
+            }
+            const current = useTerminalStore.getState()
+            current.hydrateTerminalResource(descriptor, undefined, projectId)
+            useTerminalStore.setState((state) => ({
+              terminals: state.terminals.map((terminal) =>
+                terminal.id === recordId
+                  ? { ...terminal, agentDescriptor: descriptor.agentDescriptor }
+                  : terminal
+              )
+            }))
+            const record = useTerminalStore.getState().terminals.find((t) => t.id === recordId)
+            if (record?.agentSession) {
+              useTerminalStore.getState().setTerminalAgentSession(recordId, {
+                ...record.agentSession,
+                descriptor_ref: {
+                  descriptor_id: descriptor.agentDescriptor.descriptorId,
+                  generation: replacement.generation
+                }
+              })
+            }
+            await useTerminalStore.getState().resumeTerminalResource(recordId)
+          } else retireTerminalRecord(recordId)
+        }
       }
       if (!isCurrent()) return
     })

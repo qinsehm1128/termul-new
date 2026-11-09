@@ -3,7 +3,10 @@
 import { acceptedBrandValues } from '@shared/brand'
 import type { TerminalAgentSession } from '@shared/types/cli-session.types'
 import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
-import type { TerminalResourceHydrationStatus } from '@shared/types/session-workspace.types'
+import type {
+  AgentDescriptorRef,
+  TerminalResourceHydrationStatus
+} from '@shared/types/session-workspace.types'
 import type { TerminalScreenEngine } from '@shared/types/terminal-screen.types'
 import type { AgentTerminalState } from '@/lib/agents/agent-terminal-state'
 
@@ -167,6 +170,8 @@ export interface Terminal {
    * the process died can reopen it.
    */
   agentSession?: TerminalAgentSession
+  /** Passive host identity retained even when no runtime agentSession exists. */
+  agentDescriptor?: AgentDescriptorRef
   /**
    * Latest OSC 0/2 title the child process set, or null once it cleared it.
    * Evidence for `agentState`, not a display label — the tab keeps using

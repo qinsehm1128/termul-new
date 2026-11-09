@@ -39,6 +39,9 @@ const {
 }))
 
 // The window is visible unless a test holds the gate closed.
+const trustedResumeMocks = vi.hoisted(() => ({ resumePlan: vi.fn(), resumeSpawn: vi.fn() }))
+vi.mock('@/lib/agent-hooks-api', () => ({ agentHooksApi: trustedResumeMocks }))
+
 const visibilityGate = vi.hoisted(() => ({ wait: null as Promise<void> | null }))
 vi.mock('@/lib/visibility-signal', () => ({
   isVisibleReady: () => visibilityGate.wait === null,
@@ -1328,6 +1331,54 @@ describe('restore reopens remembered agent sessions', () => {
     })
   }
   const settle = () => new Promise((resolve) => setTimeout(resolve, RESUME_COMMAND_DELAY_MS + 200))
+
+  it('restores descriptor-backed sessions with a host plan and never executes saved argv', async () => {
+    trustedResumeMocks.resumePlan.mockResolvedValue({ plan_id: 'plan-1' })
+    trustedResumeMocks.resumeSpawn.mockResolvedValue({
+      pty_id: 'trusted-pty',
+      generation: 2,
+      attempt_id: 'attempt-1',
+      pending_confirmation: true
+    })
+    restoreWith([
+      shellTerminal('t1', {
+        ...claudeSession,
+        resumeArgv: ['rm', '-rf', '/'],
+        descriptor_ref: { descriptor_id: 'descriptor-1', generation: 1 }
+      })
+    ])
+    await waitFor(() =>
+      expect(trustedResumeMocks.resumeSpawn).toHaveBeenCalledWith({
+        plan_id: 'plan-1',
+        descriptor_id: 'descriptor-1',
+        expected_generation: 1
+      })
+    )
+    await settle()
+    expect(trustedResumeMocks.resumePlan).toHaveBeenCalledWith({
+      descriptor_id: 'descriptor-1',
+      project_id: 'project-a',
+      expected_generation: 1
+    })
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+    expect(mockTerminalWrite).not.toHaveBeenCalled()
+    expect(mockTerminalKill).not.toHaveBeenCalled()
+  })
+
+  it('does not execute fallback argv after a trusted descriptor is refused', async () => {
+    trustedResumeMocks.resumePlan.mockRejectedValue({ code: 'IDENTITY_STALE' })
+    restoreWith([
+      shellTerminal('t1', {
+        ...claudeSession,
+        descriptor_ref: { descriptor_id: 'descriptor-stale', generation: 1 }
+      })
+    ])
+    await waitFor(() => expect(trustedResumeMocks.resumePlan).toHaveBeenCalled())
+    await settle()
+    expect(trustedResumeMocks.resumeSpawn).not.toHaveBeenCalled()
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+    expect(mockTerminalWrite).not.toHaveBeenCalled()
+  })
 
   it('types the resume command into a shell started where the session ran', async () => {
     restoreWith([shellTerminal('t1', claudeSession)])

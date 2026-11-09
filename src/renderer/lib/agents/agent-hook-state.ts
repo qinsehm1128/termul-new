@@ -1,13 +1,47 @@
 import type { AgentHookKind } from '@shared/types/agent-hooks.types'
 import type { TerminalAgentSession } from '@shared/types/cli-session.types'
+import { useAgentHookStateStore } from '@/stores/agent-hook-state-store'
 import type { AgentTerminalState } from './agent-terminal-state'
+
+function runtimeForSession(session: TerminalAgentSession | undefined) {
+  if (!session) return undefined
+  const store = useAgentHookStateStore.getState()
+  const candidates = Object.values(store.states).filter((runtime) => {
+    if (
+      runtime.instance_id !== store.instanceId ||
+      runtime.identity.adapter_id !== session.agentId ||
+      runtime.identity.agent_session_id !== session.sessionId
+    )
+      return false
+    const ref = session.descriptor_ref
+    return (
+      !ref ||
+      (runtime.identity.descriptor_id === ref.descriptor_id &&
+        runtime.generation === ref.generation)
+    )
+  })
+  // Legacy identities without a descriptor must not borrow another PTY's
+  // evidence when the same agent session is attached in more than one place.
+  return candidates.length === 1 ? candidates[0] : undefined
+}
 
 /** Explicit hook lifecycle evidence outranks screen/title heuristics. */
 export function hookTerminalState(
   session: TerminalAgentSession | undefined
 ): AgentTerminalState | null {
-  if (session?.source !== 'hook' || !session.hook_kind) return null
-  return hookKindState(session.hook_kind)
+  const runtime = runtimeForSession(session)
+  switch (runtime?.state) {
+    case 'busy':
+      return 'working'
+    case 'idle':
+      return 'idle'
+    case 'needs_approval':
+    case 'blocked':
+    case 'error':
+      return 'blocked'
+    default:
+      return null
+  }
 }
 
 export const HOOK_STALE_MS = 120_000
@@ -20,7 +54,7 @@ export function activeHookState(
 ): AgentTerminalState | null {
   const state = hookTerminalState(session)
   if (state === null) return null
-  const at = session?.hook_at
+  const at = runtimeForSession(session)?.hook_at
   const mayYield =
     typeof at === 'number' &&
     now - at > HOOK_STALE_MS &&

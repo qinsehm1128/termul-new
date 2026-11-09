@@ -118,6 +118,40 @@ afterEach(() => {
 })
 
 describe('Conversation production transport golden parity', () => {
+  it('preserves passive restore descriptor references identically on Tauri and HTTP', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    const saved = {
+      ...workspace(),
+      resources: [
+        {
+          kind: 'terminal' as const,
+          terminalId: 'pty-old',
+          terminalRecordId: 'record-1',
+          conversationId: ID,
+          agentDescriptor: { descriptorId: '7c8312cb-6ec5-428c-8f09-60e43fb4cc28', generation: 2 }
+        }
+      ]
+    }
+    vi.mocked(invoke).mockResolvedValue({
+      success: true,
+      data: { status: 'written', workspace: saved }
+    })
+    await tauriSessionWorkspaceApi.writeWorkspace(ID, null, saved)
+    expect(vi.mocked(invoke).mock.calls.at(-1)?.[1]).toEqual({
+      conversationId: ID,
+      basedRevision: null,
+      workspace: saved
+    })
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({ basedRevision: null, workspace: saved })
+      expect(String(init?.body)).not.toMatch(/hook_kind|hook_at|tool_name|resumeArgv|derived_state/)
+      return response({ success: true, data: { status: 'written', workspace: saved } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await webSessionWorkspaceApi.writeWorkspace(ID, null, saved)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('pins the exact Tauri core singleton request names, payload casing, and stable failures', async () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === 'conversation_resolve_legacy_id') {

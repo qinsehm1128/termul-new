@@ -5,6 +5,7 @@ import { buildTimeline } from '../../features/agent-session/chat/chat-timeline'
 import { useTerminalAgentChat } from '../../hooks/use-terminal-agent-chat'
 import { agentChatApi } from '../../lib/agent-chat-api'
 import { logFrontendError } from '../../lib/log-api'
+import { agentHookStateKey, useAgentHookStateStore } from '../../stores/agent-hook-state-store'
 import { useTerminalStore } from '../../stores/terminal-store'
 
 type View = 'terminal' | 'chat'
@@ -33,6 +34,9 @@ function TerminalAgentChat({ terminalId }: { terminalId: string }) {
     useTerminalAgentChat(terminalId)
   const tracked = useTerminalStore(
     (state) => state.terminals.find((terminal) => terminal.ptyId === terminalId)?.agentSession
+  )
+  const hookRuntime = useAgentHookStateStore((state) =>
+    state.instanceId ? state.states[agentHookStateKey(state.instanceId, terminalId)] : undefined
   )
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -121,7 +125,7 @@ function TerminalAgentChat({ terminalId }: { terminalId: string }) {
     <section className="flex h-full min-h-0 flex-col" aria-label="终端 Agent 对话">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
         <span>{snapshot?.agent ?? tracked?.agentId ?? 'Agent'}</span>
-        <span>{snapshot?.hook_state || tracked?.hook_kind || '等待会话'}</span>
+        <span>{hookRuntime?.state || snapshot?.hook_state || '等待会话'}</span>
         {tracked?.source === 'hook' && <span>Hook</span>}
         <span className="ml-auto">审批请在终端中处理</span>
       </div>

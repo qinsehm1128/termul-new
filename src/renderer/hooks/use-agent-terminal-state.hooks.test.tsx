@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useScreenObservationStore } from '@/stores/screen-observation-store'
+import { useAgentHookStateStore } from '@/stores/agent-hook-state-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { Terminal } from '@/types/project'
 import { useAgentTerminalState } from './use-agent-terminal-state'
@@ -24,11 +25,38 @@ function terminal(activity = epoch + 1): Terminal {
       agentId: 'claude-code',
       sessionId: 's',
       resumeArgv: ['claude', '--resume', 's'],
-      source: 'hook',
-      hook_kind: 'idle',
-      hook_at: epoch
+      source: 'hook'
     }
   } as Terminal
+}
+function setHook(kind: 'idle' | 'needs_approval', at = epoch): void {
+  useAgentHookStateStore.setState({
+    instanceId: 'host',
+    states: {
+      'host\0pty': {
+        instance_id: 'host',
+        terminal_id: 'pty',
+        generation: 1,
+        adapter_install_id: 'install',
+        agent_session_id: 's',
+        project_id: 'p',
+        state: kind,
+        identity: {
+          adapter_id: 'claude-code',
+          agent_session_id: 's',
+          transcript_path: null,
+          cwd: null,
+          source: 'hook',
+          descriptor_id: null,
+          resume_argv: ['claude', '--resume', 's']
+        },
+        restore_state: 'confirmed',
+        revision: 1,
+        hook_kind: kind,
+        hook_at: at
+      }
+    }
+  })
 }
 beforeEach(() => {
   vi.useFakeTimers()
@@ -37,6 +65,8 @@ beforeEach(() => {
   mocks.xterm.mockReturnValue('esc to interrupt')
   useTerminalStore.setState({ terminals: [terminal()] })
   useScreenObservationStore.setState({ byPtyId: {} })
+  useAgentHookStateStore.getState().reset()
+  setHook('idle')
 })
 afterEach(() => vi.useRealTimers())
 describe('stale hook activity precedence', () => {
@@ -66,12 +96,7 @@ describe('stale hook activity precedence', () => {
     mocks.xterm.mockReturnValue('esc to interrupt')
     await act(async () => vi.advanceTimersByTimeAsync(600))
     expect(useTerminalStore.getState().terminals[0].agentState).toBe('working')
-    const current = useTerminalStore.getState().terminals[0]
-    useTerminalStore.getState().setTerminalAgentSession('tab', {
-      ...current.agentSession!,
-      hook_at: Date.now(),
-      hook_kind: 'needs_approval'
-    })
+    setHook('needs_approval', Date.now())
     await act(async () => vi.advanceTimersByTimeAsync(600))
     expect(useTerminalStore.getState().terminals[0].agentState).toBe('blocked')
     hook.unmount()

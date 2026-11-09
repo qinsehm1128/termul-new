@@ -76,7 +76,10 @@ describe('detectLiveAgentSessions', () => {
     expect(sessions.map((s) => s.rootPid)).toEqual([10])
   })
 
-  it.each([true, false])('preserves valid hook metadata for desktop=%s', async (desktop) => {
+  it.each([
+    true,
+    false
+  ])('preserves identity but discards legacy hook runtime for desktop=%s', async (desktop) => {
     runtime.desktop = desktop
     const value = {
       ...base,
@@ -90,17 +93,15 @@ describe('detectLiveAgentSessions', () => {
     const [live] = await detectLiveAgentSessions([1])
     expect(live).toMatchObject({
       source: 'hook',
-      hook_kind: 'needs_approval',
       transcript_path: '/host/session.jsonl'
     })
     expect(toTerminalAgentSession(live)).toMatchObject({
       source: 'hook',
-      hook_kind: 'needs_approval',
       transcript_path: '/host/session.jsonl'
     })
     if (!desktop) expect(mockInvoke).not.toHaveBeenCalled()
   })
-  it('supports old hookKind serialization and discards invalid provenance or unsafe transcript paths', async () => {
+  it('drops old hook runtime, invalid provenance and unsafe transcript paths', async () => {
     mockInvoke.mockResolvedValue([
       {
         ...base,
@@ -120,11 +121,11 @@ describe('detectLiveAgentSessions', () => {
     const [valid, invalid] = await detectLiveAgentSessions([1])
     expect(valid).toMatchObject({
       source: 'hook',
-      hook_kind: 'tool_start',
       transcript_path: '/host/log.jsonl'
     })
     expect(invalid.source).toBeUndefined()
-    expect(invalid.hook_kind).toBeUndefined()
+    expect(invalid).not.toHaveProperty('hook_kind')
+    expect(valid).not.toHaveProperty('hook_kind')
     expect(invalid.transcript_path).toBeUndefined()
   })
   it('does not ask the host about no terminals', async () => {
@@ -162,13 +163,110 @@ describe('reviveTerminalAgentSession', () => {
     ).toEqual(['env', 'CODEX_HOME=/alt/codex', 'codex', 'resume', 'c1'])
   })
 
-  it('rejects unknown agents, unsafe ids and relative directories', () => {
+  it('rejects custom agents without display argv, unsafe ids and relative directories', () => {
     expect(reviveTerminalAgentSession({ agentId: 'gemini-cli', sessionId: 'a' })).toBeNull()
     expect(reviveTerminalAgentSession({ agentId: 'pi', sessionId: '$(boom)' })).toBeNull()
     expect(
       reviveTerminalAgentSession({ agentId: 'pi', sessionId: 'a', cwd: '../up' })?.cwd
     ).toBeUndefined()
     expect(reviveTerminalAgentSession(undefined)).toBeNull()
+  })
+})
+
+describe('runtime-free durable identity', () => {
+  it('pi always resumes the exact transcript rather than its session-id prefix', () => {
+    const transcript_path = '/repo/.pi/sessions/2026-11-10T01-00-00_s-1.jsonl'
+    expect(buildResumeArgv({ ...base, agentId: 'pi', transcript_path })).toEqual([
+      'pi',
+      '--session',
+      transcript_path
+    ])
+    const identity = {
+      agentId: 'pi',
+      sessionId: 's-1',
+      source: 'hook',
+      descriptor_ref: { descriptor_id: 'durable', generation: 1 },
+      transcript_path,
+      cwd: '/repo',
+      resumeArgv: ['pi', '--session', transcript_path]
+    }
+    expect(
+      reviveTerminalAgentSession({
+        ...identity,
+        hook_kind: 'tool_start',
+        hook_at: 123,
+        tool_name: 'bash',
+        state: 'busy',
+        revision: 99
+      })
+    ).toEqual(identity)
+  })
+  it('keeps custom identity and host display argv without runtime or executable authority', () => {
+    const identity = {
+      agentId: 'custom-agent',
+      sessionId: 's-1',
+      source: 'process',
+      descriptor_ref: { descriptor_id: 'custom-durable', generation: 1 },
+      transcript_path: '/repo/transcript',
+      cwd: '/repo',
+      resumeArgv: ['custom-agent', 'restore', '--id', 's-1']
+    }
+    expect(
+      reviveTerminalAgentSession({ ...identity, hook_kind: 'needs_approval', hook_at: 1 })
+    ).toEqual(identity)
+  })
+  it('preserves host-backed builtin argv as display metadata and compares reference values', () => {
+    const identity = {
+      agentId: 'qin-code',
+      sessionId: 's-1',
+      source: 'hook' as const,
+      descriptor_ref: { descriptor_id: 'durable', generation: 4 },
+      cwd: '/repo',
+      resumeArgv: ['qin-code', '--resume', 's-1', '--custom-display-flag']
+    }
+    expect(reviveTerminalAgentSession(identity)).toEqual(identity)
+    expect(
+      isSameAgentSession(identity, { ...identity, descriptor_ref: { ...identity.descriptor_ref } })
+    ).toBe(true)
+    expect(
+      isSameAgentSession(identity, {
+        ...identity,
+        descriptor_ref: { descriptor_id: 'durable', generation: 5 }
+      })
+    ).toBe(false)
+  })
+
+  it('marks legacy provenance unconfirmed and ignores every runtime field in equality', () => {
+    const identity = { agentId: 'codex', sessionId: 's-1', resumeArgv: ['codex', 'resume', 's-1'] }
+    expect(reviveTerminalAgentSession(identity)?.source).toBe('legacy-unconfirmed')
+    expect(
+      isSameAgentSession(
+        {
+          ...identity,
+          hook_kind: 'tool_start',
+          hook_at: 1,
+          tool_name: 'a',
+          state: 'busy',
+          revision: 1
+        } as typeof identity,
+        {
+          ...identity,
+          hook_kind: 'turn_done',
+          hook_at: 999,
+          tool_name: 'b',
+          state: 'idle',
+          revision: 100
+        } as typeof identity
+      )
+    ).toBe(true)
+    expect(
+      isSameAgentSession(identity, {
+        ...identity,
+        descriptor_ref: { descriptor_id: 'new', generation: 1 }
+      })
+    ).toBe(false)
+    expect(isSameAgentSession(identity, { ...identity, source: 'hook' })).toBe(false)
+    expect(isSameAgentSession(identity, { ...identity, transcript_path: '/new' })).toBe(false)
   })
 })
 

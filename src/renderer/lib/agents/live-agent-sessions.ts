@@ -7,7 +7,6 @@
  * into a fresh shell.
  */
 
-import type { AgentHookKind } from '@shared/types/agent-hooks.types'
 import {
   hasUnsafeCliSessionIdChars,
   LIVE_AGENT_IDS,
@@ -41,29 +40,9 @@ function parseLiveAgentSession(value: unknown): LiveAgentSession | null {
   const raw = value as Record<string, unknown>
   if (typeof raw.rootPid !== 'number' || !isLiveAgentId(raw.agentId)) return null
   if (typeof raw.sessionId !== 'string' || !SAFE_SESSION_ID.test(raw.sessionId)) return null
-  const hookKind = raw.hook_kind ?? raw.hookKind
-  const validKinds: readonly string[] = [
-    'session_start',
-    'session_end',
-    'prompt_submitted',
-    'tool_start',
-    'tool_end',
-    'needs_approval',
-    'blocked',
-    'idle',
-    'turn_done',
-    'error'
-  ]
   const transcript = raw.transcript_path ?? raw.transcriptPath
-  const hookAt = raw.hook_at ?? raw.hookAt
   return {
-    ...(typeof hookAt === 'number' && Number.isFinite(hookAt) && hookAt > 0
-      ? { hook_at: hookAt }
-      : {}),
     ...(raw.source === 'hook' || raw.source === 'poll' ? { source: raw.source } : {}),
-    ...(typeof hookKind === 'string' && validKinds.includes(hookKind)
-      ? { hook_kind: hookKind as AgentHookKind }
-      : {}),
     ...(isSafeAbsolutePath(transcript) ? { transcript_path: transcript } : {}),
     rootPid: raw.rootPid,
     agentId: raw.agentId,
@@ -110,7 +89,7 @@ export function buildResumeArgv(session: LiveAgentSession): string[] {
         ? ['env', `CODEX_HOME=${session.codexHome}`, 'codex', 'resume', id]
         : ['codex', 'resume', id]
     case 'pi':
-      return ['pi', '--session', id]
+      return ['pi', '--session', session.transcript_path ?? id]
     case 'qin-code':
       return session.selfDev
         ? ['qin-code', 'self-dev', '--resume', id]
@@ -121,8 +100,6 @@ export function buildResumeArgv(session: LiveAgentSession): string[] {
 export function toTerminalAgentSession(session: LiveAgentSession): TerminalAgentSession {
   return {
     source: session.source ?? 'poll',
-    ...(session.source === 'hook' ? { hook_at: session.hook_at ?? Date.now() } : {}),
-    ...(session.hook_kind ? { hook_kind: session.hook_kind } : {}),
     ...(session.transcript_path ? { transcript_path: session.transcript_path } : {}),
     agentId: session.agentId,
     sessionId: session.sessionId,
@@ -138,8 +115,8 @@ export function isSameAgentSession(
   if (!a || !b) return a === b
   return (
     a.source === b.source &&
-    a.hook_kind === b.hook_kind &&
-    a.hook_at === b.hook_at &&
+    a.descriptor_ref?.descriptor_id === b.descriptor_ref?.descriptor_id &&
+    a.descriptor_ref?.generation === b.descriptor_ref?.generation &&
     a.transcript_path === b.transcript_path &&
     a.agentId === b.agentId &&
     a.sessionId === b.sessionId &&
@@ -149,28 +126,71 @@ export function isSameAgentSession(
 }
 
 /**
- * A remembered session, checked again before use: it comes back from disk,
- * and its argv is about to be typed into a shell. The argv is rebuilt from the
- * validated fields rather than trusted as stored.
+ * Rehydrate durable identity while dropping legacy hook runtime. Host-backed
+ * argv is display metadata; restore must resolve its descriptor before spawning.
+ * Only legacy built-in metadata uses the historical safe argv reconstruction.
  */
 export function reviveTerminalAgentSession(value: unknown): TerminalAgentSession | null {
   if (typeof value !== 'object' || value === null) return null
   const raw = value as Record<string, unknown>
-  if (!isLiveAgentId(raw.agentId)) return null
+  if (typeof raw.agentId !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(raw.agentId)) return null
   if (typeof raw.sessionId !== 'string' || !SAFE_SESSION_ID.test(raw.sessionId)) return null
   const stored = Array.isArray(raw.resumeArgv) ? raw.resumeArgv : []
+  const reference = raw.descriptor_ref as Record<string, unknown> | undefined
+  const descriptor_ref =
+    reference &&
+    typeof reference.descriptor_id === 'string' &&
+    reference.descriptor_id &&
+    Number.isSafeInteger(reference.generation) &&
+    (reference.generation as number) >= 0
+      ? { descriptor_id: reference.descriptor_id, generation: reference.generation as number }
+      : undefined
+  const validStoredArgv =
+    stored.length > 0 && stored.every((arg) => typeof arg === 'string' && !/[\r\n\0]/.test(arg))
+  const identity = {
+    source: (['hook', 'poll', 'process', 'legacy-unconfirmed'].includes(raw.source as string)
+      ? raw.source
+      : 'legacy-unconfirmed') as NonNullable<TerminalAgentSession['source']>,
+    ...(descriptor_ref ? { descriptor_ref } : {}),
+    ...(isSafeAbsolutePath(raw.transcript_path) ? { transcript_path: raw.transcript_path } : {}),
+    ...(isSafeAbsolutePath(raw.cwd) ? { cwd: raw.cwd } : {})
+  }
+  // Host-backed argv is display metadata only. Restore resolves descriptor_ref
+  // again before executing. Legacy built-in entries keep their safe argv rebuild.
+  if (descriptor_ref && validStoredArgv) {
+    return {
+      ...identity,
+      agentId: raw.agentId,
+      sessionId: raw.sessionId,
+      resumeArgv: [...stored] as string[]
+    }
+  }
+  if (!isLiveAgentId(raw.agentId)) {
+    if (!validStoredArgv) return null
+    return {
+      ...identity,
+      agentId: raw.agentId,
+      sessionId: raw.sessionId,
+      resumeArgv: stored as string[]
+    }
+  }
   const codexHomeArg = stored.find(
     (arg): arg is string => typeof arg === 'string' && arg.startsWith('CODEX_HOME=')
   )
   const codexHome = codexHomeArg?.slice('CODEX_HOME='.length)
-  return toTerminalAgentSession({
-    rootPid: 0,
-    agentId: raw.agentId,
-    sessionId: raw.sessionId,
-    selfDev: stored.includes('self-dev'),
-    ...(isSafeAbsolutePath(codexHome) ? { codexHome } : {}),
-    cwd: isSafeAbsolutePath(raw.cwd) ? raw.cwd : null
-  })
+  return {
+    ...toTerminalAgentSession({
+      rootPid: 0,
+      agentId: raw.agentId,
+      sessionId: raw.sessionId,
+      selfDev: stored.includes('self-dev'),
+      ...identity,
+      ...(isSafeAbsolutePath(codexHome) ? { codexHome } : {}),
+      cwd: identity.cwd ?? null,
+      source: 'poll'
+    }),
+    ...identity
+  }
 }
 
 /** The line typed into a shell to reopen the session. */

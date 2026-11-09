@@ -87,7 +87,28 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
             agentArgs: terminal.agentArgs
           }
         : {}),
-      ...(terminal.agentSession ? { agentSession: terminal.agentSession } : {})
+      ...(terminal.agentSession
+        ? {
+            agentSession: {
+              agentId: terminal.agentSession.agentId,
+              sessionId: terminal.agentSession.sessionId,
+              resumeArgv: [...terminal.agentSession.resumeArgv],
+              ...(terminal.agentSession.cwd ? { cwd: terminal.agentSession.cwd } : {}),
+              ...(terminal.agentSession.source ? { source: terminal.agentSession.source } : {}),
+              ...(terminal.agentSession.descriptor_ref
+                ? {
+                    descriptor_ref: {
+                      descriptor_id: terminal.agentSession.descriptor_ref.descriptor_id,
+                      generation: terminal.agentSession.descriptor_ref.generation
+                    }
+                  }
+                : {}),
+              ...(terminal.agentSession.transcript_path
+                ? { transcript_path: terminal.agentSession.transcript_path }
+                : {})
+            }
+          }
+        : {})
     },
     scrollbackExtractionAvailable: extractedScrollback !== undefined,
     extractedScrollbackLineCount: extractedScrollback?.length ?? 0

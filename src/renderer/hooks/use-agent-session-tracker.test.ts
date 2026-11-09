@@ -4,6 +4,9 @@ import type { Terminal } from '@/types/project'
 
 const { mockList, mockDetect } = vi.hoisted(() => ({ mockList: vi.fn(), mockDetect: vi.fn() }))
 vi.mock('@/lib/api', () => ({ terminalApi: { list: mockList } }))
+vi.mock('@/lib/agent-hooks-api', () => ({
+  agentHooksApi: { subscribeState: vi.fn(() => vi.fn()) }
+}))
 vi.mock('@/lib/agents/live-agent-sessions', async () => {
   const actual = await vi.importActual<typeof import('@/lib/agents/live-agent-sessions')>(
     '@/lib/agents/live-agent-sessions'

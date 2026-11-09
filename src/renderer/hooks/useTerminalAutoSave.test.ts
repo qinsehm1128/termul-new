@@ -1,11 +1,17 @@
+import type { HookStateDto } from '@shared/types/agent-hooks.types'
+import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { persistenceApi } from '@/lib/persistence-api'
+import { useAgentHookStateStore } from '@/stores/agent-hook-state-store'
+import { applyAgentHookStateSync } from './use-agent-session-tracker'
 import {
   hasStructuralTerminalChange,
   isTerminalRestoreInProgress,
   saveTerminalLayout,
   serializeTerminalsForProject,
   setTerminalRestoreInProgress,
-  syncScrollbackToStore
+  syncScrollbackToStore,
+  useTerminalAutoSave
 } from './useTerminalAutoSave'
 
 const { mockRecordTerminalContinuityEvent } = vi.hoisted(() => ({
@@ -35,6 +41,10 @@ vi.mock('../utils/terminal-registry', () => ({
 // Stubbing `window.api.persistence` below does not intercept it, so these tests
 // were making a live connection attempt and passing only because it failed
 // fast. Anything that made that connect stall instead hung the suite.
+vi.mock('@/lib/agent-hooks-api', () => ({
+  agentHooksApi: { subscribeState: vi.fn(() => vi.fn()) }
+}))
+
 vi.mock('@/lib/persistence-api', () => ({
   persistenceApi: {
     read: vi.fn().mockResolvedValue({ success: false, error: 'not found', code: 'KEY_NOT_FOUND' }),
@@ -53,7 +63,7 @@ const mockWriteDebounced = vi.fn().mockResolvedValue({ success: true })
 const mockRead = vi.fn()
 const mockWrite = vi.fn().mockResolvedValue({ success: true })
 
-vi.stubGlobal('window', {
+Object.assign(window, {
   api: {
     persistence: {
       read: mockRead,
@@ -71,6 +81,116 @@ describe('useTerminalAutoSave', () => {
     useSessionWorkspaceSyncStore
       .getState()
       .setActiveConversationId('018f7a1c-1b4d-7c8a-9f01-0123456789ab')
+  })
+
+  it('100 runtime/tool updates cause zero autosaves and zero scrollback extraction', () => {
+    useAgentHookStateStore.getState().reset()
+    const row: HookStateDto = {
+      instance_id: 'host',
+      terminal_id: 'pty-1',
+      project_id: 'proj-1',
+      generation: 1,
+      adapter_install_id: 'install',
+      agent_session_id: 'session',
+      state: 'busy',
+      revision: 1,
+      restore_state: 'confirmed',
+      identity: {
+        adapter_id: 'pi',
+        agent_session_id: 'session',
+        source: 'hook',
+        descriptor_id: 'durable',
+        cwd: '/repo',
+        transcript_path: '/repo/pi.jsonl',
+        resume_argv: ['pi', '--session', '/repo/pi.jsonl']
+      }
+    }
+    useTerminalStore.setState({
+      terminals: [{ id: '1', ptyId: 'pty-1', name: 'shell', projectId: 'proj-1' }],
+      activeTerminalId: '1'
+    })
+    applyAgentHookStateSync({
+      kind: 'snapshot',
+      instance_id: 'host',
+      current_revision: 1,
+      states: [row],
+      tombstones: []
+    })
+    const hook = renderHook(() => useTerminalAutoSave('proj-1'))
+    // Consume initialization suppression so a false write cannot hide behind it.
+    act(() => useTerminalStore.setState({ activeTerminalId: '1' }))
+    vi.mocked(persistenceApi.writeDebounced).mockClear()
+    vi.mocked(extractScrollback).mockClear()
+    for (let revision = 2; revision <= 101; revision++) {
+      act(() =>
+        applyAgentHookStateSync({
+          kind: 'delta',
+          instance_id: 'host',
+          current_revision: revision,
+          states: [
+            {
+              ...row,
+              revision,
+              state: revision % 2 ? 'busy' : 'idle',
+              hook_kind: 'tool_start',
+              hook_at: revision,
+              tool_name: `tool-${revision}`
+            } as HookStateDto
+          ],
+          tombstones: []
+        })
+      )
+    }
+    expect(useAgentHookStateStore.getState().currentRevision).toBe(101)
+    expect(persistenceApi.writeDebounced).not.toHaveBeenCalled()
+    expect(extractScrollback).not.toHaveBeenCalled()
+    hook.unmount()
+  })
+
+  it('serialization whitelists durable identity and strips legacy runtime fields', () => {
+    const identity = {
+      agentId: 'pi',
+      sessionId: 'session',
+      source: 'hook' as const,
+      descriptor_ref: { descriptor_id: 'durable', generation: 1 },
+      cwd: '/repo',
+      transcript_path: '/repo/pi.jsonl',
+      resumeArgv: ['pi', '--session', '/repo/pi.jsonl']
+    }
+    const terminal = {
+      id: '1',
+      projectId: 'proj-1',
+      name: 'shell',
+      agentSession: {
+        ...identity,
+        hook_kind: 'needs_approval',
+        hook_at: 1,
+        tool_name: 'bash',
+        revision: 100,
+        state: 'busy'
+      }
+    }
+    expect(
+      serializeTerminalsForProject([terminal], 'proj-1', '1').terminals[0].agentSession
+    ).toEqual(identity)
+    expect(
+      hasStructuralTerminalChange(
+        [terminal],
+        [
+          {
+            ...terminal,
+            agentSession: {
+              ...identity,
+              hook_kind: 'turn_done',
+              hook_at: 999,
+              tool_name: 'read',
+              revision: 101,
+              state: 'idle'
+            }
+          }
+        ]
+      )
+    ).toBe(false)
   })
 
   describe('setTerminalRestoreInProgress', () => {
