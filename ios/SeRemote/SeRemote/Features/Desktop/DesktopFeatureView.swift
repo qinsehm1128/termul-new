@@ -21,7 +21,7 @@ struct DesktopFeatureView: View {
     private var allowsControl: Bool { deviceLink?.allows("screen.control") ?? true }
     private var streaming: Bool { socket.state == .streaming && scenePhase == .active }
     private var hostAllowsControl: Bool {
-        socket.controlEnabled && (socket.info?.controlEnabled ?? false) && (socket.info?.permissions.accessibility ?? false)
+        socket.controlEnabled && (socket.info?.permissions.accessibility ?? false)
     }
     private var canEnableControl: Bool { allowsView && allowsControl && hostAllowsControl && streaming }
     private var acceptsInput: Bool {
@@ -32,6 +32,7 @@ struct DesktopFeatureView: View {
     var body: some View {
         VStack(spacing: 0) {
             statusBar
+            controls
             ZStack {
                 Rectangle().fill(theme.isNight ? Color.black : theme.insetFill)
                 DesktopCanvasView(image: socket.image, displayID: socket.selectedDisplay,
@@ -68,13 +69,14 @@ struct DesktopFeatureView: View {
                     .accessibilityHidden(!keyboardVisible)
             }
             guidance
-            controls
         }
         .foregroundStyle(palette.ink)
         .tint(palette.accent)
         .background(theme.sheetSurface)
         .navigationTitle(Text("Desktop"))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(theme.barSurface, for: .navigationBar)
         .task {
             guard allowsView else { return }
             await socket.open()
@@ -231,7 +233,8 @@ struct DesktopFeatureView: View {
                 Image(systemName: "info.circle").accessibilityHidden(true)
                 Text(message).font(SeNocturneType.font(12)).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if allowsView && socket.state != .streaming && socket.state != .connecting && socket.state != .revoked {
+                if allowsView && socket.state != .connecting && socket.state != .revoked &&
+                    (socket.state != .streaming || socket.info?.permissions.accessibility == false) {
                     Button("Retry") { Task { socket.close(); await socket.open() } }
                         .frame(minWidth: 44, minHeight: 44)
                         .accessibilityLabel(Text("Reconnect remote desktop"))
@@ -284,7 +287,7 @@ struct DesktopFeatureView: View {
             if !info.viewEnabled { return String(localized: "Enable remote desktop viewing in the host’s settings.") }
             if !info.permissions.screenRecording { return String(localized: "On the Mac, allow Screen Recording in System Settings → Privacy & Security, then retry.") }
             if !allowsControl { return String(localized: "View only: ask the host owner to grant this device screen control permission.") }
-            if !info.controlEnabled { return String(localized: "View only: enable remote mouse and keyboard control on the host.") }
+            if !socket.controlEnabled { return String(localized: "View only: enable remote mouse and keyboard control on the host.") }
             if !info.permissions.accessibility { return String(localized: "View only: on the Mac, allow Accessibility in System Settings → Privacy & Security.") }
         }
         return nil
