@@ -579,6 +579,45 @@ pub async fn resume_spawn(
     Ok(answer)
 }
 
+/// Expired plans cannot authorize a spawn. Recheck under the descriptor lock
+/// shared with plan consumption before unlinking, including consumed plans.
+pub(crate) fn gc_expired_plans(home: &Path) -> Result<usize, HookErrorDto> {
+    let mut removed = 0;
+    let entries = match fs::read_dir(store::root(home)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(_) => {
+            return Err(error(
+                HookErrorCode::InternalError,
+                "cannot inspect restore plans",
+            ))
+        }
+    };
+    for entry in entries {
+        let entry = entry
+            .map_err(|_| error(HookErrorCode::InternalError, "cannot inspect restore plans"))?;
+        if !entry.file_name().to_string_lossy().starts_with("plan-") {
+            continue;
+        }
+        let plan: DurablePlan = store::read_json(&entry.path())?;
+        if plan.dto.expires_at > now_ms() {
+            continue;
+        }
+        let _lock = store::lock(home, &plan.dto.descriptor_id)?;
+        let plan: DurablePlan = store::read_json(&entry.path())?;
+        if plan.dto.expires_at <= now_ms() {
+            fs::remove_file(entry.path()).map_err(|_| {
+                error(
+                    HookErrorCode::InternalError,
+                    "cannot remove expired restore plan",
+                )
+            })?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 pub(crate) fn gc_safe(
     home: &Path,
     descriptor: &str,
@@ -895,6 +934,8 @@ mod tests {
                 transcript.to_string_lossy().into_owned()
             ]
         );
+        let live_plan = resume_plan(&context, request.clone()).await.unwrap();
+        let expired_path = plan_path(&home, &dto.plan_id);
         let mut plan: DurablePlan = store::read_json(&plan_path(&home, &dto.plan_id)).unwrap();
         plan.dto.expires_at = now_ms();
         store::atomic_json(&plan_path(&home, &dto.plan_id), &plan).unwrap();
@@ -909,6 +950,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code, HookErrorCode::PlanExpired);
+        assert_eq!(gc_expired_plans(&home).unwrap(), 1);
+        assert!(!expired_path.exists());
+        assert!(plan_path(&home, &live_plan.plan_id).exists());
         let mut forbidden = context;
         forbidden.auto_resume_enabled = false;
         assert_eq!(

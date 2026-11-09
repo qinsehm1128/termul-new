@@ -108,7 +108,8 @@ pub struct LiveAgentSessionEntry {
     pub root_pid: u32,
     pub agent_id: String,
     pub session_id: String,
-    pub self_dev: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_dev: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_home: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -245,13 +246,24 @@ mod tests {
             root_pid,
             agent_id,
             session_id: session_id.to_string(),
-            self_dev: false,
+            self_dev: Some(false),
             source: "poll",
             hook_kind: None,
             transcript_path: None,
             codex_home: None,
             cwd: Some("/work/app".to_string()),
         }
+    }
+
+    #[test]
+    fn unknown_hook_qin_variant_is_not_serialized_as_default() {
+        let mut session = detected(100, "qin-code", "unverified");
+        session.source = "hook";
+        session.self_dev = None;
+        let mapped = map_live_sessions(&[terminal("terminal", 100, None)], vec![session]);
+        let value = serde_json::to_value(&mapped[0]).unwrap();
+        assert!(value.get("selfDev").is_none());
+        assert_eq!(value["source"], "hook");
     }
 
     #[test]

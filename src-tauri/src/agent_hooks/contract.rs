@@ -213,6 +213,9 @@ pub struct HookStateDto {
     pub agent_session_id: String,
     pub project_id: String,
     pub state: DerivedState,
+    /// Only genuine Idle/TurnDone events grant readiness; SessionStart does not.
+    #[serde(default)]
+    pub ready: bool,
     pub identity: HookIdentityDto,
     pub restore_state: RestoreState,
     pub revision: u64,
@@ -365,7 +368,7 @@ mod tests {
     fn state() -> Value {
         json!({"instance_id":"instance-1", "terminal_id":"pty-1", "generation":2,
             "adapter_install_id":"install-1", "agent_session_id":"session-1", "project_id":"project-1",
-            "state":"busy", "identity":identity(), "restore_state":"confirmed", "revision":7})
+            "state":"busy", "ready":false, "identity":identity(), "restore_state":"confirmed", "revision":7})
     }
 
     #[test]

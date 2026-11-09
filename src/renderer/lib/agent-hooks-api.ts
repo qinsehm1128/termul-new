@@ -90,6 +90,7 @@ function warn(message: string) {
 /** One shared revision cursor, push subscription, in-flight request and fallback timer. */
 export function createHookStateSubscription(transport: HookStateTransport) {
   const listeners = new Set<HookStateListener>()
+  const fallbackListeners = new Set<() => void>()
   const states = new Map<string, HookStateDto>()
   let cursor: HookStateSyncRequest = {}
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -167,6 +168,15 @@ export function createHookStateSubscription(transport: HookStateTransport) {
       queuedPush = null
       if (currentEpoch === epoch && active()) {
         for (const response of pending ?? []) receivePush(response)
+        if (!connected && visible()) {
+          for (const listener of fallbackListeners) {
+            try {
+              listener()
+            } catch {
+              /* discovery cannot disrupt state transport */
+            }
+          }
+        }
       }
       if (resync && active()) {
         resync = false
@@ -235,7 +245,8 @@ export function createHookStateSubscription(transport: HookStateTransport) {
     void reconcile()
   }
 
-  return (listener: HookStateListener): (() => void) => {
+  return (listener: HookStateListener, onFallback?: () => void): (() => void) => {
+    if (onFallback) fallbackListeners.add(onFallback)
     listeners.add(listener)
     if (listeners.size === 1) start()
     else if (cursor.instance_id != null)
@@ -251,6 +262,7 @@ export function createHookStateSubscription(transport: HookStateTransport) {
       if (disposed) return
       disposed = true
       listeners.delete(listener)
+      if (onFallback) fallbackListeners.delete(onFallback)
       if (!active()) {
         ++epoch
         clearTimer()

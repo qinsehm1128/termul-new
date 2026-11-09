@@ -12,16 +12,9 @@ import { terminalApi } from '@/lib/api'
 import { useAgentHookStateStore } from '@/stores/agent-hook-state-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
-const PROCESS_DISCOVERY_INTERVAL_MS = 15_000
-
-/** Apply runtime first, then project only accepted identity changes into layout state. */
-export function applyAgentHookStateSync(response: HookStateSyncResponse): void {
-  const previous = useAgentHookStateStore.getState()
-  previous.applySync(response)
-  const runtime = useAgentHookStateStore.getState()
-  if (runtime === previous) return
-  for (const [key, state] of Object.entries(runtime.states)) {
-    if (previous.states[key] === state) continue
+/** Reconcile cached identity after either runtime updates or PTY adoption. */
+export function reconcileAgentHookIdentities(): void {
+  for (const state of Object.values(useAgentHookStateStore.getState().states)) {
     const store = useTerminalStore.getState()
     const terminal = store.terminals.find(
       (t) => t.ptyId === state.terminal_id && t.projectId === state.project_id
@@ -35,8 +28,17 @@ export function applyAgentHookStateSync(response: HookStateSyncResponse): void {
   // Ending or removing runtime does not erase the durable identity used for resume.
 }
 
+/** Apply runtime first; durable identity equality prevents runtime-only autosaves. */
+export function applyAgentHookStateSync(response: HookStateSyncResponse): void {
+  useAgentHookStateStore.getState().applySync(response)
+  reconcileAgentHookIdentities()
+}
+
 export async function syncTerminalAgentSessions(): Promise<void> {
-  const tracked = useTerminalStore.getState().terminals.filter((terminal) => terminal.ptyId)
+  // Filter before PTY listing / process detection, not only after paying their cost.
+  const tracked = useTerminalStore
+    .getState()
+    .terminals.filter((terminal) => terminal.ptyId && terminal.agentSession?.source !== 'hook')
   if (tracked.length === 0 || typeof terminalApi.list !== 'function') return
   const listed = await terminalApi.list()
   if (!listed.success) return
@@ -68,7 +70,7 @@ export function useAgentSessionTracker(): void {
     let disposed = false
     let running = false
     const discover = (): void => {
-      if (disposed || running) return
+      if (disposed || running || document.hidden) return
       running = true
       void syncTerminalAgentSessions()
         .catch(() => {
@@ -78,15 +80,31 @@ export function useAgentSessionTracker(): void {
           running = false
         })
     }
-    // B owns snapshot reconciliation, transport subscriptions and its single timer.
+    // The singleton owns the only timer: discovery runs on its visible,
+    // disconnected fallback path, never on a second always-running interval.
     const unsubscribe = agentHooksApi.subscribeState((response) => {
       if (!disposed) applyAgentHookStateSync(response)
+    }, discover)
+    const unsubscribeTerminals = useTerminalStore.subscribe((store, previous) => {
+      const attachmentsChanged =
+        store.terminals.length !== previous.terminals.length ||
+        store.terminals.some((terminal, index) => {
+          const old = previous.terminals[index]
+          return (
+            terminal.id !== old?.id ||
+            terminal.ptyId !== old.ptyId ||
+            terminal.projectId !== old.projectId
+          )
+        })
+      if (disposed || !attachmentsChanged) return
+      reconcileAgentHookIdentities()
+      discover()
     })
+    reconcileAgentHookIdentities()
     discover()
-    const interval = setInterval(discover, PROCESS_DISCOVERY_INTERVAL_MS)
     return () => {
       disposed = true
-      clearInterval(interval)
+      unsubscribeTerminals()
       unsubscribe()
     }
   }, [])

@@ -539,8 +539,9 @@ pub(crate) fn register_hook_owner_resolver(terminal: TerminalServiceHandle) {
                 }
                 let agent: &str = found[0].agent_id.as_ref();
                 match agent {
-                    "qin-code" if found[0].self_dev => Some("self-dev".into()),
-                    "qin-code" => Some("default".into()),
+                    "qin-code" => found[0].self_dev.map(|self_dev| {
+                        if self_dev { "self-dev".into() } else { "default".into() }
+                    }),
                     _ => None,
                 }
             })
@@ -549,7 +550,11 @@ pub(crate) fn register_hook_owner_resolver(terminal: TerminalServiceHandle) {
             .flatten()
         })
     }));
-    crate::agent_hooks::server::register_owner_resolver(Arc::new(move |id, generation| {
+    crate::agent_hooks::server::register_owner_resolver(hook_owner_resolver(terminal));
+}
+
+pub(crate) fn hook_owner_resolver(terminal: TerminalServiceHandle) -> crate::agent_hooks::server::OwnerResolver {
+    Arc::new(move |id, generation| {
         let terminal = terminal.clone();
         Box::pin(async move {
             use crate::agent_hooks::server::HookOwner;
@@ -583,7 +588,7 @@ pub(crate) fn register_hook_owner_resolver(terminal: TerminalServiceHandle) {
                 None
             }
         })
-    }));
+    })
 }
 /// Only the host may supply receiver credentials. PTY manager replaces id/generation.
 pub(crate) fn inject_receiver_environment(options: &mut SpawnOptions) {

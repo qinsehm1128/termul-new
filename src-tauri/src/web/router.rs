@@ -541,6 +541,15 @@ pub fn router(
 ) -> Router {
     crate::commands::register_hook_owner_resolver(terminal.clone());
     #[cfg(not(test))]
+    if let (Some(conversation), Some(manifest), Some(store)) = (&conversation, &workspace_manifest, &store) {
+        crate::cli_session::identity_gc::register(crate::cli_session::identity_gc::GcContext {
+            repository: Arc::clone(conversation.session_workspace().repository()),
+            manifest_root: manifest.root().to_path_buf(),
+            layout_file: store.path().to_path_buf(),
+            terminal: terminal.clone(),
+        });
+    }
+    #[cfg(not(test))]
     if crate::agent_hooks::start().is_err() {
         log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
     }

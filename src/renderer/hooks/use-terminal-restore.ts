@@ -9,7 +9,11 @@ import { agentHooksApi } from '@/lib/agent-hooks-api'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
-import { resumeCommandLine, reviveTerminalAgentSession } from '@/lib/agents/live-agent-sessions'
+import {
+  needsManualAgentStart,
+  resumeCommandLine,
+  reviveTerminalAgentSession
+} from '@/lib/agents/live-agent-sessions'
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
@@ -1172,19 +1176,24 @@ async function restoreFromLayout(
           continue
         }
 
+        const manualAgentStart = needsManualAgentStart(rememberedSession)
         const sessionKey = rememberedSession
           ? `${rememberedSession.agentId}:${rememberedSession.sessionId}`
           : ''
         const resumeSession =
-          resumeAgentSessions && rememberedSession && !resumedSessionKeys.has(sessionKey)
+          resumeAgentSessions &&
+          !manualAgentStart &&
+          rememberedSession &&
+          !resumedSessionKeys.has(sessionKey)
             ? rememberedSession
             : null
         if (resumeSession) resumedSessionKeys.add(sessionKey)
         const spawnCwd = resumeSession?.cwd ?? persistedTerminal.cwd
         // An agent tab has no shell to type into: run the resume command as
         // its program. A shell tab gets the command typed once it is up.
-        const programSpawnOptions =
-          resumeSession && agentSpawnOptions
+        const programSpawnOptions = manualAgentStart
+          ? undefined
+          : resumeSession && agentSpawnOptions
             ? {
                 program: resumeSession.resumeArgv[0],
                 args: resumeSession.resumeArgv.slice(1),
@@ -1286,7 +1295,10 @@ async function restoreFromLayout(
         idMap.set(persistedTerminal.id, newId)
         newTerminals.push({
           id: newId,
-          name: persistedTerminal.name,
+          name:
+            manualAgentStart && !persistedTerminal.name.endsWith(' — manual start required')
+              ? `${persistedTerminal.name} — manual start required`
+              : persistedTerminal.name,
           projectId,
           shell: normalizedShell,
           cwd: spawnCwd,
@@ -1303,7 +1315,7 @@ async function restoreFromLayout(
           ...(persistedTerminal.modes ? { pendingModes: persistedTerminal.modes } : {}),
           // ADR-004.4: carry restored agent metadata so the tab labels as the
           // agent and re-persists correctly. Seed prompt stays dropped.
-          ...(isAgentTerminal
+          ...(isAgentTerminal && !manualAgentStart
             ? {
                 kind: 'agent' as const,
                 agentId: persistedTerminal.agentId,
@@ -1312,7 +1324,11 @@ async function restoreFromLayout(
                 agentArgs: persistedTerminal.agentArgs
               }
             : {}),
-          ...(resumeSession ? { agentSession: resumeSession } : {})
+          ...(manualAgentStart
+            ? { agentSession: rememberedSession! }
+            : resumeSession
+              ? { agentSession: resumeSession }
+              : {})
         })
       } finally {
         if (spawnTimeout) clearTimeout(spawnTimeout)

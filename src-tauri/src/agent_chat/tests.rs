@@ -638,6 +638,71 @@ fn receipt_byte_budget_reclaims_finished_items_without_becoming_a_lifetime_limit
 }
 
 #[test]
+fn canonical_session_start_requires_force_and_real_idle_gets_a_distinct_revision() {
+    use crate::agent_hooks::{
+        contract::*,
+        state::{StateInput, StateStore},
+    };
+    for adapter in ["claude-code", "pi", "qin-code"] {
+        let mut store = StateStore::new("host".into());
+        let identity = HookIdentityDto {
+            adapter_id: adapter.to_owned().try_into().unwrap(),
+            agent_session_id: "session".into(),
+            transcript_path: None,
+            cwd: None,
+            source: HookIdentitySource::Hook,
+            descriptor_id: None,
+            resume_argv: None,
+        };
+        let input = StateInput {
+            terminal_id: "canonical-cold-start".into(),
+            generation: 0,
+            adapter_install_id: "install".into(),
+            project_id: "project".into(),
+            identity,
+            kind: HookKind::SessionStart,
+        };
+        let start = store.upsert(input.clone(), Instant::now()).unwrap();
+        assert!(!start.ready);
+        let mut session = Session::new(derived_chat_hook(start.clone()).unwrap());
+        let (writer, writes) = writer();
+        let queued = session
+            .enqueue("queued once".into(), None, &writer)
+            .unwrap();
+        assert_eq!(queued.status, "queued");
+        assert!(session.snapshot(None).can_force_send);
+        assert!(writes.lock().unwrap().is_empty());
+        session.force_send(&queued.id, None, &writer).unwrap();
+        session.flush(&writer);
+        assert_eq!(
+            &*writes.lock().unwrap(),
+            &["\x1b[200~queued once\x1b[201~\r"]
+        );
+        assert!(session.force_send(&queued.id, None, &writer).is_err());
+        let idle = store
+            .upsert(
+                StateInput {
+                    kind: HookKind::Idle,
+                    ..input.clone()
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(idle.ready);
+        assert!(idle.revision > start.revision);
+        session.apply_hook(derived_chat_hook(idle).unwrap());
+        session.flush(&writer);
+        assert_eq!(writes.lock().unwrap().len(), 1);
+        let repeated_start = store.upsert(input, Instant::now()).unwrap();
+        assert!(!repeated_start.ready);
+        assert_eq!(
+            derived_chat_hook(repeated_start).unwrap().kind,
+            HookKind::SessionStart
+        );
+    }
+}
+
+#[test]
 fn cold_start_without_idle_requires_explicit_force_and_only_sends_the_selected_receipt() {
     for agent in [AgentKind::ClaudeCode, AgentKind::Pi, AgentKind::QinCode] {
         let mut start = hook(HookKind::SessionStart);

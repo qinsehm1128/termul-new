@@ -36,6 +36,9 @@ pub struct WebStore {
 }
 
 impl WebStore {
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
     /// Open (and lazily load) the store at `path`.
     ///
     /// - Missing file → empty store (first run).

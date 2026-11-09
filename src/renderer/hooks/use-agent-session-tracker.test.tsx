@@ -137,6 +137,29 @@ describe('subscription-fed runtime and identity tracker', () => {
     expect(useTerminalStore.getState().terminals[0].agentSession?.sessionId).toBe('sess-1')
     expect(useAgentHookStateStore.getState().instanceId).toBe('new-host')
   })
+  it('projects a cached snapshot when its PTY is adopted later without another hook event', async () => {
+    vi.useFakeTimers()
+    const adopted = useTerminalStore.getState().terminals[0]
+    useTerminalStore.setState({ terminals: [] })
+    const hook = renderHook(() => useAgentSessionTracker())
+    const receive = mocks.subscribe.mock.calls[0][0] as (response: HookStateSyncResponse) => void
+    act(() => receive(sync(state(1, { state: 'idle' }))))
+    expect(useTerminalStore.getState().terminals).toEqual([])
+    act(() => useTerminalStore.setState({ terminals: [adopted] }))
+    expect(useTerminalStore.getState().terminals[0].agentSession).toMatchObject({
+      sessionId: 'sess-1',
+      descriptor_ref: { descriptor_id: 'descriptor', generation: 1 }
+    })
+    const identity = useTerminalStore.getState().terminals[0].agentSession
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(useTerminalStore.getState().terminals[0].agentSession).toBe(identity)
+    expect(mocks.list).not.toHaveBeenCalled()
+    expect(mocks.detect).not.toHaveBeenCalled()
+    hook.unmount()
+  })
+
   it('process discovery cannot overwrite a confirmed hook identity', async () => {
     applyAgentHookStateSync(sync())
     mocks.detect.mockResolvedValue([{ rootPid: 42, agentId: 'pi', sessionId: 'poll', cwd: null }])
@@ -181,21 +204,27 @@ describe('subscription-fed runtime and identity tracker', () => {
       resumeArgv: ['custom-cli', 'reopen', 'sess-1']
     })
   })
-  it('subscribes through B facade, tears down, and has only the old process discovery timer', async () => {
+  it('subscribes through the singleton facade with no independent process timer', async () => {
     vi.useFakeTimers()
     const hook = renderHook(() => useAgentSessionTracker())
     await act(async () => {
       await Promise.resolve()
     })
     expect(mocks.subscribe).toHaveBeenCalledTimes(1)
-    expect(vi.getTimerCount()).toBe(1)
+    expect(vi.getTimerCount()).toBe(0)
     const receive = mocks.subscribe.mock.calls[0][0] as (response: HookStateSyncResponse) => void
     act(() => receive(sync()))
     expect(getAgentHookRuntimeState('host-pty')?.state).toBe('busy')
     await act(async () => {
       vi.advanceTimersByTime(15_000)
     })
-    expect(mocks.list).toHaveBeenCalledTimes(2)
+    expect(mocks.list).toHaveBeenCalledTimes(1)
+    expect(mocks.detect).toHaveBeenCalledTimes(1)
+    // Even an explicit fallback pulse cannot scan hook-confirmed terminals.
+    await act(async () => {
+      mocks.subscribe.mock.calls[0][1]()
+    })
+    expect(mocks.list).toHaveBeenCalledTimes(1)
     hook.unmount()
     expect(mocks.unsubscribe).toHaveBeenCalledOnce()
     expect(vi.getTimerCount()).toBe(0)

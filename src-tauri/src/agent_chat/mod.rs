@@ -731,7 +731,8 @@ fn derived_chat_hook(value: agent_hooks::contract::HookStateDto) -> Option<Agent
     };
     let kind = match value.state {
         DerivedState::Busy => HookKind::PromptSubmitted,
-        DerivedState::Idle => HookKind::Idle,
+        DerivedState::Idle if value.ready => HookKind::Idle,
+        DerivedState::Idle => HookKind::SessionStart,
         DerivedState::NeedsApproval => HookKind::NeedsApproval,
         DerivedState::Blocked => HookKind::Blocked,
         DerivedState::Error => HookKind::Error,
@@ -1070,6 +1071,7 @@ mod derived_state_tests {
             adapter_install_id: "install".into(),
             agent_session_id: "session".into(),
             project_id: "project".into(),
+            ready: state == DerivedState::Idle,
             state,
             identity: HookIdentityDto {
                 adapter_id: AdapterId::try_from(adapter.to_owned()).unwrap(),

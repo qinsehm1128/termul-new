@@ -1380,6 +1380,38 @@ describe('restore reopens remembered agent sessions', () => {
     expect(mockTerminalWrite).not.toHaveBeenCalled()
   })
 
+  it('shows unverified hook qin as manual start and never starts stored qin argv', async () => {
+    restoreWith([
+      {
+        ...shellTerminal('qin-manual', {
+          agentId: 'qin-code',
+          sessionId: 'unproven-self-dev',
+          source: 'hook',
+          resumeArgv: ['qin-code', '--resume', 'unproven-self-dev']
+        }),
+        kind: 'agent',
+        agentProgram: 'qin-code',
+        agentArgs: ['self-dev']
+      }
+    ])
+    await waitFor(() => expect(mockTerminalSpawn).toHaveBeenCalled())
+    await settle()
+    expect(mockTerminalSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shell: 'bash',
+        cwd: '/projects/a'
+      })
+    )
+    expect(mockTerminalSpawn.mock.calls[0][0].program).toBeUndefined()
+    expect(mockTerminalWrite).not.toHaveBeenCalled()
+    expect(trustedResumeMocks.resumePlan).not.toHaveBeenCalled()
+    expect(mockTerminalStoreState.setTerminals).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'qin-manual — manual start required' })
+      ])
+    )
+  })
+
   it('types the resume command into a shell started where the session ran', async () => {
     restoreWith([shellTerminal('t1', claudeSession)])
 

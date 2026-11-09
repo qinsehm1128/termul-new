@@ -3167,6 +3167,8 @@ pub fn run() {
                 None
             };
 
+            let identity_gc_repository = conversation_bootstrap.as_ref().map(|bootstrap| Arc::clone(&bootstrap.repository));
+
             // Window chrome is configured before show(). macOS overlay settings
             // live in tauri.conf.json — avoid set_decorations(true) there because
             // it resets hiddenTitle/full-size content view. Win/Linux drop native
@@ -3621,6 +3623,14 @@ pub fn run() {
             }
             app.manage(Arc::clone(&project_registry));
             commands::register_hook_owner_resolver(app.state::<core::TerminalServiceHandle>().inner().clone());
+            if let (Some(repository), Some(manifest)) = (&identity_gc_repository, &workspace_manifest_service) {
+                cli_session::identity_gc::register(cli_session::identity_gc::GcContext {
+                    repository: Arc::clone(repository),
+                    manifest_root: manifest.root().to_path_buf(),
+                    layout_file: app_data_dir.join("termul-data.json"),
+                    terminal: app.state::<core::TerminalServiceHandle>().inner().clone(),
+                });
+            }
             if agent_hooks::start().is_err() {
                 log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
             }

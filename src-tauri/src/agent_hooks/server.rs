@@ -26,7 +26,7 @@ pub struct HookOwner {
     pub variant: Option<String>,
     pub root_pid: Option<u32>,
 }
-type OwnerResolver = Arc<
+pub(crate) type OwnerResolver = Arc<
     dyn Fn(String, u64) -> Pin<Box<dyn Future<Output = Option<HookOwner>> + Send>> + Send + Sync,
 >;
 static OWNER: OnceLock<Mutex<Option<OwnerResolver>>> = OnceLock::new();
@@ -76,6 +76,9 @@ struct ReceiverState {
     secret: Arc<String>,
     instance: Arc<String>,
     permits: Arc<Semaphore>,
+    home: PathBuf,
+    #[cfg(test)]
+    owner_resolver: Option<OwnerResolver>,
 }
 static STARTED: OnceLock<Result<(), String>> = OnceLock::new();
 static ENVIRONMENT: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -153,21 +156,40 @@ fn router(state: ReceiverState) -> Router {
     Router::new()
         .route("/hooks/{adapter}", post(receive))
         .layer(DefaultBodyLimit::max(256 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            admission,
+        ))
         .with_state(state)
 }
+async fn admission(
+    State(receiver): State<ReceiverState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|peer| peer.0);
+    if !peer.is_some_and(|peer| authorized(peer, request.headers(), &receiver.secret)) {
+        return reject("authorization", StatusCode::FORBIDDEN).into_response();
+    }
+    let Ok(_permit) = receiver.permits.clone().try_acquire_owned() else {
+        return reject("concurrency", StatusCode::TOO_MANY_REQUESTS).into_response();
+    };
+    match tokio::time::timeout(Duration::from_secs(5), next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => reject("deadline", StatusCode::REQUEST_TIMEOUT).into_response(),
+    }
+}
+
 async fn receive(
     State(receiver): State<ReceiverState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(adapter): Path<String>,
     headers: HeaderMap,
     body: String,
 ) -> StatusCode {
-    if !authorized(peer, &headers, &receiver.secret) {
-        return reject("authorization", StatusCode::FORBIDDEN);
-    }
-    let Ok(_permit) = receiver.permits.try_acquire() else {
-        return reject("concurrency", StatusCode::TOO_MANY_REQUESTS);
-    };
     if header(&headers, "x-se-hook-instance") != Some(receiver.instance.as_str()) {
         return reject("instance", StatusCode::FORBIDDEN);
     }
@@ -176,9 +198,8 @@ async fn receive(
     else {
         return reject("terminal", StatusCode::FORBIDDEN);
     };
-    let Some(generation) = header(&headers, "x-se-hook-generation")
-        .and_then(|s| s.parse::<u64>().ok())
-        .filter(|v| *v > 0)
+    let Some(generation) =
+        header(&headers, "x-se-hook-generation").and_then(|s| s.parse::<u64>().ok())
     else {
         return reject("generation", StatusCode::FORBIDDEN);
     };
@@ -191,6 +212,8 @@ async fn receive(
         return reject("adapter", StatusCode::BAD_REQUEST);
     }
     let resolver = OWNER.get_or_init(Default::default).lock().unwrap().clone();
+    #[cfg(test)]
+    let resolver = receiver.owner_resolver.clone().or(resolver);
     let Some(resolver) = resolver else {
         return reject("registry_unavailable", StatusCode::FORBIDDEN);
     };
@@ -210,12 +233,7 @@ async fn receive(
             return reject("qin_identity_headers", StatusCode::BAD_REQUEST);
         }
     }
-    let Some(home) = std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-    else {
-        return reject("home", StatusCode::SERVICE_UNAVAILABLE);
-    };
+    let home = &receiver.home;
     let normalized = match install::normalize_installed(&home, &adapter, install_id, &raw) {
         Ok(event) => event,
         Err(_) => return reject("snapshot_or_payload", StatusCode::BAD_REQUEST),
@@ -512,6 +530,9 @@ pub fn start() -> Result<(), String> {
                 secret: Arc::new(secret.clone()),
                 instance: Arc::new(instance.clone()),
                 permits: Arc::new(Semaphore::new(32)),
+                home: home.clone(),
+                #[cfg(test)]
+                owner_resolver: None,
             };
             let _ = ENVIRONMENT.set(HashMap::from([
                 ("SE_AGENT_HOOK_INSTANCE".into(), instance),
@@ -537,6 +558,7 @@ pub fn start() -> Result<(), String> {
                         }
                     };
                     runtime.block_on(async move {
+                        tokio::spawn(crate::cli_session::identity_gc::run(receiver.home.clone()));
                         let listener = match tokio::net::TcpListener::from_std(listener) {
                             Ok(l) => l,
                             Err(_) => {
@@ -578,11 +600,181 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+    #[tokio::test]
+    async fn native_generation_zero_environment_accepts_session_start() {
+        use super::super::contract::{
+            AdapterId, HookAction, HookConfirmRequest, HookPreviewRequest,
+        };
+        let home = tempfile::tempdir().unwrap();
+        let adapter = AdapterId::try_from("claude-code".to_string()).unwrap();
+        let preview = install::preview_v3(
+            home.path(),
+            HookPreviewRequest {
+                adapter_id: adapter.clone(),
+                action: HookAction::Install,
+                event_options: Default::default(),
+            },
+        )
+        .unwrap();
+        let installed = install::confirm_v3(
+            home.path(),
+            HookConfirmRequest {
+                adapter_id: adapter,
+                preview_id: preview.preview_id,
+                fingerprint: preview.fingerprint,
+            },
+            Some(HookAction::Install),
+        )
+        .unwrap();
+        let mut receiver = receiver();
+        receiver.home = home.path().into();
+        let env_file = home.path().join("native-env");
+        let manager = crate::web::test_pty_manager();
+        receiver.owner_resolver = Some(crate::commands::hook_owner_resolver(
+            crate::core::TerminalServiceHandle::in_process(manager.clone()),
+        ));
+        let spawned = manager
+            .spawn(
+                se_pty::SpawnOptions {
+                    program: Some("/bin/sh".into()),
+                    cwd: Some(home.path().to_string_lossy().into_owned()),
+                    args: Some(vec![
+                        "-c".into(),
+                        "env > \"$1\"; sleep 30".into(),
+                        "sh".into(),
+                        env_file.to_string_lossy().into_owned(),
+                    ]),
+                    env: Some(HashMap::from([
+                        (
+                            "SE_AGENT_HOOK_ENDPOINT".into(),
+                            "http://127.0.0.1:42001".into(),
+                        ),
+                        ("SE_AGENT_HOOK_TOKEN".into(), receiver.secret.to_string()),
+                        (
+                            "SE_AGENT_HOOK_INSTANCE".into(),
+                            receiver.instance.to_string(),
+                        ),
+                    ])),
+                    project_id: Some("native-project".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let terminal_id = spawned.info.id.clone();
+        register_owned_terminal(&terminal_id);
+        let mut injected = HashMap::new();
+        for _ in 0..200 {
+            if let Ok(text) = std::fs::read_to_string(&env_file) {
+                injected = text
+                    .lines()
+                    .filter_map(|line| line.split_once('='))
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect();
+                if injected.contains_key("SE_AGENT_HOOK_GENERATION") {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            injected.get("SE_AGENT_HOOK_GENERATION").map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(injected["SE_AGENT_HOOK_PTY_ID"], terminal_id);
+        assert!(
+            receiver.owner_resolver.as_ref().unwrap()(terminal_id.clone(), 1)
+                .await
+                .is_none()
+        );
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let payload = serde_json::json!({
+            "hook_event_name": "SessionStart", "session_id": session_id,
+            "cwd": home.path().to_str().unwrap(),
+        });
+        let response = router(receiver.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/hooks/claude-code")
+                    .header("authorization", format!("Bearer {}", receiver.secret))
+                    .header("x-se-hook-instance", &injected["SE_AGENT_HOOK_INSTANCE"])
+                    .header("x-se-hook-pty-id", &injected["SE_AGENT_HOOK_PTY_ID"])
+                    .header(
+                        "x-se-hook-generation",
+                        &injected["SE_AGENT_HOOK_GENERATION"],
+                    )
+                    .header("x-se-hook-install-id", installed.status.install_id.unwrap())
+                    .extension(ConnectInfo(
+                        "127.0.0.1:42001".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        manager.terminate(&terminal_id).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let state = state::latest(&terminal_id).expect("native SessionStart must upsert state");
+        assert_eq!(state.generation, 0);
+        assert_eq!(state.identity.agent_session_id, session_id);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn admission_bounds_body_receipt_before_polling_and_times_out_stalled_streams() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        fn stream_request(token: &str, polls: Arc<AtomicUsize>) -> Request<Body> {
+            let stream = futures_util::stream::poll_fn(move |_| {
+                polls.fetch_add(1, Ordering::SeqCst);
+                std::task::Poll::<Option<Result<axum::body::Bytes, std::io::Error>>>::Pending
+            });
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("authorization", format!("Bearer {token}"))
+                .extension(ConnectInfo(
+                    "127.0.0.1:42001".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::from_stream(stream))
+                .unwrap()
+        }
+        let mut state = receiver();
+        state.permits = Arc::new(Semaphore::new(1));
+        let first_polls = Arc::new(AtomicUsize::new(0));
+        let first = tokio::spawn(
+            router(state.clone()).oneshot(stream_request(&state.secret, first_polls.clone())),
+        );
+        while first_polls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let rejected_polls = Arc::new(AtomicUsize::new(0));
+        let response = router(state.clone())
+            .oneshot(stream_request("unauthorized", rejected_polls.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = router(state.clone())
+            .oneshot(stream_request(&state.secret, rejected_polls.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rejected_polls.load(Ordering::SeqCst), 0);
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert_eq!(
+            first.await.unwrap().unwrap().status(),
+            StatusCode::REQUEST_TIMEOUT
+        );
+        assert_eq!(state.permits.available_permits(), 1);
+    }
+
     fn receiver() -> ReceiverState {
         ReceiverState {
             secret: Arc::new("a".repeat(64)),
             instance: Arc::new(uuid::Uuid::new_v4().to_string()),
             permits: Arc::new(Semaphore::new(32)),
+            home: PathBuf::new(),
+            owner_resolver: None,
         }
     }
     async fn request(state: ReceiverState, peer: SocketAddr, instance: &str) -> StatusCode {
@@ -651,6 +843,7 @@ mod tests {
             agent_session_id: "session".into(),
             project_id: "project".into(),
             state: DerivedState::Idle,
+            ready: false,
             identity: HookIdentityDto {
                 adapter_id: "qin-code".to_owned().try_into().unwrap(),
                 agent_session_id: "session".into(),

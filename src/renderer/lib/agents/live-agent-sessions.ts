@@ -78,6 +78,7 @@ export async function detectLiveAgentSessions(rootPids: number[]): Promise<LiveA
  * session to wherever it was started.
  */
 export function buildResumeArgv(session: LiveAgentSession): string[] {
+  if (session.source === 'hook' && session.agentId === 'qin-code') return []
   const id = session.sessionId
   switch (session.agentId) {
     case 'claude-code':
@@ -155,14 +156,18 @@ export function reviveTerminalAgentSession(value: unknown): TerminalAgentSession
     ...(isSafeAbsolutePath(raw.transcript_path) ? { transcript_path: raw.transcript_path } : {}),
     ...(isSafeAbsolutePath(raw.cwd) ? { cwd: raw.cwd } : {})
   }
+  // Unknown hook qin variant is metadata, not legacy executable authority.
+  if (raw.source === 'hook' && raw.agentId === 'qin-code' && !descriptor_ref) {
+    return { ...identity, agentId: raw.agentId, sessionId: raw.sessionId, resumeArgv: [] }
+  }
   // Host-backed argv is display metadata only. Restore resolves descriptor_ref
   // again before executing. Legacy built-in entries keep their safe argv rebuild.
-  if (descriptor_ref && validStoredArgv) {
+  if (descriptor_ref) {
     return {
       ...identity,
       agentId: raw.agentId,
       sessionId: raw.sessionId,
-      resumeArgv: [...stored] as string[]
+      resumeArgv: validStoredArgv ? ([...stored] as string[]) : []
     }
   }
   if (!isLiveAgentId(raw.agentId)) {
@@ -191,6 +196,11 @@ export function reviveTerminalAgentSession(value: unknown): TerminalAgentSession
     }),
     ...identity
   }
+}
+
+/** Hook qin without a host descriptor has no proven default/self-dev variant. */
+export function needsManualAgentStart(session: TerminalAgentSession | null | undefined): boolean {
+  return session?.source === 'hook' && session.agentId === 'qin-code' && !session.descriptor_ref
 }
 
 /** The line typed into a shell to reopen the session. */

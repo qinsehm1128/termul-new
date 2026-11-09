@@ -1482,7 +1482,9 @@ mod tests {
         )
         .unwrap();
         for encoder in ["python", "node", "jq"] {
-            assert!(!rendered.contains(encoder));
+            // Inspect source, not the rendered random HOME path (which can
+            // itself contain e.g. "jq"). Runtime spies below still catch calls.
+            assert!(!adapter.files["hook"].contains(encoder));
         }
         fs::write(&script, rendered).unwrap();
         let capture = home.join("capture");

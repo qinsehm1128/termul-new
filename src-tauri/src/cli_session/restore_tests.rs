@@ -19,6 +19,7 @@ pub(super) fn state() -> HookStateDto {
             resume_argv: None,
         },
         state: DerivedState::Idle,
+        ready: true,
         restore_state: RestoreState::Confirmed,
         revision: 1,
     }
@@ -50,6 +51,14 @@ fn qin_self_dev_requires_launch_and_process_argv_agreement() {
     );
     assert_eq!(
         super::live::qin_variant_from_evidence(&argv(&["/bin/sh"]), &self_dev),
+        Some("self-dev")
+    );
+    assert_eq!(
+        super::live::qin_variant_from_evidence(&argv(&["/bin/zsh"]), &standard),
+        Some("default")
+    );
+    assert_eq!(
+        super::live::qin_variant_from_evidence(&argv(&["/bin/sh"]), &argv(&["/opt/shared-binary"])),
         None
     );
 }

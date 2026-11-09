@@ -135,6 +135,8 @@ export interface HookStateDto {
   agent_session_id: string
   project_id: string
   state: DerivedState
+  /** Actual Idle/TurnDone evidence, not identity-only SessionStart. */
+  ready?: boolean
   identity: HookIdentityDto
   restore_state: RestoreState
   revision: number

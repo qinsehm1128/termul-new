@@ -23,8 +23,8 @@ pub struct LiveAgentSession {
     pub root_pid: u32,
     pub agent_id: &'static str,
     pub session_id: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub self_dev: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_dev: Option<bool>,
     /// Set only when codex ran against a `CODEX_HOME` other than the default:
     /// `codex resume` looks for the session there and nowhere else.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,11 +112,11 @@ fn detect_with_hook_lookup(
                         let home = PathBuf::from(std::env::var_os("HOME")?);
                         super::identity_store::load(&home, id).ok()
                     })
-                    .is_some_and(|stored| {
-                        stored.variant == "self-dev"
-                            && stored.identity.agent_session_id == event.agent_session_id
+                    .filter(|stored| {
+                        stored.identity.agent_session_id == event.agent_session_id
                             && stored.adapter_install_id == event.adapter_install_id
-                    });
+                    })
+                    .map(|stored| stored.variant == "self-dev");
                 sessions.push(LiveAgentSession {
                     root_pid: *pid,
                     agent_id: match event.identity.adapter_id.as_str() {
@@ -252,12 +252,17 @@ pub(crate) fn qin_variant_from_evidence(
         };
         Some(argv.get(offset).is_some_and(|arg| arg == "self-dev"))
     }
-    let expected = self_dev(launch)?;
-    (self_dev(process)? == expected).then_some(if expected { "self-dev" } else { "default" })
+    // A shell launch carries no qin variant evidence. The uniquely observed
+    // qin child's own argv does; never infer this from the shared executable.
+    let observed = self_dev(process)?;
+    if classify(launch) == Some(LiveAgent::QinCode) && self_dev(launch)? != observed {
+        return None;
+    }
+    Some(if observed { "self-dev" } else { "default" })
 }
 pub(crate) fn verified_qin_variant(root: u32, launch: &[String]) -> Option<String> {
     let pids = verified_agent_processes(root, "qin-code");
-    if pids.is_empty() {
+    if pids.is_empty() || (classify(launch) != Some(LiveAgent::QinCode) && pids.len() != 1) {
         return None;
     }
     let processes = list_processes();
@@ -495,7 +500,7 @@ fn resolve_all(
                 root_pid: f.root_pid,
                 agent_id: f.agent.id(),
                 session_id: String::new(),
-                self_dev: false,
+                self_dev: Some(false),
                 source: "poll",
                 hook_kind: None,
                 transcript_path: None,
@@ -538,7 +543,7 @@ fn resolve_all(
                 // it; the argv flag covers a self-dev session started elsewhere.
                 LiveAgent::QinCode => {
                     session.session_id = qin_session(f, cwd.as_deref(), qin_clients, &qin_claims)?;
-                    session.self_dev = f.args.iter().any(|arg| arg == "self-dev");
+                    session.self_dev = Some(f.args.iter().any(|arg| arg == "self-dev"));
                 }
             }
             Some(session)
@@ -774,6 +779,11 @@ mod hook_precedence_tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "actual-session");
         assert_eq!(sessions[0].source, "hook");
+        assert_eq!(sessions[0].self_dev, None);
+        assert!(serde_json::to_value(&sessions[0])
+            .unwrap()
+            .get("selfDev")
+            .is_none());
         assert_eq!(sessions[0].hook_kind, None);
     }
     #[test]
@@ -821,7 +831,7 @@ mod hook_precedence_tests {
             root_pid: 10,
             agent_id: agent,
             session_id: session.into(),
-            self_dev: false,
+            self_dev: Some(false),
             codex_home: None,
             cwd: None,
             source: "poll",
@@ -992,7 +1002,7 @@ mod tests {
                 root_pid: 77,
                 agent_id: "claude-code",
                 session_id: "ca50b276-5627-4a6a-8fea-ce2bfbe86c3d".into(),
-                self_dev: false,
+                self_dev: Some(false),
                 source: "poll",
                 hook_kind: None,
                 transcript_path: None,
@@ -1160,7 +1170,7 @@ mod tests {
             SystemTime::now(),
         );
         assert_eq!(resolved[0].session_id, "s2");
-        assert!(resolved[0].self_dev);
+        assert_eq!(resolved[0].self_dev, Some(true));
     }
 
     #[test]

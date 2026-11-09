@@ -8,6 +8,7 @@
 
 pub mod commands;
 pub mod identity_store;
+pub mod identity_gc;
 mod live;
 mod parse;
 /// Vendor store roots and the per-project folder encoders. `pub(crate)` so the

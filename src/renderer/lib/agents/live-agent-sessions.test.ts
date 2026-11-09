@@ -1,4 +1,6 @@
+import type { HookStateDto } from '@shared/types/agent-hooks.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { hookStateSession } from './agent-hook-session'
 
 const { mockInvoke, runtime, mockLive } = vi.hoisted(() => ({
   mockInvoke: vi.fn(),
@@ -13,6 +15,7 @@ import {
   buildResumeArgv,
   detectLiveAgentSessions,
   isSameAgentSession,
+  needsManualAgentStart,
   resumeCommandLine,
   reviveTerminalAgentSession,
   toTerminalAgentSession
@@ -135,6 +138,74 @@ describe('detectLiveAgentSessions', () => {
 })
 
 describe('reviveTerminalAgentSession', () => {
+  it('round-trips actual custom hook identity without optional display argv', () => {
+    const state: HookStateDto = {
+      instance_id: 'host',
+      terminal_id: 'pty',
+      generation: 0,
+      adapter_install_id: 'custom-install',
+      agent_session_id: 'custom-session',
+      project_id: 'project',
+      state: 'idle',
+      restore_state: 'confirmed',
+      revision: 1,
+      identity: {
+        adapter_id: 'custom-agent',
+        agent_session_id: 'custom-session',
+        descriptor_id: 'host-descriptor',
+        source: 'hook',
+        cwd: '/repo',
+        transcript_path: null,
+        resume_argv: null
+      }
+    }
+    const session = hookStateSession(state)
+    expect(session?.resumeArgv).toEqual([])
+    expect(reviveTerminalAgentSession(JSON.parse(JSON.stringify(session)))).toEqual(session)
+  })
+  it.each(
+    [[], ['qin-code', '--resume', 'unknown'], ['qin-code', 'self-dev', '--resume', 'unknown']].map(
+      (resumeArgv) => ({ resumeArgv })
+    )
+  )('requires manual start for descriptorless hook qin regardless of legacy argv $resumeArgv', ({
+    resumeArgv
+  }) => {
+    const restored = reviveTerminalAgentSession({
+      agentId: 'qin-code',
+      sessionId: 'unknown',
+      source: 'hook',
+      cwd: '/repo',
+      resumeArgv
+    })
+    expect(restored?.resumeArgv).toEqual([])
+    expect(needsManualAgentStart(restored ?? undefined)).toBe(true)
+  })
+  it('does not turn descriptorless live hook qin into default resume authority', () => {
+    const live = toTerminalAgentSession({
+      ...base,
+      agentId: 'qin-code',
+      source: 'hook',
+      selfDev: false
+    })
+    expect(live.resumeArgv).toEqual([])
+    expect(needsManualAgentStart(live)).toBe(true)
+  })
+  it('keeps legacy non-hook project snapshot default and self-dev revival', () => {
+    for (const selfDev of [false, true]) {
+      const restored = reviveTerminalAgentSession({
+        agentId: 'qin-code',
+        sessionId: 'legacy',
+        resumeArgv: selfDev ? ['qin-code', 'self-dev', '--resume', 'legacy'] : []
+      })
+      expect(restored?.resumeArgv).toEqual([
+        'qin-code',
+        ...(selfDev ? ['self-dev'] : []),
+        '--resume',
+        'legacy'
+      ])
+      expect(needsManualAgentStart(restored ?? undefined)).toBe(false)
+    }
+  })
   it('rebuilds the argv from the validated fields', () => {
     const revived = reviveTerminalAgentSession({
       agentId: 'claude-code',

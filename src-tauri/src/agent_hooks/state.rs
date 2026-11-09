@@ -98,6 +98,9 @@ impl StateStore {
                 self.debug.pop_front();
             }
         }
+        if matches!(input.kind, HookKind::ToolStart | HookKind::ToolEnd) {
+            return None;
+        }
         let old = self.states.get(&input.terminal_id);
         if let Some(old) = old {
             if input.generation < old.generation {
@@ -162,6 +165,7 @@ impl StateStore {
             })
             .map_or(RestoreState::Unconfirmed, |previous| previous.restore_state)
         };
+        let ready = matches!(input.kind, HookKind::Idle | HookKind::TurnDone);
         let mut next = HookStateDto {
             instance_id: self.instance.clone(),
             terminal_id: input.terminal_id,
@@ -170,6 +174,7 @@ impl StateStore {
             agent_session_id: identity.agent_session_id.clone(),
             project_id: input.project_id,
             state: derived,
+            ready,
             identity,
             restore_state,
             revision: old.map_or(0, |o| o.revision),
@@ -422,6 +427,60 @@ pub fn filter_response(
         }
     }
 }
+#[derive(Default)]
+struct PendingPublications {
+    draining: bool,
+    queue: VecDeque<HookStateSyncResponse>,
+}
+static PUBLICATIONS: OnceLock<Mutex<PendingPublications>> = OnceLock::new();
+
+// Enqueue under the store's revision lock. Never hold the queue lock while
+// invoking a subscriber: project filtering and chat callbacks re-enter store.
+fn enqueue_publication(store: &mut StateStore, message: HookStateSyncResponse) {
+    let mut pending = PUBLICATIONS.get_or_init(Default::default).lock().unwrap();
+    if pending.queue.len() >= DELTA_LIMIT {
+        pending.queue.clear();
+        pending.queue.push_back(store.sync(
+            &HookStateSyncRequest::default(),
+            &|_| true,
+            Instant::now(),
+        ));
+    } else {
+        pending.queue.push_back(message);
+    }
+}
+fn drain_publications() {
+    let publications = PUBLICATIONS.get_or_init(Default::default);
+    {
+        let mut pending = publications.lock().unwrap();
+        if pending.draining {
+            return;
+        }
+        pending.draining = true;
+    }
+    loop {
+        let message = {
+            let mut pending = publications.lock().unwrap();
+            match pending.queue.pop_front() {
+                Some(message) => message,
+                None => {
+                    pending.draining = false;
+                    return;
+                }
+            }
+        };
+        broadcast(message);
+    }
+}
+fn state_delta(value: &HookStateDto) -> HookStateSyncResponse {
+    HookStateSyncResponse::Delta {
+        instance_id: instance_id().to_owned(),
+        current_revision: value.revision,
+        states: vec![value.clone()],
+        tombstones: vec![],
+    }
+}
+
 fn broadcast(delta: HookStateSyncResponse) {
     let callbacks = SUBSCRIBERS
         .get_or_init(Default::default)
@@ -454,58 +513,45 @@ pub fn upsert_with(
                 change.state = Some(value.clone());
             }
             store.counters.state_broadcasts += 1;
+            enqueue_publication(&mut store, state_delta(value));
         }
         next
     };
-    if let Some(next) = &next {
-        broadcast(HookStateSyncResponse::Delta {
-            instance_id: instance_id().to_owned(),
-            current_revision: next.revision,
-            states: vec![next.clone()],
-            tombstones: vec![],
-        });
-    }
+    drain_publications();
     next
 }
 pub fn set_restore_state(terminal: &str, generation: u64, lifecycle: RestoreState) -> bool {
     let value = {
         let mut store = store().lock().unwrap();
         let value = store.set_restore_state(terminal, generation, lifecycle, Instant::now());
-        if value.is_some() {
+        if let Some(value) = &value {
             store.counters.state_broadcasts += 1;
+            enqueue_publication(&mut store, state_delta(value));
         }
         value
     };
-    if let Some(value) = value {
-        broadcast(HookStateSyncResponse::Delta {
-            instance_id: instance_id().to_owned(),
-            current_revision: value.revision,
-            states: vec![value],
-            tombstones: vec![],
-        });
-        true
-    } else {
-        false
-    }
+    drain_publications();
+    value.is_some()
 }
 pub fn collect() {
-    let delta = {
+    {
         let mut store = store().lock().unwrap();
         let revision = store.revision;
         store.collect(Instant::now());
         if revision == store.revision {
             return;
         }
-        store.sync(
+        let delta = store.sync(
             &HookStateSyncRequest {
                 instance_id: Some(instance_id().to_owned()),
                 since_revision: Some(revision),
             },
             &|_| true,
             Instant::now(),
-        )
-    };
-    broadcast(delta);
+        );
+        enqueue_publication(&mut store, delta);
+    }
+    drain_publications();
 }
 
 #[cfg(test)]
@@ -541,18 +587,19 @@ mod tests {
                 .upsert(input(HookKind::PromptSubmitted), now)
                 .is_some(),
         );
+        let identity_before_tools = store.latest("t").unwrap().identity;
         for i in 0..100 {
-            assert!(store
-                .upsert(
-                    input(if i % 2 == 0 {
-                        HookKind::ToolStart
-                    } else {
-                        HookKind::ToolEnd
-                    }),
-                    now
-                )
-                .is_none());
+            let mut tool = input(if i % 2 == 0 {
+                HookKind::ToolStart
+            } else {
+                HookKind::ToolEnd
+            });
+            tool.identity.transcript_path = Some(format!("/tmp/tool-{i}.jsonl"));
+            tool.identity.cwd = Some(format!("/tmp/tool-{i}"));
+            tool.identity.descriptor_id = Some(format!("tool-{i}"));
+            assert!(store.upsert(tool, now).is_none());
         }
+        assert_eq!(store.latest("t").unwrap().identity, identity_before_tools);
         broadcasts += usize::from(store.upsert(input(HookKind::TurnDone), now).is_some());
         assert_eq!(broadcasts, 2);
         assert_eq!(store.revision - baseline, 2);
@@ -560,6 +607,62 @@ mod tests {
         assert_eq!(store.counters.disk_writes, 0);
         assert!(store.debug.is_empty());
     }
+    #[test]
+    fn concurrent_publications_and_restore_revisions_are_delivered_in_order() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        let first_id = format!("ordered-first-{}", uuid::Uuid::new_v4());
+        let second_id = format!("ordered-second-{}", uuid::Uuid::new_v4());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let (revision_tx, revision_rx) = mpsc::channel();
+        let blocked = AtomicBool::new(false);
+        let first_filter = first_id.clone();
+        let second_filter = second_id.clone();
+        subscribe(Arc::new(move |message| {
+            let states = match message {
+                HookStateSyncResponse::Delta { states, .. }
+                | HookStateSyncResponse::Snapshot { states, .. } => states,
+            };
+            for value in states {
+                if value.terminal_id != first_filter && value.terminal_id != second_filter {
+                    continue;
+                }
+                if value.terminal_id == first_filter && !blocked.swap(true, Ordering::SeqCst) {
+                    entered_tx.send(()).unwrap();
+                    release_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                }
+                // Subscribers may re-enter canonical state without deadlocking.
+                assert!(latest(&value.terminal_id).is_some());
+                let _ = revision_tx.send(value.revision);
+            }
+        }));
+        let mut first = input(HookKind::SessionStart);
+        first.terminal_id = first_id;
+        let publishing = std::thread::spawn(move || upsert(first).unwrap());
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let mut second = input(HookKind::SessionStart);
+        second.terminal_id = second_id.clone();
+        upsert(second).unwrap();
+        assert!(set_restore_state(&second_id, 1, RestoreState::Stale));
+        release_tx.send(()).unwrap();
+        publishing.join().unwrap();
+        let revisions: Vec<_> = (0..3)
+            .map(|_| revision_rx.recv_timeout(Duration::from_secs(10)).unwrap())
+            .collect();
+        assert!(
+            revisions.windows(2).all(|window| window[0] < window[1]),
+            "{revisions:?}"
+        );
+    }
+
     #[test]
     fn only_actual_session_start_confirms_and_runtime_cannot_clear_stale() {
         let mut store = StateStore::new("i".into());
