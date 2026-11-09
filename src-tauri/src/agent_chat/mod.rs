@@ -77,6 +77,7 @@ pub struct ChatSnapshot {
     pub hook_state: String,
     pub reset: bool,
     pub older_cursor: Option<u64>,
+    pub can_force_send: bool,
 }
 struct Pending {
     delivery: Delivery,
@@ -103,6 +104,8 @@ struct Session {
     reason: Option<String>,
     hook_state: String,
     ready_credit: bool,
+    ever_ready: bool,
+    known_busy: bool,
 }
 #[derive(PartialEq, Eq)]
 struct FileStamp {
@@ -130,6 +133,10 @@ impl FileStamp {
 impl Session {
     fn new(hook: AgentHookEvent) -> Self {
         let ready_credit = matches!(hook.kind, HookKind::Idle | HookKind::TurnDone);
+        let known_busy = !matches!(
+            hook.kind,
+            HookKind::SessionStart | HookKind::Idle | HookKind::TurnDone
+        );
         let hook_state = hook_name(hook.kind).to_owned();
         let cursor = next_cursor();
         Self {
@@ -149,6 +156,8 @@ impl Session {
             reason: None,
             hook_state,
             ready_credit,
+            ever_ready: ready_credit,
+            known_busy,
         }
     }
     fn replace(&mut self, hook: AgentHookEvent) {
@@ -166,6 +175,12 @@ impl Session {
         let was_ready = matches!(self.hook.kind, HookKind::Idle | HookKind::TurnDone);
         let is_ready = matches!(hook.kind, HookKind::Idle | HookKind::TurnDone);
         self.hook_state = hook_name(hook.kind).into();
+        if is_ready {
+            self.ever_ready = true;
+            self.known_busy = false;
+        } else if hook.kind != HookKind::SessionStart {
+            self.known_busy = true;
+        }
         if !is_ready {
             self.ready_credit = false;
         } else if !was_ready {
@@ -469,6 +484,43 @@ impl Session {
         else {
             return;
         };
+        let _ = self.write_queued(index, writer, false);
+    }
+    fn can_force_send(&self) -> bool {
+        !self.ever_ready
+            && !self.known_busy
+            && self.retired_at.is_none()
+            && self.hook.kind != HookKind::SessionEnd
+            && !self.pending.iter().any(|p| p.delivery.status == "pending")
+    }
+    fn force_send(
+        &mut self,
+        delivery_id: &str,
+        guard: Option<SendGuard>,
+        writer: &Writer,
+    ) -> Result<Delivery, String> {
+        if !self.can_force_send() {
+            return Err("force send unavailable for this session".into());
+        }
+        if guard.as_ref().is_some_and(|check| !check()) {
+            return Err("terminal.input scope denied".into());
+        }
+        let index = self
+            .pending
+            .iter()
+            .position(|p| p.delivery.id == delivery_id && p.delivery.status == "queued")
+            .ok_or_else(|| "queued delivery not found".to_string())?;
+        // An explicit request re-authorizes this exact receipt. The client never
+        // supplies/reconstructs its raw text and cannot create a second receipt.
+        self.pending[index].guard = guard;
+        self.write_queued(index, writer, true)
+    }
+    fn write_queued(
+        &mut self,
+        index: usize,
+        writer: &Writer,
+        force: bool,
+    ) -> Result<Delivery, String> {
         if self.pending[index]
             .guard
             .as_ref()
@@ -479,8 +531,9 @@ impl Session {
             item.raw = String::new();
             item.guard = None;
             self.cursor = next_cursor();
-            return;
+            return Err("terminal.input scope denied".into());
         }
+        self.known_busy = true;
         self.ready_credit = false; // one prompt per idle/turn_done, never flood the TUI
         self.hook_state = "prompt_submitted".into();
         let item = &mut self.pending[index];
@@ -500,11 +553,16 @@ impl Session {
             item.guard = None;
         }
         self.cursor = next_cursor();
-        tracing::info!(
-            event = "agent_chat_send",
-            kind = "bracketed_paste",
-            count = 1
-        );
+        if force {
+            tracing::info!(event = "agent_chat_force_send", count = 1);
+        } else {
+            tracing::info!(
+                event = "agent_chat_send",
+                kind = "bracketed_paste",
+                count = 1
+            );
+        }
+        Ok(item.delivery.clone())
     }
     fn enqueue(
         &mut self,
@@ -600,6 +658,7 @@ impl Session {
             agent: self.hook.agent,
             cursor: self.cursor,
             older_cursor: page.as_ref().and_then(|p| p.older),
+            can_force_send: self.can_force_send(),
             messages: page
                 .as_ref()
                 .map(|p| p.messages.clone())
@@ -648,6 +707,11 @@ fn hook_name(kind: HookKind) -> &'static str {
     }
 }
 
+#[derive(Default)]
+pub struct SendOptions {
+    pub force: bool,
+    pub delivery_id: Option<String>,
+}
 struct Service {
     tx: mpsc::SyncSender<Request>,
 }
@@ -662,6 +726,7 @@ enum Request {
     Send(
         String,
         String,
+        SendOptions,
         Option<SendGuard>,
         mpsc::SyncSender<Result<Delivery, String>>,
     ),
@@ -792,11 +857,26 @@ fn run(
                     .ok_or_else(|| "terminal has no hooked agent".into());
                 let _ = reply.send(result);
             }
-            Ok(Request::Send(id, text, guard, reply)) => {
+            Ok(Request::Send(id, text, options, guard, reply)) => {
                 let result = sessions
                     .get_mut(&id)
                     .ok_or_else(|| "terminal has no hooked agent".into())
-                    .and_then(|s| s.enqueue(text, guard, &writer));
+                    .and_then(|s| {
+                        if options.force {
+                            let id = options
+                                .delivery_id
+                                .as_deref()
+                                .filter(|id| !id.is_empty())
+                                .ok_or_else(|| {
+                                    "force send requires a queued delivery".to_string()
+                                })?;
+                            s.force_send(id, guard, &writer)
+                        } else if options.delivery_id.is_some() {
+                            Err("delivery_id requires force".into())
+                        } else {
+                            s.enqueue(text, guard, &writer)
+                        }
+                    });
                 if let Some(session) = sessions.get(&id) {
                     emit(&id, session.cursor);
                 }
@@ -883,10 +963,18 @@ pub fn send_authorized(
     text: String,
     guard: Option<SendGuard>,
 ) -> Result<Delivery, String> {
+    send_with_options(id, text, SendOptions::default(), guard)
+}
+pub fn send_with_options(
+    id: &str,
+    text: String,
+    options: SendOptions,
+    guard: Option<SendGuard>,
+) -> Result<Delivery, String> {
     let (tx, rx) = mpsc::sync_channel(1);
     service()?
         .tx
-        .try_send(Request::Send(id.into(), text, guard, tx))
+        .try_send(Request::Send(id.into(), text, options, guard, tx))
         .map_err(|_| "chat worker busy")?;
     rx.recv_timeout(RPC_TIMEOUT)
         .map_err(|_| "chat worker timeout; delivery must not be retried automatically")?

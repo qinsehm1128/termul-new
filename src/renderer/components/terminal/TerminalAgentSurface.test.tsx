@@ -182,6 +182,54 @@ describe('terminal agent surface', () => {
     expect(screen.getByText('不会自动重发')).toBeInTheDocument()
     expect(mocks.send).not.toHaveBeenCalled()
   })
+  it('offers an explicit cold queued override only with the server flag and reuses the receipt', () => {
+    mocks.snapshot!.can_force_send = true
+    mocks.snapshot!.hook_state = 'unknown'
+    mocks.snapshot!.deliveries = [
+      { id: 'cold', text: 'original queued raw prompt', status: 'queued' }
+    ]
+    mocks.send.mockReturnValue(new Promise(() => {}))
+    render(surface())
+    openChat()
+    const action = screen.getByRole('button', { name: '立即发送' })
+    fireEvent.click(action)
+    fireEvent.click(action)
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(expect.any(String), '', {
+      force: true,
+      delivery_id: 'cold'
+    })
+    expect(action).toBeDisabled()
+    expect(screen.getByText('original queued raw prompt')).toBeInTheDocument()
+    expect(screen.getByTestId('shared-timeline')).toHaveAttribute('data-count', '0')
+  })
+
+  it.each([
+    { flag: undefined, hook: 'unknown', status: 'queued', pending: false },
+    { flag: false, hook: 'unknown', status: 'queued', pending: false },
+    { flag: true, hook: 'busy', status: 'queued', pending: false },
+    { flag: true, hook: 'running', status: 'queued', pending: false },
+    { flag: true, hook: 'unknown', status: 'queued', pending: true },
+    { flag: true, hook: 'unknown', status: 'pending', pending: false },
+    { flag: true, hook: 'unknown', status: 'delivered', pending: false },
+    { flag: true, hook: 'unknown', status: 'unconfirmed', pending: false }
+  ] as const)('hides force send for unavailable/busy/nonqueued state: %j', ({
+    flag,
+    hook,
+    status,
+    pending
+  }) => {
+    mocks.snapshot!.can_force_send = flag
+    mocks.snapshot!.hook_state = hook
+    mocks.snapshot!.deliveries = [
+      { id: 'receipt', text: 'queued', status },
+      ...(pending ? [{ id: 'pending', text: 'in flight', status: 'pending' as const }] : [])
+    ]
+    render(surface())
+    openChat()
+    expect(screen.queryByRole('button', { name: '立即发送' })).not.toBeInTheDocument()
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
+
   it('shows a recoverable degradation state and disables unsafe sends, keeping terminal accessible', () => {
     mocks.snapshot = { ...mocks.snapshot!, state: 'degraded', reason: 'unsupported record' }
     render(surface())

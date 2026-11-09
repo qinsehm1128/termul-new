@@ -64,6 +64,17 @@ describe('terminal agent chat facade parity', () => {
     ])
   })
 
+  it('maps a queued force override to camelCase native command args without resending text', async () => {
+    mocks.desktop = true
+    await agentChatApi.send('pty/a', '', { force: true, delivery_id: 'queued-1' })
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('agent_chat_send', {
+      terminalId: 'pty/a',
+      text: '',
+      force: true,
+      deliveryId: 'queued-1'
+    })
+  })
+
   it('uses equivalent authenticated HTTP endpoints, incremental cursor and mutation bodies', async () => {
     mocks.desktop = false
     setRemoteAccessCredential('test-agent-chat-token')
@@ -129,6 +140,37 @@ describe('terminal agent chat facade parity', () => {
       `${window.location.origin}/agent-chat/pty%2Fa?before=0`,
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' })
     )
+  })
+
+  it('posts an authenticated force override for the existing receipt and surfaces busy rejection once', async () => {
+    mocks.desktop = false
+    setRemoteAccessCredential('force-token')
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, data: null })))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'AGENT_BUSY', error: 'Agent is busy' }), {
+          status: 409
+        })
+      )
+    vi.stubGlobal('fetch', fetcher)
+    await agentChatApi.send('pty/a', '', { force: true, delivery_id: 'queued-1' })
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      `${window.location.origin}/agent-chat/pty%2Fa/send`,
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'same-origin',
+        body: JSON.stringify({ text: '', force: true, delivery_id: 'queued-1' })
+      })
+    )
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('authorization')).toBe(
+      'Bearer force-token'
+    )
+    await expect(
+      agentChatApi.send('pty/a', '', { force: true, delivery_id: 'queued-1' })
+    ).rejects.toMatchObject({ message: 'Agent is busy', code: 'AGENT_BUSY' })
+    expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
   it('surfaces backend and transport failures without retrying delivery', async () => {

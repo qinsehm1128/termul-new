@@ -11,10 +11,10 @@ struct AgentChatTests {
         session: String? = "session-1", cursor: UInt64 = 1,
         messages: [ChatMessage] = [], deliveries: [AgentChatDelivery] = [],
         state: String = "ready", terminal: String = "pty-1", older: UInt64? = nil, reset: Bool = false,
-        tools: [AgentChatToolCall] = [], refs: [String: String] = [:]
+        tools: [AgentChatToolCall] = [], refs: [String: String] = [:], force: Bool = false, hook: AgentChatHookState? = nil
     ) -> AgentChatSnapshot {
         AgentChatSnapshot(terminalID: terminal, sessionID: session, agent: "claude", cursor: cursor,
-                          messages: messages, deliveries: deliveries, state: state, reason: nil, hookState: nil, toolCalls: tools, reset: reset, olderCursor: older, messageToolIDs: refs)
+                          messages: messages, deliveries: deliveries, state: state, reason: nil, hookState: hook, toolCalls: tools, reset: reset, olderCursor: older, messageToolIDs: refs, canForceSend: force)
     }
 
     private func message(_ id: String, _ text: String) -> ChatMessage {
@@ -34,19 +34,20 @@ struct AgentChatTests {
     private func store(_ fake: AgentChatFake, canView: Bool = true, canInput: Bool = true) -> AgentChatStore {
         AgentChatStore(terminalID: "pty-1", client: AgentChatClient(
             snapshot: { terminal, cursor, before in try await fake.snapshot(terminal, cursor, before) },
-            send: { terminal, text in try await fake.send(terminal, text) },
+            send: { terminal, text, options in try await fake.send(terminal, text, options) },
             control: { terminal, action in try await fake.control(terminal, action) }
         ), canView: canView, canInput: canInput)
     }
 
     @Test("Wire snapshot reuses ACP message shape and includes hook metadata and receipts")
     func wireSnapshot() throws {
-        let data = Data(#"{"terminal_id":"pty-1","session_id":"s1","agent":"claude","cursor":42,"older_cursor":7,"messages":[{"id":"m1","role":"agent","text":"hello","streaming":false,"seq":7}],"deliveries":[{"id":"d1","text":"prompt","status":"pending"}],"state":"ready","hook_state":{"kind":"permission_request"}}"#.utf8)
+        let data = Data(#"{"terminal_id":"pty-1","session_id":"s1","agent":"claude","cursor":42,"older_cursor":7,"can_force_send":true,"messages":[{"id":"m1","role":"agent","text":"hello","streaming":false,"seq":7}],"deliveries":[{"id":"d1","text":"prompt","status":"pending"}],"state":"ready","hook_state":{"kind":"permission_request"}}"#.utf8)
         let value = try JSONDecoder().decode(AgentChatSnapshot.self, from: data)
         #expect(value.terminalID == "pty-1")
         #expect(value.sessionID == "s1")
         #expect(value.cursor == 42)
         #expect(value.olderCursor == 7)
+        #expect(value.canForceSend)
         #expect(value.messages.first?.role == .agent)
         #expect(value.hookState?.kind == "permission_request")
         #expect(value.deliveries.first?.status == "pending")
@@ -378,6 +379,75 @@ struct AgentChatTests {
         #expect(store.olderCursor == 100)
     }
 
+    @Test("Explicit Send now reuses one cold queued receipt and never submits its prompt text")
+    func forceQueuedReceipt() async {
+        let receipt = AgentChatDelivery(id: "cold", text: "original raw queued text", status: "queued")
+        let fake = AgentChatFake(value: snapshot(deliveries: [receipt], force: true), delaySend: true)
+        let store = store(fake)
+        await store.refresh()
+        #expect(store.canForceDelivery("cold"))
+        async let first: Void = store.forceSend("cold")
+        async let second: Void = store.forceSend("cold")
+        _ = await (first, second)
+        #expect(await fake.sent.count == 1)
+        #expect(await fake.sent.first == "")
+        let options = await fake.sendOptions.compactMap { $0 }
+        #expect(options.first?.force == true)
+        #expect(options.first?.deliveryID == "cold")
+        #expect(store.deliveries == [receipt])
+        #expect(store.messages.isEmpty)
+    }
+
+    @Test("Force override JSON uses force/delivery_id and no original queued prompt")
+    func forceRequestBody() {
+        let body = AgentChatClient.sendBody(text: "", options: AgentChatSendOptions(force: true, deliveryID: "cold"))
+        #expect(body["text"] as? String == "")
+        #expect(body["force"] as? Bool == true)
+        #expect(body["delivery_id"] as? String == "cold")
+        let normal = AgentChatClient.sendBody(text: "normal", options: nil)
+        #expect(normal.count == 1)
+        #expect(normal["text"] as? String == "normal")
+    }
+
+    @Test("Unavailable, busy, pending, delivered and missing queued receipts cannot be forced")
+    func forceRejectedStates() async throws {
+        let busy = try JSONDecoder().decode(AgentChatHookState.self, from: Data(#""busy""#.utf8))
+        let queued = AgentChatDelivery(id: "cold", text: "queued", status: "queued")
+        let cases = [
+            snapshot(deliveries: [queued]),
+            snapshot(deliveries: [queued], force: true, hook: busy),
+            snapshot(deliveries: [queued, AgentChatDelivery(id: "pending", text: "in flight", status: "pending")], force: true),
+            snapshot(deliveries: [AgentChatDelivery(id: "cold", text: "pending", status: "pending")], force: true),
+            snapshot(deliveries: [AgentChatDelivery(id: "cold", text: "delivered", status: "delivered")], force: true),
+            snapshot(deliveries: [], force: true)
+        ]
+        for snapshot in cases {
+            let fake = AgentChatFake(value: snapshot)
+            let store = store(fake)
+            await store.refresh()
+            #expect(!store.canForceDelivery("cold"))
+            await store.forceSend("cold")
+            #expect(await fake.sent.isEmpty)
+        }
+        let fake = AgentChatFake(value: snapshot(deliveries: [queued], force: true))
+        let viewOnly = store(fake, canInput: false)
+        await viewOnly.refresh()
+        #expect(!viewOnly.canForceDelivery("cold"))
+        await viewOnly.forceSend("cold")
+        #expect(await fake.sent.isEmpty)
+    }
+
+    @Test("Failed force overrides are never retried automatically")
+    func forceFailureNoRetry() async {
+        let fake = AgentChatFake(value: snapshot(deliveries: [AgentChatDelivery(id: "cold", text: "prompt", status: "queued")], force: true), failSend: true)
+        let store = store(fake)
+        await store.refresh()
+        await store.forceSend("cold")
+        #expect(await fake.sent.count == 1)
+        #expect(store.errorMessage != nil)
+        #expect(!store.canForceDelivery("cold"))
+    }
+
     @Test("View scope blocks reads and all mutations")
     func deniedView() async {
         let fake = AgentChatFake(value: snapshot())
@@ -530,6 +600,7 @@ private actor AgentChatFake {
     var pageContinuation: CheckedContinuation<AgentChatSnapshot, Never>?
     var delayPage = false
     var sent: [String] = []
+    var sendOptions: [AgentChatSendOptions?] = []
     var controls: [AgentChatControl] = []
 
     init(value: AgentChatSnapshot, failSend: Bool = false, delaySend: Bool = false) {
@@ -551,8 +622,9 @@ private actor AgentChatFake {
         if failRead { throw URLError(.networkConnectionLost) }
         return value
     }
-    func send(_ terminal: String, _ text: String) async throws {
+    func send(_ terminal: String, _ text: String, _ options: AgentChatSendOptions?) async throws {
         sent.append(text)
+        sendOptions.append(options)
         if delaySend { try await Task.sleep(for: .milliseconds(30)) }
         if failSend { throw URLError(.networkConnectionLost) }
     }

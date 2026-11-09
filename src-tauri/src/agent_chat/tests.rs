@@ -636,3 +636,121 @@ fn receipt_byte_budget_reclaims_finished_items_without_becoming_a_lifetime_limit
     }
     assert!(s.pending.len() < 40);
 }
+
+#[test]
+fn cold_start_without_idle_requires_explicit_force_and_only_sends_the_selected_receipt() {
+    for agent in [AgentKind::ClaudeCode, AgentKind::Pi, AgentKind::QinCode] {
+        let mut start = hook(HookKind::SessionStart);
+        start.agent = agent;
+        let mut s = Session::new(start);
+        let (writer, writes) = writer();
+        let first = s.enqueue("first queued".into(), None, &writer).unwrap();
+        let second = s.enqueue("explicit second".into(), None, &writer).unwrap();
+        assert!(writes.lock().unwrap().is_empty());
+        assert!(s.snapshot(None).can_force_send);
+        let forced = s
+            .force_send(&second.id, Some(Arc::new(|| true)), &writer)
+            .unwrap();
+        assert_eq!(forced.id, second.id);
+        assert_eq!(forced.status, "pending");
+        assert_eq!(s.pending.len(), 2);
+        assert_eq!(s.pending[0].delivery.id, first.id);
+        assert_eq!(s.pending[0].delivery.status, "queued");
+        assert_eq!(
+            &*writes.lock().unwrap(),
+            &["\x1b[200~explicit second\x1b[201~\r"]
+        );
+        assert!(!s.snapshot(None).can_force_send);
+        assert!(s.force_send(&first.id, None, &writer).is_err());
+        assert!(s.force_send(&second.id, None, &writer).is_err());
+        s.expire(Instant::now() + ACK_TIMEOUT + Duration::from_secs(1));
+        s.flush(&writer);
+        assert_eq!(writes.lock().unwrap().len(), 1); // never retries a forced write
+    }
+}
+
+#[test]
+fn known_busy_or_previously_ready_sessions_reject_the_force_override() {
+    for kind in [
+        HookKind::PromptSubmitted,
+        HookKind::ToolStart,
+        HookKind::ToolEnd,
+        HookKind::NeedsApproval,
+        HookKind::Blocked,
+        HookKind::Error,
+        HookKind::SessionEnd,
+    ] {
+        let mut s = Session::new(hook(HookKind::SessionStart));
+        let (writer, writes) = writer();
+        let queued = s.enqueue("queued".into(), None, &writer).unwrap();
+        let mut busy = hook(kind);
+        busy.sequence = 2;
+        s.apply_hook(busy);
+        assert!(!s.snapshot(None).can_force_send);
+        assert!(s.force_send(&queued.id, None, &writer).is_err());
+        assert!(writes.lock().unwrap().is_empty());
+    }
+    let mut s = Session::new(hook(HookKind::Idle));
+    let mut identity = hook(HookKind::SessionStart);
+    identity.sequence = 2;
+    s.apply_hook(identity);
+    let (writer, writes) = writer();
+    let queued = s.enqueue("queued".into(), None, &writer).unwrap();
+    assert!(!s.can_force_send());
+    assert!(s.force_send(&queued.id, None, &writer).is_err());
+    assert!(writes.lock().unwrap().is_empty());
+}
+
+#[test]
+fn explicit_force_rechecks_input_authorization_and_confirms_only_from_transcript_echo() {
+    let (_dir, path, _) = transcript();
+    let mut s = Session::new(hook(HookKind::SessionStart));
+    s.path = Some(path.clone());
+    let (writer, writes) = writer();
+    let raw = "password=fixture-force-secret";
+    let queued = s.enqueue(raw.into(), None, &writer).unwrap();
+    assert!(s
+        .force_send(&queued.id, Some(Arc::new(|| false)), &writer)
+        .is_err());
+    assert!(writes.lock().unwrap().is_empty());
+    assert_eq!(s.pending[0].delivery.status, "queued");
+    let sent = s
+        .force_send(&queued.id, Some(Arc::new(|| true)), &writer)
+        .unwrap();
+    assert_eq!(sent.status, "pending");
+    assert_eq!(
+        writes.lock().unwrap()[0],
+        format!("\x1b[200~{raw}\x1b[201~\r")
+    );
+    append(
+        &path,
+        json!({"type":"user","uuid":"forced-echo","message":{"role":"user","content":raw}}),
+    );
+    s.read();
+    assert_eq!(s.pending[0].delivery.status, "delivered");
+    assert!(s.pending[0].raw.is_empty());
+    assert!(s.pending[0].guard.is_none());
+    assert!(!s.snapshot(None).can_force_send);
+    s.flush(&writer);
+    assert_eq!(writes.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn failed_forced_write_is_final_and_never_resent() {
+    let mut s = Session::new(hook(HookKind::SessionStart));
+    let (quiet, _) = writer();
+    let receipt = s.enqueue("queued".into(), None, &quiet).unwrap();
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let captured = attempts.clone();
+    let failed: Writer = Box::new(move |_, _| {
+        captured.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err("partial write".into())
+    });
+    let result = s.force_send(&receipt.id, None, &failed).unwrap();
+    assert_eq!(result.status, "unconfirmed");
+    assert!(s.pending[0].raw.is_empty());
+    assert!(!s.can_force_send());
+    assert!(s.force_send(&receipt.id, None, &failed).is_err());
+    s.flush(&failed);
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

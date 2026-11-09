@@ -21,7 +21,13 @@ export function createTauriAgentChatApi(): AgentChatApi<ChatMessage, ToolCall> {
   return {
     snapshot: (terminalId, after, before) =>
       invoke('agent_chat_snapshot', { terminalId, after: after ?? null, before: before ?? null }),
-    send: (terminalId, text) => invoke('agent_chat_send', { terminalId, text }),
+    send: (terminalId, text, options) =>
+      invoke('agent_chat_send', {
+        terminalId,
+        text,
+        ...(options?.force !== undefined ? { force: options.force } : {}),
+        ...(options?.delivery_id !== undefined ? { deliveryId: options.delivery_id } : {})
+      }),
     control: (terminalId, action) => invoke('agent_chat_control', { terminalId, action })
   }
 }
@@ -67,7 +73,27 @@ export const webAgentChatApi: AgentChatApi<ChatMessage, ToolCall> = {
     }
     return unwrap(result)
   },
-  send: async (terminalId, text) => unwrap(await webServerAgentChat.send(terminalId, text)),
+  send: async (terminalId, text, options) => {
+    if (!options) return unwrap(await webServerAgentChat.send(terminalId, text))
+    const headers = new Headers(remoteAccessHeaders())
+    headers.set('Content-Type', 'application/json')
+    const response = await fetch(
+      `${window.location.origin}/agent-chat/${encodeURIComponent(terminalId)}/send`,
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers,
+        body: JSON.stringify({ text, ...options })
+      }
+    )
+    const body = await response.json()
+    if (!response.ok)
+      throw Object.assign(
+        new Error(body.error ?? `HTTP ${response.status} ${response.statusText}`),
+        { code: body.code ?? 'NETWORK_ERROR' }
+      )
+    return unwrap(body as IpcResult<unknown>)
+  },
   control: async (terminalId, action) =>
     unwrap(await webServerAgentChat.control(terminalId, action))
 }
@@ -84,7 +110,8 @@ const desktop = createTauriAgentChatApi()
 export const agentChatApi: AgentChatApi<ChatMessage, ToolCall> = {
   snapshot: (terminalId, after, before) =>
     (isTauriContext() ? desktop : webAgentChatApi).snapshot(terminalId, after, before),
-  send: (terminalId, text) => (isTauriContext() ? desktop : webAgentChatApi).send(terminalId, text),
+  send: (terminalId, text, options) =>
+    (isTauriContext() ? desktop : webAgentChatApi).send(terminalId, text, options),
   control: (terminalId, action) =>
     (isTauriContext() ? desktop : webAgentChatApi).control(terminalId, action)
 }

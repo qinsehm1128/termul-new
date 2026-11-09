@@ -7652,6 +7652,16 @@
         }
       }
     },
+    "Send now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即发送"
+          }
+        }
+      }
+    },
     "Sending…" : {
       "localizations" : {
         "zh-Hans" : {

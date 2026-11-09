@@ -13,10 +13,25 @@ pub async fn agent_chat_snapshot(
 }
 
 #[tauri::command]
-pub async fn agent_chat_send(terminal_id: String, text: String) -> Result<Delivery, String> {
-    tokio::task::spawn_blocking(move || super::send(&terminal_id, text))
-        .await
-        .map_err(|_| "chat worker unavailable".to_string())?
+pub async fn agent_chat_send(
+    terminal_id: String,
+    text: String,
+    force: Option<bool>,
+    delivery_id: Option<String>,
+) -> Result<Delivery, String> {
+    tokio::task::spawn_blocking(move || {
+        super::send_with_options(
+            &terminal_id,
+            text,
+            super::SendOptions {
+                force: force.unwrap_or(false),
+                delivery_id,
+            },
+            None,
+        )
+    })
+    .await
+    .map_err(|_| "chat worker unavailable".to_string())?
 }
 
 #[tauri::command]

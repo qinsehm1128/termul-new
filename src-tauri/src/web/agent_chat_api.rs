@@ -21,6 +21,9 @@ pub struct Tail {
 #[derive(Deserialize)]
 pub struct SendBody {
     pub text: String,
+    #[serde(default)]
+    pub force: bool,
+    pub delivery_id: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct ControlBody {
@@ -82,7 +85,15 @@ pub async fn send(
             .is_ok()
     });
     let value = tokio::task::spawn_blocking(move || {
-        crate::agent_chat::send_authorized(&id, body.text, Some(guard))
+        crate::agent_chat::send_with_options(
+            &id,
+            body.text,
+            crate::agent_chat::SendOptions {
+                force: body.force,
+                delivery_id: body.delivery_id,
+            },
+            Some(guard),
+        )
     })
     .await;
     match value {
@@ -219,5 +230,24 @@ mod tests {
         assert!(guard());
         authority.revoke_device(&paired.device_id).unwrap();
         assert!(!guard());
+    }
+}
+
+#[cfg(test)]
+mod force_contract_tests {
+    use super::*;
+    #[test]
+    fn send_defaults_to_normal_and_explicit_force_carries_only_receipt_identity() {
+        let ordinary: SendBody =
+            serde_json::from_value(serde_json::json!({"text":"normal"})).unwrap();
+        assert!(!ordinary.force);
+        assert!(ordinary.delivery_id.is_none());
+        let forced: SendBody = serde_json::from_value(
+            serde_json::json!({"text":"","force":true,"delivery_id":"queued-id"}),
+        )
+        .unwrap();
+        assert!(forced.force);
+        assert_eq!(forced.delivery_id.as_deref(), Some("queued-id"));
+        assert!(forced.text.is_empty());
     }
 }

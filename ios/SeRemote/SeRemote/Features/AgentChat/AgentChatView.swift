@@ -88,6 +88,11 @@ struct AgentChatView: View {
                             // Deliveries are receipts, not fabricated transcript user messages.
                             Text(delivery.text).textSelection(.enabled)
                             Text(delivery.label).font(.caption).foregroundStyle(palette.inkSecondary)
+                            if store.canForceDelivery(delivery.id) {
+                                Button("Send now") { Task { await store.forceSend(delivery.id) } }
+                                    .disabled(store.isSubmitting)
+                                    .accessibilityIdentifier("agent-chat-send-now-\(delivery.id)")
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         .padding(12)

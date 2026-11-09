@@ -66,6 +66,36 @@ function TerminalAgentChat({ terminalId }: { terminalId: string }) {
       setBusy(false)
     }
   }
+  const forceAllowed =
+    snapshot?.can_force_send === true &&
+    !snapshot.deliveries.some((receipt) => receipt.status === 'pending') &&
+    !['busy', 'running', 'compacting', 'waiting_permission', 'permission_request'].includes(
+      snapshot.hook_state ?? ''
+    )
+
+  const forceSend = async (deliveryId: string) => {
+    if (
+      sending.current ||
+      !forceAllowed ||
+      !snapshot?.deliveries.some(
+        (receipt) => receipt.id === deliveryId && receipt.status === 'queued'
+      )
+    )
+      return
+    sending.current = true
+    setBusy(true)
+    setActionError(null)
+    try {
+      await agentChatApi.send(terminalId, '', { force: true, delivery_id: deliveryId })
+      await refresh()
+    } catch (cause) {
+      setActionError(`发送状态未知，请先在终端核实，不要重复发送。${String(cause)}`)
+    } finally {
+      sending.current = false
+      setBusy(false)
+    }
+  }
+
   const control = async (action: AgentChatControlAction) => {
     if (sending.current) return
     sending.current = true
@@ -144,6 +174,16 @@ function TerminalAgentChat({ terminalId }: { terminalId: string }) {
                 {deliveryLabels[delivery.status]}
               </span>
               <span className="truncate">{delivery.text}</span>
+              {delivery.status === 'queued' && forceAllowed && (
+                <button
+                  type="button"
+                  className="shrink-0 rounded border border-border px-2 py-1"
+                  disabled={busy}
+                  onClick={() => void forceSend(delivery.id)}
+                >
+                  立即发送
+                </button>
+              )}
               {delivery.status === 'unconfirmed' && (
                 <span className="shrink-0 text-muted-foreground">不会自动重发</span>
               )}

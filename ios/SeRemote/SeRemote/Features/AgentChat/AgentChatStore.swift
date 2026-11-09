@@ -22,6 +22,7 @@ final class AgentChatStore {
     private(set) var toolCalls: [AgentChatToolCall] = []
     private var messageToolIDs: [String: String] = [:]
     private(set) var hookKind: String?
+    private(set) var forceAvailable = false
     private(set) var isReady = false
     private(set) var isLoading = true
     private(set) var isSubmitting = false
@@ -63,6 +64,7 @@ final class AgentChatStore {
         guard canView else {
             isLoading = false
             isReady = false
+            forceAvailable = false
             olderCursor = nil
             isBrowsingOlder = false
             cursor = 0
@@ -112,6 +114,7 @@ final class AgentChatStore {
         agent = snapshot.agent
         cursor = snapshot.cursor
         hookKind = snapshot.hookState?.kind
+        forceAvailable = snapshot.canForceSend
         var indices = Dictionary(messages.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { _, last in last })
         for message in snapshot.messages {
             if let index = indices[message.id] {
@@ -276,6 +279,30 @@ final class AgentChatStore {
             mutationError = String(localized: "Send could not be confirmed. Check the terminal before sending again.")
             errorMessage = mutationError
             HostLog.ui.error("agent_chat send unconfirmed; no retry")
+        }
+    }
+
+    func canForceDelivery(_ id: String) -> Bool {
+        canView && canInput && !isSubmitting && forceAvailable &&
+            !["busy", "running", "compacting", "waiting_permission", "permission_request"].contains(hookKind ?? "") &&
+            !deliveries.contains { $0.status == "pending" } &&
+            deliveries.contains { $0.id == id && $0.status == "queued" }
+    }
+
+    /// Explicit user override reuses a queued receipt; no prompt text or new receipt is submitted.
+    func forceSend(_ id: String) async {
+        guard canForceDelivery(id) else { return }
+        isSubmitting = true
+        forceAvailable = false
+        mutationError = nil
+        defer { isSubmitting = false }
+        do {
+            try await client.send(terminalID, "", options: AgentChatSendOptions(force: true, deliveryID: id))
+            await refresh()
+        } catch {
+            mutationError = String(localized: "Delivery is uncertain. Check the terminal before sending again.")
+            errorMessage = mutationError
+            HostLog.ui.error("agent_chat force delivery failed; no automatic retry")
         }
     }
 
