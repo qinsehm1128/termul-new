@@ -69,7 +69,12 @@ nonisolated enum TerminalsHubPresentation {
         var buckets: [String: [TerminalsHubTerminal]] = [:]
         var other: [TerminalsHubTerminal] = []
         for terminal in terminals where !excluded.contains(terminal.id) {
-            guard let projectId = terminal.projectId, !projectId.isEmpty else {
+            // Trim at the grouping boundary too: callers may hand over a
+            // summary that never went through `terminal(from:)`, and a
+            // whitespace-only id must not become a blank project group.
+            guard let projectId = terminal.projectId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilWhenEmpty else {
                 other.append(terminal)
                 continue
             }
