@@ -439,7 +439,7 @@ struct PermissionCardView: View {
     @ViewBuilder
     private var actions: some View {
         Button(String(localized: "Deny")) { choose(nil) }
-            .frame(maxWidth: .infinity, minHeight: 40)
+            .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget)
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(palette.inkSecondary)
             .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -450,7 +450,7 @@ struct PermissionCardView: View {
             .buttonStyle(.plain)
         ForEach(card.options) { option in
             Button(option.name) { choose(option.id) }
-                .frame(maxWidth: .infinity, minHeight: 40)
+                .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(palette.canvas)
                 .background(palette.ink, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -531,7 +531,7 @@ struct QuestionCardView: View {
                 lastChoice = option.id
                 onChoose(option.id)
             }
-            .frame(maxWidth: .infinity, minHeight: 40)
+            .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget)
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(palette.canvas)
             .background(palette.ink, in: RoundedRectangle(cornerRadius: 9, style: .continuous))

@@ -89,9 +89,11 @@ struct TerminalWorkspaceView: View {
                     .lineLimit(1)
             }
             R2FitChip(label: "FIT", isActive: session.terminals.displayMode == .phone) {
-                Task { await session.terminals.setDisplayMode(.phone) }
+                let next: TerminalDisplayMode = session.terminals.displayMode == .phone ? .desktop : .phone
+                Task { await session.terminals.setDisplayMode(next) }
             }
-            .accessibilityLabel(Text("Phone Fit"))
+            .accessibilityLabel(Text(session.terminals.displayMode == .phone
+                ? "Switch to desktop fit" : "Fit the phone"))
             .accessibilityValue(Text(session.terminals.displayMode == .phone ? String(localized: "Active") : String(localized: "Idle")))
             textScaleMenu
         }

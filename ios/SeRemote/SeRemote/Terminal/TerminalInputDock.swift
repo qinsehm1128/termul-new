@@ -9,6 +9,7 @@ import UIKit
 /// both preserved so no input route from the old dock is lost.
 struct TerminalInputDock: View {
     @Environment(\.sePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var isEnabled: Bool
     var isKeyboardVisible: Bool
     @Binding var controlModifier: TerminalControlModifier
@@ -185,6 +186,7 @@ struct TerminalInputDock: View {
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(palette.inkSecondary)
                         .frame(width: 30, height: 30)
+                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -197,6 +199,7 @@ struct TerminalInputDock: View {
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(palette.inkSecondary)
                         .frame(width: 30, height: 30)
+                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -211,6 +214,7 @@ struct TerminalInputDock: View {
                     .foregroundStyle(palette.onAccent)
                     .frame(width: 30, height: 30)
                     .background(palette.accent, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -226,7 +230,7 @@ struct TerminalInputDock: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(commandFocused ? palette.accent : palette.strokeStrong, lineWidth: 1)
         }
-        .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: false), value: commandFocused)
+        .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: reduceMotion), value: commandFocused)
         .padding(.top, 8)
     }
 

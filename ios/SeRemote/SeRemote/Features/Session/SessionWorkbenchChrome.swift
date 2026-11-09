@@ -119,6 +119,8 @@ struct R2FitChip: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .frame(minHeight: SeSpace.hitTarget)
+        .contentShape(Rectangle())
         .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: reduceMotion), value: isActive)
     }
 }
