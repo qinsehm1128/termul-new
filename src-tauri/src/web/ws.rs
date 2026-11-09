@@ -1081,6 +1081,12 @@ async fn run_relay(
                         .take()
                         .expect("queued outbound frame is consumed exactly once");
                     if let Outbound::Event(event) = &frame {
+                        if event.type_ == "agent-chat-updated" {
+                            let principal = write_principal.lock().clone();
+                            if !super::agent_chat_api::update_allowed(&write_authority, principal.as_ref()) {
+                                continue;
+                            }
+                        }
                         if !hook_event_is_forwardable(event, write_authenticated_generation.load(Ordering::Acquire) != 0) {
                             continue;
                         }

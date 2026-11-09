@@ -15,6 +15,7 @@
  * sees a thrown exception from the network layer.
  */
 
+import type { AgentChatControlAction, AgentChatSnapshot } from '@shared/types/agent-chat.types'
 import type { AgentHookEvent, AgentKind, HookInstallStatus } from '@shared/types/agent-hooks.types'
 import type {
   CliSessionListArgs,
@@ -90,6 +91,17 @@ function serverBase(): string {
   if (isTauriContext()) return ''
   if (typeof window === 'undefined' || !window.location) return ''
   return window.location.origin
+}
+
+export const webServerAgentChat = {
+  snapshot: (terminalId: string, after?: number) =>
+    getJson<AgentChatSnapshot>(
+      `/agent-chat/${encodeURIComponent(terminalId)}${after === undefined ? '' : `?after=${after}`}`
+    ),
+  send: (terminalId: string, text: string) =>
+    postJson<unknown>(`/agent-chat/${encodeURIComponent(terminalId)}/send`, { text }),
+  control: (terminalId: string, action: AgentChatControlAction) =>
+    postJson<unknown>(`/agent-chat/${encodeURIComponent(terminalId)}/control`, { action })
 }
 
 export const webServerAgentHooks = {

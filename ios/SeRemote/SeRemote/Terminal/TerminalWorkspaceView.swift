@@ -23,21 +23,27 @@ struct TerminalWorkspaceView: View {
             }
             if let id = session.terminals.activeId {
                 terminalMeta
-                terminalCanvas(id: id)
-                if allowsInput {
-                    TerminalInputDock(
-                        isEnabled: true,
-                        isKeyboardVisible: session.terminalKeyboardVisible,
-                        controlModifier: $controlModifier,
-                        onSend: sendTerminalInput,
-                        onFocusTerminal: {
-                            focusToken &+= 1
-                        },
-                        onDismissKeyboard: {
-                            session.dismissTerminalKeyboard()
-                        }
-                    )
-                    .padding(.bottom, 8)
+                TerminalAgentChatContainer(
+                    terminalID: id, http: session.http,
+                    canView: deviceLink?.allows("view") ?? true, canInput: allowsInput,
+                    dismissTerminalKeyboard: { session.dismissTerminalKeyboard() }
+                ) {
+                    terminalCanvas(id: id)
+                    if allowsInput {
+                        TerminalInputDock(
+                            isEnabled: true,
+                            isKeyboardVisible: session.terminalKeyboardVisible,
+                            controlModifier: $controlModifier,
+                            onSend: sendTerminalInput,
+                            onFocusTerminal: {
+                                focusToken &+= 1
+                            },
+                            onDismissKeyboard: {
+                                session.dismissTerminalKeyboard()
+                            }
+                        )
+                        .padding(.bottom, 8)
+                    }
                 }
             } else {
                 SeEmptyState(

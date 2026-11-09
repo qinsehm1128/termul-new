@@ -214,6 +214,13 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     ))
     .merge(classified_routes(
         Router::<AppState>::new()
+            .route("/agent-chat/{terminal_id}", get(super::agent_chat_api::snapshot))
+            .route("/agent-chat/{terminal_id}/send", post(super::agent_chat_api::send))
+            .route("/agent-chat/{terminal_id}/control", post(super::agent_chat_api::control)),
+        RemoteRouteClass::AgentChat,
+    ))
+    .merge(classified_routes(
+        Router::<AppState>::new()
             .route("/agent-hooks/status", get(super::agent_hooks_api::status))
             .route("/agent-hooks/preview", get(super::agent_hooks_api::preview))
             .route("/agent-hooks/events", get(super::agent_hooks_api::events)),
@@ -485,6 +492,14 @@ pub fn router(
     if crate::agent_hooks::start().is_err() {
         log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
     }
+    crate::agent_chat::start(terminal.clone());
+    let chat_relay = Arc::downgrade(&ws_relay);
+    crate::agent_chat::subscribe(Arc::new(move |event| {
+        if let (Some(relay), Ok(payload)) = (chat_relay.upgrade(), serde_json::to_value(event)) {
+            let sinks: Vec<Arc<dyn super::sink::EventSink>> = vec![relay];
+            let _ = super::sink::fan_out(&sinks, None, "agent-chat-updated", &payload);
+        }
+    }));
     let hook_relay = Arc::downgrade(&ws_relay);
     crate::agent_hooks::subscribe(Arc::new(move |event| {
         if let (Some(relay), Ok(payload)) = (hook_relay.upgrade(), serde_json::to_value(event)) {

@@ -18,6 +18,7 @@ struct MessageBubble: View {
     @Environment(\.sePalette) private var palette
     let message: ChatMessage
     var agentName: String?
+    var sourceLabel = "ACP"
     var onEdit: (() -> Void)?
     var onRetry: (() -> Void)?
 
@@ -71,7 +72,7 @@ struct MessageBubble: View {
                 Text(displayAgentName)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(palette.ink)
-                Text("ACP")
+                Text(verbatim: sourceLabel)
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(palette.inkTertiary)
                 Spacer(minLength: 0)

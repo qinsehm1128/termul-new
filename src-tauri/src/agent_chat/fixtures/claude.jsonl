@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","cwd":"/fixture/project"}
+{"type":"user","uuid":"claude-user-1","message":{"role":"user","content":[{"type":"text","text":"Inspect the project with password=fixture-secret"}]}}
+{"type":"assistant","uuid":"claude-agent-1","message":{"id":"msg_fixture","role":"assistant","content":[{"type":"thinking","thinking":"I will inspect files. password=thinking-secret","signature":"opaque-not-visible"},{"type":"text","text":"Reading the requested file."},{"type":"tool_use","id":"claude-call-1","name":"Read","input":{"file_path":"/fixture/project/README.md","api_key":"input-secret","headers":{"Authorization":"opaque-header-secret"}}}]}}
+{"type":"user","uuid":"claude-result-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"claude-call-1","content":[{"type":"text","text":"File contents. password=result-secret"}],"is_error":false}]}}

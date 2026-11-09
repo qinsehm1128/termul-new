@@ -2,10 +2,25 @@ import SwiftUI
 
 /// The Nocturne chat surface is the live timeline, not a second conversation model.
 struct SessionChatView: View {
-    @Bindable var session: WorkspaceSession
+    private let session: WorkspaceSession?
+    private let agentChat: AgentChatStore?
+
+    init(session: WorkspaceSession) {
+        self.session = session
+        self.agentChat = nil
+    }
+
+    init(agentChat: AgentChatStore) {
+        self.session = nil
+        self.agentChat = agentChat
+    }
 
     var body: some View {
-        ChatView(session: session, embedded: true)
+        if let session {
+            ChatView(session: session, embedded: true)
+        } else if let agentChat {
+            AgentChatView(store: agentChat)
+        }
     }
 }
 

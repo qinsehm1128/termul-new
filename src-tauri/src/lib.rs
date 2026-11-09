@@ -2,6 +2,7 @@
 mod acp;
 mod acp_binary_install;
 mod acp_registry_snapshot;
+pub mod agent_chat;
 pub mod agent_hooks;
 mod agent_registry;
 /// Runtime-neutral AI channel, credential, analysis, and Fx contracts.
@@ -3226,6 +3227,11 @@ pub fn run() {
                 handle.clone(),
             )?;
             app.manage(pty_manager.clone());
+            agent_chat::start(terminal_handle.clone());
+            let chat_app = handle.clone();
+            agent_chat::subscribe(Arc::new(move |event| {
+                let _ = chat_app.emit("agent-chat-updated", event);
+            }));
             app.manage(terminal_handle.clone());
             let plugin_service = desktop_plugin_service(&app_data_dir, &handle);
             bridge_plugin_events(handle.clone(), plugin_service.clone());
@@ -4084,6 +4090,9 @@ pub fn run() {
             scheduled_tasks::commands::scheduled_task_list_audit,
             cli_session::commands::list_cli_sessions_cmd,
             cli_session::commands::resolve_cli_sessions_cmd,
+            agent_chat::commands::agent_chat_snapshot,
+            agent_chat::commands::agent_chat_send,
+            agent_chat::commands::agent_chat_control,
             agent_hooks::commands::agent_hooks_status,
             agent_hooks::commands::agent_hooks_preview,
             agent_hooks::commands::agent_hooks_install,

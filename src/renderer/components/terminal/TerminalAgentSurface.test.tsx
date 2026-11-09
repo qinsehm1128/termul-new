@@ -1,0 +1,172 @@
+import type { AgentChatSnapshot } from '@shared/types/agent-chat.types'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useEffect } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TerminalAgentSurface } from './TerminalAgentSurface'
+
+const mocks = vi.hoisted(() => ({
+  snapshot: null as AgentChatSnapshot | null,
+  error: null as string | null,
+  refresh: vi.fn(),
+  send: vi.fn(),
+  control: vi.fn(),
+  mount: vi.fn(),
+  unmount: vi.fn()
+}))
+vi.mock('../../hooks/use-terminal-agent-chat', () => ({
+  useTerminalAgentChat: () => ({
+    snapshot: mocks.snapshot,
+    error: mocks.error,
+    refresh: mocks.refresh
+  })
+}))
+vi.mock('../../lib/log-api', () => ({ logFrontendError: vi.fn() }))
+vi.mock('../../lib/agent-chat-api', () => ({
+  agentChatApi: { send: mocks.send, control: mocks.control }
+}))
+vi.mock('../../stores/terminal-store', () => ({
+  useTerminalStore: (select: (state: unknown) => unknown) => select({ terminals: [] })
+}))
+vi.mock('../../features/agent-session/chat/ChatMessageList', () => ({
+  ChatMessageList: ({ items }: { items: unknown[] }) => (
+    <div data-testid="shared-timeline" data-count={items.length} />
+  )
+}))
+function Pty({ visible }: { visible: boolean }) {
+  useEffect(() => {
+    mocks.mount()
+    return () => mocks.unmount()
+  }, [])
+  return (
+    <div data-testid="pty" data-visible={String(visible)}>
+      PTY stays alive
+    </div>
+  )
+}
+let nextId = 0
+function surface(id = `tab-${++nextId}`) {
+  return (
+    <TerminalAgentSurface terminalId={id} ptyId="host-pty" isVisible>
+      {(visible) => <Pty visible={visible} />}
+    </TerminalAgentSurface>
+  )
+}
+function openChat() {
+  fireEvent.click(screen.getByRole('button', { name: '对话', exact: true }))
+}
+
+beforeEach(() => {
+  mocks.snapshot = {
+    terminal_id: 'host-pty',
+    session_id: 's1',
+    agent: 'qin-code',
+    cursor: 1,
+    messages: [],
+    tool_calls: [],
+    reset: false,
+    deliveries: [],
+    state: 'ready',
+    hook_state: 'idle'
+  }
+  mocks.error = null
+  for (const mock of [mocks.refresh, mocks.send, mocks.control, mocks.mount, mocks.unmount])
+    mock.mockReset()
+  mocks.refresh.mockResolvedValue(undefined)
+  mocks.send.mockResolvedValue({})
+  mocks.control.mockResolvedValue({})
+  localStorage.clear()
+})
+afterEach(cleanup)
+
+describe('terminal agent surface', () => {
+  it('switches views without remounting/unmounting PTY, and restores its visibility', () => {
+    render(surface())
+    const pty = screen.getByTestId('pty')
+    openChat()
+    expect(pty).not.toBeVisible()
+    expect(pty).toHaveAttribute('data-visible', 'false')
+    expect(mocks.mount).toHaveBeenCalledTimes(1)
+    expect(mocks.unmount).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '终端', exact: true }))
+    expect(screen.getByTestId('pty')).toBe(pty)
+    expect(pty).toBeVisible()
+    expect(pty).toHaveAttribute('data-visible', 'true')
+    expect(mocks.unmount).not.toHaveBeenCalled()
+  })
+  it('remembers view per terminal tab rather than leaking across tabs', () => {
+    const first = `remember-${++nextId}`
+    const mounted = render(surface(first))
+    openChat()
+    mounted.unmount()
+    const restored = render(surface(first))
+    expect(screen.getByRole('button', { name: '对话', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    restored.unmount()
+    render(surface())
+    expect(screen.getByRole('button', { name: '终端', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+  })
+  it('sends exactly once while pending, preserves multiline text and refreshes delivery state', async () => {
+    let resolve: (() => void) | undefined
+    mocks.send.mockImplementation(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done
+        })
+    )
+    render(surface())
+    openChat()
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'one\ntwo' } })
+    const send = screen.getByRole('button', { name: '发送', exact: true })
+    fireEvent.click(send)
+    fireEvent.click(send)
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith('host-pty', 'one\ntwo')
+    await act(async () => resolve?.())
+    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(mocks.refresh).toHaveBeenCalledOnce()
+  })
+  it('exposes interrupt/stop explicitly through the host control contract', async () => {
+    render(surface())
+    openChat()
+    fireEvent.click(screen.getByRole('button', { name: '中断 (Esc)' }))
+    await waitFor(() => expect(mocks.control).toHaveBeenCalledWith('host-pty', 'interrupt'))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '强制停止 (Ctrl-C)' })).toBeEnabled()
+    )
+    fireEvent.click(screen.getByRole('button', { name: '强制停止 (Ctrl-C)' }))
+    await waitFor(() => expect(mocks.control).toHaveBeenCalledWith('host-pty', 'stop'))
+  })
+  it('renders queue and unconfirmed badges without retrying delivery', () => {
+    mocks.snapshot!.deliveries = [
+      { id: 'q', text: 'queued text', status: 'queued' },
+      { id: 'u', text: 'uncertain text', status: 'unconfirmed' }
+    ]
+    render(surface())
+    openChat()
+    expect(screen.getByText('排队中')).toBeInTheDocument()
+    expect(screen.getByText('未确认')).toBeInTheDocument()
+    expect(screen.getByText('不会自动重发')).toBeInTheDocument()
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
+  it('shows a recoverable degradation state and disables unsafe sends, keeping terminal accessible', () => {
+    mocks.snapshot = { ...mocks.snapshot!, state: 'degraded', reason: 'unsupported record' }
+    render(surface())
+    openChat()
+    expect(screen.getByRole('status')).toHaveTextContent('unsupported record')
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '终端', exact: true })).toBeEnabled()
+  })
+  it('shows uncertain failed sends and does not automatically retry', async () => {
+    mocks.send.mockRejectedValue(new Error('network lost'))
+    render(surface())
+    openChat()
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'hello' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送', exact: true }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('不要重复发送')
+    expect(mocks.send).toHaveBeenCalledTimes(1)
+  })
+})

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useLocation } from 'react-router-dom'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
+import { TerminalAgentSurface } from '@/components/terminal/TerminalAgentSurface'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
 import { AgentLauncher } from '@/features/agent-session/agents/AgentLauncher'
@@ -556,19 +557,27 @@ export function PaneContent({
                     )}
                   >
                     <Suspense fallback={<PaneSkeleton />}>
-                      <ConnectedTerminal
-                        terminalId={terminal.ptyId}
-                        storeTerminalId={terminal.id}
-                        autoSpawn={false}
-                        spawnOptions={stableProps?.spawnOptions}
-                        onBoundToStoreTerminal={stableProps?.onBoundToStoreTerminal}
-                        onCommand={stableProps?.onCommand}
-                        initialScrollback={terminal.pendingScrollback}
-                        initialModes={terminal.pendingModes}
-                        className="w-full h-full"
+                      <TerminalAgentSurface
+                        terminalId={terminal.id}
+                        ptyId={terminal.ptyId}
                         isVisible={isVisible}
-                        onSplit={handleSplitTerminalForPane}
-                      />
+                      >
+                        {(terminalVisible) => (
+                          <ConnectedTerminal
+                            terminalId={terminal.ptyId}
+                            storeTerminalId={terminal.id}
+                            autoSpawn={false}
+                            spawnOptions={stableProps?.spawnOptions}
+                            onBoundToStoreTerminal={stableProps?.onBoundToStoreTerminal}
+                            onCommand={stableProps?.onCommand}
+                            initialScrollback={terminal.pendingScrollback}
+                            initialModes={terminal.pendingModes}
+                            className="w-full h-full"
+                            isVisible={terminalVisible}
+                            onSplit={handleSplitTerminalForPane}
+                          />
+                        )}
+                      </TerminalAgentSurface>
                     </Suspense>
                     {/* Agent loading overlay: shown until ConnectedTerminal attaches
 											the renderer (rendererAttachmentCount flips to 1). Covers the

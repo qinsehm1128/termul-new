@@ -324,6 +324,9 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.agentHooks.install | agent_hooks_install `agent_hooks/commands.rs`; POST /agent-hooks/install (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | owner-only host config write; in `{agent}`; backup + atomic managed-entry merge; exact path shown before confirmation; never automatic |
 | se.agentHooks.uninstall | agent_hooks_uninstall `agent_hooks/commands.rs`; POST /agent-hooks/uninstall (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | owner-only removal of Se-owned entries/files; preserves concurrent user edits and restores original bytes when unchanged |
 | se.agentHooks.events | agent_hook_events `agent_hooks/commands.rs`; GET /agent-hooks/events (`web/agent_hooks_api.rs`) | R | global | none | OPEN | bounded metadata-only cursor tail in `{after?}` under host view grant; no prompts, tool inputs or secrets; C1 can tail by sequence; HTTP/WS metadata uses the global view grant; project_id is identity, not a per-project ACL |
+| se.agentChat.snapshot | agent_chat_snapshot `agent_chat/commands.rs`; GET /agent-chat/{terminal_id} (`web/agent_chat_api.rs`) | R | terminal | none | OPEN | view scope; host resolves hooked transcript; optional after cursor; redacted, untruncated ACP messages/tools, explicit degraded reason and queue/delivery state; no client file paths |
+| se.agentChat.send | agent_chat_send `agent_chat/commands.rs`; POST /agent-chat/{terminal_id}/send (`web/agent_chat_api.rs`) | W | terminal | grant | OPEN | terminal.input scope rechecked before delayed flush; in text; bracketed paste + Enter only at idle/turn_done; busy host queue; delivery only on matching new transcript user echo; timeout unconfirmed, never auto-resend |
+| se.agentChat.control | agent_chat_control `agent_chat/commands.rs`; POST /agent-chat/{terminal_id}/control (`web/agent_chat_api.rs`) | W | terminal | grant | OPEN | terminal.input scope; action interrupt writes Esc, stop writes Ctrl-C; never terminates/recreates the PTY |
 | se.agentHooks.ingest | POST /agent-hooks/{agent} (`agent_hooks/server.rs`) | W | terminal | none | INTERNAL | native-host-only ingestion for se.agentHooks.events; isolated IPv4 loopback listener, per-launch Bearer and PTY identity headers; never mounted on remote HTTP router, no Tauri/plugin twin, no secret-returning API |
 
 ---
@@ -332,6 +335,7 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 
 | event id | source emit (file:line) | payload summary | scope |
 |---|---|---|---|
+| se.events.agentChatUpdated | `agent-chat-updated` (`agent_chat/mod.rs`, `lib.rs`, `web/router.rs`) | `{terminal_id,cursor}` only; view-authorized clients tail snapshots; never emits prompts/tools/secrets | terminal |
 | se.events.agentHookEvent | `agent-hook-event` (`agent_hooks/mod.rs`, `lib.rs`, `web/router.rs`) | `AgentHookEvent`: sequence, terminal_id, project_id, agent, session_id, kind, at, transcript_path?, tool_name?, ok?; metadata only | project/terminal |
 | se.events.acpAgentSpawned | `acp/events.rs:337` | `{sessionId, agentId, runtime, cwd}` | session |
 | se.events.acpSessionCreated | `acp/events.rs:339` | `{sessionId, agentId, title?}` | session |

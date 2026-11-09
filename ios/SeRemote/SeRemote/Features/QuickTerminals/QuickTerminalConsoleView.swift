@@ -65,6 +65,26 @@ struct QuickTerminalConsoleView: View {
     var body: some View {
         VStack(spacing: 0) {
             compactBar
+            TerminalAgentChatContainer(
+                terminalID: terminalId, http: session.http,
+                canView: deviceLink?.allows("view") ?? true, canInput: allowsInput,
+                dismissTerminalKeyboard: { session.dismissTerminalKeyboard() }
+            ) {
+                terminalBody
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.canvas.ignoresSafeArea())
+        .terminalKeyboardHeight($keyboardHeight)
+        .task { await start() }
+        .onDisappear { release() }
+        .onChange(of: terminalId) { _, _ in
+            controlModifier = TerminalControlModifier()
+        }
+    }
+
+    private var terminalBody: some View {
+        VStack(spacing: 0) {
             if let viewer {
                 if let error = viewer.errorMessage {
                     SeErrorBanner(
@@ -100,14 +120,6 @@ struct QuickTerminalConsoleView: View {
             } else {
                 placeholder
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(palette.canvas.ignoresSafeArea())
-        .terminalKeyboardHeight($keyboardHeight)
-        .task { await start() }
-        .onDisappear { release() }
-        .onChange(of: terminalId) { _, _ in
-            controlModifier = TerminalControlModifier()
         }
     }
 
