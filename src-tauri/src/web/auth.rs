@@ -164,6 +164,7 @@ pub enum RemoteRouteClass {
     Pair,
     AgentHooksStatus,
     AgentHooksManage,
+    AgentChat,
     LocalOperator,
 }
 
@@ -197,6 +198,7 @@ impl RemoteRouteClass {
             Self::Pair => "pair",
             Self::AgentHooksStatus => "agent_hooks_status",
             Self::AgentHooksManage => "agent_hooks_manage",
+            Self::AgentChat => "agent_chat",
             Self::LocalOperator => "local_operator",
         }
     }
@@ -208,6 +210,7 @@ impl RemoteRouteClass {
             Self::Health | Self::Pair => None,
             Self::RemoteAccess | Self::AgentHooksManage | Self::LocalOperator => Some("manage"),
             Self::AgentHooksStatus => Some("view"),
+            Self::AgentChat => Some(if read { "view" } else { "terminal.input" }),
             Self::RemoteDesktop => Some(if read {
                 "screen.view"
             } else {
@@ -253,6 +256,8 @@ impl RemoteRouteClass {
             Some(Self::LocalOperator)
         } else if matches!(path, "/agent-hooks/install" | "/agent-hooks/uninstall") {
             Some(Self::AgentHooksManage)
+        } else if path == "/agent-chat" || path.starts_with("/agent-chat/") {
+            Some(Self::AgentChat)
         } else if path.starts_with("/agent-hooks/") {
             Some(Self::AgentHooksStatus)
         } else if path == "/pair" {
@@ -2019,6 +2024,145 @@ mod tests {
             .set_public_origin(Url::parse("https://example.test/path").unwrap())
             .unwrap();
         authority
+    }
+
+    #[test]
+    fn agent_chat_routes_have_read_and_terminal_input_scopes() {
+        for path in [
+            "/agent-chat",
+            "/agent-chat/terminal-one",
+            "/agent-chat/terminal-one/send",
+            "/agent-chat/terminal-one/control",
+        ] {
+            assert_eq!(
+                RemoteRouteClass::from_path(path),
+                Some(RemoteRouteClass::AgentChat)
+            );
+        }
+        assert_eq!(RemoteRouteClass::from_path("/agent-chatty"), None);
+        assert_eq!(
+            RemoteRouteClass::AgentChat.required_scope(&Method::GET),
+            Some("view")
+        );
+        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            assert_eq!(
+                RemoteRouteClass::AgentChat.required_scope(&method),
+                Some("terminal.input")
+            );
+        }
+        assert!(RemoteRouteClass::AgentChat.requires_http_bearer());
+    }
+
+    #[tokio::test]
+    async fn agent_chat_middleware_enforces_current_device_grants() {
+        let authority = Arc::new(authority());
+        let code = authority.issue_pairing_code().unwrap().code;
+        let paired = authority
+            .pair_device(super::super::devices::PairRequest {
+                code,
+                name: "Chat phone".into(),
+                platform: "ios".into(),
+            })
+            .unwrap();
+        let router = axum::Router::new()
+            .route(
+                "/agent-chat/{terminal_id}",
+                get(|| async { StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/agent-chat/{terminal_id}/send",
+                post(|| async { StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/agent-chat/{terminal_id}/control",
+                post(|| async { StatusCode::NO_CONTENT }),
+            )
+            .layer(axum::middleware::from_fn(capability_middleware))
+            .layer(Extension(authority.clone()));
+        let read = "/agent-chat/terminal-one";
+        let send = "/agent-chat/terminal-one/send";
+        let control = "/agent-chat/terminal-one/control";
+        for (scopes, method, path, expected, denied_scope) in [
+            (
+                vec!["view"],
+                Method::GET,
+                read,
+                StatusCode::NO_CONTENT,
+                None,
+            ),
+            (
+                vec!["view"],
+                Method::POST,
+                send,
+                StatusCode::FORBIDDEN,
+                Some("terminal.input"),
+            ),
+            (
+                vec!["view"],
+                Method::POST,
+                control,
+                StatusCode::FORBIDDEN,
+                Some("terminal.input"),
+            ),
+            (
+                vec!["terminal.input"],
+                Method::POST,
+                send,
+                StatusCode::NO_CONTENT,
+                None,
+            ),
+            (
+                vec!["terminal.input"],
+                Method::POST,
+                control,
+                StatusCode::NO_CONTENT,
+                None,
+            ),
+            (
+                vec!["terminal.input"],
+                Method::GET,
+                read,
+                StatusCode::FORBIDDEN,
+                Some("view"),
+            ),
+        ] {
+            authority
+                .set_device_scopes(
+                    &paired.device_id,
+                    scopes.into_iter().map(str::to_owned).collect(),
+                )
+                .unwrap();
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(
+                            header::AUTHORIZATION,
+                            format!("Bearer {}", paired.device_token),
+                        )
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if let Some(capability) = denied_scope {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    serde_json::json!({"code":"FORBIDDEN","capability":capability})
+                );
+            }
+        }
+        let response = router
+            .oneshot(Request::builder().uri(read).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
