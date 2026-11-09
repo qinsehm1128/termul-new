@@ -304,8 +304,10 @@ final class PhoneTerminalView: TerminalView {
         case .changed:
             guard !dismissDragFired else { return }
             let translation = gesture.translation(in: self)
+            // Vertical-only: a horizontal pan belongs to SwiftTerm selection or
+            // to the accessory strip, never to keyboard dismissal.
             guard translation.y >= Self.dismissDragDistance,
-                  abs(translation.y) > abs(translation.x)
+                  abs(translation.y) > 2 * abs(translation.x)
             else { return }
             dismissDragFired = true
             dismissKeyboard()
