@@ -16,6 +16,7 @@ use std::sync::Arc;
 #[derive(Deserialize)]
 pub struct Tail {
     pub after: Option<u64>,
+    pub before: Option<u64>,
 }
 #[derive(Deserialize)]
 pub struct SendBody {
@@ -52,8 +53,10 @@ pub async fn snapshot(
     if let Err(response) = allowed(&authority, &principal, "view") {
         return response;
     }
-    let value =
-        tokio::task::spawn_blocking(move || crate::agent_chat::snapshot(&id, query.after)).await;
+    let value = tokio::task::spawn_blocking(move || {
+        crate::agent_chat::snapshot_page(&id, query.after, query.before)
+    })
+    .await;
     match value {
         Ok(Ok(value)) => Json(IpcBody::ok(value)).into_response(),
         _ => Json(IpcBody::<()>::err(

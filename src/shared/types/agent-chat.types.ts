@@ -14,6 +14,8 @@ export interface AgentChatSnapshot<Message = unknown, Tool = unknown> {
   session_id: string | null
   agent: string | null
   cursor: number
+  /** Exclusive message-sequence boundary for the next older disk page; not the live cursor. */
+  older_cursor?: number | null
   messages: Message[]
   tool_calls: Tool[]
   reset: boolean
@@ -30,7 +32,11 @@ export interface AgentChatUpdated {
 }
 
 export interface AgentChatApi<Message = unknown, Tool = unknown> {
-  snapshot(terminalId: string, after?: number): Promise<AgentChatSnapshot<Message, Tool>>
+  snapshot(
+    terminalId: string,
+    after?: number,
+    before?: number
+  ): Promise<AgentChatSnapshot<Message, Tool>>
   send(terminalId: string, text: string): Promise<unknown>
   control(terminalId: string, action: AgentChatControlAction): Promise<unknown>
 }

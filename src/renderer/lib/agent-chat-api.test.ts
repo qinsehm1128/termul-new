@@ -14,6 +14,7 @@ const snapshot = {
   session_id: 'session',
   agent: 'qin-code',
   cursor: 7,
+  older_cursor: 2,
   messages: [{ id: 'm1', role: 'agent', blocks: [{ type: 'text', text: 'hello' }], timestamp: 1 }],
   tool_calls: [],
   reset: false,
@@ -49,12 +50,14 @@ describe('terminal agent chat facade parity', () => {
     mocks.invoke.mockResolvedValue(snapshot)
     expect(await agentChatApi.snapshot('pty/a')).toEqual(snapshot)
     await agentChatApi.snapshot('pty/a', 5)
+    await agentChatApi.snapshot('pty/a', undefined, 2)
     await agentChatApi.send('pty/a', 'hello\nworld')
     await agentChatApi.control('pty/a', 'interrupt')
     await agentChatApi.control('pty/a', 'stop')
     expect(mocks.invoke.mock.calls).toEqual([
-      ['agent_chat_snapshot', { terminalId: 'pty/a', after: null }],
-      ['agent_chat_snapshot', { terminalId: 'pty/a', after: 5 }],
+      ['agent_chat_snapshot', { terminalId: 'pty/a', after: null, before: null }],
+      ['agent_chat_snapshot', { terminalId: 'pty/a', after: 5, before: null }],
+      ['agent_chat_snapshot', { terminalId: 'pty/a', after: null, before: 2 }],
       ['agent_chat_send', { terminalId: 'pty/a', text: 'hello\nworld' }],
       ['agent_chat_control', { terminalId: 'pty/a', action: 'interrupt' }],
       ['agent_chat_control', { terminalId: 'pty/a', action: 'stop' }]
@@ -72,6 +75,7 @@ describe('terminal agent chat facade parity', () => {
     vi.stubGlobal('fetch', fetcher)
     expect(await agentChatApi.snapshot('pty/a')).toEqual(snapshot)
     expect(await agentChatApi.snapshot('pty/a', 5)).toEqual(snapshot)
+    expect(await agentChatApi.snapshot('pty/a', undefined, 2)).toEqual(snapshot)
     await agentChatApi.send('pty/a', 'hello\nworld')
     await agentChatApi.control('pty/a', 'interrupt')
     await agentChatApi.control('pty/a', 'stop')
@@ -83,16 +87,17 @@ describe('terminal agent chat facade parity', () => {
     ).toEqual([
       '/agent-chat/pty%2Fa',
       '/agent-chat/pty%2Fa?after=5',
+      '/agent-chat/pty%2Fa?before=2',
       '/agent-chat/pty%2Fa/send',
       '/agent-chat/pty%2Fa/control',
       '/agent-chat/pty%2Fa/control'
     ])
-    expect(fetcher.mock.calls.slice(2).map(([, options]) => options.method)).toEqual([
+    expect(fetcher.mock.calls.slice(3).map(([, options]) => options.method)).toEqual([
       'POST',
       'POST',
       'POST'
     ])
-    expect(fetcher.mock.calls.slice(2).map(([, options]) => JSON.parse(options.body))).toEqual([
+    expect(fetcher.mock.calls.slice(3).map(([, options]) => JSON.parse(options.body))).toEqual([
       { text: 'hello\nworld' },
       { action: 'interrupt' },
       { action: 'stop' }
@@ -101,6 +106,29 @@ describe('terminal agent chat facade parity', () => {
       expect(new Headers(options.headers).get('authorization')).toBe('Bearer test-agent-chat-token')
     }
     expect(mocks.invoke).not.toHaveBeenCalled()
+  })
+
+  it('preserves authorization-denial codes on exclusive-before reads', async () => {
+    mocks.desktop = false
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: 'DEVICE_REVOKED',
+            error: 'Device revoked'
+          }),
+          { status: 403 }
+        )
+    )
+    vi.stubGlobal('fetch', fetcher)
+    await expect(agentChatApi.snapshot('pty/a', undefined, 0)).rejects.toMatchObject({
+      message: 'Device revoked',
+      code: 'DEVICE_REVOKED'
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      `${window.location.origin}/agent-chat/pty%2Fa?before=0`,
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' })
+    )
   })
 
   it('surfaces backend and transport failures without retrying delivery', async () => {

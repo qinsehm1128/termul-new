@@ -6,7 +6,9 @@ struct AgentChatSnapshot: Decodable, Sendable {
     let sessionID: String?
     let agent: String?
     let cursor: UInt64
+    let olderCursor: UInt64?
     let messages: [ChatMessage]
+    let messageToolIDs: [String: String]
     let deliveries: [AgentChatDelivery]
     let state: String
     let reason: String?
@@ -16,12 +18,14 @@ struct AgentChatSnapshot: Decodable, Sendable {
 
     init(terminalID: String, sessionID: String?, agent: String?, cursor: UInt64,
          messages: [ChatMessage], deliveries: [AgentChatDelivery], state: String,
-         reason: String?, hookState: AgentChatHookState?, toolCalls: [AgentChatToolCall] = [], reset: Bool = false) {
+         reason: String?, hookState: AgentChatHookState?, toolCalls: [AgentChatToolCall] = [], reset: Bool = false, olderCursor: UInt64? = nil, messageToolIDs: [String: String] = [:]) {
         self.terminalID = terminalID
         self.sessionID = sessionID
         self.agent = agent
         self.cursor = cursor
+        self.olderCursor = olderCursor
         self.messages = messages
+        self.messageToolIDs = messageToolIDs
         self.deliveries = deliveries
         self.state = state
         self.reason = reason
@@ -36,7 +40,12 @@ struct AgentChatSnapshot: Decodable, Sendable {
         sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID)
         agent = try values.decodeIfPresent(String.self, forKey: .agent)
         cursor = try values.decode(UInt64.self, forKey: .cursor)
-        messages = try values.decode([AgentChatWireMessage].self, forKey: .messages).map(\.message)
+        olderCursor = try values.decodeIfPresent(UInt64.self, forKey: .olderCursor)
+        let wireMessages = try values.decode([AgentChatWireMessage].self, forKey: .messages)
+        messages = wireMessages.map(\.message)
+        messageToolIDs = Dictionary(wireMessages.compactMap { wire in
+            wire.toolCallID.map { (wire.message.id, $0) }
+        }, uniquingKeysWith: { _, last in last })
         deliveries = try values.decode([AgentChatDelivery].self, forKey: .deliveries)
         state = try values.decode(String.self, forKey: .state)
         reason = try values.decodeIfPresent(String.self, forKey: .reason)
@@ -47,15 +56,18 @@ struct AgentChatSnapshot: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case terminalID = "terminal_id", sessionID = "session_id", hookState = "hook_state", toolCalls = "tool_calls"
+        case olderCursor = "older_cursor"
         case agent, cursor, messages, deliveries, state, reason, reset
     }
 }
 
 private struct AgentChatWireMessage: Decodable {
     let message: ChatMessage
+    let toolCallID: String?
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        toolCallID = try values.decodeIfPresent(String.self, forKey: .toolCallID)
         let text = try values.decodeIfPresent(String.self, forKey: .text)
             ?? values.decodeIfPresent([AgentChatTextBlock].self, forKey: .blocks)?.compactMap(\.text).joined(separator: "\n")
             ?? ""
@@ -67,7 +79,10 @@ private struct AgentChatWireMessage: Decodable {
         )
     }
 
-    enum CodingKeys: String, CodingKey { case id, role, text, blocks, streaming, seq }
+    enum CodingKeys: String, CodingKey {
+        case id, role, text, blocks, streaming, seq
+        case toolCallID = "tool_call_id"
+    }
 }
 
 private struct AgentChatTextBlock: Decodable {
@@ -138,13 +153,13 @@ enum AgentChatControl: String, Sendable {
 }
 
 struct AgentChatClient: Sendable {
-    var snapshot: @MainActor @Sendable (String, UInt64) async throws -> AgentChatSnapshot
+    private var requestSnapshot: @MainActor @Sendable (String, UInt64?, UInt64?) async throws -> AgentChatSnapshot
     var send: @MainActor @Sendable (String, String) async throws -> Void
     var control: @MainActor @Sendable (String, AgentChatControl) async throws -> Void
 
     init(http: HostHTTP) {
-        snapshot = { terminalID, cursor in
-            try await http.get(Self.path(terminalID), query: ["after": String(cursor)])
+        requestSnapshot = { terminalID, cursor, before in
+            try await http.get(Self.path(terminalID), query: Self.snapshotQuery(after: cursor, before: before))
         }
         send = { terminalID, text in
             let _: AgentChatAcknowledgement = try await http.post(Self.path(terminalID) + "/send", body: ["text": text])
@@ -174,13 +189,24 @@ struct AgentChatClient: Sendable {
     }
 
     init(
-        snapshot: @escaping @MainActor @Sendable (String, UInt64) async throws -> AgentChatSnapshot,
+        snapshot: @escaping @MainActor @Sendable (String, UInt64?, UInt64?) async throws -> AgentChatSnapshot,
         send: @escaping @MainActor @Sendable (String, String) async throws -> Void,
         control: @escaping @MainActor @Sendable (String, AgentChatControl) async throws -> Void
     ) {
-        self.snapshot = snapshot
+        self.requestSnapshot = snapshot
         self.send = send
         self.control = control
+    }
+
+    func snapshot(_ terminalID: String, _ after: UInt64? = nil, before: UInt64? = nil) async throws -> AgentChatSnapshot {
+        try await requestSnapshot(terminalID, after, before)
+    }
+
+    static func snapshotQuery(after: UInt64?, before: UInt64?) -> [String: String] {
+        var query: [String: String] = [:]
+        if let after { query["after"] = String(after) }
+        if let before { query["before"] = String(before) }
+        return query
     }
 
     static func validateAcknowledgement(_ data: Data) throws {

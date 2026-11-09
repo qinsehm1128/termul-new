@@ -37,7 +37,8 @@ const CLAUDE_EVENTS: &[(&str, (u32, u32, u32))] = &[
     ("PermissionRequest", (2, 0, 45)),
     ("PostToolUseFailure", (2, 0, 56)),
 ];
-const PI_EXTENSION: &str = "// Se managed agent hooks v1\n";
+const PI_EXTENSION: &str = "// Se managed agent hooks v2\n";
+const PI_EXTENSION_V1: &str = "// Se managed agent hooks v1\n";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HookInstallStatus {
@@ -220,9 +221,10 @@ impl Adapter {
             let (config_ok, managed_config) = match self.name().as_str() {
                 "pi" => (
                     bytes.as_deref() == Some(self.pi_source().as_bytes()),
-                    bytes
-                        .as_deref()
-                        .is_some_and(|bytes| bytes.starts_with(PI_EXTENSION.as_bytes())),
+                    bytes.as_deref().is_some_and(|bytes| {
+                        bytes.starts_with(PI_EXTENSION.as_bytes())
+                            || bytes.starts_with(PI_EXTENSION_V1.as_bytes())
+                    }),
                 ),
                 "claude-code" => {
                     let value = parse_json(bytes.as_deref())?;
@@ -487,7 +489,9 @@ impl Adapter {
         match self.name().as_str() {
             "pi" => {
                 if let Some(bytes) = original {
-                    if bytes != self.pi_source().as_bytes() {
+                    if bytes != self.pi_source().as_bytes()
+                        && bytes != self.pi_v1_source().as_bytes()
+                    {
                         return Err("The pi extension path contains an unrecognized file; refusing to overwrite or delete it".into());
                     }
                 }
@@ -670,6 +674,59 @@ impl Adapter {
     fn pi_source(&self) -> String {
         format!(
             r#"{PI_EXTENSION}import {{ spawn }} from "node:child_process";
+export default function (pi: any) {{
+  // session_start precedes the CLI's initial prompt/agent_start. Unknown flags,
+  // positional prompts and @file inputs therefore fail closed, not briefly idle.
+  const flags = new Set(["--continue", "-c", "--resume", "-r", "--no-session", "--no-tools", "--no-extensions", "-ne", "--no-skills", "-ns", "--no-prompt-templates", "-np", "--no-themes", "--offline", "--hide-cwd-in-prompt", "--verbose"]);
+  const options = new Set(["--provider", "--model", "--api-key", "--thinking", "--session", "--session-dir", "--tools", "--extension", "-e", "--skill", "--prompt-template", "--theme", "--models", "--keybindings", "--system-prompt", "--append-system-prompt"]);
+  const args = process.argv.slice(2);
+  let promptFree = true;
+  for (let i = 0; i < args.length; i++) {{
+    if (flags.has(args[i])) continue;
+    if (options.has(args[i]) && args[i + 1] && !args[i + 1].startsWith("-")) {{ i++; continue; }}
+    promptFree = false;
+    break;
+  }}
+  let revision = 0;
+  let delivery = Promise.resolve();
+  const report = (name: string, event: any, ctx: any, ready: any = undefined) => {{
+    try {{
+      const payload = JSON.stringify({{ event: name, session_id: ctx?.sessionManager?.getSessionId?.(), session_file: ctx?.sessionManager?.getSessionFile?.(), tool_name: event.toolName, ok: !event.isError }});
+      if (Buffer.byteLength(payload) > 1048576) return;
+      // Delivery is detached from pi callbacks, but ordered: a late idle POST
+      // must not overtake agent_start or arrive before its session identity.
+      delivery = delivery.then(() => new Promise<void>((done) => {{
+        try {{
+          if (ready && !ready()) {{ done(); return; }}
+          const child = spawn({script}, [], {{ stdio: ["pipe", "ignore", "ignore"] }});
+          child.on("error", () => done());
+          child.on("close", () => done());
+          child.stdin.on("error", () => {{}});
+          child.stdin.end(payload);
+          child.unref();
+        }} catch {{ done(); }}
+      }}));
+    }} catch {{ /* Observers must never alter tool decisions or interrupt pi. */ }}
+  }};
+  const events = ["session_start", "agent_start", "agent_end", "tool_execution_start", "tool_execution_end", "tool_approval_requested", "tool_approval_resolved", "ui_prompt_start", "ui_prompt_end", "session_shutdown"];
+  for (const name of events) pi.on(name, (event: any, ctx: any) => {{
+    if (!process.env.SE_TERMINAL_ID) return;
+    const current = ++revision;
+    report(name, event, ctx);
+    if (name === "session_start") report("idle", event, ctx, () =>
+      current === revision && promptFree && process.stdin.isTTY === true &&
+      ctx?.hasUI === true && ctx?.isIdle?.() === true && ctx?.hasPendingMessages?.() === false);
+  }});
+}}
+"#,
+            script = serde_json::to_string(&self.script().to_string_lossy()).unwrap()
+        )
+    }
+
+    // Keep the exact v1 bytes: ownership is not inferred from a forgeable header.
+    fn pi_v1_source(&self) -> String {
+        format!(
+            r#"{PI_EXTENSION_V1}import {{ spawn }} from "node:child_process";
 export default function (pi: any) {{
   const events = ["session_start", "agent_start", "agent_end", "tool_execution_start", "tool_execution_end", "tool_approval_requested", "tool_approval_resolved", "ui_prompt_start", "ui_prompt_end", "session_shutdown"];
   for (const name of events) pi.on(name, (event: any, ctx: any) => {{
@@ -1179,6 +1236,64 @@ mod tests {
     }
 
     #[test]
+    fn pi_v1_upgrade_is_outdated_idempotent_and_reversible() {
+        for with_receipt in [false, true] {
+            let (_temp, adapter) = fixture(AgentKind::Pi);
+            let legacy = adapter.pi_v1_source().into_bytes();
+            seed(&adapter.config(), &legacy);
+            seed(&adapter.script(), adapter.script_source().as_bytes());
+            if with_receipt {
+                seed(
+                    &adapter.receipt(),
+                    &serde_json::to_vec(&Receipt {
+                        original: None,
+                        installed: legacy.clone(),
+                    })
+                    .unwrap(),
+                );
+            }
+            assert_eq!(adapter.status().state, "outdated");
+            adapter.install().unwrap();
+            let installed = fs::read(adapter.config()).unwrap();
+            let receipt = fs::read(adapter.receipt()).unwrap();
+            assert!(installed.starts_with(PI_EXTENSION.as_bytes()));
+            assert_eq!(installed, adapter.pi_source().as_bytes());
+            let backup = fs::read_dir(adapter.config().parent().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.to_string_lossy().contains(".se-backup-"))
+                .unwrap();
+            assert_eq!(fs::read(backup).unwrap(), legacy);
+            adapter.install().unwrap();
+            assert_eq!(fs::read(adapter.config()).unwrap(), installed);
+            assert_eq!(fs::read(adapter.receipt()).unwrap(), receipt);
+            adapter.uninstall().unwrap();
+            assert!(!adapter.config().exists());
+            assert!(!adapter.script().exists());
+            assert!(!adapter.receipt().exists());
+        }
+    }
+
+    #[test]
+    fn pi_version_headers_do_not_authorize_overwriting_user_edits() {
+        for legacy in [false, true] {
+            let (_temp, adapter) = fixture(AgentKind::Pi);
+            let mut source = if legacy {
+                adapter.pi_v1_source()
+            } else {
+                adapter.pi_source()
+            };
+            source.push_str("// user edit must survive verbatim\n");
+            seed(&adapter.config(), source.as_bytes());
+            assert_eq!(adapter.status().state, "outdated");
+            assert!(adapter.install().is_err());
+            assert!(adapter.uninstall().is_err());
+            assert_eq!(fs::read(adapter.config()).unwrap(), source.as_bytes());
+            assert!(!adapter.root().exists());
+        }
+    }
+
+    #[test]
     fn status_reports_invalid_configuration_as_error() {
         for (agent, invalid) in [
             (AgentKind::ClaudeCode, "{broken"),
@@ -1367,6 +1482,183 @@ mod tests {
         assert!(adapter.uninstall().is_err());
         assert_eq!(fs::read(target).unwrap(), b"{\"user\":true}");
         assert!(!adapter.root().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_observer_startup_idle_is_ordered_prompt_safe_and_fail_open() {
+        if !Command::new("node")
+            .args(["--experimental-strip-types", "--eval", ""])
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping pi runtime fixture: Node with TypeScript stripping is unavailable");
+            return;
+        }
+        let (_temp, adapter) = fixture(AgentKind::Pi);
+        adapter.install().unwrap();
+        let module = adapter.home.join("observer.mts");
+        seed(&module, adapter.pi_source().as_bytes());
+        let capture = adapter.home.join("events.jsonl");
+        let bin = adapter.home.join("bin");
+        // Delay idle completion so an immediately following busy event would
+        // overtake it if the observer regressed to parallel curl subprocesses.
+        atomic_write(
+            &bin.join("curl"),
+            br#"#!/bin/sh
+payload=$(cat)
+case "$payload" in *'"event":"idle"'*) : > "$CAPTURE_IDLE_STARTED"; sleep 0.1;; esac
+printf '%s\n' "$payload" >> "$CAPTURE_EVENTS"
+"#,
+            0o755,
+        )
+        .unwrap();
+        seed(
+            &adapter.root().join("endpoint.env"),
+            b"SE_AGENT_HOOK_PORT=38455\nSE_AGENT_HOOK_TOKEN=fixture\n",
+        );
+        let harness = r#"
+import observer from __MODULE__;
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const capture = process.env.CAPTURE_EVENTS;
+const idleStarted = process.env.CAPTURE_IDLE_STARTED;
+const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const read = () => fs.readFileSync(capture, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+const waitFor = async (n) => {
+  for (let i = 0; i < 200; i++) { if (read().length >= n) return; await pause(10); }
+  assert.fail('observer did not deliver expected events: ' + fs.readFileSync(capture, 'utf8'));
+};
+const setup = (args = [], override = {}) => {
+  fs.writeFileSync(capture, '');
+  if (fs.existsSync(idleStarted)) fs.unlinkSync(idleStarted);
+  process.argv = ['node', 'pi', ...args];
+  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+  const hooks = new Map();
+  observer({ on: (name, handler) => hooks.set(name, handler) });
+  const ctx = {
+    hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
+    sessionManager: { getSessionId: () => 'session-fixture', getSessionFile: () => '/fixture/session.jsonl' },
+    ...override
+  };
+  const fire = (name, event = {}) => {
+    assert.equal(hooks.get(name)(event, ctx), undefined, 'observer must not block/return tool decisions');
+  };
+  return { fire, ctx };
+};
+// Actual observer TS and generated shell script: safe startup reports identity
+// first, then one ready event with no message/tool output disclosure.
+let current = setup(['--model', 'fixture', '-c']);
+current.fire('session_start', { message: 'PRIVATE', toolResult: 'PRIVATE' });
+await waitFor(2);
+assert.deepEqual(read().map(x => x.event), ['session_start', 'idle']);
+fs.writeFileSync(process.env.STARTUP_CAPTURE, JSON.stringify(read()));
+for (const payload of read()) {
+  assert.equal(payload.session_id, 'session-fixture');
+  assert.equal(payload.session_file, '/fixture/session.jsonl');
+  assert.equal(JSON.stringify(payload).includes('PRIVATE'), false);
+}
+// A busy event arriving while idle is in flight must stay after idle, never
+// be overwritten by that delayed ready POST.
+current = setup();
+current.fire('session_start');
+for (let i = 0; i < 200 && !fs.existsSync(idleStarted); i++) await pause(10);
+assert.equal(fs.existsSync(idleStarted), true, 'idle delivery must have started');
+assert.deepEqual(read().map(x => x.event), ['session_start']);
+current.fire('agent_start');
+await waitFor(3);
+assert.deepEqual(read().map(x => x.event), ['session_start', 'idle', 'agent_start']);
+// CLI prompts start AFTER session_start, so even a currently idle ctx is not
+// sufficient evidence. Cover positional, @file, option+prompt and unknown args.
+for (const args of [['hello'], ['@input.md'], ['--model', 'fixture', 'hello'], ['--custom-flag'], ['--model'], ['--print'], ['--mode', 'rpc']]) {
+  current = setup(args);
+  current.fire('session_start');
+  await waitFor(1);
+  await pause(80);
+  assert.deepEqual(read().map(x => x.event), ['session_start'], JSON.stringify(args));
+}
+// No ready transition when actual startup work, pending input, missing API,
+// noninteractive mode, or shutdown/agent_start has intervened.
+for (const override of [{ isIdle: () => false }, { hasPendingMessages: () => true }, { hasUI: false }, { isIdle: undefined }, { hasPendingMessages: undefined }]) {
+  current = setup([], override);
+  current.fire('session_start');
+  await waitFor(1);
+  await pause(80);
+  assert.deepEqual(read().map(x => x.event), ['session_start']);
+}
+current = setup();
+Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+current.fire('session_start');
+await waitFor(1);
+await pause(80);
+assert.deepEqual(read().map(x => x.event), ['session_start']);
+for (const name of ['agent_start', 'session_shutdown']) {
+  current = setup();
+  current.fire('session_start');
+  current.fire(name);
+  await waitFor(2);
+  await pause(80);
+  assert.deepEqual(read().map(x => x.event), ['session_start', name]);
+}
+// Simulate CLI initial-prompt ordering with a gap before agent_start.
+current = setup(['initial prompt']);
+current.fire('session_start');
+await waitFor(1);
+await pause(80);
+current.fire('agent_start');
+current.fire('agent_end');
+await waitFor(3);
+assert.deepEqual(read().map(x => x.event), ['session_start', 'agent_start', 'agent_end']);
+// No terminal -> no delivery. Spawn failure -> no unhandled rejection and
+// subsequent observers remain non-blocking/fail-open.
+current = setup();
+delete process.env.SE_TERMINAL_ID;
+current.fire('session_start');
+await pause(80);
+assert.equal(read().length, 0);
+process.env.SE_TERMINAL_ID = 'term-fixture';
+fs.unlinkSync(__SCRIPT__);
+current.fire('session_start');
+current.fire('agent_start');
+await pause(100);
+assert.equal(read().length, 0);
+console.log('pi startup observer runtime fixtures passed');
+"#
+        .replace("__MODULE__", &serde_json::to_string(&module).unwrap())
+        .replace("__SCRIPT__", &serde_json::to_string(&adapter.script()).unwrap());
+        let runner = adapter.home.join("run.mjs");
+        seed(&runner, harness.as_bytes());
+        let output = Command::new("node")
+            .arg("--experimental-strip-types")
+            .arg(&runner)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("CAPTURE_EVENTS", &capture)
+            .env("STARTUP_CAPTURE", adapter.home.join("startup-events.json"))
+            .env("CAPTURE_IDLE_STARTED", adapter.home.join("idle-started"))
+            .env("SE_TERMINAL_ID", "term-fixture")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "node observer fixture failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "pi startup observer runtime fixtures passed"
+        );
+        let events =
+            serde_json::from_slice(&fs::read(adapter.home.join("startup-events.json")).unwrap())
+                .unwrap();
+        crate::agent_chat::tests::assert_real_pi_observer_startup_can_send(events);
     }
 
     #[cfg(unix)]

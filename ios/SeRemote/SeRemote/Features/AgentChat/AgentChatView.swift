@@ -45,6 +45,23 @@ struct AgentChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    if store.isBrowsingOlder {
+                        Button("Return to latest") { Task { await store.returnToLatest() } }
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .accessibilityIdentifier("agent-chat-return-latest")
+                    }
+                    if store.olderCursor != nil {
+                        Button(store.isLoadingOlder ? "Loading…" : "Load older messages") {
+                            let anchor = store.messages.first?.id
+                            Task {
+                                await store.loadOlder()
+                                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                            }
+                        }
+                        .disabled(store.isLoadingOlder)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .accessibilityIdentifier("agent-chat-load-older")
+                    }
                     if store.messages.isEmpty {
                         emptyState
                     }

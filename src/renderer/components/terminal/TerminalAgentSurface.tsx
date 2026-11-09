@@ -29,7 +29,8 @@ const deliveryLabels = {
 } as const
 
 function TerminalAgentChat({ terminalId }: { terminalId: string }) {
-  const { snapshot, error, refresh } = useTerminalAgentChat(terminalId)
+  const { snapshot, error, refresh, loadOlder, loadingOlder, browsingOlder, returnLatest } =
+    useTerminalAgentChat(terminalId)
   const tracked = useTerminalStore(
     (state) => state.terminals.find((terminal) => terminal.ptyId === terminalId)?.agentSession
   )
@@ -106,6 +107,25 @@ function TerminalAgentChat({ terminalId }: { terminalId: string }) {
       )}
       {snapshot?.state === 'ready' && timeline.length === 0 && (
         <p className="p-3 text-sm text-muted-foreground">暂无会话消息</p>
+      )}
+      {browsingOlder && (
+        <button
+          type="button"
+          className="shrink-0 border-b border-border px-3 py-2 text-sm"
+          onClick={() => void returnLatest()}
+        >
+          返回最新消息
+        </button>
+      )}
+      {snapshot?.older_cursor != null && (
+        <button
+          type="button"
+          className="shrink-0 border-b border-border px-3 py-2 text-sm disabled:opacity-50"
+          disabled={loadingOlder}
+          onClick={() => void loadOlder()}
+        >
+          {loadingOlder ? '正在加载…' : '加载更早消息'}
+        </button>
       )}
       <ChatMessageList
         items={timeline}

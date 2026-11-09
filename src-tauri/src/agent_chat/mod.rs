@@ -2,30 +2,42 @@
 //! No transcript or prompt is persisted in the search index or logged here.
 pub mod adapters;
 pub mod commands;
+mod history;
 mod paths;
 mod scan;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use crate::agent_hooks::{self, AgentHookEvent, AgentKind, HookKind};
 use crate::core::TerminalServiceHandle;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
-    sync::{mpsc, Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc, Arc, Mutex, OnceLock,
+    },
     time::{Duration, Instant, SystemTime},
 };
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_QUEUE: usize = 64;
+const MAX_RECEIPTS: usize = 64;
+const MAX_PENDING_BYTES: usize = 512 * 1024;
+const MAX_SESSIONS: usize = 128;
 const MAX_TEXT: usize = 128 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 type Writer = Box<dyn Fn(&str, &str) -> Result<(), String> + Send>;
 pub type SendGuard = Arc<dyn Fn() -> bool + Send + Sync>;
 type Subscriber = Arc<dyn Fn(&ChatUpdated) + Send + Sync>;
+static CURSOR: AtomicU64 = AtomicU64::new(1);
+fn next_cursor() -> u64 {
+    CURSOR.fetch_add(1, Ordering::Relaxed)
+}
+
 static SERVICE: OnceLock<Service> = OnceLock::new();
 static SUBSCRIBERS: OnceLock<Mutex<Vec<Subscriber>>> = OnceLock::new();
 
@@ -34,7 +46,7 @@ pub struct ChatUpdated {
     pub terminal_id: String,
     pub cursor: u64,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: String,
     pub role: String,
@@ -42,6 +54,8 @@ pub struct ChatMessage {
     pub streaming: bool,
     pub timestamp: u64,
     pub seq: u64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_call_id: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Delivery {
@@ -62,6 +76,7 @@ pub struct ChatSnapshot {
     pub reason: Option<String>,
     pub hook_state: String,
     pub reset: bool,
+    pub older_cursor: Option<u64>,
 }
 struct Pending {
     delivery: Delivery,
@@ -80,8 +95,10 @@ struct Session {
     cursor: u64,
     reset_cursor: u64,
     last_emitted: Option<u64>,
-    messages: Vec<ChatMessage>,
-    tools: Vec<Value>,
+    history: Option<history::History>,
+    anchor: Vec<u8>,
+    scan_state: scan::ScanState,
+    retired_at: Option<Instant>,
     pending: VecDeque<Pending>,
     reason: Option<String>,
     hook_state: String,
@@ -114,22 +131,32 @@ impl Session {
     fn new(hook: AgentHookEvent) -> Self {
         let ready_credit = matches!(hook.kind, HookKind::Idle | HookKind::TurnDone);
         let hook_state = hook_name(hook.kind).to_owned();
+        let cursor = next_cursor();
         Self {
             hook,
             path: None,
             watcher: None,
             stamp: None,
             offset: 0,
-            cursor: 0,
-            reset_cursor: 0,
+            cursor,
+            reset_cursor: cursor,
             last_emitted: None,
-            messages: vec![],
-            tools: vec![],
+            history: history::History::new().ok(),
+            anchor: vec![],
+            scan_state: scan::ScanState::default(),
+            retired_at: None,
             pending: VecDeque::new(),
             reason: None,
             hook_state,
             ready_credit,
         }
+    }
+    fn replace(&mut self, hook: AgentHookEvent) {
+        self.finish();
+        let receipts = std::mem::take(&mut self.pending);
+        *self = Session::new(hook);
+        self.reset_cursor = self.cursor;
+        self.pending = receipts;
     }
     fn apply_hook(&mut self, hook: AgentHookEvent) {
         if self.hook.sequence == hook.sequence {
@@ -145,19 +172,21 @@ impl Session {
             self.ready_credit = true;
         }
         self.hook = hook;
-        self.cursor += 1;
+        self.cursor = next_cursor();
+        if self.hook.kind == HookKind::SessionEnd {
+            self.finish();
+        }
         if changed_path {
             self.path = None;
             self.stamp = None;
             self.offset = 0;
-            self.messages.clear();
-            self.tools.clear();
+            self.clear_history();
             self.reason = None;
             self.reset_cursor = self.cursor;
             for item in &mut self.pending {
                 if item.delivery.status == "pending" {
                     item.delivery.status = "unconfirmed".into();
-                    item.raw.clear();
+                    item.raw = String::new();
                 }
             }
         }
@@ -170,7 +199,7 @@ impl Session {
                 count = 1
             );
             self.reason = Some(reason.to_owned());
-            self.cursor += 1;
+            self.cursor = next_cursor();
         }
     }
     fn configure_path(&mut self, tx: &mpsc::SyncSender<Request>) {
@@ -199,6 +228,72 @@ impl Session {
             Err(_) => self.degrade("watch_unavailable"),
         }
     }
+    fn clear_history(&mut self) {
+        self.anchor.clear();
+        self.scan_state = scan::ScanState::default();
+        if self.history.as_ref().is_some_and(|h| h.clear().is_err()) {
+            self.history = None;
+        }
+    }
+    fn finish(&mut self) {
+        if self.retired_at.is_none() {
+            self.cursor = next_cursor();
+        }
+        self.ready_credit = false;
+        self.hook.kind = HookKind::SessionEnd;
+        self.hook_state = "session_end".into();
+        self.watcher = None;
+        self.retired_at.get_or_insert_with(Instant::now);
+        for item in &mut self.pending {
+            if matches!(item.delivery.status.as_str(), "pending" | "queued") {
+                item.delivery.status = "unconfirmed".into();
+                item.raw = String::new();
+                item.guard = None;
+                self.cursor = next_cursor();
+            }
+        }
+        self.trim_receipts();
+    }
+    fn reserve_receipt(&mut self, bytes: usize) -> bool {
+        while self.pending.len() >= MAX_RECEIPTS
+            || self
+                .pending
+                .iter()
+                .map(|p| p.raw.len() + p.delivery.text.len())
+                .sum::<usize>()
+                + bytes
+                > MAX_PENDING_BYTES
+        {
+            let Some(index) = self
+                .pending
+                .iter()
+                .position(|p| !matches!(p.delivery.status.as_str(), "pending" | "queued"))
+            else {
+                return false;
+            };
+            self.pending.remove(index);
+        }
+        true
+    }
+    fn trim_receipts(&mut self) {
+        while self.pending.len() > MAX_RECEIPTS
+            || self
+                .pending
+                .iter()
+                .map(|p| p.raw.len() + p.delivery.text.len())
+                .sum::<usize>()
+                > MAX_PENDING_BYTES
+        {
+            let Some(index) = self
+                .pending
+                .iter()
+                .position(|p| !matches!(p.delivery.status.as_str(), "pending" | "queued"))
+            else {
+                break;
+            };
+            self.pending.remove(index);
+        }
+    }
     fn read(&mut self) {
         let Some(path) = self.path.clone() else {
             return;
@@ -207,39 +302,61 @@ impl Session {
             self.degrade("transcript_unreadable");
             return;
         };
-        if self.stamp.as_ref() == Some(&stamp) {
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            self.degrade("transcript_unreadable");
+            return;
+        };
+        if paths::verify_opened(&self.hook, &path, &file).is_err() {
+            self.degrade("transcript_unreadable");
             return;
         }
+        // Validate bytes just before the previous committed read boundary even if
+        // the inode survived a truncate/rewrite and the replacement grew longer.
+        let anchor_matches =
+            scan::anchor_file(&mut file, self.offset).is_some_and(|a| a == self.anchor);
         if self.stamp.as_ref().is_some_and(|old| {
             old.identity != stamp.identity
                 || stamp.len < old.len
+                || !anchor_matches
                 || (stamp.len == old.len && old.modified != stamp.modified)
         }) {
             self.offset = 0;
-            self.messages.clear();
-            self.tools.clear();
+            self.clear_history();
             self.reason = None;
-            self.cursor += 1;
+            self.cursor = next_cursor();
             self.reset_cursor = self.cursor;
-            // An echo from a replacement file is not evidence for an earlier write.
             for item in &mut self.pending {
                 if item.delivery.status == "pending" {
                     item.delivery.status = "unconfirmed".into();
-                    item.raw.clear();
+                    item.raw = String::new();
+                    item.guard = None;
                 }
             }
+        } else if self.stamp.as_ref() == Some(&stamp) && self.offset >= stamp.len {
+            return;
         }
-        let mut entries = vec![];
         let mut invalid = false;
-        let scanned = scan::scan(&path, self.offset, |record| {
-            match adapters::parse_record(self.hook.agent, &record.value, record.byte_offset) {
+        let agent = self.hook.agent;
+        // The scanner bounds work per turn, and applies records immediately: no
+        // Vec containing the whole append/journal and no linear history dedupe.
+        let Ok(scan_file) = file.try_clone() else {
+            self.degrade("transcript_unreadable");
+            return;
+        };
+        let mut state = std::mem::take(&mut self.scan_state);
+        let scanned = scan::scan_file(scan_file, self.offset, &mut state, |record| {
+            match adapters::parse_record(agent, &record.value, record.byte_offset) {
                 Ok(parsed) => {
-                    entries.extend(parsed.into_iter().map(|entry| (record.byte_offset, entry)))
+                    for entry in parsed {
+                        self.apply_entry(record.byte_offset, entry);
+                    }
                 }
                 Err(_) => invalid = true,
             }
         });
+        self.scan_state = state;
         self.offset = scanned.resume_offset;
+        self.anchor = scan::anchor_file(&mut file, self.offset).unwrap_or_default();
         self.stamp = Some(stamp);
         if invalid || !scanned.issues.is_empty() {
             self.degrade("invalid_transcript_record");
@@ -248,60 +365,74 @@ impl Session {
             Some("transcript_not_found" | "transcript_unreadable")
         ) {
             self.reason = None;
-            self.cursor += 1;
+            self.cursor = next_cursor();
         }
-        for (record_offset, entry) in entries {
-            if self.messages.iter().any(|m| m.id == entry.id) {
-                continue;
+        self.trim_receipts();
+    }
+    fn apply_entry(&mut self, record_offset: u64, entry: adapters::ParsedEntry) {
+        let Some(history) = self.history.as_ref() else {
+            self.degrade("history_unavailable");
+            return;
+        };
+        match history.contains(&entry.id) {
+            Ok(true) => return,
+            Err(_) => {
+                self.degrade("history_unavailable");
+                return;
             }
-            self.cursor += 1;
-            if let Some(text) = &entry.user_text {
-                if let Some(item) = self.pending.iter_mut().find(|p| {
-                    p.delivery.status == "pending"
-                        && record_offset >= p.baseline_offset
-                        && self.cursor > p.baseline
-                        && normalize(&p.raw) == normalize(text)
-                }) {
-                    item.delivery.status = "delivered".into();
-                    item.raw.clear();
-                }
+            _ => {}
+        }
+        self.cursor = next_cursor();
+        if let Some(text) = &entry.user_text {
+            if let Some(item) = self.pending.iter_mut().find(|p| {
+                p.delivery.status == "pending"
+                    && record_offset >= p.baseline_offset
+                    && self.cursor > p.baseline
+                    && normalize(&p.raw) == normalize(text)
+            }) {
+                item.delivery.status = "delivered".into();
+                item.raw = String::new();
+                item.guard = None;
             }
-            for mut tool in entry.tool_calls {
-                let id = tool.get("toolCallId").cloned();
-                tool["seq"] = self.cursor.into();
-                if let Some(previous) = self
-                    .tools
-                    .iter_mut()
-                    .find(|t| t.get("toolCallId") == id.as_ref())
-                {
-                    if let (Some(target), Some(update)) =
-                        (previous.as_object_mut(), tool.as_object())
-                    {
-                        for (key, value) in update {
-                            if (key == "title" && value == "Tool result")
-                                || (key == "kind" && value == "other")
-                            {
-                                if target.contains_key(key) {
-                                    continue;
-                                }
-                            }
-                            target.insert(key.clone(), value.clone());
-                        }
-                    }
-                } else {
-                    self.tools.push(tool);
-                }
+        }
+        for mut tool in entry.tool_calls {
+            self.cursor = next_cursor();
+            tool["seq"] = self.cursor.into();
+            let tool_id = tool["toolCallId"].as_str().unwrap_or("").to_owned();
+            let marker_id = format!("se-tool:{}:{}", entry.id, tool_id);
+            if history.put_tool(self.cursor, tool).is_err()
+                || history
+                    .put_message(&ChatMessage {
+                        id: marker_id,
+                        role: "tool".into(),
+                        tool_call_id: Some(tool_id),
+                        blocks: vec![],
+                        streaming: false,
+                        timestamp: now_ms(),
+                        seq: self.cursor,
+                    })
+                    .is_err()
+            {
+                self.degrade("history_unavailable");
+                return;
             }
-            if !entry.blocks.is_empty() {
-                self.messages.push(ChatMessage {
-                    id: entry.id,
-                    role: entry.role,
-                    blocks: entry.blocks,
-                    streaming: false,
-                    timestamp: now_ms(),
-                    seq: self.cursor,
-                });
-            }
+        }
+        self.cursor = next_cursor();
+        // Keep even tool-only entries in the indexed sequence so their older
+        // values can be reached via the same bounded disk pages.
+        if history
+            .put_message(&ChatMessage {
+                id: entry.id,
+                role: entry.role,
+                tool_call_id: None,
+                blocks: entry.blocks,
+                streaming: false,
+                timestamp: now_ms(),
+                seq: self.cursor,
+            })
+            .is_err()
+        {
+            self.degrade("history_unavailable");
         }
     }
     fn expire(&mut self, now: Instant) {
@@ -312,8 +443,9 @@ impl Session {
                     .is_some_and(|sent| now.saturating_duration_since(sent) >= ACK_TIMEOUT)
             {
                 item.delivery.status = "unconfirmed".into();
-                item.raw.clear();
-                self.cursor += 1;
+                item.raw = String::new();
+                item.guard = None;
+                self.cursor = next_cursor();
                 tracing::warn!(
                     event = "agent_chat_ack_timeout",
                     kind = "no_transcript_echo",
@@ -321,6 +453,7 @@ impl Session {
                 );
             }
         }
+        self.trim_receipts();
     }
     fn flush(&mut self, writer: &Writer) {
         if !self.ready_credit || matches!(self.hook.kind, HookKind::SessionEnd) {
@@ -343,8 +476,9 @@ impl Session {
         {
             let item = &mut self.pending[index];
             item.delivery.status = "unconfirmed".into();
-            item.raw.clear();
-            self.cursor += 1;
+            item.raw = String::new();
+            item.guard = None;
+            self.cursor = next_cursor();
             return;
         }
         self.ready_credit = false; // one prompt per idle/turn_done, never flood the TUI
@@ -362,9 +496,10 @@ impl Session {
         let data = format!("\x1b[200~{}\x1b[201~\r", item.raw);
         if writer(&self.hook.terminal_id, &data).is_err() {
             item.delivery.status = "unconfirmed".into();
-            item.raw.clear();
+            item.raw = String::new();
+            item.guard = None;
         }
-        self.cursor += 1;
+        self.cursor = next_cursor();
         tracing::info!(
             event = "agent_chat_send",
             kind = "bracketed_paste",
@@ -391,15 +526,19 @@ impl Session {
         if self
             .pending
             .iter()
-            .filter(|p| p.delivery.status == "queued")
+            .filter(|p| matches!(p.delivery.status.as_str(), "pending" | "queued"))
             .count()
             >= MAX_QUEUE
         {
             return Err("chat queue full".into());
         }
+        let redacted = crate::memory_index::redact::redact(&text).text;
+        if !self.reserve_receipt(text.len() + redacted.len()) {
+            return Err("chat queue full".into());
+        }
         let delivery = Delivery {
             id: uuid::Uuid::new_v4().to_string(),
-            text: crate::memory_index::redact::redact(&text).text,
+            text: redacted,
             status: "queued".into(),
         };
         self.pending.push_back(Pending {
@@ -410,11 +549,12 @@ impl Session {
             baseline_offset: self.offset,
             guard,
         });
-        self.cursor += 1;
+        self.cursor = next_cursor();
         if !self.ready_credit {
             tracing::info!(event = "agent_chat_queue", kind = "busy", count = 1);
         }
         self.flush(writer);
+        self.trim_receipts();
         Ok(self
             .pending
             .back()
@@ -423,27 +563,58 @@ impl Session {
             .clone())
     }
     fn snapshot(&self, after: Option<u64>) -> ChatSnapshot {
+        self.page(after, None)
+    }
+    fn page(&self, after: Option<u64>, before: Option<u64>) -> ChatSnapshot {
+        // Old-page bounds are sequence values too. A replacement/truncation
+        // allocates its fence after every old seq, so stale history requests can
+        // be replaced atomically even while clients have live polling paused.
+        if before.is_some_and(|bound| bound <= self.reset_cursor || bound > self.cursor) {
+            return self.page(None, None);
+        }
         let after = after.unwrap_or(0);
-        let reset = after == 0 || after > self.cursor || after < self.reset_cursor;
+        let mut reset =
+            before.is_none() && (after == 0 || after > self.cursor || after < self.reset_cursor);
+        let page = self.history.as_ref().and_then(|h| {
+            h.page(if reset || before.is_some() { 0 } else { after }, before)
+                .ok()
+        });
+        if !reset
+            && before.is_none()
+            && page
+                .as_ref()
+                .and_then(|p| p.messages.first())
+                .is_some_and(|m| {
+                    self.history
+                        .as_ref()
+                        .is_some_and(|h| h.has_between(after, m.seq).unwrap_or(true))
+                })
+        {
+            // A lagging client overflowed the bounded delta. Explicitly replace
+            // with a window, with older_cursor to retrieve the omitted history.
+            reset = true;
+        }
         ChatSnapshot {
             terminal_id: self.hook.terminal_id.clone(),
             session_id: self.hook.session_id.clone(),
             agent: self.hook.agent,
             cursor: self.cursor,
-            messages: self
-                .messages
-                .iter()
-                .filter(|m| reset || m.seq > after)
-                .cloned()
-                .collect(),
-            tool_calls: self.tools.clone(),
+            older_cursor: page.as_ref().and_then(|p| p.older),
+            messages: page
+                .as_ref()
+                .map(|p| p.messages.clone())
+                .unwrap_or_default(),
+            tool_calls: page.map(|p| p.tools).unwrap_or_default(),
             deliveries: self.pending.iter().map(|p| p.delivery.clone()).collect(),
-            state: if self.reason.is_some() {
+            state: if self.reason.is_some() || self.history.is_none() {
                 "degraded"
             } else {
                 "ready"
             },
-            reason: self.reason.clone(),
+            reason: self
+                .reason
+                .clone()
+                .or_else(|| self.history.is_none().then(|| "history_unavailable".into())),
             hook_state: self.hook_state.clone(),
             reset,
         }
@@ -484,6 +655,7 @@ enum Request {
     Wake,
     Snapshot(
         String,
+        Option<u64>,
         Option<u64>,
         mpsc::SyncSender<Result<ChatSnapshot, String>>,
     ),
@@ -539,6 +711,7 @@ pub fn start(terminal: TerminalServiceHandle) {
                     .enable_all()
                     .build()
                     .expect("agent chat runtime");
+                let liveness = terminal.clone();
                 let writer: Writer = Box::new(move |id, data| {
                     runtime.block_on(async {
                         tokio::time::timeout(
@@ -550,32 +723,53 @@ pub fn start(terminal: TerminalServiceHandle) {
                         .map_err(|_| "terminal write failed".to_string())
                     })
                 });
-                run(rx, worker_tx, writer);
+                run(
+                    rx,
+                    worker_tx,
+                    writer,
+                    Box::new(move |id| {
+                        !liveness.runtime().observes_live_terminals()
+                            || liveness.runtime().is_live(id)
+                    }),
+                );
             })
             .expect("agent chat worker");
         Service { tx }
     });
 }
 
-fn run(rx: mpsc::Receiver<Request>, tx: mpsc::SyncSender<Request>, writer: Writer) {
+fn run(
+    rx: mpsc::Receiver<Request>,
+    tx: mpsc::SyncSender<Request>,
+    writer: Writer,
+    live: Box<dyn Fn(&str) -> bool>,
+) {
     let mut sessions: HashMap<String, Session> = HashMap::new();
     let mut hook_cursor = 0;
     loop {
         let request = rx.recv_timeout(Duration::from_millis(250));
+        retire_sessions(&mut sessions, Instant::now(), &*live);
         for hook in agent_hooks::events(hook_cursor) {
             hook_cursor = hook_cursor.max(hook.sequence);
             let id = hook.terminal_id.clone();
-            if !sessions.contains_key(&id) && sessions.len() >= 128 {
+            if !sessions.contains_key(&id) && hook.kind == HookKind::SessionEnd {
+                continue;
+            }
+            if !sessions.contains_key(&id) && !make_room(&mut sessions) {
                 continue;
             }
             let session = sessions
                 .entry(id)
                 .or_insert_with(|| Session::new(hook.clone()));
-            if session.hook.session_id != hook.session_id || session.hook.agent != hook.agent {
-                *session = Session::new(hook.clone());
+            if session.hook.session_id != hook.session_id
+                || session.hook.agent != hook.agent
+                || (session.retired_at.is_some() && hook.kind != HookKind::SessionEnd)
+            {
+                session.replace(hook.clone());
             }
             session.apply_hook(hook);
-            if session.path.is_none() || session.watcher.is_none() {
+            if session.retired_at.is_none() && (session.path.is_none() || session.watcher.is_none())
+            {
                 session.configure_path(&tx);
             }
         }
@@ -591,10 +785,10 @@ fn run(rx: mpsc::Receiver<Request>, tx: mpsc::SyncSender<Request>, writer: Write
         match request {
             Ok(Request::Wake) | Err(mpsc::RecvTimeoutError::Timeout) => (),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Ok(Request::Snapshot(id, after, reply)) => {
+            Ok(Request::Snapshot(id, after, before, reply)) => {
                 let result = sessions
                     .get(&id)
-                    .map(|s| s.snapshot(after))
+                    .map(|s| s.page(after, before))
                     .ok_or_else(|| "terminal has no hooked agent".into());
                 let _ = reply.send(result);
             }
@@ -628,16 +822,55 @@ fn run(rx: mpsc::Receiver<Request>, tx: mpsc::SyncSender<Request>, writer: Write
         }
     }
 }
+// Keep final receipts observable for a grace period, but never let dead terminals
+// turn the active cap into a process-lifetime limit. Global cursor allocation
+// also fences a terminal reconstructed after retirement without a tombstone map.
+fn retire_sessions(
+    sessions: &mut HashMap<String, Session>,
+    now: Instant,
+    live: &dyn Fn(&str) -> bool,
+) {
+    for (id, session) in sessions.iter_mut() {
+        if session.retired_at.is_none() && !live(id) {
+            session.finish();
+        }
+    }
+    sessions.retain(|_, s| {
+        s.retired_at
+            .is_none_or(|at| now.saturating_duration_since(at) < Duration::from_secs(30))
+    });
+}
+fn make_room(sessions: &mut HashMap<String, Session>) -> bool {
+    if sessions.len() < MAX_SESSIONS {
+        return true;
+    }
+    let victim = sessions
+        .iter()
+        .filter_map(|(id, s)| s.retired_at.map(|at| (id.clone(), at)))
+        .min_by_key(|(_, at)| *at)
+        .map(|(id, _)| id);
+    if let Some(id) = victim {
+        sessions.remove(&id);
+    }
+    sessions.len() < MAX_SESSIONS
+}
 fn service() -> Result<&'static Service, String> {
     SERVICE
         .get()
         .ok_or_else(|| "chat service unavailable".into())
 }
 pub fn snapshot(id: &str, after: Option<u64>) -> Result<ChatSnapshot, String> {
+    snapshot_page(id, after, None)
+}
+pub fn snapshot_page(
+    id: &str,
+    after: Option<u64>,
+    before: Option<u64>,
+) -> Result<ChatSnapshot, String> {
     let (tx, rx) = mpsc::sync_channel(1);
     service()?
         .tx
-        .try_send(Request::Snapshot(id.into(), after, tx))
+        .try_send(Request::Snapshot(id.into(), after, before, tx))
         .map_err(|_| "chat worker busy")?;
     rx.recv_timeout(RPC_TIMEOUT)
         .map_err(|_| "chat worker timeout")?

@@ -5,8 +5,9 @@ use super::{ChatSnapshot, Delivery};
 pub async fn agent_chat_snapshot(
     terminal_id: String,
     after: Option<u64>,
+    before: Option<u64>,
 ) -> Result<ChatSnapshot, String> {
-    tokio::task::spawn_blocking(move || super::snapshot(&terminal_id, after))
+    tokio::task::spawn_blocking(move || super::snapshot_page(&terminal_id, after, before))
         .await
         .map_err(|_| "chat worker unavailable".to_string())?
 }

@@ -136,7 +136,7 @@ fn incremental_tail_ignores_old_records_and_retains_partial_lines() {
     );
     s.read();
     let cursor = s.cursor;
-    assert_eq!(s.messages.len(), 1);
+    assert_eq!(s.snapshot(None).messages.len(), 1);
     let value =
         json!({"type":"assistant","uuid":"second","message":{"role":"assistant","content":"two"}})
             .to_string();
@@ -149,19 +149,19 @@ fn incremental_tail_ignores_old_records_and_retains_partial_lines() {
     )
     .unwrap();
     s.read();
-    assert_eq!(s.messages.len(), 1);
+    assert_eq!(s.snapshot(None).messages.len(), 1);
     writeln!(std::fs::OpenOptions::new()
         .append(true)
         .open(&path)
         .unwrap())
     .unwrap();
     s.read();
-    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.snapshot(None).messages.len(), 2);
     let tail = s.snapshot(Some(cursor));
     assert_eq!(tail.messages.len(), 1);
     assert!(!tail.reset);
     s.read();
-    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.snapshot(None).messages.len(), 2);
 }
 #[test]
 fn malformed_complete_record_degrades_and_advances_without_spinning() {
@@ -191,7 +191,7 @@ fn replacement_resets_snapshot_and_invalidates_pending_echo() {
     std::fs::write(&path, "\n").unwrap();
     s.read();
     assert!(s.snapshot(Some(before)).reset);
-    assert!(s.messages.is_empty());
+    assert!(s.snapshot(None).messages.is_empty());
     assert_eq!(s.pending[0].delivery.status, "unconfirmed");
 }
 #[test]
@@ -221,18 +221,21 @@ fn later_tool_results_keep_the_original_invocation_metadata() {
         json!({"type":"assistant","uuid":"call-record","message":{"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"Read","input":{"file_path":"fixture.txt"}}]}}),
     );
     s.read();
-    let title = s.tools[0]["title"].clone();
-    let kind = s.tools[0]["kind"].clone();
+    let title = s.snapshot(None).tool_calls[0]["title"].clone();
+    let kind = s.snapshot(None).tool_calls[0]["kind"].clone();
     append(
         &path,
         json!({"type":"user","uuid":"result-record","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":"done"}]}}),
     );
     s.read();
-    assert_eq!(s.tools.len(), 1);
-    assert_eq!(s.tools[0]["status"], "completed");
-    assert_eq!(s.tools[0]["title"], title);
-    assert_eq!(s.tools[0]["kind"], kind);
-    assert_eq!(s.tools[0]["rawInput"]["file_path"], "fixture.txt");
+    assert_eq!(s.snapshot(None).tool_calls.len(), 1);
+    assert_eq!(s.snapshot(None).tool_calls[0]["status"], "completed");
+    assert_eq!(s.snapshot(None).tool_calls[0]["title"], title);
+    assert_eq!(s.snapshot(None).tool_calls[0]["kind"], kind);
+    assert_eq!(
+        s.snapshot(None).tool_calls[0]["rawInput"]["file_path"],
+        "fixture.txt"
+    );
 }
 #[test]
 fn file_creation_recovers_a_transient_degraded_state() {
@@ -261,7 +264,7 @@ fn notify_wakes_the_host_for_transcript_appends() {
         Ok(Request::Wake)
     ));
     s.read();
-    assert_eq!(s.messages.len(), 1);
+    assert_eq!(s.snapshot(None).messages.len(), 1);
 }
 #[test]
 fn a_ready_edge_is_not_reissued_by_consecutive_idle_turn_done_hooks() {
@@ -318,4 +321,318 @@ fn delivery_text_is_redacted_without_search_truncation() {
     assert!(value.text.len() > 32 * 1024);
     assert!(!value.text.contains("super-secret-fixture"));
     assert!(!value.text.contains("truncated for search"));
+}
+
+#[test]
+fn replacement_from_short_to_longer_history_returns_a_fenced_replacement() {
+    let (_dir, path, mut s) = transcript();
+    append(
+        &path,
+        json!({"type":"user","uuid":"old","message":{"role":"user","content":"old"}}),
+    );
+    s.read();
+    let old = s.cursor;
+    let mut next = hook(HookKind::SessionStart);
+    next.session_id = "resumed".into();
+    s.replace(next);
+    s.path = Some(path.clone());
+    let contents: String = (0..100).map(|i| format!("{}\n", json!({"type":"user","uuid":format!("new-{i}"),"message":{"role":"user","content":format!("new {i}")}}))).collect();
+    std::fs::write(&path, contents).unwrap();
+    s.read();
+    let page = s.snapshot(Some(old));
+    assert!(page.reset);
+    assert!(page.cursor > old);
+    assert_eq!(page.messages.len(), 100);
+    assert_eq!(page.messages[0].id, "claude:new-0");
+    let stale_page = s.page(None, Some(old));
+    assert!(stale_page.reset);
+    assert_eq!(stale_page.messages.len(), 100);
+}
+
+#[test]
+fn same_inode_truncate_and_regrow_validates_the_previous_boundary() {
+    let (_dir, path, mut s) = transcript();
+    append(
+        &path,
+        json!({"type":"user","uuid":"stale","message":{"role":"user","content":"stale"}}),
+    );
+    s.read();
+    let old = s.cursor;
+    let identity = FileStamp::read(&path).unwrap().identity;
+    std::fs::write(&path, format!("{}\n{}\n", json!({"type":"user","uuid":"fresh","message":{"role":"user","content":"replacement longer than the original record"}}), json!({"type":"user","uuid":"fresh-2","message":{"role":"user","content":"second"}}))).unwrap();
+    assert_eq!(FileStamp::read(&path).unwrap().identity, identity);
+    s.read();
+    let page = s.snapshot(Some(old));
+    assert!(page.reset);
+    assert_eq!(page.messages.len(), 2);
+    assert!(page.messages.iter().all(|m| m.id != "claude:stale"));
+    let stale_page = s.page(None, Some(old));
+    assert!(stale_page.reset);
+    assert_eq!(stale_page.messages.len(), 2);
+    assert!(stale_page.messages.iter().all(|m| m.id != "claude:stale"));
+}
+
+#[test]
+fn session_end_and_pty_close_finalize_multiple_queued_messages_without_resend() {
+    for closed in [false, true] {
+        let (writer, writes) = writer();
+        let mut s = Session::new(hook(HookKind::ToolStart));
+        s.enqueue("one".into(), None, &writer).unwrap();
+        s.enqueue("two".into(), None, &writer).unwrap();
+        let before = s.cursor;
+        if closed {
+            let mut sessions = HashMap::from([("terminal-fixture".into(), s)]);
+            retire_sessions(&mut sessions, Instant::now(), &|_| false);
+            s = sessions.remove("terminal-fixture").unwrap();
+        } else {
+            let mut end = hook(HookKind::SessionEnd);
+            end.sequence = 2;
+            s.apply_hook(end);
+        }
+        assert!(s.cursor > before);
+        assert!(s
+            .pending
+            .iter()
+            .all(|p| p.delivery.status == "unconfirmed" && p.raw.is_empty() && p.guard.is_none()));
+        s.flush(&writer);
+        assert!(writes.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn more_than_128_sequential_closed_terminals_do_not_exhaust_the_service() {
+    let mut sessions = HashMap::new();
+    for i in 0..300 {
+        assert!(make_room(&mut sessions));
+        let mut event = hook(HookKind::SessionStart);
+        event.terminal_id = format!("terminal-{i}");
+        sessions.insert(event.terminal_id.clone(), Session::new(event));
+        retire_sessions(&mut sessions, Instant::now(), &|_| false);
+        assert!(sessions.len() <= MAX_SESSIONS);
+    }
+    assert!(sessions.contains_key("terminal-299"));
+    retire_sessions(
+        &mut sessions,
+        Instant::now() + Duration::from_secs(31),
+        &|_| false,
+    );
+    assert!(sessions.is_empty());
+}
+
+#[test]
+fn large_transcript_has_bounded_batches_pages_indexed_dedupe_and_complete_older_text() {
+    let (_dir, path, mut s) = transcript();
+    let text = "full text, not index-truncated ".repeat(128);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    for i in 0..5000 {
+        writeln!(file, "{}", json!({"type":"user","uuid":format!("large-{i}"),"message":{"role":"user","content":text}})).unwrap();
+    }
+    drop(file);
+    let len = std::fs::metadata(&path).unwrap().len();
+    let mut batches = 0;
+    while s.offset < len {
+        let old_offset = s.offset;
+        s.read();
+        batches += 1;
+        assert!(s.offset > old_offset);
+        assert!(
+            s.offset - old_offset
+                <= scan::MAX_SCAN_BYTES + crate::memory_index::types::MAX_RECORD_BYTES as u64
+        );
+        let page = s.snapshot(None);
+        assert!(page.messages.len() <= history::PAGE_MESSAGES);
+        assert!(
+            serde_json::to_vec(&page.messages).unwrap().len()
+                <= history::PAGE_BYTES + crate::memory_index::types::MAX_RECORD_BYTES
+        );
+        assert!(s.anchor.len() <= 256);
+    }
+    assert!(batches >= 5000 / scan::MAX_SCAN_RECORDS);
+    let latest = s.snapshot(None);
+    assert!(latest.older_cursor.is_some());
+    let mut before = latest.older_cursor;
+    let mut count = latest.messages.len();
+    while let Some(cursor) = before {
+        let page = s.page(None, Some(cursor));
+        assert!(!page.reset);
+        assert_eq!(page.cursor, latest.cursor);
+        assert!(page.messages.iter().all(|m| m.seq < cursor));
+        for m in &page.messages {
+            assert_eq!(m.blocks[0]["text"], text);
+        }
+        count += page.messages.len();
+        before = page.older_cursor;
+    }
+    assert_eq!(count, 5000);
+    let cursor = s.cursor;
+    s.apply_entry(
+        0,
+        adapters::parse_record(
+            AgentKind::ClaudeCode,
+            &json!({"type":"user","uuid":"large-0","message":{"role":"user","content":text}}),
+            0,
+        )
+        .unwrap()
+        .remove(0),
+    );
+    assert_eq!(s.cursor, cursor); // old, evicted-from-window ID still indexed on disk
+}
+
+#[test]
+fn completed_receipts_are_bounded_and_a_lagging_delta_is_explicitly_reset() {
+    let (writer, _) = writer();
+    let mut s = Session::new(hook(HookKind::Idle));
+    for _ in 0..200 {
+        s.ready_credit = true;
+        s.enqueue("receipt".into(), None, &writer).unwrap();
+        s.expire(Instant::now() + ACK_TIMEOUT + Duration::from_secs(1));
+    }
+    assert!(s.pending.len() <= MAX_RECEIPTS);
+    let before = s.cursor;
+    for i in 0..300 {
+        s.apply_entry(i, adapters::parse_record(AgentKind::ClaudeCode, &json!({"type":"user","uuid":format!("gap-{i}"),"message":{"role":"user","content":"entry"}}), i).unwrap().remove(0));
+    }
+    let page = s.snapshot(Some(before));
+    assert!(page.reset);
+    assert!(page.older_cursor.is_some());
+    assert_eq!(page.messages.len(), history::PAGE_MESSAGES);
+}
+
+// Called by the executable managed-observer fixture: events are captured from
+// production generated TypeScript + shell, not a test-seeded synthetic Idle.
+pub(crate) fn assert_real_pi_observer_startup_can_send(events: Vec<Value>) {
+    assert_eq!(events[0]["event"], "session_start");
+    assert_eq!(events[1]["event"], "idle");
+    let mut start = hook(HookKind::SessionStart);
+    start.agent = AgentKind::Pi;
+    start.session_id = events[0]["session_id"].as_str().unwrap().into();
+    let mut s = Session::new(start.clone());
+    let (writer, writes) = writer();
+    s.enqueue("first pi message".into(), None, &writer).unwrap();
+    assert!(writes.lock().unwrap().is_empty());
+    // Decode the real observer event only after enqueue, exactly like the host.
+    let mut ready = start;
+    ready.kind = serde_json::from_value(json!(events[1]["event"])).unwrap();
+    ready.sequence = 2;
+    s.apply_hook(ready);
+    s.flush(&writer);
+    assert_eq!(writes.lock().unwrap().len(), 1);
+    assert_eq!(s.pending[0].delivery.status, "pending");
+    s.flush(&writer);
+    assert_eq!(writes.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn pty_close_without_receipts_advances_final_state_cursor() {
+    let mut s = Session::new(hook(HookKind::Idle));
+    let before = s.cursor;
+    s.finish();
+    assert!(s.cursor > before);
+    assert_eq!(s.snapshot(Some(before)).hook_state, "session_end");
+}
+
+#[test]
+fn tool_groups_and_large_tool_outputs_are_fully_pageable() {
+    let mut s = Session::new(hook(HookKind::Idle));
+    let calls: Vec<Value> = (0..140).map(|i| json!({"type":"tool_use","id":format!("tool-{i}"),"name":"Read","input":{"path":format!("file-{i}")}})).collect();
+    let entry = adapters::parse_record(AgentKind::ClaudeCode, &json!({"type":"assistant","uuid":"many-tools","message":{"role":"assistant","content":calls}}), 0).unwrap().remove(0);
+    s.apply_entry(0, entry);
+    for i in 0..4 {
+        s.apply_entry(i + 1, adapters::parse_record(AgentKind::ClaudeCode, &json!({"type":"user","uuid":format!("result-{i}"),"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("tool-{i}"),"content":"complete tool output ".repeat(60000)}]}}), i + 1).unwrap().remove(0));
+    }
+    let mut tools = std::collections::HashMap::new();
+    let mut page = s.snapshot(None);
+    loop {
+        assert!(page.messages.len() <= history::PAGE_MESSAGES);
+        for tool in page.tool_calls {
+            tools.insert(tool["toolCallId"].as_str().unwrap().to_string(), tool);
+        }
+        let Some(before) = page.older_cursor else {
+            break;
+        };
+        page = s.page(None, Some(before));
+    }
+    assert_eq!(tools.len(), 140);
+    assert_eq!(
+        tools["tool-0"]["rawOutput"],
+        "complete tool output ".repeat(60000)
+    );
+}
+
+#[test]
+fn oversized_unterminated_lines_are_discarded_in_bounded_resumable_turns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized.jsonl");
+    std::fs::write(
+        &path,
+        vec![b'x'; crate::memory_index::types::MAX_RECORD_BYTES * 3],
+    )
+    .unwrap();
+    let mut state = scan::ScanState::default();
+    let mut offset = 0;
+    let len = std::fs::metadata(&path).unwrap().len();
+    let mut turns = 0;
+    while offset < len {
+        let result = scan::scan_file(
+            std::fs::File::open(&path).unwrap(),
+            offset,
+            &mut state,
+            |_| panic!("oversized record must not parse"),
+        );
+        assert!(result.resume_offset > offset);
+        assert!(
+            result.resume_offset - offset
+                <= crate::memory_index::types::MAX_RECORD_BYTES as u64 + 8192
+        );
+        offset = result.resume_offset;
+        turns += 1;
+    }
+    assert!(turns > 2);
+    assert!(state.discarding);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "\n{}", json!({"valid":true})).unwrap();
+    let mut seen = 0;
+    scan::scan_file(
+        std::fs::File::open(&path).unwrap(),
+        offset,
+        &mut state,
+        |_| seen += 1,
+    );
+    assert_eq!(seen, 1);
+    assert!(!state.discarding);
+    let mut count = 0;
+    let result = scan::scan(&path, len + 1, |_| count += 1);
+    assert_eq!(count, 1);
+    assert!(result.issues.is_empty());
+}
+
+#[test]
+fn receipt_byte_budget_reclaims_finished_items_without_becoming_a_lifetime_limit() {
+    let (writer, _) = writer();
+    let mut s = Session::new(hook(HookKind::Idle));
+    for _ in 0..40 {
+        s.ready_credit = true;
+        s.enqueue("plain conversation sentence ".repeat(2500), None, &writer)
+            .unwrap();
+        assert!(s.pending.back().unwrap().delivery.text.len() > 60 * 1024);
+        s.expire(Instant::now() + ACK_TIMEOUT + Duration::from_secs(1));
+        assert!(
+            s.pending
+                .iter()
+                .map(|p| p.raw.len() + p.delivery.text.len())
+                .sum::<usize>()
+                <= MAX_PENDING_BYTES
+        );
+        assert!(s
+            .pending
+            .iter()
+            .all(|p| p.raw.is_empty() && p.guard.is_none()));
+    }
+    assert!(s.pending.len() < 40);
 }

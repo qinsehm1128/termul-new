@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   snapshot: null as AgentChatSnapshot | null,
   error: null as string | null,
   refresh: vi.fn(),
+  loadOlder: vi.fn(),
+  loadingOlder: false,
+  browsingOlder: false,
+  returnLatest: vi.fn(),
   send: vi.fn(),
   control: vi.fn(),
   mount: vi.fn(),
@@ -17,6 +21,10 @@ vi.mock('../../hooks/use-terminal-agent-chat', () => ({
   useTerminalAgentChat: () => ({
     snapshot: mocks.snapshot,
     error: mocks.error,
+    loadOlder: mocks.loadOlder,
+    loadingOlder: mocks.loadingOlder,
+    browsingOlder: mocks.browsingOlder,
+    returnLatest: mocks.returnLatest,
     refresh: mocks.refresh
   })
 }))
@@ -69,6 +77,10 @@ beforeEach(() => {
     hook_state: 'idle'
   }
   mocks.error = null
+  mocks.loadingOlder = false
+  mocks.browsingOlder = false
+  mocks.returnLatest.mockReset().mockResolvedValue(undefined)
+  mocks.loadOlder.mockReset().mockResolvedValue(undefined)
   for (const mock of [mocks.refresh, mocks.send, mocks.control, mocks.mount, mocks.unmount])
     mock.mockReset()
   mocks.refresh.mockResolvedValue(undefined)
@@ -109,6 +121,24 @@ describe('terminal agent surface', () => {
       'aria-pressed',
       'true'
     )
+  })
+  it('offers older-history loading only while a disk cursor exists and disables duplicate requests', () => {
+    mocks.snapshot!.older_cursor = 10
+    const view = surface()
+    const mounted = render(view)
+    openChat()
+    fireEvent.click(screen.getByRole('button', { name: '加载更早消息' }))
+    expect(mocks.loadOlder).toHaveBeenCalledOnce()
+    mocks.browsingOlder = true
+    mounted.rerender(surface(view.props.terminalId))
+    fireEvent.click(screen.getByRole('button', { name: '返回最新消息' }))
+    expect(mocks.returnLatest).toHaveBeenCalledOnce()
+    mocks.loadingOlder = true
+    mounted.rerender(surface(view.props.terminalId))
+    expect(screen.getByRole('button', { name: '正在加载…' })).toBeDisabled()
+    mocks.snapshot!.older_cursor = null
+    mounted.rerender(surface(view.props.terminalId))
+    expect(screen.queryByRole('button', { name: '加载更早消息' })).not.toBeInTheDocument()
   })
   it('sends exactly once while pending, preserves multiline text and refreshes delivery state', async () => {
     let resolve: (() => void) | undefined
