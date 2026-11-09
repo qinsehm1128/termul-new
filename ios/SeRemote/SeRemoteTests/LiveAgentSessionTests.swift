@@ -74,7 +74,7 @@ struct LiveAgentSessionTests {
         let with = NocturneWorkspacePresentation.project(
             projects[0],
             snapshot: NocturneWorkspaceSnapshot(liveAgentSessionCounts: ["p1": 1]))
-        #expect(with.detail == "2 live terminals · 1 agent sessions")
+        #expect(with.detail == "2 live terminals · 1 agent session")
     }
 
     @Test("Idle projects never appear as running just because agent history exists")

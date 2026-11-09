@@ -48,7 +48,9 @@ enum NocturneWorkspacePresentation {
         let changes = matchesGit ? snapshot.gitChangedFileCount : nil
         var details = [String(localized: "\(project.liveTerminalCount) live terminals")]
         if let agents = snapshot.liveAgentSessionCounts[project.id], agents > 0 {
-            details.append(String(localized: "\(agents) agent sessions"))
+            details.append(agents == 1
+                ? String(localized: "1 agent session")
+                : String(localized: "\(agents) agent sessions"))
         }
         if let changes { details.append(String(localized: "\(changes) changed files")) }
         return WorkspaceProject(id: project.id, name: project.name,
