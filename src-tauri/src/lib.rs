@@ -34,7 +34,6 @@ mod keybinding_schemes;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
-mod screen;
 /// Runtime-neutral contracts for the independent HTTP-first MCP Core.
 pub mod mcp_core;
 /// Cross-agent conversation memory index: normalizes Claude Code / Codex / pi
@@ -50,6 +49,7 @@ pub mod migration_run;
 mod migrations;
 mod project_gitignore;
 mod pty_tauri;
+mod screen;
 pub use se_terminal_core::quick_terminal;
 mod quick_terminal_commands;
 mod quick_terminal_migration;
@@ -3042,14 +3042,9 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
-            if agent_hooks::start().is_err() {
-                log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
+            if let Ok(resource_dir) = handle.path().resource_dir() {
+                agent_hooks::resources::set_builtin_resource_dir(resource_dir);
             }
-            let hook_handle = handle.clone();
-            agent_hooks::subscribe(Arc::new(move |event| {
-                use tauri::Emitter;
-                let _ = hook_handle.emit("agent-hook-event", event);
-            }));
 
             // Startup diagnostic banner (issue #244): version, OS/arch, build
             // channel, session id, and resolved log path on a single line.
@@ -3625,6 +3620,21 @@ pub fn run() {
                     });
             }
             app.manage(Arc::clone(&project_registry));
+            commands::register_hook_owner_resolver(app.state::<core::TerminalServiceHandle>().inner().clone());
+            if agent_hooks::start().is_err() {
+                log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
+            }
+            let hook_handle = handle.clone();
+            let hook_projects = Arc::clone(&project_registry);
+            agent_hooks::state::subscribe(Arc::new(move |response| {
+                use tauri::Emitter;
+                let response = agent_hooks::state::filter_response(response, &|project| hook_projects.find_path(project).is_some());
+                let empty = match &response {
+                    agent_hooks::contract::HookStateSyncResponse::Snapshot { states, tombstones, .. } |
+                    agent_hooks::contract::HookStateSyncResponse::Delta { states, tombstones, .. } => states.is_empty() && tombstones.is_empty(),
+                };
+                if !empty { let _ = hook_handle.emit("agent-hooks-state", response); }
+            }));
 
             // The two MCP sources have independent settings, credentials and
             // lifecycles. They keep serving agents after the window closes.
@@ -4102,11 +4112,17 @@ pub fn run() {
             agent_chat::commands::agent_chat_snapshot,
             agent_chat::commands::agent_chat_send,
             agent_chat::commands::agent_chat_control,
-            agent_hooks::commands::agent_hooks_status,
-            agent_hooks::commands::agent_hooks_preview,
-            agent_hooks::commands::agent_hooks_install,
-            agent_hooks::commands::agent_hooks_uninstall,
-            agent_hooks::commands::agent_hook_events,
+            agent_hooks::commands::agent_hooks_status_cmd,
+            agent_hooks::commands::agent_hooks_reload_cmd,
+            agent_hooks::commands::agent_hooks_probe_cmd,
+            agent_hooks::commands::agent_hooks_preview_cmd,
+            agent_hooks::commands::agent_hooks_confirm_cmd,
+            agent_hooks::commands::agent_hooks_install_cmd,
+            agent_hooks::commands::agent_hooks_uninstall_cmd,
+            agent_hooks::commands::agent_hooks_open_folder_cmd,
+            agent_hooks::commands::agent_hooks_state_cmd,
+            agent_hooks::commands::agent_hooks_resume_plan_cmd,
+            agent_hooks::commands::agent_hooks_resume_spawn_cmd,
             cli_session::commands::detect_live_agent_sessions_cmd,
             memory_index::commands::memory_index_build_cmd,
             memory_index::commands::memory_index_status_cmd,

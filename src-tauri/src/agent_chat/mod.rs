@@ -707,6 +707,50 @@ fn hook_name(kind: HookKind) -> &'static str {
     }
 }
 
+/// Transcript readers are a closed builtin set; custom adapter state never selects
+/// a parser by fallback or by a user-provided file extension.
+fn unsupported_or_missing(terminal: &str) -> String {
+    if agent_hooks::state::latest(terminal).is_some_and(|value| {
+        !matches!(
+            value.identity.adapter_id.as_str(),
+            "claude-code" | "pi" | "qin-code"
+        )
+    }) {
+        "UNSUPPORTED_AGENT_CHAT".into()
+    } else {
+        "terminal has no hooked agent".into()
+    }
+}
+fn derived_chat_hook(value: agent_hooks::contract::HookStateDto) -> Option<AgentHookEvent> {
+    use agent_hooks::contract::DerivedState;
+    let agent = match value.identity.adapter_id.as_str() {
+        "claude-code" => AgentKind::ClaudeCode,
+        "pi" => AgentKind::Pi,
+        "qin-code" => AgentKind::QinCode,
+        _ => return None,
+    };
+    let kind = match value.state {
+        DerivedState::Busy => HookKind::PromptSubmitted,
+        DerivedState::Idle => HookKind::Idle,
+        DerivedState::NeedsApproval => HookKind::NeedsApproval,
+        DerivedState::Blocked => HookKind::Blocked,
+        DerivedState::Error => HookKind::Error,
+        DerivedState::Ended => HookKind::SessionEnd,
+    };
+    Some(AgentHookEvent {
+        sequence: value.revision,
+        terminal_id: value.terminal_id,
+        project_id: value.project_id,
+        agent,
+        session_id: value.agent_session_id,
+        transcript_path: value.identity.transcript_path,
+        kind,
+        at: 0,
+        tool_name: None,
+        ok: None,
+    })
+}
+
 #[derive(Default)]
 pub struct SendOptions {
     pub force: bool,
@@ -765,7 +809,7 @@ pub fn start(terminal: TerminalServiceHandle) {
     SERVICE.get_or_init(|| {
         let (tx, rx) = mpsc::sync_channel(256);
         let wake = tx.clone();
-        agent_hooks::subscribe(Arc::new(move |_| {
+        agent_hooks::state::subscribe(Arc::new(move |_| {
             let _ = wake.try_send(Request::Wake);
         }));
         let worker_tx = tx.clone();
@@ -810,12 +854,34 @@ fn run(
     live: Box<dyn Fn(&str) -> bool>,
 ) {
     let mut sessions: HashMap<String, Session> = HashMap::new();
-    let mut hook_cursor = 0;
+    let mut hook_cursor = agent_hooks::contract::HookStateSyncRequest::default();
     loop {
         let request = rx.recv_timeout(Duration::from_millis(250));
         retire_sessions(&mut sessions, Instant::now(), &*live);
-        for hook in agent_hooks::events(hook_cursor) {
-            hook_cursor = hook_cursor.max(hook.sequence);
+        let response = agent_hooks::state::sync(&hook_cursor, &|_| true);
+        let (instance_id, revision, states, tombstones) = match response {
+            agent_hooks::contract::HookStateSyncResponse::Snapshot {
+                instance_id,
+                current_revision,
+                states,
+                tombstones,
+            }
+            | agent_hooks::contract::HookStateSyncResponse::Delta {
+                instance_id,
+                current_revision,
+                states,
+                tombstones,
+            } => (instance_id, current_revision, states, tombstones),
+        };
+        hook_cursor.instance_id = Some(instance_id);
+        hook_cursor.since_revision = Some(revision);
+        for deleted in tombstones {
+            sessions.remove(&deleted.terminal_id);
+        }
+        for value in states {
+            let Some(hook) = derived_chat_hook(value) else {
+                continue;
+            };
             let id = hook.terminal_id.clone();
             if !sessions.contains_key(&id) && hook.kind == HookKind::SessionEnd {
                 continue;
@@ -854,13 +920,13 @@ fn run(
                 let result = sessions
                     .get(&id)
                     .map(|s| s.page(after, before))
-                    .ok_or_else(|| "terminal has no hooked agent".into());
+                    .ok_or_else(|| unsupported_or_missing(&id));
                 let _ = reply.send(result);
             }
             Ok(Request::Send(id, text, options, guard, reply)) => {
                 let result = sessions
                     .get_mut(&id)
-                    .ok_or_else(|| "terminal has no hooked agent".into())
+                    .ok_or_else(|| unsupported_or_missing(&id))
                     .and_then(|s| {
                         if options.force {
                             let id = options
@@ -895,7 +961,7 @@ fn run(
                         _ => Err("unknown chat control".into()),
                     }
                 } else {
-                    Err("terminal has no hooked agent".into())
+                    Err(unsupported_or_missing(&id))
                 };
                 let _ = reply.send(result);
             }
@@ -990,4 +1056,48 @@ pub fn control_authorized(id: &str, action: &str, guard: Option<SendGuard>) -> R
         .map_err(|_| "chat worker busy")?;
     rx.recv_timeout(RPC_TIMEOUT)
         .map_err(|_| "chat worker timeout")?
+}
+
+#[cfg(test)]
+mod derived_state_tests {
+    use super::*;
+    use crate::agent_hooks::contract::*;
+    fn value(adapter: &str, state: DerivedState, revision: u64) -> HookStateDto {
+        HookStateDto {
+            instance_id: "host".into(),
+            terminal_id: "terminal".into(),
+            generation: 1,
+            adapter_install_id: "install".into(),
+            agent_session_id: "session".into(),
+            project_id: "project".into(),
+            state,
+            identity: HookIdentityDto {
+                adapter_id: AdapterId::try_from(adapter.to_owned()).unwrap(),
+                agent_session_id: "session".into(),
+                transcript_path: None,
+                cwd: None,
+                source: HookIdentitySource::Hook,
+                descriptor_id: None,
+                resume_argv: None,
+            },
+            restore_state: RestoreState::Confirmed,
+            revision,
+        }
+    }
+    #[test]
+    fn agent_hooks_chat_ready_without_tool_events() {
+        let idle = derived_chat_hook(value("pi", DerivedState::Idle, 1)).unwrap();
+        let mut session = Session::new(idle.clone());
+        session.apply_hook(idle);
+        assert!(session.ready_credit);
+        session.apply_hook(derived_chat_hook(value("pi", DerivedState::Busy, 2)).unwrap());
+        assert!(!session.ready_credit);
+        session.apply_hook(derived_chat_hook(value("pi", DerivedState::Idle, 3)).unwrap());
+        assert!(session.ready_credit);
+        assert_eq!(session.hook.tool_name, None);
+    }
+    #[test]
+    fn agent_hooks_custom_state_does_not_select_builtin_reader() {
+        assert!(derived_chat_hook(value("custom-agent", DerivedState::Idle, 1)).is_none());
+    }
 }

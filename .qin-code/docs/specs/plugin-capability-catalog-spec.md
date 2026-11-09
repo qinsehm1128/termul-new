@@ -6,7 +6,7 @@ title: 插件可调用的 Se Manager 全量能力清单
 date: 2026-11-04
 status: accepted
 source: user:2026-11-04T16:59:29+08:00 只有凭据和秘钥不开放，其它都开放给插件; agent://cat-a; agent://cat-b; agent://cat-c; user:2026-11-07 req-a1fec49128c8a770f1a9b055e56197e7 MCP host workspace/SSH catalog sync; agent://catalog-host-evidence; src-tauri/src/commands.rs; src-tauri/src/lib.rs; src-tauri/src/web/mcp_host_api.rs; src-tauri/src/mcp_core/host_bridge.rs; src-tauri/src/credentials.rs; user:2026-11-07 req-8f01105f55c188c39fdf0e9609e35343 SSH command deny v2/management preview catalog sync; .qin-code/docs/proposals/ssh-command-deny-policy-proposal.md; src-tauri/src/web/router.rs; src/shared/types/mcp-host.types.ts
-updated: 2026-11-09
+updated: 2026-11-10
 lang: zh-CN
 scope: project
 artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ffbe76ff784f5bf","last_updated_by_session":"session_clover_1794039875986_a9f773ef52155584","session_ids":["session_clover_1794039875986_a9f773ef52155584","session_lizard_1794024668506_6ffbe76ff784f5bf"],"todo_refs":[],"goal_refs":[]}
@@ -319,15 +319,21 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.sessions.resolveCli | resolve_cli_sessions_cmd `cli_session/commands.rs:24` | R | project | none | OPEN | in `{files[]}`; reads those transcripts |
 | se.terminals.detectLiveAgents | detect_live_agent_sessions_cmd `cli_session/commands.rs:40`; GET /cli-sessions/live (`web/cli_session_api.rs`) | R | terminal | none | OPEN | in `rootPids[]`; reads this machine's process table. Web route derives roots from live terminal-service PTYs and returns `{sessions:[{terminalId,projectId?,rootPid,agentId,sessionId,selfDev?,codexHome?,cwd?}],scannedAt}` — read-only, no secrets |
 
-| se.agentHooks.status | agent_hooks_status `agent_hooks/commands.rs`; GET /agent-hooks/status (`web/agent_hooks_api.rs`) | R | global | none | OPEN | read-only per-agent install/version/config-path status using login-shell PATH and bounded version probes; never installs |
-| se.agentHooks.preview | agent_hooks_preview `agent_hooks/commands.rs`; GET /agent-hooks/preview (`web/agent_hooks_api.rs`) | R | global | none | OPEN | under view grant, read-only exact managed config diff preview in `{agent}`; no config/backup/script writes |
-| se.agentHooks.install | agent_hooks_install `agent_hooks/commands.rs`; POST /agent-hooks/install (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | owner-only host config write; in `{agent}`; backup + atomic managed-entry merge; exact path shown before confirmation; never automatic |
-| se.agentHooks.uninstall | agent_hooks_uninstall `agent_hooks/commands.rs`; POST /agent-hooks/uninstall (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | owner-only removal of Se-owned entries/files; preserves concurrent user edits and restores original bytes when unchanged |
-| se.agentHooks.events | agent_hook_events `agent_hooks/commands.rs`; GET /agent-hooks/events (`web/agent_hooks_api.rs`) | R | global | none | OPEN | bounded metadata-only cursor tail in `{after?}` under host view grant; no prompts, tool inputs or secrets; C1 can tail by sequence; HTTP/WS metadata uses the global view grant; project_id is identity, not a per-project ACL |
+| se.agentHooks.status | agent_hooks_status_cmd `agent_hooks/commands.rs`; GET /agent-hooks/status (`web/agent_hooks_api.rs`) | R | global | none | OPEN-REDACTED | Cached adapter status; never probes or installs. No endpoint/bearer values. |
+| se.agentHooks.reload | agent_hooks_reload_cmd `agent_hooks/commands.rs`; POST /agent-hooks/reload (`web/agent_hooks_api.rs`) | R | global | none | OPEN-REDACTED | Explicit resource refresh only, no CLI spawn or installation; manage-only on HTTP. |
+| se.agentHooks.probe | agent_hooks_probe_cmd `agent_hooks/commands.rs`; POST /agent-hooks/probe (`web/agent_hooks_api.rs`) | R | global | none | OPEN-REDACTED | Explicit bounded CLI version probe, validated adapter_id; manage-only on HTTP. |
+| se.agentHooks.preview | agent_hooks_preview_cmd `agent_hooks/commands.rs`; POST /agent-hooks/preview (`web/agent_hooks_api.rs`) | R | global | none | OPEN-REDACTED | Full CAS diff for adapter/action/event_options; credentials redacted, manage-only; no plugin grant protocol in v3. |
+| se.agentHooks.confirm | agent_hooks_confirm_cmd `agent_hooks/commands.rs`; POST /agent-hooks/confirm (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | Manage-only CAS confirm bound to preview/fingerprint, no automatic install; paired always 403. |
+| se.agentHooks.install | agent_hooks_install_cmd `agent_hooks/commands.rs`; POST /agent-hooks/install (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | Manage-only CAS install; alias enforces install action. Paired always 403. |
+| se.agentHooks.uninstall | agent_hooks_uninstall_cmd `agent_hooks/commands.rs`; POST /agent-hooks/uninstall (`web/agent_hooks_api.rs`) | D | global | per-call | OPEN | Manage-only CAS uninstall; restores byte-exact originals when ownership matches. Paired always 403. |
+| se.agentHooks.openFolder | agent_hooks_open_folder_cmd `agent_hooks/commands.rs` | R | global | none | OPEN | Desktop-only fixed custom adapter root; browser facade returns UNSUPPORTED_PLATFORM, no arbitrary path. |
+| se.agentHooks.state | agent_hooks_state_cmd `agent_hooks/commands.rs`; GET /agent-hooks/state (`web/agent_hooks_api.rs`) | R | project | none | OPEN-REDACTED | Snapshot/delta cursor, authorization filtered registered projects and tombstones. No native event ring. |
+| se.agentHooks.resumePlan | agent_hooks_resume_plan_cmd `agent_hooks/commands.rs`; POST /agent-hooks/resume-plan (`web/agent_hooks_api.rs`) | R | terminal | grant | OPEN | Trusted descriptor, project and owner checks, host snapshot argv; renderer cannot supply recovery argv. |
+| se.agentHooks.resumeSpawn | agent_hooks_resume_spawn_cmd `agent_hooks/commands.rs`; POST /agent-hooks/resume-spawn (`web/agent_hooks_api.rs`) | W | terminal | per-call | OPEN | Single-use trusted plan with expected generation; backend capabilities fail closed; no unsafe duplicate spawn. |
 | se.agentChat.snapshot | agent_chat_snapshot `agent_chat/commands.rs`; GET /agent-chat/{terminal_id} (`web/agent_chat_api.rs`) | R | terminal | none | OPEN | view scope; host resolves hooked transcript; optional after cursor; redacted, untruncated ACP messages/tools, explicit degraded reason and queue/delivery state; no client file paths |
 | se.agentChat.send | agent_chat_send `agent_chat/commands.rs`; POST /agent-chat/{terminal_id}/send (`web/agent_chat_api.rs`) | W | terminal | grant | OPEN | terminal.input scope rechecked before delayed flush; in text; bracketed paste + Enter only at idle/turn_done; busy host queue; delivery only on matching new transcript user echo; timeout unconfirmed, never auto-resend |
 | se.agentChat.control | agent_chat_control `agent_chat/commands.rs`; POST /agent-chat/{terminal_id}/control (`web/agent_chat_api.rs`) | W | terminal | grant | OPEN | terminal.input scope; action interrupt writes Esc, stop writes Ctrl-C; never terminates/recreates the PTY |
-| se.agentHooks.ingest | POST /agent-hooks/{agent} (`agent_hooks/server.rs`) | W | terminal | none | INTERNAL | native-host-only ingestion for se.agentHooks.events; isolated IPv4 loopback listener, per-launch Bearer and PTY identity headers; never mounted on remote HTTP router, no Tauri/plugin twin, no secret-returning API |
+| se.agentHooks.ingest | POST /agent-hooks/{agent} (`agent_hooks/server.rs`) | W | terminal | none | INTERNAL | native-host-only ingestion for derived se.agentHooks.state; isolated IPv4 loopback listener, per-launch Bearer and PTY identity headers; never mounted on remote HTTP router, no Tauri/plugin twin, no secret-returning API |
 
 ---
 
@@ -336,7 +342,7 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | event id | source emit (file:line) | payload summary | scope |
 |---|---|---|---|
 | se.events.agentChatUpdated | `agent-chat-updated` (`agent_chat/mod.rs`, `lib.rs`, `web/router.rs`) | `{terminal_id,cursor}` only; view-authorized clients tail snapshots; never emits prompts/tools/secrets | terminal |
-| se.events.agentHookEvent | `agent-hook-event` (`agent_hooks/mod.rs`, `lib.rs`, `web/router.rs`) | `AgentHookEvent`: sequence, terminal_id, project_id, agent, session_id, kind, at, transcript_path?, tool_name?, ok?; metadata only | project/terminal |
+| se.events.agentHookEvent | `agent-hooks-state` (`agent_hooks/mod.rs`, `lib.rs`, `web/router.rs`) | `AgentHookEvent`: sequence, terminal_id, project_id, agent, session_id, kind, at, transcript_path?, tool_name?, ok?; metadata only | project/terminal |
 | se.events.acpAgentSpawned | `acp/events.rs:337` | `{sessionId, agentId, runtime, cwd}` | session |
 | se.events.acpSessionCreated | `acp/events.rs:339` | `{sessionId, agentId, title?}` | session |
 | se.events.acpMessageChunk | `acp/events.rs:341` | streaming content delta | session |

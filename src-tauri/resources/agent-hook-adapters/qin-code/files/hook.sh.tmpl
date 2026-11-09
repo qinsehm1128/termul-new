@@ -65,8 +65,23 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
 done < "$install_file"
 [ "$install_seen" = 1 ] && valid_uuid "$install_id" || exit 0
+# qin's JSON stays byte-for-byte native. The authenticated receiver constructs
+# the normalization envelope from these separately validated metadata headers.
+LC_ALL=C
+export LC_ALL
+native_event=${QIN_CODE_HOOK_EVENT:-}
+native_session=${QIN_CODE_SESSION_ID:-}
+[ -n "$native_event" ] && [ "${#native_event}" -le 64 ] || exit 0
+case "$native_event" in *[!a-z_]*) exit 0;; esac
+[ -n "$native_session" ] && [ "${#native_session}" -le 512 ] || exit 0
+cr=$(printf '\r')
+case "$native_session" in *"$cr"*|*'
+'*) exit 0;; esac
+# Curl config strings interpret backslash and double quotes. Escape both;
+# validated CR/LF cannot manufacture another header or config instruction.
+session_header=$(printf '%s' "$native_session" | sed 's/\\/\\\\/g; s/"/\\"/g') || exit 0
 send() {
-  # Bearer never appears in argv, URLs or a temporary file. FD3 is private to curl.
+  # Bearer and native identity never appear in argv, URLs or a temporary file.
   curl --disable --noproxy '*' --silent --connect-timeout 0.05 --max-time 0.15 --retry 0 \
     --output /dev/null --config /dev/fd/3 \
     --header 'Content-Type: application/json' \
@@ -76,21 +91,9 @@ send() {
     --header "x-se-hook-generation: $generation" \
     --data-binary @- "$endpoint/hooks/$agent" 3<<CONFIG 2>/dev/null || :
 header = "Authorization: Bearer $token"
+header = "x-se-hook-event: $native_event"
+header = "x-se-hook-session-id: $session_header"
 CONFIG
 }
-if [ "$agent" = qin-code ]; then
-  # qin exposes native event/session separately from its optional native JSON.
-  # An encoder is mandatory: never concatenate untrusted values into JSON.
-  python3 -c 'import json,os,sys
-try:
- p=json.loads(os.environ.get("QIN_CODE_HOOK_PAYLOAD") or "{}")
- if not isinstance(p,dict): raise ValueError()
- p["event"]=os.environ.get("QIN_CODE_HOOK_EVENT") or p.get("event")
- p["session_id"]=os.environ.get("QIN_CODE_HOOK_SESSION_ID") or p.get("session_id")
- if "session_file" in p and "transcript_path" not in p: p["transcript_path"]=p.pop("session_file")
- if p.get("event") and p.get("session_id"): sys.stdout.write(json.dumps(p,separators=(",",":")))
-except Exception: pass' 2>/dev/null | send
-else
-  send
-fi
+printf '%s' "${QIN_CODE_HOOK_PAYLOAD:-}" | send
 exit 0

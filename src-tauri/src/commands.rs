@@ -1,5 +1,6 @@
 use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManager};
 use crate::conversation::TerminalSpawnIntentV1;
+use crate::core::TerminalServiceHandle;
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
@@ -495,10 +496,116 @@ pub(crate) async fn terminal_spawn_resource(
 
 /// Core-backed project spawn keeps the remote project boundary in the
 /// commands layer while avoiding any GUI-side PtyManager lookup.
+pub(crate) fn register_hook_owner_resolver(terminal: TerminalServiceHandle) {
+    // Receiver invokes this only for identity selection and caches the result,
+    // never for routine turn/tool state transitions.
+    let variant_terminal = terminal.clone();
+    crate::agent_hooks::server::register_variant_resolver(Arc::new(move |id, generation| {
+        let terminal = variant_terminal.clone();
+        Box::pin(async move {
+            let pid = if let Some(manager) = terminal.in_process_pty() {
+                if manager.claim_generation(&id) != Some(generation) {
+                    return None;
+                }
+                manager.get(&id)?.pid
+            } else if let Some(client) = terminal.core_client() {
+                if !crate::agent_hooks::server::await_owned_terminal(&id).await {
+                    return None;
+                }
+                client
+                    .list()
+                    .await
+                    .ok()?
+                    .into_iter()
+                    .find(|info| {
+                        info.id == id && info.active && info.claim_generation == Some(generation)
+                    })?
+                    .pid
+            } else {
+                return None;
+            };
+            tokio::task::spawn_blocking(move || {
+                if terminal.in_process_pty().is_some() {
+                    return crate::cli_session::restore_service::verified_variant(
+                        &terminal, &id, "qin-code",
+                    )
+                    .ok();
+                }
+                // terminal-core has no launch-argv accessor; use only its registry root's
+                // process argv, never hook-derived identity or a client-provided variant.
+                let found = crate::cli_session::detect_live_agent_sessions(&[pid]);
+                if found.len() != 1 {
+                    return None;
+                }
+                let agent: &str = found[0].agent_id.as_ref();
+                match agent {
+                    "qin-code" if found[0].self_dev => Some("self-dev".into()),
+                    "qin-code" => Some("default".into()),
+                    _ => None,
+                }
+            })
+            .await
+            .ok()
+            .flatten()
+        })
+    }));
+    crate::agent_hooks::server::register_owner_resolver(Arc::new(move |id, generation| {
+        let terminal = terminal.clone();
+        Box::pin(async move {
+            use crate::agent_hooks::server::HookOwner;
+            if let Some(manager) = terminal.in_process_pty() {
+                if manager.claim_generation(&id) != Some(generation) {
+                    return None;
+                }
+                let instance = manager.get(&id)?;
+                Some(HookOwner {
+                    project_id: instance.project_id.clone()?,
+                    owner_session_id: instance.conversation_id.to_string(),
+                    cwd: instance.cwd.clone(),
+                    variant: None,
+                    root_pid: Some(instance.pid),
+                })
+            } else if let Some(client) = terminal.core_client() {
+                if !crate::agent_hooks::server::await_owned_terminal(&id).await {
+                    return None;
+                }
+                let info = client.list().await.ok()?.into_iter().find(|info| {
+                    info.id == id && info.active && info.claim_generation == Some(generation)
+                })?;
+                Some(HookOwner {
+                    project_id: info.project_id?,
+                    owner_session_id: info.conversation_id,
+                    cwd: info.cwd,
+                    variant: None,
+                    root_pid: Some(info.pid),
+                })
+            } else {
+                None
+            }
+        })
+    }));
+}
+/// Only the host may supply receiver credentials. PTY manager replaces id/generation.
+pub(crate) fn inject_receiver_environment(options: &mut SpawnOptions) {
+    let env = options.env.get_or_insert_with(Default::default);
+    env.retain(|key, _| {
+        ![
+            "SE_AGENT_HOOK_INSTANCE",
+            "SE_AGENT_HOOK_ENDPOINT",
+            "SE_AGENT_HOOK_TOKEN",
+            "SE_AGENT_HOOK_PTY_ID",
+            "SE_AGENT_HOOK_GENERATION",
+        ]
+        .contains(&key.as_str())
+    });
+    env.extend(crate::agent_hooks::server::receiver_environment());
+}
+
 pub(crate) async fn terminal_spawn_project_via_core(
-    options: SpawnOptions,
+    mut options: SpawnOptions,
     client: &crate::core::TerminalCoreClient,
 ) -> IpcResult<SpawnedTerminal> {
+    inject_receiver_environment(&mut options);
     if let Err(error) = require_host_admission() {
         return error;
     }
@@ -506,7 +613,10 @@ pub(crate) async fn terminal_spawn_project_via_core(
         return IpcResult::error("project spawn options are invalid", "VALIDATION_ERROR");
     }
     match client.spawn(options).await {
-        Ok(spawned) => IpcResult::success(spawned),
+        Ok(spawned) => {
+            crate::agent_hooks::server::register_owned_terminal(&spawned.info.id);
+            IpcResult::success(spawned)
+        }
         Err(crate::core::CoreError::Unauthorized) => {
             IpcResult::error("Unauthorized", "UNAUTHORIZED")
         }
@@ -518,11 +628,12 @@ pub(crate) async fn terminal_spawn_project_via_core(
 }
 
 async fn terminal_spawn_via_core(
-    options: SpawnOptions,
+    mut options: SpawnOptions,
     on_data: Option<Channel<Response>>,
     client: &crate::core::TerminalCoreClient,
     workspace: Option<&Arc<crate::conversation::SessionWorkspaceService>>,
 ) -> IpcResult<SpawnedTerminal> {
+    inject_receiver_environment(&mut options);
     if let Err(error) = require_host_admission() {
         return error;
     }
@@ -560,6 +671,7 @@ async fn terminal_spawn_via_core(
             )
         }
     };
+    crate::agent_hooks::server::register_owned_terminal(&spawned.info.id);
     let spawned = if let (Some(workspace), Some(conversation_id)) = (workspace, conversation_id) {
         if let Err(primary) = workspace
             .add_terminal_ref(conversation_id, &spawned.info.id)
@@ -652,7 +764,10 @@ pub(crate) async fn terminal_spawn_intent_resource(
     }
 
     let spawned = match intent.into_trusted_options(conversation) {
-        Ok(options) => pty_manager.spawn(options, None).await,
+        Ok(mut options) => {
+            inject_receiver_environment(&mut options);
+            pty_manager.spawn(options, None).await
+        }
         Err(error) => Err(error),
     };
     let spawned = match spawned {
@@ -666,11 +781,12 @@ pub(crate) async fn terminal_spawn_intent_resource(
 }
 
 async fn terminal_spawn_resource_impl(
-    options: SpawnOptions,
+    mut options: SpawnOptions,
     on_data: Option<Channel<Response>>,
     pty_manager: &Arc<PtyManager>,
     workspace: &Arc<crate::conversation::SessionWorkspaceService>,
 ) -> IpcResult<SpawnedTerminal> {
+    inject_receiver_environment(&mut options);
     if let Err(error) = require_host_admission() {
         return error;
     }
@@ -4759,7 +4875,8 @@ pub async fn remote_server_start(
         .try_state::<Arc<crate::mcp_core::host_service::HostCapabilityService>>()
         .map(|state| state.inner().clone());
     let named_tunnel_port = tunnel_config.preferred_bind_port().filter(|_| start_tunnel);
-    let preferred_port = listener_port_plan(publish_mode, named_tunnel_port, stored_intent.lan_port);
+    let preferred_port =
+        listener_port_plan(publish_mode, named_tunnel_port, stored_intent.lan_port);
     let reused_lan_port = named_tunnel_port.is_none() && preferred_port.is_some();
     let start_on = |port: u16| {
         remote_state.start_on_port(
@@ -4987,8 +5104,14 @@ mod tunnel_start_plan_tests {
     #[test]
     fn valid_tunnel_starts_in_both_modes() {
         let quick = TunnelConfig::default();
-        assert_eq!(tunnel_start_plan(remote::PublishMode::Lan, &quick), Ok(true));
-        assert_eq!(tunnel_start_plan(remote::PublishMode::Tunnel, &quick), Ok(true));
+        assert_eq!(
+            tunnel_start_plan(remote::PublishMode::Lan, &quick),
+            Ok(true)
+        );
+        assert_eq!(
+            tunnel_start_plan(remote::PublishMode::Tunnel, &quick),
+            Ok(true)
+        );
     }
 }
 
@@ -10435,5 +10558,31 @@ mod remote_sync_mcp_registry_tests {
             assert!(!output.contains(leaked), "leaked {leaked}: {output}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod agent_hooks_spawn_tests {
+    use super::*;
+    #[test]
+    fn agent_hooks_spawn_env_discards_renderer_receiver_credentials() {
+        let mut options: SpawnOptions = serde_json::from_value(serde_json::json!({"env": {
+            "SE_AGENT_HOOK_INSTANCE": "untrusted", "SE_AGENT_HOOK_ENDPOINT": "untrusted",
+            "SE_AGENT_HOOK_TOKEN": "untrusted", "SE_AGENT_HOOK_PTY_ID": "untrusted",
+            "SE_AGENT_HOOK_GENERATION": "untrusted", "NORMAL_ENV": "preserved"
+        }}))
+        .unwrap();
+        inject_receiver_environment(&mut options);
+        let env = options.env.unwrap();
+        assert_eq!(env.get("NORMAL_ENV").map(String::as_str), Some("preserved"));
+        for key in [
+            "SE_AGENT_HOOK_INSTANCE",
+            "SE_AGENT_HOOK_ENDPOINT",
+            "SE_AGENT_HOOK_TOKEN",
+            "SE_AGENT_HOOK_PTY_ID",
+            "SE_AGENT_HOOK_GENERATION",
+        ] {
+            assert_ne!(env.get(key).map(String::as_str), Some("untrusted"));
+        }
     }
 }

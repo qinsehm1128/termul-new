@@ -206,6 +206,21 @@ impl StateStore {
         if value.generation != generation || value.restore_state == lifecycle {
             return None;
         }
+        // A delayed spawn/timeout publisher must not regress a concurrently
+        // accepted SessionStart. Confirmation is authoritative at ingestion.
+        if lifecycle == RestoreState::PendingConfirmation
+            && matches!(
+                value.restore_state,
+                RestoreState::Confirmed | RestoreState::Stale | RestoreState::Ended
+            )
+        {
+            return None;
+        }
+        if lifecycle == RestoreState::Unconfirmed
+            && value.restore_state != RestoreState::PendingConfirmation
+        {
+            return None;
+        }
         if value.restore_state == RestoreState::Ended && lifecycle != RestoreState::Ended {
             return None;
         }

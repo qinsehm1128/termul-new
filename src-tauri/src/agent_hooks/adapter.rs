@@ -1459,6 +1459,114 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn qin_sender_preserves_native_bytes_without_encoder_and_rejects_header_injection() {
+        use std::{
+            fs,
+            os::unix::fs::PermissionsExt,
+            process::{Command, Stdio},
+        };
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().canonicalize().unwrap();
+        let install_file = home.join(".se-manager/agent-hooks/installed/qin-code/install.env");
+        fs::create_dir_all(install_file.parent().unwrap()).unwrap();
+        fs::write(
+            &install_file,
+            "SE_AGENT_HOOK_INSTALL_ID=22222222-2222-2222-2222-222222222222\n",
+        )
+        .unwrap();
+        let adapter = builtin("qin-code");
+        let script = home.join("hook.sh");
+        let rendered = render_template(
+            &adapter.files["hook"],
+            &adapter.render_context(&home).unwrap(),
+        )
+        .unwrap();
+        for encoder in ["python", "node", "jq"] {
+            assert!(!rendered.contains(encoder));
+        }
+        fs::write(&script, rendered).unwrap();
+        let capture = home.join("capture");
+        let fakecurl = home.join("fakecurl");
+        fs::write(&fakecurl, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE.argv\"\ncat > \"$CAPTURE.body\"\ncat <&3 > \"$CAPTURE.config\"\n").unwrap();
+        fs::set_permissions(&fakecurl, fs::Permissions::from_mode(0o700)).unwrap();
+        let spy = home.join("encoder-invoked");
+        // Override curl without adding a non-system directory to PATH. Any
+        // accidental encoder invocation is caught before a macOS stub can run.
+        let wrapper = r#"curl() { "$FAKE_CURL" "$@"; }
+python3() { printf invoked > "$ENCODER_SPY"; return 127; }
+python() { printf invoked > "$ENCODER_SPY"; return 127; }
+node() { printf invoked > "$ENCODER_SPY"; return 127; }
+jq() { printf invoked > "$ENCODER_SPY"; return 127; }
+. "$HOOK_SCRIPT"
+"#;
+        let payload = " {\"tool_name\":\"a\\\"b\\\\c\",\"raw\":\"\\r\\n\",\"n\":42}\r\n\n";
+        let session = "session\"\\literal\\n$(not-executed)`not-executed`";
+        let run = |event: &str, identity: &str| {
+            for extension in ["argv", "body", "config"] {
+                let _ = fs::remove_file(capture.with_extension(extension));
+            }
+            let output = Command::new("/bin/sh")
+                .args(["-c", wrapper])
+                .env("PATH", "/bin:/usr/bin")
+                .env("FAKE_CURL", &fakecurl)
+                .env("ENCODER_SPY", &spy)
+                .env("HOOK_SCRIPT", &script)
+                .env("CAPTURE", &capture)
+                .env(
+                    "SE_AGENT_HOOK_INSTANCE",
+                    "11111111-1111-1111-1111-111111111111",
+                )
+                .env("SE_AGENT_HOOK_ENDPOINT", "http://127.0.0.1:8888")
+                .env("SE_AGENT_HOOK_TOKEN", "envtoken")
+                .env(
+                    "SE_AGENT_HOOK_PTY_ID",
+                    "33333333-3333-3333-3333-333333333333",
+                )
+                .env("SE_AGENT_HOOK_GENERATION", "4")
+                .env("QIN_CODE_HOOK_EVENT", event)
+                .env("QIN_CODE_SESSION_ID", identity)
+                .env("QIN_CODE_HOOK_SESSION_ID", "wrong-legacy-variable")
+                .env("QIN_CODE_HOOK_PAYLOAD", payload)
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!spy.exists());
+        };
+        run("session_start", session);
+        assert_eq!(
+            fs::read(capture.with_extension("body")).unwrap(),
+            payload.as_bytes()
+        );
+        let config = fs::read_to_string(capture.with_extension("config")).unwrap();
+        let escaped = session.replace('\\', "\\\\").replace('"', "\\\"");
+        assert_eq!(config, format!("header = \"Authorization: Bearer envtoken\"\nheader = \"x-se-hook-event: session_start\"\nheader = \"x-se-hook-session-id: {escaped}\"\n"));
+        let argv = fs::read_to_string(capture.with_extension("argv")).unwrap();
+        assert!(!argv.contains("envtoken"));
+        assert!(!argv.contains(session));
+        assert!(argv.contains("http://127.0.0.1:8888/hooks/qin-code"));
+        for (event, identity) in [
+            ("session_start", "bad\rheader"),
+            ("session_start", "bad\nheader"),
+            ("bad\rheader", session),
+            ("bad\nheader", session),
+            ("", session),
+            ("session_start", ""),
+        ] {
+            run(event, identity);
+            assert!(!capture.with_extension("argv").exists());
+        }
+        run(&"a".repeat(65), session);
+        assert!(!capture.with_extension("argv").exists());
+        run("session_start", &"a".repeat(513));
+        assert!(!capture.with_extension("argv").exists());
+        run("session_start", &"a".repeat(512));
+        assert!(capture.with_extension("argv").exists());
+        assert!(!home.join("not-executed").exists());
+    }
+    #[cfg(unix)]
+    #[test]
     fn filesystem_rejects_symlink_root_manifest_and_template() {
         use std::os::unix::fs::symlink;
         let t = tempfile::tempdir().unwrap();

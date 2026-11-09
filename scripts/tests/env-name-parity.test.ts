@@ -198,7 +198,30 @@ const POST_FREEZE_ENV_SUFFIXES = [
   // Test-only: real example plugin artifacts built by scripts/test-plugins.sh.
   'PLUGIN_TEST_ARTIFACTS',
   // Test-only: re-executes the signal-witness test as the signalled Core.
-  'SIGNAL_WITNESS_CHILD'
+  'SIGNAL_WITNESS_CHILD',
+  // v3 hook instance isolation and receipt-owned installation identity.
+  'AGENT_HOOK_INSTANCE',
+  'AGENT_HOOK_GENERATION',
+  'AGENT_HOOK_INSTALL_ID',
+  'AGENT_HOOK_ENDPOINT',
+  'AGENT_HOOK_PORT',
+  'AGENT_HOOK_PTY_ID',
+  'AGENT_HOOK_TOKEN',
+  'PROJECT_ID',
+  'TERMINAL_ID',
+  // Existing source literals found while refreshing the exact fixture: native
+  // screen builds, plugin runtime and credentials/policy plumbing. These are
+  // deliberately enumerated (including two test sentinels), not scan exclusions.
+  'ACTIVITY_PORT',
+  'GHOSTTY_VT_PREBUILT_DIR',
+  'GHOSTTY_VT_ZIG',
+  'MCP_HOST_POLICY_FILE',
+  'PLUGIN_TARGET',
+  'PLUGIN_UI_BOOTSTRAP__',
+  'SSH_CREDENTIALS_FILE',
+  'TEST_OBSERVER_BINARY',
+  'TEST_OBSERVER_BUILD_ID',
+  '_'
 ]
 
 /** The frozen inventory plus reviewed post-freeze additions at `prefix`. */

@@ -163,6 +163,7 @@ pub enum RemoteRouteClass {
     RemoteDesktopWebSocket,
     Pair,
     AgentHooksStatus,
+    AgentHooksResume,
     AgentHooksManage,
     AgentChat,
     LocalOperator,
@@ -197,6 +198,7 @@ impl RemoteRouteClass {
             Self::RemoteDesktopWebSocket => "remote_desktop_websocket",
             Self::Pair => "pair",
             Self::AgentHooksStatus => "agent_hooks_status",
+            Self::AgentHooksResume => "agent_hooks_resume",
             Self::AgentHooksManage => "agent_hooks_manage",
             Self::AgentChat => "agent_chat",
             Self::LocalOperator => "local_operator",
@@ -210,6 +212,7 @@ impl RemoteRouteClass {
             Self::Health | Self::Pair => None,
             Self::RemoteAccess | Self::AgentHooksManage | Self::LocalOperator => Some("manage"),
             Self::AgentHooksStatus => Some("view"),
+            Self::AgentHooksResume => Some("terminal.create"),
             Self::AgentChat => Some(if read { "view" } else { "terminal.input" }),
             Self::RemoteDesktop => Some(if read {
                 "screen.view"
@@ -254,8 +257,21 @@ impl RemoteRouteClass {
     fn from_path(path: &str) -> Option<Self> {
         if path.starts_with("/remote-desktop/") || path.starts_with("/api/remote-desktop/") {
             Some(Self::LocalOperator)
-        } else if matches!(path, "/agent-hooks/install" | "/agent-hooks/uninstall") {
+        } else if matches!(
+            path,
+            "/agent-hooks/install"
+                | "/agent-hooks/uninstall"
+                | "/agent-hooks/reload"
+                | "/agent-hooks/probe"
+                | "/agent-hooks/preview"
+                | "/agent-hooks/confirm"
+        ) {
             Some(Self::AgentHooksManage)
+        } else if matches!(
+            path,
+            "/agent-hooks/resume-plan" | "/agent-hooks/resume-spawn"
+        ) {
+            Some(Self::AgentHooksResume)
         } else if path == "/agent-chat" || path.starts_with("/agent-chat/") {
             Some(Self::AgentChat)
         } else if path.starts_with("/agent-hooks/") {
@@ -1718,8 +1734,10 @@ pub async fn capability_middleware(
         }
     };
     let authorization = authority.authorize(&principal, capability).and_then(|()| {
-        if route_class == RemoteRouteClass::LocalOperator
-            && provenance != IngressProvenance::LocalOperator
+        if (route_class == RemoteRouteClass::LocalOperator
+            && provenance != IngressProvenance::LocalOperator)
+            || (route_class == RemoteRouteClass::AgentHooksManage
+                && (!peer.is_loopback() || provenance != IngressProvenance::LocalOperator))
         {
             authority.deny_scope(&principal, "manage")
         } else {
@@ -2932,5 +2950,35 @@ mod tests {
             test_tracing::messages_for(scoped_id, "se_manager::web::auth").is_empty(),
             "dropped scoped capture must not keep absorbing records"
         );
+    }
+}
+
+#[cfg(test)]
+mod agent_hooks_route_tests {
+    use super::*;
+    #[test]
+    fn agent_hooks_mutations_keep_manage_and_reads_are_revision_only() {
+        for path in [
+            "/agent-hooks/reload",
+            "/agent-hooks/probe",
+            "/agent-hooks/preview",
+            "/agent-hooks/confirm",
+            "/agent-hooks/install",
+            "/agent-hooks/uninstall",
+        ] {
+            let class = RemoteRouteClass::from_path(path).unwrap();
+            assert_eq!(class, RemoteRouteClass::AgentHooksManage, "{path}");
+            assert_eq!(class.required_scope(&Method::POST), Some("manage"));
+        }
+        for path in ["/agent-hooks/status", "/agent-hooks/state"] {
+            let class = RemoteRouteClass::from_path(path).unwrap();
+            assert_eq!(class, RemoteRouteClass::AgentHooksStatus);
+            assert_eq!(class.required_scope(&Method::GET), Some("view"));
+        }
+        for path in ["/agent-hooks/resume-plan", "/agent-hooks/resume-spawn"] {
+            let class = RemoteRouteClass::from_path(path).unwrap();
+            assert_eq!(class, RemoteRouteClass::AgentHooksResume);
+            assert_eq!(class.required_scope(&Method::POST), Some("terminal.create"));
+        }
     }
 }

@@ -1,12 +1,14 @@
 //! Explicitly managed CLI integrations. Starting the receiver never installs hooks.
+pub mod adapter;
 pub mod commands;
 pub mod contract;
 pub mod install;
-mod server;
+pub mod resources;
+pub(crate) mod server;
+pub mod state;
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 pub use server::start;
 
@@ -61,109 +63,65 @@ pub struct AgentHookEvent {
     pub ok: Option<bool>,
 }
 
-const CAPACITY: usize = 4096;
-type Subscriber = Arc<dyn Fn(&AgentHookEvent) + Send + Sync>;
-#[derive(Default)]
-pub struct EventStore {
-    sequence: u64,
-    events: VecDeque<AgentHookEvent>,
-    latest: HashMap<String, AgentHookEvent>,
+/// Compatibility projection for process detection. Authority lives in state.rs,
+/// never in a raw-event history. Tools cannot change this projection's cursor.
+fn legacy_event(value: contract::HookStateDto) -> Option<AgentHookEvent> {
+    let agent = match value.identity.adapter_id.as_str() {
+        "claude-code" => AgentKind::ClaudeCode,
+        "pi" => AgentKind::Pi,
+        "qin-code" => AgentKind::QinCode,
+        _ => return None,
+    };
+    let kind = match value.state {
+        contract::DerivedState::Busy => HookKind::PromptSubmitted,
+        contract::DerivedState::Idle => HookKind::Idle,
+        contract::DerivedState::NeedsApproval => HookKind::NeedsApproval,
+        contract::DerivedState::Blocked => HookKind::Blocked,
+        contract::DerivedState::Error => HookKind::Error,
+        contract::DerivedState::Ended => HookKind::SessionEnd,
+    };
+    Some(AgentHookEvent {
+        sequence: value.revision,
+        terminal_id: value.terminal_id,
+        project_id: value.project_id,
+        agent,
+        session_id: value.agent_session_id,
+        transcript_path: value.identity.transcript_path,
+        kind,
+        at: 0,
+        tool_name: None,
+        ok: None,
+    })
 }
-impl EventStore {
-    fn push(&mut self, mut event: AgentHookEvent) -> AgentHookEvent {
-        self.sequence += 1;
-        event.sequence = self.sequence;
-        if event.transcript_path.is_none() {
-            event.transcript_path = self
-                .latest
-                .get(&event.terminal_id)
-                .filter(|old| old.session_id == event.session_id && old.agent == event.agent)
-                .and_then(|old| old.transcript_path.clone());
-        }
-        if self.events.len() >= CAPACITY {
-            self.events.pop_front();
-        }
-        // Bound live metadata as well as history. Eviction simply restores polling.
-        if !self.latest.contains_key(&event.terminal_id) && self.latest.len() >= CAPACITY {
-            if let Some(key) = self
-                .latest
-                .values()
-                .min_by_key(|e| e.sequence)
-                .map(|e| e.terminal_id.clone())
-            {
-                self.latest.remove(&key);
-            }
-        }
-        self.latest.insert(event.terminal_id.clone(), event.clone());
-        self.events.push_back(event.clone());
-        event
-    }
-    pub fn after(&self, after: u64) -> Vec<AgentHookEvent> {
-        // A browser can outlive the host. A cursor beyond this launch's head
-        // requests a recovery snapshot; the client compares with its requested
-        // cursor, resets generation-local authority, then tails from the new head.
-        let after = if after > self.sequence { 0 } else { after };
-        let mut events: Vec<_> = self
-            .events
-            .iter()
-            .filter(|e| e.sequence > after)
-            .cloned()
-            .collect();
-        if after == 0 {
-            let retained: std::collections::HashSet<_> =
-                events.iter().map(|e| e.sequence).collect();
-            events.extend(
-                self.latest
-                    .values()
-                    .filter(|e| !retained.contains(&e.sequence))
-                    .cloned(),
-            );
-            events.sort_by_key(|e| e.sequence);
-        }
-        events
-    }
-    pub fn latest(&self, terminal: &str) -> Option<AgentHookEvent> {
-        self.latest.get(terminal).cloned()
-    }
-}
-static STORE: OnceLock<Mutex<EventStore>> = OnceLock::new();
-static SUBSCRIBERS: OnceLock<Mutex<Vec<Subscriber>>> = OnceLock::new();
+#[deprecated(note = "use state::sync; this is a latest-state compatibility projection")]
 pub fn events(after: u64) -> Vec<AgentHookEvent> {
-    STORE
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .after(after)
+    let response = state::sync(&contract::HookStateSyncRequest::default(), &|_| true);
+    let states = match response {
+        contract::HookStateSyncResponse::Snapshot { states, .. }
+        | contract::HookStateSyncResponse::Delta { states, .. } => states,
+    };
+    states
+        .into_iter()
+        .filter(|s| after == u64::MAX || s.revision > after)
+        .filter_map(legacy_event)
+        .collect()
 }
 pub fn latest(terminal: &str) -> Option<AgentHookEvent> {
-    STORE
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .latest(terminal)
+    state::latest(terminal).and_then(legacy_event)
 }
-pub fn subscribe(callback: Subscriber) {
-    SUBSCRIBERS
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .push(callback);
-}
-fn publish(event: AgentHookEvent) {
-    let event = STORE
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .push(event);
-    log::info!(target: "se_manager::agent_hooks", "operation=agent_hook_event agent={} kind={:?} count=1", event.agent.as_str(), event.kind);
-    let callbacks = SUBSCRIBERS
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .clone();
-    for callback in callbacks {
-        callback(&event);
-    }
+#[deprecated(note = "use state::subscribe; notifications are derived-state changes only")]
+pub fn subscribe(callback: Arc<dyn Fn(&AgentHookEvent) + Send + Sync>) {
+    state::subscribe(Arc::new(move |response| {
+        let states = match response {
+            contract::HookStateSyncResponse::Snapshot { states, .. }
+            | contract::HookStateSyncResponse::Delta { states, .. } => states,
+        };
+        for value in states {
+            if let Some(event) = legacy_event(value.clone()) {
+                callback(&event);
+            }
+        }
+    }));
 }
 
 fn text<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
@@ -307,56 +265,5 @@ mod tests {
             serde_json::json!({"session_id":"s", "type":"unknown"})
         )
         .is_err());
-    }
-    #[test]
-    fn stale_launch_cursor_recovers_latest_sessions_even_after_history_eviction() {
-        let mut store = EventStore::default();
-        let original = normalize(AgentKind::Pi, "quiet-terminal", "p", serde_json::json!({"session_id":"quiet", "type":"session_start", "session_file":"/sessions/quiet.jsonl"})).unwrap();
-        store.push(original);
-        let active = normalize(
-            AgentKind::QinCode,
-            "busy-terminal",
-            "p",
-            serde_json::json!({"session_id":"busy", "event":"turn_start"}),
-        )
-        .unwrap();
-        for _ in 0..CAPACITY {
-            store.push(active.clone());
-        }
-        let recovered = store.after(u64::MAX);
-        assert_eq!(recovered.len(), CAPACITY + 1);
-        assert_eq!(recovered.first().unwrap().terminal_id, "quiet-terminal");
-        assert_eq!(recovered.last().unwrap().sequence, store.sequence);
-        assert!(store.after(store.sequence).is_empty());
-        let mut next = normalize(
-            AgentKind::Pi,
-            "quiet-terminal",
-            "p",
-            serde_json::json!({"session_id":"quiet", "type":"agent_end"}),
-        )
-        .unwrap();
-        next.transcript_path = None;
-        assert_eq!(
-            store.push(next).transcript_path.as_deref(),
-            Some("/sessions/quiet.jsonl")
-        );
-    }
-
-    #[test]
-    fn store_is_bounded_and_cursors_are_monotonic() {
-        let mut store = EventStore::default();
-        let event = normalize(
-            AgentKind::Pi,
-            "t",
-            "p",
-            serde_json::json!({"session_id":"s", "type":"session_start"}),
-        )
-        .unwrap();
-        for _ in 0..CAPACITY + 5 {
-            store.push(event.clone());
-        }
-        assert_eq!(store.after(0).len(), CAPACITY);
-        assert_eq!(store.after(CAPACITY as u64).len(), 5);
-        assert_eq!(store.latest("t").unwrap().sequence, (CAPACITY + 5) as u64);
     }
 }

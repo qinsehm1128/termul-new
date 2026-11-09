@@ -111,16 +111,31 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     .merge(classified_routes(
         Router::<AppState>::new()
             .route("/remote/desktop/info", get(super::remote_desktop::info))
-            .route("/remote/desktop/screenshot", get(super::remote_desktop::screenshot))
+            .route(
+                "/remote/desktop/screenshot",
+                get(super::remote_desktop::screenshot),
+            )
             .route("/remote/desktop/stream", get(super::remote_desktop::stream)),
         RemoteRouteClass::RemoteDesktop,
     ))
     .merge(classified_routes(
         Router::<AppState>::new()
-            .route("/remote-desktop/settings", get(super::remote_desktop::get_settings).put(super::remote_desktop::set_settings))
-            .route("/remote-desktop/stop", post(super::remote_desktop::emergency_stop))
-            .route("/api/remote-desktop/settings", get(super::remote_desktop::get_settings).put(super::remote_desktop::set_settings))
-            .route("/api/remote-desktop/stop", post(super::remote_desktop::emergency_stop)),
+            .route(
+                "/remote-desktop/settings",
+                get(super::remote_desktop::get_settings).put(super::remote_desktop::set_settings),
+            )
+            .route(
+                "/remote-desktop/stop",
+                post(super::remote_desktop::emergency_stop),
+            )
+            .route(
+                "/api/remote-desktop/settings",
+                get(super::remote_desktop::get_settings).put(super::remote_desktop::set_settings),
+            )
+            .route(
+                "/api/remote-desktop/stop",
+                post(super::remote_desktop::emergency_stop),
+            ),
         RemoteRouteClass::LocalOperator,
     ))
     .merge(classified_routes(
@@ -214,23 +229,59 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     ))
     .merge(classified_routes(
         Router::<AppState>::new()
-            .route("/agent-chat/{terminal_id}", get(super::agent_chat_api::snapshot))
-            .route("/agent-chat/{terminal_id}/send", post(super::agent_chat_api::send))
-            .route("/agent-chat/{terminal_id}/control", post(super::agent_chat_api::control)),
+            .route(
+                "/agent-chat/{terminal_id}",
+                get(super::agent_chat_api::snapshot),
+            )
+            .route(
+                "/agent-chat/{terminal_id}/send",
+                post(super::agent_chat_api::send),
+            )
+            .route(
+                "/agent-chat/{terminal_id}/control",
+                post(super::agent_chat_api::control),
+            ),
         RemoteRouteClass::AgentChat,
     ))
     .merge(classified_routes(
         Router::<AppState>::new()
             .route("/agent-hooks/status", get(super::agent_hooks_api::status))
-            .route("/agent-hooks/preview", get(super::agent_hooks_api::preview))
-            .route("/agent-hooks/events", get(super::agent_hooks_api::events)),
+            .route("/agent-hooks/state", get(super::agent_hooks_api::sync)),
         RemoteRouteClass::AgentHooksStatus,
     ))
     .merge(classified_routes(
         Router::<AppState>::new()
-            .route("/agent-hooks/install", post(super::agent_hooks_api::install))
-            .route("/agent-hooks/uninstall", post(super::agent_hooks_api::uninstall)),
+            .route("/agent-hooks/reload", post(super::agent_hooks_api::reload))
+            .route("/agent-hooks/probe", post(super::agent_hooks_api::probe))
+            .route(
+                "/agent-hooks/preview",
+                post(super::agent_hooks_api::preview),
+            )
+            .route(
+                "/agent-hooks/confirm",
+                post(super::agent_hooks_api::confirm),
+            )
+            .route(
+                "/agent-hooks/install",
+                post(super::agent_hooks_api::install),
+            )
+            .route(
+                "/agent-hooks/uninstall",
+                post(super::agent_hooks_api::uninstall),
+            ),
         RemoteRouteClass::AgentHooksManage,
+    ))
+    .merge(classified_routes(
+        Router::<AppState>::new()
+            .route(
+                "/agent-hooks/resume-plan",
+                post(super::agent_hooks_api::resume_plan),
+            )
+            .route(
+                "/agent-hooks/resume-spawn",
+                post(super::agent_hooks_api::resume_spawn),
+            ),
+        RemoteRouteClass::AgentHooksResume,
     ))
     .merge(classified_routes(
         Router::<AppState>::new()
@@ -488,6 +539,7 @@ pub fn router(
     store: Option<Arc<WebStore>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Router {
+    crate::commands::register_hook_owner_resolver(terminal.clone());
     #[cfg(not(test))]
     if crate::agent_hooks::start().is_err() {
         log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
@@ -501,10 +553,10 @@ pub fn router(
         }
     }));
     let hook_relay = Arc::downgrade(&ws_relay);
-    crate::agent_hooks::subscribe(Arc::new(move |event| {
+    crate::agent_hooks::state::subscribe(Arc::new(move |event| {
         if let (Some(relay), Ok(payload)) = (hook_relay.upgrade(), serde_json::to_value(event)) {
             let sinks: Vec<Arc<dyn super::sink::EventSink>> = vec![relay];
-            let _ = super::sink::fan_out(&sinks, None, "agent-hook-event", &payload);
+            let _ = super::sink::fan_out(&sinks, None, "agent-hooks-state", &payload);
         }
     }));
     if let Some(manager) = acp.in_process_manager() {

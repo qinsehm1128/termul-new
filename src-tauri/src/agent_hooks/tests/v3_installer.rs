@@ -485,6 +485,52 @@ fn v3_probe_subprocesses_have_output_and_time_budgets() {
 }
 
 #[test]
+fn v3_unsafe_home_status_reports_renderer_diagnostic_without_probe_or_writes() {
+    let (_dir, base) = home();
+    for character in ['\'', '"', '$', '`', '\\', '\n', '\t', '\u{7f}'] {
+        let home = base.join(format!("home{character}path"));
+        let directory = custom(&home, "3.0.0");
+        let marker = base.join("unexpected-probe-marker");
+        let manifest_path = directory.join("adapter.toml");
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap()
+            .replace("se-hook-test-no-such-binary", "touch")
+            .replace(
+                "version_args = [\"--version\"]",
+                &format!("version_args = [\"{}\"]", marker.display()),
+            );
+        fs::write(&manifest_path, &manifest).unwrap();
+        let template_path = directory.join("files/hook.sh.tmpl");
+        let template = fs::read(&template_path).unwrap();
+        for statuses in [
+            adapters_status(&home).unwrap(),
+            adapters_reload(&home).unwrap(),
+        ] {
+            assert!(statuses
+                .iter()
+                .any(|status| status.id.as_str() == "example-agent"));
+            assert!(statuses.iter().all(|status| status
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "unsafe_render_path"
+                    && diagnostic.message.contains("HOME"))));
+        }
+        let error = preview_v3(&home, request(HookAction::Install)).unwrap_err();
+        assert_eq!(error.code, HookErrorCode::ValidationError);
+        assert!(error.message.contains("HOME"));
+        assert!(
+            !marker.exists(),
+            "read-only status and rejected preview must not probe"
+        );
+        assert!(!root(&home).join("installed").exists());
+        assert!(!root(&home).join("transaction.json").exists());
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), manifest);
+        assert_eq!(fs::read(template_path).unwrap(), template);
+    }
+    assert!(home_render_diagnostic(&base.join("home with spaces"), "example-agent").is_none());
+}
+
+#[test]
 fn v3_status_reload_never_executes_cli_but_manual_preview_does() {
     let (_dir, home) = home();
     let directory = custom(&home, "3.0.0");

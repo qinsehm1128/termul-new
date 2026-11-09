@@ -843,17 +843,13 @@ pub(super) fn device_revision_event(revision: u64) -> Value {
 }
 
 fn hook_event_is_forwardable(event: &SequencedEvent, authenticated: bool) -> bool {
-    if event.type_ != "agent-hook-event" {
+    if event.type_ == "agent-hook-event" {
+        return false;
+    }
+    if event.type_ != "agent-hooks-state" {
         return true;
     }
-    // Hook metadata must remain attributed, even though the device permission
-    // proposal deliberately does not introduce a project ACL.
     authenticated
-        && event
-            .payload
-            .get("project_id")
-            .and_then(Value::as_str)
-            .is_some_and(|project_id| !project_id.trim().is_empty())
 }
 
 /// Device attachment hints also accept the proposal's notification form
@@ -1011,6 +1007,7 @@ async fn run_relay(
     let write_authority = Arc::clone(&authority);
 
     let write_tx = out_tx.clone();
+    let hook_projects = Arc::clone(&state.registry);
     let mut write_task = tokio::spawn(async move {
         let mut device_sweep = tokio::time::interval(Duration::from_secs(60));
         device_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1076,7 +1073,7 @@ async fn run_relay(
                 () = write_disconnect.notified() => break,
                 queued = out_rx.recv_queued() => {
                     let Some(mut queued) = queued else { break };
-                    let frame = queued
+                    let mut frame = queued
                         .frame
                         .take()
                         .expect("queued outbound frame is consumed exactly once");
@@ -1089,6 +1086,23 @@ async fn run_relay(
                         }
                         if !hook_event_is_forwardable(event, write_authenticated_generation.load(Ordering::Acquire) != 0) {
                             continue;
+                        }
+                    }
+                    if let Outbound::Event(event) = &mut frame {
+                        if event.type_ == "agent-hooks-state" {
+                            let principal = write_principal.lock().clone();
+                            if !super::agent_chat_api::update_allowed(&write_authority, principal.as_ref()) { continue; }
+                            // Retained change metadata authorizes tombstones after deletion.
+                            // Filter the actual trigger: hidden-project changes cannot cause
+                            // observable pushes of an unrelated current snapshot.
+                            let Ok(response) = serde_json::from_value::<crate::agent_hooks::contract::HookStateSyncResponse>(event.payload.clone()) else { continue; };
+                            let response = crate::agent_hooks::state::filter_response(&response, &|project| hook_projects.find_path(project).is_some());
+                            let empty = match &response {
+                                crate::agent_hooks::contract::HookStateSyncResponse::Snapshot { states, tombstones, .. } |
+                                crate::agent_hooks::contract::HookStateSyncResponse::Delta { states, tombstones, .. } => states.is_empty() && tombstones.is_empty(),
+                            };
+                            if empty { continue; }
+                            event.payload = serde_json::to_value(response).unwrap_or(Value::Null);
                         }
                     }
                     let text = match frame {
@@ -10562,24 +10576,16 @@ mod tests {
     }
 
     #[test]
-    fn hook_events_require_authentication_and_project_metadata() {
-        let hook = |payload| SequencedEvent::new(None, 0, "agent-hook-event", payload);
-        assert!(!hook_event_is_forwardable(
-            &hook(json!({"project_id":"p"})),
-            false
-        ));
-        for payload in [
-            json!({}),
-            json!({"project_id":""}),
-            json!({"project_id":null}),
-            json!({"projectId":"p"}),
-        ] {
-            assert!(!hook_event_is_forwardable(&hook(payload), true));
+    fn hook_state_push_requires_auth_and_raw_events_are_never_forwarded() {
+        let state = SequencedEvent::new(None, 0, "agent-hooks-state", json!({}));
+        assert!(!hook_event_is_forwardable(&state, false));
+        assert!(hook_event_is_forwardable(&state, true));
+        for authenticated in [true, false] {
+            assert!(!hook_event_is_forwardable(
+                &SequencedEvent::new(None, 0, "agent-hook-event", json!({"project_id":"p"})),
+                authenticated
+            ));
         }
-        assert!(hook_event_is_forwardable(
-            &hook(json!({"project_id":"p"})),
-            true
-        ));
         assert!(hook_event_is_forwardable(
             &SequencedEvent::new(None, 0, "projects_changed", json!({})),
             true

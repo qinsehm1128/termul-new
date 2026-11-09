@@ -2349,6 +2349,22 @@ mod v3 {
         result
     }
 
+    fn home_render_diagnostic(home: &Path, id: &str) -> Option<HookDiagnosticDto> {
+        // Reuse the renderer's exact literal-safety policy rather than keeping
+        // a second character allowlist that could drift from preview behavior.
+        let context = definition::RenderContext {
+            script_path: home.to_string_lossy().into_owned(),
+            endpoint_file: root(home)
+                .join("instances/{instance}/endpoint.env")
+                .to_string_lossy()
+                .into_owned(),
+            agent_id: id.into(),
+        };
+        definition::render_template("", &context).err().map(|_| diagnostic(
+            "unsafe_render_path",
+            "V3 hook rendering is unavailable for this HOME path: control characters, quotes, $, backticks, and backslashes are unsupported. Existing owned files can still be uninstalled.",
+        ))
+    }
     fn status_one(home: &Path, id: &str) -> Result<AdapterStatusDto, HookErrorDto> {
         let adapter_id = AdapterId::try_from(id.to_owned())
             .map_err(|_| error(HookErrorCode::ValidationError, "Invalid adapter id"))?;
@@ -2362,7 +2378,7 @@ mod v3 {
             installed_version: None,
             install_id: None,
             capabilities: empty_capabilities(),
-            diagnostics: vec![],
+            diagnostics: home_render_diagnostic(home, id).into_iter().collect(),
         };
         let snapshot = match installed_snapshot(home, id) {
             Ok(snapshot) => snapshot,
@@ -2554,6 +2570,11 @@ mod v3 {
         request: HookPreviewRequest,
     ) -> Result<PendingPreview, HookErrorDto> {
         let id = request.adapter_id.as_str();
+        if request.action != HookAction::Uninstall {
+            if let Some(diagnostic) = home_render_diagnostic(home, id) {
+                return Err(error(HookErrorCode::ValidationError, &diagnostic.message));
+            }
+        }
         let receipt_file = receipt_path(home, id);
         let receipt_before = safe::read(&receipt_file)?;
         let snapshot = installed_snapshot(home, id)?;
