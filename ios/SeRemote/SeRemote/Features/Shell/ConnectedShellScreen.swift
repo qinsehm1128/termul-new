@@ -13,7 +13,7 @@ struct ConnectedShellScreen: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var destination: SidebarDestination = .live
+    @State private var destination: SidebarDestination = .conversations
     @State private var showsWorkbench = false
     @State private var showsNeeds = false
     @State private var showsCommand = false
@@ -35,19 +35,15 @@ struct ConnectedShellScreen: View {
         )
     }
 
-    private var sessions: [LiveSession] {
-        LivePresentation.sessions(
-            conversations: session.conversations.conversations,
-            projects: session.projects.projects,
-            host: hostName,
+    private var conversationEntries: [ConversationEntry] {
+        LivePresentation.conversations(
+            session.conversations.conversations,
             activeConversationID: session.workspace == .conversation ? session.conversations.active?.id : nil,
-            activeProjectID: session.workspace == .project ? session.projects.active?.id : nil,
             agent: session.chat.activeAgentId,
             isRunning: LivePresentation.isRunning(isSending: session.chat.isSending,
                                                   messages: session.chat.messages,
                                                   tools: session.chat.tools),
-            needsAttention: !needs.isEmpty,
-            agentSessions: session.liveAgents.sessions
+            needsAttention: !needs.isEmpty
         )
     }
 
@@ -93,7 +89,7 @@ struct ConnectedShellScreen: View {
                         collapsed: Binding(get: { collapsed }, set: { railCollapsed = $0 }),
                         hostName: hostName,
                         hostOnline: session.phase == .connected,
-                        counts: [.live: "\(sessions.count)"],
+                        counts: [.conversations: "\(conversationEntries.count)"],
                         version: ShellPresentation.appVersion,
                         onOpenCommand: { showsCommand = true }
                     )
@@ -150,40 +146,37 @@ struct ConnectedShellScreen: View {
 
     @ViewBuilder private var page: some View {
         switch destination {
-        case .live:
-            LiveView(
+        case .conversations:
+            ConversationsScreen(
+                session: session,
                 hostName: hostName,
                 hostMeta: session.phase == .connected ? "已连接" : "连接中",
-                sessions: sessions,
+                conversations: conversationEntries,
                 needs: needs,
                 summary: needSummary,
                 themeIcon: themeIcon,
                 onSelectHost: { showsDirectory = true },
-                onOpenSession: openSession,
+                onOpenConversation: openConversation,
+                onOpenWorkbench: { showsWorkbench = true },
                 onOpenNeeds: { showsNeeds = true },
+                onOpenCommand: { showsCommand = true },
                 onToggleTheme: { settings.appearance = mode.toggled.appearance },
                 onOpenRail: { showsDrawer = true }
             )
-        case .workspace:
+        case .terminals:
+            TerminalsHubScreen(session: session)
+        case .tools:
             WorkspaceHubScreen(
                 session: session,
                 onOpenSession: { showsWorkbench = true },
                 onOpenCommand: { showsCommand = true },
                 onToggleTheme: { settings.appearance = mode.toggled.appearance },
                 onOpenDrawer: { showsDrawer = true },
-                onSelectHost: { showsHosts = true }
+                onSelectHost: { showsHosts = true },
+                onOpenSettings: { destination = .settings }
             )
         case .settings:
-            SettingsScreen(settings: settings, store: store, onBack: { destination = .live })
-        case .files, .changes, .schedules, .quick:
-            WorkspaceHubScreen(
-                session: session,
-                onOpenSession: { showsWorkbench = true },
-                onOpenCommand: { showsCommand = true },
-                onToggleTheme: { settings.appearance = mode.toggled.appearance },
-                onOpenDrawer: { showsDrawer = true },
-                onSelectHost: { showsHosts = true }
-            )
+            SettingsScreen(settings: settings, store: store, onBack: { destination = .conversations })
         }
     }
 
@@ -192,9 +185,9 @@ struct ConnectedShellScreen: View {
     private var bottomBar: some View {
         SeBottomBar(
             selection: destination,
-            onLive: { destination = .live },
-            onWorkspace: { destination = .workspace },
-            onCommand: { showsCommand = true }
+            onConversations: { destination = .conversations },
+            onTerminals: { destination = .terminals },
+            onTools: { destination = .tools }
         )
     }
 
@@ -208,7 +201,7 @@ struct ConnectedShellScreen: View {
                 collapsed: .constant(false),
                 hostName: hostName,
                 hostOnline: session.phase == .connected,
-                counts: [.live: "\(sessions.count)"],
+                counts: [.conversations: "\(conversationEntries.count)"],
                 version: ShellPresentation.appVersion,
                 onOpenCommand: {
                     showsDrawer = false
@@ -268,21 +261,12 @@ struct ConnectedShellScreen: View {
         if session.workspace != .home { session.leaveWorkspace() }
     }
 
-    private func openSession(_ item: LiveSession) {
+    private func openConversation(_ conversation: HostConversation) {
         guard !openingSession else { return }
         openingSession = true
         selectionTask = Task {
             defer { openingSession = false; selectionTask = nil }
-            switch LivePresentation.destination(id: item.id) {
-            case let .conversation(id):
-                guard let conversation = session.conversations.conversations.first(where: { $0.id == id }) else { return }
-                await session.selectConversation(conversation)
-            case let .project(id):
-                guard let project = session.projects.projects.first(where: { $0.id == id }) else { return }
-                await session.selectProject(project)
-            case nil:
-                return
-            }
+            await session.selectConversation(conversation)
             guard !Task.isCancelled else { return }
             showsWorkbench = true
         }

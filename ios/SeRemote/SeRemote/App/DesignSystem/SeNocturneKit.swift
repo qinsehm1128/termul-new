@@ -349,6 +349,7 @@ struct SeHostSwitch: View {
     var onTheme: () -> Void
     var themeIcon: SeIcon
     var onRail: () -> Void
+    var onCommand: (() -> Void)? = nil
     var showsRail = true
 
     @Environment(\.sePalette) private var palette
@@ -381,6 +382,23 @@ struct SeHostSwitch: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if let onCommand {
+                Button(action: onCommand) {
+                    Text("⌘")
+                        .font(SeNocturneType.font(13, mono: true))
+                        .foregroundStyle(palette.accent)
+                        .frame(width: 34, height: 34)
+                        .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(mode.insetStroke, lineWidth: 1)
+                        }
+                        .contentShape(Rectangle())
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(SePressable())
+                .accessibilityLabel("命令面板")
+            }
             SeIconButton(icon: themeIcon, accessibilityLabel: "切换主题", size: 34, action: onTheme)
             if showsRail {
                 SeIconButton(icon: .sidebar, accessibilityLabel: "所有去处", size: 34, action: onRail)
@@ -820,31 +838,18 @@ struct SeThemePick: View {
 
 struct SeBottomBar: View {
     let selection: SidebarDestination
-    var onLive: () -> Void
-    var onWorkspace: () -> Void
-    var onCommand: () -> Void
+    var onConversations: () -> Void
+    var onTerminals: () -> Void
+    var onTools: () -> Void
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
 
     var body: some View {
         HStack(spacing: 6) {
-            tab(icon: .hosts, title: "现场", on: selection == .live, action: onLive)
-            tab(icon: .folder, title: "工作区", on: selection == .workspace, action: onWorkspace)
-            Button(action: onCommand) {
-                Text("⌘")
-                    .font(SeNocturneType.font(14, mono: true))
-                    .foregroundStyle(palette.accent)
-                    .frame(width: 52, height: 44)
-                    .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(mode.insetStroke, lineWidth: 1)
-                    }
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(SePressable())
-            .accessibilityLabel("命令面板")
+            tab(icon: .chat, title: "会话", on: selection == .conversations, action: onConversations)
+            tab(icon: .terminal, title: "终端", on: selection == .terminals, action: onTerminals)
+            tab(icon: .folder, title: "工具", on: selection == .tools, action: onTools)
         }
         .padding(.horizontal, 14)
         .padding(.top, 8)
@@ -855,6 +860,8 @@ struct SeBottomBar: View {
         .overlay(alignment: .top) {
             Rectangle().fill(mode.hairline).frame(height: 1)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("主导航")
     }
 
     private func tab(icon: SeIcon, title: String, on: Bool, action: @escaping () -> Void) -> some View {

@@ -43,6 +43,74 @@ enum LivePresentation {
         return chats + terminals + agents
     }
 
+    /// ACP conversations only, ordered for the 会话 tab: the active/streaming
+    /// conversation first, then the most recent host conversations. Terminals,
+    /// projects and `/cli-sessions/live` agents never enter this list.
+    static func conversations(
+        _ conversations: [HostConversation],
+        activeConversationID: String?,
+        agent: String?,
+        isRunning: Bool,
+        needsAttention: Bool
+    ) -> [ConversationEntry] {
+        let rows = conversations.filter { !$0.isDeleted }.map { conversation in
+            let active = conversation.id == activeConversationID
+            let waiting = active && needsAttention
+            let streaming = active && isRunning
+            let status: LiveSessionStatus = waiting ? .needsYou : (streaming ? .running : (conversation.lifecycleState == "ready" ? .ready : .unknown))
+            return ConversationEntry(
+                id: conversation.id,
+                conversation: conversation,
+                title: conversation.displayTitle,
+                agent: active ? agentLabel(agent ?? "") : "",
+                project: conversation.folderName,
+                status: status,
+                statusText: statusText(status: status, detail: conversation.statusLabel),
+                time: conversation.relativeCreatedLabel,
+                isActiveOrStreaming: active && (waiting || streaming),
+                needsAttention: waiting
+            )
+        }
+        return rows.enumerated().sorted { lhs, rhs in
+            if lhs.element.isActiveOrStreaming != rhs.element.isActiveOrStreaming {
+                return lhs.element.isActiveOrStreaming
+            }
+            let lhsDate = conversationDate(lhs.element.conversation)
+            let rhsDate = conversationDate(rhs.element.conversation)
+            switch (lhsDate, rhsDate) {
+            case let (l?, r?):
+                if l != r { return l > r }
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            case (nil, nil):
+                break
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
+    private static func statusText(status: LiveSessionStatus, detail: String?) -> String {
+        switch status {
+        case .needsYou: "等待你处理"
+        case .running: "运行中"
+        case .ready: detail ?? "空闲"
+        case .unknown: detail ?? "未知"
+        case .idle: "空闲"
+        }
+    }
+
+    /// Host timestamps are ISO-8601 with optional fractional seconds. Sorting is
+    /// the only use; an unparseable value simply sorts last and keeps its order.
+    private static func conversationDate(_ conversation: HostConversation) -> Date? {
+        guard let raw = conversation.createdAtUtc, !raw.isEmpty else { return nil }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: raw) { return date }
+        return ISO8601DateFormatter().date(from: raw)
+    }
+
     /// Display name for the agent the host detected.
     static func agentLabel(_ agentId: String) -> String {
         switch agentId {

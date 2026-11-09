@@ -1,38 +1,32 @@
 import SwiftUI
 
-/// The three places the workbench exposes. Feature destinations still live in
-/// the workspace hub; the rail keeps the prototype's two primary entries.
+/// The three primary places the workbench exposes: agent conversations,
+/// terminals and tools. Hosts and settings stay in the rail footer/groups.
 enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
-    case live
-    case workspace
-    case files
-    case changes
-    case schedules
-    case quick
+    case conversations
+    case terminals
+    case tools
     case settings
 
     var id: String { rawValue }
 
+    /// The three primary sections, in bar/rail order.
+    static let primary: [SidebarDestination] = [.conversations, .terminals, .tools]
+
     var title: String {
         switch self {
-        case .live: "现场"
-        case .workspace: "工作区"
-        case .files: "文件"
-        case .changes: "改动"
-        case .schedules: "定时"
-        case .quick: "速启"
+        case .conversations: "会话"
+        case .terminals: "终端"
+        case .tools: "工具"
         case .settings: "设置"
         }
     }
 
     var icon: SeIcon {
         switch self {
-        case .live: .hosts
-        case .workspace: .folder
-        case .files: .file
-        case .changes: .branch
-        case .schedules: .clock
-        case .quick: .terminal
+        case .conversations: .chat
+        case .terminals: .terminal
+        case .tools: .folder
         case .settings: .gear
         }
     }
@@ -68,19 +62,15 @@ struct AdaptiveSidebarShell: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
                     if !collapsed {
-                        groupLabel("工作")
+                        groupLabel("主要")
                     }
-                    nav(.live)
-                    nav(.workspace)
+                    ForEach(SidebarDestination.primary) { destination in
+                        nav(destination)
+                    }
                     if !collapsed {
                         groupLabel("主机")
                         hostRow
-                        groupLabel("工具")
                     }
-                    nav(.files)
-                    nav(.changes)
-                    nav(.schedules)
-                    nav(.quick)
                 }
                 .padding(.horizontal, collapsed ? 9 : 10)
                 .padding(.top, collapsed ? 8 : 4)
@@ -202,7 +192,7 @@ struct AdaptiveSidebarShell: View {
                     if let count = counts[destination], !count.isEmpty {
                         Text(count)
                             .font(SeNocturneType.font(9, mono: true))
-                            .foregroundStyle(destination == .live ? palette.accent : palette.inkTertiary)
+                            .foregroundStyle(destination == .conversations ? palette.accent : palette.inkTertiary)
                     }
                 }
             }

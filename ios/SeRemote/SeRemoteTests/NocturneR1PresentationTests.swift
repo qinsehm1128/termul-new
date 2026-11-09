@@ -200,10 +200,11 @@ struct NocturneR1LabelTests {
         #expect(LiveFilter.needsYou.title == "需要你")
     }
 
-    @Test("Rail destinations keep the two primary entries and settings")
+    @Test("Rail destinations keep the three primary entries and settings")
     func railDestinations() {
-        #expect(SidebarDestination.live.title == "现场")
-        #expect(SidebarDestination.workspace.title == "工作区")
+        #expect(SidebarDestination.conversations.title == "会话")
+        #expect(SidebarDestination.terminals.title == "终端")
+        #expect(SidebarDestination.tools.title == "工具")
         #expect(SidebarDestination.settings.title == "设置")
     }
 }

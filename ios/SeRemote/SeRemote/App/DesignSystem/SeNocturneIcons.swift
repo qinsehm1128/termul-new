@@ -28,6 +28,7 @@ nonisolated enum SeIcon: String, CaseIterable, Sendable {
     case link
     case arrowRight
     case more
+    case chat
 }
 
 struct SeIconView: View {
@@ -185,6 +186,11 @@ nonisolated struct SeIconShape: Shape {
             circle(5, 12, 1.2)
             circle(12, 12, 1.2)
             circle(19, 12, 1.2)
+        case .chat:
+            path.addRoundedRect(in: CGRect(x: rect.minX + 3 * s, y: rect.minY + 4 * s,
+                                           width: 18 * s, height: 13.5 * s),
+                                cornerSize: CGSize(width: 3 * s, height: 3 * s))
+            move(8, 17.5); line(7, 21); line(12, 17.5)
         }
         return path
     }

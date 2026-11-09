@@ -16,13 +16,13 @@ struct ToolsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: SeSpace.section) {
                         VStack(alignment: .leading, spacing: SeSpace.xs) {
-                            Text("WORKSPACE SCOPE").font(SeNocturneType.monoSmall).foregroundStyle(palette.inkSecondary)
-                            Text(session.workspaceRoot ?? String(localized: "No workspace selected"))
+                            Text("工具范围").font(SeNocturneType.monoSmall).foregroundStyle(palette.inkSecondary)
+                            Text(session.workspaceRoot ?? String(localized: "未选择项目"))
                                 .font(SeNocturneType.secondary.monospaced()).textSelection(.enabled)
                         }
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .top),
                             count: columns == .single ? 1 : 2), spacing: SeSpace.md) {
-                            ForEach(ToolDestination.allCases) { tool in
+                            ForEach(ToolDestination.hubCases) { tool in
                                 NavigationLink(value: tool) {
                                     HStack(alignment: .top, spacing: SeSpace.sm) {
                                         Image(systemName: tool.symbol).foregroundStyle(palette.ink)
@@ -44,8 +44,8 @@ struct ToolsView: View {
                     }.padding(SeSpace.screenInset)
                 }.background(palette.canvas)
             }
-            .navigationTitle("Tools")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.frame(minHeight: SeSpace.hitTarget) } }
+            .navigationTitle("工具")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.frame(minHeight: SeSpace.hitTarget) } }
             .navigationDestination(for: ToolDestination.self) { destination in
                 WorkspaceToolDestinationView(session: session, destination: destination, onOpenFile: { dismiss() })
             }
@@ -77,6 +77,10 @@ struct WorkspaceToolDestinationView: View {
 enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
     case git, scheduledTasks, quickTerminals, search, screenText
     var id: String { rawValue }
+
+    /// The 工具 tab lists tools only. Quick terminals live in the 终端 tab, so
+    /// they keep their destination for the palette but leave this grid.
+    static var hubCases: [ToolDestination] { allCases.filter { $0 != .quickTerminals } }
     var title: String {
         switch self {
         case .git: String(localized: "Git")

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Real workspace adapter. The surrounding shell owns the two top-level destinations.
+/// Real adapter for the 工具 tab. The shell owns the three primary destinations.
 struct WorkspaceHubScreen: View {
     let session: WorkspaceSession
     let onOpenSession: () -> Void
@@ -8,7 +8,7 @@ struct WorkspaceHubScreen: View {
     var onToggleTheme: () -> Void = {}
     var onOpenDrawer: () -> Void = {}
     var onSelectHost: () -> Void = {}
-    var showsBottomBar = false
+    var onOpenSettings: () -> Void = {}
 
     @Environment(ConnectionStore.self) private var connections
     @Environment(\.sePalette) private var palette
@@ -42,20 +42,19 @@ struct WorkspaceHubScreen: View {
             WorkspaceHubView(
                 host: hostName,
                 latency: "", // The host protocol does not report latency.
-                project: session.projects.active?.name ?? String(localized: "Workspace"),
+                project: session.projects.active?.name ?? String(localized: "项目"),
                 branch: session.projects.active.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot).branch } ?? "",
-                tools: ToolDestination.allCases.map { NocturneWorkspacePresentation.tool($0, snapshot: snapshot) },
+                tools: ToolDestination.hubCases.map { NocturneWorkspacePresentation.tool($0, snapshot: snapshot) },
                 projects: session.projects.projects.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot) },
                 onOpenTool: { tool in
                     if let destination = ToolDestination(rawValue: tool.id) { path.append(destination) }
                 },
                 onOpenProject: openProject,
                 onSelectHost: onSelectHost,
-                onOpenLive: onOpenSession,
                 onOpenCommand: onOpenCommand,
                 onOpenDrawer: onOpenDrawer,
                 onToggleTheme: onToggleTheme,
-                showsBottomBar: showsBottomBar
+                onOpenSettings: onOpenSettings
             )
             .disabled(selectingProject)
             .overlay { if selectingProject { ProgressView().accessibilityLabel("Opening project") } }

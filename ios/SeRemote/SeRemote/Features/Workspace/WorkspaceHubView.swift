@@ -29,23 +29,23 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
 
     var title: LocalizedStringKey {
         switch self {
-        case .tools: "Tools"
-        case .projects: "Projects"
+        case .tools: "工具"
+        case .projects: "项目"
         }
     }
 
     var label: String {
         switch self {
-        case .tools: String(localized: "Tools")
-        case .projects: String(localized: "Projects")
+        case .tools: String(localized: "工具")
+        case .projects: String(localized: "项目")
         }
     }
 }
 
 // MARK: - Screen
 
-/// The second top-level destination: the workspace hub. Tools are entry points;
-/// the section below them lists the real projects reported by the host.
+/// 工具 — the third primary destination. Tools are entry points; the section
+/// below them lists the real projects the host reports as tool context.
 struct WorkspaceHubView: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -60,11 +60,10 @@ struct WorkspaceHubView: View {
     var onOpenTool: (WorkspaceTool) -> Void = { _ in }
     var onOpenProject: (WorkspaceProject) -> Void = { _ in }
     var onSelectHost: () -> Void = {}
-    var onOpenLive: () -> Void = {}
     var onOpenCommand: () -> Void = {}
     var onOpenDrawer: () -> Void = {}
     var onToggleTheme: () -> Void = {}
-    var showsBottomBar = true
+    var onOpenSettings: () -> Void = {}
 
     @State private var section: WorkspaceSection = .tools
 
@@ -85,14 +84,12 @@ struct WorkspaceHubView: View {
                 case .projects:
                     projectSection
                 }
+                settingsSection
             }
             .padding(.bottom, 30)
         }
         .scrollIndicators(.hidden)
         .background(palette.canvas.ignoresSafeArea())
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showsBottomBar { bottomBar }
-        }
     }
 
     // MARK: Header
@@ -126,6 +123,23 @@ struct WorkspaceHubView: View {
             // Both stay hidden instead of showing an invented value.
             Spacer(minLength: 8)
 
+            Button(action: onOpenCommand) {
+                Text("⌘")
+                    .font(SeNocturneType.font(13, mono: true))
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 34, height: 34)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(palette.stroke, lineWidth: 1)
+                    }
+                    .contentShape(Rectangle())
+                    .frame(minWidth: NocturneToolMetrics.minimumTarget,
+                           minHeight: NocturneToolMetrics.minimumTarget)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "命令面板"))
+
             NocturneIconButton(
                 systemImage: "sidebar.left",
                 label: String(localized: "All destinations"),
@@ -138,7 +152,7 @@ struct WorkspaceHubView: View {
 
     private var title: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("Workspace")
+            Text("工具")
                 .font(SeNocturneType.font(33, weight: .semibold))
                 .tracking(-1.4)
                 .foregroundStyle(palette.ink)
@@ -174,7 +188,7 @@ struct WorkspaceHubView: View {
 
     private var toolSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            NocturneGroupLabel(title: String(localized: "Tools"), detail: twoDigit(tools.count))
+            NocturneGroupLabel(title: String(localized: "工具"), detail: twoDigit(tools.count))
             LazyVGrid(
                 columns: Array(repeating: GridItem(.flexible(), spacing: NocturneToolMetrics.cardGap),
                                count: 2),
@@ -243,7 +257,7 @@ struct WorkspaceHubView: View {
     private var projectSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             NocturneGroupLabel(
-                title: section == .tools ? String(localized: "Recent projects") : String(localized: "Projects"),
+                title: section == .tools ? String(localized: "最近项目") : String(localized: "项目"),
                 detail: twoDigit(projects.count)
             )
             VStack(spacing: NocturneToolMetrics.cardGap) {
@@ -269,61 +283,38 @@ struct WorkspaceHubView: View {
         }
     }
 
-    // MARK: Bottom bar
+    // MARK: Settings
 
-    private var bottomBar: some View {
-        HStack(spacing: 6) {
-            tabItem(title: "Live", systemImage: "dot.radiowaves.left.and.right", isOn: false, action: onOpenLive)
-            tabItem(title: "Workspace", systemImage: "folder", isOn: true, action: {})
-            Button(action: onOpenCommand) {
-                Image(systemName: "command")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(palette.accent)
-                    .frame(width: 52, height: 44)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
-                            .strokeBorder(palette.strokeStrong, lineWidth: 1)
-                    }
+    private var settingsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            NocturneGroupLabel(title: String(localized: "设置"), detail: "")
+            Button(action: onOpenSettings) {
+                HStack(spacing: 10) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(palette.inkTertiary)
+                    Text("设置")
+                        .font(SeNocturneType.font(12, weight: .semibold))
+                        .foregroundStyle(palette.ink)
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(palette.inkTertiary)
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 52)
+                .background(palette.card, in: RoundedRectangle(cornerRadius: 14))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(palette.stroke, lineWidth: 1)
+                }
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(String(localized: "Command palette"))
+            .buttonStyle(NocturnePressStyle(reduceMotion: reduceMotion))
+            .accessibilityLabel(String(localized: "设置"))
+            .padding(.horizontal, NocturneToolMetrics.gutter)
+            .padding(.top, NocturneToolMetrics.cardGap)
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-        .background(palette.surface)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(palette.stroke)
-                .frame(height: 1)
-        }
-    }
-
-    private func tabItem(
-        title: LocalizedStringKey,
-        systemImage: String,
-        isOn: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: .regular))
-                Text(title)
-                    .font(SeNocturneType.font(9.5, weight: .regular))
-            }
-            .foregroundStyle(isOn ? palette.ink : palette.inkTertiary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .background(
-                isOn ? palette.card.opacity(0.55) : .clear,
-                in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isOn ? [.isSelected] : [])
     }
 
     private func twoDigit(_ count: Int) -> String {
