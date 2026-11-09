@@ -2316,7 +2316,13 @@ fn desktop_terminal_service(
                     target: "se_manager::core",
                     "operation=desktop_terminal_core stable_code=READY"
                 );
-                return Ok(crate::core::TerminalServiceHandle::from_core_client(client));
+                return Ok(crate::core::TerminalServiceHandle::from_core_client_at(
+                    client,
+                    crate::core::CoreEndpoint::for_profile(
+                        app_data_dir,
+                        crate::core::CoreRole::TerminalCore,
+                    ),
+                ));
             }
             Err(error) => {
                 let failure_code = crate::core::launcher::reconciliation_failure_code(&error);

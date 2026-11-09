@@ -487,6 +487,9 @@ async fn run(
             let _ = task.await;
         }
     }
+    // Closing this viewer's Core connection releases its subscriptions on the
+    // Core side; the desktop's own connection and its views are untouched.
+    ctx.core_viewer = None;
     info!(
         "[terminal-ws] client disconnected; {} PTY(s) preserved",
         ctx.authorized.read().len()
@@ -506,6 +509,13 @@ struct ConnectionContext {
     binary_output: bool,
     /// Terminals this connection currently owns in phone-fit mode.
     phone_fit: HashSet<String>,
+    /// Independent Terminal Core connection for this remote viewer.
+    ///
+    /// Core subscriptions are per connection. Sharing the desktop's client
+    /// would make a phone `watch` abort the desktop's stream (and leave the
+    /// desktop with no output when the phone leaves), so every remote viewer
+    /// that opens a stream gets its own Core connection.
+    core_viewer: Option<Arc<crate::core::TerminalCoreClient>>,
 }
 
 impl ConnectionContext {
@@ -519,6 +529,44 @@ impl ConnectionContext {
             attachments: HashMap::new(),
             binary_output,
             phone_fit: HashSet::new(),
+            core_viewer: None,
+        }
+    }
+
+    /// The Core client that owns this connection's output streams.
+    ///
+    /// Opens a dedicated connection on first use and re-handshakes it after a
+    /// Core restart. `None` when the host is not Core-backed (the in-process
+    /// manager path) or the viewer connection cannot be established.
+    async fn viewer_core_client(
+        &mut self,
+        state: &AppState,
+    ) -> Option<Arc<crate::core::TerminalCoreClient>> {
+        if let Some(client) = self.core_viewer.clone() {
+            if client.is_connected() {
+                return Some(client);
+            }
+            if let Some(endpoint) = state.terminal.core_endpoint() {
+                if client.reconnect(endpoint).await.is_ok() {
+                    return Some(client);
+                }
+            }
+            self.core_viewer = None;
+        }
+        match state.terminal.connect_core_viewer().await {
+            Some(Ok(client)) => {
+                let client = Arc::new(client);
+                self.core_viewer = Some(Arc::clone(&client));
+                Some(client)
+            }
+            Some(Err(error)) => {
+                info!(
+                    "[terminal-ws] core viewer connect failed error={}",
+                    core_error_detail(error)
+                );
+                None
+            }
+            None => None,
         }
     }
 
@@ -616,7 +664,10 @@ async fn release_connection_view(
     if !released {
         return;
     }
-    if let Some(client) = core_terminal(state) {
+    // Only the connection that opened the stream may close it. Sending
+    // close_view on the desktop's client would decrement the desktop's view
+    // count while leaving this viewer's Core subscription alive.
+    if let Some(client) = ctx.core_viewer.clone() {
         if let Err(error) = client.close_view(terminal_id).await {
             info!(
                 "[terminal-ws] core close-view failed terminal_id={terminal_id} error={}",
@@ -625,17 +676,16 @@ async fn release_connection_view(
         }
         return;
     }
+    if core_terminal(state).is_some() {
+        // Core mode, but this connection never opened a Core stream.
+        return;
+    }
     state.pty.note_view_closed(terminal_id);
 }
 
-async fn release_connection_phone_fit(
-    state: &AppState,
-    ctx: &mut ConnectionContext,
-    terminal_id: &str,
-) {
-    if !ctx.phone_fit.remove(terminal_id) {
-        return;
-    }
+async fn release_phone_fit_for(state: &AppState, ctx: &ConnectionContext, terminal_id: &str) {
+    // Display mode is manager-global, so the shared client is enough here; the
+    // phone viewer connection is not required (and may already be gone).
     if let Some(client) = core_terminal(state) {
         if let Err(error) = client
             .set_display_mode(terminal_id, "desktop", None, None, false)
@@ -664,23 +714,21 @@ async fn release_connection_phone_fit(
     }
 }
 
+async fn release_connection_phone_fit(
+    state: &AppState,
+    ctx: &mut ConnectionContext,
+    terminal_id: &str,
+) {
+    if !ctx.phone_fit.remove(terminal_id) {
+        return;
+    }
+    release_phone_fit_for(state, ctx, terminal_id).await;
+}
+
 async fn release_phone_fits(state: &AppState, ctx: &mut ConnectionContext) {
     let owned: Vec<String> = ctx.phone_fit.drain().collect();
     for terminal_id in owned {
-        if let Err(error) = state
-            .pty
-            .set_display_mode(
-                &terminal_id,
-                TerminalDisplayMode::Desktop,
-                None,
-                None,
-                &ctx.id,
-                false,
-            )
-            .await
-        {
-            info!("[terminal-ws] phone-fit release failed terminal_id={terminal_id} error={error}");
-        }
+        release_phone_fit_for(state, ctx, &terminal_id).await;
     }
 }
 
@@ -823,7 +871,13 @@ async fn handle(
             // distinction is reserved for the local Tauri boundary. Scope-less
             // project resume is desktop-only; remote callers must prove a
             // Conversation.
-            if let Some(client) = core_terminal(state) {
+            if core_terminal(state).is_some() {
+                let Some(client) = ctx.viewer_core_client(state).await else {
+                    return Err((
+                        "NETWORK_ERROR",
+                        "terminal core viewer connection unavailable".to_string(),
+                    ));
+                };
                 let grant = client
                     .resume(resume.clone())
                     .await
@@ -837,10 +891,10 @@ async fn handle(
                     .ok_or_else(|| unauthorized_error(&resume.terminal_id))?;
                 ctx.authorize(&resume.terminal_id, conversation_id, generation);
                 install_core_stream_forwarder(
+                    client,
                     &resume.terminal_id,
                     session,
                     generation,
-                    state,
                     PassiveForwardAuth {
                         authority,
                         principal_generation: principal.generation(),
@@ -1148,7 +1202,13 @@ async fn handle(
             let claim = request.payload["claim"].as_str().unwrap_or("");
             let last_seq = request.payload["lastSeq"].as_u64().unwrap_or(0);
 
-            if let Some(client) = core_terminal(state) {
+            if core_terminal(state).is_some() {
+                let Some(client) = ctx.viewer_core_client(state).await else {
+                    return Err((
+                        "NETWORK_ERROR",
+                        "terminal core viewer connection unavailable".to_string(),
+                    ));
+                };
                 let session = client
                     .attach(&terminal_id, claim, last_seq)
                     .await
@@ -1162,10 +1222,10 @@ async fn handle(
                 ctx.authorize_unscoped(&terminal_id, generation);
                 let attach_result = session.result.clone();
                 install_core_stream_forwarder(
+                    client,
                     &terminal_id,
                     session,
                     generation,
-                    state,
                     PassiveForwardAuth {
                         authority,
                         principal_generation: principal.generation(),
@@ -1489,10 +1549,10 @@ struct PassiveForwardAuth<'a> {
 }
 
 async fn install_core_stream_forwarder(
+    client: Arc<crate::core::TerminalCoreClient>,
     terminal_id: &str,
     session: crate::core::TerminalAttachSession,
     generation: u64,
-    state: &AppState,
     forward_auth: PassiveForwardAuth<'_>,
     tx: &mpsc::Sender<Message>,
     ctx: &mut ConnectionContext,
@@ -1503,26 +1563,27 @@ async fn install_core_stream_forwarder(
     let binary_output = ctx.binary_output;
     let output_tx = tx.clone();
     let attached_id = terminal_id.to_string();
-    let client = core_terminal(state);
+    // Core replay arrives as separate frames; the first one carries the
+    // host's gap verdict so the client can paint the evicted-history marker.
+    let replay_gap = session.result.gap;
     let task = tokio::spawn(async move {
         let mut output = session.output;
         let mut tick =
             tokio::time::interval(std::time::Duration::from_millis(ATTACH_GENERATION_CHECK_MS));
         tick.tick().await;
+        let mut first_replay = true;
         loop {
             let frame = tokio::select! {
                 frame = output.recv() => frame,
                 _ = tick.tick() => {
-                    if let Some(client) = client.as_ref() {
-                        let valid = client
-                            .status(&attached_id)
-                            .await
-                            .ok()
-                            .and_then(|status| status.claim_generation)
-                            == Some(generation);
-                        if !valid {
-                            break;
-                        }
+                    let valid = client
+                        .status(&attached_id)
+                        .await
+                        .ok()
+                        .and_then(|status| status.claim_generation)
+                        == Some(generation);
+                    if !valid {
+                        break;
                     }
                     continue;
                 }
@@ -1552,13 +1613,22 @@ async fn install_core_stream_forwarder(
                         )
                         .await
                     } else {
+                        let gap = if first_replay { replay_gap } else { false };
+                        first_replay = false;
+                        // The v2 JSON shape every client already decodes:
+                        // `replay` chunks, then `data` for live output. The
+                        // Core's internal frame kinds are not a wire contract.
                         send_json(
                             &output_tx,
                             json!({
-                                "type": "replay_chunk",
+                                "type": "replay",
                                 "terminalId": attached_id,
-                                "seq": frame.seq,
-                                "data": frame.data.iter().map(|byte| *byte as u64).collect::<Vec<u64>>()
+                                "chunks": [{
+                                    "seq": frame.seq,
+                                    "data": frame.data.iter().map(|byte| *byte as u64).collect::<Vec<u64>>()
+                                }],
+                                "gap": gap,
+                                "latestSeq": frame.seq
                             }),
                         )
                         .await
@@ -1578,7 +1648,7 @@ async fn install_core_stream_forwarder(
                         send_json(
                             &output_tx,
                             json!({
-                                "type": "output",
+                                "type": "data",
                                 "terminalId": attached_id,
                                 "seq": frame.seq,
                                 "data": frame.data.iter().map(|byte| *byte as u64).collect::<Vec<u64>>()
@@ -1592,9 +1662,7 @@ async fn install_core_stream_forwarder(
                 break;
             }
         }
-        if let Some(client) = client {
-            let _ = client.close_view(&attached_id).await;
-        }
+        let _ = client.close_view(&attached_id).await;
     });
     if let Some(previous) = ctx.attachments.insert(terminal_id.to_string(), task) {
         previous.abort();
@@ -1781,26 +1849,36 @@ async fn bind_companion_output_stream(
     // Terminal Core owns the shells in the desktop composition, so the local
     // compatibility manager has no instance to watch. Core `watch` is
     // claim-free — it never rotates the desktop claim — which is exactly what
-    // a remote viewer of an already-running project terminal needs.
-    if let Some(client) = core_terminal(state) {
-        let session = client.watch(&terminal_id, last_seq).await.map_err(|error| {
-            match error {
+    // a remote viewer of an already-running project terminal needs. The watch
+    // runs on this connection's own Core client: Core keeps one output stream
+    // per terminal per connection, so reusing the desktop's client would abort
+    // the desktop's stream and leave it dead after the phone leaves.
+    if core_terminal(state).is_some() {
+        let Some(client) = ctx.viewer_core_client(state).await else {
+            return Err((
+                "NETWORK_ERROR",
+                "terminal core viewer connection unavailable".to_string(),
+            ));
+        };
+        let session = client
+            .watch(&terminal_id, last_seq)
+            .await
+            .map_err(|error| match error {
                 crate::core::CoreError::InvalidRequest(detail) if detail.contains("not found") => {
                     ("TERMINAL_NOT_FOUND", "terminal not found".to_string())
                 }
                 other => ("NETWORK_ERROR", core_error_detail(other)),
-            }
-        })?;
+            })?;
         let generation = session
             .claim_generation
             .ok_or_else(|| unauthorized_error(&terminal_id))?;
         let attach_result = session.result.clone();
         ctx.authorize_unscoped(&terminal_id, generation);
         install_core_stream_forwarder(
+            client,
             &terminal_id,
             session,
             generation,
-            state,
             PassiveForwardAuth {
                 authority,
                 principal_generation: principal.generation(),
@@ -3064,7 +3142,8 @@ mod tests {
             .expect("core project spawn");
 
         let mut state = terminal_test_state();
-        state.terminal = TerminalServiceHandle::from_core_client(client.clone());
+        state.terminal =
+            TerminalServiceHandle::from_core_client_at(client.clone(), endpoint.clone());
         let authority = terminal_authority();
         let principal = RemotePrincipal::for_tests(1);
         let (tx, _rx) = mpsc::channel(8);
@@ -3113,6 +3192,240 @@ mod tests {
             .terminate(&spawned.info.id)
             .await
             .expect("terminate project shell");
+        client.shutdown().await.expect("shutdown core");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    /// The remote viewer's watch and the desktop's watch are independent.
+    ///
+    /// Regression for the Canary report: a phone watch must not abort the
+    /// desktop's Terminal Core stream, the phone must receive the v2
+    /// `replay`/`data` frames its client decodes, and leaving must neither kill
+    /// the PTY nor leave the desktop blind.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phone_watch_and_desktop_watch_coexist_and_survive_detach() {
+        use crate::core::{CoreEndpoint, CoreRole, OutputFrame, TerminalServiceHandle};
+        use tokio::sync::mpsc::Receiver;
+
+        async fn collect_phone_output(rx: &mut Receiver<Message>, marker: &str) -> String {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+            let mut bytes: Vec<u8> = Vec::new();
+            loop {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                if text.contains(marker) {
+                    return text;
+                }
+                let message = tokio::time::timeout_at(deadline, rx.recv())
+                    .await
+                    .unwrap_or_else(|_| panic!("timed out waiting for {marker:?} on the phone"))
+                    .expect("phone output channel closed");
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let value: Value = serde_json::from_str(text.as_str()).expect("phone json frame");
+                match value["type"].as_str() {
+                    Some("replay") => {
+                        for chunk in value["chunks"].as_array().expect("replay chunks") {
+                            for byte in chunk["data"].as_array().expect("replay bytes") {
+                                bytes.push(byte.as_u64().expect("byte") as u8);
+                            }
+                        }
+                    }
+                    Some("data") => {
+                        for byte in value["data"].as_array().expect("live bytes") {
+                            bytes.push(byte.as_u64().expect("byte") as u8);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        async fn collect_desktop_output(
+            rx: &mut tokio::sync::mpsc::Receiver<OutputFrame>,
+            marker: &str,
+        ) -> String {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+            let mut bytes: Vec<u8> = Vec::new();
+            loop {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                if text.contains(marker) {
+                    return text;
+                }
+                let frame = tokio::time::timeout_at(deadline, rx.recv())
+                    .await
+                    .unwrap_or_else(|_| panic!("timed out waiting for {marker:?} on the desktop"))
+                    .expect("desktop output stream closed");
+                bytes.extend_from_slice(&frame.data);
+            }
+        }
+
+        let profile = tempfile::tempdir().unwrap();
+        let server_profile = profile.path().to_path_buf();
+        let server = tokio::spawn(async move {
+            crate::core::run_terminal_core(server_profile, crate::terminal_program()).await
+        });
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let client = {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                match crate::core::TerminalCoreClient::connect(&endpoint).await {
+                    Ok(client) => break client,
+                    Err(_) if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    }
+                    Err(error) => panic!("terminal core did not become ready: {error}"),
+                }
+            }
+        };
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client
+            .spawn(SpawnOptions {
+                conversation_id: Some(crate::conversation::ConversationId::new_v4()),
+                project_id: Some("proj-coexist".into()),
+                cwd: Some(cwd),
+                cols: Some(80),
+                rows: Some(24),
+                shell: Some("/bin/sh".into()),
+                env: Some(HashMap::from([("PS1".into(), "$ ".into())])),
+                ..Default::default()
+            })
+            .await
+            .expect("core spawn");
+        let terminal_id = spawned.info.id.clone();
+
+        // The desktop's own watch: exactly what `terminal_watch` installs.
+        let mut desktop = client.watch(&terminal_id, 0).await.expect("desktop watch");
+
+        let mut state = terminal_test_state();
+        state.terminal =
+            TerminalServiceHandle::from_core_client_at(client.clone(), endpoint.clone());
+        let authority = terminal_authority();
+        let principal = RemotePrincipal::for_tests(1);
+        let (tx, mut phone) = mpsc::channel(64);
+        let mut ctx = ConnectionContext::new(Arc::new(RwLock::new(HashMap::new())), false);
+
+        handle(
+            Request {
+                id: "watch".into(),
+                type_: "watch".into(),
+                payload: json!({ "terminalId": terminal_id, "lastSeq": 0 }),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("phone watch");
+        assert!(
+            ctx.core_viewer.is_some(),
+            "the phone must watch over its own Core connection"
+        );
+
+        // Typing on the phone reaches the PTY and both viewers see the echo.
+        handle(
+            Request {
+                id: "write".into(),
+                type_: "write".into(),
+                payload: json!({ "terminalId": terminal_id, "data": "echo PHONE_MARK\n" }),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("phone write");
+        let phone_text = collect_phone_output(&mut phone, "PHONE_MARK").await;
+        assert!(
+            phone_text.contains("PHONE_MARK"),
+            "the phone must decode live output, got {phone_text:?}"
+        );
+        let desktop_text = collect_desktop_output(&mut desktop.output, "PHONE_MARK").await;
+        assert!(
+            desktop_text.contains("PHONE_MARK"),
+            "the desktop stream must survive the phone's watch, got {desktop_text:?}"
+        );
+
+        // The phone takes the fit, then leaves: the desktop grid returns.
+        handle(
+            Request {
+                id: "phone-fit".into(),
+                type_: "set_display_mode".into(),
+                payload: json!({
+                    "terminalId": terminal_id, "mode": "phone", "cols": 35, "rows": 13
+                }),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("phone display mode");
+        let fitted = client.status(&terminal_id).await.expect("fitted status");
+        assert_eq!((fitted.cols, fitted.rows), (35, 13));
+
+        handle(
+            Request {
+                id: "detach".into(),
+                type_: "detach".into(),
+                payload: json!({ "terminalId": terminal_id }),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("phone detach");
+        let restored = client.status(&terminal_id).await.expect("restored status");
+        assert_eq!(
+            (restored.cols, restored.rows),
+            (80, 24),
+            "detach must restore the desktop display mode"
+        );
+
+        // The disconnect cleanup path (run()'s `release_phone_fits`) must reach
+        // the same Core state. It used to call the in-process manager, which
+        // logged `Terminal not found` and left the PTY at the phone grid.
+        client
+            .set_display_mode(&terminal_id, "phone", Some(35), Some(13), false)
+            .await
+            .expect("phone fit before disconnect");
+        ctx.phone_fit.insert(terminal_id.clone());
+        release_phone_fits(&state, &mut ctx).await;
+        assert!(ctx.phone_fit.is_empty());
+        let after_disconnect = client.status(&terminal_id).await.expect("disconnect status");
+        assert_eq!(
+            (after_disconnect.cols, after_disconnect.rows),
+            (80, 24),
+            "disconnect cleanup must restore the desktop display mode through Core"
+        );
+
+        // The desktop keeps receiving output and writing after the phone left.
+        client
+            .write(&terminal_id, "echo AFTER_DETACH_MARK\n")
+            .await
+            .expect("desktop write after detach");
+        let after = collect_desktop_output(&mut desktop.output, "AFTER_DETACH_MARK").await;
+        assert!(
+            after.contains("AFTER_DETACH_MARK"),
+            "the desktop must keep receiving output after the phone detaches"
+        );
+        let live = client.list().await.expect("list after detach");
+        assert!(
+            live.iter().any(|item| item.id == terminal_id),
+            "detach must never kill the PTY"
+        );
+
+        client.terminate(&terminal_id).await.expect("terminate");
         client.shutdown().await.expect("shutdown core");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
     }

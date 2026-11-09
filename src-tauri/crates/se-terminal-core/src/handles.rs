@@ -9,7 +9,7 @@
 //! constructed with [`TerminalServiceHandle::from_runtime`] /
 //! [`AcpServiceHandle::from_runtime`] once T4/T5 own the Core servers.
 
-use super::ipc::CoreError;
+use super::ipc::{CoreEndpoint, CoreError};
 use super::terminal::TerminalCoreClient;
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -303,6 +303,10 @@ pub struct TerminalServiceHandle {
     runtime: Arc<dyn TerminalRuntimeHandle>,
     in_process: Option<Arc<PtyManager>>,
     core: Option<Arc<TerminalCoreClient>>,
+    /// Endpoint of the Terminal Core this handle talks to. Remote viewers open
+    /// their own connection here so a watch never displaces the desktop's
+    /// subscription in the shared client.
+    core_endpoint: Option<CoreEndpoint>,
     /// Quick terminals owned by this process. `None` in Core mode, where
     /// Terminal Core owns them and requests go through `core`.
     quick_terminals: Option<Arc<se_quick_terminal::QuickTerminalService>>,
@@ -314,6 +318,7 @@ impl TerminalServiceHandle {
             runtime: Arc::new(InProcessTerminalRuntime::new(Arc::clone(&pty))),
             in_process: Some(pty),
             core: None,
+            core_endpoint: None,
             quick_terminals: None,
         }
     }
@@ -323,6 +328,7 @@ impl TerminalServiceHandle {
             runtime,
             in_process: None,
             core: None,
+            core_endpoint: None,
             quick_terminals: None,
         }
     }
@@ -333,8 +339,17 @@ impl TerminalServiceHandle {
             runtime: Arc::clone(&client) as Arc<dyn TerminalRuntimeHandle>,
             in_process: None,
             core: Some(client),
+            core_endpoint: None,
             quick_terminals: None,
         }
+    }
+
+    /// Core-backed handle that also remembers where the Core listens, so
+    /// additional independent viewers can attach over their own connection.
+    pub fn from_core_client_at(client: TerminalCoreClient, endpoint: CoreEndpoint) -> Self {
+        let mut handle = Self::from_core_client(client);
+        handle.core_endpoint = Some(endpoint);
+        handle
     }
 
     pub fn runtime(&self) -> Arc<dyn TerminalRuntimeHandle> {
@@ -362,6 +377,23 @@ impl TerminalServiceHandle {
 
     pub fn core_client(&self) -> Option<Arc<TerminalCoreClient>> {
         self.core.clone()
+    }
+
+    pub fn core_endpoint(&self) -> Option<&CoreEndpoint> {
+        self.core_endpoint.as_ref()
+    }
+
+    /// Open an independent Terminal Core connection for one remote viewer.
+    ///
+    /// Core subscriptions are per connection, so sharing the desktop client
+    /// would make a second `watch` abort the desktop's stream. `None` when the
+    /// handle is not Core-backed or does not know the endpoint.
+    pub async fn connect_core_viewer(&self) -> Option<Result<TerminalCoreClient, CoreError>> {
+        if self.core.is_none() {
+            return None;
+        }
+        let endpoint = self.core_endpoint.as_ref()?;
+        Some(TerminalCoreClient::connect(endpoint).await)
     }
 
     pub fn owns_core_process(&self) -> bool {

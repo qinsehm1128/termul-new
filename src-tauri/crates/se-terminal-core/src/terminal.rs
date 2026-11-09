@@ -1917,6 +1917,12 @@ impl TerminalCoreClient {
         self.rpc(METHOD_SHUTDOWN, Value::Null).await.map(|_| ())
     }
 
+    /// Whether the last handshake is still believed live. A remote viewer
+    /// uses this to reconnect its own connection before opening a watch.
+    pub fn is_connected(&self) -> bool {
+        self.inner.connected.load(Ordering::Acquire)
+    }
+
     pub async fn write(&self, terminal_id: &str, data: &str) -> Result<(), CoreError> {
         self.rpc(
             METHOD_WRITE,
@@ -3252,6 +3258,100 @@ mod tests {
         );
 
         client.shutdown().await.expect("shutdown");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    /// Two independent connections are two independent viewers.
+    ///
+    /// Terminal Core keeps `subscriptions` per connection, so a phone's watch
+    /// must not abort the desktop's stream. Detaching the phone must leave the
+    /// desktop receiving output and writing, and the phone's display-mode
+    /// lease must restore the desktop grid.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn independent_viewers_coexist_and_detach_keeps_the_desktop_live() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let server_endpoint = endpoint.clone();
+        let server = tokio::spawn(async move {
+            run_terminal_core_on_endpoint(server_endpoint, test_program()).await
+        });
+
+        let desktop = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = desktop.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+
+        // The desktop renderer's watch (the desktop `terminal_watch` command).
+        let mut desktop_stream = desktop.watch(&terminal_id, 0).await.expect("desktop watch");
+
+        // The phone: a second connection, exactly like the remote viewer path.
+        let phone = wait_for_client(&endpoint).await;
+        let mut phone_stream = phone.watch(&terminal_id, 0).await.expect("phone watch");
+
+        // Both viewers receive output produced while both are attached.
+        desktop
+            .write(&terminal_id, "echo COEXIST_MARK\n")
+            .await
+            .expect("write while both watch");
+        let desktop_text = collect_until_marker(
+            &mut desktop_stream.output,
+            "COEXIST_MARK",
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        let phone_text = collect_until_marker(
+            &mut phone_stream.output,
+            "COEXIST_MARK",
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(desktop_text.contains("COEXIST_MARK"));
+        assert!(phone_text.contains("COEXIST_MARK"));
+
+        // The phone leaves: its own subscription closes, the desktop's remains.
+        phone
+            .close_view(&terminal_id)
+            .await
+            .expect("phone close view");
+        drop(phone_stream);
+        desktop
+            .write(&terminal_id, "echo AFTER_DETACH\n")
+            .await
+            .expect("desktop write after the phone detaches");
+        let desktop_after = collect_until_marker(
+            &mut desktop_stream.output,
+            "AFTER_DETACH",
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            desktop_after.contains("AFTER_DETACH"),
+            "the desktop must keep receiving output after the phone detaches"
+        );
+
+        // Display mode: phone fit, then restore to the parked desktop grid.
+        let phone_mode = desktop
+            .set_display_mode(&terminal_id, "phone", Some(35), Some(13), false)
+            .await
+            .expect("phone fit");
+        assert_eq!(phone_mode.mode, TerminalDisplayMode::Phone);
+        assert_eq!((phone_mode.cols, phone_mode.rows), (35, 13));
+        let parked = desktop.status(&terminal_id).await.expect("status");
+        assert_eq!((parked.cols, parked.rows), (35, 13));
+
+        let restored = desktop
+            .set_display_mode(&terminal_id, "desktop", None, None, false)
+            .await
+            .expect("desktop restore");
+        assert_eq!(restored.mode, TerminalDisplayMode::Desktop);
+        assert_eq!(
+            (restored.cols, restored.rows),
+            (80, 24),
+            "the desktop grid must return after the phone leaves"
+        );
+
+        desktop.shutdown().await.expect("shutdown");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
     }
 }
