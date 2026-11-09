@@ -4696,6 +4696,7 @@ pub async fn remote_server_start(
     if let Err(error) = intent_store.save(&remote::RemoteAccessIntent {
         wanted: true,
         publish_mode,
+        lan_port: stored_intent.lan_port,
     }) {
         log::error!(
             target: "se_manager::remote::host",
@@ -4757,48 +4758,45 @@ pub async fn remote_server_start(
     let host_capabilities = app
         .try_state::<Arc<crate::mcp_core::host_service::HostCapabilityService>>()
         .map(|state| state.inner().clone());
-    let started = if let Some(bind_port) = tunnel_config
-        .preferred_bind_port()
-        .filter(|_| start_tunnel)
-    {
-        remote_state
-            .start_on_port(
-                acp_host.clone(),
-                pty_manager.clone(),
-                terminal.clone(),
-                acp_host.live_relay(),
-                project_registry.inner().clone(),
-                bind_mode,
-                conversation.clone(),
-                conversation_creation.clone(),
-                workspace_manifest,
-                acp_catalog,
-                acp_install,
-                memory_index.clone(),
-                skills_hub.clone(),
-                host_capabilities.clone(),
-                bind_port,
-            )
-            .await
-    } else {
-        remote_state
-            .start(
-                acp_host.clone(),
-                pty_manager.clone(),
-                terminal,
-                acp_host.live_relay(),
-                project_registry.inner().clone(),
-                bind_mode,
-                conversation,
-                conversation_creation,
-                workspace_manifest,
-                acp_catalog,
-                acp_install,
-                memory_index,
-                skills_hub,
-                host_capabilities,
-            )
-            .await
+    let named_tunnel_port = tunnel_config.preferred_bind_port().filter(|_| start_tunnel);
+    let preferred_port = listener_port_plan(publish_mode, named_tunnel_port, stored_intent.lan_port);
+    let reused_lan_port = named_tunnel_port.is_none() && preferred_port.is_some();
+    let start_on = |port: u16| {
+        remote_state.start_on_port(
+            acp_host.clone(),
+            pty_manager.clone(),
+            terminal.clone(),
+            acp_host.live_relay(),
+            project_registry.inner().clone(),
+            bind_mode,
+            conversation.clone(),
+            conversation_creation.clone(),
+            workspace_manifest.clone(),
+            acp_catalog.clone(),
+            acp_install.clone(),
+            memory_index.clone(),
+            skills_hub.clone(),
+            host_capabilities.clone(),
+            port,
+        )
+    };
+    let started = match preferred_port {
+        Some(port) => start_on(port).await,
+        None => start_on(0).await,
+    };
+    // A remembered port can be taken by another process between runs. Falling
+    // back to an OS-assigned port keeps remote access working; the new port is
+    // remembered below and the QR publishes it. A named tunnel's configured
+    // port is a hard requirement, so it never falls back.
+    let started = match started {
+        Err(error) if reused_lan_port => {
+            log::warn!(
+                target: "se_manager::remote::host",
+                "operation=listener_port lifecycle_phase=start stable_code=PORT_UNAVAILABLE error={error}"
+            );
+            start_on(0).await
+        }
+        other => other,
     };
     match started {
         Ok(status) => {
@@ -4812,6 +4810,31 @@ pub async fn remote_server_start(
                     ))
                 }
             };
+            // Remember what the listener actually bound. A phone keeps the
+            // whole `http://{lan-ip}:{port}` origin in its saved host record,
+            // so a stable port is what lets that record reconnect without a
+            // new QR scan.
+            if publish_mode == remote::PublishMode::Lan {
+                log::info!(
+                    target: "se_manager::remote::host",
+                    "operation=listener_port lifecycle_phase=start stable_code={} port={port}",
+                    if reused_lan_port { "PORT_REUSED" } else { "PORT_ASSIGNED" }
+                );
+                if stored_intent.lan_port != Some(port)
+                    && intent_store
+                        .save(&remote::RemoteAccessIntent {
+                            wanted: true,
+                            publish_mode,
+                            lan_port: Some(port),
+                        })
+                        .is_err()
+                {
+                    log::error!(
+                        target: "se_manager::remote::host",
+                        "operation=intent_save lifecycle_phase=start stable_code=INTENT_SAVE_FAILED"
+                    );
+                }
+            }
             if !start_tunnel {
                 return Ok(IpcResult::success(remote_state.status()));
             }
@@ -4853,6 +4876,30 @@ pub async fn remote_server_start(
     }
 }
 
+/// Decide which port the shared-live listener should ask the OS for.
+///
+/// `None` asks for an OS-assigned ephemeral port. Two things override that:
+///
+/// * A named Cloudflare tunnel needs the loopback port its remotely managed
+///   ingress targets.
+/// * LAN publishing must keep the port a paired phone already saved. The phone
+///   stores the scanned origin verbatim (`http://{lan-ip}:{port}`), so a new
+///   random port on every launch leaves that saved host dialing a closed port:
+///   no host request, no host log, no way back except rescanning the QR.
+fn listener_port_plan(
+    publish_mode: remote::PublishMode,
+    named_tunnel_port: Option<u16>,
+    remembered_lan_port: Option<u16>,
+) -> Option<u16> {
+    if let Some(port) = named_tunnel_port {
+        return Some(port);
+    }
+    match publish_mode {
+        remote::PublishMode::Lan => remembered_lan_port.filter(|port| *port != 0),
+        remote::PublishMode::Tunnel => None,
+    }
+}
+
 /// Decide whether a remote start also starts the configured tunnel.
 ///
 /// Tunnel mode needs a valid tunnel, so an invalid config is an error. LAN
@@ -4867,6 +4914,47 @@ fn tunnel_start_plan(
         (Ok(()), _) => Ok(true),
         (Err(_), remote::PublishMode::Lan) => Ok(false),
         (Err(e), remote::PublishMode::Tunnel) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod listener_port_tests {
+    use super::{listener_port_plan, remote};
+
+    #[test]
+    fn lan_start_reuses_the_port_a_paired_phone_saved() {
+        assert_eq!(
+            listener_port_plan(remote::PublishMode::Lan, None, Some(52953)),
+            Some(52953)
+        );
+    }
+
+    #[test]
+    fn lan_start_without_a_remembered_port_asks_for_an_ephemeral_one() {
+        assert_eq!(
+            listener_port_plan(remote::PublishMode::Lan, None, None),
+            None
+        );
+        assert_eq!(
+            listener_port_plan(remote::PublishMode::Lan, None, Some(0)),
+            None
+        );
+    }
+
+    #[test]
+    fn tunnel_only_start_never_reuses_a_lan_port() {
+        assert_eq!(
+            listener_port_plan(remote::PublishMode::Tunnel, None, Some(52953)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_named_tunnel_port_wins_over_the_remembered_lan_port() {
+        assert_eq!(
+            listener_port_plan(remote::PublishMode::Lan, Some(8080), Some(52953)),
+            Some(8080)
+        );
     }
 }
 
@@ -4915,13 +5003,11 @@ pub async fn remote_server_stop(
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     intent_store: State<'_, Arc<remote::RemoteAccessIntentStore>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    let publish_mode = intent_store
-        .load()
-        .map(|intent| intent.publish_mode)
-        .unwrap_or_default();
+    let stored_intent = intent_store.load().unwrap_or_default();
     if let Err(error) = intent_store.save(&remote::RemoteAccessIntent {
         wanted: false,
-        publish_mode,
+        publish_mode: stored_intent.publish_mode,
+        lan_port: stored_intent.lan_port,
     }) {
         log::error!(
             target: "se_manager::remote::host",

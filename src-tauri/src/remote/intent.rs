@@ -41,6 +41,16 @@ impl PublishMode {
 pub struct RemoteAccessIntent {
     pub wanted: bool,
     pub publish_mode: PublishMode,
+    /// Port the LAN listener bound the last time remote access ran.
+    ///
+    /// A paired phone stores the whole origin it scanned
+    /// (`http://{lan-ip}:{port}`), so a fresh OS-assigned port on every launch
+    /// strands that saved host: the phone dials a closed port and the host
+    /// never sees the request. Reusing the remembered port keeps the saved
+    /// pairing usable across desktop restarts. `None` means "no port worth
+    /// reusing" (first run, or the last bind was itself a fallback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lan_port: Option<u16>,
 }
 
 impl Default for RemoteAccessIntent {
@@ -48,6 +58,7 @@ impl Default for RemoteAccessIntent {
         Self {
             wanted: false,
             publish_mode: PublishMode::Tunnel,
+            lan_port: None,
         }
     }
 }
@@ -107,6 +118,7 @@ mod tests {
         let intent = RemoteAccessIntent::default();
         assert!(!intent.wanted);
         assert_eq!(intent.publish_mode, PublishMode::Tunnel);
+        assert_eq!(intent.lan_port, None);
     }
 
     #[test]
@@ -116,9 +128,23 @@ mod tests {
         let intent = RemoteAccessIntent {
             wanted: true,
             publish_mode: PublishMode::Lan,
+            lan_port: Some(52953),
         };
         store.save(&intent).unwrap();
         assert_eq!(store.load().unwrap(), intent);
+        let written = std::fs::read_to_string(dir.path().join("remote-access.json")).unwrap();
+        assert!(written.contains("\"lanPort\": 52953"), "{written}");
+    }
+
+    #[test]
+    fn an_intent_file_written_before_the_lan_port_existed_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remote-access.json");
+        std::fs::write(&path, br#"{"wanted":true,"publishMode":"lan"}"#).unwrap();
+        let intent = RemoteAccessIntentStore::for_path(path).load().unwrap();
+        assert!(intent.wanted);
+        assert_eq!(intent.publish_mode, PublishMode::Lan);
+        assert_eq!(intent.lan_port, None);
     }
 
     #[test]
