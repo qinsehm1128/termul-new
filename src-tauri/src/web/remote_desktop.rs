@@ -39,16 +39,45 @@ const VIDEO_QUEUE: usize = 4;
 static NEXT_VIEWER: AtomicU64 = AtomicU64::new(1);
 type DesktopResult<T> = Result<T, &'static str>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AccessFailure {
+    code: &'static str,
+    capability: &'static str,
+}
+impl AccessFailure {
+    fn new(code: &'static str, capability: &'static str) -> Self {
+        Self { code, capability }
+    }
+}
+
+fn error_body(code: &'static str, capability: Option<&'static str>, websocket: bool) -> Value {
+    let mut value = json!({"code":code});
+    if websocket {
+        value["type"] = json!("error");
+    } else {
+        value["error"] = json!(code);
+    }
+    if let Some(capability) = capability {
+        value["capability"] = json!(capability);
+    }
+    value
+}
 fn error(code: &'static str) -> Response {
+    error_with_capability(code, None)
+}
+fn access_error(failure: AccessFailure) -> Response {
+    error_with_capability(failure.code, Some(failure.capability))
+}
+fn error_with_capability(code: &'static str, capability: Option<&'static str>) -> Response {
     let status = match code {
-        "UNAUTHORIZED" => StatusCode::UNAUTHORIZED,
+        "UNAUTHORIZED" | "DEVICE_REVOKED" => StatusCode::UNAUTHORIZED,
         "DISPLAY_NOT_FOUND" => StatusCode::NOT_FOUND,
         "SCREEN_UNSUPPORTED" => StatusCode::NOT_IMPLEMENTED,
         "CAPTURE_FAILED" | "INPUT_FAILED" => StatusCode::INTERNAL_SERVER_ERROR,
         "INVALID_REQUEST" => StatusCode::BAD_REQUEST,
         _ => StatusCode::FORBIDDEN,
     };
-    (status, Json(json!({"error": code, "code": code}))).into_response()
+    (status, Json(error_body(code, capability, false))).into_response()
 }
 
 fn gate(supported: bool, view: bool, control: bool, input: bool) -> DesktopResult<()> {
@@ -69,14 +98,14 @@ fn authorize(
     principal: &RemotePrincipal,
     service: &DesktopService,
     input: bool,
-) -> DesktopResult<()> {
+) -> Result<(), AccessFailure> {
     authority
         .require_scope(principal, "screen.view")
-        .map_err(|e| e.code())?;
+        .map_err(|e| AccessFailure::new(e.code(), "screen.view"))?;
     if input {
         authority
             .require_scope(principal, "screen.control")
-            .map_err(|e| e.code())?;
+            .map_err(|e| AccessFailure::new(e.code(), "screen.control"))?;
     }
     gate(
         screen::supported(),
@@ -84,6 +113,16 @@ fn authorize(
         service.control_enabled(),
         input,
     )
+    .map_err(|code| {
+        AccessFailure::new(
+            code,
+            if code == "CONTROL_DISABLED" {
+                "screen.control"
+            } else {
+                "screen.view"
+            },
+        )
+    })
 }
 
 pub async fn info(
@@ -93,7 +132,7 @@ pub async fn info(
 ) -> Response {
     let service = service.map_or_else(DesktopService::global, |Extension(s)| s);
     if let Err(e) = authority.require_scope(&principal, "screen.view") {
-        return error(e.code());
+        return access_error(AccessFailure::new(e.code(), "screen.view"));
     }
     // Unsupported info is deliberately discoverable; no native display API is called on Linux.
     if screen::supported() && !service.view_enabled() {
@@ -123,11 +162,12 @@ pub struct ScreenshotQuery {
 pub async fn screenshot(
     Extension(authority): Extension<Arc<RemoteAccessAuthority>>,
     Extension(principal): Extension<RemotePrincipal>,
+    service: Option<Extension<Arc<DesktopService>>>,
     Query(query): Query<ScreenshotQuery>,
 ) -> Response {
-    let service = DesktopService::global();
-    if let Err(code) = authorize(&authority, &principal, &service, false) {
-        return error(code);
+    let service = service.map_or_else(DesktopService::global, |Extension(service)| service);
+    if let Err(failure) = authorize(&authority, &principal, &service, false) {
+        return access_error(failure);
     }
     let format = match query.format.as_deref().unwrap_or("jpeg") {
         "jpeg" => ImageFormat::Jpeg {
@@ -147,8 +187,8 @@ pub async fn screenshot(
     service.viewer_stopped(id);
     // Do not deliver a capture that raced desktop consent or device revocation.
     let result = authorize(&authority, &principal, &service, false)
-        .and_then(|_| result.map_err(|e| e.code()));
-    let code = result.as_ref().map(|_| "OK").unwrap_or_else(|e| *e);
+        .and_then(|_| result.map_err(|e| AccessFailure::new(e.code(), "screen.view")));
+    let code = result.as_ref().map(|_| "OK").unwrap_or_else(|e| e.code);
     log::info!(
         "desktop_screenshot device_id={} display={} stable_code={}",
         principal.device_id(),
@@ -162,7 +202,7 @@ pub async fn screenshot(
             .body(Body::from(image.bytes))
             .unwrap()
             .into_response(),
-        Err(code) => error(code),
+        Err(failure) => access_error(failure),
     }
 }
 
@@ -241,7 +281,7 @@ pub async fn stream(
 ) -> Response {
     let principal = match upgrade_principal(&authority, peer.ip(), &headers) {
         Ok(v) => v,
-        Err(e) => return error(e.code()),
+        Err(e) => return access_error(AccessFailure::new(e.code(), "screen.view")),
     };
     let registry = registry.map_or_else(
         super::upgraded_connections::UpgradedConnectionRegistry::global,
@@ -365,7 +405,60 @@ fn send_json(tx: &mpsc::Sender<Message>, value: Value) -> bool {
     tx.try_send(Message::Text(value.to_string().into())).is_ok()
 }
 fn send_error(tx: &mpsc::Sender<Message>, code: &'static str) -> bool {
-    send_json(tx, json!({"type":"error","code":code}))
+    send_json(tx, error_body(code, None, true))
+}
+fn send_access_error(tx: &mpsc::Sender<Message>, failure: AccessFailure) -> bool {
+    send_json(tx, error_body(failure.code, Some(failure.capability), true))
+}
+
+struct DesktopClose {
+    code: u16,
+    reason: &'static str,
+    error: Option<Value>,
+}
+impl DesktopClose {
+    fn normal() -> Self {
+        Self {
+            code: 1000,
+            reason: "closed",
+            error: None,
+        }
+    }
+    fn failure(failure: AccessFailure) -> Self {
+        Self {
+            code: if failure.code == "DEVICE_REVOKED" {
+                1008
+            } else {
+                1000
+            },
+            reason: failure.code,
+            error: Some(error_body(failure.code, Some(failure.capability), true)),
+        }
+    }
+    fn stopped() -> Self {
+        Self::failure(AccessFailure::new("DESKTOP_STOPPED", "screen.view"))
+    }
+}
+
+fn cancellation_close(
+    authority: &RemoteAccessAuthority,
+    principal: Option<&RemotePrincipal>,
+    active: bool,
+) -> DesktopClose {
+    if let Some(principal) = principal {
+        if let Err(error) = authority.require_scope(principal, "screen.view") {
+            return DesktopClose::failure(AccessFailure::new(error.code(), "screen.view"));
+        }
+        if active {
+            if let Err(error) = authority.require_scope(principal, "screen.control") {
+                return DesktopClose::failure(AccessFailure::new(error.code(), "screen.control"));
+            }
+        }
+    }
+    // Registry-wide shutdown/cancellation is not proof that the device was revoked.
+    let mut close = DesktopClose::stopped();
+    close.code = 1001;
+    close
 }
 // A transport drop invalidates delta ancestry; recovery is mandatory and never awaits the writer.
 fn send_frame(tx: &mpsc::Sender<Message>, bytes: Vec<u8>, recover: impl FnOnce()) -> bool {
@@ -395,31 +488,39 @@ async fn run(
     let mut stops = service.subscribe_stop();
     let (mut sink, mut source) = socket.split();
     let (tx, mut rx) = mpsc::channel(VIDEO_QUEUE);
-    let (close_tx, mut close_rx) = oneshot::channel::<(u16, &'static str)>();
+    let (close_tx, mut close_rx) = oneshot::channel::<DesktopClose>();
     let writer = tokio::spawn(async move {
         let close = loop {
             tokio::select! {
                 biased;
-                reason = &mut close_rx => break reason.unwrap_or((1000,"closed")),
+                reason = &mut close_rx => break reason.unwrap_or_else(|_|DesktopClose::normal()),
                 msg = rx.recv() => match msg {
                     Some(msg) => {
                         tokio::select! {
                             biased;
-                            reason = &mut close_rx => break reason.unwrap_or((1000,"closed")),
+                            reason = &mut close_rx => break reason.unwrap_or_else(|_|DesktopClose::normal()),
                             sent = tokio::time::timeout(Duration::from_secs(10), sink.send(msg)) => {
-                                if !matches!(sent, Ok(Ok(()))) { break (1001,"slow consumer") }
+                                if !matches!(sent, Ok(Ok(()))) { let mut close=DesktopClose::normal(); close.code=1001; close.reason="slow consumer"; break close }
                             }
                         }
                     }
-                    None => break (1000,"closed"),
+                    None => break DesktopClose::normal(),
                 }
             }
         };
+        // Deliver the terminal policy error directly, ahead of queued video and Close.
+        if let Some(error) = close.error {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(1),
+                sink.send(Message::Text(error.to_string().into())),
+            )
+            .await;
+        }
         let _ = tokio::time::timeout(
             Duration::from_secs(1),
             sink.send(Message::Close(Some(CloseFrame {
-                code: close.0,
-                reason: close.1.into(),
+                code: close.code,
+                reason: close.reason.into(),
             }))),
         )
         .await;
@@ -434,21 +535,22 @@ async fn run(
     heartbeat.tick().await;
     let auth_deadline = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(auth_deadline);
-    let mut code = (1000, "closed");
+    let mut close = DesktopClose::normal();
     loop {
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => { code = (1008,"device access revoked"); break; }
-            _ = stops.recv() => { code = (1008,"desktop stopped"); break; }
-            _ = &mut auth_deadline, if principal.is_none() => { code = (1008,"authentication required"); break; }
+            _ = cancel.cancelled() => { close = cancellation_close(&authority,principal.as_ref(),control_active); break; }
+            _ = stops.recv() => { close = DesktopClose::failure(AccessFailure::new(if service.view_enabled(){"DESKTOP_STOPPED"}else{"DESKTOP_DISABLED"},"screen.view")); break; }
+            _ = &mut auth_deadline, if principal.is_none() => { close = DesktopClose::failure(AccessFailure::new("UNAUTHORIZED","screen.view")); break; }
             _ = heartbeat.tick() => {
                 if tx.try_send(Message::Ping(vec![].into())).is_err() { break; }
             }
             _ = pump.tick() => {
                 if writer.is_finished() { break; }
                 if let Some(p) = &principal {
-                    if authority.require_scope(p,"screen.view").is_err() { code=(1008,"device access revoked"); break; }
+                    if let Err(error)=authority.require_scope(p,"screen.view") { close=DesktopClose::failure(AccessFailure::new(error.code(),"screen.view")); break; }
                     let enabled = service.control_enabled();
+                    if last_control && !enabled { close=DesktopClose::failure(AccessFailure::new("CONTROL_DISABLED","screen.control")); break; }
                     if !enabled { input = None; control_active = false; }
                     if enabled != last_control {
                         last_control = enabled;
@@ -456,7 +558,7 @@ async fn run(
                     }
                 }
                 if let Some(live) = &stream {
-                    if !service.view_enabled() { code=(1008,"desktop disabled"); break; }
+                    if !service.view_enabled() { close=DesktopClose::failure(AccessFailure::new("DESKTOP_DISABLED","screen.view")); break; }
                     match live.receiver.try_recv() {
                         Ok(StreamEvent::Frame(packet)) => { if !send_frame(&tx,packet,|| live.session.request_keyframe()) { break; } }
                         Ok(StreamEvent::Error(e)) => { send_error(&tx,e.code()); stop_stream(&mut stream,&service,id,&principal,"CAPTURE_FAILED"); }
@@ -478,17 +580,18 @@ async fn run(
                     if principal.is_none() {
                         match authority.verify_bearer_for_peer(&payload.token,peer).and_then(|p| {authority.require_scope(&p,"screen.view")?;Ok(p)}) {
                             Ok(p) => { ticket.bind_device(p.device_id()); principal=Some(p); }
-                            Err(e) => { send_error(&tx,e.code()); code=(1008,"authentication rejected"); break; }
+                            Err(e) => { close=DesktopClose::failure(AccessFailure::new(e.code(),"screen.view")); break; }
                         }
                     }
                     if !send_json(&tx,json!({"id":request_id,"type":"response","success":true,"payload":{}})) {break}
                     continue;
                 }
-                let Some(p) = &principal else { send_error(&tx,"UNAUTHORIZED"); code=(1008,"authentication required"); break };
-                if let Err(rejected) = authorize(&authority,p,&service,msg.input()) {
-                    if msg.input() { log::warn!("desktop_input_rejected device_id={} display={} stable_code={}",p.device_id(),stream.as_ref().map(|s|s.display.as_str()).unwrap_or("none"),rejected); }
-                    if !send_error(&tx,rejected) {break} continue;
+                let Some(p) = &principal else { close=DesktopClose::failure(AccessFailure::new("UNAUTHORIZED","screen.view")); break };
+                if let Err(rejected) = if matches!(msg,ClientMessage::Stop) { Ok(()) } else { authorize(&authority,p,&service,msg.input()) } {
+                    if msg.input() { log::warn!("desktop_input_rejected device_id={} display={} stable_code={}",p.device_id(),stream.as_ref().map(|s|s.display.as_str()).unwrap_or("none"),rejected.code); }
+                    close=DesktopClose::failure(rejected); break;
                 }
+                let is_input=msg.input();
                 let result: DesktopResult<()> = match msg {
                     ClientMessage::Start {display,fps,max_width,quality} => {
                         let fps = fps.unwrap_or(3).clamp(1,5);
@@ -529,11 +632,7 @@ async fn run(
                         }
                     }
                     ClientMessage::Keyframe => { if let Some(live)=&stream {live.session.request_keyframe();Ok(())} else {Err("INVALID_REQUEST")} }
-                    ClientMessage::Stop => {
-                        stop_stream(&mut stream,&service,id,&principal,"OK");input=None;control_active=false;
-                        if !send_json(&tx,json!({"type":"control_state","enabled":service.control_enabled(),"active":false})){break}
-                        Ok(())
-                    }
+                    ClientMessage::Stop => { close=DesktopClose::stopped(); break; }
                     msg => {
                         let result=inject(msg,&stream,&mut input);
                         if result.is_ok() && !control_active {
@@ -547,7 +646,7 @@ async fn run(
                         result
                     }
                 };
-                if let Err(e)=result {if !send_error(&tx,e){break}}
+                if let Err(e)=result {if !send_access_error(&tx,AccessFailure::new(e,if is_input{"screen.control"}else{"screen.view"})){break}}
             }
         }
     }
@@ -556,10 +655,14 @@ async fn run(
         &service,
         id,
         &principal,
-        if code.0 == 1008 { "FORBIDDEN" } else { "OK" },
+        close
+            .error
+            .as_ref()
+            .and_then(|error| error["code"].as_str())
+            .unwrap_or("OK"),
     );
     drop(input);
-    let _ = close_tx.send(code);
+    let _ = close_tx.send(close);
     drop(tx);
     let _ = writer.await;
 }
@@ -618,6 +721,10 @@ fn inject(
     };
     result.map_err(|e| e.code())
 }
+
+#[cfg(test)]
+#[path = "remote_desktop_shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 #[path = "remote_desktop_tests.rs"]

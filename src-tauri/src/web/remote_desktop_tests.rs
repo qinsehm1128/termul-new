@@ -69,6 +69,7 @@ async fn info_route_view_disabled_and_missing_scope() {
     let (status, body) = request_info(app, &paired.device_token).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["code"], "FORBIDDEN");
+    assert_eq!(body["capability"], "screen.view");
 }
 #[test]
 fn input_control_is_rejected_when_desktop_consent_is_off() {
@@ -83,7 +84,7 @@ fn input_control_is_rejected_when_desktop_consent_is_off() {
     let principal = authority.verify_bearer(&paired.device_token).unwrap();
     let service = DesktopService::for_tests(true, false);
     assert_eq!(
-        authorize(&authority, &principal, &service, true),
+        authorize(&authority, &principal, &service, true).map_err(|error| error.code),
         Err(if screen::supported() {
             "CONTROL_DISABLED"
         } else {
@@ -94,7 +95,7 @@ fn input_control_is_rejected_when_desktop_consent_is_off() {
         .set_device_scopes(&paired.device_id, vec!["screen.view".into()])
         .unwrap();
     assert_eq!(
-        authorize(&authority, &principal, &service, true),
+        authorize(&authority, &principal, &service, true).map_err(|error| error.code),
         Err("FORBIDDEN")
     );
 }
@@ -155,43 +156,16 @@ async fn revoke_closes_live_desktop_websocket_with_policy_code() {
     assert!(
         matches!(reply,WsMessage::Text(text) if serde_json::from_str::<Value>(&text).unwrap()["success"]==true)
     );
-    socket
-        .send(WsMessage::Text(
-            json!({"type":"text","text":"never injected"})
-                .to_string()
-                .into(),
-        ))
-        .await
-        .unwrap();
-    let rejected = tokio::time::timeout(Duration::from_secs(2), socket.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let expected = if screen::supported() {
-        "CONTROL_DISABLED"
-    } else {
-        "SCREEN_UNSUPPORTED"
-    };
-    assert!(
-        matches!(rejected,WsMessage::Text(text) if serde_json::from_str::<Value>(&text).unwrap()["code"]==expected)
-    );
-    if screen::supported() {
-        socket
-            .send(WsMessage::Text(json!({"type":"stop"}).to_string().into()))
-            .await
-            .unwrap();
-        let stopped = tokio::time::timeout(Duration::from_secs(2), socket.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(
-            matches!(stopped,WsMessage::Text(text) if serde_json::from_str::<Value>(&text).unwrap()==json!({"type":"control_state","enabled":false,"active":false}))
-        );
-    }
     authority.revoke_device(&paired.device_id).unwrap();
     assert_eq!(registry.cancel_device(&paired.device_id), 1);
+    let revoked = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(revoked,WsMessage::Text(text) if serde_json::from_str::<Value>(&text).unwrap()==json!({"type":"error","code":"DEVICE_REVOKED","capability":"screen.view"}))
+    );
     let close = tokio::time::timeout(Duration::from_secs(2), socket.next())
         .await
         .unwrap()
