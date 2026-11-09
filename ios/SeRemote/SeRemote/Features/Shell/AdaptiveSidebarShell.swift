@@ -63,12 +63,23 @@ struct SidebarHost: Identifiable, Equatable, Sendable {
 /// phone screens instead of this shell.
 struct AdaptiveSidebarShell<Detail: View>: View {
     @Environment(\.sePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let hosts: [SidebarHost]
     private let counts: [SidebarDestination: String]
     private let detail: (SidebarDestination) -> Detail
 
-    @State private var selection: SidebarDestination
+    @State private var localSelection: SidebarDestination
+    private var selectionBinding: Binding<SidebarDestination>?
+    private var onOpenCommand: () -> Void = {}
+    private var onWidthChange: (CGFloat) -> Void = { _ in }
+
+    private var selection: SidebarDestination { selectionBinding?.wrappedValue ?? localSelection }
+
+    private func select(_ destination: SidebarDestination) {
+        if let selectionBinding { selectionBinding.wrappedValue = destination }
+        else { localSelection = destination }
+    }
     @State private var collapsedOverride: Bool?
 
     init(
@@ -77,9 +88,26 @@ struct AdaptiveSidebarShell<Detail: View>: View {
         counts: [SidebarDestination: String] = [:],
         @ViewBuilder detail: @escaping (SidebarDestination) -> Detail
     ) {
-        _selection = State(initialValue: selection)
+        _localSelection = State(initialValue: selection)
         self.hosts = hosts
         self.counts = counts
+        self.detail = detail
+    }
+
+    init(
+        selection: Binding<SidebarDestination>,
+        hosts: [SidebarHost] = [],
+        counts: [SidebarDestination: String] = [:],
+        onOpenCommand: @escaping () -> Void,
+        onWidthChange: @escaping (CGFloat) -> Void = { _ in },
+        @ViewBuilder detail: @escaping (SidebarDestination) -> Detail
+    ) {
+        _localSelection = State(initialValue: selection.wrappedValue)
+        self.selectionBinding = selection
+        self.hosts = hosts
+        self.counts = counts
+        self.onOpenCommand = onOpenCommand
+        self.onWidthChange = onWidthChange
         self.detail = detail
     }
 
@@ -145,7 +173,7 @@ struct AdaptiveSidebarShell<Detail: View>: View {
                 .padding(.vertical, 10)
 
             if !isCollapsed {
-                Text("SeRemote 27.4 · build 189")
+                Text(verbatim: ShellPresentation.versionLabel(info: Bundle.main.infoDictionary ?? [:]))
                     .font(SeNocturneType.monoSmall)
                     .foregroundStyle(palette.inkTertiary)
                     .padding(.horizontal, 18)
@@ -160,16 +188,18 @@ struct AdaptiveSidebarShell<Detail: View>: View {
                 .fill(palette.stroke)
                 .frame(width: 1)
         }
-        .animation(.smooth(duration: 0.28), value: isCollapsed)
+        .animation(SeNocturneMotion.resolved(SeNocturneMotion.panel, reduceMotion: reduceMotion), value: isCollapsed)
     }
 
     private func brand(isCollapsed: Bool) -> some View {
         HStack(spacing: 9) {
+            if !isCollapsed {
             Text("Se")
                 .font(SeNocturneType.font(13, weight: .semibold, mono: true))
                 .foregroundStyle(palette.onAccent)
                 .frame(width: 32, height: 32)
                 .background(palette.accent, in: RoundedRectangle(cornerRadius: 9))
+            }
 
             if !isCollapsed {
                 VStack(alignment: .leading, spacing: 2) {
@@ -190,7 +220,7 @@ struct AdaptiveSidebarShell<Detail: View>: View {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(palette.inkSecondary)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 44, height: 44)
                     .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(.plain)
@@ -200,6 +230,7 @@ struct AdaptiveSidebarShell<Detail: View>: View {
     }
 
     private var searchField: some View {
+        Button(action: onOpenCommand) {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12))
@@ -213,12 +244,15 @@ struct AdaptiveSidebarShell<Detail: View>: View {
                 .foregroundStyle(palette.inkTertiary)
         }
         .padding(.horizontal, 9)
-        .frame(height: 34)
+        .frame(height: 44)
         .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
         .overlay {
             RoundedRectangle(cornerRadius: SeNocturneRadius.control)
                 .strokeBorder(palette.stroke, lineWidth: 1)
         }
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("k", modifiers: .command)
     }
 
     private func groupLabel(_ title: LocalizedStringKey, isCollapsed: Bool) -> some View {
@@ -243,7 +277,7 @@ struct AdaptiveSidebarShell<Detail: View>: View {
     private func item(_ destination: SidebarDestination, isCollapsed: Bool) -> some View {
         let isOn = selection == destination
         return Button {
-            selection = destination
+            select(destination)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: destination.systemImage)
@@ -263,7 +297,7 @@ struct AdaptiveSidebarShell<Detail: View>: View {
                 }
             }
             .padding(.horizontal, isCollapsed ? 0 : 9)
-            .frame(height: 36)
+            .frame(height: 44)
             .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
             .background(
                 isOn ? palette.accentSubtle : .clear,
@@ -276,7 +310,7 @@ struct AdaptiveSidebarShell<Detail: View>: View {
 
     private func hostRow(_ host: SidebarHost, isCollapsed: Bool) -> some View {
         Button {
-            selection = .live
+            select(.live)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "desktopcomputer")
@@ -295,7 +329,7 @@ struct AdaptiveSidebarShell<Detail: View>: View {
                     .frame(width: 6, height: 6)
             }
             .padding(.horizontal, isCollapsed ? 0 : 9)
-            .frame(height: 34)
+            .frame(height: 44)
             .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
         }
         .buttonStyle(.plain)

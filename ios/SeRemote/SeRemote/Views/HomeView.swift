@@ -6,6 +6,7 @@ struct HomeView: View {
     @Bindable var settings: AppSettings
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.sePalette) private var palette
     @State private var selectedHostID: UUID?
     @State private var usesSplitLayout = false
     @State private var showPairing = false
@@ -49,7 +50,7 @@ struct HomeView: View {
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(settings: settings)
+            SettingsView(settings: settings, store: store)
         }
         .alert(
             "Rename",
@@ -82,7 +83,7 @@ struct HomeView: View {
         } message: { _ in
             Text("This removes the saved host and its access secret from this device. It does not change your desktop.")
         }
-        .tint(SeTheme.accent)
+        .tint(palette.accent)
     }
 
     private var hostList: some View {
@@ -107,11 +108,11 @@ struct HomeView: View {
                     ForEach(store.savedLinks) { link in
                         hostRow(link)
                             .listRowBackground(
-                                usesSplitLayout && selectedHost?.id == link.id ? SeTheme.elevated : SeTheme.canvas
+                                Color.clear
                             )
                             .accessibilityAddTraits(usesSplitLayout && selectedHost?.id == link.id ? .isSelected : [])
-                            .listRowInsets(rowInsets)
-                            .listRowSeparatorTint(SeTheme.stroke)
+                            .listRowInsets(EdgeInsets(top: SeSpace.xs, leading: SeSpace.screenInset, bottom: SeSpace.xs, trailing: SeSpace.screenInset))
+                            .listRowSeparator(.hidden)
                             .contextMenu { hostActions(link) }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
@@ -124,7 +125,7 @@ struct HomeView: View {
                                 } label: {
                                     Label("Rename", systemImage: "pencil")
                                 }
-                                .tint(SeTheme.secondaryInk)
+                                .tint(palette.inkSecondary)
                             }
                             .swipeActions(edge: .leading, allowsFullSwipe: false) {
                                 Button {
@@ -132,14 +133,16 @@ struct HomeView: View {
                                 } label: {
                                     Label("Open", systemImage: "arrow.up.right")
                                 }
-                                .tint(SeTheme.accent)
+                                .tint(palette.accent)
                             }
                             .accessibilityAction(named: Text("Rename")) { beginRename(link) }
                             .accessibilityAction(named: Text("Delete")) { deletingLink = link }
                     }
                 }
             } header: {
-                SeSectionHeader(title: String(localized: "Recent hosts"))
+                Text("Saved hosts")
+                    .font(SeNocturneType.sectionTitle)
+                    .foregroundStyle(palette.inkSecondary)
                     .padding(.top, SeSpace.sm)
                     .textCase(nil)
             }
@@ -153,24 +156,25 @@ struct HomeView: View {
             if let error = store.errorMessage {
                 Section {
                     SeErrorBanner(message: error)
+                        .accessibilityIdentifier("home.error")
                         .listRowSeparator(.hidden)
                         .listRowInsets(rowInsets)
                 }
             }
         }
         .listStyle(.plain)
-        .listRowBackground(SeTheme.canvas)
+        .listRowBackground(palette.canvas)
         .scrollContentBackground(.hidden)
         .frame(maxWidth: SeLayout.readableColumnMaxWidth)
         .frame(maxWidth: .infinity)
-        .background(SeTheme.canvas)
-        .foregroundStyle(SeTheme.ink)
+        .background(palette.canvas)
+        .foregroundStyle(palette.ink)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Text("SeRemote")
                     .font(SeFont.identity)
-                    .foregroundStyle(SeTheme.ink)
+                    .foregroundStyle(palette.ink)
                     .accessibilityAddTraits(.isHeader)
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -195,17 +199,17 @@ struct HomeView: View {
                 if let link = selectedHost {
                     Image(systemName: "desktopcomputer")
                         .font(.largeTitle)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                         .accessibilityHidden(true)
                     Text(link.title)
                         .font(SeFont.screenTitle)
                         .accessibilityAddTraits(.isHeader)
                     Text(link.originHost)
                         .font(SeFont.body)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                     Label("Not connected", systemImage: "circle.slash")
                         .font(SeFont.support)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                     lastActivityLabel(link)
                     Button {
                         open(link)
@@ -230,7 +234,7 @@ struct HomeView: View {
                     .frame(minHeight: SeSpace.hitTarget)
                     Text("Host status is checked when you open it. Git and Files are read-only.")
                         .font(SeFont.support)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                 } else {
                     introduction
                     pairingAction
@@ -240,9 +244,9 @@ struct HomeView: View {
             .padding(SeSpace.xxl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(SeTheme.canvas)
-        .foregroundStyle(SeTheme.ink)
-        .navigationTitle(selectedHost?.title ?? String(localized: "Your field console"))
+        .background(palette.canvas)
+        .foregroundStyle(palette.ink)
+        .navigationTitle(selectedHost?.title ?? String(localized: "Your hosts"))
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -252,16 +256,16 @@ struct HomeView: View {
 
     private var introduction: some View {
         VStack(alignment: .leading, spacing: SeSpace.sm) {
-            Text("YOUR FIELD CONSOLE")
+            Text("REMOTE WORKSPACE")
                 .font(SeFont.label)
                 .tracking(1.2)
-                .foregroundStyle(SeTheme.live)
-            Text("Back to the field.")
+                .foregroundStyle(palette.inkSecondary)
+            Text("Your hosts.")
                 .font(SeFont.screenTitle)
                 .accessibilityAddTraits(.isHeader)
-            Text("Your hosts and sessions, right here.")
+            Text("Connect to a trusted desktop to return to your sessions, terminal and files.")
                 .font(SeFont.body)
-                .foregroundStyle(SeTheme.secondaryInk)
+                .foregroundStyle(palette.inkSecondary)
         }
         .padding(.vertical, SeSpace.md)
         .fixedSize(horizontal: false, vertical: true)
@@ -275,22 +279,22 @@ struct HomeView: View {
             HStack(alignment: .top, spacing: SeSpace.md) {
                 Image(systemName: "desktopcomputer")
                     .font(.title3)
-                    .foregroundStyle(SeTheme.secondaryInk)
+                    .foregroundStyle(palette.inkSecondary)
                     .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
                     .overlay {
-                        RoundedRectangle(cornerRadius: SeRadius.content)
-                            .strokeBorder(SeTheme.stroke, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: SeNocturneRadius.control)
+                            .strokeBorder(palette.stroke, lineWidth: 1)
                     }
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: SeSpace.xs) {
                     Text(link.title)
                         .font(SeFont.rowTitle)
-                        .foregroundStyle(SeTheme.ink)
+                        .foregroundStyle(palette.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(link.originHost)
                         .font(SeFont.support)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                         .lineLimit(2)
                     Label {
                         Text(store.activeLink?.id == link.id ? "Connecting" : "Not connected")
@@ -300,22 +304,29 @@ struct HomeView: View {
                         )
                     }
                     .font(SeFont.caption)
-                    .foregroundStyle(SeTheme.secondaryInk)
+                    .foregroundStyle(palette.inkSecondary)
                     lastActivityLabel(link)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Image(systemName: "chevron.right")
                     .font(SeFont.caption)
-                    .foregroundStyle(SeTheme.tertiaryInk)
+                    .foregroundStyle(palette.inkSecondary)
                     .padding(.top, SeSpace.sm)
                     .accessibilityHidden(true)
+            }
+            .padding(SeSpace.md)
+            .background(usesSplitLayout && selectedHost?.id == link.id ? palette.cardAlt : palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
+            .overlay {
+                RoundedRectangle(cornerRadius: SeNocturneRadius.card)
+                    .strokeBorder(usesSplitLayout && selectedHost?.id == link.id ? palette.strokeStrong : palette.stroke, lineWidth: 1)
             }
             .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(SePressableRowStyle())
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("home.host.\(link.id.uuidString)")
         .accessibilityHint(usesSplitLayout ? Text("Show host details") : Text("Open this host"))
     }
 
@@ -324,16 +335,16 @@ struct HomeView: View {
         if let date = activity.connectedDate(for: link) {
             Text("Last connected \(date, format: .relative(presentation: .named))")
                 .font(SeFont.timing)
-                .foregroundStyle(SeTheme.tertiaryInk)
+                .foregroundStyle(palette.inkSecondary)
         } else if let date = activity.date(for: link) {
             // An Open action alone is not evidence of a completed handshake.
             Text("Last opened \(date, format: .relative(presentation: .named))")
                 .font(SeFont.timing)
-                .foregroundStyle(SeTheme.tertiaryInk)
+                .foregroundStyle(palette.inkSecondary)
         } else {
             Text("Added \(link.createdAt, style: .date)")
                 .font(SeFont.timing)
-                .foregroundStyle(SeTheme.tertiaryInk)
+                .foregroundStyle(palette.inkSecondary)
         }
     }
 
@@ -351,14 +362,14 @@ struct HomeView: View {
 
             Text("Open SeRemote on your desktop. Scan or paste its access link. You choose when to connect.")
                 .font(SeFont.support)
-                .foregroundStyle(SeTheme.secondaryInk)
+                .foregroundStyle(palette.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(alignment: .top, spacing: SeSpace.sm) {
-                Rectangle().fill(SeTheme.accent).frame(width: 2)
-                Text("Connect to a trusted host. Pick up where you left off.")
+                Rectangle().fill(palette.accent).frame(width: 2)
+                Text("Git and Files are read-only. Pairing secrets stay in the Keychain on this phone.")
                     .font(SeFont.support)
-                    .foregroundStyle(SeTheme.secondaryInk)
+                    .foregroundStyle(palette.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .fixedSize(horizontal: false, vertical: true)

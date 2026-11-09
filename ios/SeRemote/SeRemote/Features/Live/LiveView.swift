@@ -5,6 +5,8 @@ import SwiftUI
 enum LiveSessionStatus: String, Sendable {
     case needsYou
     case running
+    case ready
+    case unknown
     case idle
 }
 
@@ -15,6 +17,7 @@ struct LiveSession: Identifiable, Equatable, Sendable {
     let host: String
     let status: LiveSessionStatus
     let timing: String
+    var detailStatus: String? = nil
 }
 
 struct LiveHost: Identifiable, Equatable, Sendable {
@@ -27,8 +30,9 @@ struct LiveHost: Identifiable, Equatable, Sendable {
 struct LiveNeedsSummary: Equatable, Sendable {
     var permissions: Int = 0
     var failures: Int = 0
+    var questions: Int = 0
 
-    var total: Int { permissions + failures }
+    var total: Int { permissions + failures + questions }
 }
 
 enum LiveFilter: String, CaseIterable, Identifiable {
@@ -59,6 +63,7 @@ struct LiveView: View {
     var hosts: [LiveHost]
     var sessions: [LiveSession]
     var needs: LiveNeedsSummary
+    var showsBottomBar = true
 
     var onSelectHost: (LiveHost) -> Void = { _ in }
     var onOpenSession: (LiveSession) -> Void = { _ in }
@@ -110,7 +115,7 @@ struct LiveView: View {
         .scrollIndicators(.hidden)
         .background(palette.canvas.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            tabBar
+            if showsBottomBar { tabBar }
         }
     }
 
@@ -128,7 +133,7 @@ struct LiveView: View {
                         .foregroundStyle(palette.inkTertiary)
                 }
                 .padding(.horizontal, 10)
-                .frame(height: 30)
+                .frame(height: 44)
                 .background(palette.surface, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                 .overlay {
                     RoundedRectangle(cornerRadius: SeNocturneRadius.control)
@@ -136,6 +141,7 @@ struct LiveView: View {
                 }
             }
             .buttonStyle(.plain)
+            .frame(minHeight: 44)
 
             Text(hosts.filter(\.isOnline).count == 1 ? "1 online" : "\(hosts.filter(\.isOnline).count) online")
                 .font(SeNocturneType.monoSmall)
@@ -176,7 +182,13 @@ struct LiveView: View {
                         .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .medium))
                         .foregroundStyle(palette.ink)
                 }
-                if needs.permissions > 0 && needs.failures > 0 {
+                if needs.questions > 0 {
+                    statusDot(palette.warning)
+                    Text("\(needs.questions) question")
+                        .font(SeNocturneType.secondary)
+                        .foregroundStyle(palette.ink)
+                }
+                if (needs.permissions > 0 || needs.questions > 0) && needs.failures > 0 {
                     Rectangle()
                         .fill(palette.strokeStrong)
                         .frame(width: 1, height: 12)
@@ -224,7 +236,7 @@ struct LiveView: View {
                     }
                     .foregroundStyle(isOn ? palette.onAccent : palette.inkSecondary)
                     .padding(.horizontal, 11)
-                    .frame(height: 30)
+                    .frame(height: 44)
                     .background {
                         if isOn {
                             RoundedRectangle(cornerRadius: SeNocturneRadius.control)
@@ -282,7 +294,7 @@ struct LiveView: View {
                     .font(SeNocturneType.rowTitle)
                     .foregroundStyle(palette.ink)
                     .lineLimit(1)
-                Text(verbatim: "\(session.agent) · \(statusTitle(session.status)) · \(session.host)")
+                Text(verbatim: [session.agent, session.detailStatus ?? statusTitle(session.status), session.host].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(SeNocturneType.font(SeNocturneType.labelSize))
                     .foregroundStyle(palette.inkTertiary)
                     .lineLimit(1)
@@ -290,9 +302,11 @@ struct LiveView: View {
 
             Spacer(minLength: 8)
 
-            Text(verbatim: session.timing)
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
+            if !session.timing.isEmpty {
+                Text(verbatim: session.timing)
+                    .font(SeNocturneType.monoSmall)
+                    .foregroundStyle(palette.inkTertiary)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
@@ -380,7 +394,7 @@ struct LiveView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(palette.inkSecondary)
-                .frame(width: 34, height: 34)
+                .frame(width: 44, height: 44)
                 .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                 .overlay {
                     RoundedRectangle(cornerRadius: SeNocturneRadius.control)
@@ -409,7 +423,7 @@ struct LiveView: View {
         switch status {
         case .needsYou: palette.warning
         case .running: palette.live
-        case .idle: palette.inkTertiary
+        case .idle, .ready, .unknown: palette.inkTertiary
         }
     }
 
@@ -418,6 +432,8 @@ struct LiveView: View {
         case .needsYou: String(localized: "Waiting for you")
         case .running: String(localized: "Running")
         case .idle: String(localized: "Idle")
+        case .ready: String(localized: "Ready")
+        case .unknown: String(localized: "Unknown")
         }
     }
 }

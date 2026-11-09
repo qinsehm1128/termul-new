@@ -1,198 +1,179 @@
-import CoreImage
 import SwiftUI
-import UIKit
 
-/// Pairing is a round trip: scan, confirm on the host, credentials land in the
-/// keychain. This sheet is the only place that starts it.
+/// The phone consumes the desktop's QR code or complete access URL. Parsing is
+/// not a handshake: success feedback belongs to the connected workspace.
+@MainActor
 struct PairingSheetView: View {
+    let onConnect: (RemoteLink) -> Void
+
+    private enum Mode: String, CaseIterable, Identifiable {
+        case scan, paste
+        var id: String { rawValue }
+    }
+
     @Environment(\.sePalette) private var palette
     @Environment(\.dismiss) private var dismiss
-
-    var link: String
-    var onCopyLink: () -> Void = {}
-    var onManualEntry: () -> Void = {}
+    @State private var mode: Mode = .scan
+    @State private var draft = ShellPairingDraft()
+    @State private var showScanner = false
+    @State private var scannedValue: String?
+    @State private var failureCount = 0
+    @FocusState private var urlFocused: Bool
+    @ScaledMetric(relativeTo: .subheadline) private var secondarySize = SeNocturneType.secondarySize
+    @ScaledMetric(relativeTo: .title3) private var titleSize = SeNocturneType.sheetTitleSize
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Capsule()
-                .fill(palette.strokeStrong)
-                .frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 10)
-
-            HStack(spacing: 10) {
-                Text("Pair a host")
-                    .font(SeNocturneType.sheetTitle)
-                    .foregroundStyle(palette.ink)
-                Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(palette.inkSecondary)
-                        .frame(width: 32, height: 32)
-                        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                                .strokeBorder(palette.stroke, lineWidth: 1)
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(String(localized: "Close"))
-            }
-            .padding(.horizontal, SeSpace.md)
-            .padding(.top, 14)
-
-            Text("Open SeRemote on your Mac → Remote access, then scan this code. The host confirms the connection.")
-                .font(SeNocturneType.secondary)
-                .foregroundStyle(palette.inkTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 4)
-
-            qrCard
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 16)
-
-            linkBox
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 14)
-
-            steps
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 16)
-
-            HStack(spacing: 8) {
-                Button(action: onCopyLink) {
-                    Text("Copy pairing link")
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .semibold))
-                        .foregroundStyle(palette.surface)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                        .background(palette.ink, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                }
-                .buttonStyle(.plain)
-
-                Button(action: onManualEntry) {
-                    Text("Enter manually")
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .medium))
-                        .foregroundStyle(palette.ink)
-                        .frame(height: 44)
-                        .padding(.horizontal, 14)
-                        .background(Color.clear, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                                .strokeBorder(palette.strokeStrong, lineWidth: 1)
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, SeSpace.md)
-            .padding(.top, 18)
-            .padding(.bottom, SeSpace.lg)
-        }
-        .background(palette.surface)
-        .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(SeNocturneRadius.sheet)
-    }
-
-    private var qrCard: some View {
-        HStack {
-            Spacer(minLength: 0)
-            Group {
-                if let image = Self.makeQRCode(link) {
-                    Image(uiImage: image)
-                        .interpolation(.none)
-                        .resizable()
-                        .scaledToFit()
-                } else {
-                    Image(systemName: "qrcode")
-                        .resizable()
-                        .scaledToFit()
-                        .foregroundStyle(palette.ink)
-                }
-            }
-            .frame(width: 168, height: 168)
-            .padding(12)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(palette.stroke, lineWidth: 1)
-            }
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var linkBox: some View {
-        HStack(spacing: 8) {
-            Text(verbatim: link)
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkSecondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 6)
-            Button(action: onCopyLink) {
-                Text("Copy")
-                    .font(SeNocturneType.monoSmall)
+        ScrollView {
+            VStack(alignment: .leading, spacing: SeSpace.lg) {
+                header
+                Text("Open SeRemote on your desktop, then scan its QR code or copy its access URL.")
+                    .font(SeNocturneType.font(secondarySize))
                     .foregroundStyle(palette.inkSecondary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 26)
-                    .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 6))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Picker("Pairing method", selection: $mode) {
+                    Text("Scan").tag(Mode.scan)
+                    Text("Paste URL").tag(Mode.paste)
+                }
+                .pickerStyle(.segmented)
+                .frame(minHeight: SeSpace.hitTarget)
+                .accessibilityIdentifier("pairing.method")
+
+                VStack(alignment: .leading, spacing: SeSpace.md) {
+                    if mode == .scan { scanContent } else { pasteContent }
+                }
+                .padding(SeSpace.lg)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
+                .overlay {
+                    RoundedRectangle(cornerRadius: SeNocturneRadius.card)
+                        .strokeBorder(palette.stroke, lineWidth: 1)
+                }
+
+                if let error = draft.errorMessage {
+                    SeErrorBanner(message: error)
+                        .accessibilityIdentifier("pairing.error")
+                }
+                Label {
+                    Text("Connect only to a desktop you trust. The access secret stays on this device and is sent only to that host.")
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "lock")
+                }
+                .font(SeNocturneType.font(secondarySize))
+                .foregroundStyle(palette.inkSecondary)
+            }
+            .padding(SeSpace.lg)
+            .frame(maxWidth: SeLayout.readableColumnMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+        .background(palette.surface.ignoresSafeArea())
+        .foregroundStyle(palette.ink)
+        .tint(palette.accent)
+        .scrollDismissesKeyboard(.interactively)
+        .presentationCornerRadius(SeNocturneRadius.sheet)
+        .onChange(of: mode) { _, newMode in urlFocused = newMode == .paste }
+        .seHaptic(.error, trigger: failureCount)
+        .fullScreenCover(isPresented: $showScanner, onDismiss: acceptScan) {
+            ScannerView { raw in
+                scannedValue = raw
+                showScanner = false
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: SeSpace.md) {
+            Text("Pair a host")
+                .font(SeNocturneType.font(titleSize, weight: .semibold))
+                .accessibilityAddTraits(.isHeader)
+            Spacer()
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(palette.inkSecondary)
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
             }
             .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 40)
-        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-        .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                .strokeBorder(palette.stroke, lineWidth: 1)
+            .accessibilityLabel("Cancel")
         }
     }
 
-    private var steps: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            step(1, "Confirm this request on the host: device name and place.")
-            step(2, "Credentials go into the keychain, scoped to this host.")
-            step(3, "The first connection is read only; writes are approved one by one.")
-        }
-    }
-
-    private func step(_ index: Int, _ text: LocalizedStringKey) -> some View {
-        HStack(alignment: .top, spacing: 9) {
-            Text(verbatim: "\(index)")
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
-                .frame(width: 16, height: 16)
-                .overlay {
-                    Circle().strokeBorder(palette.strokeStrong, lineWidth: 1)
-                }
-            Text(text)
-                .font(SeNocturneType.font(SeNocturneType.labelSize))
+    private var scanContent: some View {
+        VStack(alignment: .leading, spacing: SeSpace.md) {
+            Image(systemName: "qrcode.viewfinder")
+                .font(.system(size: 52, weight: .light))
+                .foregroundStyle(palette.inkSecondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, SeSpace.lg)
+                .accessibilityHidden(true)
+            Text("Scan the desktop QR code")
+                .font(SeNocturneType.font(titleSize, weight: .semibold))
+            Text("Camera access is requested only when you open the scanner. You can always paste the URL instead.")
+                .font(SeNocturneType.font(secondarySize))
                 .foregroundStyle(palette.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Button { showScanner = true } label: {
+                Label("Open scanner", systemImage: "qrcode.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(SePrimaryButtonStyle())
+            .accessibilityIdentifier("pairing.scan")
         }
     }
 
-    private static func makeQRCode(_ text: String) -> UIImage? {
-        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
-        filter.setValue(Data(text.utf8), forKey: "inputMessage")
-        filter.setValue("M", forKey: "inputCorrectionLevel")
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return UIImage(cgImage: cgImage)
+    private var pasteContent: some View {
+        VStack(alignment: .leading, spacing: SeSpace.md) {
+            Text("Desktop access URL")
+                .font(SeNocturneType.font(secondarySize))
+            SecureField("https://host.example/#access_token=…", text: $draft.url)
+                .font(SeNocturneType.font(secondarySize))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .privacySensitive()
+                .focused($urlFocused)
+                .submitLabel(.go)
+                .onSubmit { submit() }
+                .padding(SeSpace.sm)
+                .frame(minHeight: SeSpace.hitTarget, alignment: .leading)
+                .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                .overlay {
+                    RoundedRectangle(cornerRadius: SeNocturneRadius.control)
+                        .strokeBorder(palette.stroke, lineWidth: 1)
+                }
+                .accessibilityLabel("Desktop access URL")
+                .accessibilityIdentifier("pairing.url")
+            Text("Use the complete http or https link, including its access secret.")
+                .font(SeNocturneType.font(secondarySize))
+                .foregroundStyle(palette.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: submit) {
+                Label("Connect", systemImage: "arrow.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(SePrimaryButtonStyle())
+            .disabled(!draft.canSubmit)
+            .accessibilityIdentifier("pairing.connect")
+        }
     }
-}
 
-#Preview("Pairing · Night") {
-    PairingSheetView(link: "seremote://pair/9F2C-71A0")
-        .seThemeMode(.night)
-}
+    private func acceptScan() {
+        guard let raw = scannedValue else { return }
+        scannedValue = nil
+        draft.url = raw
+        // Dismiss camera before parsing or connecting to avoid presentation races.
+        submit()
+        if draft.errorMessage != nil { mode = .paste }
+    }
 
-#Preview("Pairing · Day") {
-    PairingSheetView(link: "seremote://pair/9F2C-71A0")
-        .seThemeMode(.day)
+    private func submit() {
+        guard let link = draft.parse() else {
+            failureCount += 1
+            return
+        }
+        urlFocused = false
+        onConnect(link)
+    }
 }

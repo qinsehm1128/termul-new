@@ -25,12 +25,7 @@ struct WorkspaceView: View {
             // foreground reconnect. In particular, never remount the PTY view.
             if hasConnected {
                 NavigationStack {
-                    HostHomeView(session: session, store: store, link: link)
-                        .navigationDestination(isPresented: workspacePresented) {
-                            SessionScreen(session: session, hostDirectory: AnyView(
-                                HostHomeView(session: session, store: store, link: link, directoryOnly: true)
-                            ))
-                        }
+                    ConnectedShellScreen(session: session, store: store, link: link)
                 }
                 .opacity(session.phase == .connected ? 1 : 0)
                 .allowsHitTesting(session.phase == .connected)
@@ -42,8 +37,13 @@ struct WorkspaceView: View {
                 connectingState
                     .transition(SeTransition.entrance(reduceMotion: reduceMotion))
             case .failed(let message):
-                failedState(message)
-                    .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+                if hasConnected {
+                    ConnectedOfflineScreen(session: session, store: store, link: link)
+                        .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+                } else {
+                    failedState(message)
+                        .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+                }
             case .connected:
                 EmptyView()
             }

@@ -43,11 +43,30 @@ struct CommandPaletteView: View {
     var items: [PaletteItem]
     var onSelect: (PaletteItem) -> Void = { _ in }
 
-    @State private var query: String = ""
+    @State private var localQuery = ""
+    private var externalQuery: Binding<String>?
+    private var filtersItemsLocally = true
     @FocusState private var isSearchFocused: Bool
 
+    init(items: [PaletteItem], onSelect: @escaping (PaletteItem) -> Void = { _ in }) {
+        self.items = items
+        self.onSelect = onSelect
+    }
+
+    /// Connected callers own filtering so content-search hits are not filtered
+    /// again by their file name (the matching text may be inside the file).
+    init(items: [PaletteItem], query: Binding<String>, onSelect: @escaping (PaletteItem) -> Void) {
+        self.items = items
+        self.externalQuery = query
+        self.filtersItemsLocally = false
+        self.onSelect = onSelect
+    }
+
+    private var queryBinding: Binding<String> { externalQuery ?? $localQuery }
+
     private var filtered: [PaletteItem] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard filtersItemsLocally else { return items }
+        let trimmed = queryBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return items }
         return items.filter {
             $0.title.localizedCaseInsensitiveContains(trimmed)
@@ -100,7 +119,7 @@ struct CommandPaletteView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(palette.inkSecondary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 44, height: 44)
                     .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                     .overlay {
                         RoundedRectangle(cornerRadius: SeNocturneRadius.control)
@@ -119,7 +138,7 @@ struct CommandPaletteView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(palette.inkTertiary)
-            TextField("Search sessions, files or commands", text: $query)
+            TextField("Search sessions, files or commands", text: queryBinding)
                 .font(SeNocturneType.font(SeNocturneType.sectionTitleSize))
                 .foregroundStyle(palette.ink)
                 .textInputAutocapitalization(.never)

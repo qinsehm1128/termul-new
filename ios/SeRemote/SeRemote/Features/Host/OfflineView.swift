@@ -11,8 +11,7 @@ struct OfflineSession: Identifiable, Equatable, Sendable {
 
 // MARK: - Screen
 
-/// Offline is not a blank page: cached sessions stay readable, and reconnecting
-/// resumes the same PTY on the host.
+/// Read-only cache is offered only when an actual transcript exists.
 struct OfflineView: View {
     @Environment(\.sePalette) private var palette
 
@@ -22,7 +21,8 @@ struct OfflineView: View {
 
     var onBack: () -> Void = {}
     var onReconnect: () -> Void = {}
-    var onWake: () -> Void = {}
+    var onWake: (() -> Void)? = nil
+    var onOpenSettings: (() -> Void)? = nil
     var onOpenCached: (OfflineSession) -> Void = { _ in }
 
     var body: some View {
@@ -34,16 +34,18 @@ struct OfflineView: View {
                     .padding(.top, SeSpace.lg)
                 connectionCard
                     .padding(.top, SeSpace.lg)
+                if !cached.isEmpty {
                 Text("Cached sessions")
                     .font(SeNocturneType.monoSmall)
                     .foregroundStyle(palette.inkTertiary)
                     .padding(.top, SeSpace.xl)
                     .padding(.bottom, 8)
                 cachedList
-                Text("Cache keeps the last 7 days. Reconnecting resumes the original PTY.")
+                Text("Cached transcripts are read only.")
                     .font(SeNocturneType.font(9.5))
                     .foregroundStyle(palette.inkTertiary)
                     .padding(.top, 14)
+                }
             }
             .padding(.horizontal, SeSpace.lg)
             .padding(.bottom, SeSpace.xxl)
@@ -59,12 +61,15 @@ struct OfflineView: View {
                 Text(verbatim: host)
                     .font(SeNocturneType.font(SeNocturneType.sectionTitleSize, weight: .semibold))
                     .foregroundStyle(palette.ink)
-                Text(verbatim: "Offline · last seen \(lastSeen)")
+                Text(lastSeen.isEmpty ? String(localized: "Offline") : String(localized: "Offline · last seen \(lastSeen)"))
                     .font(SeNocturneType.monoSmall)
                     .foregroundStyle(palette.inkTertiary)
             }
             Spacer(minLength: 8)
-            iconButton(systemImage: "ellipsis", label: String(localized: "More"), action: {})
+            if let onOpenSettings {
+                iconButton(systemImage: "slider.horizontal.3", label: String(localized: "Settings"), action: onOpenSettings)
+            }
+
         }
     }
 
@@ -73,7 +78,7 @@ struct OfflineView: View {
             Circle()
                 .fill(palette.inkTertiary)
                 .frame(width: 6, height: 6)
-            Text("Host 02")
+            Text(verbatim: host)
                 .font(SeNocturneType.monoSmall)
                 .foregroundStyle(palette.inkTertiary)
         }
@@ -84,7 +89,7 @@ struct OfflineView: View {
             Text("Connection lost")
                 .font(SeNocturneType.monoSmall)
                 .foregroundStyle(palette.inkTertiary)
-            Text("This host is offline. Cached sessions are readable, but new instructions cannot be sent.")
+            Text(cached.isEmpty ? String(localized: "Connection lost. Reconnect to continue.") : String(localized: "Connection lost. Cached transcripts are readable, but new instructions cannot be sent."))
                 .font(SeNocturneType.secondary)
                 .foregroundStyle(palette.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -95,12 +100,13 @@ struct OfflineView: View {
                     .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .semibold))
                     .foregroundStyle(palette.surface)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 40)
+                    .frame(height: 44)
                     .background(palette.ink, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
             }
             .buttonStyle(.plain)
             .padding(.top, 14)
 
+            if let onWake {
             Button(action: onWake) {
                 Text("Try Wake on LAN")
                     .font(SeNocturneType.monoSmall)
@@ -108,6 +114,8 @@ struct OfflineView: View {
                     .padding(.top, 10)
             }
             .buttonStyle(.plain)
+            .frame(minHeight: 44)
+            }
         }
         .padding(13)
         .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
@@ -162,7 +170,7 @@ struct OfflineView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(palette.inkSecondary)
-                .frame(width: 34, height: 34)
+                .frame(width: 44, height: 44)
                 .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                 .overlay {
                     RoundedRectangle(cornerRadius: SeNocturneRadius.control)

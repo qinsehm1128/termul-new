@@ -5,20 +5,28 @@ import VisionKit
 struct ScannerView: View {
     var onScan: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.sePalette) private var palette
+    @State private var cameraError: String?
 
     var body: some View {
         NavigationStack {
             Group {
-                if DataScannerViewController.isSupported, DataScannerViewController.isAvailable {
+                if let cameraError {
+                    ContentUnavailableView(
+                        "Camera unavailable",
+                        systemImage: "camera.fill",
+                        description: Text(cameraError)
+                    )
+                } else if DataScannerViewController.isSupported, DataScannerViewController.isAvailable {
                     ZStack {
-                        DataScannerRepresentable(onScan: onScan)
+                        DataScannerRepresentable(onScan: onScan, onError: { cameraError = $0 })
                         ScannerFrameOverlay()
                     }
                 } else {
                     ContentUnavailableView(
                         String(localized: "Camera unavailable"),
                         systemImage: "qrcode.viewfinder",
-                        description: Text(String(localized: "Use a physical iPhone, or paste the link instead."))
+                        description: Text("Close the scanner and paste the desktop access URL instead. Camera access may be unavailable or disabled in iOS Settings.")
                     )
                 }
             }
@@ -29,9 +37,12 @@ struct ScannerView: View {
                     Button(String(localized: "Close"), systemImage: "xmark") {
                         dismiss()
                     }
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
                 }
             }
         }
+        .tint(palette.accent)
+        .seHaptic(.error, trigger: cameraError)
     }
 }
 
@@ -153,6 +164,7 @@ private struct CornerBrackets: Shape {
 @MainActor
 private struct DataScannerRepresentable: UIViewControllerRepresentable {
     var onScan: (String) -> Void
+    var onError: (String) -> Void
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
         let scanner = DataScannerViewController(
@@ -175,6 +187,7 @@ private struct DataScannerRepresentable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ scanner: DataScannerViewController, context: Context) {
         context.coordinator.onScan = onScan
+        context.coordinator.onError = onError
         context.coordinator.startIfReady(scanner)
     }
 
@@ -186,17 +199,19 @@ private struct DataScannerRepresentable: UIViewControllerRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onScan: onScan)
+        Coordinator(onScan: onScan, onError: onError)
     }
 
     @MainActor
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         var onScan: (String) -> Void
+        var onError: (String) -> Void
         weak var controller: DataScannerViewController?
         var handled = false
 
-        init(onScan: @escaping (String) -> Void) {
+        init(onScan: @escaping (String) -> Void, onError: @escaping (String) -> Void) {
             self.onScan = onScan
+            self.onError = onError
         }
 
         func startIfReady(_ scanner: DataScannerViewController) {
@@ -205,7 +220,23 @@ private struct DataScannerRepresentable: UIViewControllerRepresentable {
                 try scanner.startScanning()
             } catch {
                 HostLog.session.error("QR scanner failed to start")
+                reportUnavailable()
             }
+        }
+
+        private func reportUnavailable() {
+            guard !handled else { return }
+            handled = true
+            DispatchQueue.main.async { [weak self] in
+                self?.onError(String(localized: "Close the scanner and paste the desktop access URL instead. Camera access may be unavailable or disabled in iOS Settings."))
+            }
+        }
+
+        func dataScanner(
+            _: DataScannerViewController,
+            becameUnavailableWithError _: DataScannerViewController.ScanningUnavailable
+        ) {
+            reportUnavailable()
         }
 
         private func accept(_ payload: String) {

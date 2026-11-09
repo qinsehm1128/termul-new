@@ -4,6 +4,7 @@ import SwiftUI
 
 enum NeedsItemKind: String, CaseIterable, Sendable {
     case permission
+    case question
     case failure
     case done
     case running
@@ -11,6 +12,7 @@ enum NeedsItemKind: String, CaseIterable, Sendable {
     var title: String {
         switch self {
         case .permission: String(localized: "Permission")
+        case .question: String(localized: "Question")
         case .failure: String(localized: "Failure")
         case .done: String(localized: "Done")
         case .running: String(localized: "Running")
@@ -39,7 +41,7 @@ struct NeedsSheetView: View {
 
     private var permissions: Int { items.filter { $0.kind == .permission }.count }
     private var failures: Int { items.filter { $0.kind == .failure }.count }
-    private var done: Int { items.filter { $0.kind == .done }.count }
+    private var questions: Int { items.filter { $0.kind == .question }.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -87,7 +89,7 @@ struct NeedsSheetView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(palette.inkSecondary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 44, height: 44)
                     .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                     .overlay {
                         RoundedRectangle(cornerRadius: SeNocturneRadius.control)
@@ -103,7 +105,7 @@ struct NeedsSheetView: View {
         var parts: [String] = []
         if permissions > 0 { parts.append("\(permissions) permission") }
         if failures > 0 { parts.append("\(failures) failure") }
-        if done > 0 { parts.append("\(done) done") }
+        if questions > 0 { parts.append("\(questions) question") }
         if parts.isEmpty { return String(localized: "Nothing needs you") }
         return parts.joined(separator: " · ")
     }
@@ -157,7 +159,7 @@ struct NeedsSheetView: View {
 
     private func badgeColor(_ kind: NeedsItemKind) -> Color {
         switch kind {
-        case .permission: palette.warning
+        case .permission, .question: palette.warning
         case .failure: palette.danger
         case .done: palette.live
         case .running: palette.accent
@@ -166,7 +168,7 @@ struct NeedsSheetView: View {
 
     private func badgeBackground(_ kind: NeedsItemKind) -> Color {
         switch kind {
-        case .permission: palette.warningSubtle
+        case .permission, .question: palette.warningSubtle
         case .failure: palette.dangerSubtle
         case .done: palette.liveSubtle
         case .running: palette.accentSubtle

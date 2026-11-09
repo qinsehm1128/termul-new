@@ -1,272 +1,233 @@
 import SwiftUI
 
-/// Settings touch this phone only: the host configuration stays on the host.
+/// Preferences affect this phone. Host identity comes from the connection store;
+/// a selected host is not advertised as online before its handshake succeeds.
+@MainActor
 struct SettingsScreen: View {
-    @Environment(\.sePalette) private var palette
-
-    @Binding var themeMode: SeThemeMode
-
-    var hostName: String
-    var hostMeta: String
-    var version: String
-
+    @Bindable var settings: AppSettings
+    var store: ConnectionStore? = nil
     var onBack: () -> Void = {}
-    var onOpenHost: () -> Void = {}
-    var onClearPairing: () -> Void = {}
 
-    @State private var haptics = true
-    @State private var interfaceMotion = true
+    @Environment(\.sePalette) private var palette
+    @State private var terminalTextScale = TerminalTextScale.current
+    @State private var notificationDenied = false
+    @State private var hostToForget: RemoteLink?
+    @ScaledMetric(relativeTo: .subheadline) private var secondarySize = SeNocturneType.secondarySize
+    @ScaledMetric(relativeTo: .title3) private var titleSize = SeNocturneType.sheetTitleSize
+    @ScaledMetric(relativeTo: .body) private var rowSize = SeNocturneType.rowTitleSize
+    @ScaledMetric(relativeTo: .caption) private var labelSize = SeNocturneType.labelSize
+    @ScaledMetric(relativeTo: .caption) private var monoSize = SeNocturneType.monoSize
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: SeSpace.md) {
                 header
-                    .padding(.top, SeSpace.xs)
-                groupLabel("Host")
+                sectionLabel("Host")
                 group {
-                    row(
-                        title: hostName,
-                        subtitle: hostMeta,
-                        value: String(localized: "Online"),
-                        systemImage: "desktopcomputer",
-                        action: onOpenHost
-                    )
-                    divider
-                    row(
-                        title: String(localized: "Notifications"),
-                        subtitle: String(localized: "Only when you are needed"),
-                        value: String(localized: "On"),
-                        systemImage: "bell",
-                        action: {}
-                    )
-                }
-                groupLabel("Appearance")
-                group {
-                    themeRow
-                }
-                groupLabel("Interaction")
-                group {
-                    toggleRow(
-                        title: String(localized: "Haptics"),
-                        subtitle: String(localized: "One tap when approving or denying"),
-                        isOn: $haptics
-                    )
-                    divider
-                    toggleRow(
-                        title: String(localized: "Interface motion"),
-                        subtitle: String(localized: "Connection state and mode switches"),
-                        isOn: $interfaceMotion
-                    )
-                }
-                groupLabel("Privacy")
-                group {
-                    row(
-                        title: String(localized: "Credentials"),
-                        subtitle: String(localized: "Keychain on this phone, never uploaded"),
-                        value: "Face ID",
-                        systemImage: "lock",
-                        action: {}
-                    )
-                    divider
-                    Button(action: onClearPairing) {
-                        Text("Remove this host")
-                            .font(SeNocturneType.font(SeNocturneType.secondarySize))
-                            .foregroundStyle(palette.danger)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14)
-                            .frame(height: 46)
+                    if let host = store?.activeLink {
+                        HStack(spacing: SeSpace.md) {
+                            Image(systemName: "desktopcomputer")
+                                .foregroundStyle(palette.inkSecondary)
+                            VStack(alignment: .leading, spacing: SeSpace.xxs) {
+                                Text(verbatim: host.title).font(SeNocturneType.font(rowSize, weight: .semibold))
+                                Text(verbatim: host.originHost)
+                                    .font(SeNocturneType.font(monoSize, mono: true))
+                                    .foregroundStyle(palette.inkSecondary)
+                            }
+                            Spacer(minLength: SeSpace.sm)
+                            Text("Current host")
+                                .font(SeNocturneType.font(labelSize))
+                                .foregroundStyle(palette.inkSecondary)
+                        }
+                        .padding(SeSpace.md)
+                        Divider().overlay(palette.stroke)
+                        Button(role: .destructive) { hostToForget = host } label: {
+                            Text("Remove this host")
+                                .font(SeNocturneType.font(secondarySize))
+                                .foregroundStyle(palette.danger)
+                                .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
+                                .padding(.horizontal, SeSpace.md)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Label("No active host", systemImage: "desktopcomputer")
+                            .font(SeNocturneType.font(secondarySize))
+                            .foregroundStyle(palette.inkSecondary)
+                            .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
+                            .padding(SeSpace.md)
                     }
-                    .buttonStyle(.plain)
                 }
-                Text(verbatim: version)
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.top, 16)
-                    .padding(.horizontal, 2)
+
+                sectionLabel("Appearance")
+                group {
+                    Picker("Language", selection: $settings.language) {
+                        Text("System").tag(AppLanguage.system)
+                        Text("English").tag(AppLanguage.english)
+                        Text("Simplified Chinese").tag(AppLanguage.simplifiedChinese)
+                    }
+                    .accessibilityIdentifier("settings.language")
+                    .settingsControl()
+                    Divider().overlay(palette.stroke)
+                    Picker("Appearance", selection: $settings.appearance) {
+                        Text("System").tag(AppAppearance.system)
+                        Text("Dark").tag(AppAppearance.dark)
+                        Text("Light").tag(AppAppearance.light)
+                    }
+                    .accessibilityIdentifier("settings.appearance")
+                    .settingsControl()
+                }
+                note("Language and appearance apply to this app.")
+
+                sectionLabel("Feedback")
+                group {
+                    Toggle(isOn: $settings.hapticsEnabled) {
+                        Label("Haptic feedback", systemImage: "hand.tap")
+                    }
+                    .accessibilityIdentifier("settings.haptics")
+                    .settingsControl()
+                    Divider().overlay(palette.stroke)
+                    Toggle(isOn: $settings.notificationsEnabled) {
+                        Label("Background alerts", systemImage: "bell")
+                    }
+                    .accessibilityIdentifier("settings.notifications")
+                    .settingsControl()
+                }
+                if notificationDenied {
+                    Label("Notifications are not allowed. Enable them in iOS Settings to receive background alerts.", systemImage: "bell.slash")
+                        .font(SeNocturneType.font(secondarySize))
+                        .foregroundStyle(palette.warning)
+                        .accessibilityIdentifier("settings.notificationsDenied")
+                }
+                note("Background alerts notify when an agent finishes a turn, asks for approval, or a terminal exits while the app is in the background. Haptics confirm actions and outcomes.")
+
+                sectionLabel("Terminal")
+                group {
+                    Picker("Default text size", selection: $terminalTextScale) {
+                        ForEach(TerminalTextScale.presets, id: \.self) { scale in
+                            Text(scale, format: .percent.precision(.fractionLength(0))).tag(scale)
+                        }
+                    }
+                    .settingsControl()
+                    .accessibilityIdentifier("settings.terminalTextScale")
+                }
+                note("Used when opening a terminal. You can adjust the text size again in the terminal toolbar.")
+
+                sectionLabel("Privacy")
+                group {
+                    Label {
+                        Text("Pairing secrets are stored in the Keychain on this phone.")
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: { Image(systemName: "lock") }
+                    .font(SeNocturneType.font(secondarySize))
+                    .padding(SeSpace.md)
+                    Divider().overlay(palette.stroke)
+                    Text("Git and Files are read-only. View changes and browse files without modifying your desktop.")
+                        .font(SeNocturneType.font(secondarySize))
+                        .foregroundStyle(palette.inkSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(SeSpace.md)
+                }
+                HStack {
+                    LabeledContent("Version", value: ShellPairingAppInfo.version())
+                    LabeledContent("Build", value: ShellPairingAppInfo.build())
+                }
+                .font(SeNocturneType.font(monoSize, mono: true))
+                .foregroundStyle(palette.inkSecondary)
             }
-            .padding(.horizontal, SeSpace.lg)
-            .padding(.bottom, SeSpace.xxl)
+            .padding(SeSpace.lg)
+            .frame(maxWidth: SeLayout.readableColumnMaxWidth)
+            .frame(maxWidth: .infinity)
         }
-        .scrollIndicators(.hidden)
         .background(palette.canvas.ignoresSafeArea())
+        .foregroundStyle(palette.ink)
+        .tint(palette.accent)
+        .onAppear { terminalTextScale = TerminalTextScale.current }
+        .onChange(of: terminalTextScale) { _, scale in TerminalTextScale.current = scale }
+        .onChange(of: settings.notificationsEnabled) { _, enabled in
+            guard enabled else { return }
+            notificationDenied = false
+            Task { @MainActor in
+                let granted = await SeNotifications.requestAuthorization()
+                if !granted {
+                    settings.notificationsEnabled = false
+                    notificationDenied = true
+                }
+            }
+        }
+        .seHaptic(.selection, trigger: settings.language)
+        .seHaptic(.selection, trigger: settings.appearance)
+        .alert("Forget host?", isPresented: Binding(
+            get: { hostToForget != nil },
+            set: { if !$0 { hostToForget = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { hostToForget = nil }
+            Button("Forget", role: .destructive) {
+                if let host = hostToForget {
+                    ShellPairingActivity().forget(host)
+                    store?.forget(host)
+                }
+                hostToForget = nil
+            }
+        } message: {
+            Text("This removes the host and its saved access secret from this phone. Pair again to reconnect.")
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            iconButton(systemImage: "chevron.left", label: String(localized: "Back"), action: onBack)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Settings")
-                    .font(SeNocturneType.font(SeNocturneType.sectionTitleSize, weight: .semibold))
-                    .foregroundStyle(palette.ink)
-                Text(verbatim: "\(hostName) · \(String(localized: "Connected"))")
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
+        HStack(spacing: SeSpace.md) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
             }
-            Spacer(minLength: 8)
-            iconButton(systemImage: "ellipsis", label: String(localized: "More"), action: {})
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+            Text("Settings")
+                .font(SeNocturneType.font(titleSize, weight: .semibold))
+                .accessibilityAddTraits(.isHeader)
+            Spacer()
         }
     }
 
-    private func groupLabel(_ title: LocalizedStringKey) -> some View {
+    private func sectionLabel(_ title: LocalizedStringKey) -> some View {
         Text(title)
-            .font(SeNocturneType.monoSmall)
-            .foregroundStyle(palette.inkTertiary)
-            .padding(.top, 18)
-            .padding(.bottom, 8)
-            .padding(.horizontal, 2)
+            .font(SeNocturneType.font(labelSize))
+            .foregroundStyle(palette.inkSecondary)
+            .padding(.top, SeSpace.sm)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func note(_ text: LocalizedStringKey) -> some View {
+        Text(text)
+            .font(SeNocturneType.font(secondarySize))
+            .foregroundStyle(palette.inkSecondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func group<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            content()
-        }
-        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-        .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                .strokeBorder(palette.stroke, lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(palette.stroke)
-            .frame(height: 1)
-            .padding(.leading, 46)
-    }
-
-    private var themeRow: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Theme")
-                    .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .medium))
-                    .foregroundStyle(palette.ink)
-                Text("Day or night, this phone only")
-                    .font(SeNocturneType.font(SeNocturneType.labelSize))
-                    .foregroundStyle(palette.inkTertiary)
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 3) {
-                ForEach(SeThemeMode.allCases) { mode in
-                    let isOn = themeMode == mode
-                    Button {
-                        themeMode = mode
-                    } label: {
-                        Text(mode.title)
-                            .font(SeNocturneType.font(SeNocturneType.labelSize, weight: isOn ? .medium : .regular))
-                            .foregroundStyle(isOn ? palette.onAccent : palette.inkSecondary)
-                            .padding(.horizontal, 9)
-                            .frame(height: 24)
-                            .background(
-                                isOn ? palette.ink : .clear,
-                                in: RoundedRectangle(cornerRadius: 5)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(2)
+        VStack(alignment: .leading, spacing: 0, content: content)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
             .overlay {
-                RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(palette.strokeStrong, lineWidth: 1)
+                RoundedRectangle(cornerRadius: SeNocturneRadius.card)
+                    .strokeBorder(palette.stroke, lineWidth: 1)
             }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 54)
-    }
-
-    private func row(
-        title: String,
-        subtitle: String,
-        value: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(palette.inkTertiary)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(verbatim: title)
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .medium))
-                        .foregroundStyle(palette.ink)
-                    Text(verbatim: subtitle)
-                        .font(SeNocturneType.font(SeNocturneType.labelSize))
-                        .foregroundStyle(palette.inkTertiary)
-                }
-                Spacer(minLength: 8)
-                Text(verbatim: value)
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(palette.inkTertiary)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 54)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func toggleRow(
-        title: String,
-        subtitle: String,
-        isOn: Binding<Bool>
-    ) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: title)
-                    .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .medium))
-                    .foregroundStyle(palette.ink)
-                Text(verbatim: subtitle)
-                    .font(SeNocturneType.font(SeNocturneType.labelSize))
-                    .foregroundStyle(palette.inkTertiary)
-            }
-            Spacer(minLength: 8)
-            Toggle("", isOn: isOn)
-                .labelsHidden()
-                .tint(palette.accent)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 54)
-    }
-
-    private func iconButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(palette.inkSecondary)
-                .frame(width: 34, height: 34)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                .overlay {
-                    RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                        .strokeBorder(palette.stroke, lineWidth: 1)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 }
 
-#Preview("Settings · Night") {
-    SettingsScreen(
-        themeMode: .constant(.night),
-        hostName: "MacBook Pro",
-        hostMeta: "上海 · 12 ms · 2 connections",
-        version: "SeRemote 27.4 · build 189"
-    )
-    .seThemeMode(.night)
+private struct SettingsControlModifier: ViewModifier {
+    @ScaledMetric(relativeTo: .subheadline) private var textSize = SeNocturneType.secondarySize
+
+    func body(content: Content) -> some View {
+        content
+            .font(SeNocturneType.font(textSize))
+            .frame(minHeight: SeSpace.hitTarget)
+            .padding(.horizontal, SeSpace.md)
+            .padding(.vertical, SeSpace.xs)
+    }
 }
 
-#Preview("Settings · Day") {
-    SettingsScreen(
-        themeMode: .constant(.day),
-        hostName: "MacBook Pro",
-        hostMeta: "上海 · 12 ms",
-        version: "SeRemote 27.4 · build 189"
-    )
-    .seThemeMode(.day)
+private extension View {
+    func settingsControl() -> some View { modifier(SettingsControlModifier()) }
 }
