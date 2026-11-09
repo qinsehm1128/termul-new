@@ -2,6 +2,12 @@ import Foundation
 import Testing
 @testable import SeRemote
 
+/// Resolve a catalog key the same way the app does, so label assertions stay
+/// locale-independent.
+private func L(_ key: String) -> String {
+    String(localized: String.LocalizationValue(stringLiteral: key))
+}
+
 @Suite("Live agent sessions")
 struct LiveAgentSessionTests {
     private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
@@ -42,7 +48,7 @@ struct LiveAgentSessionTests {
         #expect(rows[0].agent == "Claude Code")
         #expect(rows[0].title == "termul")
         #expect(rows[0].id == "agent:p1:terminal-1:session-a")
-        #expect(LivePresentation.rowMeta(for: rows[0]) == "Claude Code · 运行中 · Mac")
+        #expect(LivePresentation.rowMeta(for: rows[0]) == "Claude Code · \(L("Running")) · Mac")
     }
 
     @Test("Agent rows open their project; an unattributed agent has no destination")
@@ -69,12 +75,13 @@ struct LiveAgentSessionTests {
         """)
         let without = NocturneWorkspacePresentation.project(
             projects[0], snapshot: NocturneWorkspaceSnapshot())
-        #expect(without.detail == "2 live terminals")
+        #expect(without.detail == String(localized: "\(projects[0].liveTerminalCount) live terminals"))
 
         let with = NocturneWorkspacePresentation.project(
             projects[0],
             snapshot: NocturneWorkspaceSnapshot(liveAgentSessionCounts: ["p1": 1]))
-        #expect(with.detail == "2 live terminals · 1 agent session")
+        #expect(with.detail == String(localized: "\(projects[0].liveTerminalCount) live terminals")
+                + " · " + String(localized: "1 agent session"))
     }
 
     @Test("Idle projects never appear as running just because agent history exists")

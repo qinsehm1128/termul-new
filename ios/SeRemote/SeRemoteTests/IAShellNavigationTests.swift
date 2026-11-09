@@ -1,13 +1,19 @@
 import Testing
 @testable import SeRemote
 
+/// Resolve a catalog key the same way the app does, so label assertions stay
+/// locale-independent.
+private func L(_ key: String) -> String {
+    String(localized: String.LocalizationValue(stringLiteral: key))
+}
+
 @Suite("IA shell navigation")
 struct IAShellNavigationTests {
     @Test func primarySectionsAreConversationsTerminalsTools() {
         #expect(SidebarDestination.primary.map(\.rawValue) == ["conversations", "terminals", "tools"])
-        #expect(SidebarDestination.primary.map(\.title) == ["会话", "终端", "工具"])
+        #expect(SidebarDestination.primary.map(\.title) == [L("Conversations"), L("Terminals"), L("Tools")])
         #expect(SidebarDestination.primary.map(\.icon.rawValue) == ["chat", "terminal", "folder"])
-        #expect(SidebarDestination.settings.title == "设置")
+        #expect(SidebarDestination.settings.title == L("Settings"))
         #expect(!SidebarDestination.primary.contains(.settings))
     }
 
@@ -70,7 +76,7 @@ struct IAShellNavigationTests {
         #expect(entries.map(\.id) == ["waiting", "recent"])
         #expect(entries[0].status == .needsYou)
         #expect(entries[0].needsAttention)
-        #expect(entries[0].statusText == "等待你处理")
+        #expect(entries[0].statusText == L("Waiting for you"))
     }
 
     @Test func deletedConversationsAreHidden() {

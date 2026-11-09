@@ -1,6 +1,12 @@
 import Foundation
 import Testing
 
+/// Resolve a catalog key the same way the app does, so label assertions stay
+/// locale-independent.
+private func L(_ key: String) -> String {
+    String(localized: String.LocalizationValue(stringLiteral: key))
+}
+
 @testable import SeRemote
 
 // MARK: - Shell layout
@@ -45,7 +51,7 @@ struct NocturneR1ShellPresentationTests {
 
 @Suite("Nocturne R1 live presentation")
 struct NocturneR1LivePresentationTests {
-    @Test("Deleted conversations never reach 现场")
+    @Test("Deleted conversations never reach 会话")
     func deletedConversationsExcluded() throws {
         let conversations: [HostConversation] = try decode("""
         [{"conversationId":"a","workspaceCwd":"/work/a","lifecycleState":"ready","title":"Alpha"},
@@ -71,14 +77,14 @@ struct NocturneR1LivePresentationTests {
             agent: "Claude Code", isRunning: true, needsAttention: false)
         #expect(running[0].status == .running)
         #expect(running[0].agent == "Claude Code")
-        #expect(LivePresentation.statusText(for: running[0]) == "运行中")
+        #expect(LivePresentation.statusText(for: running[0]) == L("Running"))
 
         let waiting = LivePresentation.sessions(
             conversations: conversations, projects: [], host: "H",
             activeConversationID: "a", activeProjectID: nil,
             agent: "Claude Code", isRunning: true, needsAttention: true)
         #expect(waiting[0].status == .needsYou)
-        #expect(LivePresentation.statusText(for: waiting[0]) == "等待你处理")
+        #expect(LivePresentation.statusText(for: waiting[0]) == L("Waiting for you"))
     }
 
     @Test("Running projects appear as terminal sessions; idle projects do not")
@@ -99,10 +105,10 @@ struct NocturneR1LivePresentationTests {
     func rowMeta() {
         let session = LiveSession(id: "conversation:a", title: "A", agent: "Claude Code",
                                   host: "MacBook Pro", status: .needsYou, timing: "")
-        #expect(LivePresentation.rowMeta(for: session) == "Claude Code · 等待你处理 · MacBook Pro")
+        #expect(LivePresentation.rowMeta(for: session) == "Claude Code · \(L("Waiting for you")) · MacBook Pro")
         let terminal = LiveSession(id: "project:p", title: "P", agent: "", host: "Mac mini",
                                    status: .running, timing: "")
-        #expect(LivePresentation.rowMeta(for: terminal) == "Terminal · 运行中 · Mac mini")
+        #expect(LivePresentation.rowMeta(for: terminal) == "\(L("Terminal")) · \(L("Running")) · Mac mini")
         let ready = LiveSession(id: "conversation:b", title: "B", agent: "Codex", host: "H",
                                 status: .ready, timing: "", detailStatus: "就绪")
         #expect(LivePresentation.statusText(for: ready) == "就绪")
@@ -181,30 +187,30 @@ struct NocturneR1HostDirectoryTests {
 struct NocturneR1LabelTests {
     @Test("Needs badges use the prototype's four words and two actions")
     func needsLabels() {
-        #expect(NeedsItemKind.permission.title == "许可")
-        #expect(NeedsItemKind.question.title == "问题")
-        #expect(NeedsItemKind.failure.title == "失败")
-        #expect(NeedsItemKind.done.title == "完成")
-        #expect(NeedsItemKind.running.title == "运行")
-        #expect(NeedsItemKind.permission.actionTitle == "处理")
-        #expect(NeedsItemKind.failure.actionTitle == "查看")
+        #expect(NeedsItemKind.permission.title == L("Permission"))
+        #expect(NeedsItemKind.question.title == L("Question"))
+        #expect(NeedsItemKind.failure.title == L("Failure"))
+        #expect(NeedsItemKind.done.title == L("Done"))
+        #expect(NeedsItemKind.running.title == L("Running"))
+        #expect(NeedsItemKind.permission.actionTitle == L("Handle"))
+        #expect(NeedsItemKind.failure.actionTitle == L("View"))
     }
 
-    @Test("Palette groups and live filters use sentence-case Chinese")
+    @Test("Palette groups and live filters use sentence-case English keys")
     func paletteAndFilterLabels() {
-        #expect(PaletteItemKind.session.title == "会话")
-        #expect(PaletteItemKind.file.title == "文件")
-        #expect(PaletteItemKind.command.title == "命令")
-        #expect(LiveFilter.all.title == "全部")
-        #expect(LiveFilter.running.title == "运行中")
-        #expect(LiveFilter.needsYou.title == "需要你")
+        #expect(PaletteItemKind.session.title == L("Session"))
+        #expect(PaletteItemKind.file.title == L("File"))
+        #expect(PaletteItemKind.command.title == L("Command"))
+        #expect(LiveFilter.all.title == L("All"))
+        #expect(LiveFilter.running.title == L("Running"))
+        #expect(LiveFilter.needsYou.title == L("Need you"))
     }
 
     @Test("Rail destinations keep the three primary entries and settings")
     func railDestinations() {
-        #expect(SidebarDestination.conversations.title == "会话")
-        #expect(SidebarDestination.terminals.title == "终端")
-        #expect(SidebarDestination.tools.title == "工具")
-        #expect(SidebarDestination.settings.title == "设置")
+        #expect(SidebarDestination.conversations.title == L("Conversations"))
+        #expect(SidebarDestination.terminals.title == L("Terminals"))
+        #expect(SidebarDestination.tools.title == L("Tools"))
+        #expect(SidebarDestination.settings.title == L("Settings"))
     }
 }
