@@ -59,10 +59,10 @@ struct WorkspaceHubScreen: View {
             .disabled(selectingProject)
             .overlay { if selectingProject { ProgressView().accessibilityLabel("Opening project") } }
             .navigationDestination(for: ToolDestination.self) { destination in
-                WorkspaceToolDestinationView(session: session, destination: destination, onOpenFile: {
-                    path.removeAll()
-                    onOpenSession()
-                })
+                // Route directly so each tool keeps the prototype's custom nav.
+                // WorkspaceToolDestinationView forces the system bar visible,
+                // which would draw a second bar above the Nocturne header.
+                toolDestination(destination)
             }
             .toolbar(.hidden, for: .navigationBar)
             .task {
@@ -82,6 +82,25 @@ struct WorkspaceHubScreen: View {
             }
         }
         .tint(palette.ink)
+    }
+
+    @ViewBuilder
+    private func toolDestination(_ destination: ToolDestination) -> some View {
+        switch destination {
+        case .git:
+            GitFeatureView(session: session)
+        case .scheduledTasks:
+            ScheduledTasksFeatureView(session: session)
+        case .quickTerminals:
+            QuickTerminalsFeatureView(session: session)
+        case .search:
+            SearchFeatureView(session: session, onOpenFile: {
+                path.removeAll()
+                onOpenSession()
+            })
+        case .screenText:
+            ScreenTextFeatureView(session: session)
+        }
     }
 
     private func openProject(_ row: WorkspaceProject) {

@@ -1,7 +1,7 @@
 import SwiftUI
 
-// MARK: - Sidebar model
-
+/// The three places the workbench exposes. Feature destinations still live in
+/// the workspace hub; the rail keeps the prototype's two primary entries.
 enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
     case live
     case workspace
@@ -13,365 +13,272 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringKey {
+    var title: String {
         switch self {
-        case .live: "Live"
-        case .workspace: "Workspace"
-        case .files: "Files"
-        case .changes: "Changes"
-        case .schedules: "Schedules"
-        case .quick: "Quick"
-        case .settings: "Settings"
+        case .live: "现场"
+        case .workspace: "工作区"
+        case .files: "文件"
+        case .changes: "改动"
+        case .schedules: "定时"
+        case .quick: "速启"
+        case .settings: "设置"
         }
     }
 
-    var helpText: String {
+    var icon: SeIcon {
         switch self {
-        case .live: String(localized: "Live")
-        case .workspace: String(localized: "Workspace")
-        case .files: String(localized: "Files")
-        case .changes: String(localized: "Changes")
-        case .schedules: String(localized: "Schedules")
-        case .quick: String(localized: "Quick")
-        case .settings: String(localized: "Settings")
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .live: "dot.radiowaves.left.and.right"
-        case .workspace: "folder"
-        case .files: "doc"
-        case .changes: "arrow.triangle.branch"
-        case .schedules: "clock"
-        case .quick: "apple.terminal"
-        case .settings: "slider.horizontal.3"
+        case .live: .hosts
+        case .workspace: .folder
+        case .files: .file
+        case .changes: .branch
+        case .schedules: .clock
+        case .quick: .terminal
+        case .settings: .gear
         }
     }
 }
 
-struct SidebarHost: Identifiable, Equatable, Sendable {
-    let id: String
-    let name: String
-    let isOnline: Bool
-}
+/// iPad directory: 250 pt expanded, 76 pt rail collapsed. The width is the
+/// only input; orientation decides the default, and the user can flip it.
+struct AdaptiveSidebarShell: View {
+    @Binding var selection: SidebarDestination
+    @Binding var collapsed: Bool
+    let hostName: String
+    let hostOnline: Bool
+    let counts: [SidebarDestination: String]
+    let version: String
+    let onOpenCommand: () -> Void
+    var expandedWidth: CGFloat = ShellPresentation.railExpandedWidth
 
-// MARK: - Adaptive shell
-
-/// Regular-width shell for iPad. The sidebar is 250pt in landscape and 76pt in
-/// portrait; both can be toggled. Compact widths are expected to use the
-/// phone screens instead of this shell.
-struct AdaptiveSidebarShell<Detail: View>: View {
     @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let hosts: [SidebarHost]
-    private let counts: [SidebarDestination: String]
-    private let detail: (SidebarDestination) -> Detail
-
-    @State private var localSelection: SidebarDestination
-    private var selectionBinding: Binding<SidebarDestination>?
-    private var onOpenCommand: () -> Void = {}
-    private var onWidthChange: (CGFloat) -> Void = { _ in }
-
-    private var selection: SidebarDestination { selectionBinding?.wrappedValue ?? localSelection }
-
-    private func select(_ destination: SidebarDestination) {
-        if let selectionBinding { selectionBinding.wrappedValue = destination }
-        else { localSelection = destination }
-    }
-    @State private var collapsedOverride: Bool?
-
-    init(
-        selection: SidebarDestination = .live,
-        hosts: [SidebarHost] = [],
-        counts: [SidebarDestination: String] = [:],
-        @ViewBuilder detail: @escaping (SidebarDestination) -> Detail
-    ) {
-        _localSelection = State(initialValue: selection)
-        self.hosts = hosts
-        self.counts = counts
-        self.detail = detail
-    }
-
-    init(
-        selection: Binding<SidebarDestination>,
-        hosts: [SidebarHost] = [],
-        counts: [SidebarDestination: String] = [:],
-        onOpenCommand: @escaping () -> Void,
-        onWidthChange: @escaping (CGFloat) -> Void = { _ in },
-        @ViewBuilder detail: @escaping (SidebarDestination) -> Detail
-    ) {
-        _localSelection = State(initialValue: selection.wrappedValue)
-        self.selectionBinding = selection
-        self.hosts = hosts
-        self.counts = counts
-        self.onOpenCommand = onOpenCommand
-        self.onWidthChange = onWidthChange
-        self.detail = detail
+    private var width: CGFloat {
+        collapsed ? ShellPresentation.railCollapsedWidth : expandedWidth
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let isLandscape = geometry.size.width > geometry.size.height
-            let isCollapsed = collapsedOverride ?? !isLandscape
-
-            HStack(spacing: 0) {
-                sidebar(isCollapsed: isCollapsed)
-                detail(selection)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
+            header
+            if !collapsed {
+                search
+                    .padding(.top, 4)
             }
-            .background(palette.canvas)
-            .onChange(of: isLandscape) { _, _ in
-                collapsedOverride = nil
-            }
-        }
-    }
-
-    private func sidebar(isCollapsed: Bool) -> some View {
-        VStack(alignment: isCollapsed ? .center : .leading, spacing: 0) {
-            brand(isCollapsed: isCollapsed)
-                .padding(.horizontal, isCollapsed ? 0 : 12)
-                .padding(.top, 18)
-                .padding(.bottom, 12)
-
-            if !isCollapsed {
-                searchField
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
-            }
-
-            ScrollView {
-                VStack(alignment: isCollapsed ? .center : .leading, spacing: 2) {
-                    groupLabel("Work", isCollapsed: isCollapsed)
-                    ForEach([SidebarDestination.live, .workspace]) { destination in
-                        item(destination, isCollapsed: isCollapsed)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
+                    if !collapsed {
+                        groupLabel("工作")
                     }
-
-                    if !hosts.isEmpty {
-                        groupLabel("Hosts", isCollapsed: isCollapsed)
-                        ForEach(hosts) { hostRow($0, isCollapsed: isCollapsed) }
+                    nav(.live)
+                    nav(.workspace)
+                    if !collapsed {
+                        groupLabel("主机")
+                        hostRow
+                        groupLabel("工具")
                     }
-
-                    groupLabel("Tools", isCollapsed: isCollapsed)
-                    ForEach([SidebarDestination.files, .changes, .schedules, .quick]) { destination in
-                        item(destination, isCollapsed: isCollapsed)
-                    }
+                    nav(.files)
+                    nav(.changes)
+                    nav(.schedules)
+                    nav(.quick)
                 }
-                .padding(.horizontal, isCollapsed ? 8 : 10)
-                .padding(.top, 4)
+                .padding(.horizontal, collapsed ? 9 : 10)
+                .padding(.top, collapsed ? 8 : 4)
             }
-            .scrollIndicators(.hidden)
-
-            Rectangle()
-                .fill(palette.stroke)
-                .frame(height: 1)
-                .padding(.horizontal, isCollapsed ? 10 : 12)
-
-            item(.settings, isCollapsed: isCollapsed)
-                .padding(.horizontal, isCollapsed ? 8 : 10)
-                .padding(.vertical, 10)
-
-            if !isCollapsed {
-                Text(verbatim: ShellPresentation.versionLabel(info: Bundle.main.infoDictionary ?? [:]))
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 12)
-            }
+            Spacer(minLength: 0)
+            footer
         }
-        .frame(width: isCollapsed ? 76 : 250)
-        .frame(maxHeight: .infinity)
-        .background(palette.card)
+        .frame(width: width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(mode.railSurface)
         .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(palette.stroke)
-                .frame(width: 1)
+            Rectangle().fill(mode.hairline).frame(width: 1)
         }
-        .animation(SeNocturneMotion.resolved(SeNocturneMotion.panel, reduceMotion: reduceMotion), value: isCollapsed)
+        .ignoresSafeArea(edges: .leading)
+        .animation(reduceMotion ? nil : SeNocturneMotion.panel, value: collapsed)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("侧栏")
     }
 
-    private func brand(isCollapsed: Bool) -> some View {
-        HStack(spacing: 9) {
-            if !isCollapsed {
-            Text("Se")
-                .font(SeNocturneType.font(13, weight: .semibold, mono: true))
-                .foregroundStyle(palette.onAccent)
-                .frame(width: 32, height: 32)
-                .background(palette.accent, in: RoundedRectangle(cornerRadius: 9))
-            }
-
-            if !isCollapsed {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("SeRemote")
-                        .font(SeNocturneType.font(13, weight: .semibold))
-                        .foregroundStyle(palette.ink)
-                    Text(verbatim: hosts.first?.name ?? "No host")
-                        .font(SeNocturneType.monoSmall)
-                        .foregroundStyle(palette.inkTertiary)
-                }
-            }
-
-            if !isCollapsed { Spacer(minLength: 0) }
-
-            Button {
-                collapsedOverride = !isCollapsed
-            } label: {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(palette.inkSecondary)
-                    .frame(width: 44, height: 44)
-                    .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 7))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
-        }
-        .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
-    }
-
-    private var searchField: some View {
-        Button(action: onOpenCommand) {
-        HStack(spacing: 7) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
-                .foregroundStyle(palette.inkTertiary)
-            Text("Search or run a command")
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
-            Spacer(minLength: 4)
-            Text("⌘")
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
-        }
-        .padding(.horizontal, 9)
-        .frame(height: 44)
-        .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-        .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                .strokeBorder(palette.stroke, lineWidth: 1)
-        }
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut("k", modifiers: .command)
-    }
-
-    private func groupLabel(_ title: LocalizedStringKey, isCollapsed: Bool) -> some View {
-        Group {
-            if isCollapsed {
-                Rectangle()
-                    .fill(palette.stroke)
-                    .frame(width: 18, height: 1)
-                    .padding(.vertical, 8)
-            } else {
-                Text(title)
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.top, 12)
-                    .padding(.bottom, 4)
-                    .padding(.horizontal, 6)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
-    }
-
-    private func item(_ destination: SidebarDestination, isCollapsed: Bool) -> some View {
-        let isOn = selection == destination
-        return Button {
-            select(destination)
-        } label: {
+    private var header: some View {
+        VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: destination.systemImage)
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(isOn ? palette.accent : palette.inkTertiary)
-                    .frame(width: 18)
-                if !isCollapsed {
-                    Text(destination.title)
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: isOn ? .medium : .regular))
-                        .foregroundStyle(isOn ? palette.ink : palette.inkSecondary)
-                    Spacer(minLength: 4)
-                    if let count = counts[destination] {
-                        Text(verbatim: count)
-                            .font(SeNocturneType.monoSmall)
+                SeRailLogo()
+                if !collapsed {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("SeRemote")
+                            .font(SeNocturneType.font(13.5, weight: .semibold))
+                            .tracking(-0.2)
+                            .foregroundStyle(palette.ink)
+                        Text("iPad · Nocturne")
+                            .font(SeNocturneType.font(8.5, mono: true))
                             .foregroundStyle(palette.inkTertiary)
                     }
+                    Spacer(minLength: 0)
+                    collapseButton
                 }
             }
-            .padding(.horizontal, isCollapsed ? 0 : 9)
-            .frame(height: 44)
-            .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
-            .background(
-                isOn ? palette.accentSubtle : .clear,
-                in: RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-            )
+            .padding(.horizontal, collapsed ? 0 : 14)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+            if collapsed {
+                collapseButton.padding(.top, 10)
+            }
         }
-        .buttonStyle(.plain)
-        .help(destination.helpText)
     }
 
-    private func hostRow(_ host: SidebarHost, isCollapsed: Bool) -> some View {
+    private var collapseButton: some View {
         Button {
-            select(.live)
+            collapsed.toggle()
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 15, weight: .regular))
+            SeIconView(icon: collapsed ? .chevron : .sidebar,
+                       size: 13,
+                       stroke: 1.6,
+                       color: palette.inkSecondary)
+                .frame(width: 28, height: 28)
+                .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(Rectangle())
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(SePressable())
+        .accessibilityLabel(collapsed ? "展开侧栏" : "收起侧栏")
+    }
+
+    private var search: some View {
+        Button(action: onOpenCommand) {
+            HStack(spacing: 8) {
+                SeIconView(icon: .search, size: 14, stroke: 1.6, color: palette.inkTertiary)
+                Text("搜索会话、文件或命令")
+                    .font(SeNocturneType.font(11.5))
                     .foregroundStyle(palette.inkTertiary)
-                    .frame(width: 18)
-                if !isCollapsed {
-                    Text(verbatim: host.name)
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize))
-                        .foregroundStyle(palette.inkSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("⌘")
+                    .font(SeNocturneType.font(8, mono: true))
+                    .foregroundStyle(palette.inkTertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(mode.insetStroke, lineWidth: 1)
+                    }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 38)
+            .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(mode.insetStroke, lineWidth: 1)
+            }
+            .padding(.horizontal, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SePressable())
+    }
+
+    private func groupLabel(_ text: String) -> some View {
+        SeEyebrow(text: text)
+            .padding(.horizontal, 8)
+            .padding(.top, 10)
+            .padding(.bottom, 5)
+    }
+
+    private func nav(_ destination: SidebarDestination) -> some View {
+        let on = selection == destination
+        return Button {
+            selection = destination
+        } label: {
+            HStack(spacing: collapsed ? 0 : 10) {
+                SeIconView(icon: destination.icon,
+                           size: 17,
+                           stroke: 1.6,
+                           color: on ? palette.accent : palette.inkSecondary)
+                if !collapsed {
+                    Text(destination.title)
+                        .font(SeNocturneType.font(12.5))
+                        .foregroundStyle(on ? palette.ink : palette.inkSecondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    if let count = counts[destination], !count.isEmpty {
+                        Text(count)
+                            .font(SeNocturneType.font(9, mono: true))
+                            .foregroundStyle(destination == .live ? palette.accent : palette.inkTertiary)
+                    }
                 }
-                Circle()
-                    .fill(host.isOnline ? palette.live : palette.inkTertiary)
-                    .frame(width: 6, height: 6)
             }
-            .padding(.horizontal, isCollapsed ? 0 : 9)
-            .frame(height: 44)
-            .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
+            .padding(.horizontal, collapsed ? 0 : 9)
+            .frame(maxWidth: collapsed ? nil : .infinity, alignment: collapsed ? .center : .leading)
+            .frame(width: collapsed ? 44 : nil, height: 38)
+            .background(on ? palette.accentSubtle : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SePressable())
+        .accessibilityLabel(destination.title)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    private var hostRow: some View {
+        HStack(spacing: 8) {
+            SeNeedDot(kind: hostOnline ? .live : .off, size: 5)
+            Text(hostName)
+                .font(SeNocturneType.font(12.5))
+                .foregroundStyle(palette.ink)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.top, 2)
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if collapsed {
+                Button {
+                    selection = .settings
+                } label: {
+                    SeIconView(icon: .gear,
+                               size: 17,
+                               stroke: 1.6,
+                               color: selection == .settings ? palette.accent : palette.inkSecondary)
+                        .frame(width: 44, height: 38)
+                        .background(selection == .settings ? palette.accentSubtle : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SePressable())
+                .accessibilityLabel("设置")
+            } else {
+                nav(.settings)
+                Text(version)
+                    .font(SeNocturneType.font(8, mono: true))
+                    .foregroundStyle(palette.inkTertiary.opacity(0.75))
+                    .padding(.horizontal, 9)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+            }
+        }
+        .padding(.horizontal, collapsed ? 9 : 10)
+        .padding(.top, 10)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
+        .overlay(alignment: .top) {
+            Rectangle().fill(mode.hairline).frame(height: 1)
+        }
     }
 }
 
-// MARK: - Previews
+struct SeRailLogo: View {
+    @Environment(\.sePalette) private var palette
 
-#Preview("iPad landscape") {
-    AdaptiveSidebarShell(
-        hosts: [
-            SidebarHost(id: "mbp", name: "MacBook Pro", isOnline: true),
-            SidebarHost(id: "mini", name: "Mac mini", isOnline: false)
-        ],
-        counts: [.live: "3", .files: "482", .changes: "2", .schedules: "4", .quick: "4"]
-    ) { destination in
-        VStack(alignment: .leading, spacing: 12) {
-            Text(destination.title)
-                .font(SeNocturneType.screenTitle)
-                .foregroundStyle(.primary)
-            Text("Detail content for \(destination.rawValue).")
-                .font(SeNocturneType.secondary)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(28)
+    var body: some View {
+        Text("S")
+            .font(SeNocturneType.font(15, weight: .bold))
+            .foregroundStyle(palette.canvas)
+            .frame(width: 34, height: 34)
+            .background(palette.ink, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .accessibilityHidden(true)
     }
-    .seThemeMode(.night)
-    .frame(width: 1194, height: 834)
-}
-
-#Preview("iPad portrait") {
-    AdaptiveSidebarShell(
-        hosts: [SidebarHost(id: "mbp", name: "MacBook Pro", isOnline: true)],
-        counts: [.live: "3"]
-    ) { destination in
-        VStack {
-            Text(destination.title)
-                .font(SeNocturneType.screenTitle)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    .seThemeMode(.day)
-    .frame(width: 834, height: 1194)
 }

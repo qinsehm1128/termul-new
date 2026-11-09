@@ -24,13 +24,13 @@ struct WorkspaceView: View {
             // Once connected, keep the navigation tree alive even during a
             // foreground reconnect. In particular, never remount the PTY view.
             if hasConnected {
-                NavigationStack {
-                    ConnectedShellScreen(session: session, store: store, link: link)
-                }
-                .opacity(session.phase == .connected ? 1 : 0)
-                .allowsHitTesting(session.phase == .connected)
-                .accessibilityHidden(session.phase != .connected)
-                .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+                ConnectedShellScreen(session: session, store: store, link: link)
+                    .environment(settings)
+                    .environment(store)
+                    .opacity(session.phase == .connected ? 1 : 0)
+                    .allowsHitTesting(session.phase == .connected)
+                    .accessibilityHidden(session.phase != .connected)
+                    .transition(SeTransition.entrance(reduceMotion: reduceMotion))
             }
             switch session.phase {
             case .connecting, .idle:
@@ -39,6 +39,8 @@ struct WorkspaceView: View {
             case .failed(let message):
                 if hasConnected {
                     ConnectedOfflineScreen(session: session, store: store, link: link)
+                        .environment(settings)
+                        .environment(store)
                         .transition(SeTransition.entrance(reduceMotion: reduceMotion))
                 } else {
                     failedState(message)
