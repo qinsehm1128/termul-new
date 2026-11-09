@@ -24,6 +24,13 @@ export function RemoteDesktopSettings(): React.JSX.Element {
     try {
       const next = await remoteDesktopApi.getSettings()
       if (mounted.current) {
+        // A host without the desktop service answers with nothing; render the
+        // load-error state instead of dereferencing a missing payload.
+        if (!next || typeof next !== 'object') {
+          setSettings(null)
+          setError('无法读取远程桌面设置，请重试')
+          return
+        }
         setSettings(next)
         setError(null)
       }
