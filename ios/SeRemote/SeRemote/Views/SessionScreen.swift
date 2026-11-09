@@ -259,21 +259,30 @@ struct SessionScreen: View {
 
     private var headerSubtitle: String {
         let host = session.origin.host ?? String(localized: "Host")
-        switch session.workspace {
-        case .conversation:
+        switch session.workspaceTab {
+        case .chat:
             return NocturneSessionPresentation.subtitle(
                 host: host,
                 agent: session.chat.agentLabel,
                 model: modelName
             )
-        case .project:
+        case .terminal:
+            let terminal = session.terminals.terminals.first(where: { $0.id == session.terminals.activeId })
+            let folder = terminal?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+                ?? session.workspaceRoot.map { URL(fileURLWithPath: $0).lastPathComponent }
             return NocturneSessionPresentation.subtitle(
                 host: host,
-                agent: session.projects.active?.name,
-                model: session.terminals.terminals.first(where: { $0.id == session.terminals.activeId })?.gitBranch
+                agent: folder,
+                model: terminal?.gitBranch
             )
-        case .home:
-            return host
+        case .files:
+            let folder = session.files.crumbs.last?.name
+                ?? session.workspaceRoot.map { URL(fileURLWithPath: $0).lastPathComponent }
+            return NocturneSessionPresentation.subtitle(
+                host: host,
+                agent: folder,
+                model: String(localized: "Read only")
+            )
         }
     }
 

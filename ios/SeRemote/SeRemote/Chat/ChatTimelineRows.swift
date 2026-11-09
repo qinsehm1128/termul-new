@@ -203,7 +203,6 @@ struct MessageBubbleContent: View, Equatable {
                     topTrailingRadius: 13,
                     style: .continuous
                 ))
-                .frame(maxWidth: 327, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
             Text(attributed)

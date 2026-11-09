@@ -30,9 +30,6 @@ struct WorkspaceFileListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            filterField
-                .padding(.horizontal, 18)
-                .padding(.bottom, 4)
             ScrollView {
                 LazyVStack(spacing: 8) {
                     if isLoading {
@@ -118,7 +115,7 @@ struct WorkspaceFileListView: View {
             open(entry)
         } label: {
             HStack(spacing: 11) {
-                R2Spine(tone: selected ? .live : (entry.isDirectory ? .attention : .quiet))
+                R2Spine()
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.name)
                         .font(.system(size: 13, weight: .semibold))

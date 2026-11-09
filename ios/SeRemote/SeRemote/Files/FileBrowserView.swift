@@ -94,7 +94,6 @@ struct FileBrowserView: View {
                         .padding(.horizontal, 18)
                     fileList
                 }
-                desktopOnlyFooter
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(palette.surface)
@@ -216,19 +215,6 @@ struct FileBrowserView: View {
         .overlay(alignment: .top) {
             Rectangle().fill(palette.stroke).frame(height: 1)
         }
-    }
-
-    /// Paired phones have no fs mutation routes. Keep this boundary visible in previews too.
-    private var desktopOnlyFooter: some View {
-        Label("File editing is desktop-only. Changes need the host's local web client.", systemImage: "lock.shield")
-            .font(.system(size: 10))
-            .foregroundStyle(palette.inkTertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 8)
-            .background(palette.card)
-            .overlay(alignment: .top) { Rectangle().fill(palette.stroke).frame(height: 1) }
-            .accessibilityIdentifier("files-desktop-only")
     }
 
     private func perform(_ action: @MainActor () async -> Void) async {

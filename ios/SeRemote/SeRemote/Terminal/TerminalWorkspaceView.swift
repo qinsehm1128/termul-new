@@ -94,20 +94,6 @@ struct TerminalWorkspaceView: View {
             .accessibilityLabel(Text("Phone Fit"))
             .accessibilityValue(Text(session.terminals.displayMode == .phone ? String(localized: "Active") : String(localized: "Idle")))
             textScaleMenu
-            Button {
-                Task { await session.terminals.refreshScreenObservation() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(palette.inkTertiary)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(session.terminals.isRefreshingScreenObservation)
-            .accessibilityLabel(Text("Refresh host screen observation"))
-            .accessibilityHint(Text("Read-only status request for the current terminal"))
-            .accessibilityIdentifier("refresh-host-screen-observation")
         }
         .font(.system(size: 9, design: .monospaced))
         .padding(.horizontal, 18)
@@ -135,6 +121,15 @@ struct TerminalWorkspaceView: View {
             Button { applyTextScale(TerminalTextScale.defaultValue) } label: {
                 Label(String(localized: "Reset Text Size"), systemImage: "arrow.counterclockwise")
             }
+            Divider()
+            Button {
+                Task { await session.terminals.refreshScreenObservation() }
+            } label: {
+                Label(String(localized: "Refresh host screen observation"), systemImage: "arrow.clockwise")
+            }
+            .disabled(session.terminals.isRefreshingScreenObservation)
+            .accessibilityHint(Text("Read-only status request for the current terminal"))
+            .accessibilityIdentifier("refresh-host-screen-observation")
         } label: {
             Text("A+")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))

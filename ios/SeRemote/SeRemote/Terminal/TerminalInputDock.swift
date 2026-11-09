@@ -55,24 +55,19 @@ struct TerminalInputDock: View {
     private var keyRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                // Prototype order: Esc, Tab, Ctrl, arrows, then the real host
+                // extras (Enter/Backspace/control letters). The prototype's
+                // Option/Meta chord keys are omitted because the phone input
+                // model has no modifier-chord route.
+                ForEach(headKeys) { key in
+                    keyChip(key)
+                }
                 controlKey
-                ForEach(TerminalAccessoryCatalog.keys) { key in
-                    if key.repeatable {
-                        R2KeyChip(
-                            label: key.label,
-                            repeatable: true,
-                            accessibilityLabel: key.accessibilityLabel,
-                            action: { send(key.bytes) },
-                            repeatAction: { send(key.bytes) }
-                        )
-                    } else {
-                        R2KeyChip(
-                            label: key.label,
-                            accessibilityLabel: key.accessibilityLabel
-                        ) {
-                            send(key.bytes)
-                        }
-                    }
+                ForEach(arrowKeys) { key in
+                    keyChip(key)
+                }
+                ForEach(remainingKeys) { key in
+                    keyChip(key)
                 }
                 if UIPasteboard.general.hasStrings {
                     R2KeyChip(
@@ -84,6 +79,43 @@ struct TerminalInputDock: View {
                 }
             }
             .padding(.vertical, 2)
+        }
+    }
+
+    private var headKeys: [TerminalAccessoryKey] {
+        ["escape", "tab"].compactMap(key(id:))
+    }
+
+    private var arrowKeys: [TerminalAccessoryKey] {
+        ["arrowUp", "arrowDown", "arrowLeft", "arrowRight"].compactMap(key(id:))
+    }
+
+    private var remainingKeys: [TerminalAccessoryKey] {
+        let used = Set(headKeys.map(\.id) + arrowKeys.map(\.id))
+        return TerminalAccessoryCatalog.keys.filter { !used.contains($0.id) }
+    }
+
+    private func key(id: String) -> TerminalAccessoryKey? {
+        TerminalAccessoryCatalog.keys.first { $0.id == id }
+    }
+
+    @ViewBuilder
+    private func keyChip(_ key: TerminalAccessoryKey) -> some View {
+        if key.repeatable {
+            R2KeyChip(
+                label: key.label,
+                repeatable: true,
+                accessibilityLabel: key.accessibilityLabel,
+                action: { send(key.bytes) },
+                repeatAction: { send(key.bytes) }
+            )
+        } else {
+            R2KeyChip(
+                label: key.label,
+                accessibilityLabel: key.accessibilityLabel
+            ) {
+                send(key.bytes)
+            }
         }
     }
 

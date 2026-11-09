@@ -64,7 +64,6 @@ struct ChatView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
             messageList
-            permissionStack
             if let error = session.chat.errorMessage, !error.isEmpty {
                 SeErrorBanner(message: error)
                     .frame(maxWidth: columnWidth)
@@ -145,6 +144,7 @@ struct ChatView: View {
                             .modifier(WorkspaceMessageEntrance(enabled: entranceIDs.contains(item.id)))
                             .id(item.id)
                     }
+                    permissionCards
                     if session.chat.isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -293,49 +293,42 @@ struct ChatView: View {
     }
 
     @ViewBuilder
-    private var permissionStack: some View {
+    private var permissionCards: some View {
         if !renderedPermissions.isEmpty || !session.chat.questions.isEmpty {
-            ScrollView {
-                VStack(spacing: 12) {
-                    ForEach(renderedPermissions) { card in
-                        PermissionCardView(card: card, submission: session.chat.permissionSubmissions[card.id]) { option in
-                            guard session.chat.permissionSubmissions[card.id] != .submitting else { return }
-                            Task {
-                                let acknowledged = await session.chat.respond(permission: card, optionId: option)
-                                guard let feedback = WorkspaceChatPresentation.acknowledgedPermissionFeedback(
-                                    optionID: option,
-                                    optionName: card.options.first(where: { $0.id == option })?.name,
-                                    acknowledged: acknowledged
-                                ) else { return }
-                                switch feedback {
-                                case .approval: cardHaptic = .success
-                                case .denial: cardHaptic = .warning
-                                case .failure: cardHaptic = .error
-                                }
-                                cardHapticSerial += 1
+            VStack(spacing: 12) {
+                ForEach(renderedPermissions) { card in
+                    PermissionCardView(card: card, submission: session.chat.permissionSubmissions[card.id]) { option in
+                        guard session.chat.permissionSubmissions[card.id] != .submitting else { return }
+                        Task {
+                            let acknowledged = await session.chat.respond(permission: card, optionId: option)
+                            guard let feedback = WorkspaceChatPresentation.acknowledgedPermissionFeedback(
+                                optionID: option,
+                                optionName: card.options.first(where: { $0.id == option })?.name,
+                                acknowledged: acknowledged
+                            ) else { return }
+                            switch feedback {
+                            case .approval: cardHaptic = .success
+                            case .denial: cardHaptic = .warning
+                            case .failure: cardHaptic = .error
                             }
+                            cardHapticSerial += 1
                         }
-                        .seEntrance()
                     }
-                    ForEach(session.chat.questions) { card in
-                        QuestionCardView(card: card, submission: session.chat.questionSubmissions[card.id]) { value in
-                            guard session.chat.questionSubmissions[card.id] != .submitting else { return }
-                            Task {
-                                if await session.chat.answer(question: card, values: [value]) {
-                                    cardHaptic = .success
-                                    cardHapticSerial += 1
-                                }
+                    .seEntrance()
+                }
+                ForEach(session.chat.questions) { card in
+                    QuestionCardView(card: card, submission: session.chat.questionSubmissions[card.id]) { value in
+                        guard session.chat.questionSubmissions[card.id] != .submitting else { return }
+                        Task {
+                            if await session.chat.answer(question: card, values: [value]) {
+                                cardHaptic = .success
+                                cardHapticSerial += 1
                             }
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
-                .frame(maxWidth: columnWidth)
-                .frame(maxWidth: .infinity)
             }
-            .frame(maxHeight: 320)
-            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 14)
         }
     }
 
