@@ -29,7 +29,17 @@ fn respond<T>(result: Result<T, RemoteAuthError>) -> ApiResult<T> {
 }
 
 pub fn routes() -> Router<AppState> {
-    let management = Router::new()
+    // The middleware classifier recognizes /pair as public. The 256-bit code
+    // authorizes precisely one exchange, with no host credential in the URL.
+    management_routes()
+        .route("/pair", post(pair))
+        .route("/info", get(host_info))
+}
+
+/// Management routes carry their own capability gate because production
+/// merges them without `classified_routes`; nothing else authorizes them.
+fn management_routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
+    Router::new()
         .route("/remote/devices", get(list))
         .route("/remote/devices/audit", get(audit))
         .route("/remote/devices/disconnect-all", post(disconnect_all))
@@ -38,6 +48,8 @@ pub fn routes() -> Router<AppState> {
         .route("/remote/devices/{id}/disconnect", post(disconnect))
         .route("/remote/devices/{id}/revoke", post(revoke))
         .route("/remote/pairing-code", post(pairing_code))
+        .route_layer(middleware::from_fn(auth::capability_middleware))
+        // Outer layer runs first: classify before the capability check.
         .route_layer(middleware::from_fn(
             move |mut request: axum::extract::Request, next: axum::middleware::Next| async move {
                 request
@@ -45,12 +57,7 @@ pub fn routes() -> Router<AppState> {
                     .insert(RemoteRouteClass::RemoteAccess);
                 next.run(request).await
             },
-        ));
-    // The middleware classifier recognizes /pair as public. The 256-bit code
-    // authorizes precisely one exchange, with no host credential in the URL.
-    management
-        .route("/pair", post(pair))
-        .route("/info", get(host_info))
+        ))
 }
 
 pub fn list_service(authority: &RemoteAccessAuthority) -> Result<DeviceList, RemoteAuthError> {
@@ -194,6 +201,87 @@ mod tests {
             .route("/remote/devices", get(list))
             .layer(middleware::from_fn(auth::capability_middleware))
             .layer(Extension(authority))
+    }
+
+    /// Regression: production `routes()` must gate management on its own.
+    #[tokio::test]
+    async fn production_management_routes_reject_anonymous_and_paired_callers() {
+        let authority = Arc::new(RemoteAccessAuthority::desktop_memory());
+        let (host, _) = authority.adopt_or_issue_desktop_credential(None).unwrap();
+        let app = || {
+            management_routes::<()>()
+                .route("/pair", post(pair))
+                .layer(Extension(authority.clone()))
+        };
+        let cases = [
+            ("POST", "/remote/pairing-code"),
+            ("GET", "/remote/devices"),
+            ("GET", "/remote/devices/audit"),
+            ("POST", "/remote/devices/disconnect-all"),
+            ("PATCH", "/remote/devices/dev-1"),
+            ("POST", "/remote/devices/dev-1/grant-all"),
+            ("POST", "/remote/devices/dev-1/disconnect"),
+            ("POST", "/remote/devices/dev-1/revoke"),
+        ];
+        let request = |method: &str, uri: &str, bearer: Option<&str>| {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json");
+            if let Some(token) = bearer {
+                builder = builder.header("authorization", format!("Bearer {token}"));
+            }
+            builder.body(Body::from("{}")).unwrap()
+        };
+        for (method, uri) in cases {
+            // A fresh authority per probe keeps the failed-auth limiter (429)
+            // from masking the 401 this test asserts.
+            let anonymous = Arc::new(RemoteAccessAuthority::desktop_memory());
+            anonymous.adopt_or_issue_desktop_credential(None).unwrap();
+            let response = management_routes::<()>()
+                .layer(Extension(anonymous))
+                .oneshot(request(method, uri, None))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri} must reject anonymous callers"
+            );
+        }
+        let code = authority.issue_pairing_code().unwrap().code;
+        let paired = app()
+            .oneshot(
+                Request::post("/pair")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"code":code,"name":"iPhone","platform":"ios"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let paired: serde_json::Value =
+            serde_json::from_slice(&to_bytes(paired.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let device_token = paired["deviceToken"].as_str().unwrap().to_owned();
+        for (method, uri) in cases {
+            let response = app()
+                .oneshot(request(method, uri, Some(&device_token)))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{method} {uri} must deny paired devices"
+            );
+        }
+        let minted = app()
+            .oneshot(request("POST", "/remote/pairing-code", Some(host.bearer())))
+            .await
+            .unwrap();
+        assert_eq!(minted.status(), StatusCode::OK);
     }
 
     #[tokio::test]
