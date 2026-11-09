@@ -59,4 +59,24 @@ struct DesignSystemTests {
         #expect(SeHaptic.error.feedback == .error)
         #expect(SeHaptic.selection.feedback == .selection)
     }
+
+    @Test("Nocturne mode follows the effective color scheme")
+    func themeModeResolution() {
+        #expect(SeThemeMode.resolved(colorScheme: .dark) == .night)
+        #expect(SeThemeMode.resolved(colorScheme: .light) == .day)
+    }
+
+    @Test("Day/night toggle persists an explicit appearance")
+    func themeModePersistence() {
+        #expect(SeThemeMode.day.appearance == .light)
+        #expect(SeThemeMode.night.appearance == .dark)
+        #expect(SeThemeMode.day.toggled == .night)
+        #expect(SeThemeMode.night.toggled == .day)
+        // A persisted appearance round-trips through the color scheme it pins.
+        for mode in SeThemeMode.allCases {
+            let scheme = mode.appearance.colorScheme
+            #expect(scheme != nil)
+            if let scheme { #expect(SeThemeMode.resolved(colorScheme: scheme) == mode) }
+        }
+    }
 }

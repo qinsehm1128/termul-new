@@ -1,34 +1,36 @@
 import SwiftUI
 import UIKit
 
-/// Field Console palette (design-spec.md section 2). Warm graphite, one lichen
-/// accent for actions, cyan `live` for connection and working state.
+/// Nocturne palette (`.qin-code/design/seremote-ios27-v2`). Neutral chrome in
+/// both modes; color is reserved for state and the one primary action. The
+/// values mirror `SePalette.day` / `SePalette.night` so screens that still read
+/// `SeTheme` follow the same day/night switch as the Nocturne screens.
 ///
 /// The original names (`muted`, `lamp`, `wordmark`, `display`, `radius`) stay
 /// as aliases so existing views keep compiling while they migrate.
 enum SeTheme {
-    static let canvas = Color(lightHex: 0xF7F5EF, darkHex: 0x202320)
-    static let surface = Color(lightHex: 0xFFFEFA, darkHex: 0x2A2E29)
-    static let elevated = Color(lightHex: 0xECEEE5, darkHex: 0x343A31)
-    static let ink = Color(lightHex: 0x20271F, darkHex: 0xF1EDDF)
-    static let secondaryInk = Color(lightHex: 0x596451, darkHex: 0xB0B5A9)
-    static let tertiaryInk = Color(lightHex: 0x66715F, darkHex: 0xAAB2A0)
-    static let stroke = Color(lightHex: 0xD5D9CD, darkHex: 0x41473E)
-    static let accent = Color(lightHex: 0x4E6431, darkHex: 0xBDCBA1)
-    static let onAccent = Color(lightHex: 0xFFFFFF, darkHex: 0x20251B)
-    static let accentSubtle = Color(lightHex: 0xE6EDD9, darkHex: 0x343E2A)
-    static let live = Color(lightHex: 0x246578, darkHex: 0x91D4D5)
-    static let liveSubtle = Color(lightHex: 0xE1EFF2, darkHex: 0x253F43)
-    static let warning = Color(lightHex: 0x8B4B0B, darkHex: 0xE9BB75)
-    static let warningSubtle = Color(lightHex: 0xFFF0D9, darkHex: 0x423523)
-    static let success = Color(lightHex: 0x3D673B, darkHex: 0xB2D4A6)
-    static let danger = Color(lightHex: 0xA52F36, darkHex: 0xEFA595)
-    static let dangerSubtle = Color(lightHex: 0xFBE5E5, darkHex: 0x442D2D)
-    static let codeCanvas = Color(lightHex: 0xF1F3EB, darkHex: 0x191E19)
-    static let diffAdded = Color(lightHex: 0xDDEED8, darkHex: 0x253B29)
-    static let diffAddedInk = Color(lightHex: 0x284F2E, darkHex: 0xB8DEBC)
-    static let diffRemoved = Color(lightHex: 0xF9E2DF, darkHex: 0x412B29)
-    static let diffRemovedInk = Color(lightHex: 0x8E302E, darkHex: 0xF0BAB4)
+    static let canvas = Color(lightHex: 0xF1F4F8, darkHex: 0x0B0D12)
+    static let surface = Color(lightHex: 0xFFFFFF, darkHex: 0x12161F)
+    static let elevated = Color(lightHex: 0xE7ECF3, darkHex: 0x181D28)
+    static let ink = Color(lightHex: 0x10151C, darkHex: 0xF2F0E8)
+    static let secondaryInk = Color(lightHex: 0x4B5666, darkHex: 0xA9AEBB)
+    static let tertiaryInk = Color(lightHex: 0x5F6B7C, darkHex: 0x8F95A4)
+    static let stroke = Color(lightHex: 0xD3DAE4, darkHex: 0x262B36)
+    static let accent = Color(lightHex: 0x4353EE, darkHex: 0x98A6FF)
+    static let onAccent = Color(lightHex: 0xFFFFFF, darkHex: 0x0B0D12)
+    static let accentSubtle = Color(lightHex: 0xE3E6FD, darkHex: 0x1D2240)
+    static let live = Color(lightHex: 0x0C7A5A, darkHex: 0x4FD8AE)
+    static let liveSubtle = Color(lightHex: 0xDCEFE8, darkHex: 0x13302A)
+    static let warning = Color(lightHex: 0x9A5B08, darkHex: 0xF2B36B)
+    static let warningSubtle = Color(lightHex: 0xF5ECDF, darkHex: 0x2E2619)
+    static let success = Color(lightHex: 0x0C7A5A, darkHex: 0x4FD8AE)
+    static let danger = Color(lightHex: 0xC0392B, darkHex: 0xFF8F84)
+    static let dangerSubtle = Color(lightHex: 0xF8E4E2, darkHex: 0x33201F)
+    static let codeCanvas = Color(lightHex: 0xF1F4F8, darkHex: 0x05070A)
+    static let diffAdded = Color(lightHex: 0xDCEFE8, darkHex: 0x13302A)
+    static let diffAddedInk = Color(lightHex: 0x0A5A43, darkHex: 0x8FE6C8)
+    static let diffRemoved = Color(lightHex: 0xF8E4E2, darkHex: 0x33201F)
+    static let diffRemovedInk = Color(lightHex: 0x9A2E22, darkHex: 0xFFB4AB)
 
     // Legacy aliases.
     static let muted = secondaryInk

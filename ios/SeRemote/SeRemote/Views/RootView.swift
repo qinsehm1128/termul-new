@@ -22,5 +22,8 @@ struct RootView: View {
         }
         .background(SeTheme.canvas.ignoresSafeArea())
         .seAnimation(.context, value: store.activeLink?.id)
+        // Below SeRemoteApp's preferredColorScheme, so the persisted
+        // appearance (or the device setting for .system) decides day/night.
+        .seResolvedThemeMode()
     }
 }
