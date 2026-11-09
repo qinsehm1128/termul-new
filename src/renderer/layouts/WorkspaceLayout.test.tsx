@@ -207,26 +207,6 @@ vi.mock('@/stores/remote-status-store', () => ({
   })
 }))
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>()
-  return {
-    ...actual,
-    remoteServerApi: {
-      start: vi.fn(),
-      stop: vi.fn(),
-      status: vi.fn(),
-      intent: vi.fn(() =>
-        Promise.resolve({ success: true, data: { wanted: false, publishMode: 'tunnel' } })
-      ),
-      setIntent: vi.fn(),
-      rotateCredential: vi.fn()
-    },
-    openerApi: {
-      openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
-    }
-  }
-})
-
 vi.mock('@/stores/keyboard-shortcuts-store', async () => {
   const actual = await vi.importActual<typeof import('@/stores/keyboard-shortcuts-store')>(
     '@/stores/keyboard-shortcuts-store'
