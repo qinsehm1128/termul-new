@@ -23,6 +23,7 @@ struct TerminalsHubScreen: View {
     @State private var console: TerminalsHubConsoleRequest?
     @State private var quickConsole: QuickTerminalConsoleRequest?
     @State private var refreshing = false
+    @State private var pendingRefresh = false
 
     private static let refreshInterval: Duration = .seconds(15)
 
@@ -264,13 +265,23 @@ struct TerminalsHubScreen: View {
         }
     }
 
+    /// Single-flight, coalescing refresh. `projects` and `liveAgents` are
+    /// polled by `WorkspaceSession` every 15 s, so the hub reads their
+    /// published state and only refreshes what it owns: the live terminal
+    /// summaries and the quick-terminal records. An overlapping request sets
+    /// `pendingRefresh` and is folded into one follow-up pass instead of
+    /// being dropped.
     private func refresh() async {
-        guard !refreshing else { return }
+        guard !refreshing else {
+            pendingRefresh = true
+            return
+        }
         refreshing = true
-        defer { refreshing = false }
-        await session.projects.refresh()
-        await session.liveAgents.refresh()
-        await session.quickTerminals.refresh()
-        await store.refresh(projects: session.projects.projects)
+        repeat {
+            pendingRefresh = false
+            await session.quickTerminals.refresh()
+            await store.refresh(projects: session.projects.projects)
+        } while pendingRefresh
+        refreshing = false
     }
 }
