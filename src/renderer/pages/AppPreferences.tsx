@@ -28,7 +28,6 @@ import { KeybindingSchemePicker } from '@/components/KeybindingSchemePicker'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
 import { AgentHooksSettings } from '@/components/settings/AgentHooksSettings'
-import { AgentHooksSettings } from '@/components/settings/AgentHooksSettings'
 import { CliResumeDefaultsSettings } from '@/components/settings/CliResumeDefaultsSettings'
 import { CoreRuntimeSettings } from '@/components/settings/CoreRuntimeSettings'
 import { DataMigrationSettings } from '@/components/settings/DataMigrationSettings'
@@ -1589,7 +1588,6 @@ export default function AppPreferences(): React.JSX.Element {
                 </p>
               </div>
               <div className="w-2/3 space-y-4">
-                <AgentHooksSettings />
                 <AgentHooksSettings />
                 <AcpAgentsSettings />
                 <CliResumeDefaultsSettings />
