@@ -312,7 +312,7 @@ struct SeNavBar: View {
     var body: some View {
         HStack(spacing: 10) {
             if let onBack {
-                SeIconButton(icon: .back, accessibilityLabel: "返回", size: 34, action: onBack)
+                SeIconButton(icon: .back, accessibilityLabel: String(localized: "Back"), size: 34, action: onBack)
             }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -332,7 +332,7 @@ struct SeNavBar: View {
             }
             Spacer(minLength: 0)
             if let onTrailing {
-                SeIconButton(icon: .gear, accessibilityLabel: "更多", size: 34, action: onTrailing)
+                SeIconButton(icon: .gear, accessibilityLabel: String(localized: "More"), size: 34, action: onTrailing)
             }
         }
         .padding(.horizontal, 18)
@@ -397,11 +397,11 @@ struct SeHostSwitch: View {
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(SePressable())
-                .accessibilityLabel("命令面板")
+                .accessibilityLabel(String(localized: "Command palette"))
             }
-            SeIconButton(icon: themeIcon, accessibilityLabel: "切换主题", size: 34, action: onTheme)
+            SeIconButton(icon: themeIcon, accessibilityLabel: String(localized: "Toggle theme"), size: 34, action: onTheme)
             if showsRail {
-                SeIconButton(icon: .sidebar, accessibilityLabel: "所有去处", size: 34, action: onRail)
+                SeIconButton(icon: .sidebar, accessibilityLabel: String(localized: "All destinations"), size: 34, action: onRail)
             }
         }
         .padding(.horizontal, 18)
@@ -428,7 +428,7 @@ struct SeNeedStrip: View {
                     HStack(spacing: 7) {
                         if permissions > 0 {
                             SeNeedDot(kind: .wait)
-                            Text("\(permissions) 个许可").fontWeight(.semibold)
+                            Text("\(permissions) permissions").fontWeight(.semibold)
                         }
                         if permissions > 0 && failures > 0 {
                             Rectangle()
@@ -438,14 +438,14 @@ struct SeNeedStrip: View {
                         }
                         if failures > 0 {
                             SeNeedDot(kind: .fail)
-                            Text("\(failures) 个失败").fontWeight(.semibold)
+                            Text("\(failures) failures").fontWeight(.semibold)
                         }
                     }
                     .font(SeNocturneType.font(11.5))
                     .foregroundStyle(palette.ink)
 
                     Spacer(minLength: 0)
-                    Text("待你处理 →")
+                    Text("Needs you →")
                         .font(SeNocturneType.font(9, mono: true))
                         .foregroundStyle(palette.warning)
                 }
@@ -460,7 +460,7 @@ struct SeNeedStrip: View {
                 .padding(.top, 14)
             }
             .buttonStyle(SePressable())
-            .accessibilityLabel("待你处理")
+            .accessibilityLabel(String(localized: "Needs you"))
         }
     }
 }
@@ -576,7 +576,7 @@ struct SeHostRowView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("主机操作")
+                    .accessibilityLabel(String(localized: "Host actions"))
                 }
             }
             .padding(.horizontal, 2)
@@ -813,7 +813,7 @@ struct SeThemePick: View {
                 Button {
                     mode = item
                 } label: {
-                    Text(item == .day ? "日间" : "夜间")
+                    Text(item == .day ? "Day" : "Night")
                         .font(SeNocturneType.font(10))
                         .foregroundStyle(mode == item ? palette.canvas : palette.inkTertiary)
                         .padding(.horizontal, 8)
@@ -847,9 +847,9 @@ struct SeBottomBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            tab(icon: .chat, title: "会话", on: selection == .conversations, action: onConversations)
-            tab(icon: .terminal, title: "终端", on: selection == .terminals, action: onTerminals)
-            tab(icon: .folder, title: "工具", on: selection == .tools, action: onTools)
+            tab(icon: .chat, title: String(localized: "Conversations"), on: selection == .conversations, action: onConversations)
+            tab(icon: .terminal, title: String(localized: "Terminals"), on: selection == .terminals, action: onTerminals)
+            tab(icon: .folder, title: String(localized: "Tools"), on: selection == .tools, action: onTools)
         }
         .padding(.horizontal, 14)
         .padding(.top, 8)
@@ -861,7 +861,7 @@ struct SeBottomBar: View {
             Rectangle().fill(mode.hairline).frame(height: 1)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("主导航")
+        .accessibilityLabel(String(localized: "Main navigation"))
     }
 
     private func tab(icon: SeIcon, title: String, on: Bool, action: @escaping () -> Void) -> some View {
@@ -879,6 +879,45 @@ struct SeBottomBar: View {
         }
         .buttonStyle(SePressable())
         .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+// MARK: - Disclosure
+
+/// Keeps an explanation out of the layout: a compact `info.circle` control that
+/// shows the text in a popover on touch, and as a pointer tooltip via `help`.
+struct SeInfoTip: View {
+    let text: String
+    var accessibilityLabel: String = String(localized: "Details")
+    var size: CGFloat = 28
+
+    @Environment(\.sePalette) private var palette
+    @State private var isPresented = false
+
+    var body: some View {
+        Button {
+            isPresented = true
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(palette.inkTertiary)
+                .frame(width: size, height: size)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SePressable())
+        .help(text)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(text)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            Text(text)
+                .font(SeNocturneType.font(12))
+                .foregroundStyle(palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(14)
+                .frame(maxWidth: 300, alignment: .leading)
+                .presentationCompactAdaptation(.popover)
+                .presentationBackground(palette.card)
+        }
     }
 }
 
@@ -904,7 +943,7 @@ struct SeSheetHeader: View {
                     .tracking(-0.55)
                     .foregroundStyle(palette.ink)
                 Spacer(minLength: 0)
-                SeIconButton(icon: .close, accessibilityLabel: "关闭", size: 34, action: onClose)
+                SeIconButton(icon: .close, accessibilityLabel: String(localized: "Close"), size: 34, action: onClose)
             }
             if let subtitle {
                 Text(subtitle)

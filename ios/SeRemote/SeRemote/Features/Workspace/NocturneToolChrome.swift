@@ -504,7 +504,7 @@ struct NocturneEmptyState: View {
 
     let systemImage: String
     let title: String
-    let message: String
+    var message: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -516,10 +516,12 @@ struct NocturneEmptyState: View {
                     .font(SeNocturneType.font(13, weight: .semibold))
                     .foregroundStyle(palette.ink)
             }
-            Text(message)
-                .font(SeNocturneType.font(11, weight: .regular))
-                .foregroundStyle(palette.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let message {
+                Text(message)
+                    .font(SeNocturneType.font(11, weight: .regular))
+                    .foregroundStyle(palette.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
