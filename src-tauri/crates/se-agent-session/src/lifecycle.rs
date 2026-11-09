@@ -2841,6 +2841,7 @@ mod tests {
                     resources: vec![SessionWorkspaceResourceDescriptor::Terminal {
                         terminal_id: "terminal-live".to_string(),
                         terminal_record_id: None,
+                        agent_descriptor: None,
                         conversation_id: fixture.id,
                     }],
                     projection_state: SessionWorkspaceProjectionState::Native,
@@ -2912,6 +2913,7 @@ mod tests {
                     resources: vec![SessionWorkspaceResourceDescriptor::Terminal {
                         terminal_id: "terminal-stuck".to_string(),
                         terminal_record_id: None,
+                        agent_descriptor: None,
                         conversation_id: fixture.id,
                     }],
                     projection_state: SessionWorkspaceProjectionState::Native,
@@ -2962,6 +2964,7 @@ mod tests {
                     resources: vec![SessionWorkspaceResourceDescriptor::Terminal {
                         terminal_id: terminal_id.to_string(),
                         terminal_record_id: None,
+                        agent_descriptor: None,
                         conversation_id: fixture.id,
                     }],
                     projection_state: SessionWorkspaceProjectionState::Native,

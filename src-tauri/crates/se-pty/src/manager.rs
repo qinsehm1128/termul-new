@@ -1800,6 +1800,10 @@ pub struct PtyManager {
     /// The last view close pauses cwd/git polling without killing the PTY.
     view_refs: Arc<parking_lot::Mutex<HashMap<String, u32>>>,
     terminal_program: Arc<TerminalProgram>,
+    /// Auxiliary to the durable host claim: never launch twice for one prior generation.
+    resume_attempts: Arc<AsyncMutex<HashMap<(String, u64), (String, SpawnedTerminal)>>>,
+    /// Host-only command evidence. Never serialize or log argv (it can contain prompts/secrets).
+    launch_evidence: Arc<parking_lot::Mutex<HashMap<String, (String, Vec<String>)>>>,
 }
 
 impl PtyManager {
@@ -1828,7 +1832,57 @@ impl PtyManager {
             cleanup_job_counter: Arc::new(AtomicU64::new(0)),
             view_refs: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             terminal_program: Arc::new(terminal_program),
+            resume_attempts: Arc::new(AsyncMutex::new(HashMap::new())),
+            launch_evidence: Arc::new(parking_lot::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Raw host launch evidence for trusted backend verification only; never expose via IPC.
+    pub fn host_launch_evidence(&self, terminal_id: &str) -> Option<(String, Vec<String>)> {
+        if self.get(terminal_id).is_none() {
+            self.launch_evidence.lock().remove(terminal_id);
+            return None;
+        }
+        self.launch_evidence.lock().get(terminal_id).cloned()
+    }
+
+    /// The caller must hold its durable descriptor lock and persist a claim before entering.
+    /// Existing TerminalInfo contains the manager-issued claim; no second credential is minted.
+    pub async fn spawn_resume_idempotent(
+        &self,
+        descriptor_id: &str,
+        previous_generation: u64,
+        attempt_id: &str,
+        options: SpawnOptions,
+    ) -> Result<SpawnedTerminal, String> {
+        let mut attempts = self.resume_attempts.lock().await;
+        let key = (descriptor_id.to_owned(), previous_generation);
+        if let Some((_, info)) = attempts.get(&key) {
+            if self.claim_generation(&info.info.id).is_some() {
+                return Ok(info.clone());
+            }
+            return Err("previous resume terminal is no longer active".into());
+        }
+        let info = self.spawn(options, None).await?;
+        attempts.insert(key, (attempt_id.to_owned(), info.clone()));
+        Ok(info)
+    }
+
+    /// Recovery proof after persistence failed following a successful spawn.
+    pub async fn resume_attempt_terminal(
+        &self,
+        descriptor_id: &str,
+        previous_generation: u64,
+        attempt_id: &str,
+    ) -> Option<SpawnedTerminal> {
+        self.resume_attempts
+            .lock()
+            .await
+            .get(&(descriptor_id.to_owned(), previous_generation))
+            .filter(|(attempt, info)| {
+                attempt == attempt_id && self.claim_generation(&info.info.id).is_some()
+            })
+            .map(|(_, info)| info.clone())
     }
 
     fn pause_view_tracking(&self, terminal_id: &str) {
@@ -2258,6 +2312,7 @@ impl PtyManager {
         {
             Ok(info) => info,
             Err(e) => {
+                self.launch_evidence.lock().remove(&id);
                 // claim_guard drops here and removes the dangling record.
                 return Err(e);
             }
@@ -2313,6 +2368,17 @@ impl PtyManager {
         let program_args: Vec<String> =
             resolved.prepend_args.into_iter().chain(user_args).collect();
         let shell_path = resolved.program;
+        let evidence_args = if options.program.is_some() {
+            program_args.clone()
+        } else {
+            crate::env_refresh::shell_startup_args(&shell_path)
+                .iter()
+                .map(|arg| (*arg).to_owned())
+                .collect()
+        };
+        self.launch_evidence
+            .lock()
+            .insert(id.clone(), (shell_path.clone(), evidence_args));
 
         // Resolve working directory
         let cwd = if let Some(cwd) = &options.cwd {
@@ -3277,6 +3343,7 @@ impl PtyManager {
         id: &str,
         caller_deadline: tokio::time::Instant,
     ) -> Result<TerminalCleanupReceipt, TerminalCleanupFailure> {
+        self.launch_evidence.lock().remove(id);
         let Some(instance) = self.get(id) else {
             return Ok(TerminalCleanupReceipt {
                 terminal_id: id.to_string(),
@@ -4681,6 +4748,48 @@ impl portable_pty::Child for WindowsConPtyChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resume_same_descriptor_generation_reuses_terminal_and_existing_grant() {
+        let manager = crate::test_pty_manager();
+        let temp = tempfile::tempdir().unwrap();
+        let options = SpawnOptions {
+            cwd: Some(temp.path().to_string_lossy().into_owned()),
+            shell: Some("/bin/sh".into()),
+            ..Default::default()
+        };
+        let (first, second) = tokio::join!(
+            manager.spawn_resume_idempotent("descriptor", 4, "attempt-one", options.clone()),
+            manager.spawn_resume_idempotent("descriptor", 4, "attempt-two", options),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        let evidence = manager.host_launch_evidence(&first.info.id).unwrap();
+        assert_eq!(evidence.0, first.info.shell);
+        assert_eq!(
+            evidence.1,
+            crate::env_refresh::shell_startup_args(&first.info.shell)
+                .iter()
+                .map(|arg| (*arg).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(first.info.id, second.info.id);
+        assert_eq!(first.claim, second.claim);
+        assert!(manager
+            .resume_attempt_terminal("descriptor", 4, "attempt-one")
+            .await
+            .is_some());
+        assert!(manager
+            .resume_attempt_terminal("descriptor", 4, "attempt-two")
+            .await
+            .is_none());
+        let _ = manager.terminate(&first.info.id).await;
+        assert!(manager
+            .spawn_resume_idempotent("descriptor", 4, "attempt-three", SpawnOptions::default())
+            .await
+            .is_err());
+    }
 
     #[cfg(unix)]
     #[tokio::test]

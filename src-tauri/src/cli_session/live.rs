@@ -88,39 +88,62 @@ struct OpenFiles {
 pub fn detect_with_hooks(terminals: &[(u32, String, Option<String>)]) -> Vec<LiveAgentSession> {
     detect_with_hook_lookup(
         terminals,
-        crate::agent_hooks::latest,
+        crate::agent_hooks::state::latest,
         detect_live_agent_sessions,
     )
 }
 
 fn detect_with_hook_lookup(
     terminals: &[(u32, String, Option<String>)],
-    lookup: impl Fn(&str) -> Option<crate::agent_hooks::AgentHookEvent>,
+    lookup: impl Fn(&str) -> Option<crate::agent_hooks::contract::HookStateDto>,
     poll: impl FnOnce(&[u32]) -> Vec<LiveAgentSession>,
 ) -> Vec<LiveAgentSession> {
-    use crate::agent_hooks::HookKind;
     let mut fallback = Vec::new();
     let mut ended = std::collections::HashMap::new();
     let mut sessions = Vec::new();
     for (pid, id, cwd) in terminals {
         if let Some(event) = lookup(id) {
-            if event.kind != HookKind::SessionEnd {
+            if event.restore_state != crate::agent_hooks::contract::RestoreState::Ended {
+                let self_dev = event
+                    .identity
+                    .descriptor_id
+                    .as_deref()
+                    .and_then(|id| {
+                        let home = PathBuf::from(std::env::var_os("HOME")?);
+                        super::identity_store::load(&home, id).ok()
+                    })
+                    .is_some_and(|stored| {
+                        stored.variant == "self-dev"
+                            && stored.identity.agent_session_id == event.agent_session_id
+                            && stored.adapter_install_id == event.adapter_install_id
+                    });
                 sessions.push(LiveAgentSession {
                     root_pid: *pid,
-                    agent_id: event.agent.as_str(),
-                    session_id: event.session_id,
-                    self_dev: false,
+                    agent_id: match event.identity.adapter_id.as_str() {
+                        "claude-code" => "claude-code",
+                        "pi" => "pi",
+                        "qin-code" => "qin-code",
+                        _ => continue,
+                    },
+                    session_id: event.agent_session_id,
+                    self_dev,
                     codex_home: None,
-                    cwd: cwd.clone(),
+                    cwd: event.identity.cwd.or_else(|| cwd.clone()),
                     source: "hook",
-                    hook_kind: Some(event.kind),
-                    transcript_path: event.transcript_path,
+                    hook_kind: None,
+                    transcript_path: event.identity.transcript_path,
                 });
             } else {
                 // Uninstalling hooks must not disable discovery for the rest
                 // of this PTY's life. Only suppress the ended identity.
                 fallback.push(*pid);
-                ended.insert(*pid, (event.agent.as_str(), event.session_id));
+                ended.insert(
+                    *pid,
+                    (
+                        event.identity.adapter_id.as_str().to_string(),
+                        event.agent_session_id,
+                    ),
+                );
             }
         } else {
             fallback.push(*pid);
@@ -187,6 +210,68 @@ pub fn detect_live_agent_sessions(root_pids: &[u32]) -> Vec<LiveAgentSession> {
 }
 
 // --- process table -------------------------------------------------------
+
+/// All matching agent processes in the authenticated terminal ancestry, including direct launches.
+/// Recording all matches is conservative: a surviving ambiguous/background agent blocks restore.
+pub(crate) fn verified_agent_processes(root: u32, adapter: &str) -> Vec<u32> {
+    let processes = list_processes();
+    let mut queue: VecDeque<u32> = [root].into();
+    let mut visited = HashSet::new();
+    let mut result = Vec::new();
+    while let Some(pid) = queue.pop_front() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        if let Some(proc) = processes.iter().find(|proc| proc.pid == pid) {
+            if classify(&proc.args).is_some_and(|agent| agent.id() == adapter) {
+                result.push(pid);
+            }
+        }
+        queue.extend(
+            processes
+                .iter()
+                .filter(|proc| proc.ppid == pid)
+                .map(|proc| proc.pid),
+        );
+    }
+    result
+}
+
+pub(crate) fn qin_variant_from_evidence(
+    launch: &[String],
+    process: &[String],
+) -> Option<&'static str> {
+    fn self_dev(argv: &[String]) -> Option<bool> {
+        if classify(argv)? != LiveAgent::QinCode {
+            return None;
+        }
+        let offset = if matches!(basename(argv.first()?), "node" | "bun") {
+            2
+        } else {
+            1
+        };
+        Some(argv.get(offset).is_some_and(|arg| arg == "self-dev"))
+    }
+    let expected = self_dev(launch)?;
+    (self_dev(process)? == expected).then_some(if expected { "self-dev" } else { "default" })
+}
+pub(crate) fn verified_qin_variant(root: u32, launch: &[String]) -> Option<String> {
+    let pids = verified_agent_processes(root, "qin-code");
+    if pids.is_empty() {
+        return None;
+    }
+    let processes = list_processes();
+    let mut result: Option<&str> = None;
+    for pid in pids {
+        let process = processes.iter().find(|process| process.pid == pid)?;
+        let variant = qin_variant_from_evidence(launch, &process.args)?;
+        if result.is_some_and(|previous| previous != variant) {
+            return None;
+        }
+        result = Some(variant);
+    }
+    result.map(str::to_owned)
+}
 
 fn list_processes() -> Vec<Proc> {
     let Ok(output) = Command::new("ps")
@@ -256,8 +341,21 @@ fn classify(args: &[String]) -> Option<LiveAgent> {
         "pi" => Some(LiveAgent::Pi),
         // Only the TUI client is a session a terminal can reopen; the shared
         // server, the menubar helper and the web UI are not.
-        "qin-code" if !args.iter().skip(1).any(|arg| is_qin_non_client_arg(arg)) => {
-            Some(LiveAgent::QinCode)
+        "qin-code" => {
+            let offset = if matches!(program, "node" | "bun") {
+                2
+            } else {
+                1
+            };
+            let command = args.get(offset).map(String::as_str);
+            let command = if command == Some("self-dev") {
+                args.get(offset + 1).map(String::as_str)
+            } else {
+                command
+            };
+            // Session IDs and option values can equal subcommand names. Only
+            // the actual command position determines whether this is a TUI.
+            (!command.is_some_and(is_qin_non_client_arg)).then_some(LiveAgent::QinCode)
         }
         _ => None,
     }
@@ -381,7 +479,7 @@ fn resolve_all(
     open: &HashMap<u32, OpenFiles>,
     qin_clients: &[QinClient],
     homes: &AgentHomes,
-    now: SystemTime,
+    _now: SystemTime,
 ) -> Vec<LiveAgentSession> {
     let qin_claims = qin_argv_claims(found, qin_clients);
     let cwd_of = |f: &Found| {
@@ -389,10 +487,6 @@ fn resolve_all(
             .iter()
             .find_map(|pid| open.get(pid).and_then(|files| files.cwd.clone()))
     };
-    let mut pi_per_cwd: HashMap<Option<String>, usize> = HashMap::new();
-    for f in found.iter().filter(|f| f.agent == LiveAgent::Pi) {
-        *pi_per_cwd.entry(cwd_of(f)).or_default() += 1;
-    }
     found
         .iter()
         .filter_map(|f| {
@@ -425,14 +519,19 @@ fn resolve_all(
                     }
                 }
                 LiveAgent::Pi => {
-                    // Two pi processes in one directory write to the same folder
-                    // and cannot be told apart from outside.
-                    if pi_per_cwd.get(&cwd).copied().unwrap_or(0) > 1 {
-                        return None;
-                    }
-                    let started = now.checked_sub(f.elapsed)?;
-                    session.session_id =
-                        pi_session(homes.pi_sessions.as_deref()?, cwd.as_deref()?, started)?;
+                    let files = f
+                        .pids
+                        .iter()
+                        .filter_map(|pid| open.get(pid))
+                        .flat_map(|info| info.files.iter().map(String::as_str));
+                    let (id, path) = pi_process_session(
+                        homes.pi_sessions.as_deref()?,
+                        cwd.as_deref()?,
+                        &f.args,
+                        files,
+                    )?;
+                    session.session_id = id;
+                    session.transcript_path = Some(path.to_string_lossy().into_owned());
                 }
                 // A client started inside qin-code's own repo turns self-dev on
                 // by itself, so resuming from the session's directory restores
@@ -489,25 +588,67 @@ fn codex_session<'a>(files: impl Iterator<Item = &'a str>) -> Option<(String, Pa
         .map(|(_, id, home)| (id, home))
 }
 
-/// pi records no pid and closes its session file after every append, so the
-/// session is inferred: the file in this directory's session folder written
-/// most recently since the process started. Nothing written yet means nothing
-/// to resume.
-fn pi_session(sessions_root: &Path, cwd: &str, started: SystemTime) -> Option<String> {
-    let dir = sessions_root.join(encode_pi_project_dir(Path::new(cwd)));
-    let since = started.checked_sub(Duration::from_secs(2))?;
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            let stem = name.strip_suffix(".jsonl")?;
-            let modified = entry.metadata().and_then(|m| m.modified()).ok()?;
-            (modified >= since).then_some((modified, stem.to_string()))
-        })
-        .max_by_key(|(modified, _)| *modified)
-        // `<ISO time>_<uuid>`; `pi --session <uuid>` finds it in the cwd folder.
-        .and_then(|(_, stem)| safe_id(stem.rsplit('_').next()?))
+/// Resolve only process-evidenced handles. Never select a cwd's newest file.
+fn pi_process_session<'a>(
+    root: &Path,
+    cwd: &str,
+    args: &[String],
+    files: impl Iterator<Item = &'a str>,
+) -> Option<(String, PathBuf)> {
+    let mut candidates: Vec<PathBuf> = files
+        .filter_map(|name| safe_pi_path(root, Path::new(name)))
+        .collect();
+    if let Some(handle) = arg_after(args, "--session") {
+        let path = Path::new(handle);
+        if path.is_absolute() {
+            candidates.push(safe_pi_path(root, path)?);
+        } else if safe_id(handle).is_some() {
+            let dir = root.join(encode_pi_project_dir(Path::new(cwd)));
+            let matching: Vec<_> = std::fs::read_dir(dir)
+                .ok()?
+                .flatten()
+                .filter_map(|entry| {
+                    let path = safe_pi_path(root, &entry.path())?;
+                    (pi_path_id(&path)?.as_str() == handle).then_some(path)
+                })
+                .collect();
+            if matching.len() != 1 {
+                return None;
+            }
+            candidates.extend(matching);
+        } else {
+            return None;
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    if candidates.len() != 1 {
+        return None;
+    }
+    let path = candidates.pop()?;
+    Some((pi_path_id(&path)?, path))
+}
+pub(crate) fn safe_pi_path(root: &Path, path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute()
+        || super::identity_store::safe_path(path).is_err()
+        || super::identity_store::safe_path(root).is_err()
+    {
+        return None;
+    }
+    let canonical_root = root.canonicalize().ok()?;
+    let canonical = path.canonicalize().ok()?;
+    if !canonical.starts_with(canonical_root)
+        || !canonical.is_file()
+        || canonical.extension()?.to_str()? != "jsonl"
+    {
+        return None;
+    }
+    std::fs::File::open(&canonical).ok()?;
+    Some(canonical)
+}
+fn pi_path_id(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    safe_id(stem.rsplit('_').next()?)
 }
 
 fn arg_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -602,20 +743,19 @@ fn parse_qin_clients(text: &str) -> Vec<QinClient> {
 #[cfg(test)]
 mod hook_precedence_tests {
     use super::*;
-    use crate::agent_hooks::{AgentHookEvent, AgentKind, HookKind};
-    fn event(kind: HookKind) -> AgentHookEvent {
-        AgentHookEvent {
-            sequence: 1,
-            terminal_id: "hooked".into(),
-            project_id: "p".into(),
-            agent: AgentKind::QinCode,
-            session_id: "actual-session".into(),
-            transcript_path: None,
-            kind,
-            at: 1,
-            tool_name: None,
-            ok: None,
-        }
+    use crate::agent_hooks::{contract::*, HookKind};
+    fn event(kind: HookKind) -> HookStateDto {
+        let mut value = crate::cli_session::restore_tests::state();
+        value.terminal_id = "hooked".into();
+        value.identity.adapter_id = "qin-code".to_owned().try_into().unwrap();
+        value.identity.agent_session_id = "actual-session".into();
+        value.agent_session_id = "actual-session".into();
+        value.restore_state = if kind == HookKind::SessionEnd {
+            RestoreState::Ended
+        } else {
+            RestoreState::Confirmed
+        };
+        value
     }
     #[test]
     fn hook_state_precedes_polling_and_only_unhooked_roots_are_probed() {
@@ -634,7 +774,7 @@ mod hook_precedence_tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "actual-session");
         assert_eq!(sessions[0].source, "hook");
-        assert_eq!(sessions[0].hook_kind, Some(HookKind::NeedsApproval));
+        assert_eq!(sessions[0].hook_kind, None);
     }
     #[test]
     fn same_directory_hooks_keep_qin_and_pi_sessions_distinct() {
@@ -646,12 +786,16 @@ mod hook_precedence_tests {
             |id| {
                 let mut value = event(HookKind::SessionStart);
                 value.terminal_id = id.into();
-                value.session_id = format!("session-{id}");
-                value.agent = if id.ends_with('0') || id.ends_with('1') {
-                    AgentKind::QinCode
+                value.agent_session_id = format!("session-{id}");
+                value.identity.agent_session_id = value.agent_session_id.clone();
+                value.identity.adapter_id = if id.ends_with('0') || id.ends_with('1') {
+                    "qin-code"
                 } else {
-                    AgentKind::Pi
-                };
+                    "pi"
+                }
+                .to_owned()
+                .try_into()
+                .unwrap();
                 Some(value)
             },
             |_| panic!("active hook panes must not poll"),
@@ -921,32 +1065,34 @@ mod tests {
     }
 
     #[test]
-    fn pi_takes_the_newest_session_written_since_it_started() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root
-            .path()
-            .join("pi")
-            .join(encode_pi_project_dir(Path::new("/repo")));
-        write_aged(
-            &dir.join("2026-10-08T01-00-00-000Z_01a11a0a-0000-7000-8000-00000000000a.jsonl"),
-            Duration::from_secs(3_600),
-        );
-        write_aged(
-            &dir.join("2026-10-08T02-00-00-000Z_01a11a0b-0000-7000-8000-00000000000b.jsonl"),
-            Duration::from_secs(10),
-        );
-        let open: HashMap<_, _> = [cwd_only(5, "/repo")].into();
-        let resolved = resolve_all(
-            &[found(LiveAgent::Pi, 5, "pi")],
-            &open,
+    fn pi_uses_exact_process_file_or_unique_explicit_id_never_newest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let dir = root.join(encode_pi_project_dir(Path::new("/work")));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("old_session-one.jsonl");
+        let newest = dir.join("new_session-two.jsonl");
+        std::fs::write(&first, "{}").unwrap();
+        std::fs::write(&newest, "{}").unwrap();
+        assert!(pi_process_session(&root, "/work", &[], std::iter::empty()).is_none());
+        let exact = pi_process_session(
+            &root,
+            "/work",
             &[],
-            &homes(root.path()),
-            SystemTime::now(),
-        );
+            std::iter::once(first.to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(exact.0, "session-one");
+        assert_eq!(exact.1, first);
+        let args = args("--session session-one");
         assert_eq!(
-            resolved[0].session_id,
-            "01a11a0b-0000-7000-8000-00000000000b"
+            pi_process_session(&root, "/work", &args, std::iter::empty())
+                .unwrap()
+                .1,
+            first
         );
+        std::fs::write(dir.join("duplicate_session-one.jsonl"), "{}").unwrap();
+        assert!(pi_process_session(&root, "/work", &args, std::iter::empty()).is_none());
     }
 
     #[test]

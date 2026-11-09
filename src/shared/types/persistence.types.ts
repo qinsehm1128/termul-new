@@ -1,4 +1,5 @@
 import type { TerminalAgentSession } from './cli-session.types'
+import type { AgentDescriptorRef } from './session-workspace.types'
 import type { TerminalModes } from './ipc.types'
 import type { TerminalScreenEngine } from './terminal-screen.types'
 
@@ -32,6 +33,8 @@ export interface PersistedTerminal {
    * when the process is gone, to reopen that session rather than a bare shell.
    */
   agentSession?: TerminalAgentSession
+  /** Passive host reference survives cold hydration without runtime session state. */
+  agentDescriptor?: AgentDescriptorRef
 }
 
 // Default scrollback limit to prevent excessive storage

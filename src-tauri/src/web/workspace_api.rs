@@ -284,6 +284,7 @@ mod tests {
                 name: "main".to_string(),
                 worktree_id: Some("wt-1".to_string()),
                 claim_handle: Some("handle-1".to_string()),
+                agent_descriptor: None,
             }],
             editors: vec![],
         }

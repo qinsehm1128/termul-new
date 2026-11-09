@@ -30,6 +30,12 @@ export interface SessionWorkspaceLeafNode {
 
 export type SessionWorkspacePaneNode = SessionWorkspaceSplitNode | SessionWorkspaceLeafNode
 
+/** Passive host descriptor identity. Contains no runtime state or restore authorization. */
+export interface AgentDescriptorRef {
+  descriptorId: string
+  generation: number
+}
+
 /** Passive reference to a PtyManager-owned terminal. It conveys no ownership or credential. */
 export interface TerminalResourceDescriptor {
   kind: 'terminal'
@@ -38,6 +44,8 @@ export interface TerminalResourceDescriptor {
   /** Optional renderer record id used to rebuild visible topology. */
   terminalRecordId?: string
   conversationId: ConversationId
+  /** Missing metadata is not a restore candidate. */
+  agentDescriptor?: AgentDescriptorRef
 }
 
 /** Renderer-only result of reconciling a passive terminal reference with its host. */
@@ -261,13 +269,36 @@ function parseProjectionState(value: unknown): SessionWorkspaceProjectionState {
   return value as SessionWorkspaceProjectionState
 }
 
+/** Validate identity-only metadata; authorization is always resolved by the host. */
+export function parseAgentDescriptorRef(value: unknown): AgentDescriptorRef {
+  const candidate = runtimeRecord(value, 'Agent descriptor reference')
+  exactKeys(candidate, ['descriptorId', 'generation'])
+  nonEmptyString(candidate.descriptorId, 'Agent descriptor id')
+  if (
+    typeof candidate.descriptorId !== 'string' ||
+    candidate.descriptorId.trim().length === 0 ||
+    !Number.isSafeInteger(candidate.generation) ||
+    (candidate.generation as number) < 0
+  ) {
+    throw new TypeError('Agent descriptor reference is invalid')
+  }
+  return value as AgentDescriptorRef
+}
+
 function parseResource(
   value: unknown,
   workspaceConversationId: ConversationId
 ): SessionWorkspaceResourceDescriptor {
   const candidate = runtimeRecord(value, 'SessionWorkspace resource')
   if (candidate.kind === 'terminal') {
-    exactKeys(candidate, ['kind', 'terminalId', 'conversationId'], ['terminalRecordId'])
+    exactKeys(
+      candidate,
+      ['kind', 'terminalId', 'conversationId'],
+      ['terminalRecordId', 'agentDescriptor']
+    )
+    if (Object.prototype.hasOwnProperty.call(candidate, 'agentDescriptor')) {
+      parseAgentDescriptorRef(candidate.agentDescriptor)
+    }
     nonEmptyString(candidate.terminalId, 'SessionWorkspace terminalId')
     const resourceConversationId = conversationId(
       candidate.conversationId,

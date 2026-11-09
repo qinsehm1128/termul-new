@@ -65,6 +65,49 @@ pub enum SessionWorkspacePaneNode {
     Leaf(SessionWorkspaceLeafNode),
 }
 
+/// Passive identity reference only. Restore authorization and runtime state live
+/// outside workspace persistence; absence means there is no resumable identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", try_from = "AgentDescriptorRefWire")]
+pub struct AgentDescriptorRef {
+    pub descriptor_id: String,
+    pub generation: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentDescriptorRefWire {
+    descriptor_id: String,
+    generation: u64,
+}
+
+impl TryFrom<AgentDescriptorRefWire> for AgentDescriptorRef {
+    type Error = &'static str;
+
+    fn try_from(value: AgentDescriptorRefWire) -> std::result::Result<Self, Self::Error> {
+        if value.descriptor_id.trim().is_empty() {
+            return Err("agent descriptor id must not be blank");
+        }
+        if value.generation > 9_007_199_254_740_991 {
+            return Err("agent descriptor generation must be a safe integer");
+        }
+        Ok(Self {
+            descriptor_id: value.descriptor_id,
+            generation: value.generation,
+        })
+    }
+}
+
+/// A present metadata field must be an object, not JSON null.
+pub(crate) fn deserialize_agent_descriptor<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<AgentDescriptorRef>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    AgentDescriptorRef::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SessionWorkspaceResourceDescriptor {
@@ -81,6 +124,13 @@ pub enum SessionWorkspaceResourceDescriptor {
         terminal_record_id: Option<String>,
         #[serde(rename = "conversationId")]
         conversation_id: ConversationId,
+        #[serde(
+            rename = "agentDescriptor",
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_agent_descriptor"
+        )]
+        agent_descriptor: Option<AgentDescriptorRef>,
     },
     Editor {
         #[serde(rename = "editorId")]
@@ -623,6 +673,7 @@ impl SessionWorkspaceService {
                 .push(SessionWorkspaceResourceDescriptor::Terminal {
                     terminal_id: terminal_id.to_string(),
                     terminal_record_id: None,
+                    agent_descriptor: None,
                     conversation_id,
                 });
         } else if !add {
@@ -1839,6 +1890,92 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+mod agent_descriptor_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn terminal() -> serde_json::Value {
+        json!({"kind": "terminal", "terminalId": "pty-1", "conversationId": "01900000-0000-7000-8000-000000000001"})
+    }
+
+    #[test]
+    fn passive_agent_descriptor_roundtrips_camel_case() {
+        let mut value = terminal();
+        value["agentDescriptor"] = json!({"descriptorId": "host-descriptor", "generation": 3});
+        let resource: SessionWorkspaceResourceDescriptor =
+            serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(resource).unwrap(), value);
+    }
+
+    #[test]
+    fn legacy_terminal_omits_agent_descriptor() {
+        let value = terminal();
+        let resource: SessionWorkspaceResourceDescriptor =
+            serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(
+            &resource,
+            SessionWorkspaceResourceDescriptor::Terminal {
+                agent_descriptor: None,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(resource).unwrap(), value);
+    }
+
+    #[test]
+    fn schema_v1_accepts_both_legacy_and_reference_metadata() {
+        let mut value = json!({
+            "schemaVersion": 1,
+            "conversationId": "01900000-0000-7000-8000-000000000001",
+            "revision": 1,
+            "updatedAtUtc": "2026-11-10T00:00:00.000Z",
+            "topology": null,
+            "activePaneId": null,
+            "resources": [terminal()],
+            "projectionState": {"status": "native"}
+        });
+        let legacy: SessionWorkspaceV1 = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(legacy.schema_version, SESSION_WORKSPACE_SCHEMA_VERSION);
+        assert!(serde_json::to_value(legacy).unwrap()["resources"][0]
+            .get("agentDescriptor")
+            .is_none());
+        value["resources"][0]["agentDescriptor"] =
+            json!({"descriptorId": "host-descriptor", "generation": 0});
+        let restored: SessionWorkspaceV1 = serde_json::from_value(value).unwrap();
+        let encoded = serde_json::to_value(restored).unwrap();
+        assert_eq!(encoded["schemaVersion"], 1);
+        assert_eq!(encoded["resources"][0]["agentDescriptor"]["generation"], 0);
+    }
+
+    #[test]
+    fn invalid_agent_descriptor_metadata_is_rejected() {
+        for metadata in [
+            json!(null),
+            json!("descriptor"),
+            json!({}),
+            json!({"descriptorId": "", "generation": 1}),
+            json!({"descriptorId": "  ", "generation": 1}),
+            json!({"descriptorId": 1, "generation": 1}),
+            json!({"descriptorId": "id", "generation": -1}),
+            json!({"descriptorId": "id", "generation": 0.5}),
+            json!({"descriptorId": "id", "generation": 9007199254740992_u64}),
+            json!({"descriptorId": "id", "generation": "1"}),
+            json!({"descriptor_id": "id", "generation": 1}),
+            json!({"descriptorId": "id", "generation": 1, "trusted": true}),
+            json!({"descriptorId": "id", "generation": 1, "argv": ["agent"]}),
+            json!({"descriptorId": "id", "generation": 1, "runtime": {}}),
+        ] {
+            let mut value = terminal();
+            value["agentDescriptor"] = metadata.clone();
+            assert!(
+                serde_json::from_value::<SessionWorkspaceResourceDescriptor>(value).is_err(),
+                "accepted {metadata}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::contracts::{
@@ -2123,6 +2260,7 @@ mod tests {
                     name: "legacy".to_string(),
                     worktree_id: None,
                     claim_handle: None,
+                    agent_descriptor: None,
                 }],
                 editors: vec![EditorDescriptor {
                     editor_id: "editor-one".to_string(),

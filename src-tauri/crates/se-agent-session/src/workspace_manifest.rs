@@ -85,6 +85,12 @@ pub struct TerminalDescriptor {
     /// the raw claim — only this opaque string mirror.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim_handle: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::session_workspace::deserialize_agent_descriptor"
+    )]
+    pub agent_descriptor: Option<crate::session_workspace::AgentDescriptorRef>,
 }
 
 /// Portable editor descriptor. A restored editor tab reopens a file path inside
@@ -868,6 +874,41 @@ mod tests {
         WorkspaceManifestService::open_writable_for_tests(root).await
     }
 
+    #[test]
+    fn terminal_agent_descriptor_roundtrip_and_legacy_omission() {
+        let mut manifest = sample_manifest("project");
+        manifest.terminals[0].agent_descriptor =
+            Some(crate::session_workspace::AgentDescriptorRef {
+                descriptor_id: "host-descriptor".to_string(),
+                generation: 2,
+            });
+        let encoded = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(
+            encoded["terminals"][0]["agentDescriptor"],
+            serde_json::json!({
+                "descriptorId": "host-descriptor", "generation": 2
+            })
+        );
+        let restored: WorkspaceManifest = serde_json::from_value(encoded).unwrap();
+        assert_eq!(
+            restored.terminals[0].agent_descriptor,
+            manifest.terminals[0].agent_descriptor
+        );
+        let legacy = serde_json::to_value(sample_manifest("project")).unwrap();
+        assert!(legacy["terminals"][0].get("agentDescriptor").is_none());
+        let restored: WorkspaceManifest = serde_json::from_value(legacy).unwrap();
+        assert!(restored.terminals[0].agent_descriptor.is_none());
+    }
+
+    #[test]
+    fn terminal_agent_descriptor_rejects_runtime_metadata() {
+        let mut manifest = serde_json::to_value(sample_manifest("project")).unwrap();
+        manifest["terminals"][0]["agentDescriptor"] = serde_json::json!({
+            "descriptorId": "id", "generation": 2, "trust": true
+        });
+        assert!(serde_json::from_value::<WorkspaceManifest>(manifest).is_err());
+    }
+
     fn sample_manifest(project_id: &str) -> WorkspaceManifest {
         WorkspaceManifest {
             project_id: project_id.to_string(),
@@ -890,6 +931,7 @@ mod tests {
                 name: "main".to_string(),
                 worktree_id: Some("wt-1".to_string()),
                 claim_handle: Some("handle-1".to_string()),
+                agent_descriptor: None,
             }],
             editors: vec![],
         }
@@ -1590,6 +1632,7 @@ mod tests {
             name: "main".to_string(),
             worktree_id: Some("wt-1".to_string()),
             claim_handle: Some("handle-1".to_string()),
+            agent_descriptor: None,
         };
         let value = serde_json::to_value(&descriptor).unwrap();
         assert_eq!(value["terminalId"], "terminal-1");

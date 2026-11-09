@@ -17,6 +17,7 @@
  */
 
 import type { IpcResult } from './ipc.types'
+import type { AgentDescriptorRef } from './session-workspace.types'
 
 /** Direction for a split node. Mirrors `PaneDirection` in workspace.types.ts. */
 export type PaneDirection = 'horizontal' | 'vertical'
@@ -64,6 +65,8 @@ export interface TerminalDescriptor {
   name: string
   worktreeId?: string
   claimHandle?: string
+  /** Identity reference only; never authorizes a restore by itself. */
+  agentDescriptor?: AgentDescriptorRef
 }
 
 /** Portable editor descriptor. A restored editor tab reopens a file path. */

@@ -127,6 +127,12 @@ impl LegacyWorkspaceProjector {
             SessionWorkspaceResourceDescriptor::Terminal {
                 terminal_id: terminal_id.clone(),
                 terminal_record_id: None,
+                agent_descriptor: legacy
+                    .manifest
+                    .terminals
+                    .iter()
+                    .find(|terminal| terminal.terminal_id == *terminal_id)
+                    .and_then(|terminal| terminal.agent_descriptor.clone()),
                 conversation_id: target_conversation_id,
             }
         }));
@@ -274,6 +280,7 @@ mod tests {
                         name: "bound".to_string(),
                         worktree_id: None,
                         claim_handle: None,
+                        agent_descriptor: None,
                     },
                     TerminalDescriptor {
                         terminal_id: "terminal-shared".to_string(),
@@ -283,6 +290,7 @@ mod tests {
                         name: "shared".to_string(),
                         worktree_id: None,
                         claim_handle: None,
+                        agent_descriptor: None,
                     },
                 ],
                 editors: vec![EditorDescriptor {
@@ -299,6 +307,35 @@ mod tests {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect()
+    }
+
+    #[test]
+    fn projection_preserves_passive_agent_descriptor_reference() {
+        let mut legacy: serde_json::Value = serde_json::from_slice(&source()).unwrap();
+        legacy["manifest"]["terminals"][0]["agentDescriptor"] = serde_json::json!({
+            "descriptorId": "host-descriptor", "generation": 7
+        });
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        let id = ConversationId::parse(ID).unwrap();
+        let outcome = LegacyWorkspaceProjector::project(
+            &bytes,
+            "legacy_workspace_manifests/0/project-one.json",
+            &checksum(&bytes),
+            id,
+            &[id],
+            &HashMap::from([("terminal-bound".to_string(), id)]),
+            None,
+            "2026-08-15T10:00:00.000Z".to_string(),
+        );
+        let WorkspaceProjectionOutcome::Projected { workspace, .. } = outcome else {
+            panic!("expected projection");
+        };
+        assert!(workspace.resources.iter().any(|resource| matches!(
+            resource,
+            SessionWorkspaceResourceDescriptor::Terminal {
+                agent_descriptor: Some(reference), ..
+            } if reference.descriptor_id == "host-descriptor" && reference.generation == 7
+        )));
     }
 
     #[test]

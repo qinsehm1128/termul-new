@@ -227,6 +227,7 @@ mod tests {
             let terminal = |terminal_id: &str| SessionWorkspaceResourceDescriptor::Terminal {
                 terminal_id: terminal_id.to_string(),
                 terminal_record_id: None,
+                agent_descriptor: None,
                 conversation_id: id,
             };
             Ok(SessionWorkspaceLoadOutcome::Loaded {

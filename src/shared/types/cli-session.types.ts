@@ -257,9 +257,6 @@ export type LiveAgentId = (typeof LIVE_AGENT_IDS)[number]
  */
 export interface LiveAgentSession {
   source?: 'hook' | 'poll'
-  hook_kind?: import('./agent-hooks.types').AgentHookKind
-  /** Hook event time in epoch milliseconds; renderer-local when older hosts omit it. */
-  hook_at?: number
   transcript_path?: string
   /** Shell pid of the terminal the agent was found under. */
   rootPid: number
@@ -275,13 +272,12 @@ export interface LiveAgentSession {
 
 /** What a terminal remembers about the agent session running in it. */
 export interface TerminalAgentSession {
-  /** Older persisted sessions omit provenance and remain valid poll fallbacks. */
-  source?: 'hook' | 'poll'
-  hook_kind?: import('./agent-hooks.types').AgentHookKind
-  /** Hook event time in epoch milliseconds; renderer-local when older hosts omit it. */
-  hook_at?: number
+  /** Provenance is identity metadata; hook runtime lives in the renderer runtime store. */
+  source?: 'hook' | 'poll' | 'process' | 'legacy-unconfirmed'
+  /** Host-owned durable descriptor reference, never spawn authorization. */
+  descriptor_ref?: { descriptor_id: string; generation: number }
   transcript_path?: string
-  agentId: LiveAgentId
+  agentId: string
   sessionId: string
   cwd?: string
   /** argv that reopens the session, e.g. `['claude', '--resume', '<id>']`. */

@@ -3,21 +3,26 @@
 //! 1. Scan vendor folders that encode the current project path (names only).
 //! 2. Lazily read the first `session_id` from each JSONL file afterwards.
 //!
-//! Transcript bodies are never consumed. Resume argv is assembled in the renderer.
+//! Transcript bodies are never consumed. Automatic restore argv comes only from
+//! verified host identities and immutable installed adapter snapshots.
 
 pub mod commands;
+pub mod identity_store;
 mod live;
 mod parse;
 /// Vendor store roots and the per-project folder encoders. `pub(crate)` so the
 /// memory index reuses the exact same encoders instead of growing a second copy
 /// that could drift from what the vendors actually write on disk.
 pub(crate) mod paths;
+pub mod restore_service;
+#[cfg(test)]
+mod restore_tests;
 mod scan;
 mod scope;
 mod types;
 mod walk;
 
-pub use live::{detect_with_hooks, LiveAgentSession};
+pub use live::{detect_live_agent_sessions, detect_with_hooks, LiveAgentSession};
 pub use scan::{list_cli_sessions, resolve_cli_sessions};
 pub use types::{
     CliSessionListArgs, CliSessionListResult, CliSessionResolveArgs, CliSessionResolveResult,
